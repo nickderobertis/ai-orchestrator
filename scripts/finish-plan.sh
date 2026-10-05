@@ -159,8 +159,11 @@ DEFAULT_DAG_GRAPH="off"
 DAG_GRAPH_FLAG="--dag-graph"
 
 #: The answers the writer's task is rendered from, composed from the brief, the plan's
-#: qualified id, the document id and the resolve command `orchestrator/design_chain.py`'s
-#: rule gives for the plan. The brief's `## What` and `## Why` are quoted into the task's
+#: qualified id, the document id, the resolve command `orchestrator/design_chain.py`'s
+#: rule gives for the plan, and what `orchestrator/plan_budgets.py` states about the plan's
+#: budgets: its budgets document's answers, which the document's budget sections restate
+#: and which the task carries whole so the writer and its judge read the same entries, or
+#: the reason the migration list gives for a plan that predates budgets. The brief's `## What` and `## Why` are quoted into the task's
 #: own What and Why rather than the brief being embedded whole, because the brief's
 #: acceptance criteria are the *plan's* and a judge holds a dispatch to every criterion it
 #: finds in its task; the criteria below are this dispatch's. The resolve command is named
@@ -171,7 +174,10 @@ DAG_GRAPH_FLAG="--dag-graph"
 WRITER_ANSWERS_PROGRAM='
 import json, pathlib, re, sys
 
-(brief, plan, document, template, note, resolve) = sys.argv[1:7]
+(brief, plan, document, template, note, resolve, budgets) = sys.argv[1:8]
+budgets = json.loads(budgets)
+predates, budgets_document = budgets["predates"], budgets["document"]
+quoted = json.dumps(budgets["answers"], ensure_ascii=False, indent=2)
 # Line endings and trailing blanks are read the way `scripts/plan-brief.sh` reads a heading
 # when it validates the brief, so a brief it accepted is one this composes from.
 text = pathlib.Path(brief).read_text(encoding="utf-8").replace("\r\n", "\n")
@@ -190,6 +196,30 @@ brief_why = section("Why")
 if not brief_what or not brief_why:
     sys.exit(f"{brief} states no ## What or no ## Why for the task to be composed from")
 variables = f"{resolve} | onetaskgraph template variables --template-loader -"
+budget_answers = "`workload`, `checklist`, `ten_x`, `budgets`, `repo_wide_effects`, `realistic_data` and `spike_findings`"
+if predates:
+    budget_task = (
+        f"The plan predates budgets: `config/budgets-migration.yaml` names `{plan}`, with the "
+        f"reason below, and it carries no budgets document. Answer `predates_budgets` with "
+        f"that reason word for word, and leave {budget_answers} empty.\n\n"
+        f"> {predates}"
+    )
+    budget_criterion = (
+        f"The document\u2019s `predates_budgets` answer is the reason the migration list gives "
+        f"for `{plan}`, word for word, and every budget answer is empty."
+    )
+else:
+    budget_task = (
+        f"The plan\u2019s budgets are stated in its budgets document `{budgets_document}`, "
+        f"which answers the following. The document\u2019s {budget_answers} answers restate "
+        f"these, answer for answer, and `predates_budgets` is empty:\n\n```json\n"
+        f"{quoted}\n```"
+    )
+    budget_criterion = (
+        f"The document\u2019s {budget_answers} answers restate the answers of "
+        f"`{budgets_document}` that this task quotes, answer for answer, and its "
+        f"`predates_budgets` answer is empty."
+    )
 answers = {
     "what": (
         f"Write the design document a person reviews the plan `{plan}` as \u2014 terse prose, "
@@ -202,6 +232,7 @@ answers = {
         f"resolves it for this plan, which is the resolve command this task names: the "
         f"guidance comments in that chain say how to write it, and `{variables}` lists the "
         f"answers it takes.\n\n"
+        f"{budget_task}\n\n"
         f"What the planner was asked to plan, in the brief\u2019s words, for the document\u2019s What:"
         f"\n\n{brief_what}"
     ),
@@ -225,6 +256,7 @@ answers = {
         f"Every task of `{plan}` has one row in the planned-tasks answer, and each row\u2019s "
         "location is the location the plan store reports for that task, read back out of the "
         "store and never composed by hand.",
+        budget_criterion,
         "This dispatch reports where the store put the document, in the form the store reports "
         "it: a link where it is on a website, a path where it is a file on this machine.",
         "Every claim this dispatch makes about the finished work is true of the tree as it "
@@ -502,6 +534,13 @@ document_resolve=$("$python" -m orchestrator.design_chain "$plan_project") ||
     fail "which repository's layer the design document of $plan_project resolves through could not be read out of the plan store; the diagnostic above names why" \
         "repair what it names, then run this command again"
 
+# What the document's budget sections restate: the plan's budgets document's answers, or the
+# reason the migration list gives for a plan that predates budgets. The check above has
+# already refused a plan with neither, so a failure here is a store that stopped answering.
+budgets_context=$("$python" -m orchestrator.plan_budgets "$plan_project") ||
+    fail "what the design document of $plan_project restates about its budgets could not be read; the diagnostic above names why" \
+        "repair what it names, then run this command again"
+
 plan_source=${plan_project%%:*}
 design_document_id="${plan_project#*:}$DESIGN_DOC_ID_SUFFIX"
 
@@ -580,7 +619,7 @@ answers_file=$(mktemp "${TMPDIR:-/tmp}/finish-plan-answers.XXXXXX") || {
         "check that ${TMPDIR:-/tmp} is a directory this launch may write into, then retry"
 }
 "$python" -c "$WRITER_ANSWERS_PROGRAM" "$brief" "$plan_project" "$design_document_id" \
-    "$DOCUMENT_TEMPLATE" "$PLAN_DIRECT_PLACEMENT_NOTE" "$document_resolve" >"$answers_file" || {
+    "$DOCUMENT_TEMPLATE" "$PLAN_DIRECT_PLACEMENT_NOTE" "$document_resolve" "$budgets_context" >"$answers_file" || {
     discard_answers
     take_back
     fail "the design-document task's answers could not be composed from '$brief' by $python; the diagnostic above names why" \

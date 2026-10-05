@@ -67,6 +67,7 @@ from delegation_checkout import (
     PLAN_PROJECT,
     RESOLVED_LOADER_ENV,
     ROOT,
+    SEEDED_PLAN_RECORDS,
     TEMPLATE_ROOT_TRACE_ENV,
     WRAPPER_DEFAULTS,
 )
@@ -1006,7 +1007,11 @@ def test_the_plan_recipe_refuses_a_run_named_as_the_plan_it_authors(
     assert "; pass --name with a run name other than" in refusal, refusal
     traced = trace.read_text(encoding="utf-8") if trace.exists() else ""
     assert "onepipeline start" not in traced, f"a refused launch reached the engine:\n{traced}"
-    written = sorted(str(one.relative_to(checkout)) for one in (checkout / ".plans").rglob("*"))
+    written = sorted(
+        str(one.relative_to(checkout))
+        for one in (checkout / ".plans").rglob("*")
+        if str(one.relative_to(checkout)) not in SEEDED_PLAN_RECORDS
+    )
     assert written == [], f"a refused launch wrote plan records: {written}"
 
 
@@ -1099,7 +1104,11 @@ def test_the_plan_recipe_opt_out_still_refuses_a_plan_project_it_cannot_compare(
     assert names in result.stderr, result.stderr
     traced = trace.read_text(encoding="utf-8") if trace.exists() else ""
     assert "onepipeline start" not in traced, f"a refused launch reached the engine:\n{traced}"
-    written = sorted(str(one.relative_to(checkout)) for one in (checkout / ".plans").rglob("*"))
+    written = sorted(
+        str(one.relative_to(checkout))
+        for one in (checkout / ".plans").rglob("*")
+        if str(one.relative_to(checkout)) not in SEEDED_PLAN_RECORDS
+    )
     assert written == [], f"a refused launch wrote plan records: {written}"
 
 
@@ -1122,7 +1131,11 @@ def _refused_before_the_launch(checkout: Path, trace: Path, env: dict[str, str])
     traced = trace.read_text(encoding="utf-8")
     assert " start " not in traced, f"a refused flow reached the engine's launch:\n{traced}"
     assert "orchestrator-copy-plan" not in traced, f"a refused flow copied the plan:\n{traced}"
-    left = sorted(str(one.relative_to(checkout)) for one in (checkout / ".plans").rglob("*.md"))
+    left = sorted(
+        str(one.relative_to(checkout))
+        for one in (checkout / ".plans").rglob("*.md")
+        if str(one.relative_to(checkout)) not in SEEDED_PLAN_RECORDS
+    )
     assert left == [], f"a refused flow left records where the next run reads them: {left}"
     return result.stderr
 
@@ -1212,7 +1225,11 @@ def test_the_finish_plan_recipe_refuses_a_created_task_the_store_placed_nowhere(
         in stderr
     ), stderr
     # The project record is taken back; the one record left is the task the store wrote.
-    left = sorted(str(one.relative_to(checkout)) for one in (checkout / ".plans").rglob("*.md"))
+    left = sorted(
+        str(one.relative_to(checkout))
+        for one in (checkout / ".plans").rglob("*.md")
+        if str(one.relative_to(checkout)) not in SEEDED_PLAN_RECORDS
+    )
     assert left == [f".plans/{CREATED_RECORD}"], left
     traced = trace.read_text(encoding="utf-8")
     assert " start " not in traced, f"a refused flow reached the engine's launch:\n{traced}"
@@ -1286,7 +1303,11 @@ def test_the_finish_plan_recipe_reads_a_refusal_only_off_the_engines_own_refusal
         assert other not in result.stderr, result.stderr
     traced = trace.read_text(encoding="utf-8")
     assert " start " not in traced, f"a refused flow reached the engine's launch:\n{traced}"
-    left = sorted(str(one.relative_to(checkout)) for one in (checkout / ".plans").rglob("*.md"))
+    left = sorted(
+        str(one.relative_to(checkout))
+        for one in (checkout / ".plans").rglob("*.md")
+        if str(one.relative_to(checkout)) not in SEEDED_PLAN_RECORDS
+    )
     assert left == [], f"a refused flow left records where the next run reads them: {left}"
 
 

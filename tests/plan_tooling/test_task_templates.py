@@ -151,21 +151,22 @@ def test_the_launch_environment_names_this_checkouts_root_and_never_prompts(
 def test_the_engine_lists_this_hosts_names_through_the_launch_environment(
     launch_environment: dict[str, str],
 ) -> None:
-    """`plan-task` from the host layer, and the two names only this host registers."""
+    """`plan-task` from the host layer, and the three names only this host registers."""
     listed = _run([str(ENGINE), "template", "list", "--json"], launch_environment)
 
     assert listed.returncode == 0, listed.stderr
     document = json.loads(listed.stdout)
     assert document["registration"] == str(REGISTRATION)
     by_name = {entry["name"]: entry for entry in document["templates"]}
-    assert set(by_name) == {"plan-task", "follow-up-task", "design-doc"}, by_name
+    assert set(by_name) == {"plan-task", "follow-up-task", "design-doc", "plan-budgets"}, by_name
     assert (by_name["plan-task"]["layer"], by_name["plan-task"]["path"]) == (
         "host",
         str(PLAN_TASK),
     )
     assert by_name["follow-up-task"]["role"] == "task"
     assert by_name["design-doc"]["role"] == "document"
-    for name in ("follow-up-task", "design-doc"):
+    assert by_name["plan-budgets"]["role"] == "document"
+    for name in ("follow-up-task", "design-doc", "plan-budgets"):
         assert by_name[name]["description"].strip(), by_name[name]
 
 

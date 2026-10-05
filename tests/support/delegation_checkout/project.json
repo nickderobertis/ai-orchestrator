@@ -7,7 +7,8 @@
   ],
   "implicitDependencies": [
     "support-follow-up-variables",
-    "support-plan-root-variable"
+    "support-plan-root-variable",
+    "support-project-fixtures"
   ],
   "namedInputs": {
     "testSupport": [

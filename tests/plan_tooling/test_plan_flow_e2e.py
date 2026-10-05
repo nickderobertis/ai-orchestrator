@@ -69,12 +69,12 @@ from fake_backend import (
     RUN_ON_MARKER_ENV,
 )
 from nx_workspace import answering_this_checkouts_origin, copy_working_tree
-from project_fixtures import helper
+from project_fixtures import helper, no_budgets
 from published_tools import ONETASKGRAPH_BIN
 from scratch_identity import PLANNING_FLOW_ORIGIN, seeded
 from waits import timeout as e2e_timeout
 
-from orchestrator import plan_copy, plan_review, plan_store
+from orchestrator import plan_budgets, plan_copy, plan_review, plan_store
 from orchestrator.criteria_guard import APPENDIX
 from orchestrator.project_store import render_plan_project
 from orchestrator.root import REPO_ROOT
@@ -160,6 +160,10 @@ NODE_LABEL = "node"
 #: dispatches apart at the stand-in: both run as `worker`, so the member cannot.
 DESIGN_TASK_MARKER = "Write the design document a person reviews the plan"
 
+#: The fragment only the planner's task carries: its brief's own acceptance criterion, which
+#: the design-doc dispatch's task never quotes.
+PLANNER_TASK_MARKER = "The cursor's shape and its type are stated."
+
 #: The command the dispatched task names the document's template by: the registered name
 #: resolved, and its variables listed with the shape each answer takes. The plan here spans
 #: two repositories, so the resolve names none of them: no one repository's layer speaks
@@ -185,6 +189,18 @@ DESIGN_REFERENCE = "onepipeline:design-doc"
 ORIGIN_KEY = "onetaskgraph.origin"
 
 RunId = NewType("RunId", str)
+
+
+# llmlint: ignore[suppressions_justified] onetaskgraph owns this open JSON schema; the one
+# field read below is narrowed at its subscript.
+def _design_documents(held: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The listed documents of a plan but its budgets document, which a copy carries too."""
+    return [
+        one
+        for one in held
+        if (one["item"]["metadata"].get("onetaskgraph.template") or {}).get("template")
+        != plan_budgets.TEMPLATE_REFERENCE
+    ]
 
 
 class JournalEvent(TypedDict):
@@ -421,6 +437,34 @@ def _renders_the_document(tmp_path: Path, stored: Stored, source: str) -> list[s
     ]
 
 
+def _writes_the_budgets(tmp_path: Path, stored: Stored, source: str) -> list[str]:
+    """The command a planner runs to write its plan's budgets document, as every plan has one.
+
+    The answers are a plan needing no budget; rendering and storing are the pinned engine's
+    resolve piped into the store's own `document create`, run by the dispatch itself.
+    """
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    answers = tmp_path / "budgets-answers.json"
+    answers.write_text(
+        json.dumps(no_budgets([stored.repository, stored.second_repository])), encoding="utf-8"
+    )
+    return [
+        "bash",
+        "-c",
+        '"$1" template resolve plan-budgets --json | "$2" document create "$3"'
+        ' --project "$4" --title "$5" --id "$6" --template-loader -'
+        ' --answers "$7" --no-interactive',
+        "store-the-budgets",
+        str(ENGINE_BIN),
+        str(ONETASKGRAPH_BIN),
+        source,
+        stored.project,
+        f"Budgets: {stored.project}",
+        f"{stored.project}{plan_budgets.DOCUMENT_SUFFIX}",
+        str(answers),
+    ]
+
+
 def _environment(
     tmp_path: Path,
     stored: Stored,
@@ -479,7 +523,12 @@ def _environment(
     environment[AUTHOR_PLAN_ENV] = str(authored)
     keyed = tmp_path / "commands-per-marker.json"
     keyed.write_text(
-        json.dumps({DESIGN_TASK_MARKER: [_renders_the_document(tmp_path, stored, FIXTURE_SOURCE)]}),
+        json.dumps(
+            {
+                PLANNER_TASK_MARKER: [_writes_the_budgets(tmp_path, stored, FIXTURE_SOURCE)],
+                DESIGN_TASK_MARKER: [_renders_the_document(tmp_path, stored, FIXTURE_SOURCE)],
+            }
+        ),
         encoding="utf-8",
     )
     environment[RUN_ON_MARKER_ENV] = str(keyed)
@@ -863,6 +912,7 @@ def test_the_flow_leaves_the_plan_and_its_one_document_on_the_destination_it_was
     )
     project = planned.stored.project
     assert landed == [
+        f"documents/{project}-budgets.md",
         f"documents/{planned.stored.document}.md",
         f"projects/{project}.md",
         f"tasks/{project}/decide-the-cursor.md",
@@ -926,7 +976,7 @@ def test_the_flow_reports_where_the_destination_holds_the_project_and_the_docume
     assert documents.returncode == 0, f"the destination could not be read:\n{documents.stderr}"
     # llmlint: ignore[suppressions_justified] onetaskgraph owns this open JSON schema; the
     # fields read below are narrowed at each subscript.
-    held = cast(dict[str, Any], json.loads(documents.stdout))["items"]
+    held = _design_documents(cast(dict[str, Any], json.loads(documents.stdout))["items"])
     assert len(held) == 1, f"the destination holds {len(held)} documents of this plan: {held}"
     assert f"holds its design document at {held[0]['item']['location']['path']}" in reported, (
         f"the flow never reported where the destination holds the document a person "
@@ -1123,6 +1173,7 @@ def test_a_flow_that_names_no_destination_copies_into_the_board_this_repository_
     )
     project = default_board.stored.project
     assert landed == [
+        f"documents/{project}-budgets.md",
         f"documents/{default_board.stored.document}.md",
         f"projects/{project}.md",
         f"tasks/{project}/decide-the-cursor.md",
@@ -1185,7 +1236,7 @@ def test_a_flow_that_names_no_destination_reports_where_that_board_holds_both(
     assert documents.returncode == 0, f"the board could not be read:\n{documents.stderr}"
     # llmlint: ignore[suppressions_justified] onetaskgraph owns this open JSON schema; the
     # fields read below are narrowed at each subscript.
-    held = cast(dict[str, Any], json.loads(documents.stdout))["items"]
+    held = _design_documents(cast(dict[str, Any], json.loads(documents.stdout))["items"])
     assert len(held) == 1, f"the board holds {len(held)} documents of this plan: {held}"
     assert f"holds its design document at {held[0]['item']['location']['path']}" in reported, (
         f"the flow never reported where the board it defaults to holds the document a "

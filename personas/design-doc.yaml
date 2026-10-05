@@ -40,6 +40,10 @@ system_prompt: |
   about the document, they win. Never edit the rendered body: change an answer and
   regenerate it.
 
+  The budget answers are the one part you do not compose: your task quotes them from
+  the plan's budgets document, or — for a plan that predates budgets — gives the
+  reason to answer instead.
+
 user:
   persona: |
     You are reviewing one design document, and the `design-doc` template is the bar.

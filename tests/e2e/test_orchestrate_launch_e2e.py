@@ -1130,6 +1130,8 @@ def test_no_turn_of_this_run_reached_a_paid_provider(launched: Launched) -> None
     assert not acted, f"{len(acted)} real tool call(s) ran; the first was {acted[0]}"
 
 
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker] This journey has always launched a shipped example here, beside this module's other launches of one; what moved is that it now launches it from the journey's own approved copy, as each of those does, because the tracked examples' approvals stay stale until a person renews them. The copy reads the examples' Markdown, which `reads_docs` routes to this project's whole-workspace target and never out of it (`tests/conftest.py`'s `READS_DOCS_MARKER`), the marker the sibling example launches above already carry.  # noqa: E501
+@pytest.mark.reads_docs
 def test_a_launch_reports_a_missing_dag_scope_graph(tmp_path: Path, oneharness_bin: str) -> None:
     """The launch path names the agent-graph config it could not read.
 
@@ -1147,15 +1149,19 @@ def test_a_launch_reports_a_missing_dag_scope_graph(tmp_path: Path, oneharness_b
         pytest.skip("just is not installed")
     environment = _environment(tmp_path, oneharness_bin)
 
-    refused = _just(
-        "orchestrate",
-        SHIPPED_PROJECT,
-        "--detach",
-        "--dag-graph",
-        str(tmp_path / "absent" / "dag-scope.yaml"),
-        environment=environment,
-        seconds=120,
-    )
+    # From a copy of the examples, as every launch of one is: the launch gate refuses an
+    # example whose approval the design-doc chain has left stale before the engine is asked,
+    # and what this journey reads is the engine's refusal of the graph.
+    with isolated_examples(tmp_path) as examples:
+        refused = _just(
+            "orchestrate",
+            SHIPPED_PROJECT,
+            "--detach",
+            "--dag-graph",
+            str(tmp_path / "absent" / "dag-scope.yaml"),
+            environment={**environment, **examples.environment},
+            seconds=120,
+        )
     assert refused.returncode != 0
     reported = refused.stderr + refused.stdout
     assert "dag-scope.yaml" in reported, reported

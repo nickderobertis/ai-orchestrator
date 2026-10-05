@@ -103,6 +103,7 @@ from typing import Any, NamedTuple
 
 from orchestrator import (
     adoption_guard,
+    plan_budgets,
     plan_review,
     plan_store,
     publication_guard,
@@ -1550,7 +1551,7 @@ def plan_record_refusal(project: str, plan: object) -> str | None:
             f"{exc}; nothing says a reviewer read this plan whole, so review it with "
             f"`just review-plan {project}` once the store answers"
         )
-    if not plan_review.plan_unreviewed(record, plan):
+    if not plan_review.plan_unreviewed(record, plan, budgets=plan_budgets.readable(project)):
         return None
     return (
         f"the project record carries no plan-level review record for the plan's "
@@ -1605,8 +1606,11 @@ def check_directly(project: str) -> int:
             file=sys.stderr,
         )
         return 2
+    budgets = plan_budgets.refusals(project, plan)
+    for refused in budgets:
+        print(f"check-plan: {refused.field}: {refused.reason}", file=sys.stderr)
     try:
-        unreviewed = plan_review.unreviewed(records)
+        unreviewed = plan_review.unreviewed(records, budgets=plan_budgets.readable(project))
         whole = plan_record_refusal(project, plan)
     # tests/test_criteria_guard.py covers this: the review bar is composed from this
     # checkout's own tracked files, so a recipe journey run from here cannot remove one.
@@ -1637,7 +1641,7 @@ def check_directly(project: str) -> int:
         )
     if whole is not None:
         print(f"check-plan: {whole}", file=sys.stderr)
-    if unreviewed or whole is not None:
+    if budgets or unreviewed or whole is not None:
         return 1
     # Over the records rather than the plan, the way `orchestrator/plan_check.py` warns
     # after the verb accepts: the two paths then measure one body from one map.

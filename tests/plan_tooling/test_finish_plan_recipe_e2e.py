@@ -30,7 +30,7 @@ import os
 import re
 import shutil
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any, NamedTuple, NewType, TypedDict, cast
@@ -47,13 +47,13 @@ from fake_backend import (
     RecordedTurn,
 )
 from nx_workspace import answering_this_checkouts_origin, copy_working_tree
-from project_fixtures import helper, register_stand_in
+from project_fixtures import budgeted, helper, no_budgets, register_stand_in
 from published_tools import ONETASKGRAPH_BIN
 from scratch_identity import PLANNING_FLOW_ORIGIN, Identity, seeded
 from test_approve_design_recipe_e2e import RETIRED_DESIGN, RETIRED_TEMPLATE
 from waits import timeout as e2e_timeout
 
-from orchestrator import design_chain, plan_review, plan_store
+from orchestrator import design_approval, design_chain, plan_budgets, plan_review, plan_store
 from orchestrator.criteria_guard import APPENDIX
 from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
@@ -192,6 +192,18 @@ REFUSES = {
 RunId = NewType("RunId", str)
 
 
+# llmlint: ignore[suppressions_justified] onetaskgraph owns this open JSON schema; the one
+# field read below is narrowed at its subscript.
+def _design_documents(held: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The listed documents of a plan but its budgets document, which a copy carries too."""
+    return [
+        one
+        for one in held
+        if (one["item"]["metadata"].get("onetaskgraph.template") or {}).get("template")
+        != plan_budgets.TEMPLATE_REFERENCE
+    ]
+
+
 class Drafted(NamedTuple):
     """A plan drafted in the fixture store, and the document a dispatch will store for it."""
 
@@ -222,6 +234,7 @@ def _draft(
     source: str = FIXTURE_SOURCE,
     document_suffix: str = FIXTURE_DOCUMENT_SUFFIX,
     repositories: Sequence[str] = (),
+    budgets: Mapping[str, object] | bool = True,
 ) -> Drafted:
     """Draft an unreviewed plan into a local store, with no design document yet.
 
@@ -238,6 +251,9 @@ def _draft(
     records the way it reads a planner's own rather than a hand-written shape only this
     journey would produce. ``repositories`` gives the plan one task per origin, each naming
     that one repository; with none, its one task names no repository.
+
+    The plan carries its budgets document, as every plan does: one needing no budget unless
+    ``budgets`` gives its answers, and none at all when it is ``False``.
     """
     native = f"test-{os.getpid()}-{name}"
     # Resolved here rather than as a default argument: this process's own fixture root is
@@ -264,6 +280,14 @@ def _draft(
         },
         native_id=native,
     )
+    if budgets is not False:
+        variable = f"ONETASKGRAPH_SOURCES__{source.upper().replace('-', '_')}__CONFIG__ROOT"
+        budgeted(
+            source,
+            native,
+            no_budgets(repositories) if budgets is True else budgets,
+            {**os.environ, variable: str(root)},
+        )
     return Drafted(
         project=native,
         qualified=f"{source}:{native}",
@@ -640,6 +664,7 @@ def test_the_tail_leaves_the_plan_and_its_one_document_on_the_destination(
     """
     project = finished.drafted.project
     assert _records(finished.bench.destination) == [
+        f"documents/{project}-budgets.md",
         f"documents/{finished.drafted.document}.md",
         f"projects/{project}.md",
         f"tasks/{project}/decide-the-cursor.md",
@@ -696,7 +721,7 @@ def test_the_tail_reports_the_two_locations_the_destination_itself_answers(
     assert documents.returncode == 0, f"the destination could not be read:\n{documents.stderr}"
     # llmlint: ignore[suppressions_justified] onetaskgraph owns this open JSON schema; the
     # fields read below are narrowed at each subscript.
-    held = cast(dict[str, Any], json.loads(documents.stdout))["items"]
+    held = _design_documents(cast(dict[str, Any], json.loads(documents.stdout))["items"])
     assert len(held) == 1, f"the destination holds {len(held)} documents of this plan: {held}"
     assert f"holds its design document at {held[0]['item']['location']['path']}" in reported, (
         reported
@@ -880,7 +905,9 @@ def test_the_writers_task_names_the_resolve_command_the_rule_gives_for_the_plan(
         and entry["path"].endswith(".onepipeline/templates/design-doc.md.j2")
         for entry in chain["chain"]
     ), chain
-    (document,) = plan_store.read_documents(drafted.qualified)
+    (document,) = design_approval.design_documents(
+        drafted.qualified, plan_store.read_documents(drafted.qualified)
+    )
     provenance = document.metadata[PROVENANCE_KEY]
     assert isinstance(provenance, dict), document.metadata
     assert provenance["digest"] == chain["digest"], (provenance, chain["digest"])
@@ -938,7 +965,7 @@ def test_the_stored_design_document_is_a_rendering_a_person_can_approve_and_laun
     )
     assert documents.returncode == 0, documents.stderr
     # llmlint: ignore[suppressions_justified] onetaskgraph owns this open JSON schema.
-    (held,) = cast(dict[str, Any], json.loads(documents.stdout))["items"]
+    (held,) = _design_documents(cast(dict[str, Any], json.loads(documents.stdout))["items"])
     provenance = held["item"]["metadata"].get(PROVENANCE_KEY)
     assert isinstance(provenance, dict), held["item"]["metadata"]
     assert provenance.get("template") == DOCUMENT_TEMPLATE, provenance

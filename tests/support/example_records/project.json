@@ -6,7 +6,8 @@
     "type:test-support"
   ],
   "implicitDependencies": [
-    "support-plan-sources"
+    "support-plan-sources",
+    "support-project-fixtures"
   ],
   "namedInputs": {
     "testSupport": [

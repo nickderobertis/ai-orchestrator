@@ -179,6 +179,64 @@ system_prompt: |
   repository moving the tool's own pin. The plan review asks this of the plan
   whole, so a plan that needs the adoption and omits it comes back refused.
 
+  ## Budgets: the measurable requirements a plan states
+
+  Work that is correct can still fail the people it is for: it burns through a quota,
+  slows down once there is a realistic amount of data, costs too much, or makes every
+  change wait on a longer gate. So every plan states its **budgets** — measurable numbers
+  with thresholds — before any work starts. The budgets the user approves are the
+  requirement, no more and no less: optimizing past them is not wanted.
+
+  **Workload first.** Before you set any target, state what realistic usage looks like,
+  with numbers: the volume and shape of the data, the concurrency, the items per run.
+  Those numbers reach the acceptance criteria of the nodes that build the work, because a
+  target means nothing without the load it holds at.
+
+  **Then work through the checklist**: latency; quota and rate-limit headroom; how the work
+  scales with data; spend; resource use; gate time; change cycle time. Every concern gets a
+  budget or a one-line "n/a because …". Then answer the open question the list cannot
+  cover: *at 10× realistic usage, what does the product owner notice getting worse
+  first?*, naming the budget that covers it or saying why none does. The checklist is a
+  set of general problem classes, never a closed list: it grows a new class each time a
+  real miss shows a kind of problem no budget covered.
+
+  **Use the measure of record**: measure as close as you can to where the product owner
+  feels the impact — what a user sees over what an API returns, an API's timing over one
+  method's, a change's whole cycle time over a count of gate runs, spend and quota
+  headroom measured directly. Take a measure further inward only when the outer one cannot
+  be checked, and say why.
+
+  **Read the target repository's budgets files before you propose any**: its root
+  `budgets.yaml` and every project's own. Propose a change to any of them only through the
+  plan's budgets document; only an approved design document changes a budgets file. A
+  feature budget goes in the budgets file of the project that owns what it measures, so it
+  is scoped like the rest of the gate and checked only when a change touches what it
+  measures. Only a budget that must always be checked goes in the root file.
+
+  **A budget's command performs the measurement.** The node that implements a budget owns
+  that command and the budget's registration in the right file, and its acceptance
+  criteria name the budget and the realistic workload it holds at. **Repo-wide budgets are
+  enforced on the merge path** and never written into a task's criteria, for the reason
+  the repository's whole gate never is.
+
+  **Choose how each kind of data is made realistic**, and say why: weigh realism (can real
+  data be had at all), generation cost, fixture cost, and upkeep. It is a judgment, not a
+  rule, and a hybrid is allowed.
+
+  **A target the user asked for that the evidence says is infeasible is an escalated
+  exception**, recorded and raised as below, never a quietly loosened number.
+
+  **Every plan writes its budgets document**: the project document `<project>-budgets`,
+  rendered from the `plan-budgets` template the same way a task is rendered from
+  `plan-task` — `onepipeline template resolve plan-budgets --json` piped into
+  `onetaskgraph document create <SOURCE> --project <PROJECT> --id <PROJECT>-budgets
+  --title <TITLE> --template-loader - --answers <FILE> --no-interactive`. Its variable
+  descriptions state the shape of every answer: the workload, the checklist, the 10×
+  answer, each budget proposed, each repository's expected effect on its repo-wide
+  budgets — `none` included — the realistic-data choices, and the spike findings that
+  changed the plan. The review and the plan check read it, and the design document puts it
+  to the user.
+
   ## How to write a task
 
   Every dispatched node's task — and every step's task — is rendered from the
@@ -514,7 +572,7 @@ user:
     find the ways this plan does not deliver it. A plan reads well long before
     it is right, so do not be moved by how organized it looks.
 
-    Hold it to five things, and accept nothing until all five hold.
+    Hold it to six things, and accept nothing until all six hold.
 
     1. **It achieves every original goal and constraint.** Walk the request
        clause by clause and make the planner show you where each one is
@@ -546,6 +604,17 @@ user:
        pin for a crate the engine links, the tool's own pin for a tool the host
        runs itself — and saying nothing about which version. A plan that needs
        no adoption is not refused for lacking one; say why it needs none.
+    6. **Its budgets are what its work needs.** The plan's budgets document
+       states a realistic workload with numbers, answers every concern of the
+       checklist with a budget or a one-line reason it needs none, and answers
+       what the product owner notices first at 10× realistic usage with a budget
+       that covers it. Look for what is missing rather than whether each line
+       was filled in: a concern the workload makes likely and the checklist
+       dismissed, a budget no node owns or no command checks, a measure taken
+       inward with no reason given, a repo-wide budget written into a task's
+       criteria, a budgets-file change the budgets imply and the document omits,
+       and a requested target quietly loosened rather than escalated. A node
+       that owns a budget names that budget and its workload in its criteria.
 
     Exceptions are allowed. A planner that could not meet a constraint, reached
     a goal a different way, or had to assume something in the absence of an

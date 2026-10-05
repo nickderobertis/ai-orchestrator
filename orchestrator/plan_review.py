@@ -76,6 +76,7 @@ arrives before a judged turn is spent rather than after.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import hashlib
 import json
 import re
@@ -87,7 +88,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import NamedTuple, NewType, TypedDict
 
-from orchestrator import host_installs, plan_store
+from orchestrator import host_installs, plan_budgets, plan_store
 from orchestrator.plan_store import QualifiedTaskId, StoreTask
 from orchestrator.project_store import hosted_origin
 from orchestrator.publication_guard import RESERVED_REPO_KEY
@@ -111,13 +112,15 @@ ReviewKey = NewType("ReviewKey", str)
 #: records and the entry never has to say which it is on.
 RECORD_KEY = "orchestrator.plan-review"
 
-#: The bar this review is held to, and the schema its verdict is validated against. Both
-#: are hashed into every key, so editing either invalidates every record made under the
-#: previous one — a content-only key would leave a stale pass standing after the bar it
-#: was granted under had moved.
+#: The bar this review is held to, the schema its verdict is validated against, and the
+#: template the plan's budgets document is rendered from — whose answers the reviewer
+#: reads beside the nodes. All three are hashed into every key, so editing any of them
+#: invalidates every record made under the previous one — a content-only key would leave a
+#: stale pass standing after the bar it was granted under had moved.
 BAR_FILES = (
     Path("personas") / "planner.yaml",
     Path("config") / "plan-review-verdict.schema.json",
+    Path("templates") / "plan-budgets.md.j2",
 )
 
 #: The harness side that spends the judged turn: the supervisory routing, a finite
@@ -255,6 +258,16 @@ instruction naming which version, commit or branch of the dependency to pin — 
 telling the worker to go and find one — is a second answer the worker follows over the
 engine's, and is refused. The immutable-anchor exemption above applies only to a
 release already published; a release the node waits for is not yet an anchor.
+
+One question is asked of a node that owns a budget: one the plan's budgets document
+names as owning it, shown below the task. Such a node owns the budget's command — the
+command that performs the measurement — and its registration in the budgets file the
+entry names, and its `## Acceptance criteria` name each budget it owns by its id and
+the realistic workload the budget holds at. Refuse the criteria of such a node that
+name either one nowhere, judged by meaning. A budget registered in a repository's root
+`budgets.yaml` is a repo-wide budget, enforced on the merge path, so a criterion asking
+the worker to have met a repo-wide budget's threshold is refused, while one owning its
+registration is not. A node owning no budget is not asked this.
 
 Do not rewrite the task and do not judge it on style. Answer with the JSON object the
 response schema declares: whether it passes, and one finding for **every** criterion
@@ -631,7 +644,9 @@ def meaning_bearing(value: object) -> object:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip("\n")
 
 
-def review_key(task: StoreTask, bar: BarFingerprint) -> ReviewKey:
+def review_key(
+    task: StoreTask, bar: BarFingerprint, owned: Sequence[plan_budgets.Budget] = ()
+) -> ReviewKey:
     """The digest ``task``'s current authored content, reviewed under ``bar``, hashes to.
 
     **Exactly the authored fields, and the bar.** The title, the body prose, the
@@ -658,6 +673,11 @@ def review_key(task: StoreTask, bar: BarFingerprint) -> ReviewKey:
     comparing the node's `repo` with this host's own, so a retargeted task is a
     different question and is re-reviewed. So are its `adoption`, `consumes` and
     `merge_policy`, for the reason their constants give.
+
+    ``owned`` is every budget the plan's budgets document says this node owns, which the
+    reviewer is shown beside the task and asked about: a node handed a budget after its
+    review, or relieved of one, is a different question too. It is keyed only when there
+    is one, so a node owning none keys exactly as it did before budgets existed.
     """
     authored = {
         "adoption": task.metadata.get(ADOPTION),
@@ -673,6 +693,8 @@ def review_key(task: StoreTask, bar: BarFingerprint) -> ReviewKey:
         "task": task.content,
         "title": task.title,
     }
+    if owned:
+        authored["budgets"] = [dataclasses.asdict(budget) for budget in owned]
     return content_key(authored, bar)
 
 
@@ -762,10 +784,23 @@ def _recorded_key(metadata: Mapping[str, object]) -> ReviewKey | None:
     return ReviewKey(key) if isinstance(key, str) else None
 
 
-def unreviewed(records: Sequence[StoreTask], bar: BarFingerprint | None = None) -> list[StoreTask]:
-    """Every task of ``records`` whose current authored content carries no review record."""
+def unreviewed(
+    records: Sequence[StoreTask],
+    bar: BarFingerprint | None = None,
+    budgets: plan_budgets.Budgets | None = None,
+) -> list[StoreTask]:
+    """Every task of ``records`` whose current authored content carries no review record.
+
+    ``budgets`` is the plan's budgets document, whose budgets each task's key covers as far
+    as that task owns them.
+    """
     resolved = bar_fingerprint() if bar is None else bar
-    return [task for task in records if recorded(task) != review_key(task, resolved)]
+    owned = plan_budgets.owned(budgets)
+    return [
+        task
+        for task in records
+        if recorded(task) != review_key(task, resolved, owned.get(task.node_id, []))
+    ]
 
 
 def write_record(project: str, task: StoreTask, key: ReviewKey, by: By) -> Path:
@@ -924,7 +959,7 @@ def _steps(task: StoreTask) -> str:
     return f"\n\n## Its steps, in the order they run, as their author wrote them\n\n{sections}"
 
 
-def _prompt(plan_name: str, task: StoreTask) -> str:
+def _prompt(plan_name: str, task: StoreTask, owned: Sequence[plan_budgets.Budget] = ()) -> str:
     """One task, rendered for review under the bar this repository holds a plan to."""
     bar = (REPO_ROOT / BAR_FILES[0]).read_text(encoding="utf-8")
     # Every field :func:`review_key` hashes is rendered here, and that is a property
@@ -950,7 +985,18 @@ def _prompt(plan_name: str, task: StoreTask) -> str:
         f"## The task, as its author wrote it\n\n"
         f"{json.dumps(authored, indent=2, ensure_ascii=False)}\n\n"
         f"{task.content or '(this task states no body prose)'}"
-        f"{_steps(task)}\n"
+        f"{_steps(task)}\n\n"
+        f"## The budgets the plan's budgets document says this node owns\n\n"
+        f"{_owned_section(owned)}\n"
+    )
+
+
+def _owned_section(owned: Sequence[plan_budgets.Budget]) -> str:
+    """The budgets a node owns as its reviewer reads them, every field of each."""
+    if not owned:
+        return "(none)"
+    return json.dumps(
+        [dataclasses.asdict(budget) for budget in owned], indent=2, ensure_ascii=False
     )
 
 
@@ -976,14 +1022,15 @@ def _host_sections() -> str:
 #: key: rewording this moves every plan record and no task record.
 PLAN_REVIEW_PROMPT = """\
 You are reviewing ONE plan whole, after every task in it has passed its own review,
-for the one property no single task can show: whether the plan puts the change its
-goal needs in force on this host. Below is the review bar, then the plan's goal, then
-the table of what this host installs from each producer it depends on — the wheel,
-and the `config/<pin>.version` file that wheel governs — with the two rungs a node
-waits on a release under, and then every node of the plan with its authored fields
-and its whole task.
+for the two properties no single task can show: whether the plan puts the change its
+goal needs in force on this host, and whether its budgets are what its work needs.
+Below is the review bar, then the plan's goal, then the table of what this host
+installs from each producer it depends on — the wheel, and the `config/<pin>.version`
+file that wheel governs — with the two rungs a node waits on a release under, then the
+plan's budgets document, and then every node of the plan with its authored fields and
+its whole task.
 
-Ask two questions.
+On the adoption, ask two questions.
 
 First: does the goal need a change in one of the producers the table names to be **in
 force on this host** — installed here, run by this host's own commands or by the nodes
@@ -1012,8 +1059,25 @@ tool this host runs itself moves that tool's own pin.
 A plan that omits the adoption its goal needs is refused with a finding whose
 `criterion` is `the plan`. A plan that declares it wrongly — the wrong pin for the fix,
 `fast` where the release is needed, a `consumes` on a node of this repository, a
-version literal — is refused with a finding whose `criterion` names the node's id. A
-verdict that passes carries no findings; one that refuses carries one per thing to
+version literal — is refused with a finding whose `criterion` names the node's id.
+
+On the budgets, ask what the plan is **missing**, not only whether each entry of its
+budgets document was filled in. The document states the realistic workload, a
+checklist of concerns each answered with a budget or a one-line "n/a because ...", the
+answer to what the product owner notices getting worse first at 10x realistic usage,
+the budgets the plan proposes, each repository's expected effect on its repo-wide
+budgets, the realistic-data choices and the spike findings. Read it against the goal
+and every node, and refuse what is missing: a concern the stated workload makes likely
+that the checklist dismissed or never lists; a 10x answer no budget covers; a budget no
+node owns, or one with no command to check it; a measure taken further inward than
+where the product owner feels the impact with no reason given; a repo-wide budget — one
+in a repository's root `budgets.yaml` — written into a task's criteria as a threshold
+the worker must meet; a change to a budgets file the budgets imply that the document
+omits; and a target the evidence shows is infeasible, quietly loosened rather than
+escalated. A finding about the document as a whole names `the plan`, and one about a
+node names its id. A plan that carries no budgets document is not asked this.
+
+A verdict that passes carries no findings; one that refuses carries one per thing to
 correct, and says in each `why` what the plan would have to state instead.
 """
 
@@ -1123,14 +1187,26 @@ def plan_goal(plan: object) -> object:
     return goal
 
 
-def plan_key(plan: object, bar: BarFingerprint) -> ReviewKey:
-    """The digest ``plan``'s goal and every node's authored content hash to under ``bar``.
+def plan_key(
+    plan: object, bar: BarFingerprint, budgets: plan_budgets.Budgets | None = None
+) -> ReviewKey:
+    """The digest ``plan``'s goal, nodes and budgets hash to under ``bar``.
 
     Over the plan in the engine's loaded shape, so the store path and the check path
-    compute one key. The `shape` field keeps it from ever equalling a task's key or a
-    live edit's.
+    compute one key, and over the answers of the plan's budgets document, which the
+    reviewer reads beside the nodes: a budget changed after the review is one nobody
+    reviewed — keyed only when there is one, so a plan carrying none keys as it did
+    before budgets existed. The `shape` field keeps it from ever equalling a task's key or
+    a live edit's.
     """
-    return content_key({"goal": plan_goal(plan), "nodes": plan_nodes(plan), "shape": "plan"}, bar)
+    authored: dict[str, object] = {
+        "goal": plan_goal(plan),
+        "nodes": plan_nodes(plan),
+        "shape": "plan",
+    }
+    if budgets is not None:
+        authored["budgets"] = budgets.answers.as_record()
+    return content_key(authored, bar)
 
 
 def plan_recorded(record: Mapping[str, object]) -> ReviewKey | None:
@@ -1140,11 +1216,14 @@ def plan_recorded(record: Mapping[str, object]) -> ReviewKey | None:
 
 
 def plan_unreviewed(
-    record: Mapping[str, object], plan: object, bar: BarFingerprint | None = None
+    record: Mapping[str, object],
+    plan: object,
+    bar: BarFingerprint | None = None,
+    budgets: plan_budgets.Budgets | None = None,
 ) -> bool:
     """Whether ``plan`` as it stands carries no plan-level record on its project ``record``."""
     resolved = plan_bar_fingerprint() if bar is None else bar
-    return plan_recorded(record) != plan_key(plan, resolved)
+    return plan_recorded(record) != plan_key(plan, resolved, budgets)
 
 
 def write_plan_record(project: str, key: ReviewKey, by: By) -> Path:
@@ -1162,13 +1241,14 @@ def write_plan_record(project: str, key: ReviewKey, by: By) -> Path:
     )
 
 
-def _plan_prompt(plan: object) -> str:
+def _plan_prompt(plan: object, budgets: plan_budgets.Budgets | None = None) -> str:
     """One plan whole, rendered for the plan-level review.
 
-    Every field :func:`plan_key` hashes is rendered here — the goal, and each node's
-    fields and whole task — for the reason `_prompt` gives about the task key: a field
-    whose change invalidates the record but which the reviewer never saw is one nobody
-    reviewed. `tests/test_plan_review.py` holds the two together.
+    Every field :func:`plan_key` hashes is rendered here — the goal, the budgets
+    document's answers, and each node's fields and whole task — for the reason `_prompt`
+    gives about the task key: a field whose change invalidates the record but which the
+    reviewer never saw is one nobody reviewed. `tests/test_plan_review.py` holds the two
+    together.
     """
     bar = (REPO_ROOT / BAR_FILES[0]).read_text(encoding="utf-8")
     goal = plan_goal(plan)
@@ -1194,7 +1274,19 @@ def _plan_prompt(plan: object) -> str:
         f"## The plan's goal\n\n{goal if isinstance(goal, str) else json.dumps(goal)}\n\n"
         f"## What this host installs, and the pin each wheel governs\n\n"
         f"{host_installs.rendered()}\n{RUNGS}\n\n"
+        f"## The plan's budgets document\n\n{_budgets_section(budgets)}\n\n"
         f"## Every node of the plan, as its author wrote it\n\n" + "\n\n".join(sections) + "\n"
+    )
+
+
+def _budgets_section(budgets: plan_budgets.Budgets | None) -> str:
+    """The plan's budgets document as the plan-level reviewer reads it: every answer."""
+    if budgets is None:
+        return "(this plan carries no budgets document)"
+    return (
+        f"`{budgets.document}`, rendered from the `{plan_budgets.TEMPLATE_NAME}` template, "
+        f"answers:\n\n```json\n"
+        f"{json.dumps(budgets.answers.as_record(), indent=2, ensure_ascii=False)}\n```"
     )
 
 
@@ -1237,16 +1329,19 @@ def review(project: str) -> Reviewed:
         )
     records = plan_store.read_tasks(project)
     bar = bar_fingerprint()
-    pending = unreviewed(records, bar)
+    budgets = plan_budgets.readable(project)
+    owned = plan_budgets.owned(budgets)
+    pending = unreviewed(records, bar, budgets)
     plan = plan_store.read_plan(project, records)
     plan_name = plan.get("name", project)
     refused: list[Refusal] = []
     recorded = 0
     for index, task in enumerate(pending):
+        mine = owned.get(task.node_id, [])
         try:
-            answered = verdict(_prompt(str(plan_name), task))
+            answered = verdict(_prompt(str(plan_name), task, mine))
             if answered["passes"]:
-                write_record(project, task, review_key(task, bar), BY_REVIEW)
+                write_record(project, task, review_key(task, bar, mine), BY_REVIEW)
                 recorded += 1
         # Reviewing a task and recording its pass are caught together, because they fail
         # the same way from the operator's side: this plan is not fully reviewed, some of
@@ -1272,11 +1367,11 @@ def review(project: str) -> Reviewed:
     # is about to change.
     try:
         plan_bar = plan_bar_fingerprint()
-        if not plan_unreviewed(plan_store.project_record(project), plan, plan_bar):
+        if not plan_unreviewed(plan_store.project_record(project), plan, plan_bar, budgets):
             return Reviewed(recorded, held, refused, plan=PlanReview.HELD)
-        answered = verdict(_plan_prompt(plan))
+        answered = verdict(_plan_prompt(plan, budgets))
         if answered["passes"]:
-            write_plan_record(project, plan_key(plan, plan_bar), BY_REVIEW)
+            write_plan_record(project, plan_key(plan, plan_bar, budgets), BY_REVIEW)
             return Reviewed(recorded, held, refused, plan=PlanReview.RECORDED)
     except OSError as exc:
         return Reviewed(
@@ -1433,11 +1528,14 @@ def record_projects_new_since(before: Sequence[str]) -> Recorded:
                 continue
             try:
                 tasks = plan_store.read_tasks(project)
+                budgets = plan_budgets.readable(project)
+                owned = plan_budgets.owned(budgets)
                 for task in tasks:
-                    write_record(project, task, review_key(task, bar), BY_PLANNING)
+                    mine = owned.get(task.node_id, [])
+                    write_record(project, task, review_key(task, bar, mine), BY_PLANNING)
                     written.append(task.qualified_id)
                 plan = plan_store.read_plan(project, tasks)
-                write_plan_record(project, plan_key(plan, plan_bar), BY_PLANNING)
+                write_plan_record(project, plan_key(plan, plan_bar, budgets), BY_PLANNING)
                 plans.append(project)
             except OSError as exc:
                 passed_over.append(f"{project}: {exc}")

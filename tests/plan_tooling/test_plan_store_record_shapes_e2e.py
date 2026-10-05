@@ -48,7 +48,7 @@ from typing import Any
 
 import pytest
 import short_state
-from project_fixtures import ONEVCS_HOME, helper, register_stand_in
+from project_fixtures import ONEVCS_HOME, budgeted, helper, no_budgets, register_stand_in
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
@@ -185,6 +185,10 @@ class Store:
         """
         write_plan_project(self.drafts, {"name": native, **STEPPED_PLAN}, native_id=native)
         self.copy("project", f"{DRAFTING}:{native}")
+        # And its budgets document, which every plan carries, copied beside it the way
+        # `just copy-plan` carries a plan's documents.
+        budgeted(DRAFTING, native, no_budgets([SERVICE_ORIGIN]))
+        self.copy("document", f"{DRAFTING}:{native}-budgets")
         return f"{STORED}:{native}"
 
     def document(self, native: str, labels: list[object]) -> str:

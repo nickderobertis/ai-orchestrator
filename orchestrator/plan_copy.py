@@ -48,7 +48,7 @@ from typing import TypedDict
 
 from onetaskgraph_sdk import CopyReport, GlobalId
 
-from orchestrator import plan_review, plan_store, task_body
+from orchestrator import plan_budgets, plan_review, plan_store, task_body
 
 #: The source a plan of this repository is copied into when the caller names none: the
 #: `plans` GitHub Projects board `onetaskgraph.yaml` configures, which is where a plan of
@@ -146,7 +146,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     # this checkout's own tracked files, so a recipe run from here cannot remove one.
     # llmlint: ignore[changed_behavior_has_e2e] see the note above this line
     try:
-        pending = plan_review.unreviewed(records)
+        pending = plan_review.unreviewed(records, budgets=plan_budgets.readable(args.project))
     except OSError as exc:
         print(
             f"copy-plan: cannot fingerprint the review bar this plan would be cleared "
@@ -173,7 +173,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     # is not a directory, and a plan copied without this record can never earn one there.
     try:
         plan = plan_store.read_plan(args.project, records)
-        pending_plan = plan_review.plan_unreviewed(plan_store.project_record(args.project), plan)
+        pending_plan = plan_review.plan_unreviewed(
+            plan_store.project_record(args.project),
+            plan,
+            budgets=plan_budgets.readable(args.project),
+        )
     except (OSError, ValueError) as exc:
         print(
             f"copy-plan: cannot read the plan-level review record of {args.project}: {exc}; "

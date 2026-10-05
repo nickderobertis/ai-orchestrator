@@ -1529,6 +1529,10 @@ records that pass on the project rather than on any task.
 you did not touch costs nothing; the approval is not a second opinion on the plan, and
 every launch is refused without it save the bounded planning exemption above.
 
+**Every plan states its budgets** in the project document `<project>-budgets`:
+[`docs/budgets.md`](docs/budgets.md) is the convention, and `config/budgets-migration.yaml`
+the one list of plans that predate it.
+
 ### What every launch exports
 
 Every launch hands the engine `--bus-config config/onemessagebus.yaml` and exports

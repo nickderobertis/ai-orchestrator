@@ -18,6 +18,7 @@ argument, option, or environment variable that writes a record without a pass.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 import subprocess
@@ -27,10 +28,12 @@ from pathlib import Path
 from typing import Any, TypedDict, get_type_hints
 
 import pytest
+import yaml
+from project_fixtures import budgeted
 from published_tools import ONETASKGRAPH_BIN
 from test_host_installs import RELEASE_RULE, RELEASES
 
-from orchestrator import criteria_guard, host_installs, plan_review, plan_store
+from orchestrator import criteria_guard, host_installs, plan_budgets, plan_review, plan_store
 from orchestrator.plan_store import StoreTask
 from orchestrator.root import REPO_ROOT
 
@@ -479,11 +482,22 @@ def test_the_key_changes_with_the_bar_in_force() -> None:
     assert plan_review.review_key(_task(), BAR) != plan_review.review_key(_task(), "moved")
 
 
-def test_the_bar_fingerprint_reads_the_files_the_bar_is(tmp_path: Path) -> None:
-    """Editing either file, by one byte, invalidates every record made under it."""
-    for relative in plan_review.BAR_FILES:
-        copy = tmp_path / relative.name
-        copy.parent.mkdir(parents=True, exist_ok=True)
+def test_the_bar_is_the_review_bar_the_verdict_schema_and_the_budgets_template() -> None:
+    """The reviewer reads the budgets document's answers, so its template is part of the bar."""
+    assert (
+        Path("personas") / "planner.yaml",
+        Path("config") / "plan-review-verdict.schema.json",
+        Path("templates") / "plan-budgets.md.j2",
+    ) == plan_review.BAR_FILES
+
+
+@pytest.mark.parametrize("edited", range(len(plan_review.BAR_FILES)), ids=lambda i: f"file-{i}")
+def test_the_bar_fingerprint_reads_the_files_the_bar_is(tmp_path: Path, edited: int) -> None:
+    """Editing any of the files, by one byte, invalidates every record made under it.
+
+    Both levels of record: a task's pass found under the bar it was granted at is not found
+    under the moved one, and nor is the plan's.
+    """
     original = tmp_path / "original"
     moved = tmp_path / "moved"
     for root in (original, moved):
@@ -492,9 +506,25 @@ def test_the_bar_fingerprint_reads_the_files_the_bar_is(tmp_path: Path) -> None:
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes((REPO_ROOT / relative).read_bytes())
     assert plan_review.bar_fingerprint(original) == plan_review.bar_fingerprint(REPO_ROOT)
-    edited = moved / plan_review.BAR_FILES[0]
-    edited.write_bytes(edited.read_bytes() + b"\n# one more byte\n")
+    target = moved / plan_review.BAR_FILES[edited]
+    target.write_bytes(target.read_bytes() + b"\n")
     assert plan_review.bar_fingerprint(moved) != plan_review.bar_fingerprint(original)
+
+    granted = _recorded(
+        _task(), plan_review.review_key(_task(), plan_review.bar_fingerprint(original))
+    )
+    assert plan_review.unreviewed([granted], plan_review.bar_fingerprint(original)) == []
+    assert plan_review.unreviewed([granted], plan_review.bar_fingerprint(moved)) == [granted]
+    plan = {"goal": {"text": "Deliver it"}, "tasks": []}
+    record = {
+        "metadata": {
+            plan_review.RECORD_KEY: {
+                "key": plan_review.plan_key(plan, plan_review.plan_bar_fingerprint(original))
+            }
+        }
+    }
+    assert not plan_review.plan_unreviewed(record, plan, plan_review.plan_bar_fingerprint(original))
+    assert plan_review.plan_unreviewed(record, plan, plan_review.plan_bar_fingerprint(moved))
 
 
 #: The canonical fixture of the two shapes a plan reaches a key in: what
@@ -2123,3 +2153,227 @@ def test_a_snapshot_destination_that_is_absent_or_already_a_snapshot_is_written(
             destination.write_text('["demo:earlier"]', encoding="utf-8")
         assert plan_review.planning_main(["snapshot", str(destination)]) == 0
         assert json.loads(destination.read_text(encoding="utf-8")) == ["demo:already"]
+
+
+#: One budget a node of the plan owns, and the budgets document answers carrying it.
+OWNED_BUDGET: dict[str, object] = {
+    "id": "route-latency",
+    "repository": "github.com/acme/app",
+    "file": "apps/api/budgets.yaml",
+    "measure": "time to the route's response at the client",
+    "inner_measure_reason": "",
+    "unit": "ms",
+    "direction": "max",
+    "threshold": 250,
+    "workload": "sentinel-workload: 500 requests a minute",
+    "evidence": "spike-route measured 90 ms",
+    "command": "bun run measure:route",
+    "node": "route",
+    "file_change": "add",
+}
+BUDGET_ANSWERS: dict[str, object] = {
+    "workload": "sentinel-plan-workload: 500 requests a minute at peak.",
+    "checklist": [{"concern": "latency", "budget": "route-latency", "not_applicable": ""}],
+    "ten_x": "sentinel-ten-x: the route slows first, and route-latency covers it.",
+    "budgets": [OWNED_BUDGET],
+    "repo_wide_effects": [{"repository": "github.com/acme/app", "budget": "", "effect": "none"}],
+    "realistic_data": [],
+    "spike_findings": [],
+}
+BUDGETS = plan_budgets.Budgets(
+    plan_store.QualifiedDocumentId("demo:plan-budgets"), plan_budgets.parse(BUDGET_ANSWERS)
+)
+OWNED = plan_budgets.parse(BUDGET_ANSWERS).budgets[0]
+
+#: One moved value per answer, each still of its declared shape.
+MOVED_ANSWERS: dict[str, object] = {
+    "workload": "10 requests a minute.",
+    "checklist": [{"concern": "spend", "budget": "", "not_applicable": "n/a because free"}],
+    "ten_x": "Nothing slows.",
+    "budgets": [{**OWNED_BUDGET, "threshold": 300}],
+    "repo_wide_effects": [{"repository": "github.com/acme/app", "budget": "", "effect": "+1 s"}],
+    "realistic_data": [{"data": "d", "choice": "fixture", "reason": "r", "artifact": "a"}],
+    "spike_findings": [{"spike": "s", "finding": "f", "changed": "c"}],
+}
+
+
+def test_the_task_reviewer_is_asked_that_a_node_owning_a_budget_names_it_and_its_workload() -> None:
+    asked = " ".join(plan_review.REVIEW_PROMPT.split())
+    for sentence in (
+        "One question is asked of a node that owns a budget",
+        "Such a node owns the budget's command",
+        "its `## Acceptance criteria` name each budget it owns by its id and the realistic "
+        "workload the budget holds at",
+        "a criterion asking the worker to have met a repo-wide budget's threshold is refused",
+        "A node owning no budget is not asked this.",
+    ):
+        assert sentence in asked, sentence
+    composed = plan_review._prompt("P", _task(), [OWNED])
+    assert composed.startswith(plan_review.REVIEW_PROMPT)
+    assert "## The budgets the plan's budgets document says this node owns" in composed
+    assert "route-latency" in composed and "sentinel-workload" in composed
+    bare = plan_review._prompt("P", _task())
+    assert bare.endswith(
+        "## The budgets the plan's budgets document says this node owns\n\n(none)\n"
+    )
+
+
+def test_a_task_key_covers_the_budgets_it_owns_and_nothing_when_it_owns_none() -> None:
+    task = _task()
+    unowned = plan_review.review_key(task, BAR)
+
+    assert plan_review.review_key(task, BAR, []) == unowned
+    owned = plan_review.review_key(task, BAR, [OWNED])
+    assert owned != unowned
+    moved = plan_review.review_key(task, BAR, [dataclasses.replace(OWNED, workload="10 a minute")])
+    assert moved != owned
+    granted = _recorded(task, owned)
+    assert plan_review.unreviewed([granted], BAR, BUDGETS) == []
+    assert plan_review.unreviewed([granted], BAR) == [granted], "a budget dropped is a new question"
+
+
+def test_the_plan_reviewer_is_asked_what_the_plan_is_missing_from_its_budgets() -> None:
+    asked = " ".join(plan_review.PLAN_REVIEW_PROMPT.split())
+    for question in (
+        "On the budgets, ask what the plan is **missing**, not only whether each entry of its "
+        "budgets document was filled in",
+        "a concern the stated workload makes likely that the checklist dismissed or never lists",
+        "a 10x answer no budget covers",
+        "a budget no node owns, or one with no command to check it",
+        "a measure taken further inward than where the product owner feels the impact with no "
+        "reason given",
+        "a repo-wide budget — one in a repository's root `budgets.yaml` — written into a task's "
+        "criteria",
+        "a change to a budgets file the budgets imply that the document omits",
+        "a target the evidence shows is infeasible, quietly loosened rather than escalated",
+        "A plan that carries no budgets document is not asked this.",
+    ):
+        assert question in asked, question
+
+
+def test_the_plan_reviewer_is_shown_the_budgets_document_and_the_key_covers_it() -> None:
+    """Shown iff keyed, one level up: every answer the budgets document renders."""
+    plan = {"goal": {"text": "Deliver the route"}, "tasks": [{"id": "route"}]}
+    composed = plan_review._plan_prompt(plan, BUDGETS)
+
+    assert "## The plan's budgets document" in composed
+    assert "`demo:plan-budgets`, rendered from the `plan-budgets` template" in composed
+    for sentinel in ("sentinel-plan-workload", "sentinel-ten-x", "sentinel-workload"):
+        assert sentinel in composed, sentinel
+    assert "(this plan carries no budgets document)" in plan_review._plan_prompt(plan)
+
+    keyed = plan_review.plan_key(plan, BAR, BUDGETS)
+    assert keyed != plan_review.plan_key(plan, BAR)
+    for answer in BUDGET_ANSWERS:
+        moved = plan_budgets.Budgets(
+            BUDGETS.document,
+            plan_budgets.parse({**BUDGET_ANSWERS, answer: MOVED_ANSWERS[answer]}),
+        )
+        assert plan_review.plan_key(plan, BAR, moved) != keyed, answer
+
+
+def test_the_review_bar_holds_the_budget_question() -> None:
+    bar = " ".join(
+        yaml.safe_load((REPO_ROOT / plan_review.BAR_FILES[0]).read_text(encoding="utf-8"))["user"][
+            "persona"
+        ].split()
+    )
+    for demand in (
+        "Hold it to six things",
+        "**Its budgets are what its work needs.**",
+        "states a realistic workload with numbers",
+        "answers every concern of the checklist with a budget or a one-line reason it needs none",
+        "Look for what is missing rather than whether each line was filled in",
+        "a repo-wide budget written into a task's criteria",
+        "a requested target quietly loosened rather than escalated",
+        "A node that owns a budget names that budget and its workload in its criteria.",
+    ):
+        assert demand in bar, demand
+
+
+# llmlint: ignore-block[shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker] The
+# review reads the budgets document through the plan store, so the store is what this
+# drives: the `_Store` every review test here already writes into, with the document
+# rendered by the pinned store itself. It is not a host tool: the store is the pinned install
+# `uv.lock` names and `templates/` is in `codeWorkspace`, so both are in the key this tier is
+# memoized on, and the module under test is this project's. Only the judged turn is stood in for.
+def test_a_review_reads_the_budgets_document_from_the_store_and_records_keys_over_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Through the real store: the document is rendered and read back, the judge doubled.
+
+    Each node's prompt shows the budgets it owns and the plan's shows the whole document,
+    and the records written are the keys `just check-plan` then finds — so a plan reviewed
+    with its budgets is reviewed, and its budgets moving after is a plan nobody reviewed.
+    """
+    store = _Store(tmp_path / "store", [_task()])
+    store.install(monkeypatch)
+    monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: BAR)
+    budgeted("demo", "plan", BUDGET_ANSWERS)
+    prompts = _verdicts(monkeypatch, PASSES, PASSES)
+
+    assert plan_review.main(["demo:plan"]) == 0
+
+    read = plan_budgets.read("demo:plan")
+    assert read is not None and read.answers.as_record() == BUDGET_ANSWERS
+    assert "sentinel-workload" in prompts[0], prompts[0]
+    assert "sentinel-plan-workload" in prompts[1] and "sentinel-ten-x" in prompts[1]
+    written = store.written("plan/route")
+    assert isinstance(written, dict)
+    assert written["key"] == plan_review.review_key(_task(), BAR, [OWNED])
+    whole = store.written("plan", project=True)
+    assert isinstance(whole, dict)
+    assert whole["key"] == plan_review.plan_key(PLAN, plan_review.plan_bar_fingerprint(), read)
+
+    moved = {**BUDGET_ANSWERS, "ten_x": "Something else slows first."}
+    budgeted("demo", "plan", moved)
+    assert plan_review.plan_unreviewed(
+        plan_store.project_record("demo:plan"), PLAN, budgets=plan_budgets.read("demo:plan")
+    ), "a budgets document changed after the review still read as reviewed"
+
+
+# llmlint: ignore-end[shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]
+
+
+def test_the_planner_is_told_how_to_state_its_budgets_in_general_terms() -> None:
+    """The planner's own prompt carries every budgets rule, naming no repository of this host.
+
+    It travels into every repository planned against, so the section holds the general
+    concepts — and the review bar above holds a plan to them.
+    """
+    prompt = yaml.safe_load((REPO_ROOT / plan_review.BAR_FILES[0]).read_text(encoding="utf-8"))[
+        "system_prompt"
+    ]
+    section = prompt.split("## Budgets: the measurable requirements a plan states", 1)[1].split(
+        "\n## ", 1
+    )[0]
+    stated = " ".join(section.split())
+    for rule in (
+        "**Workload first.**",
+        "Those numbers reach the acceptance criteria",
+        "latency; quota and rate-limit headroom; how the work scales with data; spend; resource "
+        "use; gate time; change cycle time",
+        'Every concern gets a budget or a one-line "n/a because …"',
+        "*at 10× realistic usage, what does the product owner notice getting worse first?*",
+        "a set of general problem classes, never a closed list",
+        "grows a new class each time a real miss",
+        "**Use the measure of record**",
+        "Take a measure further inward only when the outer one cannot be checked, and say why",
+        "its root `budgets.yaml` and every project's own",
+        "Propose a change to any of them only through the plan's budgets document",
+        "**A budget's command performs the measurement.**",
+        "The node that implements a budget owns that command and the budget's registration",
+        "its acceptance criteria name the budget and the realistic workload it holds at",
+        "A feature budget goes in the budgets file of the project that owns what it measures",
+        "Only a budget that must always be checked goes in the root file",
+        "**Repo-wide budgets are enforced on the merge path** and never written into a task's "
+        "criteria",
+        "weigh realism (can real data be had at all), generation cost, fixture cost, and upkeep",
+        "**A target the user asked for that the evidence says is infeasible is an escalated "
+        "exception**",
+        "never a quietly loosened number",
+        "**Every plan writes its budgets document**",
+    ):
+        assert rule in stated, rule
+    for host_name in ("nickderobertis", "ai-orchestrator", "petsinc", "hellopatient"):
+        assert host_name not in section, host_name

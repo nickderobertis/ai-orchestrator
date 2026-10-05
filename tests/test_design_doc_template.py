@@ -68,13 +68,25 @@ SECTIONS = (
     ("planned_tasks", "Planned tasks"),
 )
 
+#: The four budget sections, between Architecture and Acceptance criteria, each as the block
+#: that renders it and the heading it renders. Each renders only for a plan that answers
+#: its budget answers, so a document whose plan carries none reads as it always did.
+BUDGET_SECTIONS = (
+    ("budgets", "Budgets"),
+    ("budget_files", "Budgets-file changes"),
+    ("realistic_data", "Realistic data"),
+    ("spike_findings", "Spike findings"),
+)
+
 #: The block holding what applies to the whole document, ahead of every section.
 DOCUMENT_GUIDANCE = "document_guidance"
 
 #: Every block the template defines, in order: the document's guidance, then each section's
 #: guidance block directly ahead of the block that renders it.
 BLOCKS = (DOCUMENT_GUIDANCE,) + tuple(
-    name for block, _ in SECTIONS for name in (f"{block}_guidance", block)
+    name
+    for block, _ in (*SECTIONS[:3], *BUDGET_SECTIONS, *SECTIONS[3:])
+    for name in (f"{block}_guidance", block)
 )
 
 #: The keys of an object answer, each naming the keys of the objects it lists, or `None`.
@@ -106,6 +118,49 @@ VARIABLES: dict[str, tuple[str, str | None, Keys | None]] = {
     ),
 }
 
+#: The budget answers, which restate the plan's budgets document and are optional so a
+#: document written for a plan carrying none renders as it did: each variable's type, item
+#: type and object keys, as `plan-budgets` declares them, and the one answer of the design
+#: document's own, the reason a plan predates budgets.
+BUDGET_VARIABLES: dict[str, tuple[str, str | None, Keys | None]] = {
+    "workload": ("text", None, None),
+    "checklist": ("list", "object", {"concern": None, "budget": None, "not_applicable": None}),
+    "ten_x": ("text", None, None),
+    "budgets": (
+        "list",
+        "object",
+        {
+            key: None
+            for key in (
+                "id",
+                "repository",
+                "file",
+                "measure",
+                "inner_measure_reason",
+                "unit",
+                "direction",
+                "threshold",
+                "workload",
+                "evidence",
+                "command",
+                "node",
+                "file_change",
+            )
+        },
+    ),
+    "repo_wide_effects": ("list", "object", {"repository": None, "budget": None, "effect": None}),
+    "realistic_data": (
+        "list",
+        "object",
+        {"data": None, "choice": None, "reason": None, "artifact": None},
+    ),
+    "spike_findings": ("list", "object", {"spike": None, "finding": None, "changed": None}),
+    "predates_budgets": ("text", None, None),
+}
+
+#: The plan's budgets document's own template, whose variables the budget answers restate.
+BUDGETS_TEMPLATE = REPO_ROOT / "templates" / "plan-budgets.md.j2"
+
 #: One phrase per format rule, which only that rule's statement carries. The guidance
 #: comments state each exactly once: none would leave a writer and its judge without it,
 #: and two is a second answer to drift from the first. No variable description carries
@@ -114,7 +169,10 @@ RULES = {
     "reader": "technical product manager with no depth in this domain",
     "prose": "no more technical than the plan's own goal statement",
     "length": "Exactness is spent on what is hard to undo",
-    "sections": "Five, in this order: What, Why, Architecture, Acceptance criteria, Planned tasks",
+    "sections": "In this order: What, Why, Architecture, then the four budget sections",
+    "budgets restate the budgets document": "restate the plan's budgets document",
+    "predates budgets": "This plan predates budgets: <reason>",
+    "budgets-file effect stated even when none": 'The effect is stated even when it is "none"',
     "no alert blocks": "No GitHub alert blocks",
     "guidance is never rendered": "never an HTML comment",
     "what and why": "carry no interface detail and no implementation detail",
@@ -252,10 +310,10 @@ def _render(loader_document: str, answers: object, tmp_path: Path) -> str:
 # llmlint: ignore-block[suppressions_justified] The front matter is onetaskgraph's open template
 # contract, parsed from YAML; each caller subscripts the one field it reads, so a moved shape fails
 # there rather than at a model of it written here.
-def _front_matter() -> dict[str, Any]:
-    text = TEMPLATE.read_text(encoding="utf-8")
+def _front_matter(template: Path = TEMPLATE) -> dict[str, Any]:
+    text = template.read_text(encoding="utf-8")
     found = re.match(r"---\n(.*?)\n---\n", text, re.DOTALL)
-    assert found is not None, f"{TEMPLATE.name} opens with no front matter"
+    assert found is not None, f"{template.name} opens with no front matter"
     matter: dict[str, Any] = yaml.safe_load(found.group(1))
     return matter
 
@@ -317,7 +375,8 @@ def test_the_template_declares_each_variable_with_its_type(loader: str) -> None:
         for one in json.loads(listed.stdout)["variables"]
     }
     assert declared == {
-        name: (kind, items, True) for name, (kind, items, _) in VARIABLES.items()
+        **{name: (kind, items, True) for name, (kind, items, _) in VARIABLES.items()},
+        **{name: (kind, items, False) for name, (kind, items, _) in BUDGET_VARIABLES.items()},
     }, declared
 
 
@@ -327,12 +386,14 @@ def _keys(shape: Keys) -> list[str]:
 
 
 @pytest.mark.parametrize(
-    "variable", [name for name, (_, _, keys) in VARIABLES.items() if keys], ids=str
+    "variable",
+    [name for name, (_, _, keys) in {**VARIABLES, **BUDGET_VARIABLES}.items() if keys],
+    ids=str,
 )
 def test_an_object_variables_description_names_each_of_its_keys(variable: str) -> None:
     """The description is where a writer learns an object's keys, so it names every one."""
     description = _front_matter()["variables"][variable]["description"]
-    keys = VARIABLES[variable][2]
+    keys = {**VARIABLES, **BUDGET_VARIABLES}[variable][2]
     assert keys is not None
     missing = [key for key in _keys(keys) if f"`{key}`" not in description]
     assert not missing, f"{variable}'s description never names {missing}:\n{description}"
@@ -551,3 +612,155 @@ def test_repository_guidance_extends_host_with_a_digest_covering_both_files(
     )
     host_template.write_text(host_template.read_text(encoding="utf-8") + "\n", encoding="utf-8")
     assert resolve(True, host)["digest"] != extending["digest"]
+
+
+def test_the_budget_answers_restate_the_budgets_documents_variables_key_for_key() -> None:
+    """The design document's budget answers are the budgets document's, never a second shape.
+
+    Their names, types, item types and descriptions — where each object answer's keys are
+    stated — are the `plan-budgets` template's own, and the only difference allowed is that
+    here they are optional, so a document written for a plan carrying no budgets renders as
+    it did. This fails the moment the two sets of keys part.
+    """
+    ours = _front_matter()["variables"]
+    theirs = _front_matter(BUDGETS_TEMPLATE)["variables"]
+    restated = {name: ours[name] for name in ours if name not in VARIABLES} | {}
+    restated.pop("predates_budgets")
+
+    assert set(restated) == set(theirs), (set(restated), set(theirs))
+    for name, declared in theirs.items():
+        held = restated[name]
+        assert {key: held.get(key) for key in ("type", "items", "description")} == {
+            key: declared.get(key) for key in ("type", "items", "description")
+        }, name
+        assert declared["required"] is True and held["required"] is False, name
+
+
+#: Budget answers carrying one budget, a dismissed concern and a second repository whose
+#: repo-wide effect is none, so every budget section has something of each kind to show.
+BUDGET_ANSWERS: dict[str, object] = {
+    "workload": "2,000 nodes per plan, 3 runs at once.",
+    "checklist": [
+        {"concern": "latency", "budget": "listing-latency", "not_applicable": ""},
+        {"concern": "spend", "budget": "", "not_applicable": "n/a because it calls no paid API"},
+    ],
+    "ten_x": "The listing slows first; `listing-latency` covers it.",
+    "budgets": [
+        {
+            "id": "listing-latency",
+            "repository": "github.com/acme/app",
+            "file": "apps/web/budgets.yaml",
+            "measure": "time to the first page in the browser",
+            "inner_measure_reason": "",
+            "unit": "ms",
+            "direction": "max",
+            "threshold": 800,
+            "workload": "2,000 nodes",
+            "evidence": "spike-listing measured 420 ms",
+            "command": "bun run measure:listing",
+            "node": "listing",
+            "file_change": "add",
+        }
+    ],
+    "repo_wide_effects": [
+        {"repository": "github.com/acme/app", "budget": "gate-time", "effect": "+20 s"},
+        {"repository": "github.com/acme/docs", "budget": "", "effect": "none"},
+    ],
+    "realistic_data": [
+        {
+            "data": "plan nodes",
+            "choice": "generator",
+            "reason": "Seeded, and cheap after caching.",
+            "artifact": "tools/gen-nodes.ts",
+        }
+    ],
+    "spike_findings": [
+        {"spike": "spike-listing", "finding": "The API pages at 100.", "changed": "it pages."}
+    ],
+}
+
+
+def test_rendering_budget_answers_gives_the_four_budget_sections_in_place(
+    tmp_path: Path, loader: str
+) -> None:
+    body = _render(loader, {**ANSWERS, **BUDGET_ANSWERS}, tmp_path)
+    sections = re.findall(r"^## (.+)$", body, re.MULTILINE)
+    assert tuple(sections) == (
+        "What",
+        "Why",
+        "Architecture",
+        *(heading for _, heading in BUDGET_SECTIONS),
+        "Acceptance criteria",
+        "Planned tasks",
+    ), body
+
+    budgets = body.split("## Budgets\n", 1)[1].split("\n## ", 1)[0]
+    assert "2,000 nodes per plan, 3 runs at once." in budgets
+    table = [line for line in budgets.splitlines() if line.startswith("|")]
+    assert table == [
+        "| Measure | Realistic workload | Target | Spike evidence | Check |",
+        "| --- | --- | --- | --- | --- |",
+        "| time to the first page in the browser | 2,000 nodes | at most 800 ms "
+        "| spike-listing measured 420 ms | `bun run measure:listing` in `apps/web/budgets.yaml` |",
+    ], table
+    assert "**At 10x realistic usage:** The listing slows first" in budgets
+    assert "- **spend.** n/a because it calls no paid API" in budgets
+    assert "latency." not in budgets, "a concern a budget covers is not listed as unbudgeted"
+
+    files = body.split("## Budgets-file changes\n", 1)[1].split("\n## ", 1)[0]
+    assert files.strip().split("\n\n") == [
+        "### `github.com/acme/app`",
+        "- **`listing-latency`** — add in `apps/web/budgets.yaml`.\n"
+        "- **Repo-wide `gate-time`:** +20 s",
+        "### `github.com/acme/docs`",
+        "- No budget of this plan goes in its budgets files.\n- **Repo-wide:** none",
+    ], files
+
+    data = body.split("## Realistic data\n", 1)[1].split("\n## ", 1)[0]
+    assert data.strip() == (
+        "- **plan nodes:** generator. Seeded, and cheap after caching. (`tools/gen-nodes.ts`)"
+    )
+    spikes = body.split("## Spike findings\n", 1)[1].split("\n## ", 1)[0]
+    assert spikes.strip() == "- **spike-listing:** The API pages at 100. So it pages."
+
+
+def test_a_plan_that_predates_budgets_renders_one_line_in_place_of_the_budget_sections(
+    tmp_path: Path, loader: str
+) -> None:
+    reason = "It was approved before plans carried budgets."
+    body = _render(loader, {**ANSWERS, "predates_budgets": reason}, tmp_path)
+
+    sections = re.findall(r"^## (.+)$", body, re.MULTILINE)
+    assert "Budgets-file changes" not in sections and "Spike findings" not in sections
+    budgets = body.split("## Budgets\n", 1)[1].split("\n## ", 1)[0]
+    assert budgets.strip() == f"This plan predates budgets: {reason}"
+
+
+def test_a_document_answering_no_budget_renders_no_budget_section(
+    tmp_path: Path, loader: str
+) -> None:
+    body = _render(loader, ANSWERS, tmp_path)
+
+    assert not {heading for _, heading in BUDGET_SECTIONS} & set(
+        re.findall(r"^## (.+)$", body, re.MULTILINE)
+    ), body
+
+
+@pytest.mark.parametrize(
+    ("direction", "target"),
+    [("max", "at most 800 ms"), ("min", "at least 800 ms"), ("below", "below 800 ms")],
+    ids=["max", "min", "unknown"],
+)
+def test_a_budgets_target_reads_its_direction_in_words(
+    tmp_path: Path, loader: str, direction: str, target: str
+) -> None:
+    """`max` and `min` read as words, and a value outside both is shown as it stands."""
+    budgets = BUDGET_ANSWERS["budgets"]
+    assert isinstance(budgets, list)
+    body = _render(
+        loader,
+        {**ANSWERS, **BUDGET_ANSWERS, "budgets": [{**budgets[0], "direction": direction}]},
+        tmp_path,
+    )
+    (row,) = [line for line in body.splitlines() if line.startswith("| time to the first page")]
+    assert f"| {target} |" in row, row

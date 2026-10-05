@@ -54,7 +54,7 @@ from fake_backend import (
 from github_board import LINEAR_KEY_ENV, _serving_board
 from linear_stand_in import provisioned, stand_in
 from nx_workspace import answering_this_checkouts_origin, copy_working_tree
-from project_fixtures import helper
+from project_fixtures import budgeted, helper, no_budgets
 from published_tools import ONETASKGRAPH_BIN
 from scratch_identity import pooling, seeded
 from waits import timeout as e2e_timeout
@@ -288,6 +288,13 @@ def _draft(bench: Bench, name: str, nodes: tuple[Node, ...]) -> str:
             ],
         },
         native_id=name,
+    )
+    # Every plan carries its budgets document; this one's work needs no budget.
+    budgeted(
+        AUTHORING,
+        name,
+        no_budgets([PETSINC] if any(node.petsinc for node in nodes) else []),
+        bench.environment,
     )
     return f"{AUTHORING}:{name}"
 
@@ -715,7 +722,12 @@ def test_a_mixed_plan_runs_as_one_from_its_board_home_and_its_linear_member(
         routed, bench, "plans", "document", "list", "--project", home, "--json", seconds=120
     )
     assert documents.returncode == 0, documents.stdout + documents.stderr
-    assert len(json.loads(documents.stdout)["items"]) == 1, documents.stdout
+    # The home holds the plan's two documents: the one it is read as, and its budgets.
+    templates = sorted(
+        (held["item"]["metadata"].get("onetaskgraph.template") or {}).get("template", "")
+        for held in json.loads(documents.stdout)["items"]
+    )
+    assert templates == ["onepipeline:design-doc", "onepipeline:plan-budgets"], documents.stdout
 
     launch, _, journal = _approved_and_settled(routed, bench, home, watching=False)
 

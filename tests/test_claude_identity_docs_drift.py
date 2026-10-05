@@ -33,12 +33,17 @@ IDENTITY_COUNT = re.compile(rf"\b(?:same ({_WORDS}) identities|({_WORDS}) harnes
 
 
 def _helper_defaults() -> dict[str, str]:
-    """Each indirection the real helper walks, mapped to its `$HOME`-relative default."""
+    """Each indirection the real helper walks, mapped to its `$HOME`-relative default.
+
+    The lines are read whole rather than through `head -n 1`: the helper sets `pipefail`,
+    so a `head` that exits before the second line is written fails the pipe with SIGPIPE
+    (141) whenever the host is loaded enough to schedule it that way.
+    """
     script = (
         'source "$1"\n'
         'for name in "${CLAUDE_IDENTITY_CONFIG_VARIABLES[@]}"; do\n'
-        '    leaf=$(_claude_identity_default "$name" | head -n 1)\n'
-        '    printf "%s %s\\n" "$name" "$leaf"\n'
+        '    mapfile -t described < <(_claude_identity_default "$name")\n'
+        '    printf "%s %s\\n" "$name" "${described[0]}"\n'
         "done\n"
     )
     listed = subprocess.run(

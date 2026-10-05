@@ -30,12 +30,13 @@ from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any, NewType
 
+import plan_fixture_source
 import pytest
-from project_fixtures import FIXTURE_UNIT, approved, local_project, reviewed
+from project_fixtures import FIXTURE_UNIT, approved, budgeted, local_project, no_budgets, reviewed
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
-from orchestrator import design_approval, plan_review, plan_store
+from orchestrator import design_approval, plan_budgets, plan_review, plan_store
 from orchestrator.criteria_guard import APPENDIX
 from orchestrator.root import REPO_ROOT
 
@@ -182,6 +183,19 @@ def _stored_documents(project: str) -> list[dict[str, object]]:
     return [one["item"] for one in items]
 
 
+def _design_documents(project: str) -> list[dict[str, object]]:
+    """Every document of ``project`` but its budgets document, which a copy carries too."""
+    return [
+        document
+        for document in _stored_documents(project)
+        if not (
+            isinstance(provenance := document["metadata"], dict)
+            and isinstance(rendered := provenance.get("onetaskgraph.template"), dict)
+            and rendered.get("template") == plan_budgets.TEMPLATE_REFERENCE
+        )
+    ]
+
+
 def _reported(output: str) -> list[dict[str, Any]]:
     """The copy's per-record report lines, one JSON object each, in the order printed."""
     return [json.loads(line) for line in output.splitlines() if line.startswith("{")]
@@ -252,7 +266,7 @@ def test_a_plan_is_drafted_locally_cleared_there_copied_up_and_checked(
     assert _records(destination) == [], "a trial run wrote to the destination"
     # The trial reports every record the copy would create — the document among them, so
     # the flag reached the document copy — and names no destination, because nothing was.
-    would_create = {f"{project}", f"{project}/route", f"{project}-design"}
+    would_create = {f"{project}", f"{project}/route", f"{project}-budgets", f"{project}-design"}
     assert {one["source"] for one in _reported(trial.stdout)} == would_create, trial.stdout
     assert {(one["action"], one.get("destination")) for one in _reported(trial.stdout)} == {
         ("created", None)
@@ -265,6 +279,7 @@ def test_a_plan_is_drafted_locally_cleared_there_copied_up_and_checked(
     assert [(one["action"], one["destination"]) for one in _reported(copy.stdout)] == [
         ("created", copied_id),
         ("created", f"{copied_id}/route"),
+        ("created", f"{copied_id}-budgets"),
         ("created", f"{copied_id}-design"),
     ], copy.stdout
     # The plan's **document** lands beside its tasks, and that is the store's own
@@ -272,6 +287,7 @@ def test_a_plan_is_drafted_locally_cleared_there_copied_up_and_checked(
     # and its tasks and no document at all, so a plan copied without this arrives with
     # nothing for a person to approve it as and can never be launched.
     assert _records(destination) == [
+        f"documents/{native}-budgets.md",
         f"documents/{native}-design.md",
         f"projects/{native}.md",
         f"tasks/{native}/route.md",
@@ -296,7 +312,7 @@ def test_a_plan_is_drafted_locally_cleared_there_copied_up_and_checked(
     # order work — a plan cleared and approved where it was drafted is still cleared and
     # approved once it reaches the store it is launched from, rather than having to be
     # put in front of a person a second time.
-    (document,) = _stored_documents(copied_id)
+    (document,) = _design_documents(copied_id)
     assert design_approval.RECORD_KEY in document["metadata"], document["metadata"]
 
     # And so did the plan-level record, on the project: an entry of the project's own
@@ -510,6 +526,7 @@ def test_an_argument_this_recipe_has_no_opinion_about_reaches_the_store_s_copy_v
     assert again.returncode == 0, again.stdout + again.stderr
     assert "updated" in again.stdout, again.stdout
     assert _records(destination) == [
+        f"documents/{native}-budgets.md",
         f"documents/{native}-design.md",
         f"projects/{native}.md",
         f"tasks/{native}/route.md",
@@ -590,6 +607,7 @@ def test_the_whole_flow_still_lands_from_inside_a_run_that_named_the_store_binar
     copy = _just("copy-plan", project, "--to", DESTINATION)
     assert copy.returncode == 0, copy.stdout + copy.stderr
     assert _records(destination) == [
+        f"documents/{native}-budgets.md",
         f"documents/{native}-design.md",
         f"projects/{native}.md",
         f"tasks/{native}/route.md",
@@ -712,7 +730,7 @@ def test_a_copied_design_document_points_its_task_references_at_the_destination(
     # llmlint: ignore-block[modern_domain_modeling] Transient parsed JSON, narrowed here.
     landed = _reported_locations(copied_id)
     assert set(landed) == set(drafted), landed
-    (document,) = _stored_documents(copied_id)
+    (document,) = _design_documents(copied_id)
     content = document["content"]
     assert isinstance(content, str), document
     for node, where in landed.items():
@@ -736,3 +754,71 @@ def test_a_copied_design_document_points_its_task_references_at_the_destination(
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+#: A budget the `route` node owns, in the budgets document `_budgets` answers.
+OWNED_BUDGET: dict[str, object] = {
+    "id": "route-latency",
+    "repository": REPOSITORY,
+    "file": "apps/api/budgets.yaml",
+    "measure": "time to the route's response at the client",
+    "inner_measure_reason": "",
+    "unit": "ms",
+    "direction": "max",
+    "threshold": 250,
+    "workload": "500 requests a minute",
+    "evidence": "spike-route measured 90 ms",
+    "command": "bun run measure:route",
+    "node": "route",
+    "file_change": "add",
+}
+
+
+def _budgets(**changes: object) -> dict[str, object]:
+    """The budgets document's answers with the `route` node owning one budget."""
+    answers = no_budgets([REPOSITORY])
+    checklist = answers["checklist"]
+    assert isinstance(checklist, list)
+    checklist[0] = {"concern": "latency", "budget": "route-latency", "not_applicable": ""}
+    return {**answers, "budgets": [OWNED_BUDGET], **changes}
+
+
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This journey sits beside this module's other `just copy-plan` journeys and drives the same recipe under the same `planToolingWorkspace` inputs, which `tests/plan_tooling/AGENTS.md` states as this project's split; a project of its own would be keyed on those inputs too and add only a target.  # noqa: E501
+@pytest.mark.parametrize(
+    ("changed", "said"),
+    [
+        (
+            {"budgets": [{**OWNED_BUDGET, "workload": "5,000 requests a minute"}]},
+            "1 task(s) carry no review record for their current authored content: route",
+        ),
+        (
+            {"ten_x": "Nothing slows: the route is cached."},
+            "carries no plan-level one for the plan as it stands",
+        ),
+    ],
+    ids=["an-owned-budget", "a-plan-wide-answer"],
+)
+def test_a_budget_changed_after_the_review_stops_the_copy_and_copies_nothing(
+    destination: Path, changed: dict[str, object], said: str
+) -> None:
+    """The review covered the budgets, so a budget moved after it is one nobody reviewed.
+
+    A budget the `route` node owns moved after the review leaves that task's record over
+    content its reviewer was never shown; a plan-wide answer moved leaves the plan's own
+    record so. Either way `just copy-plan` refuses before the store writes anything, naming
+    the review that would clear it.
+    """
+    project = _project("copy-budgets")
+    native = project.partition(":")[2]
+    budgeted(plan_fixture_source.SOURCE, native, _budgets())
+    reviewed(project)
+    trial = _just("copy-plan", project, "--to", DESTINATION, "--dry-run")
+    assert trial.returncode == 0, trial.stdout + trial.stderr
+
+    budgeted(plan_fixture_source.SOURCE, native, _budgets(**changed))
+    refused = _just("copy-plan", project, "--to", DESTINATION)
+
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert said in refused.stderr, refused.stderr
+    assert f"just review-plan {project}" in refused.stderr, refused.stderr
+    assert _records(destination) == [], "a refused copy wrote to the destination"

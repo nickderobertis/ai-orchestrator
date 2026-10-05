@@ -53,9 +53,94 @@ variables:
     type: list
     items: object
     required: true
+  workload:
+    description: >-
+      The realistic usage the plan's budgets hold at, with numbers: data volume and shape,
+      concurrency, items per run.
+    type: text
+    required: false
+    default: ""
+  checklist:
+    description: >-
+      One object per concern the plan was checked against, with three string keys:
+      `concern` (the concern, such as latency or gate time), `budget` (the `id` of the entry
+      of `budgets` that covers it) and `not_applicable` (a one-line "n/a because ..."). Exactly
+      one of `budget` and `not_applicable` is non-empty; the other is `""`.
+    type: list
+    items: object
+    required: false
+    default: []
+  ten_x:
+    description: >-
+      The answer to "at 10x realistic usage, what does the product owner notice getting worse
+      first?", naming the `id` of the budget that covers it or saying why none does.
+    type: text
+    required: false
+    default: ""
+  # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The `budgets` description: this restates the onebudgetspec keys a plan's budgets document names, which the task that added it requires; their reconciliation with the installed library is the `aio-budgets` node's, which adopts that library here, and the vocabularies in it are held to `orchestrator/plan_budgets.py` by `tests/test_plan_budgets_template.py` and `tests/test_plan_budgets.py`.
+  budgets:
+    description: >-
+      One object per budget the plan proposes, or `[]` when it proposes none, with these
+      keys. `id` (string, the budget's id in its budgets file). `repository` (string, the
+      normalized origin `host/owner/name` of the repository the budget goes in). `file`
+      (string, the repository-relative path of the `budgets.yaml` it goes in: `budgets.yaml`
+      for a repo-wide budget, or a project's own file for a scoped one). `measure` (string,
+      what is measured, in words, as near as possible to where the product owner feels it).
+      `inner_measure_reason` (string, why the measure is taken further inward than that, or
+      `""` when it is not). `unit` (string), `direction` (string, `max` or `min`) and
+      `threshold` (a number), each meaning what it means in onebudgetspec. `workload`
+      (string, the realistic workload the threshold holds at, which is never written into
+      the budgets file). `evidence` (string, where the number came from: a spike report's id
+      and figures, or the measurement it rests on). `command` (string, the command that
+      performs the measurement, as it will be registered). `node` (string, the id of the plan
+      node that owns the budget's command). `file_change` (string, `add`, `change` or
+      `none`).
+    type: list
+    items: object
+    required: false
+    default: []
+  # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+  repo_wide_effects:
+    description: >-
+      At least one object per repository the plan's tasks change, with three string keys:
+      `repository` (its normalized origin), `budget` (the `id` of a budget in that
+      repository's root `budgets.yaml`, or `""` when it has none) and `effect` (the expected
+      effect of the plan on it, never empty, and `none` when there is none).
+    type: list
+    items: object
+    required: false
+    default: []
+  realistic_data:
+    description: >-
+      One object per kind of data the plan makes realistic, or `[]`, with four string keys:
+      `data` (what the data is), `choice` (`generator`, `fixture`, `hybrid` or
+      `real-sample`), `reason` (why, weighed on realism, generation cost, fixture cost and
+      upkeep) and `artifact` (the repository artifact spikes, checks and later plans share).
+    type: list
+    items: object
+    required: false
+    default: []
+  spike_findings:
+    description: >-
+      One object per spike finding that changed the plan, or `[]`, with three string keys:
+      `spike` (the spike's id), `finding` (what it found) and `changed` (what in the plan it
+      changed).
+    type: list
+    items: object
+    required: false
+    default: []
+  predates_budgets:
+    description: >-
+      The reason `config/budgets-migration.yaml` gives for this plan when it names the plan,
+      which then carries no budgets document; `""` for every other plan.
+    type: text
+    required: false
+    default: ""
 ---
 {#- A table cell is one line holding no bare column delimiter, whatever an answer says. -#}
 {% macro cell(value) %}{{ value | replace("|", "\\|") | replace("\r\n", " ") | replace("\n", " ") | replace("\r", " ") }}{% endmacro %}
+{#- A budget's target in words: the direction, the threshold and the unit. -#}
+{% macro target(budget) %}{% if budget.direction == "max" %}at most{% elif budget.direction == "min" %}at least{% else %}{{ budget.direction }}{% endif %} {{ budget.threshold }} {{ budget.unit }}{% endmacro %}
 {% block document_guidance %}
 {#
   THE READER. A technical product manager with no depth in this domain. They read this
@@ -69,14 +154,18 @@ variables:
   be for the same plan. Exactness is spent on what is hard to undo, and everything else is
   said in a sentence.
 
-  SECTIONS. Five, in this order: What, Why, Architecture, Acceptance criteria, Planned
-  tasks. There is no separate Contracts section, and no answer adds a heading of its own.
+  SECTIONS. In this order: What, Why, Architecture, then the four budget sections —
+  Budgets, Budgets-file changes, Realistic data, Spike findings — then Acceptance criteria
+  and Planned tasks. A plan the migration list names renders one line in place of the four
+  budget sections. There is no separate Contracts section, and no answer adds a heading of
+  its own.
 
   HIGHLIGHTING. No GitHub alert blocks (`> [!CAUTION]` and the like) anywhere. The bold
   reversibility line is the whole of the highlighting.
 
   THIS TEMPLATE. Each section renders inside its own block: `what`, `why`, `architecture`,
-  `acceptance_criteria` and `planned_tasks`. Each section's guidance is a Jinja comment in a
+  `budgets`, `budget_files`, `realistic_data`, `spike_findings`, `acceptance_criteria` and
+  `planned_tasks`. Each section's guidance is a Jinja comment in a
   separate block, `<name>_guidance`, and this block, `document_guidance`, holds what applies
   to the whole document. Guidance is always a Jinja comment, never an HTML comment, so a
   rendered document carries none of it. The front matter states the data shape, what each
@@ -179,6 +268,118 @@ variables:
 
 {% endif %}
 {% endfor %}
+{% endblock %}
+{% block budgets_guidance %}
+{#
+  BUDGETS. The budget answers — `workload`, `checklist`, `ten_x`, `budgets`,
+  `repo_wide_effects`, `realistic_data` and `spike_findings` — restate the plan's budgets
+  document, the project document `<project>-budgets`, answer for answer: copy each from the
+  answers that document was rendered from, and invent none. A plan the migration list
+  `config/budgets-migration.yaml` names carries no budgets document; for it, answer
+  `predates_budgets` with the reason the list gives, word for word, and leave every budget
+  answer empty, and the section reads "This plan predates budgets: <reason>" in place of
+  all four budget sections.
+
+  The section opens with the realistic workload in the plan's own numbers, then a table with
+  one row per budget: the measure, the realistic workload it holds at, the target, the spike
+  evidence the number rests on, and the check — the command that performs the measurement
+  and the budgets file it is registered in. Then the answer to what the product owner
+  notices getting worse first at 10x realistic usage, and the concerns the plan found need
+  no budget, each with its reason. A reader approving this approves these targets.
+#}
+{% endblock %}
+{% block budgets %}
+{% if predates_budgets %}
+## Budgets
+
+This plan predates budgets: {{ predates_budgets }}
+
+{% elif workload or checklist or ten_x or budgets or repo_wide_effects or realistic_data or spike_findings %}
+## Budgets
+
+{{ workload }}
+
+| Measure | Realistic workload | Target | Spike evidence | Check |
+| --- | --- | --- | --- | --- |
+{% for budget in budgets %}
+| {{ cell(budget.measure) }} | {{ cell(budget.workload) }} | {{ cell(target(budget)) }} | {{ cell(budget.evidence) }} | `{{ cell(budget.command) }}` in `{{ cell(budget.file) }}` |
+{% endfor %}
+
+**At 10x realistic usage:** {{ ten_x }}
+
+{% for entry in checklist if entry.not_applicable %}
+{% if loop.first %}
+**Not budgeted:**
+
+{% endif %}
+- **{{ entry.concern }}.** {{ entry.not_applicable }}
+{% if loop.last %}
+
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endblock %}
+{% block budget_files_guidance %}
+{#
+  BUDGETS-FILE CHANGES. One subsection per repository the plan changes, from
+  `repo_wide_effects`: the budgets the plan adds to or changes in that repository's budgets
+  files, each with the file it goes in, and then the expected effect on each of its
+  repo-wide budgets. The effect is stated even when it is "none", because approving this
+  document is what approves a change to a budgets file, and nothing else changes one.
+#}
+{% endblock %}
+{% block budget_files %}
+{% if repo_wide_effects and not predates_budgets %}
+## Budgets-file changes
+
+{% for repository in repo_wide_effects | map(attribute="repository") | unique %}
+### `{{ repository }}`
+
+{% for budget in budgets | selectattr("repository", "equalto", repository) %}
+- **`{{ budget.id }}`** — {{ budget.file_change }} in `{{ budget.file }}`.
+{% else %}
+- No budget of this plan goes in its budgets files.
+{% endfor %}
+{% for entry in repo_wide_effects | selectattr("repository", "equalto", repository) %}
+- **Repo-wide{% if entry.budget %} `{{ entry.budget }}`{% endif %}:** {{ entry.effect }}
+{% endfor %}
+
+{% endfor %}
+{% endif %}
+{% endblock %}
+{% block realistic_data_guidance %}
+{#
+  REALISTIC DATA. One bullet per kind of data the plan makes realistic, from
+  `realistic_data`: the choice — a generator, a fixture, a hybrid or a real sample — and the
+  reason, weighed on realism, generation cost, fixture cost and upkeep, naming the artifact
+  that holds it.
+#}
+{% endblock %}
+{% block realistic_data %}
+{% if realistic_data and not predates_budgets %}
+## Realistic data
+
+{% for entry in realistic_data %}
+- **{{ entry.data }}:** {{ entry.choice }}. {{ entry.reason }} (`{{ entry.artifact }}`)
+{% endfor %}
+
+{% endif %}
+{% endblock %}
+{% block spike_findings_guidance %}
+{#
+  SPIKE FINDINGS. One bullet per spike finding that changed the plan, from
+  `spike_findings`, stated plainly: what the spike found, and what in the plan it changed.
+#}
+{% endblock %}
+{% block spike_findings %}
+{% if spike_findings and not predates_budgets %}
+## Spike findings
+
+{% for entry in spike_findings %}
+- **{{ entry.spike }}:** {{ entry.finding }} So {{ entry.changed }}
+{% endfor %}
+
+{% endif %}
 {% endblock %}
 {% block acceptance_criteria_guidance %}
 {#

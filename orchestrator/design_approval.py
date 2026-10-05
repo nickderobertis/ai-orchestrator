@@ -159,6 +159,15 @@ REPLACE = (
 #: The one shape a chain digest has, as the engine states it and the store records it.
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 
+#: The plan's **budgets document**, the one other document a plan's project holds: the
+#: template it is rendered from, the reference its rendering records, and the suffix its id
+#: carries after the plan's own native id. Stated here because this module decides which
+#: document of a project is its design document, and `orchestrator/plan_budgets.py` — the
+#: budgets document's reader — names them from here.
+BUDGETS_TEMPLATE = "plan-budgets"
+BUDGETS_REFERENCE = f"onepipeline:{BUDGETS_TEMPLATE}"
+BUDGETS_SUFFIX = "-budgets"
+
 
 class Unrendered(OSError):
     """A document that is not, as it stands, a rendering of the design-doc template in force."""
@@ -510,6 +519,29 @@ def located(document: StoreDocument) -> str:
     return plan_store.located(document.location, str(document.qualified_id))
 
 
+def budgets_document_id(project: str) -> str:
+    """The qualified id ``project``'s budgets document has where the plan is drafted."""
+    source, native = plan_store.qualified(project)
+    return f"{source}:{native}{BUDGETS_SUFFIX}"
+
+
+def is_budgets_document(project: str, document: StoreDocument) -> bool:
+    """Whether ``document`` is ``project``'s budgets document rather than its design document.
+
+    By its id where the plan was drafted, and by the template it records being rendered from
+    anywhere — a board mints its own ids, so a copy is known by its provenance alone.
+    """
+    provenance = document.metadata.get(PROVENANCE)
+    return str(document.qualified_id) == budgets_document_id(project) or (
+        isinstance(provenance, dict) and provenance.get("template") == BUDGETS_REFERENCE
+    )
+
+
+def design_documents(project: str, documents: Sequence[StoreDocument]) -> list[StoreDocument]:
+    """Every one of ``documents`` that is not ``project``'s budgets document."""
+    return [document for document in documents if not is_budgets_document(project, document)]
+
+
 def design_document(project: str) -> StoreDocument:
     """``project``'s design document, or ``OSError`` saying why there is not exactly one."""
     return one_document(project, plan_store.read_documents(project))
@@ -519,7 +551,9 @@ def one_document(project: str, documents: Sequence[StoreDocument]) -> StoreDocum
     """The one of ``documents`` that is ``project``'s design document.
 
     A project holds documents rather than *the* document, so "the design document" is the
-    one document of the project. Several is refused rather than guessed at: an approval
+    one document of the project that is not its budgets document, which
+    :func:`is_budgets_document` recognises and the plan check reads instead. Several is
+    refused rather than guessed at: an approval
     recorded against the wrong one of two reads as sound from every side afterwards, and
     the person who wrote the second document is the one who can say which is which.
 
@@ -527,6 +561,7 @@ def one_document(project: str, documents: Sequence[StoreDocument]) -> StoreDocum
     them — whether a planning project holds one at all is half of what ends its exemption
     — and a second read would ask the store the same question twice per launch.
     """
+    documents = design_documents(project, documents)
     if not documents:
         raise OSError(
             f"{project} holds no design document, so there is nothing a person could have "
@@ -699,7 +734,7 @@ def assess(project: str) -> Assessment:
     stamped = stamped_launch(project)
     note: str | None = None
     try:
-        documents = plan_store.read_documents(project)
+        documents = design_documents(project, plan_store.read_documents(project))
         if stamped is not None:
             held = frozenset(task.node_id for task in plan_store.read_tasks(project))
             beyond = tuple(sorted(held - stamped.nodes))

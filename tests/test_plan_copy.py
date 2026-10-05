@@ -286,7 +286,7 @@ def test_a_review_bar_this_checkout_cannot_compose_stops_before_it_judges_anythi
     """
     _reads(monkeypatch, _task("route"))
 
-    def refuse(_records: Sequence[StoreTask]) -> list[StoreTask]:
+    def refuse(_records: Sequence[StoreTask], **_keyed: object) -> list[StoreTask]:
         raise OSError("personas/planner.yaml is missing")
 
     monkeypatch.setattr(plan_review, "unreviewed", refuse)

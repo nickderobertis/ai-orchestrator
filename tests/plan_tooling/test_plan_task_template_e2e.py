@@ -38,6 +38,7 @@ from test_plan_flow_e2e import (
     _environment,
     _just,
     _renders_the_document,
+    _writes_the_budgets,
 )
 
 from orchestrator import plan_check, plan_store, task_body
@@ -207,7 +208,10 @@ def authored(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> A
                 # then `resolve` | `document create`), judged by the real `check-plan` and flow
                 # after it.
                 # llmlint: ignore[e2e_not_mocked, tests_mirror_real_usage] Paid turn only.
-                PLANNER_MARKER: [["bash", str(_planner_script(tmp_path, stored))]],
+                PLANNER_MARKER: [
+                    ["bash", str(_planner_script(tmp_path, stored))],
+                    _writes_the_budgets(tmp_path / "budgets", stored, AUTHORING),
+                ],
                 # llmlint: ignore[e2e_not_mocked, tests_mirror_real_usage] Paid turn only.
                 DESIGN_TASK_MARKER: [_renders_the_document(tmp_path / "design", stored, AUTHORING)],
             }

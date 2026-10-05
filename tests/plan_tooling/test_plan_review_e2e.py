@@ -36,10 +36,10 @@ import plan_root_variable
 import pytest
 import short_state
 from nx_workspace import answering_this_checkouts_origin, copy_working_tree
-from project_fixtures import helper, local_project
+from project_fixtures import budgets_record, helper, local_project, no_budgets
 from waits import timeout as e2e_timeout
 
-from orchestrator import plan_review, plan_store
+from orchestrator import plan_budgets, plan_review, plan_store
 from orchestrator.criteria_guard import APPENDIX
 from orchestrator.project_store import render_plan_project
 from orchestrator.root import REPO_ROOT
@@ -236,7 +236,9 @@ def test_an_unreviewed_plan_is_refused_and_a_reviewed_one_is_accepted(tmp_path: 
     assert isinstance(whole, dict), whole
     assert whole["by"] == plan_review.BY_REVIEW, whole
     assert whole["key"] == plan_review.plan_key(
-        plan_store.read_plan(project, [recorded]), plan_review.plan_bar_fingerprint()
+        plan_store.read_plan(project, [recorded]),
+        plan_review.plan_bar_fingerprint(),
+        plan_budgets.read(project),
     )
 
     accepted = _just("check-plan", project)
@@ -1152,7 +1154,12 @@ def _authored_records(native: str) -> dict[str, str]:
         },
         native_id=native,
     )
-    return {str(root / relative): content for relative, content in rendered.items()}
+    budgets, written = budgets_record(
+        native, no_budgets(["github.com/nickderobertis/some-service"])
+    )
+    return {str(root / relative): content for relative, content in rendered.items()} | {
+        str(root / budgets): written
+    }
 
 
 def _a_checkout_of_its_own(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -1275,6 +1282,7 @@ def test_a_planning_run_that_settled_records_what_it_authored_and_nothing_else(
     assert whole["key"] == plan_review.plan_key(
         plan_store.read_plan(f"{AUTHORING}:{authored}", [task]),
         plan_review.plan_bar_fingerprint(),
+        plan_budgets.read(f"{AUTHORING}:{authored}"),
     )
     assert _launches(tmp_path) == 0, "the closeout spent a provider turn"
 
@@ -1639,7 +1647,9 @@ def test_a_plan_that_adopts_the_release_its_goal_needs_is_recorded_whole(
     assert isinstance(whole, dict), whole
     assert whole["by"] == plan_review.BY_REVIEW, whole
     plan, records = plan_store.read_project(project)
-    assert whole["key"] == plan_review.plan_key(plan, plan_review.plan_bar_fingerprint())
+    assert whole["key"] == plan_review.plan_key(
+        plan, plan_review.plan_bar_fingerprint(), plan_budgets.read(project)
+    )
 
     accepted = _just("check-plan", project)
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr

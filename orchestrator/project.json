@@ -143,8 +143,10 @@
           "projects": [
             "support-conftest",
             "support-delegation-checkout",
+            "support-fake-codex",
             "support-follow-up-variables",
             "support-llmlint-install",
+            "support-no-paid-provider",
             "support-nx-inputs",
             "support-nx-workspace",
             "support-onejudge-bundle",
@@ -153,6 +155,8 @@
             "support-plan-root-variable",
             "support-plan-sources",
             "support-probe-run-root",
+            "support-project-fixtures",
+            "support-published-tools",
             "support-registered-checkouts",
             "support-short-state",
             "support-waits"

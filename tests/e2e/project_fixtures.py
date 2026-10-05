@@ -9,21 +9,23 @@ retention. `tests/plan_fixture_source.py` says why no test process shares one.
 
 from __future__ import annotations
 
+import functools
+import hashlib
 import itertools
 import json
 import os
 import re
 import subprocess
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
 import plan_fixture_source
 from published_tools import ONETASKGRAPH_BIN
 
-from orchestrator import design_chain
-from orchestrator.project_store import write_plan_project
+from orchestrator import design_chain, plan_budgets, plan_store
+from orchestrator.project_store import hosted_origin, write_plan_project
 from orchestrator.root import REPO_ROOT
 
 _PROJECT_SEQUENCE = itertools.count()
@@ -100,9 +102,175 @@ def local_project(content: str, name: str) -> str:
     plan.setdefault("name", native)
     write_plan_project(plan_fixture_source.root(), plan, native_id=native)
     project = f"test-fixtures:{native}"
+    budgeted(plan_fixture_source.SOURCE, native, no_budgets(plan_repositories(plan)))
     _designed(native)
     approved(project)
     return project
+
+
+#: The concerns every fixture plan's checklist answers, each as not applicable: a fixture
+#: plan does no work at any scale, and the budgets document is what every plan carries.
+FIXTURE_CONCERNS = (
+    "latency",
+    "quota and rate-limit headroom",
+    "scaling with data",
+    "spend",
+    "resource use",
+    "gate time",
+    "change cycle time",
+)
+
+
+# llmlint: ignore[suppressions_justified] A plan fixture is the engine's open plan shape.
+def plan_repositories(plan: Mapping[str, Any]) -> list[str]:
+    """Every repository ``plan``'s tasks name, as the origin a budgets document states it."""
+    tasks = plan.get("tasks")
+    return sorted(
+        {
+            hosted_origin(task["repo"]) or task["repo"]
+            for task in (tasks if isinstance(tasks, list) else [])
+            if isinstance(task, dict) and isinstance(task.get("repo"), str)
+        }
+    )
+
+
+def no_budgets(repositories: Iterable[str]) -> dict[str, object]:
+    """A budgets document's answers for a plan that needs no budget, and says why for each.
+
+    Every concern of the checklist answered not applicable, no budget proposed, and one
+    repo-wide effect of `none` for each repository the plan changes — the answers
+    `just check-plan` passes for a plan whose work moves nothing anybody measures.
+    """
+    return {
+        "workload": "One fixture run, over a handful of records.",
+        "checklist": [
+            {
+                "concern": concern,
+                "budget": "",
+                "not_applicable": f"n/a because the fixture does no work {concern} measures",
+            }
+            for concern in FIXTURE_CONCERNS
+        ],
+        "ten_x": "Nothing: ten fixture runs are still a handful of records.",
+        "budgets": [],
+        "repo_wide_effects": [
+            {"repository": repository, "budget": "", "effect": "none"}
+            for repository in sorted(set(repositories))
+        ],
+        "realistic_data": [],
+        "spike_findings": [],
+    }
+
+
+def _resolved(name: str, environment: Mapping[str, str] | None = None) -> str:
+    """The loader document the pinned engine states for the host template ``name``."""
+    resolved = subprocess.run(
+        [str(_ENGINE), "template", "resolve", name, "--json"]
+        + ["--template-root", str(REPO_ROOT / "templates")],
+        cwd=REPO_ROOT,
+        env=None if environment is None else dict(environment),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if resolved.returncode != 0:
+        raise AssertionError(f"the {name} template did not resolve: {resolved.stderr}")
+    return resolved.stdout
+
+
+def budgeted(
+    source: str,
+    native: str,
+    answers: Mapping[str, object],
+    environment: Mapping[str, str] | None = None,
+) -> str:
+    """Render ``native``'s budgets document into ``source`` the way a planner writes it.
+
+    The pinned engine's `template resolve plan-budgets` piped into the pinned store's
+    `document create`, under the id `<native>-budgets` the plan check reads it by. Answers
+    the document's qualified id.
+    """
+    with tempfile.NamedTemporaryFile("w", suffix=".json", encoding="utf-8") as written:
+        json.dump(answers, written)
+        written.flush()
+        created = subprocess.run(
+            [str(ONETASKGRAPH_BIN), "document", "create", source, "--project", native]
+            + ["--title", f"Budgets: {native}", "--id", f"{native}{plan_budgets.DOCUMENT_SUFFIX}"]
+            + ["--template-loader", "-", "--answers", written.name, "--no-interactive"],
+            cwd=REPO_ROOT,
+            env=None if environment is None else dict(environment),
+            input=_resolved(plan_budgets.TEMPLATE_NAME, environment),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    if created.returncode != 0:
+        raise AssertionError(f"the fixture's budgets document was not created: {created.stderr}")
+    return f"{source}:{native}{plan_budgets.DOCUMENT_SUFFIX}"
+
+
+def budgets_record(native: str, answers: Mapping[str, object]) -> tuple[Path, str]:
+    """``native``'s budgets document as the record file a local Markdown store keeps it in.
+
+    For a stand-in planner that writes its plan's records as files: the record is the
+    pinned store's own, written by `budgeted` into a scratch local source of its own and
+    read back, so the stand-in leaves exactly what a planner's `document create` leaves.
+    Answers its path under a source's root, and its content.
+    """
+    with tempfile.TemporaryDirectory(prefix="budgets-record-") as scratch:
+        root = Path(scratch)
+        write_plan_project(root, {"name": native, "tasks": []}, native_id=native)
+        variables = {
+            "ONETASKGRAPH_SOURCES__BUDGETSRECORD__PLUGIN": "local-md",
+            "ONETASKGRAPH_SOURCES__BUDGETSRECORD__CONFIG__ROOT": str(root),
+        }
+        budgeted("budgetsrecord", native, answers, {**os.environ, **variables})
+        relative = Path("documents") / f"{native}{plan_budgets.DOCUMENT_SUFFIX}.md"
+        return relative, (root / relative).read_text(encoding="utf-8")
+
+
+def budgets_document(project: str, answers: Mapping[str, object]) -> plan_store.StoreDocument:
+    """``project``'s budgets document as the store would answer it, rendered but not stored.
+
+    The body is the pinned store's own rendering of ``answers`` through the template, and
+    the provenance is the one the store records beside a rendering: what a unit test reads
+    through the real reader without writing a store. Rendered once per project and answers.
+    """
+    return _rendered_budgets(project, json.dumps(answers, sort_keys=True))
+
+
+@functools.cache
+def _rendered_budgets(project: str, answers: str) -> plan_store.StoreDocument:
+    with tempfile.NamedTemporaryFile("w", suffix=".json", encoding="utf-8") as written:
+        written.write(answers)
+        written.flush()
+        rendered = subprocess.run(
+            [str(ONETASKGRAPH_BIN), "template", "render", "--template-loader", "-"]
+            + ["--answers", written.name, "--no-interactive"],
+            cwd=REPO_ROOT,
+            input=_resolved(plan_budgets.TEMPLATE_NAME),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    if rendered.returncode != 0:
+        raise AssertionError(f"the budgets document did not render: {rendered.stderr}")
+    digest = "sha256:" + hashlib.sha256(rendered.stdout.encode("utf-8")).hexdigest()
+    return plan_store.StoreDocument(
+        qualified_id=plan_store.QualifiedDocumentId(plan_budgets.document_id(project)),
+        title=f"Budgets: {project}",
+        content=rendered.stdout,
+        project=plan_store.qualified(project).native,
+        labels=[],
+        repositories=[],
+        metadata={
+            "onetaskgraph.template": {
+                "template": plan_budgets.TEMPLATE_REFERENCE,
+                "body_digest": digest,
+            }
+        },
+        location=None,
+    )
 
 
 #: The variable naming the `onevcs` registry a process reads.

@@ -49,7 +49,7 @@ import plan_fixture_source
 import pytest
 import short_state
 from fake_backend import AGENT_DELAY_ENV, PROMPT_LOG_ENV
-from project_fixtures import helper
+from project_fixtures import budgeted, helper, no_budgets
 from scratch_identity import PLANNING_FLOW_ORIGIN, seeded
 from waits import timeout as e2e_timeout
 
@@ -166,6 +166,8 @@ def _plan_project(native: str) -> str:
         },
         native_id=native,
     )
+    # And its budgets document, as every plan carries: this one's work needs no budget.
+    budgeted(FIXTURE_SOURCE, native, no_budgets([]))
     return f"{FIXTURE_SOURCE}:{native}"
 
 

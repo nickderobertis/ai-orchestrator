@@ -1375,7 +1375,7 @@ def test_a_lock_held_with_no_state_recorded_is_reported_held_by_another_caller(
     # real `flock` on the checkout's real lock file, and nothing else of the script's. The
     # state it leaves is one no job writes, a process and a `HEAD` in no shape the script
     # does, which is read as no state at all.
-    (memo_dir / "state").write_text("status running\npid abc\nhead zzz\n", encoding="utf-8")
+    (memo_dir / "state").write_text("status running\npid NOT-A-PID\nhead zzz\n", encoding="utf-8")
     holder = subprocess.Popen(
         [
             "flock",
@@ -1401,7 +1401,8 @@ def test_a_lock_held_with_no_state_recorded_is_reported_held_by_another_caller(
         assert detached.returncode == 0, detached.stdout + detached.stderr
         held = _line(detached, "running", stand_in)
         assert "another caller" in held
-        assert "abc" not in held
+        # The memo directory is a hex digest, so a hex-looking stand-in pid can occur in it.
+        assert "NOT-A-PID" not in held
         assert _marks(tmp_path) == ["sibling"]
     finally:
         release.write_text("", encoding="utf-8")

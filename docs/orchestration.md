@@ -637,6 +637,14 @@ name: the first two would compose the shape that fails, and the third named the 
 shape there is. `scripts/plan.sh`'s header holds the whole of the reasoning, both
 directions of it.
 
+### A plan's budgets
+
+Every plan states its measurable requirements — its budgets — in one project document
+beside it, `<project>-budgets`, rendered from `templates/plan-budgets.md.j2`. `just
+review-plan` reads it, `just check-plan` refuses a plan carrying none, and the design
+document shows it. [`budgets.md`](budgets.md) states the principles and the convention, and
+`config/budgets-migration.yaml` is the one list of plans that predate the requirement.
+
 ### The document the plan is read as, and the launch that writes it
 
 **The document is written last, by a launch of its own, from a plan something has already
