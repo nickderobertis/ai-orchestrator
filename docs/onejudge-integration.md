@@ -156,25 +156,53 @@ pacemaker turn from a two-party agent turn, and a judge turn from either.
 
 onejudge frames every evaluator call by the oneharness mode its judge resolves, and how
 that mode is resolved and recorded is onejudge's to state, in its
-`crates/onejudge/src/oneharness/posture.rs`. Its read-only framing leaves a Codex judge, which has no
-file-reading tool beside its shell, nothing to read the worktree with. So both judge
-sides onejudge frames here, `oneharness.judge.toml` and
-`oneharness.design-doc-judge.toml`, state `mode = "plan"` at their own top level: Codex
-runs it in its read-only sandbox with oneharness's plan instruction, and Claude Code in
-its plan mode, which may write a plan under the identity's own config directory and
-nothing in the worktree. It is not in a shared parent, because `oneharness.dispatch.toml`
-is also the worker's. Ten Codex judge turns, each asked a question only a file in the
-worktree could answer, ran no command before the change and all answered that no tool
-could read the file; after it, all ten read the file with a shell command and answered
-correctly.
+`crates/onejudge/src/oneharness/posture.rs`. Both judge sides onejudge frames here,
+`oneharness.judge.toml` and `oneharness.design-doc-judge.toml`, state **`mode =
+"default"`** at their own top level, and each carries its own read-only enforcement per
+harness:
+
+- `[harness.codex] args` ends `-c sandbox_mode=read-only`;
+- `[harness.claude-code] args` is `--tools Read,Grep,Glob --strict-mcp-config`.
+
+**Not `read-only`**: its framing leaves a Codex judge, which has no file-reading tool
+beside its shell, nothing to read the worktree with, so it fails correct work it cannot
+see. **Not `plan`**, though `plan` also reads: one judge config drives both judge-side
+calls, the verdict and the **simulated user**, whose message is the worker's next turn.
+A planning mode frames that message as a plan — oneharness prepends its planning
+instruction to a Codex prompt, and Claude Code runs in its own plan mode — so a
+supervisor that found work incomplete told the worker to stop and plan instead of
+finishing it. Measured through the engine's dispatch path on the same inputs, a Codex
+simulated user under `plan` asked for a plan and no changes, and under `default` asked
+for the remaining work.
+
+**Why the enforcement is pinned in the role files rather than left to the mode.**
+`default` withholds nothing by itself, on either harness:
+
+- A judge-side Codex turn is a `codex exec` turn — onejudge reaches it through the
+  `oneharness` CLI, not the app-server thread a worker runs on — and `default` asks it
+  for no sandbox, so it takes the host's own, which on this host is
+  `danger-full-access`. With the pin removed, a dispatched judge turn's `touch` and
+  `apply_patch` both landed; with it, the turn ran read-only and both were refused.
+- Claude Code's `default` is `dontAsk`, which still runs anything the worktree's or the
+  identity's settings allow in a trusted workspace. With `--tools` removed, a checkout
+  allowing `Bash(touch:*)` had its `touch` run by a dispatched judge turn; with it, the
+  turn was offered `Glob`, `Grep` and `Read` and nothing else. Naming what is permitted
+  rather than what is denied keeps a tool the CLI adds later out, and
+  `--strict-mcp-config` loads no MCP server.
+
+Neither setting is in a shared parent, because `oneharness.dispatch.toml` is also the
+worker's. Under this configuration ten Codex verdict-judge turns per file, each asked a
+question only a file in the worktree could answer, read it with a shell command, and
+three Claude turns per file read it with `Read`.
 
 Every supervisory Codex role — both judges, the monitor, the pacemaker, the plan
 reviewer, the drafter and the judged lint tier — also passes `-c features.apps=false` in
 its `[harness.codex]` args, which removes the ChatGPT-app connector tools
 (`mcp__codex_apps__…`, some 260 of a judge turn's 275) and leaves the shell. The worker
-roles and the shared parents carry neither setting.
-`tests/e2e/test_supervisory_codex_posture_e2e.py` holds both to what the real CLI
-resolves and to the argv a dry run builds per identity.
+roles and the shared parents carry none of these settings.
+`tests/e2e/test_supervisory_codex_posture_e2e.py` holds them to what the real CLI
+resolves and to the argv a dry run builds per identity, and fails on a planning mode, a
+lost sandbox pin, or a lost or widened Claude Code tool set.
 
 ### The judge side may be a list of judges
 

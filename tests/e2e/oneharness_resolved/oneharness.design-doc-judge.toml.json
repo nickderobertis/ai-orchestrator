@@ -21,7 +21,11 @@
         "value": null
       },
       "args": {
-        "value": null
+        "value": [
+          "--tools",
+          "Read,Grep,Glob",
+          "--strict-mcp-config"
+        ]
       },
       "bin": {
         "value": null
@@ -228,7 +232,9 @@
       "args": {
         "value": [
           "-c",
-          "features.apps=false"
+          "features.apps=false",
+          "-c",
+          "sandbox_mode=read-only"
         ]
       },
       "bin": {
@@ -362,7 +368,7 @@
     "value": null
   },
   "mode": {
-    "value": "plan"
+    "value": "default"
   },
   "model": {
     "value": null

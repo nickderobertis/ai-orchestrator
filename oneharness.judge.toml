@@ -8,11 +8,11 @@
 # identities run on.
 extends = "oneharness.dispatch.toml"
 
-# mode: the posture onejudge frames this judge by, so it may read the tree it judges.
-# Here rather than in `oneharness.dispatch.toml`, which is also the worker's parent,
-# because it is a decision about the judging role. docs/onejudge-integration.md, "The
-# mode a judge runs in".
-mode = "plan"
+# mode: `default`, never `plan`, because this config also drives the simulated user and
+# a planning mode would frame its message to the worker as a plan. Here rather than in
+# `oneharness.dispatch.toml`, which is also the worker's parent. docs/onejudge-integration.md,
+# "The mode a judge runs in", says why, and why the enforcement below is per harness.
+mode = "default"
 
 # history_labels: the counterpart to the agent config's `role = "agent"` — this is
 # the side that supervises. Stamping it makes "show me the judge's view of this
@@ -46,8 +46,15 @@ harnesses = [
 # it, no Claude candidate can (`-c` is claude's `--continue`), and this role's variants —
 # with their credential masks — stay untouched. Only the supervisory Codex roles carry it;
 # a worker's own `args` would replace a parent's, so no shared parent does.
+#
+# `sandbox_mode=read-only`: `default` leaves a judge turn on the host's own sandbox.
 [harness.codex]
-args = ["-c", "features.apps=false"]
+args = ["-c", "features.apps=false", "-c", "sandbox_mode=read-only"]
+
+# Only reading tools and no MCP server: `default` is Claude Code's `dontAsk`, which still
+# runs what a worktree's or identity's settings allow.
+[harness.claude-code]
+args = ["--tools", "Read,Grep,Glob", "--strict-mcp-config"]
 
 # The cheaper supervisor tier, and the one thing this role changes about the
 # identities themselves. Codex matches the agent side's GPT-5.6 Sol, inherited

@@ -284,6 +284,8 @@ def _with_command_ceiling(harness: dict[str, Any]) -> dict[str, Any]:
 
     Claude Code's ceiling merges into the harness's `env` beside what it already holds;
     Codex's arguments are the whole `args` list, since a child's list replaces a parent's.
+    Claude Code's `args` are dropped, since the judge's are its reading-only tool set,
+    which only the judge sides carry.
     Typed `Any` like every effective configuration in this module: it is `oneharness`'s
     JSON, whose schema that CLI owns and validates, and only these two keys are read.
     """
@@ -294,6 +296,7 @@ def _with_command_ceiling(harness: dict[str, Any]) -> dict[str, Any]:
         "claude-code": {
             **claude_code,
             "env": {**claude_code["env"], CLAUDE_CODE_CEILING: {"value": CEILING_MS}},
+            "args": {"value": None},
         },
         "codex": {**codex, "args": {"value": list(CODEX_CEILING_ARGS)}},
     }
@@ -615,7 +618,8 @@ def test_every_side_resolves_its_intended_effective_deadline(
         "every identity of oneharness.follow-up.toml must carry oneharness.judge.toml's model, "
         "environment and masks exactly, less the masks on the plan-store credentials and with "
         "the worker's one-hour shell-command ceiling as its Codex arguments in place of the "
-        "judge's connector switch, which only the supervisory roles carry"
+        "judge's connector switch and read-only sandbox, and without the judge's Claude Code "
+        "tool set, which only the supervisory roles carry"
     )
     still_masked = [
         name for name in PLAN_STORE_CREDENTIALS if name in json.dumps(follow_up_routing["harness"])
