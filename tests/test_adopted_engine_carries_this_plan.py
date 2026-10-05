@@ -761,6 +761,26 @@ ACCEPTED_FOLLOW_UPS_1002_LANDINGS = (
     ),
 )
 
+#: The two engine-side nodes of the approved-budgets plan, issue #1508: a lifecycle node
+#: kept as a branch on its origin rather than landed, settling `done` as `preserved`, and
+#: the per-change telemetry view over a run's dispatches, gate runs and landing.
+#: `tests/e2e/test_budget_capabilities_adopted_e2e.py` drives both through the recipes
+#: on this host.
+APPROVED_BUDGETS_LANDINGS = (
+    Landing(
+        node="onepipeline-preserve-2",
+        change_request=755,
+        commit="e8b21d5cde5b9e385511a3ebf67472b88d6f6dad",
+        did="keep a node's branch on its origin instead of landing it with publish: preserve",
+    ),
+    Landing(
+        node="onepipeline-change-telemetry-2",
+        change_request=757,
+        commit="4ce9bb823ebffe29c3b4aca31e9ff6b362f297a0",
+        did="aggregate each change's cycle time from its dispatches, gate runs and landing",
+    ),
+)
+
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
     Landing(
@@ -797,6 +817,7 @@ LANDINGS = (
     *CORRELATED_RULING_LANDINGS,
     *TICKET_FIXES_LANDINGS,
     *ACCEPTED_FOLLOW_UPS_1002_LANDINGS,
+    *APPROVED_BUDGETS_LANDINGS,
 )
 
 

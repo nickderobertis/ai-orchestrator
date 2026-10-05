@@ -187,7 +187,11 @@ or `provider-failed` node whose work landed says *landed on its base* with the c
 `done` can be unlanded by design, its dependents proceeding: `change-draft` is a draft
 the plan asked for, and `change-review-draft` is a change whose required checks are green,
 on a `change-open` identity whose approvals are required, kept as a draft for its user's
-review until that person lifts it on the host or with `onevcs change ready <session>`. The retryable
+review until that person lifts it on the host or with `onevcs change ready <session>`. A node
+declaring `publish: "preserve"` settles `done` as `preserved`: a branch kept on its origin
+at the head the settlement names and never landed, which `just unpublished` counts until
+it is acknowledged; `just reclaim-branch <branch> --repo <checkout> --discard` deletes it
+once nothing needs it. The retryable
 failure words — `checks-failed` and its siblings in the outcome vocabulary
 `tests/test_engine_contracts.py` holds to the engine — say the publication reached the
 merge path and got no verdict it could act on, and they arrive already retried, the

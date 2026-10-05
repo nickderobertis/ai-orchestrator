@@ -231,6 +231,16 @@ POOL_ONEVCS_FLOOR = Release(0, 27, 0)
 #: pre-push claim — is about that copy: `config/onevcs.version` past this floor over an
 #: engine linking an older onevcs would describe a push no shutdown can make.
 PRESERVE_ONEVCS_FLOOR = Release(0, 29, 0)
+#: The onevcs release carrying what the approved-budgets plan measures with:
+#: https://github.com/nickderobertis/onevcs/pull/311 (`9b06ed4`), first cut as 0.41.0,
+#: adds `RetireMode::Discard`, which deletes a branch kept on purpose that never landed;
+#: and https://github.com/nickderobertis/onevcs/pull/313 (`da0b1d9`), first cut as 0.42.0,
+#: adds the `gate-run` event kind and the `landed_at` a publication's landing record
+#: carries. Held on the *linked* copy because the gate runs and landings
+#: `onepipeline telemetry RUN --changes` reads are the records a dispatch's publication
+#: writes through it: a CLI pin past this floor over an engine linking an older onevcs
+#: would read every change's `gate` as not measured.
+DISCARD_AND_GATE_RUN_ONEVCS_FLOOR = Release(0, 42, 0)
 #: oneagentgraph https://github.com/nickderobertis/oneagentgraph/pull/111 (`18daa25`), first
 #: cut as 0.4.1: the release linking that onejudge, which is what lets a `kind: onejudge`
 #: member's `user.artifacts` reach its judge.
@@ -491,6 +501,26 @@ def test_the_linked_onevcs_preserves_the_branches_a_shutdown_leaves() -> None:
     )
 
 
+def test_the_linked_onevcs_records_gate_runs_and_discards_a_kept_branch() -> None:
+    """Above the floor, a change's gate runs and landing reach the per-change view, and a
+    preserved branch can be discarded by name.
+
+    `publish: "preserve"` keeps a branch nothing will land, and `reclaim --discard` is the
+    one verb that deletes one; the per-change telemetry view reads its gate segment off
+    the `gate-run` records the linked copy writes. Below this floor a dispatch publishes
+    through a onevcs that writes neither, so every change would read `gate` as not
+    measured however its merge path ran.
+    """
+    linked = Release.parse(_linked_version("onevcs"))
+
+    assert linked >= DISCARD_AND_GATE_RUN_ONEVCS_FLOOR, (
+        f"the adopted engine links onevcs {linked}, below the "
+        f"{DISCARD_AND_GATE_RUN_ONEVCS_FLOOR} that records each gate run and landing time "
+        "and discards a deliberately kept branch; the per-change telemetry view over it "
+        "measures no gate"
+    )
+
+
 def test_the_linked_onejudge_lets_a_workers_judge_side_be_a_list() -> None:
     """Above the floor, a graph naming `judges:` reaches a onejudge that can run it.
 
@@ -649,7 +679,7 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 LINKED_HARNESS_CORES = (
     LinkedCore(dependent="oneagentgraph", dependent_version="0.5.5", core="0.24.1"),
     LinkedCore(dependent="onejudge", dependent_version="0.17.1", core="0.24.1"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.60.4", core="0.24.1"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.61.0", core="0.24.1"),
 )
 
 #: How a crate names itself in a compiled binary: cargo embeds the registry source

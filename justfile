@@ -842,11 +842,14 @@ import-branch *args:
     @uv run onevcs import "$@"
 
 # Reclaim a superseded branch: `just reclaim-branch <branch> --repo <checkout>
-# [--dry-run] [--json]`, the line `just recoverable` and `just unpublished` print for a
-# branch a landed retry replaced that still differs from its base. It deletes the branch
-# from every place that holds it, its origin copy included, and returns any pool slot
-# rather than removing it; `onevcs reclaim` refuses a branch it cannot prove superseded
-# or that anything live holds, and its exit status is the verb's own.
+# [--discard] [--dry-run] [--json]`, the line `just recoverable` and `just unpublished`
+# print for a branch a landed retry replaced that still differs from its base. It deletes
+# the branch from every place that holds it, its origin copy included, and returns any
+# pool slot rather than removing it; `onevcs reclaim` refuses a branch it cannot prove
+# superseded or that anything live holds, and its exit status is the verb's own.
+# `--discard` is for a branch kept on purpose that never landed — a `preserved` node's,
+# once nothing needs it — and discards its work; every other reason to keep a branch
+# still refuses it.
 reclaim-branch *args:
     @uv run onevcs reclaim "$@"
 

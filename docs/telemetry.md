@@ -7,11 +7,14 @@ just telemetry                     # every run
 just telemetry --breakdown         # every run, wall clock broken into buckets
 just telemetry RUN_ID              # one named run, settled or not
 just telemetry RUN_ID --breakdown  # that run, broken down
+just telemetry RUN_ID --changes    # that run, one line per change
+just telemetry RUN_ID --changes --json
 ```
 
-`onepipeline telemetry` takes exactly one option, `--breakdown`, and one optional
-run argument; there is no scoping, filtering, or windowing flag to reach for. A
-window is cut from the output rather than asked for.
+`onepipeline telemetry` takes one optional run argument and two views of it:
+`--breakdown`, and `--changes` — which needs a run, conflicts with `--breakdown`, and
+alone takes `--json`. There is no scoping, filtering, or windowing flag to reach for.
+A window is cut from the output rather than asked for.
 
 `RUN_ID` is the identifier `launch.json` advertises, resolved exactly as `just
 monitor` and `just status` resolve it — an exact run directory, or a plan name
@@ -19,7 +22,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.60.4 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.61.0 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -135,6 +138,9 @@ publication's: the `pre-push` hook git runs at the publishing push lands in
 `publication_wait`, and so does waiting on a host's required checks. **Read a
 present `gate` as evidence the run predates the adoption**, and read `agent`
 against `publication_wait` where the old advice said `agent` against `gate`.
+The per-change view below is where a gate's own time is measured again: it reads
+the `gate-run` records the linked `onevcs` writes for each `pre-push` hook and each
+required-checks watch, which this run-scoped bucket does not.
 
 The paragraph below is kept for reading those older runs. It described an
 identity routed to `{kind: pre-push}`, whose cost landed in
@@ -295,6 +301,40 @@ SBOM.
 `settled_done`, `no_diff`, `surfaces_queued`, and `surfaces_read` are the run's own
 counters; `surfaces_read` is what resets the planner-update pacemaker.
 
+## One change at a time: `--changes`
+
+`just telemetry RUN_ID --changes` reads a run one change at a time, for comparing a
+change's delivery against its budget. A **change** is one retry lineage, and each entry
+carries exactly these fields — `node`, `lineage`, `repository`, `branch`, `change_url`,
+`outcome`, `dispatched_at`, `landed_at`, `landing`, `cycle_seconds`, `dispatches`,
+`publication_attempts`, `gate_runs`, `gate_seconds`, `segments`, `not_measured` — of
+which a budget is read against these:
+
+- `dispatched_at`, the lineage's first dispatch; `landed_at` and `landing`, the time and
+  commit of the landing `onevcs` recorded, each `null` until it lands;
+- `cycle_seconds`, `landed_at - dispatched_at`, and `null` for a change that has not
+  landed — a `preserved` one never does;
+- `gate_runs`, one per `pre-push` hook or required-checks watch with its own
+  `started_at`, `ended_at`, `seconds` and `verdict`, and `gate_seconds`, their sum;
+- `segments`, which sum exactly to `cycle_seconds`, and `not_measured`, each segment the
+  records could not decide, whose time is counted in `other` rather than estimated.
+
+| Segment | What it counts |
+| --- | --- |
+| `agent` | A dispatch, from its start to its agent settling |
+| `scheduling` | Waiting on a decision, until the next dispatch |
+| `gate` | Each gate run, from its `started_at` to its `ended_at` |
+| `publication` | The closeout outside a gate |
+| `review_wait` | Waiting on a person to review |
+| `merge_queue` | Queued to merge, until the landing |
+| `release_wait` | Held for a release |
+| `other` | Time the records do not decide |
+
+`onepipeline`'s own `docs/contract.md` is the field-by-field statement, an older run's
+reading among it. `tests/test_engine_contracts.py` holds the field list and the segment
+table to the engine; `tests/e2e/test_budget_capabilities_adopted_e2e.py` reads the
+document over a run whose `pre-push` gate it timed.
+
 ## Finding an optimization target
 
 1. Run `just telemetry --breakdown` and start with the largest `WALL`.
@@ -386,7 +426,7 @@ served them.
    `just telemetry-server` — or by `just dag-ui`, which is the same published server
    with the browser view built into it answering on the same origin) is the structured
    view. Measured against real runs on
-   **`onepipeline-api` 0.23.2**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.24.0**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
    what re-opens this paragraph: `telemetry_schema_version` 21 on the envelope, where
    0.13.0 served 20 and

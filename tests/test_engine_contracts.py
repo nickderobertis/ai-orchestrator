@@ -453,6 +453,33 @@ VOCABULARIES = (
         re.compile(r"so what it may carry is a closed list —\s*(.*?) — and", re.DOTALL),
         re.compile(r"`([a-z][a-z_]*)`"),
     ),
+    # llmlint: ignore-block[shell_test_tiers_stay_split] Two data rows in this existing
+    # uncached vocabulary gate, which already reads the adopted engine's source from a
+    # registered checkout under `reads_checkouts`; they add no tier or suite, and moving
+    # the module to a project of its own is restructuring outside this adoption.
+    Vocabulary(
+        # The per-change view's segment table, read off the enum `not_measured` lists
+        # and `segments` is keyed by, so a segment the engine adds is a hole here.
+        "onepipeline change telemetry Segment",
+        ONEPIPELINE,
+        "changes.rs",
+        re.compile(r"(?:#\[[^\]]*\]\s*)*pub enum Segment \{.*?\n\}", re.DOTALL),
+        re.compile(r"^\s{4}([A-Z][A-Za-z]*),", re.MULTILINE),
+        TELEMETRY,
+        re.compile(r"\| Segment \| What it counts \|(.*?)\n\n", re.DOTALL),
+        re.compile(r"^\| `([a-z][a-z_]*)` \|", re.MULTILINE),
+    ),
+    Vocabulary(
+        "onepipeline ChangeCycle fields",
+        ONEPIPELINE,
+        "changes.rs",
+        re.compile(r"(?:#\[[^\]]*\]\s*)*pub struct ChangeCycle \{.*?\n\}", re.DOTALL),
+        re.compile(r"^\s{4}pub ([a-z_]+):", re.MULTILINE),
+        TELEMETRY,
+        re.compile(r"each entry\s+carries exactly these fields —\s*(.*?) — of", re.DOTALL),
+        re.compile(r"`([a-z][a-z_]*)`"),
+    ),
+    # llmlint: ignore-end[shell_test_tiers_stay_split]
     Vocabulary(
         "onevcs hook-running git commands",
         ONEVCS,

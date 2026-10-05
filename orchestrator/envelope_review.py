@@ -189,6 +189,7 @@ NODE_FIELDS = frozenset(
         "title",
         "body",
         "draft",
+        "publish",
         "execution_checkout",
         "steps",
         "resume",

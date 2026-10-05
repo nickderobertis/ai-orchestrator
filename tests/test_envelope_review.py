@@ -1292,6 +1292,24 @@ def test_a_stated_node_sizing_its_own_workspace_placement_is_read_as_one() -> No
     assert resulting == ["placed"]
 
 
+def test_a_stated_node_keeping_its_branch_is_read_as_one() -> None:
+    """`publish` is a field the engine's `Node` accepts, so a node stating it is read.
+
+    A `publish: "preserve"` node is dispatched like any lifecycle node and only its
+    closeout differs, so its task is one a worker is judged against; a preflight that
+    did not know the field would pass over a node the engine commits.
+    """
+    graph, resulting = stated_graph(
+        _envelope(
+            {"op": "add", "node": {"id": "spike", "publish": "preserve"}},
+            {"op": "add", "node": {"id": "kept", "keep": True}},
+        )
+    )
+
+    assert graph == {"spike": {"id": "spike", "publish": "preserve"}}
+    assert resulting == ["spike"]
+
+
 def test_the_graph_an_envelope_forms_carries_deps_and_consumes_as_the_engine_does() -> None:
     """The fields the adoption rules read move with the edges, as `edits.rs` moves them.
 
