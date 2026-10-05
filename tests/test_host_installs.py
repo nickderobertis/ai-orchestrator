@@ -29,9 +29,16 @@ from pathlib import Path
 
 import onevcs_state_snapshot
 import pytest
-from registered_checkouts import registered_checkouts
+from registered_checkouts import RepoIdentity, registered_checkouts
 
-from orchestrator.host_installs import INSTALLED, Installed, by_artifact, by_producer, rendered
+from orchestrator.host_installs import (
+    AWAITING_FIRST_ADOPTION,
+    INSTALLED,
+    Installed,
+    by_artifact,
+    by_producer,
+    rendered,
+)
 from orchestrator.root import REPO_ROOT
 
 #: The rows this table is fixed to, stated here in full rather than derived from the
@@ -229,7 +236,7 @@ def test_every_pinned_distribution_is_a_rows_wheel_and_every_rows_wheel_is_pinne
     )
 
 
-def _override_default_targets() -> dict[str, str]:
+def _override_default_targets() -> dict[RepoIdentity, str]:
     """Each producer's `default_target` as `config/onevcs.releases.yml` writes it."""
     text = RELEASES.read_text(encoding="utf-8")
     rules = list(RELEASE_RULE.finditer(text))
@@ -237,7 +244,7 @@ def _override_default_targets() -> dict[str, str]:
         "config/onevcs.releases.yml no longer writes every rule's match as a one-line flow "
         f"mapping, so only {len(rules)} of {text.count('- match:')} rules were read back"
     )
-    defaults: dict[str, str] = {}
+    defaults: dict[RepoIdentity, str] = {}
     for rule in rules:
         identity = f"{rule['host']}/{rule['owner']}/{rule['name']}"
         named = re.search(r"^    default_target: (\S+)$", rule["fields"], re.MULTILINE)
@@ -246,18 +253,112 @@ def _override_default_targets() -> dict[str, str]:
     return defaults
 
 
+#: The producers whose override rule precedes their first adoption, stated here in full
+#: for the reason `EXPECTED_ROWS` is: `onebudgetspec`, until the node adopting its first
+#: release gives it a row, a pin and a dependency.
+EXPECTED_AWAITING: frozenset[RepoIdentity] = frozenset({"github.com/nickderobertis/onebudgetspec"})
+
+
+def override_complaints(
+    defaults: dict[RepoIdentity, str],
+    rows: tuple[Installed, ...],
+    awaiting: frozenset[RepoIdentity],
+) -> list[str]:
+    """Every way the override's default targets disagree with the table and the set.
+
+    Taken as arguments rather than read here so that each refusal can be shown on a
+    defective copy, beside the tracked one passing.
+    """
+    expected = {row.producer: row.target for row in rows}
+    found = [
+        f"{producer} is both a row and awaiting its first adoption; the node that adds "
+        "the row removes it from the set"
+        for producer in sorted(awaiting & expected.keys())
+    ]
+    found += [
+        f"config/onevcs.releases.yml names {producer}'s default target {target!r}, and "
+        "neither a row nor the awaiting-first-adoption set accounts for it"
+        for producer, target in sorted(defaults.items())
+        if producer not in expected and producer not in awaiting
+    ]
+    found += [
+        f"{producer} is awaiting its first adoption, and config/onevcs.releases.yml names "
+        "no default target for it"
+        for producer in sorted(awaiting - defaults.keys())
+    ]
+    found += [
+        f"config/onevcs.releases.yml names {producer}'s default target "
+        f"{defaults.get(producer)!r}, and its row says {target!r}"
+        for producer, target in expected.items()
+        if defaults.get(producer) != target
+    ]
+    return found
+
+
 def test_the_overrides_default_target_per_producer_is_the_rows_target() -> None:
     """The override names, per producer, the target the table says this host installs.
 
     Both directions: a producer in the override with no row is a default target nothing
     says the artifact of, and a row with no rule is a producer a consumer naming no
-    `consumes` would get no target from — held for ever under `published`.
+    `consumes` would get no target from — held for ever under `published`. The one
+    admitted gap is a producer on the awaiting-first-adoption set, whose rule precedes
+    the release that would give it a row.
     """
-    defaults = _override_default_targets()
-    expected = {row.producer: row.target for row in INSTALLED}
-    assert defaults == expected, (
-        f"config/onevcs.releases.yml names default targets {defaults}; the table says {expected}"
+    assert AWAITING_FIRST_ADOPTION == EXPECTED_AWAITING
+    assert (
+        override_complaints(_override_default_targets(), INSTALLED, AWAITING_FIRST_ADOPTION) == []
     )
+
+
+def test_a_producer_in_the_override_with_neither_a_row_nor_an_entry_is_refused() -> None:
+    defaults = {**_override_default_targets(), "github.com/nickderobertis/unadopted": "pypi"}
+
+    assert override_complaints(defaults, INSTALLED, AWAITING_FIRST_ADOPTION) == [
+        "config/onevcs.releases.yml names github.com/nickderobertis/unadopted's default "
+        "target 'pypi', and neither a row nor the awaiting-first-adoption set accounts for it"
+    ]
+
+
+def test_the_set_is_what_admits_the_tracked_awaiting_producer() -> None:
+    """Off the set, the tracked onebudgetspec rule is a default target nothing accounts for."""
+    (producer,) = EXPECTED_AWAITING
+
+    assert override_complaints(_override_default_targets(), INSTALLED, frozenset()) == [
+        f"config/onevcs.releases.yml names {producer}'s default target 'pypi', and neither "
+        "a row nor the awaiting-first-adoption set accounts for it"
+    ]
+
+
+def test_a_producer_with_both_a_row_and_an_entry_on_the_set_is_refused() -> None:
+    """The adopting node adds the row and empties the entry together; half of that fails."""
+    (producer,) = EXPECTED_AWAITING
+    adopted = Installed(producer, "pypi", "pypi:onebudgetspec-cli", "onebudgetspec", False)
+
+    assert override_complaints(
+        _override_default_targets(), (*INSTALLED, adopted), AWAITING_FIRST_ADOPTION
+    ) == [
+        f"{producer} is both a row and awaiting its first adoption; the node that adds the "
+        "row removes it from the set"
+    ]
+
+
+def test_an_entry_on_the_set_the_override_does_not_name_is_refused() -> None:
+    awaiting = AWAITING_FIRST_ADOPTION | {"github.com/nickderobertis/unruled"}
+
+    assert override_complaints(_override_default_targets(), INSTALLED, awaiting) == [
+        "github.com/nickderobertis/unruled is awaiting its first adoption, and "
+        "config/onevcs.releases.yml names no default target for it"
+    ]
+
+
+def test_a_rows_default_target_moving_in_the_override_is_refused() -> None:
+    row = INSTALLED[0]
+    defaults = {**_override_default_targets(), row.producer: "crate"}
+
+    assert override_complaints(defaults, INSTALLED, AWAITING_FIRST_ADOPTION) == [
+        f"config/onevcs.releases.yml names {row.producer}'s default target 'crate', and its "
+        f"row says {row.target!r}"
+    ]
 
 
 def test_no_rule_in_the_override_restates_a_producers_targets() -> None:
@@ -304,21 +405,25 @@ def _declared_ids_at_fetched_base(checkout: Path) -> dict[str, str] | None:
     return None
 
 
-def _producer_declaration(row: Installed) -> tuple[dict[str, str], str]:
-    """Each target's id by name as ``row``'s producer declares it, and where that was read.
+def _producer_declaration(
+    producer: RepoIdentity, *, declared_yet: bool = True
+) -> tuple[dict[str, str], str] | None:
+    """Each target's id by name as ``producer`` declares it, and where that was read.
 
     Read through `onevcs release targets --json`, which is the read a dispatch makes.
     A checkout `onevcs` cannot read a declaration out of right now — another manager's
     dispatch has it on a branch — is read at its fetched base instead, and the second
-    value says which read answered so a failure can name it.
+    value says which read answered so a failure can name it. A producer awaiting its
+    first adoption — ``declared_yet`` false — may not have declared anything yet, which
+    answers None rather than failing.
     """
     checkouts = registered_checkouts()
-    assert row.producer in checkouts, (
-        f"{row.producer} has no checkout on this host among those "
+    assert producer in checkouts, (
+        f"{producer} has no checkout on this host among those "
         "`config/onevcs.checkouts` lists, so its declaration cannot be reconciled here"
     )
     asked = subprocess.run(
-        ["uv", "run", "onevcs", "release", "targets", row.producer, "--json"],
+        ["uv", "run", "onevcs", "release", "targets", producer, "--json"],
         cwd=REPO_ROOT,
         # The producer is one this host registers, which only the suite's registry copy
         # names: `tests/onevcs_state_snapshot.py`.
@@ -328,7 +433,7 @@ def _producer_declaration(row: Installed) -> tuple[dict[str, str], str]:
         check=False,
     )
     assert asked.returncode == 0 or NOT_REGISTERED not in asked.stderr, (
-        f"{row.producer} is not registered in this host's onevcs registry; run "
+        f"{producer} is not registered in this host's onevcs registry; run "
         f"`just repos-apply`: {asked.stderr}"
     )
     if asked.returncode == 0:
@@ -336,13 +441,15 @@ def _producer_declaration(row: Installed) -> tuple[dict[str, str], str]:
         if declaration["state"] == "declared":
             return {
                 target["name"]: target["id"] for target in declaration["declared"]["target"]
-            }, f"`onevcs release targets {row.producer} --json`"
-    declared = _declared_ids_at_fetched_base(checkouts[row.producer])
+            }, f"`onevcs release targets {producer} --json`"
+    declared = _declared_ids_at_fetched_base(checkouts[producer])
+    if declared is None and not declared_yet:
+        return None
     assert declared is not None, (
-        f"{row.producer}'s declaration could not be read through onevcs "
-        f"({asked.stdout or asked.stderr}) or at {checkouts[row.producer]}'s fetched base"
+        f"{producer}'s declaration could not be read through onevcs "
+        f"({asked.stdout or asked.stderr}) or at {checkouts[producer]}'s fetched base"
     )
-    return declared, f"{checkouts[row.producer]}'s fetched base"
+    return declared, f"{checkouts[producer]}'s fetched base"
 
 
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] This marker is not a
@@ -361,7 +468,9 @@ def test_each_rows_artifact_is_what_the_producer_declares_under_that_target_name
     The declared target carrying the row's name has to carry the row's artifact as its
     id, or a node waiting on the override's default target waits on something else.
     """
-    declared, declared_by = _producer_declaration(row)
+    read = _producer_declaration(row.producer)
+    assert read is not None
+    declared, declared_by = read
     assert declared.get(row.target) == row.artifact, (
         f"{row.producer} declares {declared} at {declared_by}, and the table says its "
         f"`{row.target}` target is `{row.artifact}`; if the producer moved, that is a "
@@ -370,9 +479,12 @@ def test_each_rows_artifact_is_what_the_producer_declares_under_that_target_name
 
 
 @pytest.mark.reads_checkouts
-@pytest.mark.parametrize("row", INSTALLED, ids=lambda row: row.producer)
+@pytest.mark.parametrize(
+    "producer",
+    [*(row.producer for row in INSTALLED), *sorted(AWAITING_FIRST_ADOPTION)],
+)
 def test_each_producers_fixture_declares_the_targets_the_producer_declares(
-    row: Installed,
+    producer: RepoIdentity,
 ) -> None:
     """The stand-in declaration names every target the producer does, by id, and no other.
 
@@ -382,15 +494,22 @@ def test_each_producers_fixture_declares_the_targets_the_producer_declares(
     producer no longer declares is proven against a repository that does not exist. So
     the whole map is held, not only the row's target — and a producer that moved is a
     fixture to refresh from its base, since the fixture is a copy and not a contract.
+
+    A producer awaiting its first adoption is held the same way from the moment its
+    base declares anything; before then its fixture is the contract its plan states,
+    with no declaration yet to drift from, and that is the skip's reason.
     """
-    declared, declared_by = _producer_declaration(row)
-    fixture = FIXTURES / f"{row.producer.rpartition('/')[2]}.toml"
+    read = _producer_declaration(producer, declared_yet=producer not in AWAITING_FIRST_ADOPTION)
+    if read is None:
+        pytest.skip(f"{producer} declares no release targets at its base yet")
+    declared, declared_by = read
+    fixture = FIXTURES / f"{producer.rpartition('/')[2]}.toml"
     stand_in = {
         target["name"]: target["id"]
         for target in tomllib.loads(fixture.read_text(encoding="utf-8"))["target"]
     }
     assert stand_in == declared, (
-        f"{fixture.relative_to(REPO_ROOT)} declares {stand_in}, and {row.producer} "
+        f"{fixture.relative_to(REPO_ROOT)} declares {stand_in}, and {producer} "
         f"declares {declared} at {declared_by}; refresh the fixture's target ids and "
         "names from the producer's base"
     )

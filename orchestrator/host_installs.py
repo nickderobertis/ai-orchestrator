@@ -36,7 +36,14 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
-__all__ = ["INSTALLED", "Installed", "by_artifact", "by_producer", "rendered"]
+__all__ = [
+    "AWAITING_FIRST_ADOPTION",
+    "INSTALLED",
+    "Installed",
+    "by_artifact",
+    "by_producer",
+    "rendered",
+]
 
 
 # llmlint: ignore-block[modern_domain_modeling] The four names are `str` by the interface
@@ -122,6 +129,22 @@ INSTALLED: tuple[Installed, ...] = (
         governs_dispatch=False,
     ),
 )
+
+
+#: Producers `config/onevcs.releases.yml` names a ``default_target`` for ahead of their
+#: first adoption here, each as ``github.com/<owner>/<name>``. A row needs a
+#: ``config/<pin>.version`` and a `pyproject.toml` pin, and a producer that has released
+#: nothing can have neither; yet a `published` node adopting its first release names no
+#: ``consumes``, so without the override's rule its hold would wait on a target it never
+#: resolves and never release. A producer stands here instead of in ``INSTALLED`` — never
+#: in both — and the node that adopts its release moves it into a row, with the pin and
+#: the dependency, emptying its entry: for `onebudgetspec`, the plan's ``aio-budgets``
+#: node. `tests/test_host_installs.py` holds the override to the two together.
+# llmlint: ignore-block[modern_domain_modeling] Each entry is an `Installed.producer` value
+# waiting to become one, compared against that `str` field and against the identity text
+# `onevcs` prints, for the reason the block above `Installed` gives.
+AWAITING_FIRST_ADOPTION: frozenset[str] = frozenset({"github.com/nickderobertis/onebudgetspec"})
+# llmlint: ignore-end[modern_domain_modeling]
 
 
 def by_artifact(artifact: str) -> Installed | None:

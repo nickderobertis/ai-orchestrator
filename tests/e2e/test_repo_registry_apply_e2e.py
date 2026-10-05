@@ -40,7 +40,7 @@ import pytest
 from registered_checkouts import TRACKED_CHECKOUTS, RepoIdentity
 from scratch_identity import seeded
 
-from orchestrator.host_installs import INSTALLED, Installed
+from orchestrator.host_installs import AWAITING_FIRST_ADOPTION, INSTALLED, Installed, by_producer
 from orchestrator.root import REPO_ROOT
 
 #: The registry this host ran on before `onevcs` owned one, verbatim.
@@ -132,6 +132,11 @@ PRINTOBSERVER: RepoIdentity = "github.com/nickderobertis/printobserver"
 #: `default:` resolves the reviewed pair too, so a policy read alone would answer
 #: identically whether the rule matched or nothing did.
 HELLOPATIENT: RepoIdentity = "github.com/petsinc/hellopatient"
+#: The producer whose override rule precedes its first release, spelled out for the
+#: same reason, with the target its plan contracts as the wheel this host will install.
+ONEBUDGETSPEC: RepoIdentity = "github.com/nickderobertis/onebudgetspec"
+ONEBUDGETSPEC_TARGET = "pypi"
+ONEBUDGETSPEC_ARTIFACT = "pypi:onebudgetspec-cli"
 
 RepoType = Literal["single-owner", "team"]
 Workflow = Literal["local", "remote"]
@@ -1394,6 +1399,65 @@ def test_the_tracked_registration_routes_hellopatient_through_its_own_rule(
         assert reported(checked.stdout, "publication") == "change-open", checked.stdout
         assert reported(checked.stdout, "approvals") == "required", checked.stdout
         assert reported(checked.stdout, "matched") == expected_rule, checked.stdout
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker]  # noqa: E501 - llmlint reads a directive's rule list off one line
+# A sibling of the printobserver and hellopatient routing journeys beside it: every journey
+# of `just repos-apply` lives in this module, in the tier it already runs in, as the
+# module's file-scoped reason says, and a project of their own is one change to the
+# project graph for all of them at once, not one more journey's to make.
+def test_the_tracked_registration_routes_onebudgetspec_and_names_its_wheel_before_a_row(
+    tmp_path: Path,
+) -> None:
+    """A producer registered ahead of its first release, by the tracked files alone.
+
+    Its rule has to decide its publication — `change-auto` with no approvals, by its own
+    position in the file rather than the reviewed default — and the release override has
+    to answer the wheel this host will install as its default target while the table
+    holds no row for it, because a `published` node adopting its first release names no
+    `consumes` and would otherwise wait on a target nothing resolves. The scratch
+    checkout carries the producer's origin and a stand-in declaration of the target
+    names its plan contracts, committed at its base, where `onevcs` reads it.
+    """
+    assert by_producer(ONEBUDGETSPEC) is None
+    assert ONEBUDGETSPEC in AWAITING_FIRST_ADOPTION
+    entries = tracked_checkouts_of("onebudgetspec")
+    assert len(entries) == 1, entries
+
+    path = declaring_checkout(
+        tmp_path / "checkouts" / Path(entries[0]).name,
+        f"https://{ONEBUDGETSPEC}.git",
+        RELEASE_DECLARATIONS / "onebudgetspec.toml",
+    )
+    manifest = tmp_path / "checkouts.list"
+    manifest.write_text(f"{path}\n", encoding="utf-8")
+    home = tmp_path / "onevcs"
+
+    applied = apply_registry(manifest, home)
+    assert applied.returncode == 0, applied.stdout + applied.stderr
+    assert (home / "releases.yml").read_bytes() == TRACKED_RELEASES.read_bytes()
+
+    ruled = ruled_identities()
+    assert ruled.count(ONEBUDGETSPEC) == 1, ruled
+    host, owner, name = ONEBUDGETSPEC.split("/")
+    expected_rule = (
+        f"rule {ruled.index(ONEBUDGETSPEC) + 1} {{host: {host}, owner: {owner}, name: {name}}}"
+    )
+    for argument in (ONEBUDGETSPEC, Path(entries[0]).name):
+        checked = onevcs(home, "rules", "check", argument)
+        assert checked.returncode == 0, checked.stdout + checked.stderr
+        assert reported(checked.stdout, "publication") == "change-auto", checked.stdout
+        assert reported(checked.stdout, "approvals") == "none", checked.stdout
+        assert reported(checked.stdout, "matched") == expected_rule, checked.stdout
+
+    answer = release_targets(home, ONEBUDGETSPEC)
+    assert answer["default_target"] == ONEBUDGETSPEC_TARGET, answer
+    assert answer["adoption"] == GLOBAL_RUNG, answer
+    declared = {target["name"]: target["probe"]["args"][0] for target in answer["targets"]}
+    assert declared[ONEBUDGETSPEC_TARGET] == ONEBUDGETSPEC_ARTIFACT, declared
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker]  # noqa: E501
 
 
 def test_a_checkout_this_host_does_not_have_is_skipped(tmp_path: Path) -> None:

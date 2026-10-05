@@ -60,6 +60,7 @@
 ~/.ai-orchestrator/repos/nickderobertis__github-secrets
 ~/.ai-orchestrator/repos/nickderobertis__nick-derobertis-site
 ~/.ai-orchestrator/repos/nickderobertis__notignored
+~/.ai-orchestrator/repos/nickderobertis__onebudgetspec
 ~/.ai-orchestrator/repos/nickderobertis__onetaskgraph
 
 # `printobserver`, which this host both publishes and executes in. The first entry is

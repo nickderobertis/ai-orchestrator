@@ -26,6 +26,11 @@
 #     `declaration: merge` keeps the producer's declaration as the source of its
 #     targets, and no rule carries `targets:` of its own, because a target restated
 #     here replaces the producer's whole and stops matching it the day it moves.
+#
+#   - A producer this host will install but has not yet adopted may carry its rule
+#     ahead of its first release, so a node adopting that release waits for the right
+#     artifact from the start. `orchestrator/host_installs.py` names each such producer
+#     in `AWAITING_FIRST_ADOPTION` until the node adopting it adds its row and pin.
 version: 1
 default:
   adoption: fast
@@ -54,5 +59,8 @@ repositories:
     declaration: merge
     default_target: pypi-cli
   - match: {host: github.com, owner: nickderobertis, name: onemessagebus}
+    declaration: merge
+    default_target: pypi
+  - match: {host: github.com, owner: nickderobertis, name: onebudgetspec}
     declaration: merge
     default_target: pypi

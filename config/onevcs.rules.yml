@@ -142,6 +142,10 @@ rules:
     publication: change-auto
     approvals: none
 
+  - match: {host: github.com, owner: nickderobertis, name: onebudgetspec}
+    publication: change-auto
+    approvals: none
+
   - match: {host: github.com, owner: nickderobertis, name: oneharness}
     publication: change-auto
     approvals: none

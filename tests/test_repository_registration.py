@@ -384,3 +384,26 @@ def test_a_rule_carrying_a_field_beyond_the_policy_is_refused() -> None:
     )
 
     assert any("where the policy for a single-owner" in found for found in complaints(defective))
+
+
+#: The repository this plan builds `onebudgetspec` in, routed like `onetaskgraph`, the
+#: library it is modelled on: without its own rule it falls to the reviewed default and
+#: every node of its library work waits on a review nobody asked for.
+ONEBUDGETSPEC: RepoIdentity = f"github.com/{OWNER}/onebudgetspec"
+ONEBUDGETSPEC_CHECKOUT = f"{DISPATCHED_ROOT}/{OWNER}__onebudgetspec"
+
+
+def test_onebudgetspec_is_listed_and_ruled_to_publish_like_its_siblings() -> None:
+    """Its checkout is listed, and its one rule states the sibling policy above `default:`.
+
+    First match wins, so the rule standing above the fallthrough is what makes the
+    identity resolve to `change-auto` rather than to `change-open` with approvals.
+    """
+    registration = tracked()
+    assert ONEBUDGETSPEC_CHECKOUT in listed(registration.checkouts)
+
+    matching = [rule for rule in rules_of(registration.rules) if rule.identity == ONEBUDGETSPEC]
+    assert len(matching) == 1, matching
+    (rule,) = matching
+    assert rule.fields == EXPECTED_POLICY
+    assert rule.at < registration.rules.index(FALLTHROUGH)
