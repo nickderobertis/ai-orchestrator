@@ -153,7 +153,19 @@ class Workspace:
         return self.marker.read_text(encoding="utf-8").splitlines()
 
     def measure(self, project: str, value: int) -> None:
-        (self.root / project / "value").write_text(f"{value}\n", encoding="utf-8")
+        """Write what the budget measures, stamped in a later second than the last write.
+
+        Nx 23's file-hash archive reuses a file's stored hash while its size and its
+        modification time in whole seconds are unchanged, so a same-size rewrite inside
+        the second of the write Nx last hashed is invisible to it and the task replays.
+        A person's edit lands seconds later; the journey's lands within a second when two
+        checks run fast, so it is stamped the way an edit would be.
+        """
+        path = self.root / project / "value"
+        previous = path.stat().st_mtime_ns
+        path.write_text(f"{value}\n", encoding="utf-8")
+        stamp = max(path.stat().st_mtime_ns, (previous // 1_000_000_000 + 1) * 1_000_000_000)
+        os.utime(path, ns=(stamp, stamp))
 
 
 @pytest.fixture

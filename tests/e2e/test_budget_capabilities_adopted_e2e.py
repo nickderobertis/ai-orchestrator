@@ -87,14 +87,33 @@ COMMIT_COMMANDS = [
 #: that a gate run the engine failed to time would not reach it by rounding.
 GATE_SLEEP_SECONDS = 2
 
+#: How long the scratch gate may keep waiting, in monotonic seconds, for its wall-clock
+#: interval to reach GATE_SLEEP_SECONDS. `onevcs` stamps the run on the wall clock, which
+#: a VM guest steps back whenever it resynchronizes (this host's Lima guest about 0.11 s
+#: every ten seconds or so), so a step inside a plain `sleep` reads a 2 s run as 1.9 s.
+#: The hook therefore waits until its own wall-clock stamps are GATE_SLEEP_SECONDS apart,
+#: and fails, naming the clock, if they are not within this bound.
+GATE_WALL_CLOCK_DEADLINE_SECONDS = 30
+
 #: The scratch identity's `pre-push` gate. It appends one line per run: the millisecond
 #: it started, the one it ended, and every local commit git handed it to push.
 GATE_HOOK = """#!/usr/bin/env bash
 set -euo pipefail
 started=$(date +%s%3N)
 pushed=$(awk '{{print $2}}' | tr '\\n' ' ')
+uptime_cs() {{ local up; read -r up _ < /proc/uptime; echo "${{up/./}}"; }}
+deadline=$(( $(uptime_cs) + {deadline} * 100 ))
 sleep {sleep}
 ended=$(date +%s%3N)
+until (( ended - started >= {sleep} * 1000 )); do
+    if (( $(uptime_cs) >= deadline )); then
+        echo "scratch gate: the wall clock advanced $(( ended - started )) ms," \\
+            "short of {sleep} s, within {deadline} s of monotonic time" >&2
+        exit 1
+    fi
+    sleep 0.05
+    ended=$(date +%s%3N)
+done
 printf '{{"started_ms": %s, "ended_ms": %s, "pushed": "%s"}}\\n' \\
     "$started" "$ended" "$pushed" >> {log}
 """
@@ -474,7 +493,12 @@ def landed(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Ite
     hooks = root / "hooks"
     hooks.mkdir()
     hook = hooks / "pre-push"
-    hook.write_text(GATE_HOOK.format(sleep=GATE_SLEEP_SECONDS, log=gate_log), encoding="utf-8")
+    hook.write_text(
+        GATE_HOOK.format(
+            sleep=GATE_SLEEP_SECONDS, deadline=GATE_WALL_CLOCK_DEADLINE_SECONDS, log=gate_log
+        ),
+        encoding="utf-8",
+    )
     hook.chmod(0o755)
     # The execution checkout is where an operator's hooks live; `onevcs` carries them
     # into the clone a session publishes from.
@@ -593,6 +617,7 @@ def test_the_per_change_view_times_the_gate_and_the_landing(landed: Landed) -> N
     assert run.verdict == "passed", run
     assert _millis(run.started_at) <= hook.started_ms, (run, hook)
     assert _millis(run.ended_at) >= hook.ended_ms, (run, hook)
+    assert _ms(run.seconds) >= hook.ended_ms - hook.started_ms, (run, hook)
     assert run.seconds >= GATE_SLEEP_SECONDS, run
 
     gate_ms = _ms(change.gate_seconds)

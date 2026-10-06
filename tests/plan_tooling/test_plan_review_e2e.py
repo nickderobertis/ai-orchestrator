@@ -32,6 +32,7 @@ import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
+import jsonschema
 import plan_root_variable
 import pytest
 import short_state
@@ -281,16 +282,53 @@ def test_a_refused_review_shows_every_finding_and_records_nothing(tmp_path: Path
     assert "no review record" in still.stderr, still.stderr
 
 
-#: The two answers the verdict schema exists to refuse, and the reason it is one schema
-#: rather than two fields nobody compares: a finding **is** a refused criterion, so a
-#: refusal naming none stops this content while saying nothing an author can correct,
-#: and a pass carrying one would clear a task whose own reviewer refused criteria of it.
+#: The two answers whose outcome and findings disagree. A finding **is** a refused
+#: criterion, so a refusal naming none stops this content while saying nothing an author
+#: can correct, and a pass carrying one would clear a task whose own reviewer refused
+#: criteria of it. Both are sound in shape, and the schema admits them: the top-level
+#: combinator that would refuse them is refused in turn by Claude's validators, so the
+#: review module's own reader is what refuses them.
 DISAGREES_WITH_ITSELF = (
     pytest.param({"passes": False, "findings": []}, id="refuses-nothing"),
     pytest.param(
         {"passes": True, "findings": [{"criterion": "the route works", "why": "it is vague"}]},
         id="passes-with-a-finding",
     ),
+)
+
+
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] These two cases were parameters of `test_an_answer_the_schema_does_not_admit_records_nothing` below and drive the same `just review-plan` under the same `planToolingWorkspace` inputs, which `tests/plan_tooling/AGENTS.md` states as this project's split; the module gains no journey, and a project of its own would be keyed on those inputs too.  # noqa: E501
+@pytest.mark.parametrize("answer", DISAGREES_WITH_ITSELF)
+def test_a_schema_valid_answer_that_disagrees_with_itself_records_nothing(
+    tmp_path: Path, answer: dict[str, object]
+) -> None:
+    """The real oneharness admits it on the first attempt, and the reader refuses it.
+
+    One provider turn proves the schema validated the answer — a refused one is
+    re-prompted up to `schema_max_retries` — and the command still reports no usable
+    verdict, records nothing on the task or the plan, and leaves the plan refused.
+    """
+    jsonschema.Draft7Validator(
+        json.loads((REPO_ROOT / plan_review.BAR_FILES[1]).read_text(encoding="utf-8"))
+    ).validate(answer)
+    project = _project("review-self-contradicting")
+
+    review = _just("review-plan", project, environment=_reviewing(tmp_path, answer))
+    assert review.returncode == 2, review.stdout + review.stderr
+    assert "no candidate answered the review with a verdict" in review.stderr, review.stderr
+    assert "nothing was recorded" in review.stderr, review.stderr
+    assert _launches(tmp_path) == 1, "the schema refused an answer it was meant to admit"
+    assert _record_of(project, "route") is None
+    assert _plan_record_of(project) is None
+
+    still = _just("check-plan", project)
+    assert still.returncode == 1, still.stdout + still.stderr
+    assert "no review record" in still.stderr, still.stderr
+
+
+#: The answers the verdict schema itself refuses: each is unsound in shape, so
+#: oneharness re-prompts it and no candidate answers a verdict.
+THE_SCHEMA_REFUSES = (
     pytest.param(
         {"passes": True, "findings": [], "reason": "and some commentary besides"},
         id="undeclared-field",
@@ -331,7 +369,8 @@ DISAGREES_WITH_ITSELF = (
 )
 
 
-@pytest.mark.parametrize("answer", DISAGREES_WITH_ITSELF)
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] An existing journey whose cases this change only renamed and narrowed: it drives `just review-plan` under the same `planToolingWorkspace` inputs every journey in this module sits behind, which `tests/plan_tooling/AGENTS.md` states as this project's split, and it now runs two cases fewer.  # noqa: E501
+@pytest.mark.parametrize("answer", THE_SCHEMA_REFUSES)
 def test_an_answer_the_schema_does_not_admit_records_nothing(
     tmp_path: Path, answer: dict[str, object]
 ) -> None:

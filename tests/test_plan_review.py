@@ -22,11 +22,13 @@ import dataclasses
 import json
 import re
 import subprocess
+import tomllib
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, TypedDict, get_type_hints
 
+import jsonschema
 import pytest
 import yaml
 from project_fixtures import budgeted
@@ -1019,30 +1021,100 @@ def test_the_verdict_type_matches_the_schema_it_is_validated_against() -> None:
         assert SCHEMA_TYPES[described["type"]] == finding[name], name
 
 
-def test_the_schema_admits_a_verdict_only_where_its_outcome_and_findings_agree() -> None:
-    """A finding is a refused criterion, so the two halves are one statement.
+#: Every JSON Schema keyword whose presence at a schema's top level is a combinator. The
+#: Claude Code and Anthropic API structured-output validators refuse one there, so a
+#: schema carrying one fails every Claude candidate a chain falls through to.
+TOP_LEVEL_COMBINATORS = frozenset({"allOf", "oneOf", "anyOf", "not", "if", "then", "else"})
 
-    Read off the schema rather than driven, because oneharness is what enforces it and
-    `tests/plan_tooling/test_plan_review_e2e.py` is where a real turn meets that
-    validator. What this holds is that the file still *says* it: a refusal admitting no
-    finding would let a reviewer stop this content with nothing naming what to correct,
-    and a pass admitting one would clear a task whose own reviewer refused criteria of
-    it — which is the failure that ends `_answered`'s narrowing too.
+#: The one dialect every harness this repository routes to accepts: Claude Code's own
+#: validator does not know the 2020-12 meta-schema and refuses the whole turn naming it.
+DRAFT_07 = "http://json-schema.org/draft-07/schema#"
+
+
+def _harness_schemas() -> dict[str, Path]:
+    """Every repository-owned schema a harness config hands a turn, by config name.
+
+    Read off the configs rather than listed, so a role that gains a `schema_file` is
+    held to the subset below by being configured. Each path resolves against its own
+    config's directory, which is where oneharness resolves it.
     """
-    conditions = {
-        found["if"]["properties"]["passes"]["const"]: found["then"]["properties"]["findings"]
-        for found in _verdict_schema()["allOf"]
-    }
+    found: dict[str, Path] = {}
+    for config in sorted(REPO_ROOT.glob("oneharness*.toml")):
+        named = tomllib.loads(config.read_text(encoding="utf-8")).get("schema_file")
+        if isinstance(named, str):
+            found[config.name] = config.parent / named
+    return found
 
-    assert conditions[True] == {"maxItems": 0}, conditions
-    assert conditions[False] == {"minItems": 1}, conditions
 
-    # And a finding that names nothing is refused for the same reason a refusal naming
-    # no finding is: it leaves its reader exactly where the other one does. Both
-    # keywords are held, at the strength `_answered` reads them back at: `minLength`
-    # alone admits a run of spaces, which names nothing while satisfying a length, and
-    # a schema that admitted one would send a reviewer an answer oneharness validates
-    # and this package then discards with nothing said about why.
+def _untyped(schema: Mapping[str, Any], where: str) -> list[str]:
+    """Every subschema reached through `properties` or an object-valued `items` that
+    declares no `type`, by where it sits — the two locations these schemas nest at, which
+    the meta-schema check and the combinator check beside this leave unread. `Any`
+    because JSON Schema is recursive and each level is read for different keys, so a
+    narrower type would restate the schema files this walks, as `_verdict_schema` says."""
+    missing = [] if "type" in schema else [where]
+    for name, child in schema.get("properties", {}).items():
+        missing += _untyped(child, f"{where}.properties.{name}")
+    if isinstance(schema.get("items"), Mapping):
+        missing += _untyped(schema["items"], f"{where}.items")
+    return missing
+
+
+def test_every_schema_a_harness_is_handed_is_one_every_harness_accepts() -> None:
+    """The verdict and the drafter's body are the two, in the subset Claude accepts.
+
+    Both reach a chain that falls through to Claude Code, whose `--json-schema` refuses a
+    dialect it does not know and whose API refuses a top-level combinator, so a schema
+    outside that subset fails every Claude candidate rather than one answer. Each is
+    checked against the draft-07 meta-schema, declares its dialect as draft-07 or not at
+    all, carries a `type` on every subschema strict typing reads, and has no combinator
+    at its top level.
+    """
+    schemas = _harness_schemas()
+    assert {name: path.relative_to(REPO_ROOT) for name, path in schemas.items()} == {
+        "oneharness.plan-review.toml": plan_review.BAR_FILES[1],
+        "oneharness.pr-author.toml": Path("config") / "pr-author-body.schema.json",
+    }, schemas
+    for name, path in schemas.items():
+        schema = json.loads(path.read_text(encoding="utf-8"))
+        jsonschema.Draft7Validator.check_schema(schema)
+        assert schema.get("$schema", DRAFT_07) == DRAFT_07, name
+        assert TOP_LEVEL_COMBINATORS.isdisjoint(schema), name
+        assert _untyped(schema, "$") == [], name
+
+
+@pytest.mark.parametrize(
+    "structured",
+    [
+        {"passes": False, "findings": []},
+        {"passes": True, "findings": [{"criterion": "the route works", "why": "it is vague"}]},
+    ],
+    ids=["refuses-nothing", "passes-with-a-finding"],
+)
+def test_an_answer_the_schema_admits_is_no_verdict_when_its_outcome_and_findings_disagree(
+    structured: dict[str, object],
+) -> None:
+    """A finding is a refused criterion, so the two halves are one statement — held here.
+
+    The schema cannot say it: the top-level combinator that would is refused by the
+    Claude validators, so both answers below validate against it and `_answered` is
+    what refuses them. A refusal admitting no finding would let a reviewer stop this
+    content with nothing naming what to correct, and a pass admitting one would clear a
+    task whose own reviewer refused criteria of it.
+    """
+    jsonschema.Draft7Validator(_verdict_schema()).validate(structured)
+
+    assert plan_review._answered(structured) is None
+
+
+def test_the_schema_refuses_a_finding_that_names_nothing() -> None:
+    """A finding naming nothing leaves its reader where a refusal naming none does.
+
+    Both keywords are held, at the strength `_answered` reads them back at: `minLength`
+    alone admits a run of spaces, which names nothing while satisfying a length, and a
+    schema that admitted one would send a reviewer an answer oneharness validates and
+    this package then discards with nothing said about why.
+    """
     item = _verdict_schema()["properties"]["findings"]["items"]["properties"]
     assert {name: field["minLength"] for name, field in item.items()} == {
         "criterion": 1,

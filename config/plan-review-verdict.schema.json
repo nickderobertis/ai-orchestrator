@@ -1,7 +1,7 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "The verdict a plan-review turn answers with",
-  "description": "The structured answer `oneharness.plan-review.toml` validates every review turn against, and the whole contract between the reviewer and `orchestrator/plan_review.py`, which records a pass only when `passes` is true and records nothing at all otherwise. A finding *is* a refused criterion, so the outcome and the findings are one statement and this schema admits them only where they agree: a refusal carries at least one finding, so a reviewer can never refuse a task while naming nothing to correct, and a pass carries none, so a verdict can never clear a task while reporting criteria it refuses. Nothing beside those two fields: a reviewer that answered with its own commentary, a severity, or a rewritten task would have that extra silently ignored, so the schema refuses it here — where oneharness re-prompts — rather than downstream where nothing is watching. This file is hashed into every review key, so editing it invalidates every record made under the previous version; `just review-plan <source:project>` is what re-reviews an invalidated task, at one judged turn apiece.",
+  "description": "The structured answer `oneharness.plan-review.toml` validates every review turn against, and the whole contract between the reviewer and `orchestrator/plan_review.py`, which records a pass only when `passes` is true and records nothing at all otherwise. A finding *is* a refused criterion, so the outcome and the findings are one statement: a refusal carries at least one finding and a pass carries none. That agreement is not stated here, because a top-level `allOf`, `oneOf` or `anyOf` is refused by the Claude Code and Anthropic API structured-output validators every chain in this repository may reach, and this file is written in the draft-07 subset every harness accepts. `_answered` in `orchestrator/plan_review.py` is its one authority: a schema-valid answer whose outcome and findings disagree is read as no verdict, so the task stays unreviewed rather than recorded either way. Nothing beside those two fields: a reviewer that answered with its own commentary, a severity, or a rewritten task would have that extra silently ignored, so the schema refuses it here — where oneharness re-prompts — rather than downstream where nothing is watching. This file is hashed into every review key, so editing it invalidates every record made under the previous version; `just review-plan <source:project>` is what re-reviews an invalidated task, at one judged turn apiece.",
   "type": "object",
   "properties": {
     "passes": {
@@ -33,15 +33,5 @@
     }
   },
   "required": ["passes", "findings"],
-  "additionalProperties": false,
-  "allOf": [
-    {
-      "if": { "properties": { "passes": { "const": true } }, "required": ["passes"] },
-      "then": { "properties": { "findings": { "maxItems": 0 } } }
-    },
-    {
-      "if": { "properties": { "passes": { "const": false } }, "required": ["passes"] },
-      "then": { "properties": { "findings": { "minItems": 1 } } }
-    }
-  ]
+  "additionalProperties": false
 }

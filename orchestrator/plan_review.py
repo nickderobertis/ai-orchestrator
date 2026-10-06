@@ -288,7 +288,7 @@ class Finding(TypedDict):
     """One criterion a verdict refuses, and why.
 
     A finding *is* a refused criterion rather than a note beside one, which is what
-    lets the schema hold a verdict's outcome and its findings to each other: a
+    lets :func:`_answered` hold a verdict's outcome and its findings to each other: a
     refusal carries at least one and a pass carries none.
     """
 
@@ -855,16 +855,20 @@ def _declared(mapping: object, fields: frozenset[str]) -> bool:
 def _answered(structured: object) -> Verdict | None:
     """``structured`` as a verdict, or ``None`` when it is not one this may act on.
 
-    The schema is enforced by oneharness, and this narrowing is enforced again here for
-    the two properties a record is written from. **The outcome and the findings have to
-    agree**: a refusal naming no criterion says nothing an author can correct, and a
-    pass carrying findings would clear a task whose own reviewer refused criteria of it
-    — so neither is a verdict, and a report carrying only those leaves the task
-    unreviewed rather than recorded either way. And **the shape has to be the declared
-    one**, at both its levels, because the schema sets `additionalProperties: false` and
-    an answer carrying more than that was written to a contract this does not have.
-    Reading both here as well as in the schema is what makes them true of a harness
-    whose validator was skipped, misconfigured, or stood in for.
+    The schema is enforced by oneharness, and this narrowing reads the two properties a
+    record is written from. **The outcome and the findings have to agree**, and this is
+    the one place that rule is enforced: a refusal naming no criterion says nothing an
+    author can correct, and a pass carrying findings would clear a task whose own
+    reviewer refused criteria of it — so neither is a verdict, and a report carrying
+    only those leaves the task unreviewed rather than recorded either way. The schema
+    cannot state it, because the top-level combinator that would is refused by the
+    Claude Code and Anthropic API structured-output validators, so a schema-valid answer
+    can still disagree with itself and only this refuses it. And **the shape has to be
+    the declared one**, at both its levels, because the schema sets
+    `additionalProperties: false` and an answer carrying more than that was written to a
+    contract this does not have. Reading the shape here as well as in the schema is what
+    makes it true of a harness whose validator was skipped, misconfigured, or stood in
+    for.
     """
     match structured:
         case {"passes": bool(passes), "findings": list(raw)} if _declared(
@@ -883,7 +887,8 @@ def _answered(structured: object) -> Verdict | None:
             # two-finding refusal report one, which is the whole defect this contract
             # was widened away from. A blank `criterion` or `why` is unreadable in the
             # sense that matters — it leaves its reader where a refusal carrying no
-            # finding leaves them — so the schema and this narrowing both refuse it.
+            # finding leaves them — so the schema and this narrowing both refuse it. The
+            # outcome disagreeing with the findings is refused here alone.
             if len(findings) != len(raw) or passes is bool(findings):
                 return None
             return Verdict(passes=passes, findings=findings)

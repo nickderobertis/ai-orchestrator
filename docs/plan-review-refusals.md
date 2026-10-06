@@ -9,8 +9,10 @@ sit behind this document, two of them spent oscillating between opposite wrong a
 on a single criterion that one pass listing both objections would have closed.
 
 The verdict now carries a list of findings, each naming the criterion it is about and
-why that criterion is refused, and the schema admits a refusal only with at least one
-finding and a pass only with none. That is the change. This document is the evidence it
+why that criterion is refused, and a refusal is read as a verdict only with at least one
+finding and a pass only with none — a rule `_answered` in `orchestrator/plan_review.py`
+enforces, since the schema keeps to the draft-07 subset every harness accepts and cannot
+state it. That is the change. This document is the evidence it
 was designed against: every refusal this host has recorded, classified.
 
 ## The corpus
