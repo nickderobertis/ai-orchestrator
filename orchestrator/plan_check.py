@@ -47,6 +47,7 @@ from orchestrator import (
     plan_budgets,
     plan_review,
     plan_store,
+    spike_plan,
     structural_guard,
     task_body,
 )
@@ -300,6 +301,12 @@ def refusals(document: object, project: str) -> list[Refusal]:
         found.extend(
             Refusal(node=None, field=refused.field, reason=refused.reason)
             for refused in plan_budgets.refusals(named, document)
+        )
+        # The spike convention reads the project's plan-kind stamp and its documents, which
+        # the loaded plan carries neither of, so it is read for a named project alone too.
+        found.extend(
+            Refusal(node=refused.node, field=refused.field, reason=refused.reason)
+            for refused in spike_plan.refusals(named, document)
         )
     found.extend(_review_refusals(document, project))
     whole = _plan_review_refusal(document, named)

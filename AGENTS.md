@@ -1477,13 +1477,24 @@ so nothing runs outside the ledger.
 
 ### The plan flow
 
+<!-- llmlint: ignore-block[agents_md_durable_and_terse] The task that added the spike stage requires this paragraph to state, tersely, the flow's stages, where a spike's report lives and how a spike branch is named, acknowledged, listed and discarded, because a manager reading this file decides on a stopped flow and on a kept branch from them; `docs/orchestration.md` holds the convention in full. -->
 `just plan <brief.md>` turns a manager-written brief into the project the planner
-authors, launches it, and hands over to `just finish-plan` for everything after the plan
-exists. Its decisions rather than its defaults: the persona is the **path**
+authors, launches it, and runs **draft → spikes → finalize** before handing over to `just
+finish-plan` for review and the design document. A draft that needs measuring writes
+`spike-<topic>` nodes into `<plan project>-spikes`; each keeps its branch as `<host
+prefix>/<plan native id>/spike-<topic>`, acknowledged with `just unpublished
+--acknowledge`, and writes its report as the document `<spike id>-report` of the plan's
+own project. The plan's successful main run discards those branches, its success hook
+running `just reclaim-branch --discard` on each; a failed run and an
+unlaunched plan keep them, listed by `git ls-remote --heads origin '*/spike-*'`. Every stop
+prints the `--resume` command that carries the flow on.
+<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
+Its decisions rather than its defaults: the persona is the **path**
 `../personas/planner.yaml`, because a bare name resolves to a built-in role; the run id
 it prints is guaranteed the run's own, so a detached planner's questions reach its own
 channel; it names `--dag-graph off`, because a planning run's plan is its own output;
-both of the flow's nodes are **direct** nodes in the launching checkout — the one flag
+every planner node of the flow — the draft, the finalize and the design document — is a
+**direct** node in the launching checkout — the one flag
 that changes the dispatched task — because no lifecycle shape fits a dispatched node
 that commits nothing (`scripts/plan.sh`'s header holds the placement note and the
 incident behind it); and it names `--require-rendered false`, the one launch here that

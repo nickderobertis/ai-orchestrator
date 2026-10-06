@@ -56,6 +56,21 @@ PLAN_SAFE_RUN_ID='^[A-Za-z0-9_][A-Za-z0-9_-]*$'
 #: could not be refused as taken before the planner was launched.
 PLAN_DESIGN_RUN_SUFFIX="-design"
 
+#: What the spike stage's two runs are called, given the flow's name, for the same reason:
+#: the draft planner's spikes launch as `<name>-spikes` and the planner that finalizes the
+#: plan from them as `<name>-finalize`, and both are refused as taken before the draft is
+#: launched. `scripts/plan.sh` is the one place either is launched.
+PLAN_SPIKES_RUN_SUFFIX="-spikes"
+PLAN_FINALIZE_RUN_SUFFIX="-finalize"
+
+#: The stages `--resume` carries a flow on from, as `plan_options_parse` matches them and its
+#: refusal names them, which `scripts/plan.sh` alone owns: the
+#: spike stage — read the draft's spikes, launch them unless their run exists, then read
+#: how it settled — and the finalize stage, which launches the finalizing planner unless
+#: its run exists. Neither re-launches a run that exists, which is what makes a resume
+#: never re-run a stage that already completed.
+PLAN_RESUME_STAGES="spikes finalize"
+
 #: Where `onepipeline` keeps its ledger, and so where a run id is already taken. The
 #: same default and the same override every planner-facing verb reads, resolved
 #: against the working directory exactly as they resolve it.
@@ -267,6 +282,14 @@ plan_design_run() {
     printf '%s%s' "${1-}" "$PLAN_DESIGN_RUN_SUFFIX"
 }
 
+# Echo the runs the spikes and the finalizing planner of a flow named ``$1`` run under.
+plan_spikes_run() {
+    printf '%s%s' "${1-}" "$PLAN_SPIKES_RUN_SUFFIX"
+}
+plan_finalize_run() {
+    printf '%s%s' "${1-}" "$PLAN_FINALIZE_RUN_SUFFIX"
+}
+
 # Refuse ``$2`` as a run id something has already taken.
 #
 # A run root that already exists is what makes `onepipeline` mint `<name>-2` instead, so
@@ -301,7 +324,7 @@ plan_run_is_free() {
 # other, and a caller refusing its own non-option by name says more than a parser that
 # forwarded it to a verb which has never heard of it.
 #
-# Answers through globals rather than through stdout because there are five of them and
+# Answers through globals rather than through stdout because there are six of them and
 # one is an array. $1 names the calling launcher so its diagnostics stay attributable.
 plan_options_parse() {
     local caller=${1:?plan_options_parse: the name of the calling launcher is required, so its diagnostics stay attributable; pass it as the first argument, then retry}
@@ -310,6 +333,7 @@ plan_options_parse() {
     PLAN_OPT_MAX_TURNS=""
     PLAN_OPT_DESTINATION=""
     PLAN_OPT_DESIGN_DOC=1
+    PLAN_OPT_RESUME=""
     PLAN_OPT_FORWARDED=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -359,6 +383,22 @@ plan_options_parse() {
                     echo "$caller: --to was given no value; name the configured source this plan is copied into, or omit it for the board this repository plans against" >&2
                     return 2
                 fi
+                shift
+                ;;
+            --resume | --resume=*)
+                if [ "$1" = --resume ]; then
+                    PLAN_OPT_RESUME="${2-}"
+                    [ $# -lt 2 ] || shift
+                else
+                    PLAN_OPT_RESUME="${1#--resume=}"
+                fi
+                case "$PLAN_OPT_RESUME" in
+                    spikes | finalize) ;;
+                    *)
+                        echo "$caller: --resume names the stage a planning flow carries on from, one of: $PLAN_RESUME_STAGES; got '$PLAN_OPT_RESUME'. Run the command the flow printed when it stopped" >&2
+                        return 2
+                        ;;
+                esac
                 shift
                 ;;
             --repo | --repo=* | --execution-checkout | --execution-checkout=* | --direct)

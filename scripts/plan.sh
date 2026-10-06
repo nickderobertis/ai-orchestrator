@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # Launch a planner on a manager-written brief and finish the plan it writes: `just plan
 # <BRIEF.md> [--name NAME] [--max-turns N] [--to SOURCE] [--no-design-doc]
-# [<onepipeline start flags>]`.
+# [--resume spikes|finalize] [<onepipeline start flags>]`.
+#
+# The flow is **draft → spikes → finalize → review → design doc**, each launch a run of its
+# own: the draft planner as `<name>`; the plan's spikes, when the draft wrote any into
+# `<plan project>-spikes`, as `<name>-spikes`; the planner that reworks the plan from their
+# reports as `<name>-finalize`; and the tail's design document as `<name>-design`.
 #
 # The manager's job is writing the brief and reviewing what comes back, not
 # assembling a plan project by hand. So this recipe writes the project, and the one shape
@@ -17,9 +22,9 @@
 #     root of that name already exists, mints the first free `<name>-2` instead — so
 #     a name is only the run id while nothing has taken it. This recipe writes the
 #     plan and owns its `name`, so it guarantees that by refusing a name already
-#     taken rather than by predicting what will be minted. **Both** of this flow's run
-#     ids are refused that way, here, before anything is launched: the tail below runs a
-#     second launch, and an hour of planning must not end at a name collision.
+#     taken rather than by predicting what will be minted. **Every one** of this flow's
+#     run ids is refused that way, here, before anything is launched: each stage below is
+#     a launch of its own, and an hour of planning must not end at a name collision.
 #   * **The launch names `--require-rendered false`**, the one launch of this host that
 #     does. Its one node's task is the manager's hand-written brief, which no template
 #     renders and which the user ruled out of the template's scope; every other launch
@@ -112,15 +117,15 @@
 # host where watching it that way can say least. A caller who wants an observer names
 # one and keeps it, per flag, exactly as `just orchestrate` keeps a caller's own.
 #
-# **The plan this launch writes is one node, and the rest of the flow is a second
-# launch.** A person cannot usefully review a plan node by node; what they can judge is
+# **Each planner this launch writes is one node, and every stage is a launch of its
+# own.** A person cannot usefully review a plan node by node; what they can judge is
 # the design document — terse prose, complete interfaces, as the `design-doc` template's
 # guidance lays it out. That document has to be
 # written from **reviewed** content, and a run cannot interject a review between its own
 # nodes: a review record is written by this repository's own code and never by a
-# dispatched agent. So the document is not a second node of this run. When the planner
-# has settled and this launch's closeout has recorded what it authored, this hands over
-# to `scripts/finish-plan.sh`, which reviews the plan, checks it, launches the document,
+# dispatched agent. So the document is not a second node of this run. When the planners
+# have settled, their closeouts have recorded what they authored and any spikes have run,
+# this hands over to `scripts/finish-plan.sh`, which reviews the plan, checks it, launches the document,
 # copies both into the destination, and reports where that destination holds them. That
 # script is the one implementation of every step after the plan is authored, and an
 # operator who edited a plan afterwards runs it on its own.
@@ -133,14 +138,24 @@
 # refused **here**, before the planner is dispatched, rather than an hour later by the
 # tail. `--no-design-doc` opts out of the requirement with the tail.
 #
-# **A detached launch keeps the planner and leaves the tail to the operator.** `--detach`
-# hands back the moment the run is recorded, so the plan does not exist yet and every step
-# of the tail would be about a project nothing has written. The launch says so and prints
-# the command that finishes it once the planner has settled.
+# **The spikes.** The convention a draft's spikes follow is `orchestrator/spike_plan.py`'s
+# to state; what this owns is the order. The spikes run after the draft's closeout, because
+# their project is the draft's output and is named and stamped for its launch only once it
+# exists; the plan and the spikes are reviewed and checked before any spike launches,
+# because a plan the check refuses is not one to measure for; and the finalize planner runs
+# only once every spike settled `preserved` and its branch is acknowledged, because it
+# reworks the plan from all of their reports at once. A draft that wrote no spikes goes
+# straight to the tail. `orchestrator/spike_flow.py` answers each read between the stages.
 #
-# `--name`, `--max-turns`, `--to` and `--no-design-doc` are consumed here, and the three
-# retired placement flags are refused by name; every other flag is passed to
-# `onepipeline start` untouched, `--dag-graph` included.
+# **Every stop says how to carry on.** A stage that does not settle, and any step that
+# refuses, stops the flow before the next stage and prints the one `--resume` command that
+# carries it on, and so does a `--detach` launch, which hands back before its run has
+# settled. A resume never launches a stage whose run exists: it reads how that run settled
+# instead, so a resume never re-runs a stage that already completed.
+#
+# `--name`, `--max-turns`, `--to`, `--no-design-doc` and `--resume` are consumed here, and
+# the three retired placement flags are refused by name; every other flag is passed to
+# each `onepipeline start` untouched, `--dag-graph` included.
 set -euo pipefail
 
 #: What the project this launch writes says about itself: it is the plan a *planning*
@@ -205,6 +220,10 @@ DETACH_FLAG="--detach"
 #: name the file it has to take back rather than sweeping the directory.
 NODE_ID="plan"
 
+#: The finalize planner's node id, in a project of its own for the same reason the draft's
+#: is: its run is a planning launch, exempt from design approval for exactly this node.
+FINALIZE_NODE_ID="finalize"
+
 # Writes the plan. The brief is read here and embedded verbatim: it IS the task, in the
 # `## What` / `## Why` / `## Acceptance criteria` template every task this repository
 # dispatches is written in, so anything that reformatted it would be editing the
@@ -217,19 +236,22 @@ NODE_ID="plan"
 PLAN_PROGRAM='
 import json, pathlib, sys
 
-(name, brief, persona, node_id, turns, direct_note) = sys.argv[1:7]
+(name, brief, persona, node_id, turns, direct_note, note, goal) = sys.argv[1:9]
 task = pathlib.Path(brief).read_text(encoding="utf-8")
 
 # A direct node works in the launch directory, and the shared completion bar demands
 # every change committed. Saying so in the task is the only place the dispatch and its
-# judge both read it.
+# judge both read it. A note of the stage itself, which is what the finalize planner is
+# told, sits between the brief and that placement note, so the words of the manager still
+# precede everything else.
 node = {"id": node_id, "persona": persona}
-node["task"] = task.rstrip() + "\n\n" + direct_note.strip() + "\n"
+staged = "\n\n" + note.strip() if note.strip() else ""
+node["task"] = task.rstrip() + staged + "\n\n" + direct_note.strip() + "\n"
 if turns:
     node["max_turns"] = int(turns)
 plan = {
     "schema_version": 3,
-    "goal": {"text": f"Plan the work the manager briefed in {brief}"},
+    "goal": {"text": goal},
     "name": name,
     "tasks": [node],
 }
@@ -242,7 +264,7 @@ fail() {
 }
 
 usage() {
-    echo "usage: just plan <brief.md> [--name NAME] [--max-turns N] [--to SOURCE] [--no-design-doc] [<onepipeline start flags>]" >&2
+    echo "usage: just plan <brief.md> [--name NAME] [--max-turns N] [--to SOURCE] [--no-design-doc] [--resume spikes|finalize] [<onepipeline start flags>]" >&2
 }
 
 # llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own directory stops being enterable between its launch and its first line; no journey can produce that without racing the filesystem the test itself runs on.
@@ -313,14 +335,25 @@ done
 # demanding it would refuse a launch that has no use for the answer.
 tail_arguments=()
 declared_project=""
+spikes_run=$(plan_spikes_run "$name")
+finalize_run=$(plan_finalize_run "$name")
 if [ "$PLAN_OPT_DESIGN_DOC" -eq 1 ]; then
     declared_project=$(plan_brief_project plan "$brief") || exit 2
-    # Both of this flow's run ids, refused as taken here rather than by the tail an hour
-    # from now. The tail derives its own the same way, from the same helper, so what is
-    # checked is the id it will actually use.
+    # Every run id this flow will launch under, refused as taken here rather than by a
+    # stage an hour from now: the spikes, the finalizing planner and the tail's document.
+    # Each stage derives its own the same way, from the same helper, so what is checked is
+    # the id it will actually use. A resume skips the ids of the spikes and the finalize,
+    # because a stage whose run exists is this flow's own and is read rather than launched;
+    # the tail's is checked either way, since the tail launches whatever ran before it.
+    if [ -z "$PLAN_OPT_RESUME" ]; then
+        for run_id in "$spikes_run" "$finalize_run"; do plan_run_is_free plan "$run_id" || exit 2; done
+    fi
     plan_run_is_free plan "$(plan_design_run "$name")" || exit 2
     tail_arguments+=(--name "$name")
     [ -z "$PLAN_OPT_DESTINATION" ] || tail_arguments+=(--to "$PLAN_OPT_DESTINATION")
+elif [ -n "$PLAN_OPT_RESUME" ]; then
+    fail "--resume carries the flow on to its spikes, its finalize and its tail, and --no-design-doc stops the flow after the planner" \
+        "drop --no-design-doc to carry the flow on"
 elif [ -n "$PLAN_OPT_DESTINATION" ]; then
     fail "--to names the destination the tail copies this plan into, and --no-design-doc stops the flow before there is anything to copy" \
         "drop one of the two: --to alone finishes the plan into that destination, and --no-design-doc alone launches the planner and stops"
@@ -344,7 +377,9 @@ if [ "$declared_project" = "$PLAN_SOURCE:$name" ]; then
         "pass --name with a run name other than '$name'"
 fi
 
-plan_run_is_free plan "$name" || exit 2
+# A resume carries on from a stage after the draft, whose run is this flow's own and so is
+# not refused as taken; a fresh flow refuses it like every other id above.
+[ -n "$PLAN_OPT_RESUME" ] || plan_run_is_free plan "$name" || exit 2
 export "$PLAN_RUN_ID_ENV=$name"
 
 # shellcheck source=scripts/credentials-env.sh
@@ -357,9 +392,9 @@ export_ask_manager plan || exit "$?"
 load plan-root-env.sh
 export_plan_authoring_root plan || exit "$?"
 
-# The root the helper above resolved, which is where this launch writes its project and
+# The root the helper above resolved, which is where this launch writes its projects and
 # where everything downstream of it then looks: `onepipeline start` below, the review
-# snapshot beside it, and the closeout that reads what the run authored all resolve the
+# snapshot beside it, and the closeout that reads what a run authored all resolve the
 # `authoring` source through the store, and the store answers with this directory
 # because this launch put it in the environment.
 #
@@ -376,58 +411,42 @@ plan_directory="$plan_root/$PLAN_RECORDS"
 # printed and no repair.
 mkdir -p "$plan_directory" || fail "the plan directory $plan_directory could not be created" \
     "check that the plan-authoring root is a directory this launch may write into, then retry"
-plan="$plan_directory/$name.md"
-plan_task_records="$plan_root/$PLAN_TASKS/$name"
-planning_metadata="${PLANNING_PROJECT_METADATA//@NODES@/[\"$NODE_ID\"]}"
-"$python" -c "$PLAN_PROGRAM" "$name" "$brief" "$PLANNER_PERSONA" "$NODE_ID" "$PLAN_OPT_MAX_TURNS" \
-    "$PLAN_DIRECT_PLACEMENT_NOTE" \
-    | "$python" -m orchestrator.project_store "$plan_root" "$planning_metadata" >/dev/null || {
-    # Reported rather than swallowed, and reported without ending the launch here: what
-    # the operator has to act on is the write that failed, which the diagnostic below
-    # names, and a removal that failed on top of it leaves records the next launch would
-    # read — so it earns its own line naming them, and the refusal still comes last. The
-    # one task record is named rather than matched by a pattern: this project has exactly
-    # one node and its id is what that file is called, so there is nothing to sweep.
-    rm -f "$plan" "$plan_task_records/$NODE_ID.md" ||
-        echo "plan: part of the half-written plan could not be removed; delete $plan and $plan_task_records by hand, or the next launch of '$name' reads what this one left" >&2
-    # This one is *expected* to fail whenever the directory is absent or still holds a
-    # record the removal above could not take, and both are already reported by that
-    # line, so its own failure is not a second thing to tell anybody about.
-    rmdir "$plan_task_records" 2>/dev/null || :
-    fail "the plan for '$brief' could not be written to $plan by $python" \
-        "restore the pinned toolchain with 'just bootstrap', then retry"
+
+# Where this flow's runs are recorded, and so where a stage's run is found to exist: the
+# same default and override `plan_run_is_free` reads.
+runs_root=${!PLAN_RUNS_ROOT_ENV:-$PLAN_DEFAULT_RUNS_ROOT}
+
+# The command that carries this flow on from stage ``$1``: the brief, the flow's own name
+# and every option this launch was given, so the resumed stage launches exactly as this
+# one would have.
+resume_command() {
+    local stage=$1 command argument
+    command="just plan $(printf '%q' "$brief") --name $(printf '%q' "$name")"
+    [ -z "$PLAN_OPT_DESTINATION" ] || command+=" --to $(printf '%q' "$PLAN_OPT_DESTINATION")"
+    [ -z "$PLAN_OPT_MAX_TURNS" ] || command+=" --max-turns $PLAN_OPT_MAX_TURNS"
+    # llmlint: ignore[robust_shell] `${a[@]+"${a[@]}"}` is the `set -u` idiom for a possibly-empty array, measured to keep every element one argument; each is then quoted for the shell the operator pastes this into.
+    for argument in ${PLAN_OPT_FORWARDED[@]+"${PLAN_OPT_FORWARDED[@]}"}; do
+        command+=" $(printf '%q' "$argument")"
+    done
+    printf '%s --resume %s' "$command" "$stage"
 }
 
-# One line, and the placement is in it rather than beside it: where this planner works
-# decides what a brief may ask it to leave behind, so a manager reading the receipt is
-# the reader who needs it — and a second line on a successful launch is noise the next
-# reader learns to skip.
-placement="it is a direct node dispatched into this checkout, which concurrent orchestrators share, so it may write only to gitignored paths, may not commit, and may not leave the base branch"
-# What a detached launch owes beside the receipt, folded into that one line rather than
-# printed after the launch: `--detach` hands back before the plan exists, so the tail
-# cannot run and the operator has to run it themselves once the planner has settled. It is
-# known here, before anything is launched, and a second success line is noise the next
-# reader learns to skip.
-handover=""
-if [ "$detached" -eq 1 ] && [ "${#tail_arguments[@]}" -ne 0 ]; then
-    handover="; $DETACH_FLAG hands back before the planner has written anything, so once run $name has settled, finish the plan with: just finish-plan $brief ${tail_arguments[*]}"
-fi
-project="$PLAN_SOURCE:$name"
-# Named relative to the directory this launch was made from when the plan is under it,
-# which for an ordinary `just plan` is this checkout and the line a manager already
-# reads, and absolute otherwise. Both halves are the same claim — where the plan is —
-# and a path spelled relative to a directory it is not under names nothing, which is
-# what a caller who has pointed the plan-authoring root elsewhere would be handed.
-case "$plan" in
-    "$PWD"/*) written=${plan#"$PWD"/} ;;
-    *) written=$plan ;;
-esac
-echo "plan: wrote $project at $written; $placement; answer this planner's questions with: just channel-next $name$handover" >&2
+# Stop the flow before stage ``$2`` for the reason ``$1``, printing the one command that
+# carries it on from there once the reason is answered, and exit ``$3`` (1 by default).
+stop() {
+    echo "plan: $1; nothing after it was launched. Once that is answered, carry the flow on with: $(resume_command "$2")" >&2
+    exit "${3:-1}"
+}
 
-# The snapshot `record_projects_new_since` is taken against; its docstring says what
-# the window does and does not cover. Placed after the brief project is written, and
-# deliberately: a manager wrote that one, no planner reviewed it, and `just check-plan`
-# is right to go on refusing it.
+# One of this checkout's recipes, run from its root whatever directory the flow was
+# launched from.
+recipe() {
+    just --justfile "$script_dir/../justfile" --working-directory "$script_dir/.." "$@"
+}
+
+# The review snapshot a planner launch's closeout is taken against; its docstring says what
+# the window does and does not cover. One file, retaken before each planner this flow
+# launches, so a closeout records what appeared while its own planner ran.
 # llmlint: ignore[changed_behavior_has_e2e] A host failure: `mktemp` refusing on a full or unwritable temporary filesystem. Driving it means breaking the filesystem the journey itself runs on.
 snapshot=$(mktemp) || fail "the review snapshot could not be opened" \
     "free disk space and retry"
@@ -436,60 +455,251 @@ snapshot=$(mktemp) || fail "the review snapshot could not be opened" \
 # caller has to act on now — but it is said rather than swallowed, because the next
 # reader of a full temporary filesystem should know what put a file there.
 trap 'rm -f "$snapshot" || echo "plan: the review snapshot at $snapshot could not be removed; delete it by hand once this launch has finished" >&2' EXIT
-# llmlint: ignore[changed_behavior_has_e2e] The snapshot lists each plan source's own root, so what can fail it is the store's configuration being unreadable or the pinned toolchain being absent from a checkout this script has already resolved — neither reachable from a journey that is not breaking the host it runs on.
-"$python" -m orchestrator.plan_review snapshot "$snapshot" || fail \
-    "the plan review snapshot could not be taken by $python" \
-    "restore the pinned toolchain with 'just bootstrap', then retry"
 
-# Through the shared wrapper rather than `uv run` directly, because that is where a
-# planner's identity is established: a run launched without it records `unknown`,
-# and `just runs --mine` and `just stop` then disown it.
+# Write one planner's project — `$PLAN_SOURCE:$1`, holding the one node ``$2`` — whose task
+# is the brief, then the note ``$3`` (empty for the draft), then the placement note, under
+# the goal ``$4``. Echoes where the project record was written.
+write_planner() {
+    local run_name=$1 node_id=$2 note=$3 goal=$4 written records metadata
+    written="$plan_directory/$run_name.md"
+    records="$plan_root/$PLAN_TASKS/$run_name"
+    metadata="${PLANNING_PROJECT_METADATA//@NODES@/[\"$node_id\"]}"
+    "$python" -c "$PLAN_PROGRAM" "$run_name" "$brief" "$PLANNER_PERSONA" "$node_id" "$PLAN_OPT_MAX_TURNS" \
+        "$PLAN_DIRECT_PLACEMENT_NOTE" "$note" "$goal" \
+        | "$python" -m orchestrator.project_store "$plan_root" "$metadata" >/dev/null || {
+        # Reported rather than swallowed, and reported without ending the launch here: what
+        # the operator has to act on is the write that failed, which the diagnostic below
+        # names, and a removal that failed on top of it leaves records the next launch would
+        # read — so it earns its own line naming them, and the refusal still comes last. The
+        # one task record is named rather than matched by a pattern: this project has exactly
+        # one node and its id is what that file is called, so there is nothing to sweep.
+        rm -f "${written:?}" "${records:?}/${node_id:?}.md" ||
+            echo "plan: part of the half-written plan could not be removed; delete $written and $records by hand, or the next launch of '$run_name' reads what this one left" >&2
+        # This one is *expected* to fail whenever the directory is absent or still holds a
+        # record the removal above could not take, and both are already reported by that
+        # line, so its own failure is not a second thing to tell anybody about.
+        rmdir "$records" 2>/dev/null || :
+        fail "the plan for '$brief' could not be written to $written by $python" \
+            "restore the pinned toolchain with 'just bootstrap', then retry"
+    }
+    printf '%s' "$written"
+}
+
+# Take the snapshot the next planner launch's closeout is read against. Placed after that
+# planner's project is written, and deliberately: a manager wrote that one, no planner
+# reviewed it, and `just check-plan` is right to go on refusing it.
+take_snapshot() {
+    : >"$snapshot" || fail "the review snapshot at $snapshot could not be emptied for the next planner's closeout" \
+        "free disk space in its directory and retry"
+    # llmlint: ignore[changed_behavior_has_e2e] The snapshot lists each plan source's own root, so what can fail it is the store's configuration being unreadable or the pinned toolchain being absent from a checkout this script has already resolved — neither reachable from a journey that is not breaking the host it runs on.
+    "$python" -m orchestrator.plan_review snapshot "$snapshot" || fail \
+        "the plan review snapshot could not be taken by $python" \
+        "restore the pinned toolchain with 'just bootstrap', then retry"
+}
+
+# Launch the project ``$1`` under the run ``$2``, with this launch's own flags last,
+# through the shared wrapper rather than `uv run` directly, because that is where a
+# planner's identity is established: a run launched without it records `unknown`, and
+# `just runs --mine` and `just stop` then disown it. The run's id is exported so its
+# dispatches ask on its own channel. Answers the launch's exit status.
 #
-# A caller's own flags reach `onepipeline start` as they were typed, with this
-# recipe's observer default after them and only when they named none. That verb is the
-# one thing that knows its own surface, and a copy of its flag list here would both be
-# the drift `tests/test_cli_surface_drift.py` exists to catch and turn a pass-through
-# into a version pin.
-#
-# Run rather than `exec`ed, which it was until this launch grew a closeout: a planning
-# run that settles successfully has produced a plan its own judge has already read, so
-# the tasks it authored are recorded here rather than left for `just review-plan` to
-# spend a second judged turn on. A run that did not settle successfully records nothing,
-# and a planner working in its own worktree — which is the default placement — writes
-# its plan somewhere this snapshot never saw, so there is simply nothing to record.
-#
-# A closeout that fails carries its own status out, rather than being swallowed under a
-# green launch: what it failed to do is record what this run authored, and a plan
-# silently left unrecorded is one whose next `just check-plan` refuses it with nothing
-# to say why. What does *not* fail it is a plan it cannot record — that one is named and
-# left alone, because a closeout cannot tell its own run's output from a neighbour's and
-# an unrelated plan may not kill this launch. Both endings that a journey can reach
-# without breaking the host are driven — a settled run recording what it authored, and
-# an unsettled one recording nothing — in tests/e2e/test_plan_review_e2e.py.
-status=0
-# One directive rather than two stacked ones: a directive's scope is the line under it, so the upper of a stacked pair covers the lower and never the command, and the judge reported whichever of the two it had stranded.
-# llmlint: ignore[boundary_inputs_validated, tool_output_is_signal, robust_shell] `onepipeline start` validates its own surface and restating it here is the drift this repository gates against; this is `just orchestrate`'s attached launch with a plan written first, so streaming the run as it goes is what a manager stays attached for — the one line this script owns, the plan it wrote and the command that answers the planner, is printed above; and the two array expansions are the `set -u` idiom whose `+` part alone is unquoted, measured to keep `one two`, `*` and the empty string each one argument.
-"$script_dir/onepipeline.sh" start "$project" ${PLAN_OPT_FORWARDED[@]+"${PLAN_OPT_FORWARDED[@]}"} ${observer[@]+"${observer[@]}"} ${rendered[@]+"${rendered[@]}"} || status=$?
-if [ "$status" -eq 0 ]; then
+# A caller's own flags reach `onepipeline start` as they were typed, with this recipe's
+# observer default after them and only when they named none. That verb is the one thing
+# that knows its own surface, and a copy of its flag list here would both be the drift
+# `tests/test_cli_surface_drift.py` exists to catch and turn a pass-through into a version
+# pin.
+launch() {
+    local project=$1 run_name=$2
+    shift 2
+    export "$PLAN_RUN_ID_ENV=$run_name"
+    # One directive rather than two stacked ones: a directive's scope is the line under it, so the upper of a stacked pair covers the lower and never the command, and the judge reported whichever of the two it had stranded.
+    # llmlint: ignore[boundary_inputs_validated, tool_output_is_signal, robust_shell] `onepipeline start` validates its own surface and restating it here is the drift this repository gates against; this is `just orchestrate`'s attached launch with a plan written first, so streaming the run as it goes is what a manager stays attached for — the lines this script owns are printed beside it; and the array expansions are the `set -u` idiom whose `+` part alone is unquoted, measured to keep `one two`, `*` and the empty string each one argument.
+    "$script_dir/onepipeline.sh" start "$project" ${PLAN_OPT_FORWARDED[@]+"${PLAN_OPT_FORWARDED[@]}"} ${observer[@]+"${observer[@]}"} "$@"
+}
+
+# Record, after a planner launch that settled, what that planner authored: a planning run
+# that settles successfully has produced a plan its own judge has already read, so the
+# tasks it authored are recorded here rather than left for `just review-plan` to spend a
+# second judged turn on. A closeout that fails carries its own status out, rather than
+# being swallowed under a green launch: what it failed to do is record what the run
+# authored, and a plan silently left unrecorded is one whose next `just check-plan` refuses
+# it with nothing to say why. What does *not* fail it is a plan it cannot record — that one
+# is named and left alone, because a closeout cannot tell its own run's output from a
+# neighbour's and an unrelated plan may not kill this launch. Both endings that a journey
+# can reach without breaking the host are driven — a settled run recording what it
+# authored, and an unsettled one recording nothing — in tests/e2e/test_plan_review_e2e.py.
+closeout() {
     # llmlint: ignore[changed_behavior_has_e2e] The one ending left is a settled run whose closeout then fails outright, which now takes an unreadable snapshot or an unreadable review bar rather than any plan on disk; a project it cannot record is passed over instead, which `tests/test_plan_review.py` drives.
-    "$python" -m orchestrator.plan_review closeout "$snapshot" || status=$?
-fi
-if [ "$status" -ne 0 ] || [ "${#tail_arguments[@]}" -eq 0 ]; then
-    exit "$status"
+    "$python" -m orchestrator.plan_review closeout "$snapshot"
+}
+
+# Name the path ``$1`` relative to the directory this launch was made from when it is
+# under it, which for an ordinary `just plan` is this checkout and the line a manager
+# already reads, and absolute otherwise: a path spelled relative to a directory it is not
+# under names nothing, which is what a caller who has pointed the plan-authoring root
+# elsewhere would be handed.
+where() {
+    case "$1" in
+        "$PWD"/*) printf '%s' "${1#"$PWD"/}" ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
+# One line per planner launch, and the placement is in it rather than beside it: where
+# this planner works decides what a brief may ask it to leave behind, so a manager reading
+# the receipt is the reader who needs it — and a second line on a successful launch is
+# noise the next reader learns to skip.
+placement="it is a direct node dispatched into this checkout, which concurrent orchestrators share, so it may write only to gitignored paths, may not commit, and may not leave the base branch"
+
+# 1. The draft: the planner on the brief, unless a resume carries on past it.
+if [ -z "$PLAN_OPT_RESUME" ]; then
+    plan=$(write_planner "$name" "$NODE_ID" "" "Plan the work the manager briefed in $brief")
+    # What a detached launch owes beside the receipt, folded into that one line rather than
+    # printed after the launch: `--detach` hands back before the plan exists, so the rest of
+    # the flow cannot run and the operator carries it on once the planner has settled. It
+    # is known here, before anything is launched, and a second success line is noise the
+    # next reader learns to skip.
+    handover=""
+    if [ "$detached" -eq 1 ] && [ "${#tail_arguments[@]}" -ne 0 ]; then
+        handover="; $DETACH_FLAG hands back before the planner has written anything, so once run $name has settled, carry the flow on with: $(resume_command spikes)"
+    fi
+    echo "plan: wrote $PLAN_SOURCE:$name at $(where "$plan"); $placement; answer this planner's questions with: just channel-next $name$handover" >&2
+    take_snapshot
+    status=0
+    # llmlint: ignore[robust_shell] `${a[@]+"${a[@]}"}` is the `set -u` idiom for a possibly-empty array, measured to keep every element one argument.
+    launch "$PLAN_SOURCE:$name" "$name" ${rendered[@]+"${rendered[@]}"} || status=$?
+    # A detached launch has already been told how to carry the flow on, on the receipt
+    # above: everything after the draft is about the plan the planner writes, and this
+    # hands back before there is one.
+    [ "$detached" -eq 0 ] || exit "$status"
+    if [ "$status" -eq 0 ]; then
+        closeout || status=$?
+    fi
+    [ "${#tail_arguments[@]}" -ne 0 ] || exit "$status"
+    [ "$status" -eq 0 ] ||
+        stop "run $name, the draft planner, did not settle or its closeout failed (status $status); read it with 'just channel-next $name'" spikes "$status"
+else
+    # A resume carries on from the draft's output, so the draft has to have produced one.
+    "$python" -m orchestrator.spike_flow settled "$name" --project "$PLAN_SOURCE:$name" >/dev/null ||
+        stop "run $name, the draft planner, has not settled with its node done; read it with 'just channel-next $name'" spikes
 fi
 
-# The rest of the flow, in the one place it is implemented. It is reached only on a
-# launch that settled and recorded what it authored, because every step of it is about
-# the plan the planner wrote: reviewing a project nothing has written, or writing a
-# document about one, is not a cheaper version of this — it is a refusal an hour after
-# the manager stopped watching.
-# A detached launch has already been told how to finish the plan, on the one receipt line
-# above: the tail is about the plan the planner writes, and this hands back before there
-# is one.
-[ "$detached" -eq 0 ] || exit 0
+# 2. The spikes: the draft's `<plan>-spikes` project, launched unless its run exists.
+plan_native=${declared_project#*:}
+spikes_project="$declared_project$PLAN_SPIKES_RUN_SUFFIX"
+spikes_launched=0
+# Whichever stage a resume names, spikes whose run does not exist are launched here: a
+# resume names where the flow stopped, and is never a way past a stage that never ran.
+if [ ! -e "$runs_root/$spikes_run" ]; then
+    # Named for the run it launches as and stamped `spikes`, naming exactly its nodes,
+    # which is what exempts it from design approval and nothing else. Nothing printed is a
+    # draft that wrote no spikes, which goes straight to the tail.
+    spike_nodes=$("$python" -m orchestrator.spike_flow prepare "$spikes_project" "$spikes_run") ||
+        stop "the spikes project $spikes_project could not be read or stamped; the diagnostic above names why" spikes 2
+    if [ -z "$spike_nodes" ]; then
+        # llmlint: ignore[tool_output_is_signal] The tail's own lines are its product: it is a further launch, and the run id it prints is the only place that run's channel is named.
+        exec "$script_dir/finish-plan.sh" "$brief" "${tail_arguments[@]}"
+    fi
+    # The plan and its spikes are each reviewed, then checked, before a spike is launched:
+    # a plan the check refuses — one missing its budgets document, say — is one no spike
+    # should be measuring for, and a spike the check refuses is one that would not launch.
+    # The draft's closeout has recorded what it wrote, so each review is free and silent
+    # then, and spends a judged turn only on what nothing has read — a resume after a
+    # detached draft, whose closeout never ran. Each step is the tail's own, run through
+    # `finish-plan.sh --step`, so the review and the check stay implemented there alone.
+    for checked_project in "$declared_project" "$spikes_project"; do
+        reviewed=0
+        "$script_dir/finish-plan.sh" --step review "$checked_project" || reviewed=$?
+        [ "$reviewed" -eq 0 ] ||
+            stop "the review above refused or could not read $checked_project (status $reviewed); correct what it named in that project's own task records" spikes "$reviewed"
+        checked=0
+        "$script_dir/finish-plan.sh" --step check "$checked_project" || checked=$?
+        [ "$checked" -eq 0 ] ||
+            stop "the check above refused or could not read $checked_project (status $checked); correct what it named in that project" spikes "$checked"
+    done
+    handover=""
+    if [ "$detached" -eq 1 ]; then
+        handover="; $DETACH_FLAG hands back before the spikes have run, so once run $spikes_run has settled, carry the flow on with: $(resume_command spikes)"
+    fi
+    # llmlint: ignore[tool_output_is_signal] The one line naming the run this launches and the command that answers its spikes' questions, which a detached or interrupted supervisor has no other way to reach, as the draft's receipt and the tail's launch line each are for theirs.
+    echo "plan: launching run $spikes_run, the spikes of $declared_project, each keeping its branch as <host prefix>/$plan_native/spike-<topic>; answer their questions with: just channel-next $spikes_run$handover" >&2
+    # The plan is named in the template rather than left to the shipped default, which
+    # would name the *spikes* project — so every spike branch reads
+    # `<host prefix>/<plan native id>/spike-<topic>` and `git ls-remote --heads origin
+    # '*/spike-*'` lists it from any machine. How the run ended is read below rather than
+    # off this status: a spike that settled `failed` is named there, node by node.
+    launched=0
+    launch "$spikes_project" "$spikes_run" --branch-template "$plan_native/{{ node.id }}" || launched=$?
+    spikes_launched=1
+    if [ "$detached" -eq 1 ]; then
+        [ "$launched" -eq 0 ] ||
+            stop "run $spikes_run, the spikes, could not be launched (status $launched); the diagnostic above names why" spikes "$launched"
+        exit 0
+    fi
+fi
+
+# Read how the spikes settled — every node `done`, as `preserved` — and acknowledge each
+# branch they kept, read off `onevcs`'s own records of that run rather than its journal. A
+# flow whose draft wrote no spikes has no spikes run, and nothing to read here; a launch
+# this made is always read, so one that left no run behind stops here rather than passing
+# for a draft with no spikes.
+spikes_ran=0
+acknowledgement=""
+if [ "$spikes_launched" -eq 1 ] || [ -e "$runs_root/$spikes_run" ]; then
+    "$python" -m orchestrator.spike_flow settled "$spikes_run" --spikes --project "$spikes_project" >/dev/null ||
+        stop "run $spikes_run, the spikes, has not settled with every spike done and its branch preserved; the line above names each node, and 'just channel-next $spikes_run' reads the run" spikes
+    spikes_ran=1
+    kept=$("$python" -m orchestrator.spike_flow branches "$spikes_run") ||
+        stop "the branches run $spikes_run kept could not be read; the line above names why" spikes
+    acknowledged_branches=()
+    while IFS=$'\t' read -r spike branch; do
+        # The view answers 0 or 7 once the acknowledgement is recorded — 7 saying some other
+        # branch still counts, which is every spike after this one until each is reached —
+        # and 1 or 2 when it could not record one (`scripts/unpublished.sh --print-surface`).
+        acknowledged=0
+        recipe unpublished --acknowledge "$branch" --reason "kept as the spike $spike of the plan $declared_project until the plan's main run succeeds, whose success hook discards it; its retries and recovery may need it until then" >/dev/null || acknowledged=$?
+        case "$acknowledged" in
+            0 | 7) ;;
+            *) stop "the spike branch $branch could not be acknowledged (status $acknowledged); the diagnostic above names why" spikes "$acknowledged" ;;
+        esac
+        acknowledged_branches+=("$branch")
+    done <<<"$kept"
+    # Said on the finalize planner's receipt rather than on a line of its own.
+    acknowledgement="; acknowledged the spike branches ${acknowledged_branches[*]}, kept until the main run of $declared_project succeeds"
+fi
+
+# 3. The finalize: a planner reworks the plan from every report, unless its run exists.
+if [ "$spikes_ran" -eq 1 ] && [ ! -e "$runs_root/$finalize_run" ]; then
+    # llmlint: ignore[changed_behavior_has_e2e] The note reads the branches the line above has just read and found, so it fails only when `onevcs` stops answering between the two reads; tests/test_spike_flow.py drives the read's own refusals, and tests/plan_tooling/test_plan_spike_flow_e2e.py the stop this shares when the first read finds no branch.
+    finalize_note=$("$python" -m orchestrator.spike_flow note "$declared_project" "$spikes_run") ||
+        stop "the finalize planner's note could not be composed; the line above names why" finalize
+    plan=$(write_planner "$finalize_run" "$FINALIZE_NODE_ID" "$finalize_note" "Finalize $declared_project from its spikes")
+    handover=""
+    if [ "$detached" -eq 1 ]; then
+        handover="; $DETACH_FLAG hands back before the planner has finalized anything, so once run $finalize_run has settled, carry the flow on with: $(resume_command finalize)"
+    fi
+    # llmlint: ignore[tool_output_is_signal] The finalize planner's receipt, naming its run and the command that answers its questions, as the draft's does for the draft; the acknowledgement rides on it rather than printing a line of its own.
+    echo "plan: wrote $PLAN_SOURCE:$finalize_run at $(where "$plan")$acknowledgement; $placement; answer this planner's questions with: just channel-next $finalize_run$handover" >&2
+    take_snapshot
+    status=0
+    # llmlint: ignore[robust_shell] `${a[@]+"${a[@]}"}` is the `set -u` idiom for a possibly-empty array, measured to keep every element one argument.
+    launch "$PLAN_SOURCE:$finalize_run" "$finalize_run" ${rendered[@]+"${rendered[@]}"} || status=$?
+    [ "$detached" -eq 0 ] || exit "$status"
+    [ "$status" -eq 0 ] ||
+        stop "run $finalize_run, the finalize planner, did not settle (status $status); read it with 'just channel-next $finalize_run'" finalize "$status"
+    closeout || stop "the closeout of run $finalize_run could not record what it authored; the diagnostic above names why" finalize "$?"
+elif [ "$spikes_ran" -eq 1 ]; then
+    "$python" -m orchestrator.spike_flow settled "$finalize_run" --project "$PLAN_SOURCE:$finalize_run" >/dev/null ||
+        stop "run $finalize_run, the finalize planner, has not settled with its node done; read it with 'just channel-next $finalize_run'" finalize
+fi
+
+# 4. The rest of the flow, in the one place it is implemented. It is reached only once the
+# plan is the one every earlier stage left, because every step of it is about that plan:
+# reviewing a project nothing has finished, or writing a document about one, is not a
+# cheaper version of this — it is a refusal an hour after the manager stopped watching.
 # The tail's own lines are its product rather than a second success report of this one:
-# it is a second launch, and the run id it prints is the only place that run's channel is
-# named — a supervisor holding this output has to be able to reach both. The two locations
-# it ends with are what a person opens to review the plan.
+# it is a further launch, and the run id it prints is the only place that run's channel is
+# named — a supervisor holding this output has to be able to reach every one. The two
+# locations it ends with are what a person opens to review the plan.
 # llmlint: ignore[tool_output_is_signal] see the note above this line
 exec "$script_dir/finish-plan.sh" "$brief" "${tail_arguments[@]}"

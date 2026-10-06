@@ -391,6 +391,17 @@ recipe() {
 
 usage() {
     echo "usage: just finish-plan <brief.md> [--to SOURCE] [--name NAME] [--no-design-doc] [<onepipeline start flags>]" >&2
+    echo "   or: just finish-plan --step review|check <SOURCE:PROJECT>" >&2
+}
+
+# One step of the tail over one project — the review or the check — exactly as the tail
+# runs it, answering with that recipe's own status. `just plan` vets the draft's plan and
+# its spikes this way before a spike launches, so each step stays implemented here alone.
+tail_step() {
+    case "$1" in
+        review) recipe review-plan "$2" ;;
+        check) recipe check-plan "$2" ;;
+    esac
 }
 
 # llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own directory stops being enterable between its launch and its first line; no journey can produce that without racing the filesystem the test itself runs on.
@@ -419,6 +430,24 @@ load() {
 # shellcheck source=scripts/plan-brief.sh
 load plan-brief.sh
 
+if [ "${1:-}" = --step ]; then
+    case "${2:-}" in
+        review | check) ;;
+        *)
+            usage
+            fail "--step names the one tail step to run alone, review or check; got '${2:-}'" \
+                "name review or check, then the qualified SOURCE:PROJECT it runs over"
+            ;;
+    esac
+    if [ "$#" -ne 3 ] || [ -z "$3" ]; then
+        usage
+        fail "--step $2 runs over exactly one nonempty SOURCE:PROJECT; got $(($# - 2)) argument(s) after the step" \
+            "name the one qualified project it runs over, and nothing after it"
+    fi
+    tail_step "$2" "$3"
+    exit
+fi
+
 brief="${1:-}"
 if ! plan_brief_is_a_task finish-plan "$brief"; then
     usage
@@ -434,6 +463,8 @@ plan_options_parse finish-plan "$@" || exit "$UNRUNNABLE"
 # named the wrong command.
 [ -z "$PLAN_OPT_MAX_TURNS" ] || fail "--max-turns names the planner's budget, and this command launches no planner" \
     "the design-document dispatch takes its persona's own budget; drop the flag, or pass it to 'just plan'"
+[ -z "$PLAN_OPT_RESUME" ] || fail "--resume carries 'just plan' on from one of its stages, and this command is the tail every stage hands over to" \
+    "drop the flag, or run 'just plan' with it"
 
 name=$(plan_run_name finish-plan "$PLAN_OPT_NAME" "$brief") || exit "$UNRUNNABLE"
 design_run=$(plan_design_run "$name")
@@ -468,7 +499,7 @@ fi
 # every refused criterion, which this flow ends on rather than repairing — the planner's
 # own judge is the repair loop and it has already run.
 review_status=0
-recipe review-plan "$plan_project" || review_status=$?
+tail_step review "$plan_project" || review_status=$?
 if [ "$review_status" -ne 0 ]; then
     if [ "$review_status" -eq 1 ]; then
         echo "finish-plan: the review above refused $plan_project, so no design document was launched and nothing was copied; correct every criterion it named in the plan's own task record, then run 'just finish-plan $brief' again" >&2
@@ -481,7 +512,7 @@ fi
 # 2. The plan its own launch will read, refused here rather than after a document
 # dispatch has been paid for.
 check_status=0
-recipe check-plan "$plan_project" || check_status=$?
+tail_step check "$plan_project" || check_status=$?
 if [ "$check_status" -ne 0 ]; then
     if [ "$check_status" -eq 1 ]; then
         echo "finish-plan: the check above refused $plan_project, so no design document was launched and nothing was copied; a plan that would not launch is not one to write a document about — correct each node the check named in the plan's own task record, read it back with 'just check-plan $plan_project', and run this command again" >&2

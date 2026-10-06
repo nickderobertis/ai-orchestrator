@@ -21,6 +21,18 @@ variables:
       the operational notes say only a task may grant. Leave empty when there is none.
     type: text
     default: ""
+  spikes:
+    description: >-
+      The spikes this task builds on, one object per spike with three string keys: `spike`
+      (the spike's node id, `spike-<topic>`), `report` (the document id of its report,
+      `<spike id>-report`, a document of this plan's own project) and `branch` (the
+      preserved branch its harness is kept on, ending `/<spike id>`, or `/<spike id>-<n>`
+      where a retry of the spike cut its own). Rendered as a `## Spike
+      evidence` section, so the worker starts from the measurements and the harness. Leave
+      empty when the task builds on no spike.
+    type: list
+    items: object
+    default: []
 ---
 {% extends "onepipeline/plan-task.md.j2" %}
 {% block before_criteria %}
@@ -34,6 +46,19 @@ variables:
 
 {% endblock %}
 {% block after_criteria %}
+{% if spikes %}
+
+## Spike evidence
+
+This task builds on these spikes. Start from each report's measurements and from the
+harness on each branch rather than measuring again. A report is the document of this plan's
+own project with that id or, on a copy of the plan, the one whose `onetaskgraph.origin`
+names it:
+
+{% for entry in spikes %}
+- `{{ entry.spike }}`: report `{{ entry.report }}`, a document of this plan's own project; branch `{{ entry.branch }}`
+{% endfor %}
+{% endif %}
 {% if additional_info %}
 
 ## Additional info

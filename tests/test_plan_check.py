@@ -186,7 +186,7 @@ def test_a_project_record_the_store_cannot_answer_is_refused_naming_what_it_said
         lambda _project: (_ for _ in ()).throw(OSError("the store answered nothing")),
     )
 
-    budgets, refusal = plan_check.refusals(document, "authoring:probe")
+    budgets, spikes, refusal = plan_check.refusals(document, "authoring:probe")
 
     assert refusal["node"] is None
     assert refusal["field"] == "metadata"
@@ -196,6 +196,10 @@ def test_a_project_record_the_store_cannot_answer_is_refused_naming_what_it_said
     assert budgets["field"] == "budgets"
     assert "authoring:probe's budgets could not be read" in budgets["reason"]
     assert "the store answered nothing" in budgets["reason"]
+    # So is the spike convention, whose stamp is on the same project record.
+    assert (spikes["node"], spikes["field"]) == (None, None)
+    assert "authoring:probe's spike convention could not be checked" in spikes["reason"]
+    assert "the store answered nothing" in spikes["reason"]
 
 
 def test_a_node_whose_criteria_rest_outside_its_dispatch_is_refused_against_its_task(

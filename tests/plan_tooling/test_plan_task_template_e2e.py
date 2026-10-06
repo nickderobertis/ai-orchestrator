@@ -298,6 +298,7 @@ def test_the_planning_launch_alone_runs_without_require_rendered(authored: Autho
         assert record.get("require_rendered", False) is expected, (run, record)
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] An existing journey of `plan-tooling`, updated to the planning flow's new handover; where it runs is that project's split, which `tests/plan_tooling/AGENTS.md` states and this change leaves as it was.  # noqa: E501
 @pytest.mark.xdist_group("plan-task-template")
 def test_each_task_records_the_engines_template_and_keeps_its_answers_beside_it(
     authored: Authored,
@@ -312,10 +313,13 @@ def test_each_task_records_the_engines_template_and_keeps_its_answers_beside_it(
             "pinned engine states for this host's plan-task"
         )
         stored = _answers(authored.tasks[node])
-        assert stored == {"additional_info": "", **answers}, stored
+        assert stored == {"additional_info": "", "spikes": [], **answers}, stored
         assert task.content is not None and task.content.startswith(f"## What\n\n{answers['what']}")
     second = _task(authored.stored.qualified, authored.tasks["read-the-cursor"])
     assert second.deps == ("decide-the-cursor",), second.deps
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 @pytest.mark.xdist_group("plan-task-template")

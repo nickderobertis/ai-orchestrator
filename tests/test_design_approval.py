@@ -651,6 +651,22 @@ def test_a_project_holding_several_documents_is_refused_rather_than_guessed_at(
         design_approval.design_document("authoring:demo")
 
 
+def test_a_spikes_report_is_never_taken_for_the_design_document(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each spike writes its report into the plan's project, known by its template anywhere."""
+    report = _document(
+        qualified_id="plans:BOARD_MINTED_ID",
+        metadata=_provenance(APPROVED_PROSE, template=design_approval.SPIKE_REPORT_REFERENCE),
+    )
+    copied = dataclasses.replace(report, qualified_id=QualifiedDocumentId("authoring:x"))
+    _holds(monkeypatch, report, _document(), copied)
+
+    assert design_approval.is_spike_report(report)
+    assert not design_approval.is_spike_report(_document())
+    assert design_approval.design_document("authoring:demo") == _document()
+
+
 @pytest.mark.parametrize(
     ("metadata", "expected"),
     [
@@ -1226,6 +1242,87 @@ def test_a_follow_ups_stamp_naming_anything_but_one_node_bounds_nothing(
     assert assessed.exemption is None
     assert assessed.refusal is not None
     assert "follow-ups launch" not in assessed.refusal
+
+
+def _spikes_stamp(*nodes: str) -> Mapping[str, object]:
+    """The metadata `scripts/plan.sh` writes onto a plan's `<plan>-spikes` project."""
+    return {
+        design_approval.PLAN_KIND: {
+            design_approval.STAMP_KIND: design_approval.SPIKES,
+            design_approval.STAMP_NODES: list(nodes),
+        }
+    }
+
+
+#: The spikes project of a plan, and the two spike nodes its draft planner wrote there.
+SPIKES_PROJECT = "authoring:cursor-plan-spikes"
+SPIKE_NODES = ("spike-listing", "spike-quota")
+
+
+def test_a_spikes_launch_is_exempt_for_exactly_the_nodes_its_stamp_names(
+    monkeypatch: pytest.MonkeyPatch, template: design_approval.ChainDigest
+) -> None:
+    """The plan's document is written after the spikes, so they launch unapproved — said."""
+    _project(monkeypatch, _spikes_stamp(*SPIKE_NODES))
+    _tasks(monkeypatch, *SPIKE_NODES)
+    _holds(monkeypatch)
+
+    assessed = design_approval.assess(SPIKES_PROJECT)
+
+    assert assessed.refusal is None
+    assert assessed.exemption is not None
+    assert "is the spikes a planning flow launches before it finalizes" in assessed.exemption
+    assert "(spike-listing, spike-quota)" in assessed.exemption
+    assert design_approval.stamped_launch(SPIKES_PROJECT) == design_approval.StampedLaunch(
+        design_approval.SPIKES, frozenset(NodeId(node) for node in SPIKE_NODES)
+    )
+    assert design_approval.planning_launch(SPIKES_PROJECT) is None, (
+        "a spikes stamp is not a planning launch, whatever reads it as one"
+    )
+
+
+@pytest.mark.parametrize(
+    ("held", "said"),
+    [
+        (
+            (*SPIKE_NODES, "build-the-listing"),
+            "1 task(s) that launch never wrote (build-the-listing)",
+        ),
+        (SPIKE_NODES[:1], "claims 1 node(s) the project does not hold (spike-quota)"),
+    ],
+    ids=["a-node-beyond-the-stamp", "a-stamped-node-not-held"],
+)
+def test_a_spikes_project_that_disagrees_with_its_stamp_is_gated_like_any_other(
+    monkeypatch: pytest.MonkeyPatch,
+    template: design_approval.ChainDigest,
+    held: tuple[str, ...],
+    said: str,
+) -> None:
+    """Nothing beyond the named spikes, and no claim beyond what the project holds."""
+    _project(monkeypatch, _spikes_stamp(*SPIKE_NODES))
+    _tasks(monkeypatch, *held)
+    _holds(monkeypatch)
+
+    assessed = design_approval.assess(SPIKES_PROJECT)
+
+    assert assessed.exemption is None
+    assert assessed.refusal is not None
+    assert said in assessed.refusal
+    assert "stamped as the spikes a planning flow launches" in assessed.refusal
+
+
+def test_a_spikes_project_holding_a_design_document_is_no_longer_exempt(
+    monkeypatch: pytest.MonkeyPatch, template: design_approval.ChainDigest
+) -> None:
+    _project(monkeypatch, _spikes_stamp(*SPIKE_NODES))
+    _tasks(monkeypatch, *SPIKE_NODES)
+    _holds(monkeypatch, _document())
+
+    assessed = design_approval.assess(SPIKES_PROJECT)
+
+    assert assessed.exemption is None
+    assert assessed.refusal is not None
+    assert "it holds 1 design document(s)" in assessed.refusal
 
 
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_docs` routes between this

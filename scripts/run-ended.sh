@@ -9,14 +9,22 @@
 # host does with it.
 #
 #   * **success** — every node ended `done`, so the main work is complete and what is left
-#     is verifying what the run drafted. It runs `just follow-ups <run-id> --detach` in
+#     is discarding the plan's spike branches and verifying what the run drafted. Every
+#     spike branch the plan names — each `*/<plan native id>/spike-*` branch on the origin
+#     of a repository the run's nodes change, which `orchestrator/spike_branches.py` lists —
+#     is discarded with `just reclaim-branch <branch> --repo <repository> --discard`, one
+#     line reporting each outcome; a branch it cannot discard, or a repository it cannot
+#     list, is reported and stops neither the others nor the follow-up run. Then it runs
+#     `just follow-ups <run-id> --detach` in
 #     this checkout and turns the recipe's two lines into the one a manager reads: the
 #     follow-up run's id and its watch command. Detached, because the hook is awaited and a
 #     follow-up run outlives its deadline. When the recipe answers that there is nothing to
 #     verify, its one line is relayed alone, because it already says no follow-up run was
 #     launched. It exits with the recipe's status.
 #   * **failure** — the run ended any other way: a failed or skipped node, an unfinished
-#     graph with nothing left to decide, or a clean stop. It launches nothing, and prints
+#     graph with nothing left to decide, or a clean stop. It discards no spike branch,
+#     because a failed run's retries and recovery may still need them. It launches nothing,
+#     and prints
 #     one line naming the run, the reason the engine gave on stdin, and the command that
 #     verifies the run's drafts by hand. It exits 0, because there is nothing it tried.
 #
@@ -63,6 +71,45 @@ run=${ONEPIPELINE_RUN_ID:-}
 # llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so nothing would ever match.
 [[ "$run" =~ $PLAN_SAFE_RUN_ID ]] || fail "ONEPIPELINE_RUN_ID '$run' is not a run id: a run id is one word of letters, digits, '_' and '-'" "$usage"
 
+# Discard every spike branch the plan of the run at ``$1`` names, reporting each outcome.
+# Nothing it meets ends the hook: a plan whose spikes outlive their use costs disk and a
+# listing line, while a success hook that stopped here would launch no follow-up run.
+discard_spike_branches() {
+    local root=$1 python listing listed=0 kind repository detail discarded reclaimed
+    local -a gone=()
+    python="$checkout/.venv/bin/python3"
+    [ -x "$python" ] || python=python3
+    listing=$(cd -- "$checkout" && "$python" -m orchestrator.spike_branches "$root") || listed=$?
+    if [ "$listed" -ne 0 ]; then
+        echo "run-ended: the spike branches of run $run's plan could not be listed (status $listed), so none was discarded; the diagnostic above names why; each repository lists them with: git ls-remote --heads origin '*/spike-*'" >&2
+        return 0
+    fi
+    while IFS=$'\t' read -r kind repository detail; do
+        case "$kind" in
+            branch)
+                reclaimed=0
+                discarded=$(cd -- "$checkout" && just reclaim-branch "$detail" --repo "$repository" --discard 2>&1) || reclaimed=$?
+                if [ "$reclaimed" -eq 0 ]; then
+                    gone+=("$detail of $repository")
+                else
+                    printf '%s\n' "$discarded"
+                    echo "run-ended: spike branch $detail of $repository could not be discarded ('just reclaim-branch' exited $reclaimed, for the reason above); it is kept, and 'just reclaim-branch $detail --repo $repository --discard' discards it"
+                fi
+                ;;
+            unlisted)
+                echo "run-ended: the spike branches of run $run's plan on $repository could not be listed, so none there was discarded: $detail; once that is repaired, discard each with 'just reclaim-branch <branch> --repo $repository --discard', listing them in its checkout with: git ls-remote --heads origin '*/spike-*'"
+                ;;
+        esac
+    done <<<"$listing"
+    # One line for every branch it discarded, beside a line for each it could not: the
+    # follow-up receipt after it is what a manager reads this log for.
+    if [ "${#gone[@]}" -ne 0 ]; then
+        local IFS=","
+        # llmlint: ignore[tool_output_is_signal] The task that added this discard requires the hook to report each outcome on its output, and a manager reading this log decides from it which spike branches are gone; it is one line for all of them, and the follow-up receipt stays its own line because its exact shape is what a supervisor reads the follow-up run's id from.
+        echo "run-ended: discarded the spike branches ${gone[*]}, because run $run, its plan's main run, succeeded"
+    fi
+}
+
 case "${ONEPIPELINE_HOOK:-}" in
     success)
         run_root=${ONEPIPELINE_RUN_ROOT:-}
@@ -73,6 +120,7 @@ case "${ONEPIPELINE_HOOK:-}" in
             fail "ONEPIPELINE_RUN_ROOT '$run_root' is not the canonical absolute directory of run $run" "$usage"
         export ONEPIPELINE_RUNS_DIR
         ONEPIPELINE_RUNS_DIR=$(dirname -- "$run_root")
+        discard_spike_branches "$run_root"
         status=0
         # Standard error is left alone, so the recipe's own diagnostics and the engine's
         # launch record reach the hook's log; standard output is the recipe's answer.

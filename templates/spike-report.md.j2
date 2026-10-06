@@ -1,0 +1,91 @@
+---
+onetaskgraph_template: 1
+description: >-
+  A spike's report: what one spike measured, how, on which branch its harness is kept, and
+  any problem it found with the plan's design. The spike writes it as the document
+  `<spike id>-report` of the plan's own project, so it travels to the board with the plan's
+  other documents; the finalize planner reworks the plan from it, and every task that builds
+  on the spike links it through the `plan-task` template's `spikes` answer.
+variables:
+  spike:
+    description: >-
+      The spike's node id, `spike-<topic>`.
+    type: string
+    required: true
+  branch:
+    description: >-
+      The preserved branch the spike's work is kept on, `<host prefix>/<plan>/spike-<topic>`.
+    type: string
+    required: true
+  harness:
+    description: >-
+      Where on that branch the harness is, and the one command that runs it to perform one
+      measurement, so the implementing node can register it, or grow it into, the budget's
+      onebudgetspec command.
+    type: text
+    required: true
+  method:
+    description: >-
+      How the spike measured: the real systems it ran against, the workload it ran at, and
+      anything that limits how far the numbers carry.
+    type: text
+    required: true
+  candidates:
+    description: >-
+      One object per candidate budget the spike measured, with six string keys: `budget`
+      (the candidate budget's id), `measure` (what was measured), `workload` (the workload
+      it was measured at), `achievable` (what is achievable, with the measured figure),
+      `limits` (what the system's limits allow, with the arithmetic, such as a rate limit
+      divided across a run) and `consumed` (what the spike itself consumed: calls, quota,
+      spend, time).
+    type: list
+    items: object
+    required: true
+  findings:
+    description: >-
+      One string per problem the spike found with the plan's design beyond its budgets: an
+      approach that will not work, an API that does not behave as assumed, a missing
+      dependency. `[]` when it found none.
+    type: list
+    items: string
+    required: true
+---
+{#- A table cell is one line holding no bare column delimiter, whatever an answer says. -#}
+{% macro cell(value) %}{{ value | string | replace("|", "\\|") | replace("\r\n", " ") | replace("\n", " ") | replace("\r", " ") }}{% endmacro %}
+{% block document_guidance %}
+{#
+  THE READERS. The finalize planner reads this report to rework the plan's targets,
+  decomposition and contracts; the worker of every task that builds on the spike starts
+  from it, and reaches the harness on the branch it names.
+
+  THIS TEMPLATE. Guidance is always a Jinja comment, never an HTML comment, so a rendered
+  document carries none of it.
+#}
+{% endblock %}
+# Spike `{{ spike }}`
+
+- **Branch:** `{{ branch }}`
+
+## Harness
+
+{{ harness }}
+
+## Method
+
+{{ method }}
+
+## Candidate budgets
+
+| Budget | Measure | Workload | Achievable | Limits allow | Consumed |
+| --- | --- | --- | --- | --- | --- |
+{% for candidate in candidates %}
+| {{ cell(candidate.budget) }} | {{ cell(candidate.measure) }} | {{ cell(candidate.workload) }} | {{ cell(candidate.achievable) }} | {{ cell(candidate.limits) }} | {{ cell(candidate.consumed) }} |
+{% endfor %}
+
+## Design findings
+
+{% for finding in findings %}
+- {{ finding }}
+{% else %}
+This spike found no problem with the plan's design beyond its budgets.
+{% endfor %}

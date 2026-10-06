@@ -70,7 +70,7 @@ import probe_run_root
 import pytest
 from test_linked_libraries import _linked_version
 
-from orchestrator import follow_up_drafts
+from orchestrator import follow_up_drafts, spike_flow
 from orchestrator.root import REPO_ROOT
 
 pytestmark = pytest.mark.reads_checkouts
@@ -1513,6 +1513,57 @@ def test_the_words_the_prose_declares_absent_are_absent(
             "that word from an older document has nothing to find, which is the state "
             "this correction removed"
         )
+
+
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_checkouts` moves this
+# test out of every memoized tier into the uncached `orchestrator:test-checkouts`, because its
+# subject is the adopted engine's own source in a registered checkout, which no `nx.json` glob
+# hashes — the reason this module's other engine-source tests carry, beside which it reads
+# the same `engine_settlements` fixture.
+def test_the_settlement_the_spike_stage_waits_for_is_one_the_engine_writes(
+    engine_settlements: frozenset[tuple[str, str]],
+) -> None:
+    """`orchestrator/spike_flow.py` reads a kept spike as `done` with the outcome `preserved`.
+
+    That reader is what lets `just plan` go on from its spikes to their finalize, so a
+    release that settled a preserved node on another word would stop every spiked plan at
+    its spikes, each reported as not kept.
+    """
+    assert (spike_flow.DONE, spike_flow.PRESERVED) in engine_settlements, sorted(engine_settlements)
+
+
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+
+
+#: The spikes' branch template `scripts/plan.sh` hands `onepipeline start`: the plan, then the
+#: node rendered by the expression this reads off the engine.
+SPIKES_TEMPLATE = re.compile(r'--branch-template "\$plan_native/(\{\{[^"]*\}\})"')
+#: The engine's shipped default branch template, whose node expression is the one it renders.
+SHIPPED_TEMPLATE = re.compile(r'"(\{%[^"]*/(\{\{ node\.id \}\}))";')
+
+
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_checkouts` moves this
+# test out of every memoized tier into the uncached `orchestrator:test-checkouts`, because its
+# subject is the adopted engine's own source in a registered checkout, which no `nx.json` glob
+# hashes — the reason this module's other engine-source tests carry.
+def test_the_spikes_branch_template_names_the_node_as_the_engine_renders_it() -> None:
+    """`plan.sh` names every spike branch `<plan>/<node>`; the node is the engine's expression.
+
+    The template is the engine's to render, so the one expression `scripts/plan.sh` hands it
+    for the node is held to the one the pinned engine's own shipped default renders the node
+    by: a release that renamed it would cut spike branches no listing finds as the plan's.
+    """
+    shipped = SHIPPED_TEMPLATE.search(_source(ONEPIPELINE, "branchname.rs"))
+    assert shipped is not None, (
+        f"onepipeline {ONEPIPELINE.ref}'s src/branchname.rs no longer ships a default branch "
+        "template ending in the node's id, which the spikes' template is held to"
+    )
+    named = SPIKES_TEMPLATE.search((REPO_ROOT / "scripts" / "plan.sh").read_text("utf-8"))
+    assert named is not None, "scripts/plan.sh no longer launches the spikes with a template"
+    assert named.group(1) == shipped.group(2), (named.group(1), shipped.group(1))
+
+
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 
 @pytest.mark.parametrize(

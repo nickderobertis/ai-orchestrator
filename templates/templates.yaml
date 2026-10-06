@@ -13,3 +13,6 @@ templates:
   plan-budgets:
     role: document
     description: A plan's budgets document, stored as the project document `<project>-budgets`.
+  spike-report:
+    role: document
+    description: A spike's report, stored as the document `<spike id>-report` of the plan's own project.

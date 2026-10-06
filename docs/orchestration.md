@@ -100,8 +100,9 @@ Linear's Triage is never written, because it has its own meaning in Linear.
 launched from the board** — and `just plan` performs everything down to the approval:
 
 ```sh
-just plan brief.md                       # the planner authors into `authoring`, its
-                                         # closeout records what it wrote, and the tail
+just plan brief.md                       # the planner drafts into `authoring`, its
+                                         # closeout records what it wrote, any spikes run
+                                         # and a planner finalizes from them, and the tail
                                          # then reviews the plan, checks it, launches the
                                          # design document, copies both onto `plans`, and
                                          # reports where that board holds them
@@ -133,11 +134,12 @@ the document is a **second launch**, of a one-node project whose planning stamp 
 one node — which is what keeps its own exemption from the design-approval gate bounded to
 the launch that writes a document rather than granted to the plan.
 
-**Both of this flow's run ids are decided before either launch is made.** The tail's run
-is the flow's own name plus `-design`, and `just plan` refuses it as taken before it
+**Every one of this flow's run ids is decided before any launch is made.** The draft runs
+as the flow's own name, its spikes as that name plus `-spikes`, the finalizing planner as
+`-finalize` and the tail as `-design`, and `just plan` refuses each as taken before it
 dispatches a planner: an hour of planning must not end at a name collision. Each id is
 printed beside `just channel-next <id>`, so a supervisor holding only that output can
-reach either run's channel.
+reach every run's channel.
 
 **Its refusals are told apart by exit status**, because each names a different thing to
 correct and a caller scripting the flow branches on the status: **1** is the review
@@ -152,9 +154,10 @@ criterion back and stops.
 after the planner, copying nothing and reporting no location, because a plan on the board
 with no document can never be approved and so can never be launched — the review a plan
 still gets under it is `just plan`'s own closeout, and `just finish-plan --no-design-doc`
-reaches no step at all and says so. A `--detach`ed `just plan` hands back before the plan
-exists, so it keeps the planner alone and its one receipt line carries the `just
-finish-plan` command that finishes it.
+reaches no step at all and says so. A `--detach`ed `just plan` hands back before its run
+has settled, and every stop — a stage that did not settle, a step that refused — prints
+the one `just plan … --resume <stage>` command that carries the flow on; a resume never
+launches a stage whose run exists, so it never re-runs one that completed.
 
 **That order is forced rather than preferred, and the reason is where a review record
 lives.** A record is one entry of the task's *own Markdown document*, so
@@ -644,6 +647,30 @@ beside it, `<project>-budgets`, rendered from `templates/plan-budgets.md.j2`. `j
 review-plan` reads it, `just check-plan` refuses a plan carrying none, and the design
 document shows it. [`budgets.md`](budgets.md) states the principles and the convention, and
 `config/budgets-migration.yaml` is the one list of plans that predate the requirement.
+
+### Spikes: measuring before the plan is final
+
+**`just plan` is draft → spikes → finalize → review → design doc.** A draft that cannot
+know a budget's number without measuring, or is unsure of an approach, writes spikes into
+`<plan project>-spikes`: lifecycle nodes `spike-<topic>` that keep their branch
+(`onepipeline.publish: "preserve"`). `scripts/plan.sh` stamps that project `spikes`,
+naming exactly its nodes — exempt from design approval for them alone — checks it and the
+plan, and launches it with a branch template naming the plan, so each branch is
+`<host prefix>/<plan native id>/spike-<topic>`. Each spike writes its report as the
+document `<spike id>-report` of the **plan's** project, from `templates/spike-report.md.j2`,
+so it travels to the board with the plan. Once every spike settled `preserved`, each branch
+`onevcs` recorded for that run is acknowledged with `just unpublished --acknowledge`, and a
+finalize planner reworks the plan from the reports, linking each dependent task to its
+reports and branches through the `plan-task` template's `spikes` answer. A draft with no
+spikes goes straight to the tail; `just check-plan` refuses a break of the convention
+(`orchestrator/spike_plan.py`).
+
+**A spike branch is kept until the plan's main run succeeds**: the success hook,
+`scripts/run-ended.sh`, discards every `*/<plan native id>/spike-*` branch on the origin of
+each repository the run changes with `just reclaim-branch <branch> --repo <repository>
+--discard`, reporting each. A failed run keeps them for its retries and recovery, and so
+does a plan never launched; `git ls-remote --heads origin '*/spike-*'` lists what is left
+from any machine.
 
 ### The document the plan is read as, and the launch that writes it
 

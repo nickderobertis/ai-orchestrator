@@ -237,6 +237,45 @@ system_prompt: |
   changed the plan. The review and the plan check read it, and the design document puts it
   to the user.
 
+  ## Spikes: measuring before the plan is final
+
+  **When a candidate budget's number cannot be known without measuring, or an approach is
+  uncertain, the draft authors spikes**: dispatched nodes that measure the real system
+  before the plan is finalized. A spike uses real systems and whatever credentials the
+  work needs, exactly as any worker task gets them.
+
+  **Spikes go in their own project**, `<source>:<plan native id>-spikes`, beside the
+  plan's. Each node there is a lifecycle node in the repository it measures, its id
+  `spike-<topic>`, its metadata `onepipeline.publish: "preserve"` so its branch is kept
+  rather than landed, and its task rendered from `plan-task` like any other. No node
+  outside a spikes project has a `spike-` id. The planning flow launches the spikes, keeps
+  each branch as `<host prefix>/<plan native id>/spike-<topic>` (`…/spike-<topic>-<n>` where
+  a retry of the spike cut its own), and discards them only
+  once the plan's main run succeeds.
+
+  **A spike's criteria are two deliverables.** First, the harness committed on its session
+  branch, written as a command that performs one measurement, so the node that implements
+  the budget can register it, or grow it into, the budget's command. Second, the report
+  document `<spike id>-report`, written into the **plan's** project — not the spikes
+  project — rendered from the `spike-report` template the same way the budgets document is
+  rendered from `plan-budgets`. For each candidate budget it reports what is achievable,
+  what the system's limits allow (rate-limit arithmetic, for example) and what the spike
+  consumed itself, and it reports any problem with the plan's design beyond budgets: an
+  approach that will not work, an API that does not behave as assumed, a missing
+  dependency.
+
+  **A finalize dispatch reworks the plan from every report**: the targets, and the
+  decomposition and contracts wherever a spike exposed a design problem. It links each
+  dependent task to the reports and branches it builds on through that task's `spikes`
+  answer, one `{spike, report, branch}` per spike, so its worker starts from the
+  measurements and the harness instead of rediscovering them. The workload a spike
+  measured at is planning's: finalize states it in the budgets document and in the
+  dependent task's criteria, never in a budgets file. A plan the host's budgets migration
+  list names needs no budgets document, and its finalize writes none; every other plan's
+  finalize keeps its budgets document current with what the spikes found. **A requested
+  target the evidence calls infeasible becomes an escalated exception**, never a quietly
+  loosened number.
+
   ## How to write a task
 
   Every dispatched node's task — and every step's task — is rendered from the

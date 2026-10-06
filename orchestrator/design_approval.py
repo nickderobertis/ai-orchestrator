@@ -43,7 +43,10 @@ for the identifier that did exactly that.
 as does not exist until the run has written one. The one-node project `just follow-ups`
 writes is exempt on the same terms and under the same bound, stamped as its own kind: its
 one node verifies a finished run's drafted follow-ups, and there is no plan for a person to
-read it as. That is a statement about a launch with
+read it as. So is the spikes project a planning flow launches between its draft and its
+finalize, stamped `spikes`: its nodes measure what the plan's budgets and design rest on, and
+the document a person approves is the plan's, written only once the planner has finalized
+from what they found. That is a statement about a launch with
 nothing to approve yet, and it stops being true of the project the moment either half of it
 does — so the exemption is bounded by both halves rather than by the stamp alone:
 
@@ -159,14 +162,19 @@ REPLACE = (
 #: The one shape a chain digest has, as the engine states it and the store records it.
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 
-#: The plan's **budgets document**, the one other document a plan's project holds: the
-#: template it is rendered from, the reference its rendering records, and the suffix its id
-#: carries after the plan's own native id. Stated here because this module decides which
-#: document of a project is its design document, and `orchestrator/plan_budgets.py` — the
-#: budgets document's reader — names them from here.
+#: The plan's **budgets document**, one of the two other kinds of document a plan's project
+#: holds: the template it is rendered from, the reference its rendering records, and the
+#: suffix its id carries after the plan's own native id. Stated here because this module
+#: decides which document of a project is its design document, and
+#: `orchestrator/plan_budgets.py` — the budgets document's reader — names them from here.
 BUDGETS_TEMPLATE = "plan-budgets"
 BUDGETS_REFERENCE = f"onepipeline:{BUDGETS_TEMPLATE}"
 BUDGETS_SUFFIX = "-budgets"
+
+#: The other kind: a **spike's report**, which each spike writes into the plan's project
+#: (`orchestrator/spike_plan.py` states the convention). Known by the template its rendering
+#: records, which travels with every copy where an id does not.
+SPIKE_REPORT_REFERENCE = "onepipeline:spike-report"
 
 
 class Unrendered(OSError):
@@ -183,9 +191,12 @@ PLAN_KIND = "orchestrator.plan-kind"
 #: says nothing — is gated. `scripts/plan.sh` and `scripts/finish-plan.sh` stamp the first;
 #: `scripts/follow-ups.sh` stamps the second, whose launch dispatches exactly one node, so a
 #: stamp of that kind naming more than one bounds nothing and exempts nothing.
+#: `scripts/plan.sh` stamps the third on a plan's `<plan>-spikes` project, naming every
+#: spike node the draft planner wrote there, before it launches them.
 PLANNING = "planning"
 FOLLOW_UPS = "follow-ups"
-EXEMPT_KINDS = (PLANNING, FOLLOW_UPS)
+SPIKES = "spikes"
+EXEMPT_KINDS = (PLANNING, FOLLOW_UPS, SPIKES)
 
 #: The field of that stamp naming the kind, and the field naming the node ids the launch
 #: wrote. The second is what bounds the exemption to the launch it was written for, and
@@ -204,19 +215,37 @@ STAMP_NODES = "nodes"
 #: rather than a second copy of the spellings beside the constants above.
 _STAMP = SimpleNamespace(key=PLAN_KIND, kind=STAMP_KIND, nodes=STAMP_NODES, planning=PLANNING)
 
+
+class Launch(NamedTuple):
+    """What an exempt kind's launch is, in the words a reader gets."""
+
+    #: What the project is while the exemption holds: "<project> is <subject>".
+    subject: str
+    #: Why that launch has no document to approve.
+    reason: str
+    #: What the project is stamped as, once the exemption has lapsed.
+    stamped: str
+
+
 #: What each exempt kind's launch is, in the words a reader gets.
 _LAUNCHES = {
-    PLANNING: (
+    PLANNING: Launch(
         "the plan a planning launch is writing",
         "that run's output is the plan, and the document it will be read as does not exist "
         "until it has written one",
         "the plan a planning launch writes",
     ),
-    FOLLOW_UPS: (
+    FOLLOW_UPS: Launch(
         "the project a follow-ups launch writes",
         "its one node verifies a finished run's drafted follow-ups, and there is no plan for "
         "a person to read it as",
         "the project a follow-ups launch writes",
+    ),
+    SPIKES: Launch(
+        "the spikes a planning flow launches before it finalizes its plan",
+        "its nodes measure what the plan's budgets and design rest on, and the document a "
+        "person approves is the plan's, written once the planner has finalized from them",
+        "the spikes a planning flow launches",
     ),
 }
 
@@ -537,9 +566,19 @@ def is_budgets_document(project: str, document: StoreDocument) -> bool:
     )
 
 
+def is_spike_report(document: StoreDocument) -> bool:
+    """Whether ``document`` is a spike's report, by the template it records being rendered from."""
+    provenance = document.metadata.get(PROVENANCE)
+    return isinstance(provenance, dict) and provenance.get("template") == SPIKE_REPORT_REFERENCE
+
+
 def design_documents(project: str, documents: Sequence[StoreDocument]) -> list[StoreDocument]:
-    """Every one of ``documents`` that is not ``project``'s budgets document."""
-    return [document for document in documents if not is_budgets_document(project, document)]
+    """Every one of ``documents`` that is neither ``project``'s budgets document nor a report."""
+    return [
+        document
+        for document in documents
+        if not is_budgets_document(project, document) and not is_spike_report(document)
+    ]
 
 
 def design_document(project: str) -> StoreDocument:
@@ -551,8 +590,9 @@ def one_document(project: str, documents: Sequence[StoreDocument]) -> StoreDocum
     """The one of ``documents`` that is ``project``'s design document.
 
     A project holds documents rather than *the* document, so "the design document" is the
-    one document of the project that is not its budgets document, which
-    :func:`is_budgets_document` recognises and the plan check reads instead. Several is
+    one document of the project that is neither its budgets document, which
+    :func:`is_budgets_document` recognises and the plan check reads instead, nor a spike's
+    report, which :func:`is_spike_report` recognises. Several is
     refused rather than guessed at: an approval
     recorded against the wrong one of two reads as sound from every side afterwards, and
     the person who wrote the second document is the one who can say which is which.
@@ -639,7 +679,7 @@ def exemption(project: str, written: frozenset[NodeId], kind: str = PLANNING) ->
     be indistinguishable from an approval.
     """
     named = ", ".join(sorted(written))
-    launch, reason, _ = _LAUNCHES[kind]
+    launch, reason = _LAUNCHES[kind].subject, _LAUNCHES[kind].reason
     return (
         f"{project} is {launch}: it holds exactly the "
         f"{len(written)} node(s) that launch dispatches ({named}) and no design document "
@@ -681,7 +721,7 @@ def lapsed(
     if documents:
         ended.append(f"it holds {len(documents)} design document(s), so there is something to read")
     return (
-        f"({project} is stamped as {_LAUNCHES[kind][2]}, which is exempt from "
+        f"({project} is stamped as {_LAUNCHES[kind].stamped}, which is exempt from "
         f"this gate — but only for that launch, and {' and '.join(ended)}.)"
     )
 

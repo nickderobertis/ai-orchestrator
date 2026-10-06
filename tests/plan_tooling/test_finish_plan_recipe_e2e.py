@@ -1399,7 +1399,25 @@ UNRUNNABLE_FLOWS = (
         "no longer an option",
     ),
     Unrunnable("a run id nothing can use", ("--name", "with.dots"), "is not a run id"),
+    # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Two more rows of this
+    # module's own refusal table, over the same `just finish-plan` every other row drives;
+    # `plan-tooling` is keyed on `planToolingWorkspace`, which names that recipe and its
+    # scripts, and each row refuses in under a second before anything is reviewed or launched.
+    Unrunnable(
+        "a step the tail does not run alone",
+        ("--step", "copy", "authoring:some-plan"),
+        "one tail step to run alone, review or check; got 'copy'",
+    ),
+    Unrunnable(
+        "a step naming no project",
+        ("--step", "check"),
+        "--step check runs over exactly one nonempty SOURCE:PROJECT; got 0 argument(s)",
+    ),
+    # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 )
+
+#: The invocations that take no brief, so none is put in front of their arguments.
+BRIEFLESS = ("--missing-brief", "--step")
 
 
 @pytest.mark.xdist_group("finish-plan")
@@ -1421,7 +1439,7 @@ def test_a_flow_that_cannot_run_at_all_is_told_apart_from_every_refusal(
     brief = _brief(tmp_path, drafted)
     arguments = (
         unrunnable.arguments
-        if unrunnable.arguments[0] == "--missing-brief"
+        if unrunnable.arguments[0] in BRIEFLESS
         else (str(brief), *unrunnable.arguments)
     )
 
@@ -1568,18 +1586,19 @@ def test_a_design_document_launch_that_does_not_settle_ends_the_flow_at_its_own_
     )
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] An existing journey of `plan-tooling`, updated to the planning flow's new handover; where it runs is that project's split, which `tests/plan_tooling/AGENTS.md` states and this change leaves as it was.  # noqa: E501
 @pytest.mark.xdist_group("finish-plan")
 def test_a_detached_plan_launch_hands_this_command_back_on_its_own_receipt(
     tmp_path: Path, oneharness_bin: str
 ) -> None:
-    """`--detach` hands back before the plan exists, so the tail is the operator's to run.
+    """`--detach` hands back before the plan exists, so carrying the flow on is the operator's.
 
     Every step here is about the plan the planner writes, and a detached launch returns
     the moment its run is recorded — so running them there would review a project nothing
-    has authored. What `just plan` owes instead is the command that finishes the plan once
-    the planner has settled, and it owes it **on the one receipt it already prints**: a
-    second success line is noise the next reader learns to skip, and this one is known
-    before the launch is even made.
+    has authored. What `just plan` owes instead is the command that carries the flow on —
+    to its spikes, its finalize and this tail — once the planner has settled, and it owes it
+    **on the one receipt it already prints**: a second success line is noise the next reader
+    learns to skip, and this one is known before the launch is even made.
 
     The name is in that command rather than left to its default, because a caller who
     re-ran it bare would finish the plan under a different run id than the one that
@@ -1609,8 +1628,8 @@ def test_a_detached_plan_launch_hands_this_command_back_on_its_own_receipt(
     try:
         assert launch.returncode == OK, f"the detached launch failed:\n{launch.stderr}"
         reported = launch.stdout + launch.stderr
-        assert f"just finish-plan {brief}" in reported, (
-            f"a detached launch never said how to finish the plan it started:\n{reported}"
+        assert f"just plan {brief}" in reported and "--resume spikes" in reported, (
+            f"a detached launch never said how to carry on the plan it started:\n{reported}"
         )
         assert f"--name {named}" in reported, (
             f"the handover drops the name this flow's runs are derived from:\n{reported}"
@@ -1638,6 +1657,9 @@ def test_a_detached_plan_launch_hands_this_command_back_on_its_own_receipt(
         assert _records(bench.destination) == [], "a detached launch reached the destination"
     finally:
         _stop(bench, named)
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 def _provisioned_copy_listing_no_criterion(tmp_path: Path) -> Path:

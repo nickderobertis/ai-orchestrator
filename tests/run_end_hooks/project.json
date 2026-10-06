@@ -18,6 +18,7 @@
     "support-plan-root-variable",
     "support-project-fixtures",
     "support-published-tools",
+    "support-scratch-identity",
     "support-short-state",
     "support-waits"
   ],
@@ -77,6 +78,14 @@
       "{workspaceRoot}/orchestrator/plan_store.py",
       "{workspaceRoot}/orchestrator/project_store.py",
       "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/config/onevcs.releases.yml",
+      "{workspaceRoot}/config/onevcs.workspaces.yml",
+      "{workspaceRoot}/scripts/apply-repo-registry.sh",
+      "{workspaceRoot}/scripts/registered-checkouts.sh",
+      "{workspaceRoot}/orchestrator/host_installs.py",
+      "{workspaceRoot}/orchestrator/workspaces_overlay.py",
+      "{workspaceRoot}/orchestrator/spike_branches.py",
+      "{workspaceRoot}/orchestrator/spike_plan.py",
       "{workspaceRoot}/tests/run_end_hooks/**/*"
     ]
   },

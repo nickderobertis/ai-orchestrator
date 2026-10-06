@@ -151,14 +151,20 @@ def test_the_launch_environment_names_this_checkouts_root_and_never_prompts(
 def test_the_engine_lists_this_hosts_names_through_the_launch_environment(
     launch_environment: dict[str, str],
 ) -> None:
-    """`plan-task` from the host layer, and the three names only this host registers."""
+    """`plan-task` from the host layer, and the four names only this host registers."""
     listed = _run([str(ENGINE), "template", "list", "--json"], launch_environment)
 
     assert listed.returncode == 0, listed.stderr
     document = json.loads(listed.stdout)
     assert document["registration"] == str(REGISTRATION)
     by_name = {entry["name"]: entry for entry in document["templates"]}
-    assert set(by_name) == {"plan-task", "follow-up-task", "design-doc", "plan-budgets"}, by_name
+    assert set(by_name) == {
+        "plan-task",
+        "follow-up-task",
+        "design-doc",
+        "plan-budgets",
+        "spike-report",
+    }, by_name
     assert (by_name["plan-task"]["layer"], by_name["plan-task"]["path"]) == (
         "host",
         str(PLAN_TASK),
@@ -166,7 +172,8 @@ def test_the_engine_lists_this_hosts_names_through_the_launch_environment(
     assert by_name["follow-up-task"]["role"] == "task"
     assert by_name["design-doc"]["role"] == "document"
     assert by_name["plan-budgets"]["role"] == "document"
-    for name in ("follow-up-task", "design-doc", "plan-budgets"):
+    assert by_name["spike-report"]["role"] == "document"
+    for name in ("follow-up-task", "design-doc", "plan-budgets", "spike-report"):
         assert by_name[name]["description"].strip(), by_name[name]
 
 
@@ -221,7 +228,7 @@ def test_the_template_extends_the_engines_base_and_opens_no_criteria_heading_its
     assert '{% include "dispatch-appendix.md" %}' in source
 
 
-def test_the_variables_are_the_three_this_host_declares_and_the_inherited_criteria(
+def test_the_variables_are_the_four_this_host_declares_and_the_inherited_criteria(
     launch_environment: dict[str, str],
 ) -> None:
     listed = _run(
@@ -232,11 +239,13 @@ def test_the_variables_are_the_three_this_host_declares_and_the_inherited_criter
 
     assert listed.returncode == 0, listed.stderr
     variables = {one["name"]: one for one in json.loads(listed.stdout)["variables"]}
-    assert set(variables) == {"what", "why", "additional_info", "acceptance_criteria"}
+    assert set(variables) == {"what", "why", "additional_info", "spikes", "acceptance_criteria"}
     for name in ("what", "why"):
         assert (variables[name]["type"], variables[name]["required"]) == ("text", True)
     assert variables["additional_info"]["required"] is False
     assert variables["additional_info"]["default"] == ""
+    assert (variables["spikes"]["type"], variables["spikes"]["required"]) == ("list", False)
+    assert variables["spikes"]["default"] == []
     assert variables["acceptance_criteria"]["type"] == "list"
     assert variables["acceptance_criteria"]["required"] is True
     assert variables["acceptance_criteria"]["declared_in"] == BASE
@@ -380,3 +389,162 @@ def test_the_sections_a_brief_must_have_are_the_ones_a_task_renders_with(
     headings = re.findall(r"^## .+$", _render(launch_environment, answers, tmp_path), re.M)
 
     assert required == tuple(headings[: headings.index("## Additional info")]), headings
+
+
+#: The template a spike's report is rendered from, and the six answers it takes.
+SPIKE_REPORT = ROOT / "spike-report.md.j2"
+SPIKE_REPORT_VARIABLES = {
+    "spike": ("string", True),
+    "branch": ("string", True),
+    "harness": ("text", True),
+    "method": ("text", True),
+    "candidates": ("list", True),
+    "findings": ("list", True),
+}
+
+#: The `spikes` answer of a task building on two spikes, as a finalize planner gives it.
+SPIKES = [
+    {"spike": "spike-listing", "report": "spike-listing-report", "branch": "nick/p/spike-listing"},
+    {"spike": "spike-quota", "report": "spike-quota-report", "branch": "nick/p/spike-quota"},
+]
+
+#: The heading the `spikes` answer renders under, and the one it must sit above.
+SPIKE_EVIDENCE = "## Spike evidence"
+
+
+def _render_from(
+    environment: dict[str, str],
+    root: Path,
+    name: str,
+    answers: dict[str, object],
+    tmp_path: Path,
+) -> str:
+    """One rendering of ``name`` resolved from the template root ``root``."""
+    resolved = _run(
+        [str(ENGINE), "template", "resolve", name, "--json", "--template-root", str(root)],
+        environment,
+    )
+    assert resolved.returncode == 0, resolved.stderr
+    loader = tmp_path / f"{name}-{root.name}-loader.json"
+    loader.write_text(resolved.stdout, encoding="utf-8")
+    rendered = plan_store.sdk(
+        plan_store.client().template_render(template_loader=str(loader), answers=answers)
+    )
+    return rendered.body
+
+
+def test_the_spike_report_is_a_document_template_taking_the_six_answers_a_spike_reports(
+    launch_environment: dict[str, str],
+) -> None:
+    resolved = _run(
+        [str(ENGINE), "template", "resolve", "spike-report", "--json"], launch_environment
+    )
+    assert resolved.returncode == 0, resolved.stderr
+    assert json.loads(resolved.stdout)["path"] == str(SPIKE_REPORT)
+
+    listed = _run(
+        [str(PLAN_STORE), "template", "variables", "--template-loader", "-", "--json"],
+        launch_environment,
+        stdin=resolved.stdout,
+    )
+
+    assert listed.returncode == 0, listed.stderr
+    variables = {one["name"]: one for one in json.loads(listed.stdout)["variables"]}
+    assert {
+        name: (one["type"], one["required"]) for name, one in variables.items()
+    } == SPIKE_REPORT_VARIABLES
+    for variable in variables.values():
+        assert variable["description"].strip(), variable
+
+
+def test_a_spike_report_renders_every_candidate_and_says_when_it_found_nothing(
+    launch_environment: dict[str, str], tmp_path: Path
+) -> None:
+    answers: dict[str, object] = {
+        "spike": "spike-listing",
+        "branch": "nick/p/spike-listing",
+        "harness": "`spikes/listing.py`; run `uv run spikes/listing.py --pages 20`.",
+        "method": "Twenty pages of the real listing at 2,000 nodes.",
+        "candidates": [
+            {
+                "budget": "listing-latency",
+                "measure": "time to the first page",
+                "workload": "2,000 nodes\r\nin 20 pages",
+                "achievable": "420 ms\nat p95",
+                "limits": "5,000 calls an hour | 20 per run",
+                "consumed": "20 calls\rof the hour's 5,000",
+            }
+        ],
+        "findings": [],
+    }
+
+    body = _render_from(launch_environment, ROOT, "spike-report", answers, tmp_path)
+    found = _render_from(
+        launch_environment,
+        ROOT,
+        "spike-report",
+        {**answers, "findings": ["The listing API ignores its page size."]},
+        tmp_path,
+    )
+
+    assert "`nick/p/spike-listing`" in body
+    assert "uv run spikes/listing.py --pages 20" in body
+    # Every line break in a cell is folded to a space, so each candidate stays one row.
+    assert (
+        "| listing-latency | time to the first page | 2,000 nodes in 20 pages | 420 ms at p95 |"
+        in body
+    ), body
+    assert "| 20 calls of the hour's 5,000 |" in body, body
+    assert "5,000 calls an hour \\| 20 per run" in body, "a cell's delimiter was left bare"
+    assert "found no problem with the plan's design" in body
+    assert "- The listing API ignores its page size." in found
+    assert "found no problem" not in found
+
+
+def test_a_task_building_on_spikes_names_each_report_and_branch_above_its_own_notes(
+    launch_environment: dict[str, str], tmp_path: Path
+) -> None:
+    body = _render(launch_environment, {**ANSWERS, "spikes": SPIKES}, tmp_path)
+
+    headings = re.findall(r"^## .+$", body, re.MULTILINE)
+    assert headings[:5] == [
+        "## What",
+        "## Why",
+        "## Acceptance criteria",
+        SPIKE_EVIDENCE,
+        "## Additional info",
+    ], headings
+    section = body.split(SPIKE_EVIDENCE, 1)[1].split("## Additional info", 1)[0]
+    for entry in SPIKES:
+        assert (
+            f"- `{entry['spike']}`: report `{entry['report']}`, a document of this plan's own "
+            f"project; branch `{entry['branch']}`"
+        ) in section, section
+
+
+def test_a_task_building_on_no_spike_renders_the_body_it_rendered_before_spikes_existed(
+    launch_environment: dict[str, str], tmp_path: Path
+) -> None:
+    """The template with the `spikes` variable and its section taken out renders the same.
+
+    That template is this one as it stood before the variable was added: the declaration
+    and the one conditional section are the whole of what the variable added, so taking
+    them out mechanically is the earlier template, without a copy of it to drift.
+    """
+    source = PLAN_TASK.read_text(encoding="utf-8")
+    declared = re.search(r"\n  spikes:\n(?:    .*\n)+", source)
+    section = re.search(r"\{% if spikes %\}.*?\{% endif %\}\n", source, re.DOTALL)
+    assert declared is not None and section is not None, "the spikes variable moved"
+    before = source.replace(declared.group(0), "\n").replace(section.group(0), "")
+    root = tmp_path / "before"
+    root.mkdir()
+    for kept in ROOT.iterdir():
+        if kept.is_file():
+            (root / kept.name).write_text(kept.read_text(encoding="utf-8"), encoding="utf-8")
+    (root / PLAN_TASK.name).write_text(before, encoding="utf-8")
+
+    for answers in (ANSWERS, {n: v for n, v in ANSWERS.items() if n != "additional_info"}):
+        now = _render_from(launch_environment, ROOT, "plan-task", answers, tmp_path)
+        assert now == _render_from(launch_environment, root, "plan-task", answers, tmp_path)
+        assert now == _render(launch_environment, {**answers, "spikes": []}, tmp_path)
+        assert SPIKE_EVIDENCE not in now
