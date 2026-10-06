@@ -215,6 +215,10 @@ class StoreTask:
     #: The native id of the project the store files this task under, or `None` for a
     #: record not read from the store.
     project: str | None = None
+    #: Where the store says this task's record is — the absolute path of a local
+    #: Markdown record — or `None` for a record not read from the store or one the store
+    #: reports no location for.
+    location: str | None = None
 
 
 @dataclass(frozen=True)
@@ -347,6 +351,9 @@ def read_tasks(project: str) -> list[StoreTask]:
                 (),
                 tuple(x.model_dump() for x in item.delivers),
                 filed,
+                located(item.location.model_dump(mode="python"), held_id)
+                if item.location
+                else None,
             )
         )
     ids = {record.qualified_id: record.node_id for record in records}
@@ -479,6 +486,20 @@ def located(location: Mapping[str, object] | None, fallback: str) -> str:
         if isinstance(value, str) and value:
             return value
     return fallback
+
+
+def local_file(location: str | None) -> str | None:
+    """``location`` when it is an absolute path to a file on this host, and ``None`` otherwise.
+
+    A store's location is whatever it reports — a local record's path, a board item's URL,
+    or, from :func:`located`, the record's own qualified id — and only the first is a file
+    a reader on this host can open. So a location handed to anybody as *a path to read* is
+    held to that here, rather than trusted: a URL named as a file is a read that fails.
+    """
+    if location is None:
+        return None
+    path = Path(location)
+    return str(path) if path.is_absolute() and path.is_file() else None
 
 
 def configured_settings() -> dict[str, object]:

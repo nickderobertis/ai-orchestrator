@@ -7,7 +7,7 @@ The real oneharness still selects it, spawns it, parses its stream, times and
 prices the turn, and writes the history record the launch contract is read back
 out of — which is what a smoke journey has to keep real to mean anything.
 
-Eight environment variables steer it, and each exists because a journey has to
+Nine environment variables steer it, and each exists because a journey has to
 tell one outcome from another deterministically:
 
 * ``FAKE_CODEX_ATTEMPT_LOG`` names a file this appends one line to per launch,
@@ -35,7 +35,10 @@ tell one outcome from another deterministically:
   can name, and they differ only in whether the provider has anything to show for
   itself, which is the one reading a chain publishes rather than derives.
 * ``FAKE_CODEX_PROMPT_LOG`` names a file this appends one JSON record to per
-  launch, carrying the prompt the provider was actually given. It is how a journey
+  launch, carrying the prompt the provider was actually given, the argv it was
+  spawned with — which is where the approval mode a role file asked for arrives, as
+  codex's own ``--sandbox`` — and every file the launch opened under
+  ``FAKE_CODEX_READ_LISTED_FOR``. It is how a journey
   reads the prompt of a turn nothing else can observe: since oneagentgraph 0.2.18 a
   single-sided ``kind: oneharness`` member's turn is an in-process
   ``oneharness_core`` call rather than a spawned CLI, so
@@ -53,6 +56,16 @@ tell one outcome from another deterministically:
   ``FAKE_CODEX_RUN_ON_MARKER_LOG`` beside it names a file each command's argv, exit status
   and output are appended to, one JSON line apiece: this process's own stderr reaches no
   record a journey can read, so that file is how a failed command explains itself.
+
+* ``FAKE_CODEX_READ_LISTED_FOR`` names a marker, and makes a launch whose prompt lists
+  task files — the plan-level review's ``task file: <path>`` lines, each under its
+  ``### Node `<id>``` heading — do what a reviewer reading through those paths does:
+  open each listed file from inside the turn, and, where a line of one carries the
+  marker, answer a refusal whose finding names that node and quotes the line. It is
+  how a journey proves the listed path is real, readable in the turn, and carries the
+  detail the prompt left out — the model's choice of which file to open is the one
+  thing substituted. A prompt listing no task file, or files carrying no marker, is
+  answered as any other launch is.
 
 Keep this deterministic and stdlib-only — this file *is* the provider binary.
 """
@@ -96,6 +109,28 @@ class TurnEvent(TypedDict):
     thread_id: NotRequired[str]
     item: NotRequired[AgentMessage]
     usage: NotRequired[Usage]
+
+
+class PromptRecord(TypedDict):
+    """One launch, as ``FAKE_CODEX_PROMPT_LOG`` records it: what it was given and opened."""
+
+    prompt: str
+    argv: list[str]
+    read: list[str]
+
+
+class Finding(TypedDict):
+    """One criterion a refusal names, in the verdict schema's two fields."""
+
+    criterion: str
+    why: str
+
+
+class Refusal(TypedDict):
+    """The verdict a launch answers when the files it opened carried the marker."""
+
+    passes: Literal[False]
+    findings: list[Finding]
 
 
 #: What a launch answers when no journey scripted one.
@@ -174,7 +209,7 @@ def read_prompt(argv: list[str]) -> str | None:
     read through rather than taken as the prompt. Read once, because stdin can be read
     once, and only when something reads the prompt.
     """
-    wanted = ("FAKE_CODEX_PROMPT_LOG", "FAKE_CODEX_RUN_ON_MARKER")
+    wanted = ("FAKE_CODEX_PROMPT_LOG", "FAKE_CODEX_RUN_ON_MARKER", "FAKE_CODEX_READ_LISTED_FOR")
     if not argv or not any(os.environ.get(name) for name in wanted):
         return None
     positional: list[str] = []
@@ -189,13 +224,46 @@ def read_prompt(argv: list[str]) -> str | None:
     return sys.stdin.read() if positional[-1] == "-" else positional[-1]
 
 
-def record_prompt(prompt: str | None) -> None:
-    """Append the prompt this launch was given, when a journey asked for it."""
+def record_prompt(prompt: str | None, argv: list[str], read: list[str]) -> None:
+    """Append the prompt this launch was given, its argv and what it opened, when asked."""
     log = os.environ.get("FAKE_CODEX_PROMPT_LOG")
     if log is None or prompt is None:
         return
     with Path(log).open("a", encoding="utf-8") as stream:
-        stream.write(json.dumps({"prompt": prompt}) + "\n")
+        stream.write(json.dumps(PromptRecord(prompt=prompt, argv=argv, read=read)) + "\n")
+
+
+#: How a plan-level prompt lists each node and the task file it may open.
+NODE_HEADING = "### Node `"
+TASK_FILE = "task file: "
+
+
+def read_listed(prompt: str | None) -> tuple[list[str], list[Finding]]:
+    """Open each task file ``prompt`` lists, and quote every line carrying the marker.
+
+    Answers the paths opened, in the order listed, and one finding per marked line, naming
+    the node the path was listed under. Nothing is opened unless a journey named a marker.
+    """
+    marker = os.environ.get("FAKE_CODEX_READ_LISTED_FOR")
+    if not marker or prompt is None:
+        return [], []
+    read: list[str] = []
+    findings: list[Finding] = []
+    node = ""
+    for line in prompt.splitlines():
+        if line.startswith(NODE_HEADING):
+            node = line.removeprefix(NODE_HEADING).split("`", 1)[0]
+        elif line.startswith(TASK_FILE):
+            path = Path(line.removeprefix(TASK_FILE).strip())
+            if not path.is_absolute() or not path.is_file():
+                continue
+            read.append(str(path))
+            for held in path.read_text(encoding="utf-8").splitlines():
+                if marker in held:
+                    findings.append(
+                        {"criterion": node, "why": f"its task file reads: {held.strip()}"}
+                    )
+    return read, findings
 
 
 def run_on_marker(argv: list[str], prompt: str | None) -> None:
@@ -247,9 +315,14 @@ def run_on_marker(argv: list[str], prompt: str | None) -> None:
                     )
 
 
-def turn(launches: int | None) -> tuple[TurnEvent, ...]:
-    """The stream this launch emits, with token accounting withheld on request."""
-    return turn_events(answer(launches), billed=os.environ.get("FAKE_CODEX_OMIT_USAGE") != "1")
+def turn(launches: int | None, findings: list[Finding]) -> tuple[TurnEvent, ...]:
+    """The stream this launch emits, with token accounting withheld on request.
+
+    A launch that found marked lines in the files it opened refuses quoting them, which
+    is the one answer its reading decides; every other launch answers as scripted.
+    """
+    text = json.dumps({"passes": False, "findings": findings}) if findings else answer(launches)
+    return turn_events(text, billed=os.environ.get("FAKE_CODEX_OMIT_USAGE") != "1")
 
 
 def hold() -> None:
@@ -261,7 +334,8 @@ def hold() -> None:
 
 def main() -> int:
     prompt = read_prompt(sys.argv[1:])
-    record_prompt(prompt)
+    read, findings = read_listed(prompt)
+    record_prompt(prompt, sys.argv[1:], read)
     launches = record_launch()
     run_on_marker(sys.argv[1:], prompt)
     hold()
@@ -269,7 +343,7 @@ def main() -> int:
     if launches is not None and launches <= unavailable:
         print("fake_codex: the provider started and then failed", file=sys.stderr)
         return 1
-    for event in turn(launches):
+    for event in turn(launches, findings):
         print(json.dumps(event), flush=True)
     if os.environ.get("FAKE_CODEX_FAIL_AFTER_TURN") == "1":
         # The turn above is complete and accounted for, so this exit is a failure

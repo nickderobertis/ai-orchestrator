@@ -348,10 +348,16 @@ def design(scenario: Scenario, project: str) -> list[Node]:
     (own,) = _tasks(project)
     content = str(own["item"]["content"])
     answers = dict(scenario["design"])
-    quoted = re.search(r"which answers the following\..*?```json\n(.*?)\n```", content, re.S)
+    # The task names the budgets document's file; its answers are the record it renders.
+    named = re.search(r"budgets document `[^`]+`, the file `([^`]+)`", content)
     predates = re.search(r"The plan predates budgets:.*?\n\n> ([^\n]+)", content, re.S)
-    if quoted:
-        answers.update(json.loads(quoted.group(1)))
+    if named:
+        recorded = re.search(
+            r"\n## Record\n\n```json\n([^\n]*)\n```",
+            Path(named.group(1)).read_text(encoding="utf-8"),
+        )
+        assert recorded is not None, named.group(1)
+        answers.update(json.loads(recorded.group(1)))
     elif predates:
         answers["predates_budgets"] = predates.group(1)
     plan = scenario["plan"]

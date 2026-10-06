@@ -19,14 +19,16 @@ argument, option, or environment variable that writes a record without a pass.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
+import os
 import re
 import subprocess
 import tomllib
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, TypedDict, get_type_hints
+from typing import Any, NamedTuple, TypedDict, get_type_hints
 
 import jsonschema
 import pytest
@@ -712,13 +714,24 @@ def test_a_plan_this_cannot_walk_is_keyed_over_no_nodes_rather_than_raised(plan:
     assert plan_review.plan_key(plan, BAR) != plan_review.plan_key(STORE_PLAN, BAR)
     # A goal that is not the `{"text": ...}` shape is keyed as whatever it is.
     assert plan_review.plan_goal({"goal": "bare"}) == "bare"
-    assert (
-        plan_review.plan_nodes({"tasks": [{"id": "s", "steps": "not steps"}]})[0]["steps"] is None
+    # Steps this cannot narrow key as no steps, through the node's review key.
+    assert plan_review.plan_nodes({"tasks": [{"id": "s", "steps": "not steps"}]}) == (
+        plan_review.plan_nodes({"tasks": [{"id": "s"}]})
     )
 
 
 def test_the_plan_reviewer_is_shown_exactly_what_the_plan_key_covers() -> None:
-    """The same pairing as the task prompt's, one level up: shown iff keyed."""
+    """The same pairing as the task prompt's, one level up: shown, or proven read.
+
+    Every keyed field of a node is rendered, except its `review_key` — which stands for
+    the body, the steps and the budgets it owns — and that one is rendered as the
+    per-task record it must equal, beside the path of the content it covers. The body
+    itself never reaches the prompt beyond its summary, and nothing unkeyed does either.
+    """
+    assert set(plan_review.KeyedNode.__annotations__) == {
+        *plan_review.SHOWN_FIELDS,
+        "review_key",
+    }, "a keyed node field is neither shown nor stood in for by the review key"
     sentinels = {
         "goal": "sentinel-goal",
         "id": "sentinel-id",
@@ -731,12 +744,19 @@ def test_the_plan_reviewer_is_shown_exactly_what_the_plan_key_covers() -> None:
         "kind": "sentinel-kind",
         "expects_no_diff": "sentinel-expects-no-diff",
         "persona": "sentinel-persona",
-        "task": "sentinel-body-prose",
+        "summary": "sentinel-summary",
         "step id": "sentinel-step-id",
         "step persona": "sentinel-step-persona",
-        "step prose": "sentinel-step-task",
+        "record": "sentinel-record-key",
+        "path": "/sentinel/store/tasks/sentinel-task-file.md",
     }
-    unkeyed = {"max_turns": "sentinel-max-turns", "step branch": "sentinel-step-branch"}
+    unread = {
+        "criteria": "sentinel-criterion",
+        "a later paragraph": "sentinel-later-paragraph",
+        "step prose": "sentinel-step-task",
+        "max_turns": "sentinel-max-turns",
+        "step branch": "sentinel-step-branch",
+    }
     plan = {
         "goal": {"text": sentinels["goal"]},
         "tasks": [
@@ -751,31 +771,47 @@ def test_the_plan_reviewer_is_shown_exactly_what_the_plan_key_covers() -> None:
                 "kind": sentinels["kind"],
                 "expects_no_diff": sentinels["expects_no_diff"],
                 "persona": sentinels["persona"],
-                "task": sentinels["task"],
-                "max_turns": unkeyed["max_turns"],
+                "task": (
+                    f"## What\n\nThe {sentinels['summary']} of the work.\n\n"
+                    f"{unread['a later paragraph']}\n\n"
+                    f"## Acceptance criteria\n\n- {unread['criteria']}\n"
+                ),
+                "max_turns": unread["max_turns"],
                 "steps": [
                     {
                         "id": sentinels["step id"],
                         "persona": sentinels["step persona"],
-                        "task": sentinels["step prose"],
-                        "branch": unkeyed["step branch"],
+                        "task": unread["step prose"],
+                        "branch": unread["step branch"],
                     }
                 ],
             }
         ],
     }
-    composed = plan_review._plan_prompt(plan)
+    view = plan_review.PlanView(
+        tasks={sentinels["id"]: sentinels["path"]},
+        records={sentinels["id"]: {"key": sentinels["record"], "by": "review-plan"}},
+    )
+    composed = plan_review._plan_prompt(plan, view=view)
     for field, sentinel in sentinels.items():
-        assert sentinel in composed, f"{field} is hashed into the plan key and never shown"
-    for field, sentinel in unkeyed.items():
-        assert sentinel not in composed, f"{field} is shown and not covered by the plan key"
-    # Beside the bar: the table with both rungs stated, and the question itself.
+        assert sentinel in composed, f"{field} is keyed or stands for keyed content, never shown"
+    for field, sentinel in unread.items():
+        assert sentinel not in composed, f"{field} reached the compact view"
+    # Beside the bar: the table with both rungs stated, the origin, and the question.
     assert composed.startswith(plan_review.PLAN_REVIEW_PROMPT)
     assert host_installs.rendered() in composed
     assert plan_review.RUNGS in composed
+    assert f"`{plan_review.host_repository()}`" in composed
     assert (REPO_ROOT / plan_review.BAR_FILES[0]).read_text(encoding="utf-8") in composed
     # A node with no prose and no steps still renders, saying so.
     assert "states no body prose" in plan_review._plan_prompt({"tasks": [{"id": "bare"}]})
+
+
+def test_the_operational_notes_file_named_is_the_one_the_criteria_guard_reads() -> None:
+    """Restated rather than imported, because `criteria_guard` reads `plan_review`."""
+    assert plan_review.APPENDIX == criteria_guard.APPENDIX
+    composed = plan_review._plan_prompt({"tasks": [{"id": "bare"}]})
+    assert str(REPO_ROOT / criteria_guard.APPENDIX) in composed
 
 
 def test_the_plan_reviewer_is_asked_both_questions_and_told_the_pass_case() -> None:
@@ -1063,16 +1099,18 @@ def _untyped(schema: Mapping[str, Any], where: str) -> list[str]:
 def test_every_schema_a_harness_is_handed_is_one_every_harness_accepts() -> None:
     """The verdict and the drafter's body are the two, in the subset Claude accepts.
 
-    Both reach a chain that falls through to Claude Code, whose `--json-schema` refuses a
-    dialect it does not know and whose API refuses a top-level combinator, so a schema
-    outside that subset fails every Claude candidate rather than one answer. Each is
-    checked against the draft-07 meta-schema, declares its dialect as draft-07 or not at
-    all, carries a `type` on every subschema strict typing reads, and has no combinator
-    at its top level.
+    The verdict is handed by both reviewer roles, per task and whole plan. Both reach a
+    chain that falls through to Claude Code, whose `--json-schema` refuses a dialect it
+    does not know and whose API refuses a top-level combinator, so a schema outside that
+    subset fails every Claude candidate rather than one answer. Each is checked against
+    the draft-07 meta-schema, declares its dialect as draft-07 or not at all, carries a
+    `type` on every subschema strict typing reads, and has no combinator at its top
+    level.
     """
     schemas = _harness_schemas()
     assert {name: path.relative_to(REPO_ROOT) for name, path in schemas.items()} == {
         "oneharness.plan-review.toml": plan_review.BAR_FILES[1],
+        "oneharness.plan-review-whole.toml": plan_review.BAR_FILES[1],
         "oneharness.pr-author.toml": Path("config") / "pr-author-body.schema.json",
     }, schemas
     for name, path in schemas.items():
@@ -1432,7 +1470,7 @@ def _verdicts(monkeypatch: pytest.MonkeyPatch, *answers: plan_review.Verdict) ->
     given = list(answers)
     seen: list[str] = []
 
-    def verdict(prompt: str) -> plan_review.Verdict:
+    def verdict(prompt: str, *_: object) -> plan_review.Verdict:
         seen.append(prompt)
         return given.pop(0)
 
@@ -1529,7 +1567,7 @@ def test_a_plan_level_turn_that_answers_nothing_leaves_the_task_records_standing
     monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: BAR)
     answers = [PASSES]
 
-    def verdict(prompt: str) -> plan_review.Verdict:
+    def verdict(prompt: str, *_: object) -> plan_review.Verdict:
         if answers:
             return answers.pop(0)
         raise OSError("the chain answered nothing")
@@ -1690,7 +1728,7 @@ def test_a_review_that_stops_partway_keeps_and_reports_the_passes_it_granted(
     monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: BAR)
     answers = [PASSES]
 
-    def verdict(prompt: str) -> plan_review.Verdict:
+    def verdict(prompt: str, *_: object) -> plan_review.Verdict:
         if answers:
             return answers.pop(0)
         raise OSError("the chain answered nothing")
@@ -2343,10 +2381,12 @@ def test_the_plan_reviewer_is_shown_the_budgets_document_and_the_key_covers_it()
     composed = plan_review._plan_prompt(plan, BUDGETS)
 
     assert "## The plan's budgets document" in composed
-    assert "`demo:plan-budgets`, rendered from the `plan-budgets` template" in composed
+    assert "`demo:plan-budgets`, at `(the store reported no path for it)`" in composed
     for sentinel in ("sentinel-plan-workload", "sentinel-ten-x", "sentinel-workload"):
         assert sentinel in composed, sentinel
     assert "(this plan carries no budgets document)" in plan_review._plan_prompt(plan)
+    located = plan_review._plan_prompt(plan, BUDGETS, plan_review.PlanView(budgets="/b.md"))
+    assert "`demo:plan-budgets`, at `/b.md`, rendered from the `plan-budgets` template" in located
 
     keyed = plan_review.plan_key(plan, BAR, BUDGETS)
     assert keyed != plan_review.plan_key(plan, BAR)
@@ -2418,6 +2458,35 @@ def test_a_review_reads_the_budgets_document_from_the_store_and_records_keys_ove
     ), "a budgets document changed after the review still read as reviewed"
 
 
+def test_a_review_excerpts_long_budget_prose_only_in_the_plan_level_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The entrypoint keeps owned detail whole while bounding the plan overview."""
+    store = _Store(tmp_path / "store", [_task()])
+    store.install(monkeypatch)
+    monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: BAR)
+    prose = {
+        field: f"{field}: " + "measured workload and evidence " * 20
+        for field in plan_review.EXCERPTED_BUDGET_FIELDS
+    }
+    answers = {**BUDGET_ANSWERS, "budgets": [{**OWNED_BUDGET, **prose}]}
+    budgeted("demo", "plan", answers)
+    prompts = _verdicts(monkeypatch, PASSES, PASSES)
+
+    assert plan_review.main(["demo:plan"]) == 0
+
+    for field, value in prose.items():
+        assert value in prompts[0], field
+        assert value not in prompts[1], field
+        excerpt = value[: plan_review.EXCERPT_LIMIT] + plan_review.EXCERPT_MARKER
+        assert json.dumps(excerpt, ensure_ascii=False) in prompts[1], field
+    read = plan_budgets.read("demo:plan")
+    assert read is not None and read.answers.as_record() == answers
+    whole = store.written("plan", project=True)
+    assert isinstance(whole, dict)
+    assert whole["key"] == plan_review.plan_key(PLAN, plan_review.plan_bar_fingerprint(), read)
+
+
 # llmlint: ignore-end[shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]
 
 
@@ -2463,3 +2532,650 @@ def test_the_planner_is_told_how_to_state_its_budgets_in_general_terms() -> None
         assert rule in stated, rule
     for host_name in ("nickderobertis", "ai-orchestrator", "petsinc", "hellopatient"):
         assert host_name not in section, host_name
+
+
+# The realistic plans the plan-level prompt is measured over.
+#
+# Both are 44 nodes and 52 budgets, the size of `authoring:create-repo-baseline-audit`,
+# the plan whose 2,005,821-character prompt no candidate could answer. Measured on that
+# plan: agent task bodies of about 23.5k authored characters each, then the operational
+# notes; `kind: human` nodes of a few hundred; each budget's `measure` near 120
+# characters, its `workload` near 1,040, its `evidence` from 260 to 780 and its
+# `inner_measure_reason` near 360; and the document's own `workload` near 4,500. The
+# budgets these two tests measure are registered in `orchestrator/budgets.yaml`, which is
+# the one place their thresholds are stated.
+
+#: The budgets file the two prompt-size budgets are registered in, and read from.
+ORCHESTRATOR_BUDGETS = REPO_ROOT / "orchestrator" / "budgets.yaml"
+#: Where a store of this shape keeps its task files, as the baseline plan's store does.
+FIXTURE_STORE = "/home/operator/ai-orchestrator/.plans/tasks"
+#: How many authored characters a realistic agent task body carries before its notes.
+AUTHORED_CHARACTERS = 23_500
+#: The words realistic prose is drawn from: this host's own planning vocabulary, so the
+#: text reads as a task does rather than as filler a reviewer would skim differently.
+VOCABULARY_TEXT = (
+    "the repository's gate runs its targets through the project graph so a change to one "
+    "package re-runs only what that package reaches; the worker adds the missing tier, "
+    "keeps the cache key covering every file the tier reads, and proves the change with a "
+    "journey that drives the real recipe rather than a stand-in for it; the published "
+    "release carries the fix and the pin moves only once the registry reports it; a "
+    "budget measured where the product owner feels the impact holds the change to its "
+    "realistic workload"
+)
+VOCABULARY = tuple(VOCABULARY_TEXT.split())
+
+
+def _prose(seed: str, characters: int) -> str:
+    """Deterministic sentences of about ``characters`` characters, distinct per ``seed``."""
+    words: list[str] = []
+    length = 0
+    position = int(hashlib.sha256(seed.encode()).hexdigest(), 16)
+    while length < characters:
+        word = VOCABULARY[position % len(VOCABULARY)]
+        position = position // 7 + 1_000_003 * (len(words) + 1)
+        words.append(word)
+        length += len(word) + 1
+    sentences = [" ".join(words[at : at + 18]) for at in range(0, len(words), 18)]
+    return " ".join(sentence[0].upper() + sentence[1:] + "." for sentence in sentences)
+
+
+def _slug(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+
+
+def _agent_body(node_id: str, lead: int = 420, grown: int = 1) -> str:
+    """One agent task as the plan-task template renders it: authored sections, then notes.
+
+    ``grown`` multiplies the authored text past the lead — later `## What` paragraphs,
+    criteria and the task's own `## Additional info` — which is what a longer task grows.
+    """
+    later = AUTHORED_CHARACTERS * grown - lead
+    paragraphs = "\n\n".join(
+        _prose(f"{node_id}-what-{index}", later // 4 // 3) for index in range(3)
+    )
+    criteria = "\n".join(
+        f"- {_prose(f'{node_id}-criterion-{index}', later // 2 // 12)}" for index in range(12)
+    )
+    notes = _prose(f"{node_id}-notes", later // 4)
+    return (
+        f"## What\n\n{_prose(f'{node_id}-lead', lead)}\n\n"
+        f"{paragraphs} SENTINEL-LATER-{node_id}.\n\n"
+        f"## Why\n\n{_prose(f'{node_id}-why', 400)}\n\n"
+        f"## Acceptance criteria\n\n{criteria}\n- SENTINEL-CRITERION-{node_id}.\n\n"
+        f"## Additional info\n\n{notes} SENTINEL-NOTES-{node_id}.\n\n"
+        f"{(REPO_ROOT / plan_review.APPENDIX).read_text(encoding='utf-8').strip()}\n"
+    )
+
+
+def _human_body(node_id: str) -> str:
+    return (
+        f"{_prose(f'{node_id}-action', 340)}\n\n"
+        f"{_prose(f'{node_id}-detail', 1_600)} SENTINEL-LATER-{node_id}.\n"
+    )
+
+
+#: The repositories the baseline plan spans: this host's own and twenty-six others.
+REPOSITORIES = (
+    "github.com/nickderobertis/ai-orchestrator",
+    *(f"github.com/nickderobertis/repository-{index:02d}" for index in range(26)),
+)
+
+
+def _budget(index: int, node: str, repository: str) -> dict[str, object]:
+    """One budget at the measured sizes of the baseline plan's prose fields."""
+    return {
+        "id": f"budget-{index:02d}",
+        "repository": repository,
+        "file": "budgets.yaml",
+        "measure": _prose(f"measure-{index}", 117),
+        "inner_measure_reason": _prose(f"inner-{index}", 357),
+        "unit": "seconds",
+        "direction": "max",
+        "threshold": 600 + index,
+        "workload": _prose(f"workload-{index}", 1_037),
+        "evidence": _prose(f"evidence-{index}", 258 + (index * 41) % 524),
+        "command": f"just measure-{index:02d} --against main --report seconds",
+        "node": node,
+        "file_change": "add",
+    }
+
+
+def _fixture_budgets(owners: Sequence[tuple[str, str]]) -> plan_budgets.Budgets:
+    """52 budgets spread over ``owners`` — (node, repository) pairs — at measured sizes."""
+    answers = {
+        "workload": _prose("plan-workload", 4_500),
+        "checklist": [
+            {"concern": concern, "budget": f"budget-{index:02d}", "not_applicable": ""}
+            for index, concern in enumerate(
+                ("latency", "spend", "resource use", "gate time", "change cycle time")
+            )
+        ]
+        + [
+            {
+                "concern": "quota and rate-limit headroom",
+                "budget": "",
+                "not_applicable": _prose("quota", 300),
+            }
+        ],
+        "ten_x": _prose("ten-x", 780),
+        "budgets": [_budget(index, *owners[index % len(owners)]) for index in range(52)],
+        "repo_wide_effects": [
+            {"repository": repository, "budget": "gate-time", "effect": _prose(repository, 80)}
+            for repository in REPOSITORIES
+        ],
+        "realistic_data": [],
+        "spike_findings": [
+            {"spike": f"spike-{index}", "finding": _prose(f"finding-{index}", 200), "changed": "x"}
+            for index in range(3)
+        ],
+    }
+    return plan_budgets.Budgets(
+        plan_store.QualifiedDocumentId("authoring:fixture-budgets"), plan_budgets.parse(answers)
+    )
+
+
+class RealisticPlan(NamedTuple):
+    """One realistic plan, as the review reads it: the plan, its budgets, where things are."""
+
+    plan: dict[str, object]
+    budgets: plan_budgets.Budgets
+    view: plan_review.PlanView
+
+
+def _realistic(nodes: list[dict[str, object]]) -> RealisticPlan:
+    owners = [(str(node["id"]), str(node["repo"])) for node in nodes if node.get("kind") != "human"]
+    view = plan_review.PlanView(
+        tasks={
+            str(node["id"]): f"{FIXTURE_STORE}/{_slug(str(node['title']))}.md" for node in nodes
+        },
+        records={
+            str(node["id"]): {
+                "key": hashlib.sha256(str(node["id"]).encode()).hexdigest(),
+                "by": "review-plan",
+                "reviewed_at": "2026-10-06T09:26:10.363120+00:00",
+            }
+            for node in nodes
+        },
+        budgets="/home/operator/ai-orchestrator/.plans/documents/fixture-budgets.md",
+    )
+    plan = {"name": "fixture", "goal": {"text": _prose("goal", 900)}, "tasks": nodes}
+    return RealisticPlan(plan, _fixture_budgets(owners), view)
+
+
+def baseline_shaped(grown: int = 1) -> RealisticPlan:
+    """The baseline plan's shape: 36 agent nodes, one of this host, and 8 human ones.
+
+    One agent node's `## What` lead is longer than the summary's bound.
+    """
+    nodes: list[dict[str, object]] = []
+    for index in range(36):
+        node_id = f"repository-{index:02d}-baseline"
+        nodes.append(
+            {
+                "id": node_id,
+                "title": f"ci: bring repository {index:02d} up to the create-repo baseline",
+                "repo": REPOSITORIES[0] if index == 0 else REPOSITORIES[1 + index % 26],
+                "persona": "engineer",
+                "deps": [] if index % 5 else [f"repository-{(index + 1) % 36:02d}-baseline"],
+                "task": _agent_body(node_id, lead=900 if index == 3 else 420, grown=grown),
+            }
+        )
+    for index in range(8):
+        node_id = f"governance-{index}"
+        nodes.append(
+            {
+                "id": node_id,
+                "title": f"Turn on the required checks of repository {index:02d}'s main branch",
+                "repo": REPOSITORIES[index + 1],
+                "kind": "human",
+                "deps": [f"repository-{index + 1:02d}-baseline"],
+                "task": _human_body(node_id),
+            }
+        )
+    return _realistic(nodes)
+
+
+def host_shaped(grown: int = 1) -> RealisticPlan:
+    """Every node of this host's repository: half `published`, a quarter `consumes`.
+
+    Two nodes are stepped, one of them three steps long, and one carries a `## What` lead
+    longer than the summary's bound.
+    """
+    nodes: list[dict[str, object]] = []
+    for index in range(44):
+        node_id = f"adopt-{index:02d}"
+        node: dict[str, object] = {
+            "id": node_id,
+            "title": f"feat: adopt producer {index:02d}'s release and move the pin it governs",
+            "repo": REPOSITORIES[0],
+            "persona": "engineer",
+            "deps": [f"adopt-{index - 1:02d}"] if index else [],
+            "task": _agent_body(node_id, lead=1_100 if index == 7 else 420, grown=grown),
+        }
+        if index < 22:
+            node["adoption"] = "published"
+        elif index < 33:
+            node["consumes"] = {f"producer-{index:02d}": "wheel"}
+        if index in (40, 41):
+            node["steps"] = [
+                {
+                    "id": f"step-{step}",
+                    "persona": "engineer",
+                    "task": _agent_body(f"{node_id}-{step}"),
+                }
+                for step in range(3 if index == 40 else 2)
+            ]
+        nodes.append(node)
+    return _realistic(nodes)
+
+
+REALISTIC = {"baseline-shaped": baseline_shaped, "host-shaped": host_shaped}
+
+
+def _prompt_of(realistic: RealisticPlan) -> str:
+    return plan_review._plan_prompt(realistic.plan, realistic.budgets, realistic.view)
+
+
+def _node_costs(prompt: str) -> dict[str, int]:
+    """What each node costs the prompt: its section and the separator before it."""
+    body = prompt.split("## Every node of the plan, compactly\n\n", 1)[1]
+    body = body.split("\n\n## What you may open", 1)[0]
+    sections = body.split("\n\n### Node `")
+    return {
+        section.removeprefix("### Node `").split("`", 1)[0]: len(section) + len("\n\n### Node `")
+        for section in sections
+    }
+
+
+def _threshold(identifier: str) -> float:
+    """A budget's threshold, read from `orchestrator/budgets.yaml` — its one statement."""
+    document = yaml.safe_load(ORCHESTRATOR_BUDGETS.read_text(encoding="utf-8"))
+    (budget,) = [entry for entry in document["budgets"] if entry["id"] == identifier]
+    threshold = budget["threshold"]
+    assert isinstance(threshold, int | float)
+    return threshold
+
+
+def _report(value: int) -> None:
+    """Hand onebudgetspec the measured value, when this test is a budget's command."""
+    if destination := os.environ.get("ONEBUDGETSPEC_RESULT"):
+        Path(destination).write_text(json.dumps({"value": value}), encoding="utf-8")
+
+
+@pytest.mark.reads_docs
+def test_the_plan_level_prompt_is_the_compact_view_of_a_realistic_plan() -> None:
+    """Contract 2 over the baseline-shaped plan: every node alike, nothing past a summary."""
+    realistic = baseline_shaped()
+    prompt = _prompt_of(realistic)
+    appendix = (REPO_ROOT / plan_review.APPENDIX).read_text(encoding="utf-8").strip()
+    tasks = realistic.plan["tasks"]
+    assert isinstance(tasks, list) and len(tasks) == 44
+    assert sum(1 for node in tasks if node.get("kind") == "human") == 8
+    assert sum(1 for node in tasks if node["repo"] == plan_review.host_repository()) == 1
+    assert len(realistic.budgets.answers.budgets) == 52
+
+    for node in tasks:
+        node_id = node["id"]
+        section = prompt.split(f"### Node `{node_id}`", 1)[1].split("\n\n### Node `", 1)[0]
+        for field in plan_review.SHOWN_FIELDS:
+            assert f'"{field}":' in section, (node_id, field)
+        stored = realistic.view.records[node_id]
+        assert isinstance(stored, dict) and stored["key"] in section, node_id
+        assert f"task file: {realistic.view.tasks[node_id]}" in section, node_id
+        summary = plan_review.summary(node["task"])
+        assert f"summary: {summary}" in section, node_id
+        assert len(summary.removesuffix(plan_review.SUMMARY_MARKER)) <= plan_review.SUMMARY_LIMIT
+        for sentinel in ("LATER", "CRITERION", "NOTES"):
+            assert f"SENTINEL-{sentinel}-{node_id}" not in prompt, (node_id, sentinel)
+    # A lead past the bound is cut verbatim, and says so.
+    assert "repository-03-baseline" in prompt
+    assert plan_review.SUMMARY_MARKER in prompt
+    # The operational notes are named once, never rendered.
+    assert appendix.splitlines()[4] not in prompt, "a line of the notes' body was rendered"
+    assert prompt.count(str(REPO_ROOT / plan_review.APPENDIX)) == 1
+    # Each budget's long prose is a marked excerpt; every other answer is whole.
+    for budget in realistic.budgets.answers.budgets:
+        for field in plan_review.EXCERPTED_BUDGET_FIELDS:
+            value = getattr(budget, field)
+            if len(value) > plan_review.EXCERPT_LIMIT:
+                assert value not in prompt, (budget.id, field)
+                excerpt = value[: plan_review.EXCERPT_LIMIT] + plan_review.EXCERPT_MARKER
+                assert json.dumps(excerpt, ensure_ascii=False) in prompt, (budget.id, field)
+            else:
+                assert json.dumps(value, ensure_ascii=False) in prompt, (budget.id, field)
+        for field in ("id", "repository", "file", "unit", "command", "node", "file_change"):
+            assert json.dumps(getattr(budget, field), ensure_ascii=False) in prompt
+    record = realistic.budgets.answers.as_record()
+    for answer in ("workload", "checklist", "ten_x", "repo_wide_effects", "spike_findings"):
+        assert json.dumps(record[answer], ensure_ascii=False, separators=(",", ":")) in prompt
+
+
+@pytest.mark.reads_docs
+def test_plan_level_prompt_size_holds_both_realistic_plans_under_its_budget() -> None:
+    """Budget `plan-level-prompt-chars`: the larger realistic prompt, against its threshold.
+
+    And the property that makes the budget hold for any plan this size: growing every
+    task body of the host-shaped plan fourfold leaves its prompt exactly as long.
+    """
+    sizes = {name: len(_prompt_of(build())) for name, build in REALISTIC.items()}
+    grown = len(_prompt_of(host_shaped(grown=4)))
+    tasks = host_shaped(grown=4).plan["tasks"]
+    assert isinstance(tasks, list)
+    authored = min(len(node["task"]) for node in tasks)
+    print(f"plan-level prompt characters: {sizes}; host-shaped grown fourfold: {grown}")
+    assert authored > 4 * AUTHORED_CHARACTERS, authored
+    assert grown == sizes["host-shaped"], f"a longer body changed the prompt: {grown} vs {sizes}"
+    largest = max(sizes.values())
+    _report(largest)
+    threshold = _threshold("plan-level-prompt-chars")
+    assert largest <= threshold, f"the plan-level prompt sizes {sizes} exceed {threshold}"
+
+
+@pytest.mark.reads_docs
+def test_plan_level_prompt_per_node_holds_every_realistic_node_under_its_budget() -> None:
+    """Budget `plan-level-prompt-chars-per-node`: the costliest node of both plans.
+
+    Including a node whose `## What` lead is past the summary's bound and a stepped node
+    of three steps, which are the two shapes that cost the most.
+    """
+    costs = {
+        f"{name}:{node}": cost
+        for name, build in REALISTIC.items()
+        for node, cost in _node_costs(_prompt_of(build())).items()
+    }
+    assert len(costs) == 88, len(costs)
+    for heavy in ("baseline-shaped:repository-03-baseline", "host-shaped:adopt-07"):
+        assert costs[heavy] > plan_review.SUMMARY_LIMIT, heavy
+    stepped = host_shaped().plan["tasks"]
+    assert isinstance(stepped, list) and len(stepped[40]["steps"]) == 3
+    assert '"id":"step-2"' in _prompt_of(host_shaped())
+    costliest = max(costs, key=costs.__getitem__)
+    print(f"costliest node: {costliest} at {costs[costliest]} characters")
+    _report(costs[costliest])
+    threshold = _threshold("plan-level-prompt-chars-per-node")
+    assert costs[costliest] <= threshold, f"{costliest} costs {costs[costliest]} > {threshold}"
+
+
+#: The review keys the dispatch base's own `plan_review.py` (bab2b6ae, which carries the
+#: corrected verdict schema) computed for these tasks under the bar below — taken by
+#: running that tree's module, not this one. A record written then must read as current
+#: now: this change moved the plan-level key and nothing a per-task record is keyed on.
+BASE_BAR = plan_review.BarFingerprint("bar-fingerprint")
+BASE_KEYS = {
+    "plain": "5a189abfd3877086124ceb40552c81b513359e62159e2fb5829f15f17b7d7ae8",
+    "adopting": "0cdc66b36242b3b7d59a6449c1b9277659e79ad9176045921dfb74e294db4f57",
+    "stepped": "d92752dcc6ea622936b77b0463e0ff12230e565047448e496b89897e9b83417a",
+    "plain-owning": "2b8ca70ae148330e524a907c76e95a7f2ae104b01d0744d322c05b4b15611ac5",
+}
+BASE_TASKS = {
+    "plain": StoreTask(
+        "demo:plan/route",
+        "route",
+        "feat: add the route",
+        "## What\n\nAdd the route.\n\n## Acceptance criteria\n\n- It rejects an invalid request.\n",
+        {"onepipeline.id": "route", "onepipeline.persona": "engineer"},
+        [],
+        (),
+    ),
+    "adopting": StoreTask(
+        "demo:plan/adopt",
+        "adopt",
+        "feat: adopt the release",
+        "## What\n\nMove the pin.\n",
+        {
+            "onepipeline.id": "adopt",
+            "onepipeline.persona": "engineer",
+            "onepipeline.adoption": "published",
+            "onepipeline.deps": ["run:r-1#x"],
+        },
+        ["github.com/nickderobertis/ai-orchestrator"],
+        ("engine",),
+    ),
+    "stepped": StoreTask(
+        "demo:plan/s",
+        "s",
+        "feat: stepped",
+        "",
+        {
+            "onepipeline.id": "s",
+            "onepipeline.kind": None,
+            "onepipeline.steps": [
+                {"id": "a", "persona": "engineer", "task": "Do a."},
+                {"id": "b", "persona": "engineer", "task": "Do b."},
+            ],
+        },
+        [],
+        (),
+    ),
+}
+BASE_BUDGET = plan_budgets.parse(
+    {
+        "workload": "w",
+        "checklist": [],
+        "ten_x": "t",
+        "budgets": [
+            {
+                "id": "b1",
+                "repository": "github.com/acme/app",
+                "file": "budgets.yaml",
+                "measure": "m",
+                "inner_measure_reason": "",
+                "unit": "ms",
+                "direction": "max",
+                "threshold": 5,
+                "workload": "w",
+                "evidence": "e",
+                "command": "c",
+                "node": "route",
+                "file_change": "add",
+            }
+        ],
+        "repo_wide_effects": [],
+        "realistic_data": [],
+        "spike_findings": [],
+    }
+)
+
+
+def test_a_task_record_written_under_the_dispatch_base_still_reads_as_current() -> None:
+    """Per-task review is unchanged: every record the base wrote stands under this code."""
+    recorded = [_recorded(task, BASE_KEYS[name]) for name, task in BASE_TASKS.items()]
+    assert plan_review.unreviewed(recorded, BASE_BAR) == []
+    owning = _recorded(BASE_TASKS["plain"], BASE_KEYS["plain-owning"])
+    owned = plan_budgets.Budgets(plan_store.QualifiedDocumentId("demo:plan-budgets"), BASE_BUDGET)
+    assert plan_review.unreviewed([owning], BASE_BAR, owned) == []
+
+
+def test_the_plan_key_moves_with_a_budget_a_node_owns_through_its_review_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A node's owned budget reaches the plan key through the node's review key.
+
+    And a plan read twice keys twice alike — the unchanged plan is the one a record
+    stands over. The task bar is varied through the seam the other tests here use for
+    it, `bar_fingerprint`, since `plan_key` derives each review key from it.
+    """
+    monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: BASE_BAR)
+    plan = {"goal": {"text": "Deliver"}, "tasks": [{"id": "route", "task": "## What\n\nIt."}]}
+    budgets = plan_budgets.Budgets(plan_store.QualifiedDocumentId("demo:plan-budgets"), BASE_BUDGET)
+    keyed = plan_review.plan_key(plan, BAR, budgets)
+    assert keyed == plan_review.plan_key(json.loads(json.dumps(plan)), BAR, budgets)
+    (node,) = plan_review.plan_nodes(plan, budgets)
+    record = plan_review.task_record_of({"id": "route", "task": "## What\n\nIt."})
+    assert node["review_key"] == plan_review.review_key(record, BASE_BAR, list(BASE_BUDGET.budgets))
+    moved = plan_budgets.Budgets(
+        budgets.document,
+        dataclasses.replace(
+            BASE_BUDGET,
+            budgets=(dataclasses.replace(BASE_BUDGET.budgets[0], evidence="measured again"),),
+        ),
+    )
+    assert plan_review.plan_key(plan, BAR, moved) != keyed
+    # The task bar the review keys are computed under is part of the plan key too.
+    monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: plan_review.BarFingerprint("x"))
+    assert plan_review.plan_key(plan, BAR, budgets) != keyed
+
+
+def test_the_size_guard_never_sits_below_the_budget_it_guards() -> None:
+    """`PLAN_PROMPT_LIMIT` admits every plan the prompt-size budget admits.
+
+    The budget's threshold is read from `orchestrator/budgets.yaml`, its one statement.
+    """
+    assert _threshold("plan-level-prompt-chars") <= plan_review.PLAN_PROMPT_LIMIT
+
+
+def test_the_plan_level_turn_spawns_under_its_own_role_file_and_the_task_turns_do_not(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Which config each turn is handed, at the one seam a turn crosses into a harness."""
+    store = _Store(tmp_path / "store", [_task()])
+    store.install(monkeypatch)
+    monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: BAR)
+    handed: list[tuple[str, ...]] = []
+
+    def verdict(prompt: str, command: Sequence[str] = plan_review.HARNESS_COMMAND, *_: object):
+        handed.append(tuple(command))
+        return PASSES
+
+    monkeypatch.setattr(plan_review, "verdict", verdict)
+    assert plan_review.main(["demo:plan"]) == 0
+    assert handed == [plan_review.HARNESS_COMMAND, plan_review.HARNESS_WHOLE_COMMAND]
+    assert str(REPO_ROOT / "oneharness.plan-review-whole.toml") in plan_review.HARNESS_WHOLE_COMMAND
+    assert str(REPO_ROOT / "oneharness.plan-review.toml") in plan_review.HARNESS_COMMAND
+
+
+def test_a_plan_level_prompt_over_the_limit_spends_no_turn_and_records_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The guard stops before the turn, through the stop path, naming both numbers."""
+    store = _Store(tmp_path / "store", [_task()])
+    store.install(monkeypatch)
+    monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: BAR)
+    monkeypatch.setattr(plan_review, "PLAN_PROMPT_LIMIT", 100)
+    prompts = _verdicts(monkeypatch, PASSES)
+
+    assert plan_review.main(["demo:plan"]) == 2
+    assert len(prompts) == 1, "a plan-level turn was spent over the limit"
+    assert isinstance(store.written("plan/route"), dict), "the task's own pass was lost"
+    assert store.written("plan", project=True) is None
+    reported = capsys.readouterr().err
+    assert "characters, over the 100-character limit" in reported, reported
+    assert "no plan-level turn was spent" in reported, reported
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        (None, "(this node states no body prose)"),
+        ("  \n", "(this node states no body prose)"),
+        ("## What\n\nThe lead.\n\nThe second.\n", "The lead."),
+        ("Merge it once green.\n\nThen tell the user.", "Merge it once green."),
+        ("## What\n\n## Why\n\nBecause.\n", "Because."),
+        ("# Title\n\n## Why\n\n", "(this node states no paragraph outside its headings)"),
+    ],
+    ids=["none", "blank", "what", "human", "empty-what", "only-headings"],
+)
+def test_a_summary_is_the_first_authored_paragraph(body: object, expected: str) -> None:
+    assert plan_review.summary(body) == expected
+
+
+def test_a_summary_past_its_bound_is_cut_verbatim_and_marked() -> None:
+    lead = "x" * (plan_review.SUMMARY_LIMIT + 1)
+    assert plan_review.summary(f"## What\n\n{lead}\n") == (
+        lead[: plan_review.SUMMARY_LIMIT] + plan_review.SUMMARY_MARKER
+    )
+
+
+def test_the_view_names_where_each_task_and_document_is(tmp_path: Path) -> None:
+    """Paths read off the store's answer, and only those that are files here.
+
+    A location that is a URL — a board item's — is not named as a file the reviewer may
+    open, and a budgets document the store cannot decide is none.
+    """
+    store = tmp_path / "store"
+    for relative in ("tasks/route.md", "documents/plan-budgets.md", "documents/plan-design.md"):
+        (store / relative).parent.mkdir(parents=True, exist_ok=True)
+        (store / relative).write_text("held\n", encoding="utf-8")
+    task = dataclasses.replace(_recorded(_task(), "k"), location=str(store / "tasks/route.md"))
+    unlocated = dataclasses.replace(_task(node_id="other", qualified_id="demo:plan/other"))
+    on_a_board = dataclasses.replace(
+        _task(node_id="board", qualified_id="demo:plan/board"),
+        location="https://github.com/orgs/acme/projects/2/views/1?pane=issue&itemId=1",
+    )
+
+    def document(
+        identifier: str, path: str, template: str | None = None
+    ) -> plan_store.StoreDocument:
+        return plan_store.StoreDocument(
+            qualified_id=plan_store.QualifiedDocumentId(identifier),
+            title=identifier,
+            content="",
+            project="plan",
+            labels=[],
+            repositories=[],
+            metadata={} if template is None else {"onetaskgraph.template": {"template": template}},
+            location={"path": path},
+        )
+
+    budgets = document("demo:plan-budgets", str(store / "documents/plan-budgets.md"))
+    design = document("demo:plan-design", str(store / "documents/plan-design.md"))
+    view = plan_review.plan_view("demo:plan", [task, unlocated, on_a_board], [budgets, design])
+    assert view.tasks == {"route": str(store / "tasks/route.md")}
+    assert view.records["route"] == {"key": "k", "by": "review-plan"}
+    assert view.records["other"] is None
+    assert view.budgets == str(store / "documents/plan-budgets.md")
+    assert view.design == str(store / "documents/plan-design.md")
+    composed = plan_review._plan_prompt({"tasks": [{"id": "route"}]}, view=view)
+    assert f"the design document at `{store / 'documents/plan-design.md'}`" in composed
+
+    twice = document("demo:other-budgets", "/store/documents/b.md", plan_budgets.TEMPLATE_REFERENCE)
+    undecided = plan_review.plan_view("demo:plan", [task], [budgets, twice])
+    assert undecided.budgets is None and undecided.design is None
+
+
+@pytest.mark.parametrize(
+    "location",
+    [
+        None,
+        "https://github.com/orgs/acme/projects/2/views/1?pane=issue&itemId=1",
+        "authoring:plan/route",
+        "tasks/route.md",
+        "/no/such/file.md",
+    ],
+    ids=["none", "url", "qualified-id", "relative", "missing"],
+)
+def test_a_location_that_is_no_file_here_is_named_as_no_path(location: str | None) -> None:
+    assert plan_store.local_file(location) is None
+
+
+def test_a_location_that_is_a_file_here_is_its_path(tmp_path: Path) -> None:
+    held = tmp_path / "route.md"
+    held.write_text("held\n", encoding="utf-8")
+    assert plan_store.local_file(str(held)) == str(held)
+    assert plan_store.local_file(str(tmp_path)) is None, "a directory is not a file to read"
+
+
+def test_the_reviewer_reads_budget_detail_by_the_heading_the_budgets_template_renders() -> None:
+    """The prompt sends the reviewer to a budget's own section, never the whole document.
+
+    The heading it names is the one `templates/plan-budgets.md.j2` renders each budget's
+    section under, so a search for it finds that section and no other.
+    """
+    template = (REPO_ROOT / "templates" / "plan-budgets.md.j2").read_text(encoding="utf-8")
+    assert plan_review.BUDGET_HEADING.replace("<id>", "{{ budget.id }}") in template
+    composed = " ".join(plan_review._plan_prompt({"tasks": [{"id": "bare"}]}).split())
+    assert f"under its `{plan_review.BUDGET_HEADING}` heading" in composed
+    assert "Never read the whole budgets document, nor its `## Record` line" in composed
+    asked = " ".join(plan_review.PLAN_REVIEW_PROMPT.split())
+    assert "a budget's detail by its id, never the whole budgets document" in asked
+
+
+@pytest.mark.reads_docs
+def test_the_reviewer_reads_a_task_file_only_up_to_the_notes_every_agent_task_shares() -> None:
+    """The heading the prompt stops a task-file read at is the appendix's own."""
+    appendix = (REPO_ROOT / plan_review.APPENDIX).read_text(encoding="utf-8")
+    assert f"\n{plan_review.NOTES_HEADING}\n" in appendix
+    composed = " ".join(plan_review._plan_prompt({"tasks": [{"id": "bare"}]}).split())
+    assert f"read it only as far as its `{plan_review.NOTES_HEADING}` heading" in composed
+    asked = " ".join(plan_review.PLAN_REVIEW_PROMPT.split())
+    assert "a node's task file, up to the operational notes it ends with" in asked

@@ -91,6 +91,20 @@ PLAN_REVIEW_CONFIG = REPO_ROOT / "oneharness.plan-review.toml"
 #: the other two are: what matters is that it is finite and chosen.
 REVIEWER_DEADLINE_SECONDS = 300
 
+#: The plan-level reviewer's config: the reviewer's routing, chain and schema verbatim,
+#: run read-only so it can open the task files its compact view lists, under a deadline
+#: of its own. Named here for the reason the reviewer's is — `orchestrator/plan_review.py`
+#: names it, and nothing dispatches it — and held to the reviewer's file below so the
+#: copy cannot drift from it in anything but those two settings.
+PLAN_REVIEW_WHOLE_CONFIG = REPO_ROOT / "oneharness.plan-review-whole.toml"
+
+#: Its per-turn deadline, as that file states it, and the ceiling the plan set for it.
+WHOLE_REVIEWER_DEADLINE_SECONDS = 600
+WHOLE_REVIEWER_DEADLINE_CEILING = 900
+
+#: What the whole-plan reviewer's routing may differ from the per-task reviewer's in.
+WHOLE_REVIEWER_DIFFERENCES = {"timeout", "mode"}
+
 #: The design-doc role's own graph, and the member whose two sides it re-pairs. Its
 #: configs are the fifth and sixth copies of this routing, and the only pair on this host
 #: whose identity orders are the reverse of the ordinary one: Codex leads the side that
@@ -129,7 +143,7 @@ DESIGN_DOC_REVIEWER_CHAIN = [
     "claude-code:primary",
 ]
 
-#: The identity order every side resolves. Two orders cover all ten configs: the worker
+#: The identity order every side resolves. Two orders cover all eleven configs: the worker
 #: and the design-doc reviewer lead with the Claude subscriptions, every other side with
 #: Codex, and all of them name the same six identities with the primary-backup Claude
 #: subscription immediately before the primary one, which is last everywhere.
@@ -141,6 +155,7 @@ INTENDED_CHAINS = {
     "pacemaker": DESIGN_DOC_WRITER_CHAIN,
     "drafter": DESIGN_DOC_WRITER_CHAIN,
     "reviewer": DESIGN_DOC_WRITER_CHAIN,
+    "whole reviewer": DESIGN_DOC_WRITER_CHAIN,
     "design-doc writer": DESIGN_DOC_WRITER_CHAIN,
     "design-doc reviewer": DESIGN_DOC_REVIEWER_CHAIN,
     "follow-up": DESIGN_DOC_WRITER_CHAIN,
@@ -416,7 +431,7 @@ def test_timeout_kills_process_tree_and_preserves_real_partial_telemetry(
 def test_every_side_resolves_its_intended_effective_deadline(
     oneharness_bin: str,
 ) -> None:
-    """Prove all ten turn configs together from oneharness's effective values."""
+    """Prove all eleven turn configs together from oneharness's effective values."""
     monitor = _named_config(DAG_SCOPE_GRAPH, MONITOR_MEMBER, "agent.oneharness_config")
     pacemaker = _named_config(DAG_SCOPE_GRAPH, "check-in", "oneharness_config")
     drafter = _named_config(PR_AUTHOR_GRAPH, PR_AUTHOR_MEMBER, "oneharness_config")
@@ -425,10 +440,20 @@ def test_every_side_resolves_its_intended_effective_deadline(
         DESIGN_DOC_GRAPH, DESIGN_DOC_MEMBER, "judge.oneharness_config"
     )
     follow_up = _named_config(FOLLOW_UP_GRAPH, FOLLOW_UP_MEMBER, "oneharness_config")
-    own = {monitor, pacemaker, drafter, PLAN_REVIEW_CONFIG, writer, design_doc_reviewer, follow_up}
-    assert len(own) == 7, (
+    own = {
+        monitor,
+        pacemaker,
+        drafter,
+        PLAN_REVIEW_CONFIG,
+        PLAN_REVIEW_WHOLE_CONFIG,
+        writer,
+        design_doc_reviewer,
+        follow_up,
+    }
+    assert len(own) == 8, (
         f"the monitor ({monitor}), the check-in pacemaker ({pacemaker}), the "
         f"pr-author drafter ({drafter}), the plan reviewer ({PLAN_REVIEW_CONFIG}), the "
+        f"whole-plan reviewer ({PLAN_REVIEW_WHOLE_CONFIG}), the "
         f"design-doc writer ({writer}), the design-doc reviewer "
         f"({design_doc_reviewer}) and the follow-up agent ({follow_up}) must each name "
         "their own oneharness config; re-sharing one is what gives a scheduled member no "
@@ -443,6 +468,7 @@ def test_every_side_resolves_its_intended_effective_deadline(
         "pacemaker": pacemaker,
         "drafter": drafter,
         "reviewer": PLAN_REVIEW_CONFIG,
+        "whole reviewer": PLAN_REVIEW_WHOLE_CONFIG,
         "design-doc writer": writer,
         "design-doc reviewer": design_doc_reviewer,
         "follow-up": follow_up,
@@ -556,6 +582,41 @@ def test_every_side_resolves_its_intended_effective_deadline(
     assert effective["reviewer"]["schema_file"]["value"], (
         "oneharness.plan-review.toml must name the schema a verdict is validated "
         "against; without it an unvalidated answer is recorded as a review"
+    )
+
+    # The whole-plan reviewer: the reviewer's routing with two settings of its own, and
+    # nothing else. It reads a compact view and opens the task files that view lists, so
+    # it runs read-only, under a finite deadline no longer than the ceiling set for it.
+    assert effective["whole reviewer"]["timeout"] == {
+        "value": WHOLE_REVIEWER_DEADLINE_SECONDS,
+        "source": str(PLAN_REVIEW_WHOLE_CONFIG),
+    }, (
+        f"the whole-plan reviewer must retain its explicit finite "
+        f"{WHOLE_REVIEWER_DEADLINE_SECONDS}-second deadline"
+    )
+    assert 0 < WHOLE_REVIEWER_DEADLINE_SECONDS <= WHOLE_REVIEWER_DEADLINE_CEILING
+    assert effective["whole reviewer"]["mode"] == {
+        "value": "read-only",
+        "source": str(PLAN_REVIEW_WHOLE_CONFIG),
+    }, (
+        'oneharness.plan-review-whole.toml must declare `mode = "read-only"`: the turn opens '
+        "the task files its prompt lists, and a reviewer that could write could change them"
+    )
+    assert effective["whole reviewer"]["stream"]["value"] is False
+    assert (
+        effective["whole reviewer"]["schema_file"]["value"]
+        == effective["reviewer"]["schema_file"]["value"]
+    ), "the whole-plan reviewer must answer under the per-task reviewer's verdict schema"
+    whole_routing = _without_sources(effective["whole reviewer"])
+    reviewer_routing = _without_sources(effective["reviewer"])
+    differing = {
+        field
+        for field in whole_routing
+        if field != "config_files" and whole_routing[field] != reviewer_routing[field]
+    }
+    assert differing == WHOLE_REVIEWER_DIFFERENCES, (
+        "oneharness.plan-review-whole.toml must be oneharness.plan-review.toml's routing with "
+        f"only the deadline and the mode changed; these differ: {sorted(differing)}"
     )
 
     for side, deadline_seconds, chain in (

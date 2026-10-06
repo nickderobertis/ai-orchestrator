@@ -52,11 +52,25 @@ Whether a plan puts the change its goal needs *in force on this host* — a prod
 landed upstream and adopted here through the `config/<pin>.version` the installed wheel
 governs — is not a property of any task in it: a consumer missing from a plan is absent
 from every task, and the per-task turn reviews one task. So :func:`review` spends one
-further turn under :data:`PLAN_REVIEW_PROMPT` once every task carries a record, over the
-goal and every node whole, and records the pass on the **project** record under the same
-:data:`RECORD_KEY`, keyed by :func:`plan_key` under :func:`plan_bar_fingerprint`. The
-three properties hold for it exactly as for a task's record, and `just check-plan` and
-`just copy-plan` both refuse a plan whose project carries none. **A mid-run live edit is
+further turn under :data:`PLAN_REVIEW_PROMPT` once every task carries a record, and
+records the pass on the **project** record under the same :data:`RECORD_KEY`, keyed by
+:func:`plan_key` under :func:`plan_bar_fingerprint`. The three properties hold for it
+exactly as for a task's record, and `just check-plan` and `just copy-plan` both refuse a
+plan whose project carries none.
+
+**That turn reads a compact view of the plan, the way a person reviews one: from an
+overview, opening detail where it matters.** It is shown the goal, the budgets document
+with each budget's longest prose excerpted, and per node its authored fields, the
+per-task record that proves a per-task turn read its whole task, the task file's path and
+a bounded summary — and it runs read-only under its own role file,
+:data:`HARNESS_WHOLE_CONFIG`, opening the files its judgment needs. Every task body ends
+with the same operational notes, and a fleet-wide plan's bodies run to megabytes, so a
+prompt carrying them whole outgrew every candidate's window; this one grows with how many
+nodes a plan has and never with how long their bodies are, and :data:`PLAN_PROMPT_LIMIT`
+refuses, before any turn is spent, one that has outgrown the smallest window a candidate
+answers in. The plan key follows the view: it covers each node's fields and that node's
+task review key rather than its body, so a body that changes moves the plan key through
+the task's own. **A mid-run live edit is
 held to the per-task tiers only.** An `add`, a `retry` or a `requeue` with an amended
 task reaches :mod:`orchestrator.envelope_review`, which spends the per-task turn and
 never this one, because a model call over the whole plan there would stall every
@@ -88,9 +102,9 @@ from enum import StrEnum
 from pathlib import Path
 from typing import NamedTuple, NewType, TypedDict
 
-from orchestrator import host_installs, plan_budgets, plan_store
+from orchestrator import design_approval, host_installs, plan_budgets, plan_store
 from orchestrator.plan_store import QualifiedTaskId, StoreTask
-from orchestrator.project_store import hosted_origin
+from orchestrator.project_store import ENGINE_PREFIX, hosted_origin
 from orchestrator.publication_guard import RESERVED_REPO_KEY
 from orchestrator.root import REPO_ROOT
 
@@ -135,6 +149,21 @@ HARNESS_COMMAND: tuple[str, ...] = (
     "run",
     "--config",
     str(REPO_ROOT / HARNESS_CONFIG),
+    "--format",
+    "json",
+)
+
+#: The harness side that spends the **plan-level** turn: the per-task routing above in the
+#: same order, with the same schema, run read-only under a deadline of its own. Its own
+#: file because the turn is a different job — it reads a compact view and opens the task
+#: files its judgment needs — and a mode or a deadline written into the per-task file
+#: would move every per-task turn and every live edit's review with it.
+HARNESS_WHOLE_CONFIG = Path("oneharness.plan-review-whole.toml")
+HARNESS_WHOLE_COMMAND: tuple[str, ...] = (
+    "oneharness",
+    "run",
+    "--config",
+    str(REPO_ROOT / HARNESS_WHOLE_CONFIG),
     "--format",
     "json",
 )
@@ -896,7 +925,11 @@ def _answered(structured: object) -> Verdict | None:
             return None
 
 
-def verdict(prompt: str) -> Verdict:
+def verdict(
+    prompt: str,
+    command: Sequence[str] = HARNESS_COMMAND,
+    config: Path = HARNESS_CONFIG,
+) -> Verdict:
     """Spend one judged turn on ``prompt`` and return the structured verdict it answered.
 
     The turn goes through the same seam every other side of this repository reaches its
@@ -908,10 +941,12 @@ def verdict(prompt: str) -> Verdict:
     :mod:`orchestrator.envelope_review` spends it on a live edit's resulting task under
     :func:`edit_prompt`; a second spawn there would be a second seam to stand in for.
     Raises :class:`OSError` when no verdict came back, naming why and the repair, so a
-    caller never records a pass from a turn that answered nothing.
+    caller never records a pass from a turn that answered nothing. ``command`` and
+    ``config`` are the per-task side's unless the caller is :func:`review` spending the
+    plan-level turn, which names :data:`HARNESS_WHOLE_COMMAND` and its file.
     """
     completed = subprocess.run(
-        [*HARNESS_COMMAND, "--prompt-file", "-"],
+        [*command, "--prompt-file", "-"],
         cwd=REPO_ROOT,
         input=prompt,
         text=True,
@@ -939,7 +974,7 @@ def verdict(prompt: str) -> Verdict:
     raise OSError(
         f"no candidate answered the review with a verdict matching {BAR_FILES[1]}; "
         f"{completed.stderr.strip() or 'the harness reported no reason'}. Check the "
-        f"identity chain in {HARNESS_CONFIG} with `oneharness detect`, then run this "
+        f"identity chain in {config} with `oneharness detect`, then run this "
         f"command again — nothing was recorded"
     )
 
@@ -1033,8 +1068,13 @@ goal needs in force on this host, and whether its budgets are what its work need
 Below is the review bar, then the plan's goal, then the table of what this host
 installs from each producer it depends on — the wheel, and the `config/<pin>.version`
 file that wheel governs — with the two rungs a node waits on a release under, then the
-plan's budgets document, and then every node of the plan with its authored fields and
-its whole task.
+plan's budgets document, and then a compact view of every node of the plan: its
+authored fields, the record of the per-task review that read its whole task, the
+absolute path of its task file, and a summary of what it does. No task body is shown
+beyond that summary, and a budget's longest prose is excerpted; each path listed is a
+file you may open read-only, and you open only what your judgment needs — a node's task
+file, up to the operational notes it ends with, where a question below turns on its
+criteria, and a budget's detail by its id, never the whole budgets document.
 
 On the adoption, ask two questions.
 
@@ -1100,6 +1140,41 @@ RUNGS = (
     "carrying the work, never the branch; every other repository's rung is `fast`."
 )
 
+#: The longest plan-level prompt, in characters, :func:`review` spends a turn on. Longer
+#: is refused before any turn is spent, through the `stopped` path, naming both numbers:
+#: a prompt no candidate can hold is a turn every candidate fails, and a refusal that
+#: says so costs nothing.
+#:
+#: Derived from the smallest window a candidate of `oneharness.plan-review-whole.toml`
+#: answers in, measured on 2026-10-06 and re-derived whenever a candidate's model moves:
+#:
+#: * **Codex, `gpt-6-astra`** — the smallest. codex-cli 0.159.2's installed model
+#:   declaration (`~/.codex/models_cache.json`) gives `context_window` 272,000 tokens at
+#:   `effective_context_window_percent` 95, so 258,400 usable, which is the
+#:   `model_context_window` the proof turn's own rollout reported.
+#: * **Claude Code, `claude-opus-5-5`** — Claude Code 2.1.291 reported `contextWindow`
+#:   1,000,000 tokens and `maxOutputTokens` 128,000 for it in a one-word probe turn on
+#:   `claude-code:alternate2`; not inferred from Codex, and not the bound here.
+#:
+#: The basis is Codex's 258,400 less a 20% margin: 206,720 tokens. Out of it come Codex's
+#: own instructions, tools and the appended schema — 21,592 tokens, the first call's
+#: input on a 637-character prompt — an output reserve of 16,000 tokens (the proof turns
+#: answered in at most 5,411), and file-read headroom for about four whole task bodies and
+#: the budget sections a judgment reads by id, 400,000 characters taken at a conservative
+#: 3.5 characters a token, 114,286 tokens. What remains, 54,842 tokens, at the 3.86
+#: characters a token the real 167,170-character baseline prompt measured, is 211,690
+#: characters, so the limit is 210,000. It must never sit below the
+#: `plan-level-prompt-chars` budget's threshold, which `tests/test_plan_review.py` holds
+#: it to.
+#:
+#: Every candidate must fit the prompt, so the smallest window is the basis; each turn's
+#: own reading is bounded by its own window less 20% — 206,720 tokens for Codex. Never
+#: re-derive this limit from a Claude token count: Claude Code spends about 65,000 tokens
+#: of its own before the prompt and its reads come back line-numbered. A whole read of a
+#: large budgets document is what overflows Codex, which is why the prompt sends the
+#: reviewer to a budget's section by id.
+PLAN_PROMPT_LIMIT = 210_000
+
 #: What a finding of the plan-level turn names when it is about the plan rather than
 #: about one node: the word the prompt tells the reviewer to use, and what the operator
 #: reads it back as.
@@ -1109,10 +1184,12 @@ THE_PLAN = "the plan"
 def plan_bar_fingerprint(root: Path = REPO_ROOT) -> BarFingerprint:
     """A digest of the bar a plan is held to whole, over ``root``'s copy of the files.
 
-    The task bar, the plan-level question, and the table the question is asked over —
-    distinct from :func:`bar_fingerprint` so that rewording the plan-level prompt
-    moves every plan record and no task record, while a change to the table moves
-    both, since both prompts render it.
+    The task bar, the plan-level question, the table the question is asked over, and
+    every constant that decides what the compact view shows the reviewer
+    (:data:`COMPACT_VIEW`) — distinct from :func:`bar_fingerprint` so that rewording the
+    plan-level prompt, or showing the reviewer more or less of a plan, moves every plan
+    record and no task record, while a change to the table moves both, since both
+    prompts render it.
     """
     digest = hashlib.sha256()
     digest.update(bar_fingerprint(root).encode("utf-8"))
@@ -1120,11 +1197,77 @@ def plan_bar_fingerprint(root: Path = REPO_ROOT) -> BarFingerprint:
     digest.update(PLAN_REVIEW_PROMPT.encode("utf-8"))
     digest.update(b"\0")
     digest.update(host_installs.rendered().encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(json.dumps(COMPACT_VIEW, sort_keys=True).encode("utf-8"))
     return BarFingerprint(digest.hexdigest())
 
 
+# llmlint: ignore[suppressions_justified] A node is the engine's own open plan contract;
+# every field this reads is narrowed at the read.
+def task_record_of(node: object) -> StoreTask:
+    """One node of a plan in the engine's loaded shape, as the record a review key covers.
+
+    The one reconstruction of a task record from a loaded node, for both readers of a
+    plan: :func:`plan_key`, which keys each node by the review key its task's own record
+    must hold, and `orchestrator/plan_check.py`, which asks :func:`unreviewed` of the
+    document the engine's `plan check` hands it. A second reconstruction would be a
+    second answer to which fields a review covers, and the drift between two of them was
+    https://github.com/nickderobertis/ai-orchestrator/issues/1071.
+
+    A :class:`~orchestrator.plan_store.StoreTask` rather than a shape of its own, because
+    :func:`review_key` is what decides which fields a review covers. The node arrives in
+    one of the two spellings of that shape: the document the engine's loader hands the
+    registered check carries the store's own metadata map verbatim under ``metadata``,
+    and :func:`orchestrator.plan_store.read_plan`'s node carries the same `onepipeline.`
+    keys with the prefix taken off and no map beside them, so for that one the map is put
+    back by restoring the prefix. ``qualified_id`` is the one field neither carries — it
+    is the store's address for the record, and nothing on this path addresses one — so it
+    is filled from the node id, which is what every message here names anyway.
+
+    ``repositories`` is filled from the node's resolved ``repo``, which the engine and
+    `read_plan` both read from the record's own `repositories` list or its reserved
+    `onepipeline.repo` key — the same two spellings, in the same order,
+    :func:`repository_of` reads a store record by — so the `repo` the key covers is one
+    value whichever path computed it.
+
+    ``deps`` is filled from the node's **resolved** dependencies, which carry a node's
+    cross-DAG references beside this project's own edges, and the metadata beside it
+    carries the cross-DAG statement — the two halves
+    :func:`orchestrator.plan_store.authored_deps` reconciles into the one representation
+    a key covers. So this copies the list as it stands rather than trying to take the
+    cross-DAG half back out of it: subtracting here would be the second construction
+    whose drift from the review's own was that same issue.
+    """
+    read = node if isinstance(node, Mapping) else {}
+    node_id = read.get("id")
+    metadata = read.get("metadata")
+    if not isinstance(metadata, Mapping):
+        metadata = {f"{ENGINE_PREFIX}{field}": value for field, value in read.items()}
+    deps = read.get("deps")
+    title = read.get("title")
+    content = read.get("task")
+    repo = read.get("repo")
+    # An id that is not a string is not rendered into one: the engine's loader refuses a
+    # node without one long before this runs, so a missing id here means the two readers
+    # disagree — and a record addressed as `None` would refuse a node no plan contains.
+    named = node_id if isinstance(node_id, str) else ""
+    return StoreTask(
+        qualified_id=QualifiedTaskId(named),
+        node_id=plan_store.NodeId(named),
+        title=title if isinstance(title, str) else "",
+        content=content if isinstance(content, str) else None,
+        metadata=metadata,
+        repositories=[repo] if isinstance(repo, str) else [],
+        deps=tuple(
+            plan_store.NodeId(dependency)
+            for dependency in (deps if isinstance(deps, list) else [])
+            if isinstance(dependency, str)
+        ),
+    )
+
+
 class KeyedNode(TypedDict):
-    """One node of a plan, narrowed to the authored fields the plan-level key covers.
+    """One node of a plan, narrowed to what the plan-level key covers.
 
     Read off the plan in the **engine's loaded shape** — `plan_store.read_plan`'s answer
     for the store path and the document `scripts/plan-check.sh` receives for the check
@@ -1133,6 +1276,14 @@ class KeyedNode(TypedDict):
     ``object`` because it is read for its meaning rather than narrowed to a type: a
     value of the wrong shape is keyed as what it is, and the engine's loader is what
     refuses it, long before this is asked.
+
+    **The task body and the steps are not here, and that is what keeps the plan-level
+    prompt small.** They reach the plan key through ``review_key`` — the key
+    :func:`review_key` computes for the node, which is exactly the value its task's own
+    record must hold, and which covers every authored field of the task, its steps and
+    the budgets it owns. So a change to any of them moves this key exactly as it moves
+    that task's record, and the plan-level reviewer is shown the record that proves a
+    per-task turn read that content, and the path it is at, rather than the content.
     """
 
     id: object
@@ -1145,11 +1296,26 @@ class KeyedNode(TypedDict):
     kind: object
     expects_no_diff: object
     persona: object
-    task: object
-    steps: list[AuthoredStep] | None
+    review_key: ReviewKey
 
 
-def plan_nodes(plan: object) -> list[KeyedNode]:
+#: The fields of a :class:`KeyedNode` the plan-level reviewer is shown as they are; the
+#: one other field, ``review_key``, is shown as the per-task record it must equal.
+SHOWN_FIELDS = (
+    "id",
+    "title",
+    "repo",
+    "deps",
+    "adoption",
+    "consumes",
+    "merge_policy",
+    "kind",
+    "expects_no_diff",
+    "persona",
+)
+
+
+def plan_nodes(plan: object, budgets: plan_budgets.Budgets | None = None) -> list[KeyedNode]:
     """Every node of ``plan``, narrowed to a :class:`KeyedNode`, sorted by id.
 
     Read for its meaning field by field, exactly as a task's record is, and sorted so
@@ -1158,13 +1324,24 @@ def plan_nodes(plan: object) -> list[KeyedNode]:
     nodes rather than raising: the engine's loader has refused that shape long before
     this is asked, and a key over an empty list refuses the plan for want of a record
     exactly as an unreadable one would.
+
+    Each node's ``review_key`` is computed under the task bar this checkout fingerprints
+    (:func:`bar_fingerprint`) and ``budgets``, the plan's budgets document, whose budgets
+    a node's key covers as far as it owns them — exactly the key its task's own record
+    must hold.
     """
     tasks = plan.get("tasks") if isinstance(plan, Mapping) else None
+    readable = [
+        task for task in (tasks if isinstance(tasks, list) else []) if isinstance(task, Mapping)
+    ]
+    if not readable:
+        return []
+    bar = bar_fingerprint()
+    owned = plan_budgets.owned(budgets)
     nodes: list[KeyedNode] = []
-    for task in tasks if isinstance(tasks, list) else []:
-        if not isinstance(task, Mapping):
-            continue
+    for task in readable:
         deps = task.get("deps")
+        record = task_record_of(task)
         nodes.append(
             KeyedNode(
                 id=meaning_bearing(task.get("id")),
@@ -1179,8 +1356,7 @@ def plan_nodes(plan: object) -> list[KeyedNode]:
                 kind=meaning_bearing(task.get("kind")),
                 expects_no_diff=meaning_bearing(task.get("expects_no_diff")),
                 persona=meaning_bearing(task.get("persona")),
-                task=meaning_bearing(task.get("task")),
-                steps=_narrowed_steps(task.get("steps")),
+                review_key=review_key(record, bar, owned.get(record.node_id, [])),
             )
         )
     return sorted(nodes, key=lambda node: json.dumps(node["id"], sort_keys=True))
@@ -1205,10 +1381,18 @@ def plan_key(
     reviewed — keyed only when there is one, so a plan carrying none keys as it did
     before budgets existed. The `shape` field keeps it from ever equalling a task's key or
     a live edit's.
+
+    **Each node is keyed by its fields and its task's review key, never by its body.**
+    The review key covers the body, the steps and the budgets the node owns, so a change
+    to any of them moves this key through it — and the plan-level reviewer is shown the
+    record proving a per-task turn read that content rather than the content itself,
+    which is what keeps that prompt's size a function of how many nodes there are rather
+    than of how long their tasks are. Those review keys are computed under the task bar
+    this checkout fingerprints, :func:`bar_fingerprint`.
     """
     authored: dict[str, object] = {
         "goal": plan_goal(plan),
-        "nodes": plan_nodes(plan),
+        "nodes": plan_nodes(plan, budgets),
         "shape": "plan",
     }
     if budgets is not None:
@@ -1248,52 +1432,277 @@ def write_plan_record(project: str, key: ReviewKey, by: By) -> Path:
     )
 
 
-def _plan_prompt(plan: object, budgets: plan_budgets.Budgets | None = None) -> str:
-    """One plan whole, rendered for the plan-level review.
+@dataclasses.dataclass(frozen=True)
+class PlanView:
+    """Where each part of a plan is, for the plan-level reviewer to open read-only.
 
-    Every field :func:`plan_key` hashes is rendered here — the goal, the budgets
-    document's answers, and each node's fields and whole task — for the reason `_prompt`
-    gives about the task key: a field whose change invalidates the record but which the
-    reviewer never saw is one nobody reviewed. `tests/test_plan_review.py` holds the two
-    together.
+    Read from the store by :func:`plan_view` and handed to :func:`_plan_prompt`, which
+    renders the paths beside the compact view of each node and opens none of them: the
+    reviewer does, in its own turn, as far as its judgment needs.
     """
+
+    #: Each node's task file, by node id: the absolute path the store reports it at.
+    tasks: Mapping[str, str] = dataclasses.field(default_factory=dict)
+    #: Each node's per-task review record as stored, by node id.
+    records: Mapping[str, object] = dataclasses.field(default_factory=dict)
+    #: The budgets document's file, when the plan carries one the store located.
+    budgets: str | None = None
+    #: The design document's file, when the plan carries exactly one the store located.
+    design: str | None = None
+
+
+# llmlint: ignore[changed_behavior_has_e2e] Through the real recipe only a local store
+# reaches this: `review` refuses a store no record can be written into (`unwritable`)
+# before any view is built, and `just check-plan` refuses a plan carrying two budgets
+# documents. So a board location and an undecidable budgets document are reachable only
+# by handing this the store's answer directly, which `tests/test_plan_review.py` does;
+# the local paths it names are driven end to end by `tests/plan_tooling/test_plan_review_e2e.py`.
+def plan_view(
+    project: str,
+    records: Sequence[StoreTask],
+    documents: Sequence[plan_store.StoreDocument],
+) -> PlanView:
+    """Where ``project``'s tasks and documents are, read off what the store answered.
+
+    Only a location that is a file on this host is named, because the reviewer is told it
+    may open each one: a board item's URL named as a file would be a read that fails.
+    """
+    budgets = None
+    design = None
+    try:
+        held = plan_budgets.find(project, documents)
+    except plan_budgets.BudgetsError:
+        held = None
+    if held is not None:
+        budgets = plan_store.local_file(design_approval.located(held))
+    designs = design_approval.design_documents(project, documents)
+    if len(designs) == 1:
+        design = plan_store.local_file(design_approval.located(designs[0]))
+    return PlanView(
+        tasks={
+            task.node_id: path
+            for task in records
+            if (path := plan_store.local_file(task.location)) is not None
+        },
+        records={task.node_id: task.metadata.get(RECORD_KEY) for task in records},
+        budgets=budgets,
+        design=design,
+    )
+
+
+#: How long a node's summary may run before it is cut, in characters, and what marks the
+#: cut. The summary is authored text only — the first paragraph of the body's `## What`
+#: — so this bounds what a node costs the prompt however long its task grows.
+SUMMARY_LIMIT = 600
+SUMMARY_MARKER = " [excerpt; full task at the path above]"
+
+#: The four prose fields of a budget the plan-level prompt excerpts, the bound each is
+#: cut at when it is longer, and what marks the cut. Every other answer of the budgets
+#: document is rendered whole, and the whole document is at the path the section names.
+EXCERPTED_BUDGET_FIELDS = ("measure", "workload", "evidence", "inner_measure_reason")
+EXCERPT_LIMIT = 160
+EXCERPT_MARKER = " [excerpt]"
+
+#: The file every agent task's body ends with, under its last `## Additional info`:
+#: this host's operational notes, the same for every node, so the plan-level prompt
+#: names it once rather than rendering it once per node. Restated rather than imported
+#: from `orchestrator.criteria_guard`, which reads this module; `tests/test_plan_review.py`
+#: holds the two together.
+APPENDIX = Path("templates") / "dispatch-appendix.md"
+
+#: What the reviewer is told about the notes it is not shown, and the closing instruction
+#: on what it may open.
+APPENDIX_STATEMENT = (
+    "Every agent node's task body — every node whose `kind` is not `human` — ends with "
+    "this host's operational notes, under its last `## Additional info` heading: the "
+    "same text for every node, read from `{path}`. They are not rendered here."
+)
+OPENING = (
+    "You may open any path listed above read-only — a task file, the budgets document, "
+    "the operational notes{design} — and you open only what your judgment needs. Open a "
+    "task file where a judgment turns on that node's criteria, and read it only as far as "
+    "its `{notes_heading}` heading: what follows is the same for every agent node, the "
+    "operational notes named above. Read a budget's detail by "
+    "its id: the section under its `{budget_heading}` heading in the budgets document, "
+    "found by a search for that heading and read as a range of lines. Never read the "
+    "whole budgets document, nor its `## Record` line, which repeats every answer on one "
+    "line: every budget's answers are already above, and the whole document outgrows the "
+    "room a reviewer has. A summary is the first paragraph of the task's `## What`, cut "
+    "where marked; a node's acceptance criteria are never shown here, so a finding about "
+    "them rests on the task file you opened."
+)
+
+#: The heading the `plan-budgets` template renders each budget's section under, with
+#: `<id>` standing for the budget's id; `tests/test_plan_review.py` holds it to the
+#: template.
+BUDGET_HEADING = "### `<id>`"
+
+#: The heading this host's operational notes open under in every agent task, past which
+#: a task file holds nothing particular to its node; `tests/test_plan_review.py` holds it
+#: to `templates/dispatch-appendix.md`.
+NOTES_HEADING = "### Operational notes for this host"
+
+#: Every constant that decides what the compact view shows, hashed into
+#: :func:`plan_bar_fingerprint`: showing the reviewer more or less of a plan is a
+#: different review, so it moves every plan record.
+COMPACT_VIEW: dict[str, object] = {
+    "summary_limit": SUMMARY_LIMIT,
+    "summary_marker": SUMMARY_MARKER,
+    "excerpted_budget_fields": list(EXCERPTED_BUDGET_FIELDS),
+    "excerpt_limit": EXCERPT_LIMIT,
+    "excerpt_marker": EXCERPT_MARKER,
+    "shown_fields": list(SHOWN_FIELDS),
+    "appendix_statement": APPENDIX_STATEMENT,
+    "opening": OPENING,
+    "budget_heading": BUDGET_HEADING,
+    "notes_heading": NOTES_HEADING,
+}
+
+#: The heading a task's lead paragraph sits under.
+WHAT_HEADING = re.compile(r"^##[ \t]+What[ \t]*$", re.MULTILINE)
+
+
+def _paragraphs(text: str) -> list[str]:
+    """``text``'s blank-line-separated blocks, stripped, in order, empty ones dropped."""
+    return [block.strip() for block in re.split(r"\n[ \t]*\n", text) if block.strip()]
+
+
+def summary(body: object) -> str:
+    """A node's summary: the first paragraph under its `## What`, cut at the bound.
+
+    For a body with no `## What` — a `kind: human` node states its action without one —
+    the body's first paragraph that is not a heading. Verbatim and authored: never
+    anything a model wrote, and cut rather than paraphrased, with a marker saying so.
+    """
+    if not isinstance(body, str) or not body.strip():
+        return "(this node states no body prose)"
+    lead = WHAT_HEADING.search(body)
+    paragraph = None
+    if lead is not None:
+        under = _paragraphs(body[lead.end() :])
+        if under and not under[0].startswith("#"):
+            paragraph = under[0]
+    if paragraph is None:
+        paragraph = next(
+            (block for block in _paragraphs(body) if not block.startswith("#")),
+            "(this node states no paragraph outside its headings)",
+        )
+    if len(paragraph) > SUMMARY_LIMIT:
+        return paragraph[:SUMMARY_LIMIT] + SUMMARY_MARKER
+    return paragraph
+
+
+def _compact(value: object) -> str:
+    """``value`` as JSON with no indentation, which is what the compact view renders."""
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _excerpt(value: object) -> object:
+    """``value`` cut to :data:`EXCERPT_LIMIT` with the marker, when it is a longer string."""
+    if isinstance(value, str) and len(value) > EXCERPT_LIMIT:
+        return value[:EXCERPT_LIMIT] + EXCERPT_MARKER
+    return value
+
+
+def _node_section(node: KeyedNode, raw: Mapping[str, object], view: PlanView) -> str:
+    """One node as the plan-level reviewer reads it: alike for every node of every plan."""
+    node_id = str(node["id"])
+    shown = {field: value for field, value in node.items() if field in SHOWN_FIELDS}
+    record = view.records.get(node_id)
+    stored = (
+        {field: record.get(field) for field in ("key", "by", "reviewed_at")}
+        if isinstance(record, Mapping)
+        else None
+    )
+    lines = [f"### Node `{node_id}`", f"fields: {_compact(shown)}"]
+    steps = _narrowed_steps(raw.get("steps"))
+    if steps:
+        lines.append(
+            "steps: " + _compact([{"id": step["id"], "persona": step["persona"]} for step in steps])
+        )
+    lines += [
+        f"per-task review record: {_compact(stored)}",
+        f"task file: {view.tasks.get(node_id, '(the store reported no path for it)')}",
+        f"summary: {summary(raw.get('task'))}",
+    ]
+    return "\n".join(lines)
+
+
+def _plan_prompt(
+    plan: object, budgets: plan_budgets.Budgets | None = None, view: PlanView | None = None
+) -> str:
+    """One plan whole, rendered as the compact view the plan-level reviewer reads.
+
+    Every field :func:`plan_key` hashes is either rendered here or is a node's
+    ``review_key``, which is rendered as the per-task record it must equal — the proof a
+    per-task turn read that content — beside the path of the content itself. That pairing
+    is the property, for the reason `_prompt` gives about the task key: a field whose
+    change invalidates the record but which the reviewer could neither see nor open is
+    one nobody reviewed. `tests/test_plan_review.py` holds the two together.
+
+    No task body reaches the prompt beyond its :func:`summary`, whatever the node's
+    repository, kind or adoption: a prompt's size depends on how many nodes the plan
+    has, never on how long their bodies are.
+    """
+    shown = PlanView() if view is None else view
     bar = (REPO_ROOT / BAR_FILES[0]).read_text(encoding="utf-8")
     goal = plan_goal(plan)
-    sections = []
-    for node in plan_nodes(plan):
-        fields = {field: value for field, value in node.items() if field not in {"task", "steps"}}
-        steps = node["steps"]
-        body = node["task"] if isinstance(node["task"], str) else "(this node states no body prose)"
-        rendered = (
-            f"### Node `{node['id']}`\n\n"
-            f"{json.dumps(fields, indent=2, ensure_ascii=False)}\n\n{body}"
-        )
-        if isinstance(steps, list):
-            rendered += "\n\n" + "\n\n".join(
-                f"#### Step {position}: {step['id']} (persona: {step['persona']})\n\n"
-                f"{step['task'] or '(this step states no body prose)'}"
-                for position, step in enumerate(steps, start=1)
-            )
-        sections.append(rendered)
+    tasks = plan.get("tasks") if isinstance(plan, Mapping) else None
+    raw_by_id = {
+        _compact(meaning_bearing(task.get("id"))): task
+        for task in (tasks if isinstance(tasks, list) else [])
+        if isinstance(task, Mapping)
+    }
+    sections = [
+        _node_section(node, raw_by_id[_compact(node["id"])], shown)
+        for node in plan_nodes(plan, budgets)
+    ]
+    design = f", the design document at `{shown.design}`" if shown.design else ""
     return (
         f"{PLAN_REVIEW_PROMPT}\n"
         f"## The review bar\n\n{bar}\n\n"
         f"## The plan's goal\n\n{goal if isinstance(goal, str) else json.dumps(goal)}\n\n"
         f"## What this host installs, and the pin each wheel governs\n\n"
         f"{host_installs.rendered()}\n{RUNGS}\n\n"
-        f"## The plan's budgets document\n\n{_budgets_section(budgets)}\n\n"
-        f"## Every node of the plan, as its author wrote it\n\n" + "\n\n".join(sections) + "\n"
+        f"## This host's own repository\n\n"
+        f"`{host_repository()}` — the origin a node's `repo` is compared with to decide "
+        f"whether it is a node of this host's own repository.\n\n"
+        f"## The plan's budgets document\n\n{_budgets_section(budgets, shown.budgets)}\n\n"
+        f"## The operational notes\n\n"
+        f"{APPENDIX_STATEMENT.format(path=REPO_ROOT / APPENDIX)}\n\n"
+        f"## Every node of the plan, compactly\n\n" + "\n\n".join(sections) + "\n\n"
+        f"## What you may open\n\n{
+            OPENING.format(
+                design=design, budget_heading=BUDGET_HEADING, notes_heading=NOTES_HEADING
+            )
+        }\n"
     )
 
 
-def _budgets_section(budgets: plan_budgets.Budgets | None) -> str:
-    """The plan's budgets document as the plan-level reviewer reads it: every answer."""
+def _budgets_section(budgets: plan_budgets.Budgets | None, path: str | None = None) -> str:
+    """The plan's budgets document as the plan-level reviewer reads it.
+
+    Every answer whole, but for each budget's four prose fields, each cut to a marked
+    excerpt when it is longer than :data:`EXCERPT_LIMIT` — so an empty field still reads
+    as empty — and the whole document at the path the opening line names.
+    """
     if budgets is None:
         return "(this plan carries no budgets document)"
+    record = budgets.answers.as_record()
+    held = record.get("budgets")
+    record["budgets"] = [
+        {
+            field: _excerpt(value) if field in EXCERPTED_BUDGET_FIELDS else value
+            for field, value in budget.items()
+        }
+        for budget in (held if isinstance(held, list) else [])
+        if isinstance(budget, Mapping)
+    ]
     return (
-        f"`{budgets.document}`, rendered from the `{plan_budgets.TEMPLATE_NAME}` template, "
-        f"answers:\n\n```json\n"
-        f"{json.dumps(budgets.answers.as_record(), indent=2, ensure_ascii=False)}\n```"
+        f"`{budgets.document}`, at `{path or '(the store reported no path for it)'}`, "
+        f"rendered from the `{plan_budgets.TEMPLATE_NAME}` template; each budget is also "
+        f"covered by the per-task review key of the node that owns it:\n\n"
+        f"{_compact(record)}"
     )
 
 
@@ -1376,7 +1785,22 @@ def review(project: str) -> Reviewed:
         plan_bar = plan_bar_fingerprint()
         if not plan_unreviewed(plan_store.project_record(project), plan, plan_bar, budgets):
             return Reviewed(recorded, held, refused, plan=PlanReview.HELD)
-        answered = verdict(_plan_prompt(plan, budgets))
+        # The records again, now carrying every pass this run wrote, so the view shows
+        # each node's record as it stands rather than as it stood before the run.
+        view = plan_view(
+            project, plan_store.read_tasks(project), plan_store.read_documents(project)
+        )
+        prompt = _plan_prompt(plan, budgets, view)
+        if len(prompt) > PLAN_PROMPT_LIMIT:
+            return Reviewed(
+                recorded,
+                held,
+                refused,
+                f"the plan-level prompt is {len(prompt)} characters, over the "
+                f"{PLAN_PROMPT_LIMIT}-character limit no candidate is known to answer; no "
+                f"plan-level turn was spent and no plan-level record was written",
+            )
+        answered = verdict(prompt, HARNESS_WHOLE_COMMAND, HARNESS_WHOLE_CONFIG)
         if answered["passes"]:
             write_plan_record(project, plan_key(plan, plan_bar, budgets), BY_REVIEW)
             return Reviewed(recorded, held, refused, plan=PlanReview.RECORDED)

@@ -48,6 +48,7 @@ CONNECTOR_ROLES = (
     "oneharness.orchestrator.toml",
     "oneharness.check-in.toml",
     "oneharness.plan-review.toml",
+    "oneharness.plan-review-whole.toml",
     "oneharness.pr-author.toml",
     "oneharness.design-doc-judge.toml",
     "oneharness.llmlint.toml",

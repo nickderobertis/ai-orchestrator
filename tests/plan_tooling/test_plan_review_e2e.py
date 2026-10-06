@@ -33,16 +33,24 @@ from collections.abc import Callable
 from pathlib import Path
 
 import jsonschema
+import plan_fixture_source
 import plan_root_variable
 import pytest
 import short_state
 from nx_workspace import answering_this_checkouts_origin, copy_working_tree
-from project_fixtures import budgets_record, helper, local_project, no_budgets
+from project_fixtures import (
+    budgeted,
+    budgets_record,
+    designed,
+    helper,
+    local_project,
+    no_budgets,
+)
 from waits import timeout as e2e_timeout
 
 from orchestrator import plan_budgets, plan_review, plan_store
 from orchestrator.criteria_guard import APPENDIX
-from orchestrator.project_store import render_plan_project
+from orchestrator.project_store import render_plan_project, write_plan_project
 from orchestrator.root import REPO_ROOT
 
 #: This suite is its own Nx project, `plan-tooling`, rather than a marker tier of the
@@ -1701,17 +1709,27 @@ def test_a_plan_that_adopts_the_release_its_goal_needs_is_recorded_whole(
     assert NEEDS_THE_FIX_HERE in turn, turn
     for node in ("adopt", "engine"):
         assert f"### Node `{node}`" in turn, turn
+        # Each node's record as stored, and the task file it was read from.
+        stored = _record_of(project, node)
+        assert isinstance(stored, dict), node
+        assert f'"key":"{stored["key"]}"' in turn, node
+        assert str(_document(project, node)) in turn, node
     for shown in (
-        '"title": "feat: adopt the engine release carrying the fix"',
-        '"repo": "github.com/nickderobertis/ai-orchestrator"',
-        '"repo": "github.com/nickderobertis/onepipeline"',
-        '"deps": [ "engine" ]',
-        '"adoption": "published"',
-        '"consumes": null',
-        "resolves the linked fix, and the installed `onepipeline` reports that same release",
-        "Add the route and the test that drives it",
+        '"title":"feat: adopt the engine release carrying the fix"',
+        '"repo":"github.com/nickderobertis/ai-orchestrator"',
+        '"repo":"github.com/nickderobertis/onepipeline"',
+        '"deps":["engine"]',
+        '"adoption":"published"',
+        '"consumes":null',
+        "summary: Add the route and the test that drives it",
     ):
         assert shown in turn, shown
+    # The adopting node's criteria are in its task file, not in the compact view, and
+    # the operational notes every agent task ends with are named once, never rendered.
+    assert "resolves the linked fix" not in turn, "a node's criteria reached the compact view"
+    notes_body = (REPO_ROOT / APPENDIX).read_text(encoding="utf-8").splitlines()[4]
+    assert notes_body not in turn, "the notes were rendered"
+    assert str(REPO_ROOT / APPENDIX) in turn
     assert " ".join(plan_review.RUNGS.split()) in turn, turn
     assert "`config/onepipeline.version` pins and which every dispatched node runs" in turn
     for question in (
@@ -2014,10 +2032,345 @@ def test_the_reviewer_is_handed_the_cross_dag_dependency_its_record_is_keyed_on(
         if '"title": "feat: add the route"' in one and _flat_plan_prompt() not in one
     ]
     assert f'"depends_on": [ "design", "{CROSS_DAG_EDGE}" ]' in task, task
-    assert f'"deps": [ "design", "{CROSS_DAG_EDGE}" ]' in _plan_prompt_given(tmp_path), (
+    assert f'"deps":["design","{CROSS_DAG_EDGE}"]' in _plan_prompt_given(tmp_path), (
         "the plan-level turn was shown the node's own edge without the run it waits on"
     )
 
     accepted = _just("check-plan", project)
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr
     assert "no review record" not in accepted.stderr, accepted.stderr
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] `plan-tooling` is the leaf
+# project keyed on `planToolingWorkspace`, the edge this rule asks for, and every other
+# `review-plan` journey of this module already runs behind it. These read what those read —
+# the recipes, the scripts, the templates and the `orchestrator` package the review runs —
+# so a narrower key would memoize a verdict over a tree they never ran against.
+#: The answers a node of `_project`'s shape is regenerated from, through the host's own
+#: `plan-task` template — the one way a planned task's body is changed — and the one
+#: answer the journey below changes.
+REGENERATED = {
+    "what": "Add the route and the test that drives it.",
+    "why": "The user cannot complete a purchase without it.",
+    "acceptance_criteria": [line.removeprefix("- ") for line in STATES_ITS_BAR.splitlines()],
+}
+REGENERATED_WHAT = "Add the refund route beside the purchase route, and the test that drives it."
+
+
+def _regenerate(tmp_path: Path, project: str, node_id: str, answers: dict[str, object]) -> None:
+    """Regenerate one task's body from ``answers``, keeping its id, deps and metadata.
+
+    `onepipeline template resolve plan-task --json | onetaskgraph task render` — the pipe
+    `AGENTS.md` says a planned task is changed by — with the answers supplied, as a task
+    first written by hand is rendered. Never a body edited in place.
+    """
+    (task,) = [one for one in plan_store.read_tasks(project) if one.node_id == node_id]
+    answered = tmp_path / f"{node_id}-answers.json"
+    answered.write_text(json.dumps(answers), encoding="utf-8")
+    rendered = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "set -euo pipefail; onepipeline template resolve plan-task --json | "
+            'onetaskgraph task render "$1" --template-loader - --answers "$2" --no-interactive',
+            "regenerate",
+            str(task.qualified_id),
+            str(answered),
+        ],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{REPO_ROOT / '.venv' / 'bin'}{os.pathsep}{os.environ['PATH']}",
+            "ONEPIPELINE_TEMPLATE_ROOT": str(REPO_ROOT / "templates"),
+        },
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+    assert rendered.returncode == 0, rendered.stdout + rendered.stderr
+
+
+def _prompt_records(path: Path) -> list[dict[str, object]]:
+    """Every launch the scripted provider logged: its prompt, argv and the files it read."""
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def test_a_regenerated_task_body_invalidates_the_plan_level_record_and_only_that_task(
+    tmp_path: Path,
+) -> None:
+    """A body change reaches the plan key through the task's review key, and nowhere else.
+
+    The plan is reviewed whole; one task's body is regenerated with different authored
+    text; `just check-plan` then refuses that task and the missing plan-level record, and
+    no other task; and the second `just review-plan` re-reviews only that task, spends one
+    plan-level turn, and records the key of the plan as it now stands.
+    """
+    project = _project("review-regenerated", STATES_ITS_BAR, "ledger")
+    for node in ("route", "ledger"):
+        _regenerate(tmp_path, project, node, REGENERATED)
+    first = _just("review-plan", project, environment=_reviewing(tmp_path, PASSES))
+    assert first.returncode == 0, first.stdout + first.stderr
+    assert _launches(tmp_path) == 3, "two tasks and the plan should cost three turns"
+    assert isinstance(_plan_record_of(project), dict)
+    assert _just("check-plan", project).returncode == 0
+
+    _regenerate(tmp_path, project, "route", {**REGENERATED, "what": REGENERATED_WHAT})
+    (route,) = [one for one in plan_store.read_tasks(project) if one.node_id == "route"]
+    assert route.content is not None and REGENERATED_WHAT in route.content
+
+    refused = _just("check-plan", project)
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    named = [line for line in refused.stderr.splitlines() if "no review record for" in line]
+    assert len(named) == 1 and "route" in named[0], refused.stderr
+    assert "no plan-level review record" in refused.stderr, refused.stderr
+
+    second = _just("review-plan", project, environment=_reviewing(tmp_path, PASSES))
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert "recorded a review of 1 task(s); 1 already carried one" in second.stdout, second.stdout
+    assert "the plan as a whole was reviewed and recorded" in second.stdout, second.stdout
+    assert _launches(tmp_path) == 5, "the second review should cost one task and one plan turn"
+    whole = _plan_record_of(project)
+    assert isinstance(whole, dict)
+    plan, _ = plan_store.read_project(project)
+    assert whole["key"] == plan_review.plan_key(
+        plan, plan_review.plan_bar_fingerprint(), plan_budgets.read(project)
+    )
+    assert _just("check-plan", project).returncode == 0
+
+
+#: A detail the compact view omits: it sits in the adopting node's criteria, below its
+#: summary, so the plan-level reviewer reaches it only by opening the node's task file.
+OMITTED_DETAIL = "READ-THROUGH-7f3c: `config/onepipeline.version` names the adopted release."
+
+
+def test_the_plan_level_reviewer_reads_omitted_detail_through_a_listed_path(
+    tmp_path: Path,
+) -> None:
+    """The listed path is real, readable inside the turn, and carries what was omitted.
+
+    The provider double opens each task file the plan-level prompt lists from inside its
+    turn and refuses quoting the line it found the detail on. So the detail is absent from
+    the prompt, the file read is the path the prompt listed, the turn was spawned
+    read-only under its own role file — and the per-task turns were not — and the
+    operator reads a plan-level finding quoting what only the file carried.
+    """
+    project = _adoption_project(
+        "review-reads-through", criteria=f"{ADOPTS_THE_ENGINE}\n- {OMITTED_DETAIL}"
+    )
+    log = tmp_path / "prompts.jsonl"
+    environment = _reviewing(tmp_path, PASSES)
+    environment["FAKE_CODEX_PROMPT_LOG"] = str(log)
+    environment["FAKE_CODEX_READ_LISTED_FOR"] = "READ-THROUGH-7f3c"
+
+    review = _just("review-plan", project, environment=environment)
+    assert review.returncode == 1, review.stdout + review.stderr
+    launches = _prompt_records(log)
+    whole = [one for one in launches if _flat_plan_prompt() in " ".join(str(one["prompt"]).split())]
+    tasks = [one for one in launches if one not in whole]
+    assert len(whole) == 1 and len(tasks) == 2, [len(whole), len(tasks)]
+    (turn,) = whole
+    prompt = str(turn["prompt"])
+    assert "READ-THROUGH-7f3c" not in prompt, "the omitted detail reached the prompt"
+    listed = str(_document(project, "adopt"))
+    assert f"task file: {listed}" in prompt
+    read = turn["read"]
+    assert isinstance(read, list) and listed in read, read
+    argv = turn["argv"]
+    assert isinstance(argv, list) and argv[argv.index("--sandbox") + 1] == "read-only", argv
+    for one in tasks:
+        spawned = one["argv"]
+        assert isinstance(spawned, list) and "--sandbox" not in spawned, spawned
+    assert f"review-plan: adopt — its task file reads: - {OMITTED_DETAIL}" in review.stderr, (
+        review.stderr
+    )
+    assert "the plan as a whole was refused on 1 finding(s)" in review.stderr, review.stderr
+    assert _plan_record_of(project) is None, "a refusal recorded a plan-level pass"
+
+
+def test_a_plan_whose_compact_prompt_exceeds_the_limit_spends_no_plan_level_turn(
+    tmp_path: Path,
+) -> None:
+    """The size guard, through the real recipe: exit 2, both numbers, no turn, no record."""
+    goal = "Deliver the checkout route. " * (plan_review.PLAN_PROMPT_LIMIT // 28 + 1)
+    project = local_project(
+        json.dumps({"schema_version": 3, "goal": {"text": goal}, "tasks": [_node("route")]}),
+        "review-over-the-limit",
+    )
+    log = tmp_path / "prompts.jsonl"
+    environment = _reviewing(tmp_path, PASSES)
+    environment["FAKE_CODEX_PROMPT_LOG"] = str(log)
+
+    review = _just("review-plan", project, environment=environment)
+    assert review.returncode == 2, review.stdout + review.stderr
+    assert f"over the {plan_review.PLAN_PROMPT_LIMIT}-character limit" in review.stderr
+    assert "no plan-level turn was spent" in review.stderr, review.stderr
+    measured = [int(word) for word in review.stderr.split() if word.isdigit()]
+    assert any(size > plan_review.PLAN_PROMPT_LIMIT for size in measured), review.stderr
+    prompts = _prompts(log)
+    assert len(prompts) == 1 and _flat_plan_prompt() not in prompts[0], "a plan turn was spent"
+    assert isinstance(_record_of(project, "route"), dict), "the task's own pass was lost"
+    assert _plan_record_of(project) is None
+
+
+#: A `## What` lead longer than the summary's bound, a human node's action and the detail
+#: after it, and a budget whose workload is longer than the excerpt's bound: the shapes
+#: the compact view cuts, each with what must not survive the cut.
+LONG_LEAD = "Add the route and the test that drives it, " * 20
+HUMAN_ACTION_LEAD = "Merge the change request once its required checks have gone green."
+HUMAN_DETAIL = "HUMAN-DETAIL-4c1e: tell the user the route is live."
+LONG_WORKLOAD = "500 purchases a minute at the evening peak, across every storefront, " * 4
+
+
+def _compact_view_project() -> str:
+    """One agent node with a long lead owning a long-workload budget, one human node."""
+    native = f"review-compact-view-{os.getpid()}"
+    write_plan_project(
+        plan_fixture_source.root(),
+        {
+            "schema_version": 3,
+            "name": native,
+            "goal": {"text": "Deliver the checkout route"},
+            "tasks": [
+                {
+                    **_node("route"),
+                    "task": _task().replace(
+                        "Add the route and the test that drives it.", LONG_LEAD.strip(), 1
+                    ),
+                },
+                {
+                    "id": "merge",
+                    "kind": "human",
+                    "repo": "https://github.com/nickderobertis/some-service",
+                    "title": "Merge the route's change request",
+                    "deps": ["route"],
+                    "task": f"{HUMAN_ACTION_LEAD}\n\n{HUMAN_DETAIL}\n",
+                },
+            ],
+        },
+        native_id=native,
+    )
+    answers = no_budgets(["github.com/nickderobertis/some-service"])
+    answers["checklist"][0] = {
+        "concern": "latency",
+        "budget": "route-latency",
+        "not_applicable": "",
+    }
+    answers["budgets"] = [
+        {
+            "id": "route-latency",
+            "repository": "github.com/nickderobertis/some-service",
+            "file": "budgets.yaml",
+            "measure": "time to the route's response at the client",
+            "inner_measure_reason": "",
+            "unit": "ms",
+            "direction": "max",
+            "threshold": 250,
+            "workload": LONG_WORKLOAD,
+            "evidence": "spike-route measured 90 ms",
+            "command": "bun run measure:route",
+            "node": "route",
+            "file_change": "add",
+        }
+    ]
+    budgeted(plan_fixture_source.SOURCE, native, answers)
+    root = plan_fixture_source.root()
+    designed(
+        plan_fixture_source.SOURCE,
+        native,
+        [{"task": "route", "delivers": "the route", "depends_on": "none", "location": str(root)}],
+    )
+    return f"{plan_fixture_source.SOURCE}:{native}"
+
+
+def test_a_real_review_hands_the_reviewer_the_compact_view_of_a_stored_plan(
+    tmp_path: Path,
+) -> None:
+    """What the store holds, cut the way the compact view cuts it, with every path real.
+
+    Through the real recipe and the real store: a lead past the summary's bound arrives
+    cut and marked, a human node's summary is its action and nothing after it, a budget's
+    long workload arrives as a marked excerpt while its short prose arrives whole, and the
+    task files, the budgets document and the design document are each named by a path
+    that opens to the full text the prompt left out.
+    """
+    project = _compact_view_project()
+    log = tmp_path / "prompts.jsonl"
+    environment = _reviewing(tmp_path, PASSES)
+    environment["FAKE_CODEX_PROMPT_LOG"] = str(log)
+
+    review = _just("review-plan", project, environment=environment)
+    assert review.returncode == 0, review.stdout + review.stderr
+    (turn,) = [
+        str(one["prompt"])
+        for one in _prompt_records(log)
+        if _flat_plan_prompt() in " ".join(str(one["prompt"]).split())
+    ]
+    lead = LONG_LEAD.strip()
+    assert f"summary: {lead[: plan_review.SUMMARY_LIMIT]}{plan_review.SUMMARY_MARKER}" in turn
+    assert lead not in turn, "a lead past the bound arrived whole"
+    assert f"summary: {HUMAN_ACTION_LEAD}" in turn
+    assert HUMAN_DETAIL not in turn, "a human node's body arrived past its summary"
+    excerpt = LONG_WORKLOAD[: plan_review.EXCERPT_LIMIT] + plan_review.EXCERPT_MARKER
+    assert json.dumps(excerpt) in turn and LONG_WORKLOAD not in turn
+    assert json.dumps("spike-route measured 90 ms") in turn, "short prose was excerpted"
+
+    for node in ("route", "merge"):
+        path = _document(project, node)
+        assert f"task file: {path}" in turn, node
+    (budgets_path,) = [
+        line.split("`")[3] for line in turn.splitlines() if line.startswith("`test-fixtures:")
+    ]
+    assert LONG_WORKLOAD.strip() in Path(budgets_path).read_text(encoding="utf-8")
+    design = turn.split("the design document at `", 1)[1].split("`", 1)[0]
+    assert Path(design).is_file(), design
+
+
+def _move_the_compact_view(checkout: Path) -> None:
+    """Show the reviewer one character less of every summary, in the copy's own source."""
+    module = checkout / "orchestrator" / "plan_review.py"
+    source = module.read_text(encoding="utf-8")
+    stated = f"SUMMARY_LIMIT = {plan_review.SUMMARY_LIMIT}\n"
+    assert stated in source, "the summary bound is no longer stated where this journey moves it"
+    module.write_text(
+        source.replace(stated, f"SUMMARY_LIMIT = {plan_review.SUMMARY_LIMIT - 1}\n", 1),
+        encoding="utf-8",
+    )
+
+
+@COPIES_THE_TRACKED_TREE
+def test_moving_what_the_compact_view_shows_invalidates_the_plan_record_and_no_task_record(
+    tmp_path: Path,
+) -> None:
+    """Showing the reviewer more or less of a plan is a different review.
+
+    The compact view's constants are hashed into the plan bar and no task bar, so a copy
+    of this checkout whose summary bound moved refuses the plan-level record and accepts
+    every task's — and this checkout, whose view did not move, still accepts both.
+    """
+    project = _project("review-compact-view-moved")
+    assert _just("review-plan", project, environment=_reviewing(tmp_path, PASSES)).returncode == 0
+    assert _just("check-plan", project).returncode == 0
+
+    moved = tmp_path / "checkout-with-a-moved-view"
+    moved.mkdir()
+    copy_working_tree(moved)
+    answering_this_checkouts_origin(moved)
+    _move_the_compact_view(moved)
+
+    refused = subprocess.run(
+        ["just", "check-plan", project],
+        cwd=moved,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(180),
+        check=False,
+    )
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "no plan-level review record" in refused.stderr, refused.stderr
+    assert "no review record for" not in refused.stderr, "a task record moved with the view"
+    still = _just("check-plan", project)
+    assert still.returncode == 0, still.stdout + still.stderr
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

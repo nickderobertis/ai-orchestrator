@@ -291,6 +291,7 @@ RESTATING_SITES = (
     RestatingSite("oneharness.llmlint.toml", labels.ENGINE_LABEL_PREFIX),
     RestatingSite("oneharness.orchestrator.toml", labels.ENGINE_LABEL_PREFIX),
     RestatingSite("oneharness.plan-review.toml", labels.ENGINE_LABEL_PREFIX),
+    RestatingSite("oneharness.plan-review-whole.toml", labels.ENGINE_LABEL_PREFIX),
     RestatingSite("oneharness.pr-author.toml", labels.ENGINE_LABEL_PREFIX),
 )
 

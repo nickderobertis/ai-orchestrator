@@ -64,7 +64,7 @@ concerns (persona defaults, session), never harness/model selection.
 ### Where the identities are stated, and what a role file carries
 
 Every role config above extends a shared parent, so the six identities are written down
-once rather than ten times:
+once rather than eleven times:
 
 | File | What it holds |
 | --- | --- |
@@ -75,7 +75,7 @@ once rather than ten times:
 `oneharness.toml`, `oneharness.judge.toml` and `oneharness.follow-up.toml` extend
 `oneharness.dispatch.toml`, because those are the sides the engine starts inside a
 node's dispatch and so the only ones with a node scratch directory to point at. The
-other seven extend `oneharness.identities.toml` directly.
+other eight extend `oneharness.identities.toml` directly.
 
 Neither parent is named `oneharness.toml`, so oneharness's own project-config discovery
 — walking up from the working directory for that exact name — cannot find one. Keep it
@@ -106,7 +106,7 @@ But `codex:primary`'s mask cannot live in a parent at all. That identity honours
 ambient `CODEX_HOME` and masks nothing except the plan store's two credentials, so for those three
 roles its correct mask is *empty* — and empty is exactly what a child cannot say, since
 an empty list inherits. So `oneharness.identities.toml` and `oneharness.dispatch.toml`
-state no mask at that variant, and each of the seven roles that masks them says so
+state no mask at that variant, and each of the eight roles that masks them says so
 itself. It is the one place the six-identity block is not the whole
 story, and both parents carry a note at that variant explaining why.
 
@@ -121,14 +121,15 @@ child that merely *mentions* a variant table without giving it a non-empty `unse
 is reported as masking nothing — `unset_env: []` — while the turn it runs still applies
 the parent's mask. Adding one `env_from` key or one `model` line is exactly that case.
 
-So `oneharness.dispatch.toml`, `oneharness.judge.toml`, `oneharness.pr-author.toml` and
-`oneharness.plan-review.toml` restate masks they would inherit correctly anyway. The
+So `oneharness.dispatch.toml`, `oneharness.judge.toml`, `oneharness.pr-author.toml`,
+`oneharness.plan-review.toml` and `oneharness.plan-review-whole.toml` restate masks they
+would inherit correctly anyway. The
 restatement changes no behaviour; it keeps what this host *reports* about its own
 credential isolation true, which is what a reviewer and the equivalence record below
 both read. A follow-up against oneharness is what retires them.
 
 Both halves are held, and it takes both.
-`tests/e2e/test_oneharness_config_equivalence_e2e.py` holds all ten roles' reported
+`tests/e2e/test_oneharness_config_equivalence_e2e.py` holds all eleven roles' reported
 configurations to a committed record under `tests/e2e/oneharness_resolved/`, so a
 deliberate routing change is a visible update to that record in the same commit.
 `tests/e2e/test_dispatch_environment_e2e.py` drives a **real turn** on every identity of
@@ -1256,8 +1257,9 @@ probe to failing on either.
 Pre-push runs it only when the pushed endpoint diff touches `scripts/`,
 `config/oneharness.version`, `config/onejudge.base.yaml`,
 `oneharness.identities.toml`, `oneharness.dispatch.toml`, `oneharness.toml`,
-`oneharness.judge.toml`, `oneharness.orchestrator.toml`, or
-`oneharness.check-in.toml`; every other pushed diff skips it. The two shared parents
+`oneharness.judge.toml`, `oneharness.orchestrator.toml`,
+`oneharness.check-in.toml`, `oneharness.plan-review.toml`, or
+`oneharness.plan-review-whole.toml`; every other pushed diff skips it. The two shared parents
 are on that list because they are where an identity, a model or a credential mask now
 changes — a launch path can move without any role file being touched at all.
 

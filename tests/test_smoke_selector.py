@@ -54,6 +54,9 @@ def run_selector_cases(source: Path, clone: Path) -> str:
         capture_output=True,
         check=True,
     ).stdout.splitlines()
+    assert {"oneharness.plan-review.toml", "oneharness.plan-review-whole.toml"} <= set(declared), (
+        "Both review roles must select the paid launch-path smoke"
+    )
     for relative in (
         f"{path}launch-smoke-probe.sh" if path.endswith("/") else path for path in declared
     ):

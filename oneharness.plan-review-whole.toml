@@ -1,0 +1,63 @@
+# The plan-level reviewer's harness config: WHICH harness + model reads one plan WHOLE —
+# a compact view of every node, the per-task review records, and the paths it may open —
+# for the two questions no single task can show. Named by `orchestrator/plan_review.py`'s
+# `HARNESS_WHOLE_CONFIG`, which only the plan-level turn of `just review-plan` spawns
+# under; every per-task turn and every live edit's review stay on
+# `oneharness.plan-review.toml`. See AGENTS.md.
+#
+# Everything below restates that file except two settings, and it is a file of its own
+# for exactly those two: `mode`, because this turn opens the task files its prompt lists
+# and no other turn of this repository's reviewer should be granted any tool, and
+# `timeout`, because opening several task files is a longer job than reading one prompt.
+# Written into the per-task file, either would move every per-task turn with it.
+# `tests/e2e/test_oneharness_timeout_e2e.py` holds this chain to that file's.
+extends = "oneharness.identities.toml"
+
+# mode: the approval mode each harness is asked for. `read-only` is what lets the turn
+# open a listed path at all — Claude Code's Read/Grep/Glob, Codex's read-only sandbox —
+# and nothing more: a reviewer that could write would be a reviewer whose verdict
+# depends on what it changed.
+mode = "read-only"
+
+# timeout: the per-turn deadline in seconds, under the ceiling the plan set for this
+# turn (900). The real plan-level turns over the 44-node, 52-budget baseline, reading
+# what the prompt directs, answered in at most 112 s; ten minutes leaves room for heavier
+# reads and a schema re-prompt. A missed deadline records nothing, so the plan stays
+# refused and the operator runs it again.
+timeout = 600
+
+# schema_file, schema_max_retries and stream: the per-task file's, for the reasons it
+# states there — the same verdict contract, validated against a complete response.
+# `schema_file` is relative to THIS file.
+schema_file = "config/plan-review-verdict.schema.json"
+schema_max_retries = 2
+stream = false
+
+# The reviewer is a single-sided agent turn. `role` names that side, which none of the
+# engine's `onepipeline.*` keys says; the per-task file explains the label.
+history_labels = { role = "agent" }
+
+# The supervisory order, in the per-task file's order and for its reason.
+# llmlint: ignore[changed_behavior_has_e2e] tests/e2e/test_oneharness_timeout_e2e.py proves this list against the real CLI's effective configuration; paid-provider quota rejection cannot be deterministic.
+harnesses = [
+    "codex:primary",
+    "codex:alternate",
+    "claude-code:alternate",
+    "claude-code:alternate2",
+    "claude-code:primary-backup",
+    "claude-code:primary",
+]
+
+# The GPT-6 Astra tier and the connector switch, as the per-task file states them.
+[harness.codex]
+model = "gpt-6-astra"
+args = ["-c", "features.apps=false"]
+
+# The variant masks, restated for the reason the per-task file gives.
+[harness.codex.variant.primary]
+model = "gpt-6-astra"
+unset_env = ["GH_PROJECTS_TOKEN", "HELLOPATIENT_LINEAR_API_KEY"]
+
+[harness.codex.variant.alternate]
+model = "gpt-6-astra"
+unset_env = ["OPENAI_API_KEY", "GH_PROJECTS_TOKEN", "HELLOPATIENT_LINEAR_API_KEY"]

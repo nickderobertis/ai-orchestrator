@@ -90,9 +90,17 @@ def precision(report_config: dict[str, object]) -> int:
 
 @pytest.fixture(scope="module")
 def targets() -> dict[str, dict]:
-    """The real Nx target declarations this module's fixture project imitates."""
+    """The real Nx target declarations this module's fixture project imitates.
+
+    A target that names no ``command`` of its own (``budget`` among them) runs the one
+    ``nx.json``'s ``targetDefaults`` states, so each is read with that default merged
+    under it: a floor declared there is as much a second floor as one declared here.
+    """
     project = json.loads((REPO_ROOT / "orchestrator" / "project.json").read_text(encoding="utf-8"))
-    return project["targets"]
+    defaults = json.loads((REPO_ROOT / "nx.json").read_text(encoding="utf-8"))["targetDefaults"]
+    return {
+        name: {**defaults.get(name, {}), **target} for name, target in project["targets"].items()
+    }
 
 
 def _uncalled_for_band(floor: float) -> int:

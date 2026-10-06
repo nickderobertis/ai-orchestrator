@@ -156,59 +156,6 @@ def _node_refusals(document: object) -> Iterator[Refusal]:
             yield Refusal(node=node.id, field="task", reason=_reason(node.id, exc))
 
 
-# llmlint: ignore[suppressions_justified] The document is the engine's own open plan
-# contract; every field this reads is narrowed at the read.
-def _task_record(task: object) -> plan_store.StoreTask:
-    """One document task as the record a review key is computed over.
-
-    A :class:`~orchestrator.plan_store.StoreTask` rather than a shape of its own,
-    because :func:`orchestrator.plan_review.review_key` is what decides which fields a
-    review covers and a second carrier of those fields would be a second answer to
-    that. ``qualified_id`` is the one field the loaded plan does not carry — it is the
-    store's address for the record, and nothing on this path addresses one — so it is
-    filled from the node id, which is what every message here names anyway.
-
-    ``repositories`` is filled from the document's resolved ``repo``, which the engine
-    read from the record's own `repositories` list or its reserved `onepipeline.repo`
-    key — the same two spellings, in the same order,
-    :func:`orchestrator.plan_review.repository_of` reads a store record by — so the
-    `repo` the key covers is one value whichever path computed it.
-
-    ``deps`` is filled from the document's **resolved** dependencies, which carry a node's
-    cross-DAG references beside this project's own edges, and the metadata beside it is
-    the store's map verbatim — the two halves
-    :func:`orchestrator.plan_store.authored_deps` reconciles into the one representation
-    a key covers. So this copies the list as it stands rather than trying to take the
-    cross-DAG half back out of it: subtracting here would be the second construction
-    whose drift from the review's own was
-    https://github.com/nickderobertis/ai-orchestrator/issues/1071.
-    """
-    read = task if isinstance(task, dict) else {}
-    node_id = read.get("id")
-    metadata = read.get("metadata")
-    deps = read.get("deps")
-    title = read.get("title")
-    content = read.get("task")
-    repo = read.get("repo")
-    # An id that is not a string is not rendered into one: the engine's loader refuses a
-    # node without one long before this runs, so a missing id here means the two readers
-    # disagree — and a record addressed as `None` would refuse a node no plan contains.
-    named = node_id if isinstance(node_id, str) else ""
-    return plan_store.StoreTask(
-        qualified_id=plan_store.QualifiedTaskId(named),
-        node_id=plan_store.NodeId(named),
-        title=title if isinstance(title, str) else "",
-        content=content if isinstance(content, str) else None,
-        metadata=metadata if isinstance(metadata, dict) else {},
-        repositories=[repo] if isinstance(repo, str) else [],
-        deps=tuple(
-            plan_store.NodeId(dependency)
-            for dependency in (deps if isinstance(deps, list) else [])
-            if isinstance(dependency, str)
-        ),
-    )
-
-
 def _review_refusals(document: object, project: str) -> Iterator[Refusal]:
     """One refusal per task of ``document`` that carries no review record.
 
@@ -219,7 +166,9 @@ def _review_refusals(document: object, project: str) -> Iterator[Refusal]:
     the project the wrapper named.
     """
     tasks = document.get("tasks") if isinstance(document, dict) else None
-    records = [_task_record(task) for task in (tasks if isinstance(tasks, list) else [])]
+    records = [
+        plan_review.task_record_of(task) for task in (tasks if isinstance(tasks, list) else [])
+    ]
     named = None if project == UNNAMED_PROJECT else project
     for task in plan_review.unreviewed(records, budgets=plan_budgets.readable(named)):
         yield Refusal(

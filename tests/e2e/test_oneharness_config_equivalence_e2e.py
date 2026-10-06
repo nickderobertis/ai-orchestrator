@@ -1,6 +1,6 @@
 """Every role's effective oneharness configuration, held to a committed record.
 
-The ten `oneharness.<role>.toml` files state their identities through `extends`, so
+The eleven `oneharness.<role>.toml` files state their identities through `extends`, so
 what each one resolves to is a claim about a chain rather than about a file. This
 module holds every role's resolved configuration to a committed record under
 `oneharness_resolved/`, and holds each variant's reported credential mask as a property

@@ -1,0 +1,27 @@
+# The orchestrator project's own budgets, checked by its `budget` Nx target whenever a
+# change touches the project. Each command runs from this directory with no shell, and
+# writes the value it measured to the file `ONEBUDGETSPEC_RESULT` names. This file is the
+# one statement of each threshold: the tests that measure them read it from here.
+schema_version: 1
+budgets:
+  - id: plan-level-prompt-chars
+    description: >-
+      Characters of the plan-level prompt `just review-plan` composes for a realistic
+      44-node, 52-budget plan — the larger of the baseline-shaped and host-shaped fixtures
+      in tests/test_plan_review.py — which must stay well inside the smallest context
+      window a candidate of the plan-level role answers in.
+    measure: reported
+    command: ["uv", "run", "--directory", "..", "pytest", "tests/test_plan_review.py", "-k", "plan_level_prompt_size"]
+    unit: characters
+    direction: max
+    threshold: 200000
+  - id: plan-level-prompt-chars-per-node
+    description: >-
+      Characters the costliest node of either realistic fixture adds to the plan-level
+      prompt, so a plan's prompt grows with how many nodes it has and never with how
+      long their task bodies are.
+    measure: reported
+    command: ["uv", "run", "--directory", "..", "pytest", "tests/test_plan_review.py", "-k", "plan_level_prompt_per_node"]
+    unit: characters
+    direction: max
+    threshold: 1600

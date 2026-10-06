@@ -240,8 +240,11 @@ class WriterContext(TypedDict):
     predates: str
     #: The plan's budgets document, or `""` for a plan that predates budgets.
     document: str
-    #: That document's answers as its record states them, or `None` with no document.
-    answers: dict[str, object] | None
+    #: Where the store says that document is — the absolute path of a local record — or
+    #: `""` with no document. The writer reads the answers there rather than having them
+    #: quoted into its task, which a plan of many budgets grows past what one command-line
+    #: argument can carry to a dispatch.
+    path: str
 
 
 document_id = design_approval.budgets_document_id
@@ -635,24 +638,36 @@ def context(project: str) -> WriterContext:
     """What the design-document writer's task states about ``project``'s budgets.
 
     The migration list's reason when it names the plan, and otherwise the plan's budgets
-    document and the answers it renders, which the design document's budget answers
-    restate. Raises :class:`BudgetsError` for a plan with neither, which `just check-plan`
-    has refused before any writer is launched.
+    document and where it is, whose answers the design document's budget answers restate —
+    read here first, so a document that does not render its answers is refused before a
+    writer is pointed at it. Raises :class:`BudgetsError` for a plan with neither, which
+    `just check-plan` has refused before any writer is launched.
     """
     reason = migrated(project)
     if reason is not None:
-        return WriterContext(predates=reason, document="", answers=None)
-    budgets = read(project)
-    if budgets is None:
+        return WriterContext(predates=reason, document="", path="")
+    held = find(project, plan_store.read_documents(project))
+    if held is None:
         raise BudgetsError(
             f"{project} carries no `{document_id(project)}` document and "
             f"`config/budgets-migration.yaml` does not name it, so there is nothing for its "
             f"design document's budget sections to restate; `just check-plan {project}` "
             f"refuses it for the same reason"
         )
-    return WriterContext(
-        predates="", document=str(budgets.document), answers=budgets.answers.as_record()
-    )
+    answers_of(held)
+    path = plan_store.local_file(design_approval.located(held))
+    # llmlint: ignore[changed_behavior_has_e2e] Unreachable through `just finish-plan`, the
+    # one caller: it finishes a plan held in the local `authoring` source, whose documents
+    # are local files, so only a store answer handed in directly can reach this refusal, as
+    # `tests/test_plan_budgets.py` does; the local path is driven end to end by
+    # `tests/plan_tooling/test_finish_plan_budgets_e2e.py`.
+    if path is None:
+        raise BudgetsError(
+            f"{held.qualified_id} is not a file on this host (the store locates it at "
+            f"{design_approval.located(held)!r}), so the design-document writer could not read "
+            f"its answers; draft and finish the plan in a local Markdown source"
+        )
+    return WriterContext(predates="", document=str(held.qualified_id), path=path)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

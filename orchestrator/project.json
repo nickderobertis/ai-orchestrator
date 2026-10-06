@@ -202,6 +202,20 @@
       "options": {
         "cwd": "."
       }
+    },
+    "budget": {
+      "inputs": [
+        "default",
+        "{workspaceRoot}/tests/test_plan_review.py",
+        "{workspaceRoot}/tests/test_host_installs.py",
+        "{workspaceRoot}/templates/**/*",
+        "{workspaceRoot}/personas/planner.yaml",
+        "{workspaceRoot}/config/**/*",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ]
     }
   }
 }

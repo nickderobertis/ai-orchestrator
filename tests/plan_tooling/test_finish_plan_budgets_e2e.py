@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -102,9 +103,10 @@ BUDGETS: dict[str, object] = {
 }
 
 #: The doubled writer: what a design-doc dispatch does, as one program. It reads its own
-#: task out of the store, answers the budget answers from what the task quotes — the
-#: budgets document's answers, or the reason the plan predates budgets — and renders the
-#: document from those answers and the rest it composed.
+#: task out of the store, answers the budget answers from what the task points it at — the
+#: answers recorded in the budgets document at the path the task names, or the reason the
+#: plan predates budgets — and renders the document from those answers and the rest it
+#: composed.
 WRITER = r"""
 import json, os, re, subprocess, sys, tempfile
 
@@ -115,10 +117,13 @@ listed = subprocess.run(
 )
 (task,) = [held["item"]["content"] for held in json.loads(listed.stdout)["items"]]
 answers = json.loads(open(base, encoding="utf-8").read())
-quoted = re.search(r"which answers the following\..*?```json\n(.*?)\n```", task, re.S)
+named = re.search(r"budgets document `[^`]+`, the file `([^`]+)`", task)
 predates = re.search(r"The plan predates budgets:.*?\n\n> ([^\n]+)", task, re.S)
-if quoted:
-    answers.update(json.loads(quoted.group(1)))
+if named:
+    recorded = re.search(
+        r"\n## Record\n\n```json\n([^\n]*)\n```", open(named.group(1), encoding="utf-8").read()
+    )
+    answers.update(json.loads(recorded.group(1)))
 elif predates:
     answers["predates_budgets"] = predates.group(1)
 loader = subprocess.run(
@@ -170,6 +175,20 @@ def _writes_from_its_task(bench: Bench, drafted: Drafted, run: RunId) -> None:
     bench.environment[PROMPT_LOG_ENV] = str(bench.tmp_path / f"turns-{drafted.project}.jsonl")
 
 
+def _names_the_budgets_document(task: str, drafted: Drafted, budgets: dict[str, object]) -> None:
+    """The writer's task names the budgets document and a file recording ``budgets`` whole."""
+    assert f"`{drafted.qualified}-budgets`" in task, task
+    path = re.search(r"budgets document `[^`]+`, the file `([^`]+)`", task)
+    assert path is not None, task
+    recorded = re.search(
+        r"\n## Record\n\n```json\n([^\n]*)\n```", Path(path.group(1)).read_text(encoding="utf-8")
+    )
+    assert recorded is not None and json.loads(recorded.group(1)) == budgets
+    assert "`predates_budgets` is empty" in task, task
+    assert "```json" not in task, "the task quotes the budgets rather than naming them"
+    assert len(task.encode("utf-8")) < SINGLE_ARGUMENT_LIMIT
+
+
 @pytest.mark.xdist_group("finish-plan")
 def test_a_budgeted_plans_writer_is_handed_its_budgets_and_its_document_shows_them(
     tmp_path: Path, oneharness_bin: str
@@ -195,11 +214,9 @@ def test_a_budgeted_plans_writer_is_handed_its_budgets_and_its_document_shows_th
     finally:
         _stop(bench, f"{run}{DESIGN_RUN_SUFFIX}")
 
-    # The writer's task quotes the budgets document whole, and says what to do with it.
-    assert f"`{drafted.qualified}-budgets`" in task, task
-    quoted = task.split("which answers the following.", 1)[1].split("```json\n", 1)[1]
-    assert json.loads(quoted.split("\n```", 1)[0]) == BUDGETS, task
-    assert "`predates_budgets` is empty" in task, task
+    # The writer's task names the budgets document and the file it is at, and says what to
+    # do with it; it quotes no answer, so its size does not grow with the plan's budgets.
+    _names_the_budgets_document(task, drafted, BUDGETS)
 
     # And the document the flow stored shows them, in the budgets table.
     stored = drafted.document_path.read_text(encoding="utf-8")
@@ -212,6 +229,94 @@ def test_a_budgeted_plans_writer_is_handed_its_budgets_and_its_document_shows_th
     assert "2,000 nodes per plan, 3 runs at once." in stored, stored
     assert "- **spend.** n/a because it calls no paid API" in stored, stored
     assert "predates budgets" not in stored, stored
+
+
+#: Linux's limit on one command-line argument (`MAX_ARG_STRLEN`, 32 pages of 4 KiB): a
+#: value handed to a program as one argv word past it fails the exec with `Argument list
+#: too long`. `authoring:create-repo-baseline-audit`'s budgets document is 431,586 bytes.
+SINGLE_ARGUMENT_LIMIT = 128 * 1024
+
+
+def _plan_sized_budgets() -> dict[str, object]:
+    """52 budgets at the baseline plan's measured prose sizes, all owned by the one node."""
+    prose = "The affected tier's wall clock on a pull request touching one package. " * 24
+    listed = BUDGETS["budgets"]
+    assert isinstance(listed, list) and isinstance(listed[0], dict)
+    return {
+        **BUDGETS,
+        "checklist": [
+            {"concern": "latency", "budget": "listing-latency-00", "not_applicable": ""},
+            {"concern": "gate time", "budget": "listing-latency-01", "not_applicable": ""},
+            {
+                "concern": "spend",
+                "budget": "",
+                "not_applicable": "n/a because it calls no paid API",
+            },
+        ],
+        "budgets": [
+            {
+                **listed[0],
+                "id": f"listing-latency-{index:02d}",
+                "measure": prose[:117],
+                "inner_measure_reason": prose[:357],
+                "workload": prose,
+                "evidence": prose[: 258 + (index * 41) % 524],
+            }
+            for index in range(52)
+        ],
+    }
+
+
+@pytest.mark.xdist_group("finish-plan")
+def test_a_plan_whose_budgets_outgrow_one_argument_still_composes_its_writers_task(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """A budgets context past the single-argument limit reaches the writer's answers whole.
+
+    The plan's budgets document is measured over the limit first, so the journey cannot
+    pass by being small; then the real recipe composes the
+    design-document writer's task from it — naming the budgets document rather than quoting
+    it, so the task stays under the limit too — the engine dispatches the writer, and the
+    design document the writer stores restates every one of the 52 budgets. The copy onto
+    the board after that is held to GitHub's issue-body limit, which a plan this size
+    exceeds; that is the board's limit rather than this flow's, and not asserted here.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    budgets = _plan_sized_budgets()
+    bench = _bench(tmp_path, oneharness_bin, PASSES)
+    drafted = _draft("finish-plan-plan-sized-budgets", budgets=budgets)
+    # What grows with the plan is the budgets document: the one under test is past the limit,
+    # as `authoring:create-repo-baseline-audit`'s is, so the journey cannot pass by being small.
+    stored_budgets = (
+        drafted.document_path.parent / f"{drafted.qualified.partition(':')[2]}-budgets.md"
+    )
+    assert stored_budgets.stat().st_size > SINGLE_ARGUMENT_LIMIT, stored_budgets.stat().st_size
+    run = RunId("finish-plan-e2e-plan-sized-budgets")
+    _writes_from_its_task(bench, drafted, run)
+    try:
+        finished = _just(
+            "finish-plan",
+            str(_brief(tmp_path, drafted)),
+            "--name",
+            run,
+            "--to",
+            DESTINATION,
+            environment=bench.environment,
+        )
+        assert "Argument list too long" not in finished.stdout + finished.stderr
+        # The writer's task dispatched and its run settled; what follows is the copy onto
+        # the board, which GitHub's issue-body limit decides for documents this size.
+        settled = f"-- {run}{DESIGN_RUN_SUFFIX}  1/1 done  SETTLED  complete"
+        assert settled in finished.stdout + finished.stderr, f"{finished.stdout}\n{finished.stderr}"
+        task = _design_task(bench, run)["content"]
+    finally:
+        _stop(bench, f"{run}{DESIGN_RUN_SUFFIX}")
+    _names_the_budgets_document(task, drafted, budgets)
+    # The writer task dispatched and the writer copied every budget into the document.
+    stored = drafted.document_path.read_text(encoding="utf-8")
+    assert "## Budgets\n" in stored, stored
+    assert stored.count("`bun run measure:listing` in `apps/web/budgets.yaml`") == 52, stored
 
 
 @pytest.mark.xdist_group("finish-plan")

@@ -562,24 +562,49 @@ def test_a_migration_list_the_check_cannot_read_is_a_refusal_rather_than_an_exem
     assert "absent.yaml" in refused.reason
 
 
-def test_the_writers_context_is_the_documents_answers_or_the_lists_reason(
+def test_the_writers_context_is_the_documents_path_or_the_lists_reason(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     project = _plan()
 
     assert plan_budgets.main([project]) == 0
     stated = json.loads(capsys.readouterr().out)
-    assert stated == {"predates": "", "document": f"{project}-budgets", "answers": ANSWERS}
-    assert list(stated["answers"]) == list(plan_budgets.VARIABLES)
+    path = stated.pop("path")
+    assert stated == {"predates": "", "document": f"{project}-budgets"}
+    # The writer is pointed at the document's file rather than handed its answers, and that
+    # file records exactly the answers the document renders.
+    recorded = re.search(
+        r"\n## Record\n\n```json\n([^\n]*)\n```", Path(path).read_text(encoding="utf-8")
+    )
+    assert Path(path).is_absolute() and recorded is not None
+    assert json.loads(recorded.group(1)) == ANSWERS
 
     assert plan_budgets.main(["authoring:approved-budgets"]) == 0
     listed = json.loads(capsys.readouterr().out)
-    assert listed["document"] == "" and listed["answers"] is None
+    assert listed["document"] == "" and listed["path"] == ""
     assert listed["predates"] == plan_budgets.migrated("authoring:approved-budgets")
 
     bare = _plan(None)
     assert plan_budgets.main([bare]) == 2
     assert f"{bare} carries no `{bare}-budgets` document" in capsys.readouterr().err
+
+
+def test_a_budgets_document_that_is_no_file_here_is_refused_for_the_writer(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The writer is pointed at a file it can read, or at nothing: a board copy is refused.
+
+    The store answers the document as a board does — rendered, with no local location —
+    so its location falls back to the document's id, which no reader can open.
+    """
+    project = "plans:board-plan"
+    monkeypatch.setattr(
+        plan_store, "read_documents", lambda named: [budgets_document(project, ANSWERS)]
+    )
+    assert plan_budgets.main([project]) == 2
+    refused = capsys.readouterr().err
+    assert f"{project}-budgets is not a file on this host" in refused, refused
+    assert "local Markdown source" in refused, refused
 
 
 def test_the_fixture_answers_for_a_plan_needing_no_budget_break_no_rule() -> None:

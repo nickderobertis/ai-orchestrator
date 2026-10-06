@@ -1391,7 +1391,7 @@ its intended order. **Every identity in every chain is spelled as a variant**, t
 `env_file` are declarable on a variant only, so a bare harness id in a chain is one
 candidate no per-identity environment rule reaches — the credential masks and the
 `XDG_RUNTIME_DIR` repoint, each explained beside its rule. `codex:primary`'s
-plan-store credential mask is the one no parent may hold, so each of the seven roles that
+plan-store credential mask is the one no parent may hold, so each of the eight roles that
 masks them declares it. That variant deliberately declares no `unset_env` for `CODEX_HOME`,
 which is ambient configuration a developer may export and this is the identity that
 honours it; `tests/e2e/test_dispatch_environment_e2e.py` reads what a turn is handed
@@ -1553,7 +1553,10 @@ whether a node whose criteria change no repository file declares `expects_no_dif
 It also spends one plan-level turn on release adoption — whether a plan whose goal needs
 a producer's change in force on this host carries a node of this repository adopting the
 release, on the right pin, naming no version — once every task carries a record, and
-records that pass on the project rather than on any task.
+records that pass on the project rather than on any task. That turn reads a compact view —
+each node's fields, its task record, its task file's path and a bounded summary — and
+opens what it needs read-only under `oneharness.plan-review-whole.toml`; a prompt past
+`PLAN_PROMPT_LIMIT` exits 2 before any turn is spent.
 `just plan`'s own closeout records what its planner authored, so a planner-written plan
 you did not touch costs nothing; the approval is not a second opinion on the plan, and
 every launch is refused without it save the bounded planning exemption above.

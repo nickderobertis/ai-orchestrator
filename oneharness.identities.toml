@@ -62,7 +62,7 @@ model = "gpt-6.1-sol"
 # **This variant deliberately declares no `unset_env`, and it is the one variant that
 # cannot.** Its only masks anywhere on this host are the plan store's credentials,
 # `GH_PROJECTS_TOKEN` and `HELLOPATIENT_LINEAR_API_KEY`, and that is a per-ROLE policy
-# rather than a property of the identity: seven roles never reach the plan store and
+# rather than a property of the identity: eight roles never reach the plan store and
 # stop both here, while three exist to read and write the store and must let them
 # travel.
 #
@@ -72,7 +72,7 @@ model = "gpt-6.1-sol"
 # one those three roles could never remove: every other variant's mask is a longer list
 # they can replace with a shorter one, and this one's would be the whole of it.
 #
-# Each of the seven roles that masks them therefore says so at its own
+# Each of the eight roles that masks them therefore says so at its own
 # `[harness.codex.variant.primary]`. `tests/e2e/test_dispatch_environment_e2e.py` drives
 # a real turn on every identity of every role and reads what the provider was handed,
 # which is what catches this rather than any reading of the resolved config.

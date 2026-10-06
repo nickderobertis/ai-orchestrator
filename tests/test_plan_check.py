@@ -102,7 +102,7 @@ def _node(**fields: object) -> dict[str, object]:
 
 def _reviewed(node: dict[str, object]) -> dict[str, object]:
     """``node`` carrying a record for exactly the content it states."""
-    record = plan_check._task_record(node)
+    record = plan_review.task_record_of(node)
     key = plan_review.review_key(record, plan_review.bar_fingerprint())
     metadata = dict(record.metadata)
     metadata[plan_review.RECORD_KEY] = {"key": key}
@@ -300,7 +300,7 @@ def test_a_document_carrying_no_tasks_at_all_reviews_nothing(document: object) -
 
 def test_a_task_record_narrows_every_field_the_document_may_be_missing() -> None:
     """A review key is computed over fields the loaded plan need not carry."""
-    empty = plan_check._task_record("not a task")
+    empty = plan_review.task_record_of("not a task")
 
     assert empty.title == ""
     assert empty.content is None
@@ -310,18 +310,40 @@ def test_a_task_record_narrows_every_field_the_document_may_be_missing() -> None
     # An id that is not a string is left empty rather than rendered into one: the
     # engine's loader refuses a node without one, so a record addressed as `"None"`
     # would name a node no plan contains.
-    assert plan_check._task_record({"id": 7}).node_id == ""
+    assert plan_review.task_record_of({"id": 7}).node_id == ""
 
-    read = plan_check._task_record({"id": "a", "deps": ["b", 7], "task": "x", "title": "T"})
+    read = plan_review.task_record_of({"id": "a", "deps": ["b", 7], "task": "x", "title": "T"})
     assert read.deps == ("b",)
     assert read.content == "x"
     assert read.repositories == []
 
     # The document's resolved `repo` is carried as the record's one repository, so the
     # key's `repo` reads the same value the store path reads off `repositories`.
-    hosted = plan_check._task_record({"id": "a", "repo": "github.com/o/n", "task": "x"})
+    hosted = plan_review.task_record_of({"id": "a", "repo": "github.com/o/n", "task": "x"})
     assert plan_review.repository_of(hosted) == "github.com/o/n"
-    assert plan_review.repository_of(plan_check._task_record({"id": "a", "repo": 7})) is None
+    assert plan_review.repository_of(plan_review.task_record_of({"id": "a", "repo": 7})) is None
+
+
+def test_the_check_and_the_plan_key_reconstruct_a_task_record_through_one_function() -> None:
+    """`plan_check` keeps no reconstruction of its own; the store's node shape reads alike.
+
+    The loaded document carries the store's metadata map verbatim, `read_plan`'s node the
+    same `onepipeline.` keys with the prefix taken off: the one function puts the prefix
+    back, so both shapes key one task to one review key.
+    """
+    assert not hasattr(plan_check, "_task_record")
+    loaded = plan_review.task_record_of(
+        {
+            "id": "a",
+            "task": "x",
+            "persona": "engineer",
+            "metadata": {"onepipeline.id": "a", "onepipeline.persona": "engineer"},
+        }
+    )
+    stored = plan_review.task_record_of({"id": "a", "task": "x", "persona": "engineer"})
+    assert stored.metadata[plan_review.PERSONA] == "engineer"
+    bar = plan_review.BarFingerprint("bar")
+    assert plan_review.review_key(loaded, bar) == plan_review.review_key(stored, bar)
 
 
 def test_the_check_answers_its_contract_on_stdin(

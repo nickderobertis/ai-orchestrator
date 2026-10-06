@@ -161,9 +161,11 @@ DAG_GRAPH_FLAG="--dag-graph"
 #: The answers the writer's task is rendered from, composed from the brief, the plan's
 #: qualified id, the document id, the resolve command `orchestrator/design_chain.py`'s
 #: rule gives for the plan, and what `orchestrator/plan_budgets.py` states about the plan's
-#: budgets: its budgets document's answers, which the document's budget sections restate
-#: and which the task carries whole so the writer and its judge read the same entries, or
-#: the reason the migration list gives for a plan that predates budgets. The brief's `## What` and `## Why` are quoted into the task's
+#: budgets: its budgets document and the file it is at, whose recorded answers the
+#: document's budget sections restate and which the writer and its judge both read there —
+#: named rather than quoted, because a plan of many budgets makes a task too large for the
+#: engine to hand its dispatch as one argument — or the reason the migration list gives
+#: for a plan that predates budgets. The brief's `## What` and `## Why` are quoted into the task's
 #: own What and Why rather than the brief being embedded whole, because the brief's
 #: acceptance criteria are the *plan's* and a judge holds a dispatch to every criterion it
 #: finds in its task; the criteria below are this dispatch's. The resolve command is named
@@ -174,10 +176,9 @@ DAG_GRAPH_FLAG="--dag-graph"
 WRITER_ANSWERS_PROGRAM='
 import json, pathlib, re, sys
 
-(brief, plan, document, template, note, resolve, budgets) = sys.argv[1:8]
-budgets = json.loads(budgets)
-predates, budgets_document = budgets["predates"], budgets["document"]
-quoted = json.dumps(budgets["answers"], ensure_ascii=False, indent=2)
+(brief, plan, document, template, note, resolve) = sys.argv[1:7]
+budgets = json.loads(sys.stdin.read())
+predates, budgets_document, budgets_path = budgets["predates"], budgets["document"], budgets["path"]
 # Line endings and trailing blanks are read the way `scripts/plan-brief.sh` reads a heading
 # when it validates the brief, so a brief it accepted is one this composes from.
 text = pathlib.Path(brief).read_text(encoding="utf-8").replace("\r\n", "\n")
@@ -211,14 +212,14 @@ if predates:
 else:
     budget_task = (
         f"The plan\u2019s budgets are stated in its budgets document `{budgets_document}`, "
-        f"which answers the following. The document\u2019s {budget_answers} answers restate "
-        f"these, answer for answer, and `predates_budgets` is empty:\n\n```json\n"
-        f"{quoted}\n```"
+        f"the file `{budgets_path}`: read it there, as you read the plan\u2019s tasks. Its "
+        f"answers are the JSON object under its `## Record` heading. The document\u2019s "
+        f"{budget_answers} answers restate those, answer for answer and word for word, and "
+        f"`predates_budgets` is empty."
     )
     budget_criterion = (
-        f"The document\u2019s {budget_answers} answers restate the answers of "
-        f"`{budgets_document}` that this task quotes, answer for answer, and its "
-        f"`predates_budgets` answer is empty."
+        f"The document\u2019s {budget_answers} answers restate the answers recorded in "
+        f"`{budgets_document}`, answer for answer, and its `predates_budgets` answer is empty."
     )
 answers = {
     "what": (
@@ -565,8 +566,8 @@ document_resolve=$("$python" -m orchestrator.design_chain "$plan_project") ||
     fail "which repository's layer the design document of $plan_project resolves through could not be read out of the plan store; the diagnostic above names why" \
         "repair what it names, then run this command again"
 
-# What the document's budget sections restate: the plan's budgets document's answers, or the
-# reason the migration list gives for a plan that predates budgets. The check above has
+# What the document's budget sections restate: the plan's budgets document and its path, or
+# the reason the migration list gives for a plan that predates budgets. The check above has
 # already refused a plan with neither, so a failure here is a store that stopped answering.
 budgets_context=$("$python" -m orchestrator.plan_budgets "$plan_project") ||
     fail "what the design document of $plan_project restates about its budgets could not be read; the diagnostic above names why" \
@@ -649,8 +650,12 @@ answers_file=$(mktemp "${TMPDIR:-/tmp}/finish-plan-answers.XXXXXX") || {
     fail "a scratch file for the design-document task's answers could not be created" \
         "check that ${TMPDIR:-/tmp} is a directory this launch may write into, then retry"
 }
-"$python" -c "$WRITER_ANSWERS_PROGRAM" "$brief" "$plan_project" "$design_document_id" \
-    "$DOCUMENT_TEMPLATE" "$PLAN_DIRECT_PLACEMENT_NOTE" "$document_resolve" "$budgets_context" >"$answers_file" || {
+# The budgets context reaches the program on stdin, through the `printf` builtin, which is
+# never an exec and so is held to no argument limit: when it carried the document's answers
+# a plan of 52 budgets composed one past Linux's 128 KiB limit on a single argument.
+printf '%s' "$budgets_context" | "$python" -c "$WRITER_ANSWERS_PROGRAM" "$brief" "$plan_project" \
+    "$design_document_id" "$DOCUMENT_TEMPLATE" "$PLAN_DIRECT_PLACEMENT_NOTE" "$document_resolve" \
+    >"$answers_file" || {
     discard_answers
     take_back
     fail "the design-document task's answers could not be composed from '$brief' by $python; the diagnostic above names why" \
