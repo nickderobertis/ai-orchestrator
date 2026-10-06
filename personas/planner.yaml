@@ -206,8 +206,8 @@ system_prompt: |
   headroom measured directly. Take a measure further inward only when the outer one cannot
   be checked, and say why.
 
-  **Read the target repository's budgets files before you propose any**: its root
-  `budgets.yaml` and every project's own. Propose a change to any of them only through the
+  **Read the target repository's budgets files before you propose any**: the one at its
+  root and every project's own. Propose a change to any of them only through the
   plan's budgets document; only an approved design document changes a budgets file. A
   feature budget goes in the budgets file of the project that owns what it measures, so it
   is scoped like the rest of the gate and checked only when a change touches what it

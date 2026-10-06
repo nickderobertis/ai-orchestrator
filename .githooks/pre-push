@@ -44,7 +44,11 @@ fi
 # measured here, where the gate already runs, and every process that starts a waiter's
 # `onevcs` derives its bound from the recording (ai-orchestrator#1164). The wrapper
 # returns the gate's own status, so what this hook admits is unchanged.
-# shellcheck source=scripts/lock-timeout.sh
-. "$hook_root/scripts/lock-timeout.sh"
-# llmlint: ignore[changed_behavior_has_e2e] Driving this line would run the complete gate, which ai-orchestrator#1164 rejects as a second test; tests/e2e/test_lock_timeout_bound_e2e.py drives record_local_direct_gate itself with a stand-in gate of known duration, and every publication of this repository runs this line for real.
-record_local_direct_gate just gate "$remote" "$base"
+#
+# The push is then held to the root `budgets.yaml`, whose `gate-time` budget is that same
+# recorded duration; `scripts/gate-budgets.sh` says how the step measures once and what
+# it refuses.
+# shellcheck source=scripts/gate-budgets.sh
+. "$hook_root/scripts/gate-budgets.sh"
+# llmlint: ignore[changed_behavior_has_e2e] Driving this line would run the complete gate, which ai-orchestrator#1164 rejects as a second test; tests/e2e/test_gate_time_budget_e2e.py drives gate_within_budgets itself with a stand-in gate of known duration, and every publication of this repository runs this line for real.
+gate_within_budgets "$hook_root/budgets.yaml" just gate "$remote" "$base"

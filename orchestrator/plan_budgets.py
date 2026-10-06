@@ -68,9 +68,13 @@ VARIABLES = (
 )
 
 
-# llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This is this repository's copy of onebudgetspec's `direction` vocabulary, and the plan this node belongs to assigns its reconciliation with the installed library to the `aio-budgets` node, which adopts that library here; nothing installs it before then. The templates' and `docs/budgets.md`'s copies are held to this one by `tests/test_plan_budgets_template.py`.  # noqa: E501
 class Direction(StrEnum):
-    """Which side of its threshold a budget holds a measurement to."""
+    """Which side of its threshold a budget holds a measurement to.
+
+    This repository's copy of onebudgetspec's `direction` vocabulary, held to the installed
+    library's `onebudgetspec schema` by `tests/test_budgets_files.py`; the templates' and
+    `docs/budgets.md`'s copies are held to this one by `tests/test_plan_budgets_template.py`.
+    """
 
     MAX = "max"
     MIN = "min"
@@ -88,9 +92,9 @@ class FileChange(StrEnum):
     NONE = "none"
 
 
-#: The one file name a budgets file has. onebudgetspec's convention, copied for the reason
-#: :class:`Direction` gives and held to the same reconciliation.
-# llmlint: ignore[contracts_have_one_source_or_a_drift_gate] onebudgetspec's file name, copied for the reason the suppression on `Direction` above gives: its reconciliation with the installed library is the `aio-budgets` node's, which adopts that library here, and the templates' and `docs/budgets.md`'s copies are held to this one by `tests/test_plan_budgets_template.py` and `tests/test_plan_budgets.py`.  # noqa: E501
+#: The one file name a budgets file has: onebudgetspec's convention, held to the installed
+#: library's `onebudgetspec schema` by `tests/test_budgets_files.py`, as :class:`Direction`
+#: is, with the templates' and `docs/budgets.md`'s copies held to this one.
 BUDGETS_FILE = "budgets.yaml"
 
 

@@ -8,6 +8,7 @@ requires-python = ">=3.13"
 classifiers = ["Private :: Do Not Upload"]
 dependencies = [
     "onetaskgraph-sdk==0.2.58",
+    "onebudgetspec-cli==0.1.0",
     "oneagentgraph-cli==0.5.5",
     "oneharness-cli==0.21.2",
     "onejudge==0.17.1",

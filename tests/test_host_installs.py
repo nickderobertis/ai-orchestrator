@@ -52,7 +52,7 @@ from orchestrator.root import REPO_ROOT
 
 #: The rows this table is fixed to, stated here in full rather than derived from the
 #: module: a test that read them out of the code under test would hold the module to
-#: itself. Nine producers, the override's order, the engine wheel alone marked as what a
+#: itself. Ten producers, the override's order, the engine wheel alone marked as what a
 #: dispatch runs, and `llmlint` alone governed by no pin, naming its installer instead.
 EXPECTED_ROWS = (
     Installed(
@@ -93,6 +93,13 @@ EXPECTED_ROWS = (
         "pypi",
         "pypi:onemessagebus-cli",
         "onemessagebus",
+        False,
+    ),
+    Installed(
+        "github.com/nickderobertis/onebudgetspec",
+        "pypi",
+        "pypi:onebudgetspec-cli",
+        "onebudgetspec",
         False,
     ),
     Installed(
@@ -270,9 +277,13 @@ def _override_default_targets() -> dict[RepoIdentity, str]:
 
 
 #: The producers whose override rule precedes their first adoption, stated here in full
-#: for the reason `EXPECTED_ROWS` is: `onebudgetspec`, until the node adopting its first
-#: release gives it a row, a pin and a dependency.
-EXPECTED_AWAITING: frozenset[RepoIdentity] = frozenset({"github.com/nickderobertis/onebudgetspec"})
+#: for the reason `EXPECTED_ROWS` is: none, since `onebudgetspec`'s first release was
+#: adopted with its row, its pin and its dependency.
+EXPECTED_AWAITING: frozenset[RepoIdentity] = frozenset()
+#: A producer that has released nothing yet, standing in for the next one whose override
+#: rule precedes its first adoption: the set is empty, and what it admits still has to be
+#: shown on a copy holding one.
+UNRELEASED: RepoIdentity = "github.com/nickderobertis/unreleased"
 
 
 def override_complaints(
@@ -335,11 +346,24 @@ def test_a_producer_in_the_override_with_neither_a_row_nor_an_entry_is_refused()
     ]
 
 
-def test_the_set_is_what_admits_the_tracked_awaiting_producer() -> None:
-    """Off the set, the tracked onebudgetspec rule is a default target nothing accounts for."""
-    (producer,) = EXPECTED_AWAITING
+def test_the_set_is_what_admits_an_awaiting_producer() -> None:
+    """A rule ahead of a first adoption passes on the set, and is unaccounted for off it."""
+    defaults = {**_override_default_targets(), UNRELEASED: "pypi"}
 
-    assert override_complaints(_override_default_targets(), INSTALLED, frozenset()) == [
+    assert override_complaints(defaults, INSTALLED, frozenset({UNRELEASED})) == []
+    assert override_complaints(defaults, INSTALLED, frozenset()) == [
+        f"config/onevcs.releases.yml names {UNRELEASED}'s default target 'pypi', and neither "
+        "a row nor the awaiting-first-adoption set accounts for it"
+    ]
+
+
+def test_the_onebudgetspec_row_is_what_accounts_for_its_tracked_rule() -> None:
+    """Adopted, onebudgetspec's rule is admitted by its row: without the row it is refused."""
+    producer = "github.com/nickderobertis/onebudgetspec"
+    without = tuple(row for row in INSTALLED if row.producer != producer)
+
+    assert len(without) == len(INSTALLED) - 1
+    assert override_complaints(_override_default_targets(), without, AWAITING_FIRST_ADOPTION) == [
         f"config/onevcs.releases.yml names {producer}'s default target 'pypi', and neither "
         "a row nor the awaiting-first-adoption set accounts for it"
     ]
@@ -347,12 +371,9 @@ def test_the_set_is_what_admits_the_tracked_awaiting_producer() -> None:
 
 def test_a_producer_with_both_a_row_and_an_entry_on_the_set_is_refused() -> None:
     """The adopting node adds the row and empties the entry together; half of that fails."""
-    (producer,) = EXPECTED_AWAITING
-    adopted = Installed(producer, "pypi", "pypi:onebudgetspec-cli", "onebudgetspec", False)
+    producer = "github.com/nickderobertis/onebudgetspec"
 
-    assert override_complaints(
-        _override_default_targets(), (*INSTALLED, adopted), AWAITING_FIRST_ADOPTION
-    ) == [
+    assert override_complaints(_override_default_targets(), INSTALLED, frozenset({producer})) == [
         f"{producer} is both a row and awaiting its first adoption; the node that adds the "
         "row removes it from the set"
     ]
@@ -395,7 +416,7 @@ def test_no_rule_in_the_override_restates_a_producers_targets() -> None:
         assert "declaration: ignore" not in rule["fields"], rule.group(0)
 
 
-def _scratch_producers(root: Path) -> Path:
+def _scratch_producers(root: Path, defaults: dict[RepoIdentity, str] | None = None) -> Path:
     """A checkout list of one scratch producer per rule of the tracked override.
 
     Each declares only what this repository decides of it: a row's target under the
@@ -417,20 +438,28 @@ def _scratch_producers(root: Path) -> Path:
                 )
             },
         )
-        for producer, target in _override_default_targets().items()
+        for producer, target in (defaults or _override_default_targets()).items()
     ]
     manifest = root / "checkouts.list"
     manifest.write_text("".join(f"{path}\n" for path in paths), encoding="utf-8")
     return manifest
 
 
-def _contradictions(manifest: Path) -> list[str]:
-    """What the readers find, over the checkouts ``manifest`` lists, against the tracked files."""
+def _contradictions(
+    manifest: Path,
+    defaults: dict[RepoIdentity, str] | None = None,
+    awaiting: frozenset[RepoIdentity] = AWAITING_FIRST_ADOPTION,
+) -> list[str]:
+    """What the readers find, over the checkouts ``manifest`` lists, against the tracked files.
+
+    ``defaults`` and ``awaiting`` default to the tracked override and set; a journey about
+    a producer ahead of its first adoption names a copy holding one.
+    """
     declarations = {
         identity: declared_targets(paths[0]) for identity, paths in held_checkouts(manifest).items()
     }
     return release_contradictions(
-        _override_default_targets(), declarations, INSTALLED, AWAITING_FIRST_ADOPTION
+        defaults or _override_default_targets(), declarations, INSTALLED, awaiting
     )
 
 
@@ -526,39 +555,40 @@ def test_a_producer_awaiting_its_first_adoption_passes_with_no_row(tmp_path: Pat
     No install row, a resolved default target, and a declaration that may carry that
     target among others — or nothing at all yet, before the producer declares.
     """
-    (producer,) = EXPECTED_AWAITING
-    target = _override_default_targets()[producer]
-    manifest = _scratch_producers(tmp_path)
+    producer, target = UNRELEASED, "pypi"
+    defaults = {**_override_default_targets(), producer: target}
+    awaiting = frozenset({producer})
+    manifest = _scratch_producers(tmp_path, defaults)
     assert by_producer(producer) is None
-    assert _contradictions(manifest) == []
+    assert _contradictions(manifest, defaults, awaiting) == []
 
     advance(
         _checkout(manifest, producer),
         {
             "release-targets.toml": declaration(
-                {"crate": "crate:onebudgetspec", target: "pypi:onebudgetspec-cli"}
+                {"crate": "crate:unreleased", target: "pypi:unreleased-cli"}
             ),
             "Cargo.toml": '[workspace]\nmembers = ["crates/*"]\n',
         },
     )
-    assert _contradictions(manifest) == []
+    assert _contradictions(manifest, defaults, awaiting) == []
 
     advance(_checkout(manifest, producer), {"release-targets.toml": None})
-    assert _contradictions(manifest) == []
+    assert _contradictions(manifest, defaults, awaiting) == []
 
 
 def test_a_producer_awaiting_its_first_adoption_still_contradicts_by_dropping_its_target(
     tmp_path: Path,
 ) -> None:
-    (producer,) = EXPECTED_AWAITING
-    target = _override_default_targets()[producer]
-    manifest = _scratch_producers(tmp_path)
+    producer, target = UNRELEASED, "pypi"
+    defaults = {**_override_default_targets(), producer: target}
+    manifest = _scratch_producers(tmp_path, defaults)
     advance(
         _checkout(manifest, producer),
-        {"release-targets.toml": declaration({"crate": "crate:onebudgetspec"})},
+        {"release-targets.toml": declaration({"crate": "crate:unreleased"})},
     )
 
-    assert _contradictions(manifest) == [
+    assert _contradictions(manifest, defaults, frozenset({producer})) == [
         f"{producer} no longer declares the default target {target!r} "
         "config/onevcs.releases.yml names for it; it declares ['crate']"
     ]

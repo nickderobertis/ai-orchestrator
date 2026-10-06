@@ -109,6 +109,19 @@
     },
     "bootstrap": {
       "cache": false
+    },
+    "budget": {
+      "command": "uv run onebudgetspec check {projectRoot}/budgets.yaml --exclude-label onepipeline",
+      "options": {
+        "cwd": "."
+      },
+      "cache": true,
+      "inputs": [
+        "default"
+      ]
+    },
+    "validate-budgets": {
+      "cache": false
     }
   }
 }

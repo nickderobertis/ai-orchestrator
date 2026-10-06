@@ -603,8 +603,9 @@ def test_a_check_run_failing_only_in_an_unconditional_phase_still_fails(tmp_path
 
     assert result.returncode != 0
     assert trace.read_text().splitlines() == _check_trace("run-many")
-    assert "check: deterministic checks failed in 1 of 3 phases (test-checkouts,coverage)" in (
-        result.stderr
+    assert (
+        f"check: deterministic checks failed in 1 of 3 phases ({','.join(UNCONDITIONAL_TARGETS)})"
+        in result.stderr
     )
 
 

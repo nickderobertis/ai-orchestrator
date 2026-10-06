@@ -68,6 +68,7 @@ readonly PUBLISHED_TOOL_SPECS=(
   "onepipeline-api|onepipeline-api-cli|onepipeline-ui.version"
   "onemessagebus|onemessagebus-cli|onemessagebus.version"
   "onetaskgraph|onetaskgraph-cli|onetaskgraph.version"
+  "onebudgetspec|onebudgetspec-cli|onebudgetspec.version"
 )
 declare -A PUBLISHED_TOOL_VERSIONS=()
 ADOPTED_ONEJUDGE_VERSION="$(tr -d '[:space:]' <"$ONEJUDGE_VERSION_FILE")"

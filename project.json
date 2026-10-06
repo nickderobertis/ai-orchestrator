@@ -11,6 +11,10 @@
     "check-nx-cache": {
       "command": "./scripts/check-nx-cache.sh",
       "options": { "cwd": "." }
+    },
+    "validate-budgets": {
+      "command": "uv run onebudgetspec validate --recursive .",
+      "options": { "cwd": "." }
     }
   }
 }

@@ -1407,21 +1407,23 @@ def test_the_tracked_registration_routes_hellopatient_through_its_own_rule(
 # of `just repos-apply` lives in this module, in the tier it already runs in, as the
 # module's file-scoped reason says, and a project of their own is one change to the
 # project graph for all of them at once, not one more journey's to make.
-def test_the_tracked_registration_routes_onebudgetspec_and_names_its_wheel_before_a_row(
+def test_the_tracked_registration_routes_onebudgetspec_and_names_the_wheel_its_row_installs(
     tmp_path: Path,
 ) -> None:
-    """A producer registered ahead of its first release, by the tracked files alone.
+    """A producer registered ahead of its first release and since adopted, by the tracked files.
 
     Its rule has to decide its publication — `change-auto` with no approvals, by its own
     position in the file rather than the reviewed default — and the release override has
-    to answer the wheel this host will install as its default target while the table
-    holds no row for it, because a `published` node adopting its first release names no
-    `consumes` and would otherwise wait on a target nothing resolves. The scratch
-    checkout carries the producer's origin and a scratch declaration of the target the
-    override names for it, committed at its base, where `onevcs` reads it.
+    to answer, as its default target, the wheel the table's row now installs, because a
+    `published` node depending on it names no `consumes` and would otherwise wait on a
+    target nothing resolves. The scratch checkout carries the producer's origin and a
+    scratch declaration of the target the override names for it, committed at its base,
+    where `onevcs` reads it.
     """
-    assert by_producer(ONEBUDGETSPEC) is None
-    assert ONEBUDGETSPEC in AWAITING_FIRST_ADOPTION
+    row = by_producer(ONEBUDGETSPEC)
+    assert row is not None
+    assert (row.target, row.artifact) == (ONEBUDGETSPEC_TARGET, ONEBUDGETSPEC_ARTIFACT)
+    assert ONEBUDGETSPEC not in AWAITING_FIRST_ADOPTION
     entries = tracked_checkouts_of("onebudgetspec")
     assert len(entries) == 1, entries
 
@@ -1457,7 +1459,7 @@ def test_the_tracked_registration_routes_onebudgetspec_and_names_its_wheel_befor
     declared = {target["name"]: target["probe"]["args"][0] for target in answer["targets"]}
     assert declared[ONEBUDGETSPEC_TARGET] == ONEBUDGETSPEC_ARTIFACT, declared
     # The resolution `tests/e2e/test_release_adoption_in_force_e2e.py` reads off this
-    # host, taken here off a real one: a resolved default target and no row is valid.
+    # host, taken here off a real one: the resolved default target is the row's.
     assert (
         default_target_complaint(
             ONEBUDGETSPEC,

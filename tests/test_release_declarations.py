@@ -95,10 +95,12 @@ def test_only_the_sibling_contradicting_the_tracked_override_is_named(tmp_path: 
     ]
 
 
-def test_a_producer_awaiting_its_first_adoption_resolves_its_default_with_no_row() -> None:
-    """The resolution the next journey reads is accepted for the awaiting producer alone."""
+def test_an_installed_producer_resolves_the_default_its_row_installs() -> None:
+    """The resolution the next journey reads is accepted for the row's target alone."""
     defaults = override_default_targets(RELEASES.read_text(encoding="utf-8"))
-    assert by_producer(GROWN) is None and GROWN in AWAITING_FIRST_ADOPTION
+    row = by_producer(GROWN)
+    assert row is not None and GROWN not in AWAITING_FIRST_ADOPTION
+    assert defaults[GROWN] == row.target
 
     assert default_target_complaint(GROWN, defaults[GROWN], defaults) is None
     assert default_target_complaint(GROWN, None, defaults) is not None

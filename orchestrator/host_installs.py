@@ -1,6 +1,6 @@
 """What this host installs from each producer it depends on, and the pin each wheel governs.
 
-Nine repositories publish the tools this harness configures, and each publishes
+Ten repositories publish the tools this harness configures, and each publishes
 several artifacts — a crate, a wheel, an npm launcher, an SDK — of which this host
 installs exactly one: the wheel `pyproject.toml` pins, or, for `onejudge` and
 `onetaskgraph`, the CLI wheel the pinned SDK carries from `uv.lock` at its own version,
@@ -141,6 +141,13 @@ INSTALLED: tuple[Installed, ...] = (
         governs_dispatch=False,
     ),
     Installed(
+        producer="github.com/nickderobertis/onebudgetspec",
+        target="pypi",
+        artifact="pypi:onebudgetspec-cli",
+        pin="onebudgetspec",
+        governs_dispatch=False,
+    ),
+    Installed(
         producer="github.com/nickderobertis/llmlint",
         target="cli",
         artifact="pypi:llmlint-cli",
@@ -158,12 +165,12 @@ INSTALLED: tuple[Installed, ...] = (
 #: ``consumes``, so without the override's rule its hold would wait on a target it never
 #: resolves and never release. A producer stands here instead of in ``INSTALLED`` — never
 #: in both — and the node that adopts its release moves it into a row, with the pin and
-#: the dependency, emptying its entry: for `onebudgetspec`, the plan's ``aio-budgets``
-#: node. `tests/test_host_installs.py` holds the override to the two together.
+#: the dependency, emptying its entry. `tests/test_host_installs.py` holds the override
+#: to the two together.
 # llmlint: ignore-block[modern_domain_modeling] Each entry is an `Installed.producer` value
 # waiting to become one, compared against that `str` field and against the identity text
 # `onevcs` prints, for the reason the block above `Installed` gives.
-AWAITING_FIRST_ADOPTION: frozenset[str] = frozenset({"github.com/nickderobertis/onebudgetspec"})
+AWAITING_FIRST_ADOPTION: frozenset[str] = frozenset()
 # llmlint: ignore-end[modern_domain_modeling]
 
 

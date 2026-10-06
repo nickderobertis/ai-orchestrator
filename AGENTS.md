@@ -25,7 +25,7 @@ configures are in [the roster](#the-tools-this-harness-configures).
 
 This repository is the canonical example of how the published libraries — `onepipeline`,
 `onevcs`, `oneagentgraph`, `onejudge`, `oneharness`, `onetaskgraph`, `onemessagebus`,
-`onepipeline-ui` and `llmlint` — are used together, and a tool for dogfooding them. So
+`onepipeline-ui`, `onebudgetspec` and `llmlint` — are used together, and a tool for dogfooding them. So
 outside the planning and follow-up flows it is configuration and thin wrappers over
 their verbs, and nothing else: primarily config, and past that a very light wrapper on
 a CLI tool or no wrapper at all. Code that works around an upstream gap is an
@@ -365,6 +365,12 @@ What each tool is *for here*. How to use it is the tool's own to say — in
   Governed by `config/onemessagebus.version`, which governs the CLI the host runs; a
   dispatch reaches the bus through the crates the engine links. `onemessagebus --help`;
   https://github.com/nickderobertis/onemessagebus.
+- **`onebudgetspec`** — budgets registered in `budgets.yaml` files, each naming the
+  command that measures it, and the check that gates on them: the root file holds what
+  every push of this repository is held to, and a project's own file is checked when a
+  change touches that project. `config/onebudgetspec.version` governs the CLI the hook
+  and `just check` run; it governs no dispatch. `onebudgetspec --help`;
+  https://github.com/nickderobertis/onebudgetspec.
 - **`llmlint`** — the judged lint tier (`llmlint.yml`; `just lint-llm`, `just
   lint-llm-diff`), the blocking pre-push check beside the deterministic `just check`.
   No `config/` pin: `scripts/setup-llmlint.sh` installs it, holding the release to the
@@ -1793,9 +1799,12 @@ release did, cited to something a reader can open.
 Squash-merge via PR; PRs follow `.github/pull_request_template.md`. With no CI, the
 **pre-push hook** (`.githooks/pre-push`, activated by `just bootstrap`) runs `just
 gate`, so nothing reaches the remote unproven, and every dispatched agent clears its
-own findings before committing. The one exception is `onevcs preserve`, the only verb
-that may push without the hook: it puts an unproven **branch ref, never a base**, on the
-origin, opens no change request, and nothing can merge that ref without a publication
+own findings before committing. The push is then held to the root `budgets.yaml`, whose
+`gate-time` budget is that gate's own measured duration and whose threshold is stated
+there alone: over budget refuses the push, as a defect to optimize rather than re-measure,
+and a project's own budgets live in a `budgets.yaml` beside its `project.json`. The one
+exception is `onevcs preserve`, the only verb that may push without the hook: it puts an
+unproven **branch ref, never a base**, on the origin, opens no change request, and nothing can merge that ref without a publication
 that does run the merge path — the words `just shutdown`'s report prints about every
 branch it pushes are *on its origin unproven*. A deletion is not such a push: `onevcs retire`
 and `onevcs reclaim` remove a branch's origin copy with `--no-verify`, because a deletion

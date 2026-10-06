@@ -78,6 +78,7 @@ TOOLS = (
     "oneharness",
     "onetaskgraph",
     "onemessagebus",
+    "onebudgetspec",
     "llmlint",
 )
 _TOOL = "(?:" + "|".join(re.escape(tool) for tool in TOOLS) + ")"

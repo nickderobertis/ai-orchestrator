@@ -2373,7 +2373,7 @@ def test_the_planner_is_told_how_to_state_its_budgets_in_general_terms() -> None
         "grows a new class each time a real miss",
         "**Use the measure of record**",
         "Take a measure further inward only when the outer one cannot be checked, and say why",
-        "its root `budgets.yaml` and every project's own",
+        "the one at its root and every project's own",
         "Propose a change to any of them only through the plan's budgets document",
         "**A budget's command performs the measurement.**",
         "The node that implements a budget owns that command and the budget's registration",

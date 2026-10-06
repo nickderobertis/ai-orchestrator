@@ -282,6 +282,14 @@ def test_a_repository_named_by_alias_is_compared_as_written() -> None:
     ]
 
 
+def test_a_task_naming_no_repository_asks_for_no_repo_wide_effect() -> None:
+    human = {"id": "sign-off", "kind": "human", "task": "Sign it off."}
+    direct = {"id": "notes", "repo": "", "task": "Write the notes."}
+    plan = {**PLAN, "tasks": [*PLAN["tasks"], human, direct]}
+
+    assert plan_budgets.rule_refusals(plan_budgets.parse(ANSWERS), plan) == []
+
+
 def test_a_plan_with_no_readable_tasks_is_judged_rather_than_crashed_on() -> None:
     answers = plan_budgets.parse(ANSWERS)
 

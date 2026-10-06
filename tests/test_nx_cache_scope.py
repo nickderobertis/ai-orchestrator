@@ -74,6 +74,7 @@ from nx_inputs import (
     MERGE_POLICY_ROOT,
     MERGE_POLICY_SCOPED,
     NX_CACHE_CHECK,
+    OPT_IN_TARGETS,
     PLAN_TOOLING_DOCS_SCOPED,
     PLAN_TOOLING_PROJECT,
     PLAN_TOOLING_ROOT,
@@ -286,6 +287,12 @@ def test_every_tier_a_diff_can_deselect_is_one_a_memo_would_have_answered() -> N
     """
     for target in SELECTED_TARGETS:
         owners = _owners(target)
+        if not owners and target in OPT_IN_TARGETS:
+            assert _memoizes(target, {"targets": {target: {}}}), (
+                f"{target} is a tier a diff can deselect that a project opts into, so "
+                "nx.json's targetDefaults has to memoize it for every project that does"
+            )
+            continue
         assert owners, f"the deterministic tier selects {target}, which no project declares"
         for root, declaration in owners:
             assert _memoizes(target, declaration), (
