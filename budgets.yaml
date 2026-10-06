@@ -20,3 +20,15 @@ budgets:
     unit: seconds
     direction: max
     threshold: 1800
+  - id: cycle-time
+    description: >-
+      A landed change's time from its first dispatch to its landing on the base, the measure
+      of record for delivery, read from the adopted engine's per-change telemetry. It exists
+      only once the change has landed, so it is reported after landing, by this host's
+      run-success hook through `just follow-ups`, and never blocks the change it measures.
+    labels: [onepipeline]
+    measure: reported
+    command: ["scripts/budget-cycle-time.sh"]
+    unit: seconds
+    direction: max
+    threshold: 10800

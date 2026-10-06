@@ -41,8 +41,9 @@
 # wherever the launch put it.
 #
 # This is the only thing in this repository that launches `just follow-ups`; a manager
-# typing it is the only other way it runs. `just plan`, `just finish-plan` and `just
-# follow-ups` name no hook, so a planning run and a follow-up run never launch one.
+# typing it is the only other way it runs. `just plan` and `just finish-plan` name no hook,
+# and `just follow-ups` names only its budget closeout, which launches nothing, so a
+# planning run and a follow-up run never launch one.
 # `tests/run_end_hooks/test_run_end_hooks_e2e.py` drives both modes through a real launch.
 set -euo pipefail
 

@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "run": "sample",
+  "entries": [
+    {
+      "node": "<written for you from the library's report or the engine's telemetry; leave it>",
+      "repository": "<written for you from the library's report or the engine's telemetry; leave it>",
+      "change_url": "<written for you from the library's report or the engine's telemetry; leave it>",
+      "landing": "<written for you from the library's report or the engine's telemetry; leave it>",
+      "budget": "<written for you from the library's report or the engine's telemetry; leave it>",
+      "result": "over",
+      "actual": "<written for you from the library's report or the engine's telemetry; leave it>",
+      "headroom": "<written for you from the library's report or the engine's telemetry; leave it>",
+      "headroom_percent": "<written for you from the library's report or the engine's telemetry; leave it>",
+      "host": "<written for you from the library's report or the engine's telemetry; leave it>",
+      "cycle_seconds": "<written for you from the library's report or the engine's telemetry; leave it>",
+      "segments": "<written for you from the library's report or the engine's telemetry; leave it>",
+      "not_measured": "<written for you from the library's report or the engine's telemetry; leave it>",
+      "gate_runs": "<written for you from the library's report or the engine's telemetry; leave it>",
+      "dispatches": "<written for you from the library's report or the engine's telemetry; leave it>",
+      "publication_attempts": "<written for you from the library's report or the engine's telemetry; leave it>",
+      "disposition": [
+        {
+          "disposition": "<one of filed, budget-question>",
+          "root_cause": "<root-cause>",
+          "item": "<standin:<native id> of the ticket or item the evidence reached, or the closed item>",
+          "detail": "<one or two sentences: the cause the telemetry shows, and what became of it>"
+        }
+      ],
+      "detail": "<written for you from the library's report or the engine's telemetry; leave it>"
+    }
+  ]
+}

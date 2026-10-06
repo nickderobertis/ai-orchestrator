@@ -13,12 +13,16 @@ second local store standing in for the board, whose item is moved the way a pers
 
 from __future__ import annotations
 
+import argparse
+import contextlib
 import copy
 import dataclasses
 import functools
+import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -369,7 +373,7 @@ def test_a_sound_item_reads_back_as_the_ticket_it_was_rendered_from() -> None:
 def test_the_record_is_the_current_schema_and_carries_the_host_after_verified_at() -> None:
     held = tickets.record(_ticket())
 
-    assert held["schema"] == tickets.SCHEMA == 8
+    assert held["schema"] == tickets.SCHEMA == 9
     keys = list(held)
     assert keys == [*tickets.RECORD_KEYS, tickets.FREQUENCY_FIELD]
     assert held[tickets.ESTIMATE_FIELD] == "medium"
@@ -437,11 +441,11 @@ def _status(word: str) -> Callable[[dict[str, object]], None]:
         (_drop_record("basis"), "record is missing basis"),
         (_drop_record("host"), "record is missing host"),
         (_set_record("extra", 1), "carries keys this does not write: extra"),
-        (_set_record("schema", 1), "is schema 1, and this reads schema 7 or 8"),
-        (_set_record("schema", 2), "is schema 2, and this reads schema 7 or 8"),
-        (_set_record("schema", 3), "is schema 3, and this reads schema 7 or 8"),
-        (_set_record("schema", 4), "is schema 4, and this reads schema 7 or 8"),
-        (_set_record("schema", 6), "is schema 6, and this reads schema 7 or 8"),
+        (_set_record("schema", 1), "is schema 1, and this reads schema 7, 8 or 9"),
+        (_set_record("schema", 2), "is schema 2, and this reads schema 7, 8 or 9"),
+        (_set_record("schema", 3), "is schema 3, and this reads schema 7, 8 or 9"),
+        (_set_record("schema", 4), "is schema 4, and this reads schema 7, 8 or 9"),
+        (_set_record("schema", 6), "is schema 6, and this reads schema 7, 8 or 9"),
         (_drop_record("priority_estimate"), "record is missing priority_estimate; `priority"),
         (_set_record("priority_estimate", "critical"), "`priority_estimate` 'critical' is not"),
         (_set_record("priority_estimate", "none"), "`priority_estimate` 'none' is not one of"),
@@ -572,7 +576,7 @@ def test_a_schema_4_ticket_is_refused_naming_its_schema_first() -> None:
 
     found = tickets.problems(item, run=RUN, root_cause=CAUSE)
 
-    assert found[0].startswith("the record is schema 4, and this reads schema 7 or 8"), found
+    assert found[0].startswith("the record is schema 4, and this reads schema 7, 8 or 9"), found
     assert any(
         "carries `## Repository` and `## Suggested fixes`, which schema 5 retired; bring the "
         "ticket to the current shape" in problem
@@ -791,7 +795,7 @@ def test_every_problem_is_named_at_once_rather_than_the_first() -> None:
     item = _item()
     item["project"] = "a-project"
     item["title"] = ""
-    _record(item)["schema"] = 9
+    _record(item)["schema"] = tickets.SCHEMA + 1
 
     found = tickets.problems(item)
 
@@ -1000,6 +1004,8 @@ COMMON: dict[str, object] = {
 INITIAL_ACCOUNT: dict[str, object] = {
     "dispositions": Path(DISPOSITIONS),
     "check_dispositions": CHECK_DISPOSITIONS,
+    "budgets": Path("/budgets.json"),
+    "check_budgets": "check-budget-account",
 }
 FEEDBACK_ACCOUNT: dict[str, object] = {
     "feedback_file": FEEDBACK_FILE,
@@ -1129,6 +1135,7 @@ INITIAL_SECTIONS = (
     # The approved example's two sections, shown after the example's placeholders.
     tickets.IMPACT,
     tickets.SUGGESTED_FIX,
+    "Every landed change against its budgets",
     "Ownership on the board",
     "Acceptance criteria",
 )
@@ -1154,6 +1161,11 @@ INITIAL_CRITERIA = (
     "dispatch was given carries exactly one disposition, with the root causes that "
     "disposition owes. Run it last, after the final edit to that account, because a run of it "
     "from before that edit says nothing about the account you leave.",
+    "`check-budget-account` reports the budget account at `/budgets.json` sound: every overrun "
+    "carries exactly one disposition and every other entry none, and only dispositions "
+    "changed. Run it last, after the final edit to that account.",
+    "The report lists every landed change's result line from the budget account, and every "
+    "`budget-question` with the closed item's URL.",
     "Every claim the report makes about what reached the board is true of the board as it "
     "finally stands: an issue reported created or updated is one the copy printed, and a "
     "refusal reported is one a command printed.",
@@ -1816,7 +1828,7 @@ def test_a_schema_7_ticket_still_validates_and_the_same_ticket_at_schema_8_is_re
     `none` leaves it where it was — still bind it.
     """
     older = _ticket(body=SCHEMA_7_BODY, priority_estimate=tickets.Priority.HIGH)
-    path = _write(drafts_root, older, _at_schema(older, tickets.PRIOR_SCHEMA))
+    path = _write(drafts_root, older, _at_schema(older, tickets.STRUCTURE_AT - 1))
 
     assert tickets.main(["validate", str(path)]) == tickets.SOUND, capsys.readouterr().err
     assert tickets.read_ticket(path).body == SCHEMA_7_BODY
@@ -1859,7 +1871,7 @@ def test_a_schema_7_ticket_keeps_the_uncapped_estimate_it_was_written_with(
         priority_estimate=tickets.Priority.URGENT,
         frequency=tickets.Frequency.CONSISTENT,
     )
-    path = _write(drafts_root, older, _at_schema(older, tickets.PRIOR_SCHEMA))
+    path = _write(drafts_root, older, _at_schema(older, tickets.STRUCTURE_AT - 1))
 
     assert tickets.main(["validate", str(path)]) == tickets.SOUND, capsys.readouterr().err
     capsys.readouterr()
@@ -1871,7 +1883,7 @@ def test_a_schema_7_ticket_keeps_the_uncapped_estimate_it_was_written_with(
         body=body.replace(SCHEMA_7_RAISED_LINE, capped),
         priority_estimate=tickets.Priority.HIGH,
     )
-    _write(drafts_root, rewritten, _at_schema(rewritten, tickets.PRIOR_SCHEMA))
+    _write(drafts_root, rewritten, _at_schema(rewritten, tickets.STRUCTURE_AT - 1))
     assert tickets.main(["validate", str(path)]) == tickets.SOUND, capsys.readouterr().err
     capsys.readouterr()
 
@@ -2893,6 +2905,10 @@ def _answers_command(root: Path, *extra: str) -> list[str]:
         DISPOSITIONS,
         "--check-dispositions",
         CHECK_DISPOSITIONS,
+        "--budgets",
+        "/budgets.json",
+        "--check-budgets",
+        "check-budget-account",
         *extra,
     ]
 
@@ -5868,6 +5884,1356 @@ def test_each_statuss_linear_state_is_the_one_the_linear_source_writes_it_as() -
         status.value: mapping[status.value] for status in tickets.Status
     }
     assert not set(tickets.PEOPLES_LINEAR_STATES) & set(mapping.values())
+
+
+# llmlint: ignore-end[shell_test_tiers_stay_split]
+
+
+# llmlint: ignore-block[shell_test_tiers_stay_split] Required public CLI coverage here.
+# These tests exercise this module's public budget-account commands against locked library CLIs.
+# The task requires the command tests here; the attached host-launch journeys live in plan-
+# tooling.
+# A completed workstream captured from the adopted engine's per-change renderer.
+CYCLE_DOCUMENT = REPO_ROOT / "tests/fixtures/cycle-time/adopted-engine.json"
+
+
+def _cycle_document() -> dict:
+    return json.loads(CYCLE_DOCUMENT.read_text())
+
+
+def _budget_cli(root: Path, run: str = RUN, *extra: str) -> subprocess.CompletedProcess[str]:
+    arguments = ["check-budgets", "--root", str(root), *extra, run]
+    done = subprocess.run(
+        [sys.executable, "-m", "orchestrator.follow_up_tickets", *arguments],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    # The public Python entry point and the executable must make the same decision.
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        status = tickets.main(arguments)
+    assert (status, out.getvalue(), err.getvalue()) == (
+        done.returncode,
+        done.stdout,
+        done.stderr,
+    )
+    return done
+
+
+def _budget_account(root: Path, *entries: dict, run: str = RUN) -> Path:
+    path = tickets.budgets_path(root, run)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"schema": tickets.BUDGETS_SCHEMA, "run": run, "entries": entries}))
+    return path
+
+
+def _cycle_entry(result: str = "over") -> dict:
+    change = next(c for c in _cycle_document()["changes"] if c["cycle_seconds"] is not None)
+    budget = json.loads(
+        subprocess.check_output(
+            [
+                str(REPO_ROOT / ".venv/bin/onebudgetspec"),
+                "list",
+                "budgets.yaml",
+                "--label",
+                "onepipeline",
+                "--output",
+                "json",
+            ],
+            cwd=REPO_ROOT,
+            text=True,
+        )
+    )["budgets"][0]
+    entry = tickets._entry(change, tickets.BudgetResult(result), "recorded telemetry")
+    entry.update(
+        budget={key: budget[key] for key in tickets.ENTRY_BUDGET_KEYS},
+        actual=change["cycle_seconds"],
+        headroom=-1,
+        headroom_percent=-1,
+        host={"load1": 0, "cpus": 1, "mem_available_mib": None, "conditions": {}},
+    )
+    entry["repository"] = REPOSITORY
+    return entry
+
+
+def _budget_disposed(item: str | None = None, word: str = "filed") -> dict:
+    return {
+        "disposition": word,
+        "root_cause": CAUSE,
+        "item": item,
+        "detail": "This run reproduced a long gate; evidence names its measured interval.",
+    }
+
+
+@pytest.mark.parametrize("count", [0, 2])
+def test_budget_cli_refuses_an_overrun_without_exactly_one_disposition(
+    drafts_root: Path,
+    count: int,
+) -> None:
+    entry = _cycle_entry()
+    entry["disposition"] = [_budget_disposed()] * count
+    _budget_account(drafts_root, entry)
+    done = _budget_cli(drafts_root)
+    assert done.returncode == tickets.UNSOUND
+    assert f"carries {count} dispositions" in done.stderr
+    assert entry["node"] in done.stderr
+
+
+@pytest.mark.parametrize("result", ["within", "error", "no-budget"])
+def test_budget_cli_refuses_dispositions_on_a_non_overrun(drafts_root: Path, result: str) -> None:
+    entry = _cycle_entry(result)
+    entry["disposition"] = [_budget_disposed()]
+    _budget_account(drafts_root, entry)
+    done = _budget_cli(drafts_root)
+    assert done.returncode == tickets.UNSOUND
+    assert f"is `{result}` and carries a disposition" in done.stderr
+    entry["disposition"] = []
+    _budget_account(drafts_root, entry)
+    assert _budget_cli(drafts_root).returncode == tickets.SOUND
+
+
+@pytest.mark.parametrize(
+    "word,reason",
+    [
+        ("filed", "links no ticket or item"),
+        ("budget-question", "naming no closed item"),
+    ],
+)
+def test_budget_cli_requires_a_link(drafts_root: Path, word: str, reason: str) -> None:
+    entry = _cycle_entry()
+    entry["disposition"] = [_budget_disposed(word=word)]
+    _budget_account(drafts_root, entry)
+    done = _budget_cli(drafts_root)
+    assert done.returncode == tickets.UNSOUND
+    assert reason in done.stderr
+
+
+def _register_budget_repo(root: Path, repository: str = REPOSITORY) -> None:
+    root.mkdir()
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    done = subprocess.run(
+        [
+            str(REPO_ROOT / ".venv/bin/onevcs"),
+            "register",
+            str(root),
+            "--origin",
+            "https://" + repository + ".git",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+
+
+def _standing_budget(root: Path, entry: dict, *, changed: bool = False) -> None:
+    import yaml
+
+    budget = dict(entry["budget"])
+    budget.pop("file")
+    budget.update(command=["true"], measure="reported", labels=["onepipeline"])
+    if changed:
+        budget["threshold"] *= 2
+    (root / "budgets.yaml").write_text(yaml.safe_dump({"schema_version": 1, "budgets": [budget]}))
+
+
+def test_budget_question_reads_the_closed_item_and_the_budget_that_stands(
+    budget_registry: Path,
+    board: Path,
+    drafts_root: Path,
+    tmp_path: Path,
+) -> None:
+    entry = _cycle_entry()
+    budget = tickets._standing(entry)
+    old = _ticket(created_by_run=OTHER_RUN, owning_runs=(tickets.RunId(OTHER_RUN),), budget=budget)
+    destination = _on_board(_write(drafts_root, old))
+    entry["disposition"] = [_budget_disposed(destination, "budget-question")]
+    _budget_account(drafts_root, entry)
+    done = _budget_cli(drafts_root)
+    assert done.returncode == tickets.UNSOUND
+    assert "not closed as not planned" in done.stderr
+    _moved(destination, tickets.Status.WITHDRAWN)
+    checkout = tmp_path / "registered"
+    _register_budget_repo(checkout)
+    _standing_budget(checkout, entry)
+    assert _budget_cli(drafts_root).returncode == tickets.SOUND
+    done = _budget_cli(drafts_root, RUN, "--board", BOARD)
+    assert done.returncode == tickets.UNSOUND
+    assert "holds no evidence comment" in done.stderr
+    plan_store.sdk(
+        plan_store.client().task_comment_add(
+            destination,
+            body=tickets.render_comment(RUN, CAUSE, "Long gate again. Should the budget change?"),
+        )
+    )
+    assert _budget_cli(drafts_root, RUN, "--board", BOARD).returncode == tickets.SOUND
+    _standing_budget(checkout, entry, changed=True)
+    done = _budget_cli(drafts_root)
+    assert done.returncode == tickets.UNSOUND
+    assert "no longer stands" in done.stderr
+    _standing_budget(checkout, entry)
+    old = dataclasses.replace(old, budget=budget._replace(threshold=budget.threshold * 2))
+    _write(drafts_root, old)
+    _on_board(tickets.ticket_path(drafts_root, OTHER_RUN, CAUSE))
+    done = _budget_cli(drafts_root)
+    assert done.returncode == tickets.UNSOUND
+    assert "recorded budget" in done.stderr and "differs" in done.stderr
+
+
+def test_budget_record_round_trips_and_an_older_record_without_it_is_unchanged(
+    drafts_root: Path,
+) -> None:
+    budget = tickets._standing(_cycle_entry())
+    ticket = _ticket(budget=budget, drafts=())
+    path = _write(drafts_root, ticket)
+    read = tickets.read_ticket(path)
+    assert read.budget == budget
+    assert tickets.render(read) == tickets.render(ticket)
+    assert tickets.record(read)["budget"] == budget.record()
+    held = _item()
+    _record(held)["schema"] = tickets.PRIOR_SCHEMA
+    old = tickets.from_store_item(held)
+    assert old.budget is None
+    assert "budget" not in tickets.record(old)
+
+
+def test_initial_task_teaches_diagnosis_the_closed_rule_and_the_learning_loop() -> None:
+    task = _flat(_task())
+    for instruction in (
+        "Report every landed change",
+        "headroom_percent",
+        "never by estimate",
+        "Deferred",
+        "budget-question",
+        "closed as not planned",
+        "same repository, file, id",
+        "general class of problem",
+        "personas/planner.yaml",
+        "approved design document",
+        "this dispatch writes neither",
+        "three",
+        "gate",
+        "merge queue",
+        "release",
+    ):
+        assert instruction.lower() in task.lower(), instruction
+
+
+def _executable(path: Path, program: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"#!{sys.executable}\n" + program)
+    path.chmod(0o755)
+
+
+@pytest.fixture
+def budget_launch(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """Only published engine/registry CLIs are doubled; comparison is the real library."""
+    launch = tmp_path / "launcher"
+    installs = launch / ".venv/bin"
+    installs.mkdir(parents=True)
+    (installs / "onebudgetspec").symlink_to(REPO_ROOT / ".venv/bin/onebudgetspec")
+    captured = _cycle_document()
+    fixture = tmp_path / "telemetry.json"
+    fixture.write_text(json.dumps(captured))
+    _executable(
+        installs / "onepipeline", f"import sys\nsys.stdout.write(open({str(fixture)!r}).read())\n"
+    )
+    checkout = tmp_path / "service"
+    checkout.mkdir()
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({REPOSITORY: str(checkout)}))
+    _executable(
+        installs / "onevcs",
+        f"""import json, sys
+mapping = json.load(open({str(registry)!r}))
+if sys.argv[-1] not in mapping:
+    sys.stderr.write("is not a registered repository")
+    sys.exit(2)
+print(json.dumps({{"publication_checkout": mapping[sys.argv[-1]]}}))
+""",
+    )
+    runs = tmp_path / "runs"
+    (runs / captured["run_id"]).mkdir(parents=True)
+    return launch, checkout, runs
+
+
+def _measuring_file(checkout: Path, *, threshold: float, label: bool = True) -> None:
+    import yaml
+
+    budget = dict(_cycle_entry()["budget"])
+    budget.pop("file")
+    budget.update(
+        threshold=threshold,
+        measure="reported",
+        command=[str(REPO_ROOT / "scripts/budget-cycle-time.sh")],
+    )
+    if label:
+        budget["labels"] = ["onepipeline"]
+    (checkout / "budgets.yaml").write_text(
+        yaml.safe_dump({"schema_version": 1, "budgets": [budget]})
+    )
+
+
+@pytest.mark.parametrize(
+    "case", ["within", "over", "error", "missing", "unlabelled", "unregistered"]
+)
+def test_open_budget_account_uses_each_real_library_result_and_preserves_telemetry(
+    drafts_root: Path,
+    budget_launch: tuple[Path, Path, Path],
+    case: str,
+) -> None:
+    launch, checkout, runs = budget_launch
+    captured = _cycle_document()
+    change = next(c for c in captured["changes"] if c["cycle_seconds"] is not None)
+    change["repository"] = REPOSITORY
+    match case:
+        case "error":
+            change = next(
+                c for c in captured["changes"] if c["landing"] and c["cycle_seconds"] is None
+            )
+            change["repository"] = REPOSITORY
+        case "unregistered":
+            change["repository"] = "github.com/unregistered/service"
+    captured["changes"] = [change, {**change, "node": "preserved", "landing": None}]
+    (runs.parent / "telemetry.json").write_text(json.dumps(captured))
+    if case != "missing":
+        _measuring_file(
+            checkout, threshold=change.get("cycle_seconds") or 1, label=case != "unlabelled"
+        )
+        if case == "over":
+            _measuring_file(checkout, threshold=change["cycle_seconds"] / 2)
+    arguments = [
+        "open-budgets",
+        "--root",
+        str(drafts_root),
+        "--runs-root",
+        str(runs),
+        "--checkout",
+        str(launch),
+        captured["run_id"],
+    ]
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        assert tickets.main(arguments) == tickets.SOUND
+    done = subprocess.run(
+        [sys.executable, "-m", "orchestrator.follow_up_tickets", *arguments],
+        text=True,
+        capture_output=True,
+        check=False,
+        cwd=REPO_ROOT,
+    )
+    assert done.stdout == out.getvalue()
+    assert done.returncode == 0, done.stderr
+    account = json.loads(Path(done.stdout.strip()).read_text())
+    assert len(account["entries"]) == 1
+    assert tickets.open_budgets(
+        drafts_root, captured["run_id"], runs, tickets.Installs(launch / ".venv/bin")
+    ) == Path(done.stdout.strip())
+    entry = account["entries"][0]
+    expected = case if case in ("within", "over", "error") else "no-budget"
+    assert entry["result"] == expected
+    if expected != "over":
+        assert _budget_cli(drafts_root, captured["run_id"]).returncode == tickets.SOUND
+    assert entry["disposition"] == []
+    for field in tickets.TELEMETRY_FIELDS:
+        assert entry[field] == change[field]
+    match expected:
+        case "within" | "over":
+            assert entry["actual"] == change["cycle_seconds"]
+            assert entry["headroom"] == entry["budget"]["threshold"] - entry["actual"]
+            assert (
+                entry["headroom_percent"] == entry["headroom"] / entry["budget"]["threshold"] * 100
+            )
+        case "error":
+            # The reason is the library's own `error`, unchanged: nothing here derives one.
+            library = subprocess.run(
+                [str(launch / ".venv/bin/onebudgetspec"), "check", "budgets.yaml"]
+                + ["--label", "onepipeline", "--output", "json"],
+                env={
+                    **os.environ,
+                    "ONEPIPELINE_RUN_ID": captured["run_id"],
+                    "ONEPIPELINE_NODE_ID": change["node"],
+                    "ONEPIPELINE_RUNS_DIR": str(runs),
+                    "PATH": f"{launch / '.venv/bin'}{os.pathsep}{os.environ['PATH']}",
+                },
+                cwd=checkout,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            [reported] = json.loads(library.stdout)["results"]
+            assert reported["verdict"] == "error"
+            assert entry["detail"] == reported["error"]
+            assert entry["detail"].endswith("budget-cycle-time.sh exited with status 1")
+        case "no-budget":
+            assert {
+                "missing": "does not exist",
+                "unlabelled": "has not opted in",
+                "unregistered": "no checkout registered",
+            }[case] in entry["detail"]
+    # Re-dispatch keeps the first measurement and its dispositions unchanged.
+    path = Path(done.stdout.strip())
+    before = path.read_bytes()
+    (checkout / "budgets.yaml").unlink(missing_ok=True)
+    reopened = tickets.open_budgets(
+        drafts_root, captured["run_id"], runs, tickets.Installs(launch / ".venv/bin")
+    )
+    assert reopened == path and path.read_bytes() == before
+
+
+@pytest.mark.parametrize("node_kind", ["measured", "unknown", "absent", "preserved"])
+def test_cycle_script_through_installed_budgetspec_reports_verdicts_and_failure_reasons(
+    budget_launch: tuple[Path, Path, Path],
+    node_kind: str,
+) -> None:
+    launch, checkout, runs = budget_launch
+    document = _cycle_document()
+    change = next(c for c in document["changes"] if c["cycle_seconds"] is not None)
+    match node_kind:
+        case "unknown":
+            change = next(
+                c for c in document["changes"] if c["landing"] and c["cycle_seconds"] is None
+            )
+        case "preserved":
+            change = next(c for c in document["changes"] if c["landing"] is None)
+    node = "absent" if node_kind == "absent" else change["node"]
+    environment = {
+        **os.environ,
+        "PATH": f"{launch / '.venv/bin'}:{os.environ['PATH']}",
+        "ONEPIPELINE_RUN_ID": document["run_id"],
+        "ONEPIPELINE_NODE_ID": node,
+        "ONEPIPELINE_RUNS_DIR": str(runs),
+    }
+    for multiplier, verdict in ((2, "within"), (0.5, "over")):
+        _measuring_file(checkout, threshold=(change["cycle_seconds"] or 1) * multiplier)
+        import yaml
+
+        budgets = yaml.safe_load((checkout / "budgets.yaml").read_text())
+        budgets["conditions"] = [
+            {"name": name, "command": ["printf", value]}
+            for name, value in (("zeta", "3"), ("dispatches", "2"))
+        ]
+        (checkout / "budgets.yaml").write_text(yaml.safe_dump(budgets))
+        command = [
+            str(REPO_ROOT / ".venv/bin/onebudgetspec"),
+            "check",
+            "budgets.yaml",
+            "--label",
+            "onepipeline",
+            "--output",
+        ]
+        report = subprocess.run(
+            [*command, "json"],
+            env=environment,
+            cwd=checkout,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        result = json.loads(report.stdout)["results"][0]
+        if node_kind != "measured":
+            assert result["verdict"] == "error"
+            assert result["error"].endswith("budget-cycle-time.sh exited with status 1")
+            direct = subprocess.run(
+                [str(REPO_ROOT / "scripts/budget-cycle-time.sh")],
+                env={**environment, "ONEBUDGETSPEC_RESULT": str(checkout / "result.json")},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            assert direct.returncode != 0
+            assert {
+                "unknown": "was not measured",
+                "absent": "recorded no change",
+                "preserved": "has not landed",
+            }[node_kind] in direct.stderr
+            break
+        assert result["verdict"] == verdict
+        assert result["actual"] == change["cycle_seconds"]
+        assert f"run {document['run_id']}, node {node}" in result["detail"]
+        assert change["landing"] in result["detail"]
+        line = subprocess.run(
+            [*command, "text"],
+            env=environment,
+            cwd=checkout,
+            text=True,
+            capture_output=True,
+            check=False,
+        ).stdout.strip()
+        entry = tickets._measured_entry(change, result)
+
+        # Sampling the host is the only moving portion of the second library invocation.
+        def stable_host(text: str) -> str:
+            text = re.sub(r"(?<=load=)[^/ ]+", "<sampled-load>", text)
+            return re.sub(r"(?<=mem_available=)(?:[0-9]+|unknown)", "<sampled-memory>", text)
+
+        assert stable_host(tickets.result_line(entry)) == stable_host(line)
+        assert tickets._host_line(result["host"]).startswith("load=")
+
+
+def test_budget_record_schema_nine_matches_the_checked_in_golden() -> None:
+    budget = tickets.OverrunBudget(
+        tickets.Origin(REPOSITORY), "budgets.yaml", "cycle-time", 123, "max"
+    )
+    golden = json.loads((CYCLE_DOCUMENT.parent / "ticket-v9.json").read_text())
+    assert tickets.record(_ticket(budget=budget)) == golden
+
+
+@pytest.mark.parametrize(
+    "departure,reason",
+    [
+        ({"repository": "not-an-origin"}, "not a normalized origin"),
+        ({"file": ""}, "not a non-empty string"),
+        ({"id": 3}, "not a non-empty string"),
+        ({"threshold": True}, "not a number"),
+        ({"direction": "sideways"}, "not one of"),
+    ],
+)
+def test_budget_ticket_validator_refuses_bad_budget_fields(
+    drafts_root: Path,
+    departure: dict,
+    reason: str,
+) -> None:
+    budget = tickets._standing(_cycle_entry()).record() | departure
+    held = tickets.record(_ticket()) | {"budget": budget}
+    written = tickets.render(_ticket()).replace(
+        json.dumps(tickets.record(_ticket())),
+        json.dumps(held),
+    )
+    path = _write(drafts_root, _ticket(), written)
+    assert tickets.main(["validate", str(path)]) == tickets.UNSOUND
+    assert any(reason in problem for problem in tickets.budget_problems(budget, "budget"))
+
+
+@pytest.mark.parametrize("budget", [None, [], {"id": "delivery"}])
+def test_budget_ticket_validator_refuses_a_non_budget_record(
+    drafts_root: Path, budget: object
+) -> None:
+    held = _item()
+    _record(held)["budget"] = budget
+    assert any("not an object of exactly" in problem for problem in tickets.problems(held))
+
+
+@pytest.mark.parametrize(
+    "departure,reason",
+    [
+        ({"result": "green"}, "states the result"),
+        ({"budget": {}}, "not one onebudgetspec reported"),
+        ({"detail": None}, "valid detail string"),
+        ({"budget": None}, "names no budget"),
+        ({"disposition": {}}, "not a list"),
+        ({"disposition": [None]}, "not an object"),
+        ({"disposition": [{}]}, "not an object of exactly"),
+        ({"disposition": [_budget_disposed() | {"disposition": "duplicate"}]}, "not one of"),
+        ({"disposition": [_budget_disposed() | {"root_cause": "spaces here"}]}, "not a kebab-case"),
+        ({"disposition": [_budget_disposed() | {"detail": ""}]}, "detail"),
+    ],
+)
+def test_budget_cli_refuses_a_malformed_entry(
+    drafts_root: Path, departure: dict, reason: str
+) -> None:
+    entry = _cycle_entry() | departure
+    _budget_account(drafts_root, entry)
+    done = _budget_cli(drafts_root)
+    assert done.returncode == tickets.UNSOUND
+    assert reason in done.stderr
+    assert entry["node"] in done.stderr
+
+
+def test_budget_cli_checks_measurement_integrity_and_each_envelope(
+    drafts_root: Path,
+    tmp_path: Path,
+) -> None:
+    assert _budget_cli(drafts_root).returncode == tickets.UNSOUND
+    entry = _cycle_entry("within")
+    path = _budget_account(drafts_root, entry)
+    measured = tmp_path / "measured.json"
+    measured.write_bytes(path.read_bytes())
+    assert _budget_cli(drafts_root, RUN, "--measured", str(measured)).returncode == tickets.SOUND
+    entry["actual"] = 0
+    _budget_account(drafts_root, entry)
+    done = _budget_cli(drafts_root, RUN, "--measured", str(measured))
+    assert done.returncode == tickets.UNSOUND and "only `disposition`" in done.stderr
+    _budget_account(drafts_root)
+    done = _budget_cli(drafts_root, RUN, "--measured", str(measured))
+    assert done.returncode == tickets.UNSOUND and "not the ones measured" in done.stderr
+    path.write_text(json.dumps({"schema": 2, "run": RUN, "entries": []}))
+    assert _budget_cli(drafts_root).returncode == tickets.UNSOUND
+    path.write_text("invalid JSON")
+    assert _budget_cli(drafts_root).returncode == tickets.UNRUNNABLE
+    path.write_text(json.dumps({"schema": 1, "run": RUN, "entries": [None]}))
+    assert _budget_cli(drafts_root).returncode == tickets.UNSOUND
+
+
+def test_budget_report_commands_print_the_saved_library_values(
+    drafts_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    for command in ("budget-results", "budget-overruns"):
+        assert tickets.main([command, "--root", str(drafts_root), RUN]) == tickets.UNRUNNABLE
+        capsys.readouterr()
+    entries = [_cycle_entry(result) for result in ("within", "over", "error", "no-budget")]
+    entries[2]["detail"] = "command failed"
+    entries[3]["budget"] = None
+    path = _budget_account(drafts_root, *entries)
+    assert tickets.main(["budget-results", "--root", str(drafts_root), RUN]) == tickets.SOUND
+    assert capsys.readouterr().out.splitlines() == [tickets.change_line(entry) for entry in entries]
+    snapshot = drafts_root / "measured-account.json"
+    snapshot.write_bytes(path.read_bytes())
+    entries[0]["actual"] = 999
+    _budget_account(drafts_root, *entries)
+    assert (
+        tickets.main(
+            ["budget-results", "--root", str(drafts_root), "--measured", str(snapshot), RUN]
+        )
+        == tickets.SOUND
+    )
+    original = json.loads(snapshot.read_text())["entries"]
+    assert capsys.readouterr().out.splitlines() == [
+        tickets.change_line(entry) for entry in original
+    ]
+    assert tickets.main(["budget-overruns", "--root", str(drafts_root), RUN]) == tickets.SOUND
+    assert capsys.readouterr().out == "1\n"
+    assert tickets.main(["budgets-path", "--root", str(drafts_root), RUN]) == tickets.SOUND
+    assert capsys.readouterr().out == str(path) + "\n"
+    path.write_text(json.dumps({"entries": {}}))
+    assert tickets.main(["budget-results", "--root", str(drafts_root), RUN]) == tickets.UNSOUND
+    path.write_text(json.dumps({"schema": tickets.BUDGETS_SCHEMA, "run": RUN, "entries": [None]}))
+    assert tickets.main(["budget-results", "--root", str(drafts_root), RUN]) == tickets.UNSOUND
+    assert tickets._plain(1e-8) == "0.00000001"
+    assert tickets._plain(None) == "unknown"
+    assert tickets._host_line({"conditions": {"dispatches": "2"}}).endswith("dispatches=2")
+
+
+@pytest.mark.parametrize(
+    "tool,body,reason",
+    [
+        ("onepipeline", "raise SystemExit(4)", "exited 4"),
+        ("onepipeline", "print('invalid JSON')", "not JSON"),
+        ("onepipeline", "print('{}')", "not a schema"),
+        ("onevcs", "raise SystemExit(4)", "exited 4"),
+        ("onevcs", "print('invalid JSON')", "named no publication checkout"),
+        ("onevcs", "print('{}')", "named no publication checkout"),
+    ],
+)
+def test_budget_account_refuses_an_unreadable_engine_or_registry_boundary(
+    budget_launch: tuple[Path, Path, Path],
+    drafts_root: Path,
+    tool: str,
+    body: str,
+    reason: str,
+) -> None:
+    launch, _, runs = budget_launch
+    _executable(launch / ".venv/bin" / tool, body + "\n")
+    with pytest.raises(OSError, match=reason):
+        tickets.open_budgets(
+            drafts_root, _cycle_document()["run_id"], runs, tickets.Installs(launch / ".venv/bin")
+        )
+
+
+def test_budget_account_refuses_an_existing_foreign_account_and_a_missing_install(
+    drafts_root: Path,
+    budget_launch: tuple[Path, Path, Path],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    launch, _, runs = budget_launch
+    run = _cycle_document()["run_id"]
+    path = _budget_account(drafts_root, run=run)
+    path.write_text(json.dumps({"schema": 1, "run": "foreign", "entries": []}))
+    arguments = [
+        "open-budgets",
+        "--root",
+        str(drafts_root),
+        "--runs-root",
+        str(runs),
+        "--checkout",
+        str(launch),
+        run,
+    ]
+    assert tickets.main(arguments) == tickets.UNRUNNABLE
+    assert "not this run's budget account" in capsys.readouterr().err
+    path.unlink()
+    (launch / ".venv/bin/onepipeline").unlink()
+    assert tickets.main(arguments) == tickets.UNRUNNABLE
+    assert "did not run" in capsys.readouterr().err
+    assert (
+        tickets.change_telemetry("absent-run", runs, tickets.Installs(launch / ".venv/bin")) == []
+    )
+
+
+def test_budget_filed_entry_requires_a_sound_ticket_with_its_budget(
+    drafts_root: Path,
+    board: Path,
+) -> None:
+    entry = _cycle_entry()
+    link = f"{BOARD}:some-item"
+    entry["disposition"] = [_budget_disposed(link)]
+    _budget_account(drafts_root, entry)
+    assert "holds no ticket" in _budget_cli(drafts_root).stderr
+    path = _write(drafts_root, _ticket())
+    assert "rather than the one it overran" in _budget_cli(drafts_root).stderr
+    path.write_text("broken ticket")
+    assert "ticket is not sound" in _budget_cli(drafts_root).stderr
+    ticket = _ticket(budget=tickets._standing(entry), drafts=())
+    _write(drafts_root, ticket)
+    assert _budget_cli(drafts_root).returncode == tickets.SOUND
+    # A link alone cannot attest that the evidence actually reached the item.
+    destination = _on_board(path)
+    entry["disposition"] = [_budget_disposed(destination)]
+    _budget_account(drafts_root, entry)
+    done = _budget_cli(drafts_root, RUN, "--board", BOARD)
+    assert done.returncode == tickets.UNSOUND and "evidence did not reach" in done.stderr
+    plan_store.sdk(
+        plan_store.client().task_comment_add(
+            destination, body=tickets.render_comment(RUN, CAUSE, "The gate overran again.")
+        )
+    )
+    assert _budget_cli(drafts_root, RUN, "--board", BOARD).returncode == tickets.SOUND
+
+
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] Required board journey in this suite.  # noqa: E501 - directive and reason occupy one line
+# This board journey reads the repository's documented field configuration, like the adjacent
+# board tests; the task requires this suite and does not authorize changing enforcement targets.
+@pytest.mark.reads_docs
+def test_budget_evidence_is_read_back_from_the_loopback_board(
+    budget_registry: Path,
+    drafts_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import github_board as remote
+
+    environment, root = remote._followups_environment(tmp_path)
+    with remote._serving_followups(environment, fields=True):
+        for name, value in environment.items():
+            monkeypatch.setenv(name, value)
+        entry = _cycle_entry()
+        entry["repository"] = remote._hosted(remote.CONFIGURED_REPOSITORY)
+        budget = tickets._standing(entry)
+        publication = tmp_path / "publication"
+        _register_budget_repo(publication, str(budget.repository))
+        _standing_budget(publication, entry)
+        for word, cause in (("filed", CAUSE), ("budget-question", "closed-budget-cause")):
+            earlier = _ticket(
+                created_by_run=tickets.RunId(OTHER_RUN),
+                owning_runs=(tickets.RunId(OTHER_RUN),),
+                root_cause=tickets.RootCause(cause),
+                repository=budget.repository,
+                title=f"{tickets.repository_name(budget.repository)}: delivery overrun",
+                basis=(tickets.Basis(budget.repository, tickets.Commit(COMMIT)),),
+                drafts=(),
+                budget=budget,
+            )
+            path = _write(root, earlier)
+            assert tickets.main(["copy", "--board", "followups", str(path)]) == tickets.SOUND
+            # The module's copy binds the stored record to the board's native item.
+            read = tickets.read_ticket(path)
+            assert read.board_item is not None
+            item = f"followups:{read.board_item}"
+            if word == "budget-question":
+                plan_store.sdk(plan_store.client().task_status_set(item, tickets.Status.WITHDRAWN))
+            else:
+                plan_store.sdk(plan_store.client().task_status_set(item, tickets.Status.DEFERRED))
+                local = dataclasses.replace(
+                    earlier, created_by_run=tickets.RunId(RUN), owning_runs=(tickets.RunId(RUN),)
+                )
+                _write(root, local)
+            entry["disposition"] = [_budget_disposed(item, word) | {"root_cause": cause}]
+            _budget_account(root, entry)
+            done = _budget_cli(root, RUN, "--board", "followups")
+            assert done.returncode == tickets.UNSOUND
+            assert "evidence" in done.stderr
+            plan_store.sdk(
+                plan_store.client().task_comment_add(
+                    item,
+                    body=tickets.render_comment(
+                        RUN, cause, "Measured long gate. Should the budget change?"
+                    ),
+                )
+            )
+            assert tickets.main(["re-estimate", "--board", "followups", item]) == tickets.SOUND
+            done = _budget_cli(root, RUN, "--board", "followups")
+            assert done.returncode == tickets.SOUND, done.stderr
+
+
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+
+
+@pytest.mark.parametrize(
+    "result,reason",
+    [
+        (None, "not an object"),
+        ({}, "names no id"),
+        (
+            {
+                "id": "delivery",
+                "file": "budgets.yaml",
+                "unit": "seconds",
+                "direction": "max",
+                "threshold": None,
+                "host": {},
+            },
+            "states no threshold or host",
+        ),
+        (
+            {
+                "id": "delivery",
+                "file": "budgets.yaml",
+                "unit": "seconds",
+                "direction": "max",
+                "threshold": 10,
+                "host": {},
+                "verdict": "green",
+            },
+            "states the verdict",
+        ),
+    ],
+)
+def test_budget_report_rejects_malformed_library_results_at_its_boundary(
+    budget_launch: tuple[Path, Path, Path],
+    result: object,
+    reason: str,
+) -> None:
+    launch, checkout, runs = budget_launch
+    cli = launch / ".venv/bin/onebudgetspec"
+    cli.unlink()
+    _executable(cli, f"print({json.dumps({'results': [result]})!r})\n")
+    with pytest.raises(OSError, match=reason):
+        tickets.budget_report(
+            checkout, RUN, "service", runs, tickets.Installs(launch / ".venv/bin")
+        )
+
+
+@pytest.mark.parametrize("text", ["invalid JSON", "{}"])
+def test_budget_account_records_a_library_invocation_that_gave_no_report(
+    drafts_root: Path,
+    budget_launch: tuple[Path, Path, Path],
+    text: str,
+) -> None:
+    launch, checkout, runs = budget_launch
+    cli = launch / ".venv/bin/onebudgetspec"
+    cli.unlink()
+    _executable(cli, f"import sys\nprint({text!r})\nsys.stderr.write('invalid budgets file')\n")
+    document = _cycle_document()
+    change = next(c for c in document["changes"] if c["cycle_seconds"] is not None)
+    change["repository"] = REPOSITORY
+    document["changes"] = [change]
+    (runs.parent / "telemetry.json").write_text(json.dumps(document))
+    (checkout / "budgets.yaml").write_text("invalid budgets")
+    path = tickets.open_budgets(
+        drafts_root, document["run_id"], runs, tickets.Installs(launch / ".venv/bin")
+    )
+    entry = json.loads(path.read_text())["entries"][0]
+    assert entry["result"] == "error"
+    assert entry["detail"].endswith("invalid budgets file")
+    assert entry["disposition"] == []
+
+
+def test_a_change_whose_repository_was_not_recorded_is_reported_without_a_budget(
+    drafts_root: Path,
+    budget_launch: tuple[Path, Path, Path],
+) -> None:
+    launch, _, runs = budget_launch
+    document = _cycle_document()
+    change = next(c for c in document["changes"] if c["landing"])
+    change["repository"] = None
+    document["changes"] = [change]
+    (runs.parent / "telemetry.json").write_text(json.dumps(document))
+    path = tickets.open_budgets(
+        drafts_root, document["run_id"], runs, tickets.Installs(launch / ".venv/bin")
+    )
+    entry = json.loads(path.read_text())["entries"][0]
+    assert entry["result"] == "no-budget" and "names no repository" in entry["detail"]
+    assert tickets._host_line({"load1": 0, "cpus": 1, "mem_available_mib": 2}) == (
+        "load=0/1 mem_available=2MiB"
+    )
+
+
+def test_budget_question_refuses_missing_changed_or_unreadable_closed_records(
+    budget_registry: Path,
+    board: Path,
+    drafts_root: Path,
+    tmp_path: Path,
+) -> None:
+    entry = _cycle_entry()
+    budget = tickets._standing(entry)
+    old = _ticket(
+        created_by_run=tickets.RunId(OTHER_RUN),
+        owning_runs=(tickets.RunId(OTHER_RUN),),
+        drafts=(),
+        budget=budget,
+    )
+    item = _on_board(_write(drafts_root, old))
+    _moved(item, tickets.Status.WITHDRAWN)
+    entry["disposition"] = [_budget_disposed(item, "budget-question")]
+    _budget_account(drafts_root, entry)
+    assert "standing budget could not be read" in _budget_cli(drafts_root).stderr
+    publication = tmp_path / "registered"
+    _register_budget_repo(publication)
+    assert "standing budget could not be read" in _budget_cli(drafts_root).stderr
+    _standing_budget(publication, entry)
+    assert _budget_cli(drafts_root).returncode == tickets.SOUND
+    record = tickets.record(old)
+    for altered, reason in (
+        ({**record, "root_cause": "another-cause"}, "not for the root cause"),
+        ({key: value for key, value in record.items() if key != "budget"}, "states no budget"),
+    ):
+        plan_store.sdk(
+            plan_store.client().task_metadata_set(item, tickets.KEY, json.dumps(altered))
+        )
+        done = _budget_cli(drafts_root)
+        assert done.returncode == tickets.UNSOUND and reason in done.stderr
+    entry["disposition"] = [_budget_disposed(f"{BOARD}:missing-item", "budget-question")]
+    _budget_account(drafts_root, entry)
+    assert "board could not read" in _budget_cli(drafts_root).stderr
+
+
+@pytest.mark.parametrize(
+    "field,value,reason",
+    [
+        ("threshold", "not a number", "not a number"),
+        ("direction", "sideways", "not one of"),
+        ("unit", "", "names no budget unit"),
+    ],
+)
+def test_budget_account_validates_budget_values_before_using_them(
+    drafts_root: Path,
+    field: str,
+    value: object,
+    reason: str,
+) -> None:
+    entry = _cycle_entry()
+    entry["budget"][field] = value
+    _budget_account(drafts_root, entry)
+    done = _budget_cli(drafts_root)
+    assert done.returncode == tickets.UNSOUND and reason in done.stderr
+
+
+@pytest.fixture
+def budget_registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    registry = tmp_path / "budget-registry"
+    monkeypatch.setenv("ONEVCS_HOME", str(registry))
+    return registry
+
+
+def test_budget_account_contract_matches_its_checked_in_golden() -> None:
+    expected = (CYCLE_DOCUMENT.parent / "budget-account-v1.json").read_text().strip()
+    assert tickets.budget_example("sample", "standin") == expected
+
+
+@pytest.mark.parametrize(
+    "departure,reason",
+    [
+        ({"landing": 4}, "landing"),
+        ({"node": ""}, "node"),
+        ({"cycle_seconds": -1}, "cycle_seconds"),
+        ({"cycle_seconds": float("inf")}, "cycle_seconds"),
+        ({"dispatches": None}, "dispatches"),
+        ({"publication_attempts": -1}, "publication_attempts"),
+        ({"segments": []}, "segments"),
+        ({"segments": {"agent": -1}}, "segments"),
+        ({"gate_runs": None}, "gate_runs"),
+        ({"gate_runs": [None]}, "gate_runs"),
+        ({"not_measured": None}, "not_measured"),
+        ({"not_measured": [None]}, "not_measured"),
+        ({"node": None}, "node"),
+    ],
+)
+def test_budget_account_refuses_malformed_telemetry_before_recording_it(
+    budget_launch: tuple[Path, Path, Path], drafts_root: Path, departure: dict, reason: str
+) -> None:
+    launch, _, runs = budget_launch
+    document = _cycle_document()
+    document["changes"][0].update(departure)
+    (runs.parent / "telemetry.json").write_text(json.dumps(document))
+    with pytest.raises(OSError, match=reason):
+        tickets.open_budgets(
+            drafts_root, document["run_id"], runs, tickets.Installs(launch / ".venv/bin")
+        )
+    assert not tickets.budgets_path(drafts_root, document["run_id"]).exists()
+
+
+@pytest.mark.parametrize(
+    "departure,reason",
+    [
+        ({"direction": "sideways"}, "direction"),
+        ({"file": "/outside/budgets.yaml"}, "within its repository"),
+        ({"file": "../budgets.yaml"}, "within its repository"),
+        ({"error": []}, "optional error string"),
+        ({"detail": 4}, "optional detail string"),
+        ({"actual": None}, "finite actual"),
+        ({"host": {"load1": None, "cpus": 1}}, "host load"),
+        ({"host": {"load1": 0, "cpus": 1, "mem_available_mib": "large"}}, "host memory"),
+        ({"host": {"load1": 0, "cpus": 1, "conditions": []}}, "host conditions"),
+        ({"host": {"load1": 0, "cpus": 1, "conditions": {"dispatches": 1}}}, "host conditions"),
+    ],
+)
+def test_budget_report_refuses_unrenderable_library_values(
+    budget_launch: tuple[Path, Path, Path], departure: dict, reason: str
+) -> None:
+    launch, checkout, runs = budget_launch
+    entry = _cycle_entry()
+    result = (
+        entry["budget"]
+        | {key: entry[key] for key in ("actual", "headroom", "headroom_percent", "host")}
+        | {"verdict": "over"}
+        | departure
+    )
+    cli = launch / ".venv/bin/onebudgetspec"
+    cli.unlink()
+    _executable(cli, f"print({json.dumps({'results': [result]})!r})\n")
+    with pytest.raises(OSError, match=reason):
+        tickets.budget_report(
+            checkout, RUN, "service", runs, tickets.Installs(launch / ".venv/bin")
+        )
+
+
+@pytest.mark.parametrize("command", ["budget-results", "budget-overruns", "open-budgets"])
+@pytest.mark.parametrize(
+    "departure", [{"actual": None}, {"host": None}, {"host": {}}, {"segments": []}]
+)
+def test_budget_read_commands_refuse_invalid_retained_measurements(
+    drafts_root: Path, command: str, departure: dict
+) -> None:
+    entry = _cycle_entry("within") | departure
+    _budget_account(drafts_root, entry)
+    extra = (
+        ["--runs-root", str(drafts_root / "runs"), "--checkout", str(REPO_ROOT)]
+        if command == "open-budgets"
+        else []
+    )
+    assert tickets.main([command, "--root", str(drafts_root), *extra, RUN]) != tickets.SOUND
+
+
+@pytest.mark.parametrize("run", ["../../outside", "..", ".", "", "/outside"])
+def test_budget_cli_refuses_run_ids_that_escape_the_account_root(
+    drafts_root: Path, run: str
+) -> None:
+    done = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "orchestrator.follow_up_tickets",
+            "budgets-path",
+            "--root",
+            str(drafts_root),
+            run,
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert done.returncode == tickets.UNRUNNABLE
+    assert "one safe path component" in done.stderr
+    with pytest.raises(argparse.ArgumentTypeError, match="one safe path component"):
+        tickets.budgets_path(drafts_root, run)
+
+
+@pytest.mark.parametrize("host", [[], {"load1": 0, "cpus": 1, "conditions": {"dispatches": []}}])
+def test_budget_cli_refuses_unrenderable_hosts_on_error_entries(
+    drafts_root: Path, host: object
+) -> None:
+    entry = _cycle_entry("error") | {"host": host}
+    _budget_account(drafts_root, entry)
+    assert _budget_cli(drafts_root).returncode == tickets.UNSOUND
+    assert tickets.main(["budget-results", "--root", str(drafts_root), RUN]) == tickets.UNSOUND
+
+
+def test_budget_entry_model_matches_the_serialized_key_contract() -> None:
+    assert set(tickets.BudgetEntry.__annotations__) == set(tickets.BUDGET_ENTRY_KEYS)
+
+
+@pytest.mark.parametrize(
+    "case,reason",
+    [
+        ("invalid-json", "not JSON"),
+        ("wrong-run", "holds no changes"),
+        ("wrong-schema", "holds no changes"),
+        ("boolean-schema", "holds no changes"),
+        ("missing-dispatch-time", "valid dispatched_at timestamp"),
+        ("malformed-landing-time", "valid landed_at timestamp"),
+        ("naive-landing-time", "valid landed_at timestamp"),
+        ("no-run", "no run is named"),
+        ("no-node", "no node is named"),
+        ("no-result", "names no result file"),
+        ("no-interpreter", "no interpreter is installed"),
+        ("engine-failed", "engine could not report"),
+        ("unwritable-result", "no cycle of"),
+        ("invalid-cycle", "was not measured"),
+        ("empty-landing", "has not landed"),
+    ],
+)
+def test_cycle_script_refuses_each_broken_boundary_with_a_remediation(
+    budget_launch: tuple[Path, Path, Path], case: str, reason: str
+) -> None:
+    launch, _, runs = budget_launch
+    document = _cycle_document()
+    change = next(c for c in document["changes"] if c["cycle_seconds"] is not None)
+    script = REPO_ROOT / "scripts/budget-cycle-time.sh"
+    result = launch / "result.json"
+    environment = {
+        **os.environ,
+        "PATH": f"{launch / '.venv/bin'}:{os.environ['PATH']}",
+        "ONEPIPELINE_RUN_ID": document["run_id"],
+        "ONEPIPELINE_NODE_ID": change["node"],
+        "ONEPIPELINE_RUNS_DIR": str(runs),
+        "ONEBUDGETSPEC_RESULT": str(result),
+    }
+    match case:
+        case "invalid-json":
+            _executable(launch / ".venv/bin/onepipeline", "print('invalid JSON')\n")
+        case "wrong-run":
+            document["run_id"] = "foreign"
+        case "wrong-schema":
+            document["schema_version"] = -1
+        case "boolean-schema":
+            document["schema_version"] = True
+        case "missing-dispatch-time":
+            change.pop("dispatched_at")
+        case "malformed-landing-time":
+            change["landed_at"] = "last week"
+        case "naive-landing-time":
+            change["landed_at"] = "2026-01-01T00:00:20"
+        case "no-run":
+            environment.pop("ONEPIPELINE_RUN_ID")
+        case "no-node":
+            environment.pop("ONEPIPELINE_NODE_ID")
+        case "no-result":
+            environment.pop("ONEBUDGETSPEC_RESULT")
+        case "no-interpreter":
+            script = launch / "isolated/scripts/budget-cycle-time.sh"
+            script.parent.mkdir(parents=True)
+            shutil.copy2(REPO_ROOT / "scripts/budget-cycle-time.sh", script)
+        case "engine-failed":
+            _executable(
+                launch / ".venv/bin/onepipeline",
+                "import sys\nsys.stderr.write('broken telemetry')\nsys.exit(4)\n",
+            )
+        case "unwritable-result":
+            result.mkdir()
+        case "invalid-cycle":
+            change["cycle_seconds"] = float("inf")
+        case "empty-landing":
+            change["landing"] = ""
+    (runs.parent / "telemetry.json").write_text(json.dumps(document))
+    done = subprocess.run(
+        [str(script)], env=environment, text=True, capture_output=True, check=False
+    )
+    assert done.returncode == 1
+    assert reason in done.stderr
+    assert any(word in done.stderr for word in ("retry", "run", "bootstrap", "read"))
+    assert not result.is_file()
+
+
+def test_budget_account_reports_a_real_subprocess_timeout_as_unrunnable(
+    budget_launch: tuple[Path, Path, Path],
+    drafts_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    launch, _, runs = budget_launch
+    _executable(launch / ".venv/bin/onepipeline", "import time\ntime.sleep(1)\n")
+    monkeypatch.setattr(tickets, "BUDGET_TIMEOUT_SECONDS", 0.02)
+    result = tickets.main(
+        [
+            "open-budgets",
+            "--root",
+            str(drafts_root),
+            "--runs-root",
+            str(runs),
+            "--checkout",
+            str(launch),
+            _cycle_document()["run_id"],
+        ]
+    )
+    assert result == tickets.UNRUNNABLE
+    assert "timed out" in capsys.readouterr().err
+    assert not tickets.budgets_path(drafts_root, _cycle_document()["run_id"]).exists()
+
+
+@pytest.mark.parametrize("file", ["/outside/budgets.yaml", "../../outside/budgets.yaml"])
+def test_budget_ticket_cli_refuses_a_budget_outside_its_repository(
+    drafts_root: Path, file: str
+) -> None:
+    ticket = _ticket(budget=tickets._standing(_cycle_entry()))
+    written = tickets.render(ticket)
+    record = tickets.record(ticket)
+    record["budget"]["file"] = file
+    path = _write(
+        drafts_root, ticket, written.replace(json.dumps(tickets.record(ticket)), json.dumps(record))
+    )
+    assert tickets.main(["validate", str(path)]) == tickets.UNSOUND
+
+
+def test_budget_account_cli_refuses_a_boolean_engine_schema(
+    budget_launch: tuple[Path, Path, Path], drafts_root: Path
+) -> None:
+    launch, _, runs = budget_launch
+    document = _cycle_document() | {"schema_version": True}
+    (runs.parent / "telemetry.json").write_text(json.dumps(document))
+    with pytest.raises(OSError, match="not a schema"):
+        tickets.open_budgets(
+            drafts_root, document["run_id"], runs, tickets.Installs(launch / ".venv/bin")
+        )
+
+
+@pytest.mark.parametrize("departure", [{"threshold": True}, {"direction": []}])
+def test_budget_question_refuses_malformed_registered_budget_values(
+    budget_registry: Path,
+    board: Path,
+    drafts_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    departure: dict,
+) -> None:
+    entry = _cycle_entry()
+    entry["budget"]["threshold"] = 1
+    old = _ticket(
+        created_by_run=OTHER_RUN,
+        owning_runs=(tickets.RunId(OTHER_RUN),),
+        budget=tickets._standing(entry),
+    )
+    destination = _on_board(_write(drafts_root, old))
+    _moved(destination, tickets.Status.WITHDRAWN)
+    entry["disposition"] = [_budget_disposed(destination, "budget-question")]
+    _budget_account(drafts_root, entry)
+    checkout = tmp_path / "registered"
+    _register_budget_repo(checkout)
+    _standing_budget(checkout, entry)
+    bin = tmp_path / "tools"
+    bin.mkdir()
+    for tool in ("onevcs", "onetaskgraph"):
+        (bin / tool).symlink_to(REPO_ROOT / ".venv/bin" / tool)
+    reported = {key: entry["budget"][key] for key in ("id", "threshold", "direction")} | departure
+    _executable(bin / "onebudgetspec", f"print({json.dumps({'budgets': [reported]})!r})\n")
+    monkeypatch.setattr(tickets.sys, "executable", str(bin / "python"))
+    done = tickets.main(["check-budgets", "--root", str(drafts_root), RUN])
+    assert done == tickets.UNSOUND
+
+
+def _closeout_arguments(
+    root: Path, snapshot: Path, hook: Path, command: str = "budget-closeout"
+) -> list[str]:
+    return [
+        command,
+        "--root",
+        str(root),
+        "--board",
+        BOARD,
+        "--measured",
+        str(snapshot),
+        "--hook",
+        str(hook),
+        RUN,
+    ]
+
+
+def test_budget_closeout_executes_quoted_hook_and_deletes_its_own_snapshot(
+    drafts_root: Path,
+    board: Path,
+    tmp_path: Path,
+) -> None:
+    entry = _cycle_entry("within")
+    account = _budget_account(drafts_root, entry)
+    snapshot = tmp_path / "measurement ' with spaces.json"
+    snapshot.write_bytes(account.read_bytes())
+    hook = tmp_path / "hook ' with spaces.sh"
+    hook.touch()
+    write = _closeout_arguments(drafts_root, snapshot, hook, "write-budget-closeout")
+    assert tickets.main(write) == tickets.SOUND
+    assert hook.stat().st_mode & 0o777 == 0o700
+    done = subprocess.run([str(hook)], text=True, capture_output=True, check=False)
+    assert done.returncode == tickets.SOUND, done.stderr
+    assert tickets.change_line(entry) in done.stdout
+    assert not snapshot.exists() and not hook.exists()
+    # Exercise the same public command entrypoint for coverage as the real executable.
+    snapshot.write_bytes(account.read_bytes())
+    assert tickets.main(write) == tickets.SOUND
+    assert tickets.main(_closeout_arguments(drafts_root, snapshot, hook)) == tickets.SOUND
+    assert not snapshot.exists() and not hook.exists()
+
+
+def test_budget_closeout_preserves_a_refused_snapshot_and_recovers_after_repair(
+    drafts_root: Path,
+    board: Path,
+    tmp_path: Path,
+) -> None:
+    entry = _cycle_entry("within")
+    account = _budget_account(drafts_root, entry)
+    snapshot = tmp_path / "measured.json"
+    snapshot.write_bytes(account.read_bytes())
+    hook = tmp_path / "closeout.sh"
+    assert (
+        tickets.main(_closeout_arguments(drafts_root, snapshot, hook, "write-budget-closeout"))
+        == tickets.SOUND
+    )
+    _budget_account(drafts_root, entry | {"actual": 0})
+    args = _closeout_arguments(drafts_root, snapshot, hook)
+    assert tickets.main(args) == tickets.UNSOUND
+    assert snapshot.exists() and hook.exists()
+    account.write_bytes(snapshot.read_bytes())
+    assert tickets.main(args) == tickets.SOUND
+    assert not snapshot.exists() and not hook.exists()
+
+
+def test_budget_closeout_writer_refuses_foreign_broken_or_reused_inputs(
+    drafts_root: Path,
+    board: Path,
+    tmp_path: Path,
+) -> None:
+    account = _budget_account(drafts_root, _cycle_entry("within"))
+    snapshot = tmp_path / "measured.json"
+    hook = tmp_path / "closeout.sh"
+    args = _closeout_arguments(drafts_root, snapshot, hook, "write-budget-closeout")
+    assert tickets.main(args) == tickets.UNRUNNABLE
+    snapshot.write_text("invalid JSON")
+    assert tickets.main(args) == tickets.UNRUNNABLE
+    snapshot.write_text(json.dumps({"schema": 1, "run": "foreign", "entries": []}))
+    assert tickets.main(args) == tickets.UNSOUND
+    snapshot.write_bytes(account.read_bytes())
+    hook.write_text("already owns another launch")
+    assert tickets.main(args) == tickets.UNRUNNABLE
+    assert hook.read_text() == "already owns another launch"
+    missing = tmp_path / "absent" / "closeout.sh"
+    assert (
+        tickets.main(_closeout_arguments(drafts_root, snapshot, missing, "write-budget-closeout"))
+        == tickets.UNRUNNABLE
+    )
+
+
+def test_budget_closeout_reports_missing_evidence_and_a_cleanup_failure(
+    drafts_root: Path,
+    board: Path,
+    tmp_path: Path,
+) -> None:
+    snapshot = tmp_path / "measured.json"
+    hook = tmp_path / "closeout.sh"
+    hook.write_text("owned hook")
+    assert tickets.main(_closeout_arguments(drafts_root, snapshot, hook)) == tickets.UNSOUND
+    assert hook.exists()
+    account = _budget_account(drafts_root, _cycle_entry("within"))
+    snapshot.write_bytes(account.read_bytes())
+    hook.unlink()
+    hook.mkdir()
+    assert tickets.main(_closeout_arguments(drafts_root, snapshot, hook)) == tickets.UNRUNNABLE
+    assert snapshot.exists()
+
+
+@pytest.mark.parametrize("departure", [{"schema": 2}, {"run": "foreign"}])
+def test_budget_cli_refuses_a_foreign_snapshot_even_with_identical_entries(
+    drafts_root: Path,
+    tmp_path: Path,
+    departure: dict,
+) -> None:
+    account = _budget_account(drafts_root, _cycle_entry("within"))
+    original = json.loads(account.read_text()) | departure
+    snapshot = tmp_path / "foreign.json"
+    snapshot.write_text(json.dumps(original))
+    done = _budget_cli(drafts_root, RUN, "--measured", str(snapshot))
+    assert done.returncode == tickets.UNSOUND
+    assert "measurement snapshot" in done.stderr
 
 
 # llmlint: ignore-end[shell_test_tiers_stay_split]

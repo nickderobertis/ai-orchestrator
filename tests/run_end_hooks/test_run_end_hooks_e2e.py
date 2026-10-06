@@ -423,15 +423,25 @@ def _run_end_hook_logs(run_root: Path) -> list[Path]:
     ]
 
 
-def test_a_follow_up_run_names_no_hook_and_launches_no_follow_up_run_of_its_own(
+def test_a_follow_up_run_names_only_its_budget_closeout_and_launches_no_follow_up_run(
     succeeded: Succeeded,
 ) -> None:
+    """A follow-up run's one run-end hook is its own budget closeout, never `run-ended.sh`."""
     bench, follow_up = succeeded.ended.bench, succeeded.follow_up
 
     assert succeeded.watched.returncode == 0, succeeded.watched.stdout + succeeded.watched.stderr
     launched = _launch_record(bench, follow_up)
-    assert not _run_end_hooks_named(launched), launched
-    assert not _run_end_hook_logs(bench.runs / follow_up)
+    hooked = _launch_record(bench, succeeded.ended.hooked.run)
+    closeout = launched.get("success_hook")
+    assert isinstance(closeout, str) and closeout, launched
+    assert launched.get("failure_hook") == closeout, launched
+    assert closeout != hooked.get("success_hook"), (launched, hooked)
+    assert "run-ended" not in closeout, launched
+    # A passing closeout retires the per-launch executable it ran as.
+    assert not Path(closeout).exists(), closeout
+    logs = _run_end_hook_logs(bench.runs / follow_up)
+    assert [log.name for log in logs] == ["success.log"], logs
+    assert "run-ended:" not in logs[0].read_text("utf-8"), logs[0].read_text("utf-8")
     assert not list(bench.runs.glob(f"{follow_up}{FOLLOW_UPS_SUFFIX}*"))
 
 

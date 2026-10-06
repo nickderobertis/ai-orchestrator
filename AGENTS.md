@@ -939,6 +939,12 @@ follow-up run and names it. Tell the user the main work is complete and only fol
 are being verified; that run is yours and owed a watch like any other. When it settles,
 give the user the link to every follow-up issue it created or updated, the drafts it
 dropped with why, and anything it found that should have been surfaced during the run.
+Read the follow-up run's budget closeout in `just results`, and repair a failed one before
+relaying the run. Every landed change is reported against its repository's delivery budgets; overruns collect evidence
+by root cause. A `budget-question` comments on a cause closed as not planned while its
+recorded budget still stands and asks the user whether that budget should change. A verified
+miss in an uncovered dimension proposes a general planner-checklist concept and the
+repository's own budget through a plan, never by editing the planner directly.
 
 **When a run ends any other way**, the failure hook launches nothing. Decide with the user
 whether to verify its drafts by hand with `just follow-ups <run-id>`, which verifies the

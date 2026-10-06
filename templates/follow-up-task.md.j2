@@ -125,6 +125,18 @@ variables:
     description: The example disposition account, written from the keys its validator reads. `initial` mode only.
     type: text
     default: ""
+  budgets:
+    description: The path of the budget account the launch measured this run's landed changes into. `initial` mode only.
+    type: string
+    default: ""
+  check_budgets:
+    description: The command that checks the budget account. `initial` mode only.
+    type: string
+    default: ""
+  budget_example:
+    description: The example budget account, one `over` entry, written from the keys its validator reads. `initial` mode only.
+    type: text
+    default: ""
   withdrawal:
     description: >-
       The one status change a comment dispatch makes — withdrawing this run's own proposal a
@@ -163,7 +175,9 @@ variables:
 Verify the follow-up drafts run `{{ run }}` left behind, group what stands by root cause, and
 put one verified ticket per root cause on the `{{ board }}` board. Where another run already
 has an open issue for the same root cause, add this run's evidence to it as a comment
-instead of filing a duplicate.
+instead of filing a duplicate. Report every change the run landed against its own
+repository's budgets, and diagnose each overrun's cause from telemetry and file it by cause
+the same way.
 
 ## Why
 
@@ -171,7 +185,10 @@ During a run, workers, the monitor, the pacemaker and the manager draft what the
 outside their own scope as unverified follow-ups, and nobody has checked them. This
 dispatch checks them. A draft is worth a ticket only once its claim holds in the tree it
 names. Every session's tickets accumulate on one board, so a root cause already filed
-there gets this run's evidence rather than a second issue.
+there gets this run's evidence rather than a second issue. A change's cycle time is the
+measure of record for delivery, but it exists only once the change has landed, so it cannot
+block that change: it is reported here instead, and an overrun nobody has prioritized gets
+louder rather than duplicated.
 
 ## Where everything is
 
@@ -369,13 +386,20 @@ Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Review
     stands in for the full re-verification a feedback re-dispatch used to perform by
     accident, which was the only thing that ever surfaced a sound draft an earlier agent
     had quietly left out.
-11. **Report** every issue you created or updated with its URL (its location where the
+11. **Dispose of every overrun of a landed change's budgets.** Follow "Every landed change
+    against its budgets" below, then run `{{ check_budgets }}` and correct the budget account
+    until it reports it sound.
+12. **Report** every issue you created or updated with its URL (its location where the
     board reports no URL), every dropped draft with its reason, every ticket dropped or
     withdrawn under an accepted ticket with that ticket's URL, every ticket the board
     refused a status for with what `board-status` printed, every ticket the store refused
     to copy with the refusal it printed, and every finding that should have been surfaced
-    live. The account at `{{ dispositions }}` is the record of what became of each draft; the
-    report says what the reader needs beyond it.
+    live. Report the budgets too: every landed change's result line, every overrun's cause
+    and what became of it, with the ticket's or item's URL, and every
+    `{{ shape.budget_question }}` with the closed item's URL and the question it asks, so the
+    manager can put that question to the user. The accounts at `{{ dispositions }}` and
+    `{{ budgets }}` are the record of what became of each draft and each overrun; the report
+    says what the reader needs beyond them.
 
 ## The account of every draft
 
@@ -564,6 +588,85 @@ user approved them for onepipeline#625:
 ````markdown
 {{ shape.worked_example }}````
 
+## Every landed change against its budgets
+
+The launch measured every change run `{{ run }}` landed, once, before you were dispatched: in
+each change's own repository it ran onebudgetspec over the `{{ shape.budget_label }}`-labelled
+budgets of that repository's root `{{ shape.budgets_file }}`, and wrote one entry per result into the
+budget account at `{{ budgets }}`, with the change's telemetry copied unchanged —
+{{ shape.telemetry_fields }}. Every value of an entry is the library's or the engine's except its
+`disposition`, which is yours: never change any other, and never measure again.
+
+- **Report every landed change.** List every entry with its result line in the budgets
+  convention's format, from the entry's own values: `budget <id>: actual <actual> <unit>,
+  budget <threshold> <unit>, headroom <headroom> <unit> (<headroom_percent>%) —
+  <{{ shape.within }} or {{ shape.over }}>; host: …`. An entry that is `{{ shape.budget_error }}` is reported with the
+  library's reason, its `detail`, and one that is `{{ shape.no_budget }}` with its `detail`: neither is
+  ever reported as within.
+- **Only an `{{ shape.over }}` entry takes a disposition, exactly one.** Every `{{ shape.within }}`,
+  `{{ shape.budget_error }}` and `{{ shape.no_budget }}` entry keeps `"disposition": []`.
+- **Diagnose each overrun's cause from the entry's own telemetry, never by estimate.**
+  Read `segments` using the adopted engine's per-change telemetry contract. `gate_runs`,
+  `dispatches` and `publication_attempts` count what repeated. Diagnose a long gate,
+  repeated gate runs, repeated dispatches or retries, waiting on review, the merge queue,
+  scheduling, or a held release. Never estimate a segment named in `not_measured`; say
+  the cause is not decidable where the recorded measurements do not distinguish it. For
+  a long gate, read the host conditions `host` carries beside the result, load against
+  `cpus`, available memory and other dispatches, and say whether they explain it.
+- **Dispose of each overrun by its cause, through the machinery above, never as a
+  duplicate.** Its root cause is `<repository name>-<budget id>-over-<cause>`, such as
+  `ai-orchestrator-cycle-time-over-repeated-gate-runs`, so a later overrun of the same cause
+  meets the same item. Search the board for it as step 7 searches for any root cause:
+  - an open item carrying it, one at `Deferred` included, takes this run's evidence as a
+    comment, followed by `{{ re_estimate }}`, which is how three or more occurrences raise its
+    priority estimate;
+  - otherwise the overrun is filed as a new ticket, under "The verified ticket".
+
+  Either way this run holds a ticket for that root cause under `{{ shape.tickets_directory }}/`, and its
+  `{{ shape.record_key }}` record carries `{{ shape.budget_field }}`, an object of {{ shape.budget_record_keys }}: the entry's
+  `repository`, and its `budget`'s `file`, `id`, `threshold` and `direction`, exactly as the
+  entry holds them. A ticket sourced only from this budget account records `drafts: []`,
+  since no worker draft originated it. No ticket filed for anything else carries `{{ shape.budget_field }}`. Its
+  `## {{ shape.evidence }}` states the entry's result line and the telemetry the diagnosis read. The
+  disposition is `{{ shape.filed }}`, its `item` the `<board>:<native id>` of the ticket's own item or
+  of the item the evidence went on.
+- **An overrun whose root-cause item was closed as not planned asks rather than re-files.**
+  Where the root-cause search finds the item for that root cause closed as not planned
+  (`{{ shape.withdrawn }}`), read its record's `{{ shape.budget_field }}`. When that is the budget this entry was
+  measured against — the same repository, file, id, threshold and direction — the budget
+  still stands only if the registered repository's budgets file still holds that id with
+  the same threshold and direction; read it with onebudgetspec `list`. Re-file nothing. Add this run's one evidence comment to that closed item,
+  under "Ownership on the board", carrying the entry's result line and the diagnosed cause,
+  and asking whether the budget should change instead; it is the one evidence comment that
+  goes on a closed item. The disposition is `{{ shape.budget_question }}`, its `item` the closed item.
+  When the recorded budget differs, the budget changed since the item was closed, and the
+  overrun is filed as usual, as a new ticket.
+- **A verified miss in a dimension no budget covered teaches the planner a class, never a
+  rule.** Where a draft or an overrun shows a requirement slipping in a dimension no budget
+  measured, the ticket's `## {{ shape.suggested_fix }}` proposes two things, and this dispatch writes
+  neither. First, a **general class of problem** for the checklist in
+  `personas/planner.yaml`: "the board was listed in full" becomes "any operation whose cost
+  grows with data a third party holds gets a quota and scaling budget". That checklist holds
+  general concepts only, because the planner travels into every repository. Second, the
+  repository-specific budget and its command, for that repository's budgets file — its root
+  `{{ shape.budgets_file }}` for a repo-wide budget, the owning project's own for a scoped one — and its
+  suite, through a plan whose approved design document changes that file.
+
+The account's shape, with its one `{{ shape.over }}` entry's disposition to fill:
+
+````json
+{{ budget_example }}
+````
+
+**`{{ check_budgets }}` is what says the account is complete.** It exits {{ shape.exits.sound }} when every
+`{{ shape.over }}` entry carries exactly one disposition — a `{{ shape.filed }}` one linking an item, under a
+root cause whose ticket this run holds recording the budget it overran, or a
+`{{ shape.budget_question }}` naming an item closed as not planned whose recorded budget is the one the
+entry was measured against — and every other entry carries none; it exits {{ shape.exits.unsound }}
+naming each entry it refuses. This dispatch is not finished while it refuses. The attached
+recipe runs it again after settlement with `--board`, reading each evidence comment back,
+and against the account as it was measured.
+
 {% include "follow-up-task/ownership.md.j2" %}
 
 {% else %}
@@ -743,6 +846,11 @@ that issue. This dispatch is not finished while it refuses.
   dispatch was given carries exactly one disposition, with the root causes that
   disposition owes. Run it last, after the final edit to that account, because a run of it
   from before that edit says nothing about the account you leave.
+- `{{ check_budgets }}` reports the budget account at `{{ budgets }}` sound: every overrun
+  carries exactly one disposition and every other entry none, and only dispositions
+  changed. Run it last, after the final edit to that account.
+- The report lists every landed change's result line from the budget account, and every
+  `{{ shape.budget_question }}` with the closed item's URL.
 - Every claim the report makes about what reached the board is true of the board as it
   finally stands: an issue reported created or updated is one the copy printed, and a
   refusal reported is one a command printed.

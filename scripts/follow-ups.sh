@@ -295,8 +295,24 @@ if [ "$comments" -ne 1 ]; then
         fail "counting the drafts and tickets of run '$run' answered '$counts' rather than two counts" \
             "restore the pinned toolchain with 'just bootstrap', then retry"
     fi
+    # Every change the run landed, measured once against its own repository's
+    # `onepipeline`-labelled budgets before anything is dispatched, in the budget account
+    # beside the disposition account: the library's verdicts and the engine's telemetry,
+    # which the dispatch only disposes of. A re-dispatch keeps the account it finds, since a
+    # budget measures once. `docs/budgets.md` states what each budget's command is handed.
+    budget_account=$("$python" -m orchestrator.follow_up_tickets open-budgets --root "$drafts_root" \
+        --runs-root "$runs_root" --checkout "$script_dir/.." "$run") ||
+        fail "the landed changes of run '$run' could not be measured against their budgets under $drafts_root" \
+            "repair what the refusal above names, then retry 'just follow-ups $run'"
+    overruns=$("$python" -m orchestrator.follow_up_tickets budget-overruns --root "$drafts_root" "$run") ||
+        fail "the budget account at $budget_account could not be read" \
+            "repair what the refusal above names, then retry 'just follow-ups $run'"
+    # llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so nothing would ever match.
+    [[ "$overruns" =~ $COUNT ]] ||
+        fail "counting the overruns of run '$run' answered '$overruns' rather than a count" \
+            "restore the pinned toolchain with 'just bootstrap', then retry"
 fi
-if [ "$comments" -ne 1 ] && [ "$held_drafts" -eq 0 ] && [ "$held_tickets" -eq 0 ]; then
+if [ "$comments" -ne 1 ] && [ "$held_drafts" -eq 0 ] && [ "$held_tickets" -eq 0 ] && [ "$overruns" -eq 0 ]; then
     # A previous pass can consume every draft and still leave an incomplete account.
     # Read that account before calling the run empty; no artifact means no pass began.
     prior=$("$python" -m orchestrator.follow_up_tickets dispositions-path --root "$drafts_root" "$run") ||
@@ -305,7 +321,12 @@ if [ "$comments" -ne 1 ] && [ "$held_drafts" -eq 0 ] && [ "$held_tickets" -eq 0 
         "$python" -m orchestrator.follow_up_tickets check-dispositions --root "$drafts_root" "$run" >/dev/null ||
             fail "the account at $prior was refused above" "correct it before treating this run as complete"
     fi
-    echo "follow-ups: run $run holds no follow-up drafts and no tickets under $drafts_root, so there is nothing to verify and no follow-up run was launched"
+    # Every landed change's result line, on standard error so the one line below stays the
+    # whole of standard output, which the success hook relays alone.
+    # llmlint: ignore[tool_output_is_signal] Each landed result is mandatory report output.
+    "$python" -m orchestrator.follow_up_tickets budget-results --root "$drafts_root" "$run" >&2 ||
+        fail "the budget account at $budget_account could not be read" "repair the refusal above, then retry"
+    echo "follow-ups: run $run holds no follow-up drafts, no tickets and no budget overrun under $drafts_root, so there is nothing to verify and no follow-up run was launched"
     exit 0
 fi
 
@@ -349,6 +370,22 @@ repository_layer=$PWD
 
 scratch=$(mktemp) || fail "a scratch file for the task's answers could not be created" "free disk space and retry"
 trap 'rm -f "$scratch" || echo "follow-ups: the scratch file $scratch could not be removed; delete it by hand" >&2' EXIT
+# The budget account as measured, kept out of the dispatch's reach, so the check after
+# settlement holds every value but the dispositions to what the library and the engine said.
+measured=$(mktemp) || fail "a scratch file for the measured budget account could not be created" "free disk space and retry"
+hook_snapshot=''
+budget_hook=''
+hook_handed_off=0
+# shellcheck disable=SC2329 # Invoked by the EXIT trap, not by a direct shell command.
+cleanup_launch() {
+    local -a files=("$scratch" "$measured")
+    if [ "$hook_handed_off" -eq 0 ]; then
+        [ -z "$hook_snapshot" ] || files+=("$hook_snapshot")
+        [ -z "$budget_hook" ] || files+=("$budget_hook")
+    fi
+    rm -f -- "${files[@]}" || echo "follow-ups: launch scratch could not be removed; delete the named files by hand" >&2
+}
+trap 'cleanup_launch' EXIT
 
 # llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own checkout stops being enterable between its first line and this one; no journey can produce that without racing the filesystem the test itself runs on.
 checkout=$(CDPATH='' cd -- "$script_dir/.." && pwd) || fail "this recipe's checkout could not be resolved" \
@@ -392,6 +429,21 @@ else
     # The dispatch corrects its local account; this sole board check runs after settlement
     # so a final board edit or comment cannot escape validation.
     validator=("${tickets_module[@]}" check-dispositions --root "$drafts_root" --board "$board" "$run")
+    cp -- "$budget_account" "$measured" ||
+        fail "the budget account at $budget_account could not be kept as measured" "free disk space and retry"
+    budget_validator=("${tickets_module[@]}" check-budgets --root "$drafts_root" --board "$board" \
+        --measured "$measured" "$run")
+fi
+budget_hooks=()
+if [ "$comments" -ne 1 ]; then
+    hook_snapshot=$(mktemp) || fail "a per-launch budget snapshot could not be created" "free disk space and retry"
+    budget_hook=$(mktemp) || fail "a per-launch budget closeout hook could not be created" "free disk space and retry"
+    cp -- "$budget_account" "$hook_snapshot" ||
+        fail "the budget account could not be captured for detached closeout" "free disk space and retry"
+    "${tickets_module[@]}" write-budget-closeout --root "$drafts_root" --board "$board" \
+        --measured "$hook_snapshot" --hook "$budget_hook" "$run" >/dev/null ||
+        fail "the budget closeout hook could not be written" "repair the refusal above and retry"
+    budget_hooks=(--success-hook "$budget_hook" --failure-hook "$budget_hook")
 fi
 
 # The engine that states the template and checks the task created from it: this checkout's
@@ -425,7 +477,9 @@ else
     printf -v quoted_board '%q' "$board"
     printf -v quoted_run '%q' "$run"
     answering+=(--dispositions "$account"
-        --check-dispositions "$quoted_python -m orchestrator.follow_up_tickets check-dispositions --root $quoted_root $quoted_run")
+        --check-dispositions "$quoted_python -m orchestrator.follow_up_tickets check-dispositions --root $quoted_root $quoted_run"
+        --budgets "$budget_account"
+        --check-budgets "$quoted_python -m orchestrator.follow_up_tickets check-budgets --root $quoted_root $quoted_run")
 fi
 "${tickets_module[@]}" "${answering[@]}" >"$scratch" ||
     fail "the follow-up agent's task could not be answered for run '$run'" \
@@ -481,7 +535,8 @@ if [ "$detached" -eq 1 ]; then
     # The engine's own launch record goes to standard error, so standard output is the two
     # lines below and nothing else.
     # llmlint: ignore[tool_output_is_signal] The engine's launch record is kept for an operator reading standard error, and standard output carries only the two lines the success hook relays.
-    "$script_dir/onepipeline.sh" start "$project" --dag-graph off --detach >&2 || launched=$?
+    "$script_dir/onepipeline.sh" start "$project" --dag-graph off --detach "${budget_hooks[@]}" >&2 || launched=$?
+    [ ! -f "$runs_root/$follow_up_run/launch.json" ] || hook_handed_off=1
     if [ "$launched" -ne 0 ]; then
         echo "follow-ups: the detached launch of run $follow_up_run over run $run failed; the diagnostic above names why" >&2
         exit "$launched"
@@ -501,7 +556,8 @@ else
 fi
 status=0
 # llmlint: ignore[tool_output_is_signal] This is an attached launch, so streaming the run as it goes is what the operator stays attached for.
-"$script_dir/onepipeline.sh" start "$project" --dag-graph off || status=$?
+"$script_dir/onepipeline.sh" start "$project" --dag-graph off "${budget_hooks[@]}" || status=$?
+[ ! -f "$runs_root/$follow_up_run/launch.json" ] || hook_handed_off=1
 
 # With no judge, this is what holds the output to its shape. Initial mode validates every
 # ticket the run left through the store, then reads the disposition account; feedback mode
@@ -525,6 +581,21 @@ if [ "$accounted" -ne 0 ]; then
         echo "follow-ups: the account at $account was refused above; correct it, or re-dispatch with '$again'" >&2
     fi
     [ "$checked" -ne 0 ] || checked=$accounted
+fi
+if [ "$comments" -ne 1 ]; then
+    reported=0
+    # llmlint: ignore[tool_output_is_signal] Each landed result is mandatory report output.
+    "${tickets_module[@]}" budget-results --root "$drafts_root" --measured "$measured" "$run" || reported=$?
+    if [ "$reported" -ne 0 ]; then
+        echo "follow-ups: results at $budget_account could not be reported; repair the refusal above and retry with '$again'" >&2
+        [ "$checked" -ne 0 ] || checked=$reported
+    fi
+    budgeted=0
+    "${budget_validator[@]}" >/dev/null || budgeted=$?
+    if [ "$budgeted" -ne 0 ]; then
+        echo "follow-ups: the budget account at $budget_account was refused above; correct its dispositions, or re-dispatch with '$again'" >&2
+        [ "$checked" -ne 0 ] || checked=$budgeted
+    fi
 fi
 if [ "$status" -ne 0 ]; then
     echo "follow-ups: run $follow_up_run did not settle successfully; read it with 'just results $follow_up_run'" >&2

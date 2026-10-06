@@ -26,6 +26,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 from nx_inputs import BUDGET_SCOPED, project_declarations
 
@@ -62,9 +63,9 @@ def _schema() -> dict:
     return json.loads(ran.stdout)["roots"]["budgets-file"]
 
 
-def test_the_root_file_holds_exactly_gate_time_and_the_dispatches_condition() -> None:
+def test_the_root_file_holds_gate_time_cycle_time_and_the_dispatches_condition() -> None:
     document = _root()
-    (gate_time,) = document["budgets"]
+    gate_time, cycle_time = document["budgets"]
     threshold = gate_time.pop("threshold")
     description = gate_time.pop("description")
 
@@ -81,6 +82,17 @@ def test_the_root_file_holds_exactly_gate_time_and_the_dispatches_condition() ->
     }
     assert isinstance(threshold, int | float) and threshold > 0, threshold
     assert "pre-push gate" in description and "record_local_direct_gate" in description
+    assert cycle_time.pop("threshold") > 0
+    description = cycle_time.pop("description")
+    assert "reported after landing" in description and "never blocks" in description
+    assert cycle_time == {
+        "id": "cycle-time",
+        "labels": ["onepipeline"],
+        "measure": "reported",
+        "command": ["scripts/budget-cycle-time.sh"],
+        "unit": "seconds",
+        "direction": "max",
+    }
 
 
 def test_the_installed_library_validates_the_whole_tree() -> None:
@@ -95,17 +107,23 @@ def test_the_installed_library_validates_the_whole_tree() -> None:
     assert ran.returncode == 0, ran.stdout + ran.stderr
 
 
-def test_the_gate_time_threshold_is_stated_in_the_budgets_file_alone() -> None:
+@pytest.mark.parametrize("identifier", ["gate-time", "cycle-time"])
+def test_each_delivery_threshold_is_stated_in_the_budgets_file_alone(identifier: str) -> None:
     """Nothing that measures `gate-time`, or refuses a push over it, restates the number."""
-    (gate_time,) = _root()["budgets"]
-    number = re.compile(rf"(?<![\d.]){re.escape(f'{gate_time["threshold"]:g}')}(?![\d])")
+    budget = next(entry for entry in _root()["budgets"] if entry["id"] == identifier)
+    number = re.compile(rf"(?<![\d.]){re.escape(f'{budget["threshold"]:g}')}(?![\d])")
 
     restating = [
         relative
-        for relative in MEASURING
+        for relative in (
+            *MEASURING,
+            "scripts/budget-cycle-time.sh",
+            "orchestrator/follow_up_tickets.py",
+            "templates/follow-up-task.md.j2",
+        )
         if number.search((REPO_ROOT / relative).read_text(encoding="utf-8"))
     ]
-    assert restating == [], f"{restating} restate the gate-time threshold budgets.yaml states"
+    assert restating == [], f"{restating} restate the {identifier} threshold budgets.yaml states"
 
 
 def test_a_project_declares_a_budget_target_exactly_when_it_holds_its_own_budgets_file() -> None:

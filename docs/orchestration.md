@@ -2211,9 +2211,9 @@ landed some other way — fires its success hook for the complete ending that se
 carried it to; either way follow-up verification launches on recovery. A settle that
 changes why a run failed without changing that it did ends it under the same hook and
 fires nothing new. A driver that dies fires nothing.
-`just plan`, `just finish-plan` and `just
-follow-ups` name no hook, so a planning run and a follow-up run never launch a
-follow-up run, and nothing else in this repository runs `just follow-ups` — the
+`just plan` and `just finish-plan` name no hook, and `just follow-ups` names only
+its per-launch budget closeout, which validates and reports the budget account and
+launches nothing, so a planning run and a follow-up run never launch a follow-up run, and nothing else in this repository runs `just follow-ups` — the
 success hook and a manager typing it are the only two ways. **Hooks arrive with an
 engine adopted between runs**: a launch record written before `config/onepipeline.version`
 named a release carrying them names no hook, and that run fires none, whichever engine

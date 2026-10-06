@@ -22,6 +22,7 @@
     "support-older-plan-store",
     "support-plan-fixture-source",
     "support-plan-root-variable",
+    "support-probe-run-root",
     "support-project-fixtures",
     "support-published-tools",
     "support-run-task-store-instruction",

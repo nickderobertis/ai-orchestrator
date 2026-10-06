@@ -45,6 +45,7 @@ from test_follow_ups_answer_comments_recipe_e2e import (
 )
 from test_follow_ups_recipe_e2e import (
     BOARD,
+    FULL_SEVERITY,
     HOST,
     OK,
     REFUSED,
@@ -84,8 +85,9 @@ pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
 #: feedback task brings forward, keyed by that schema — 1, with no `host`, no `repositories`
 #: and no `## Impact`; 2, with a `host` but neither of the others; 3, with `repositories` but no
 #: `## Impact`; 4, the last with the headings schema 5 retired; 5, which the onepipeline#438
-#: ticket carried; 6, the last with no stored estimate; and 7, the one before the current,
-#: which still validates and is brought to the rubric's structure when it is rewritten.
+#: ticket carried; 6, the last with no stored estimate; 7, the last before the rubric's
+#: structure; and 8, the one before the current — both of which still validate, and are brought
+#: forward when they are rewritten.
 PROPOSED_CAUSE = "listing-cursor-skips-last-page"
 UNSURE_CAUSE = "lock-file-left-after-crash"
 DEFERRED_CAUSE = "sweep-trailer-omits-a-family"
@@ -102,6 +104,7 @@ OLDER_CAUSES = dict(
             "export-drops-a-column",
             "retry-loop-never-backs-off",
             "cache-never-expires",
+            "badge-counts-stale-items",
         ),
         strict=True,
     )
@@ -382,15 +385,12 @@ def test_the_older_tickets_are_read_by_validate_as_the_schema_history_says(
             bench,
         )
         said = validated.stdout + validated.stderr
-        if schema == tickets.PRIOR_SCHEMA:
+        if schema in tickets.SOUND_SCHEMAS:
             assert validated.returncode == 0, said
             assert "is a sound ticket" in said, said
             continue
         assert validated.returncode == 1, said
-        assert (
-            f"the record is schema {schema}, and this reads schema {tickets.PRIOR_SCHEMA} or "
-            f"{tickets.SCHEMA}"
-        ) in said
+        assert f"the record is schema {schema}, and this reads schema {_sound()}" in said
         missing = said.split(" record is missing ", 1)[1].split("\n", 1)[0]
         assert ("host" in missing) == (schema < tickets.HOST_AT), (schema, said)
         assert ("carries no `repositories`" in said) == (schema < tickets.REPOSITORIES_AT), (
@@ -403,6 +403,12 @@ def test_the_older_tickets_are_read_by_validate_as_the_schema_history_says(
         ), (schema, said)
 
 
+def _sound() -> str:
+    """The schemas a reader accepts as sound, as its refusal of any other names them."""
+    *earlier, last = tickets.SOUND_SCHEMAS
+    return f"{', '.join(str(one) for one in earlier)} or {last}"
+
+
 def _impact(body: str) -> str:
     """The prose and lines of ``body``'s `## Impact` section, as a ticket's evidence states them."""
     return body.split(f"## {tickets.IMPACT}\n\n", 1)[1].split("\n\n## ", 1)[0].strip()
@@ -411,8 +417,9 @@ def _impact(body: str) -> str:
 def _older(ticket: tickets.Ticket, schema: int) -> str:
     """``ticket`` as ``schema`` stored it: no estimate, frequency or item binding.
 
-    ``ticket`` carries no estimate line, which schema 7 added; a schema-7 ticket has the
-    estimate `board-status` wrote for one occurrence, and an intermittent judgment. Before
+    ``ticket`` carries no estimate line, which schema 7 added; a schema-7 or -8 ticket has the
+    estimate `board-status` wrote for one occurrence, and an intermittent judgment. From
+    :data:`tickets.STRUCTURE_AT` its body is ``ticket``'s own, which carries that structure. Before
     :data:`tickets.STRUCTURE_AT` its `## Impact` is bare prose and a workaround that leaves
     the severity where it was, and its `## Suggested fix` the paragraph alone. Before
     :data:`tickets.IMPACT_AT` its body has no `## Impact`, before
@@ -424,15 +431,25 @@ def _older(ticket: tickets.Ticket, schema: int) -> str:
     """
     assert tickets.PRIOR_SCHEMAS[0] <= schema < tickets.SCHEMA, schema
     assert f"- {tickets.ESTIMATE_LINE}:" not in ticket.body, ticket.body
-    severity = tickets.Severity.HIGH
-    estimated = tickets.estimate(severity, tickets.Frequency.INTERMITTENT, 1)
-    plain = tickets.impact_section(
-        f"{ticket.root_cause}: readers lose the last page.", severity, WORKAROUND, severity
-    )
-    if schema >= tickets.ESTIMATE_AT:
-        plain += tickets.estimate_line(severity, tickets.Frequency.INTERMITTENT, 1) + "\n"
-    body = ticket.body.replace(f"{_impact(ticket.body)}\n", plain, 1).replace(f"\n\n{UNIT}", "", 1)
-    assert UNIT not in body and "**" not in body, body
+    intermittent = tickets.Frequency.INTERMITTENT
+    if schema >= tickets.STRUCTURE_AT:
+        # The rubric's structure as it stands: what came after it is an optional field alone.
+        mitigated = FULL_SEVERITY[1]
+        body = tickets.with_estimate_line(
+            ticket.body, tickets.estimate_line(mitigated, intermittent, 1)
+        )
+    else:
+        mitigated = tickets.Severity.HIGH
+        plain = tickets.impact_section(
+            f"{ticket.root_cause}: readers lose the last page.", mitigated, WORKAROUND, mitigated
+        )
+        if schema >= tickets.ESTIMATE_AT:
+            plain += tickets.estimate_line(mitigated, intermittent, 1) + "\n"
+        body = ticket.body.replace(f"{_impact(ticket.body)}\n", plain, 1).replace(
+            f"\n\n{UNIT}", "", 1
+        )
+        assert UNIT not in body and "**" not in body, body
+    estimated = tickets.estimate(mitigated, intermittent, 1)
     if schema < tickets.IMPACT_AT:
         body = body.replace(f"## {tickets.IMPACT}\n\n{_impact(body)}\n\n\n", "", 1)
         assert f"## {tickets.IMPACT}\n" not in body, body
@@ -785,14 +802,14 @@ def test_a_comment_correcting_an_older_ticket_brings_it_to_the_current_schema_wi
     before = older.before["metadata"]
     assert isinstance(before, dict)
     assert before[tickets.KEY]["schema"] == schema
-    if schema == tickets.PRIOR_SCHEMA:
+    if schema in tickets.SOUND_SCHEMAS:
         # Sound as it stands: the rewrite the comment asks for is what brings it forward.
         assert "is a sound ticket" in older.witness, older.witness
         assert f"exit {tickets.SOUND}" in older.witness, older.witness
     else:
         assert (
-            f"the record is schema {schema}, and this reads schema {tickets.PRIOR_SCHEMA} or "
-            f"{tickets.SCHEMA}; bring the ticket to the current shape"
+            f"the record is schema {schema}, and this reads schema {_sound()}; "
+            "bring the ticket to the current shape"
         ) in older.witness, older.witness
         assert f"exit {tickets.UNSOUND}" in older.witness, older.witness
     retired = [f"## {heading}\n" for heading in tickets.RETIRED_HEADINGS]

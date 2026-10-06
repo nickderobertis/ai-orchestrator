@@ -54,17 +54,21 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import math
 import os
 import re
+import shlex
+import subprocess
 import sys
 import tempfile
 from collections import Counter
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal, NamedTuple, NewType, NoReturn, cast
+from typing import Literal, NamedTuple, NewType, NoReturn, TypedDict, cast
 
 from onetaskgraph_sdk import CopyReport
 
@@ -75,6 +79,7 @@ from onetaskgraph_sdk._generated.query_response_of_qualified_task import Qualifi
 
 from orchestrator import follow_up_drafts as drafts
 from orchestrator import plan_store
+from orchestrator.plan_budgets import BUDGETS_FILE, Direction
 from orchestrator.plan_store import RECORD_COMPONENT
 from orchestrator.project_store import TASKS_DIRECTORY, frontmatter, hosted_origin
 
@@ -102,13 +107,14 @@ BOARD = "followups"
 #: Schema 8 added the structure the severity rubric is judged through: the `## Impact`
 #: section's labelled parts (:data:`IMPACT_PARTS`, :data:`WORKAROUND_COSTS`), the
 #: `## Suggested fix` section's opening paragraph and unit subsections, and the rule that an
-#: acceptable workaround lowers a severity above `low`.
-SCHEMA = 8
+#: acceptable workaround lowers a severity above `low`. Schema 9 adds the optional
+#: `budget` record for an overrun; older records without it remain readable.
+SCHEMA = 9
 #: Every earlier schema a re-dispatch brings a ticket forward from, enumerated rather than
 #: admitted by range, so a record declaring any other schema — zero, negative, a later one or
 #: no integer — is refused by name rather than read as an older ticket. `board-status` reads a
 #: board item's record of one before :data:`ESTIMATE_AT` as storing no estimate.
-PRIOR_SCHEMAS = (1, 2, 3, 4, 5, 6, 7)
+PRIOR_SCHEMAS = (1, 2, 3, 4, 5, 6, 7, 8)
 #: The schema just before, which every reader still accepts as sound: its body predates
 #: :data:`SCHEMA`'s structure, and a run that rewrites it brings it forward.
 PRIOR_SCHEMA = PRIOR_SCHEMAS[-1]
@@ -120,6 +126,10 @@ HOST_AT, REPOSITORIES_AT, IMPACT_AT = 2, 3, 4
 #: The schema whose `## Impact` and `## Suggested fix` carry the structure the rubric is judged
 #: through, and whose acceptable workaround always lowers a severity above `low`.
 STRUCTURE_AT = 8
+#: Every schema a reader accepts as sound: from :data:`ESTIMATE_AT` on, because schema 7's body
+#: predates the structure :data:`STRUCTURE_AT` added, which a run that rewrites it brings it to,
+#: and :data:`SCHEMA` added only an optional field.
+SOUND_SCHEMAS = tuple(range(ESTIMATE_AT, SCHEMA + 1))
 
 #: The metadata key a ticket's record sits under, which travels onto the board item.
 KEY = "orchestrator.follow-up"
@@ -385,6 +395,25 @@ class CopyLink(NamedTuple):
     item: QualifiedBoardId
 
 
+class OverrunBudget(NamedTuple):
+    """A budget an overrun was measured against: where it is registered, and its line.
+
+    ``file`` is the budgets file as onebudgetspec's report names it, relative to the root of
+    ``repository``'s checkout; ``threshold`` and ``direction`` are what decide the verdict,
+    so two of these are the same standing budget exactly when every field is equal.
+    """
+
+    repository: Origin
+    file: str
+    id: str
+    threshold: float
+    direction: Direction
+
+    def record(self) -> dict[str, object]:
+        """This budget as a ticket record's :data:`BUDGET_FIELD` and an entry's `budget` hold it."""
+        return dict(zip(BUDGET_RECORD_KEYS, self, strict=True))
+
+
 #: How long a ticket's title may be.
 TITLE_LIMIT = 120
 
@@ -426,8 +455,17 @@ FREQUENCY_FIELD = "frequency"
 #: follows by its origin rule; no ticket whose item a copy creates is given one. Both commands
 #: refuse, naming both ids, when the link or the store's destination is any other item.
 BINDING_FIELD = "board_item"
+#: **Which budget an overrun ticket was filed for.** Optional, and carried only by a ticket
+#: filed for a budget overrun: the budget as the run's budget account recorded it from
+#: onebudgetspec's report, with the repository whose budgets file registers it, as
+#: :data:`BUDGET_RECORD_KEYS`. A later overrun whose root-cause item was closed as not planned
+#: reads it back to tell whether that budget still stands (:class:`BudgetDisposition`). It is
+#: absent on every other ticket and on older records. Schema 9 introduces the field while
+#: retaining schema-7 and schema-8 records.
+BUDGET_FIELD = "budget"
+BUDGET_RECORD_KEYS = ("repository", "file", "id", "threshold", "direction")
 #: The keys a record may carry beside :data:`RECORD_KEYS`.
-OPTIONAL_KEYS = (BINDING_FIELD, FREQUENCY_FIELD)
+OPTIONAL_KEYS = (BINDING_FIELD, FREQUENCY_FIELD, BUDGET_FIELD)
 #: The front-matter key the store reads a `local-md` task's priority from, which a copy
 #: carries onto the board item's `Priority` field.
 PRIORITY_FIELD = "priority"
@@ -1038,6 +1076,7 @@ class Ticket:
     priority: Priority = Priority.NONE
     origin: plan_store.QualifiedTaskId | None = None
     links: tuple[CopyLink, ...] = ()
+    budget: OverrunBudget | None = None
 
     def link(self, board: str) -> BoardItemId | None:
         """The native id of the item the store's link names on ``board``, or `None`."""
@@ -1119,6 +1158,8 @@ def record(ticket: Ticket) -> dict[str, object]:
         held[BINDING_FIELD] = ticket.board_item
     if ticket.frequency is not None:
         held[FREQUENCY_FIELD] = str(ticket.frequency)
+    if ticket.budget is not None:
+        held[BUDGET_FIELD] = ticket.budget.record()
     return held
 
 
@@ -1273,13 +1314,14 @@ def _record_problems(
     ``for_copy`` holds a ticket about to be copied to carrying a frequency judgment.
     """
     found = []
-    readable = (SCHEMA, PRIOR_SCHEMA, UNESTIMATED_SCHEMA) if pending else (SCHEMA, PRIOR_SCHEMA)
+    readable = (*SOUND_SCHEMAS, UNESTIMATED_SCHEMA) if pending else SOUND_SCHEMAS
     # Named before the missing keys, because a ticket of an older schema lacks the keys its
     # successor added, and the schema is what says why.
     if "schema" in held and (type(held["schema"]) is not int or held["schema"] not in readable):
         found.append(
-            f"the record is schema {held['schema']!r}, and this reads schema {PRIOR_SCHEMA} "
-            f"or {SCHEMA}; bring the ticket to the current shape"
+            f"the record is schema {held['schema']!r}, and this reads schema "
+            + ", ".join(str(one) for one in SOUND_SCHEMAS[:-1])
+            + f" or {SOUND_SCHEMAS[-1]}; bring the ticket to the current shape"
         )
     owed = [key for key in RECORD_KEYS if not (pending and key == ESTIMATE_FIELD)]
     missing = [key for key in owed if key not in held]
@@ -1330,7 +1372,10 @@ def _record_problems(
             f"`created_by_run` {creator!r} is not {run!r}, the run whose tickets directory holds it"
         )
     found.extend(_runs_problems(held["owning_runs"], creator))
-    found.extend(_drafts_problems(held["drafts"], held["owning_runs"]))
+    # A budget-only overrun originates in the host's account rather than a worker draft.
+    # Its optional budget is validated below; no other ticket may omit its source drafts.
+    if held["drafts"] != [] or BUDGET_FIELD not in held:
+        found.extend(_drafts_problems(held["drafts"], held["owning_runs"]))
     found.extend(_basis_problems(held["basis"], repository))
     if not _real_time(held["verified_at"]):
         found.append(
@@ -1348,7 +1393,59 @@ def _record_problems(
             f"`{BINDING_FIELD}` {held[BINDING_FIELD]!r} is not a board item's native id; leave "
             "it as `board-status` or `copy` wrote it"
         )
+    if BUDGET_FIELD in held:
+        found.extend(budget_problems(held[BUDGET_FIELD], f"`{BUDGET_FIELD}`"))
     return found
+
+
+def _is_number(value: object) -> bool:
+    """Whether ``value`` is a finite JSON number, which a `bool` is not."""
+    return type(value) in (int, float) and math.isfinite(cast(float, value))
+
+
+def budget_problems(value: object, named: str) -> list[str]:
+    """Every way ``value`` is not an :class:`OverrunBudget` as a record or an entry holds one.
+
+    ``named`` is how a refusal names where the value sits.
+    """
+    if not isinstance(value, Mapping) or sorted(value) != sorted(BUDGET_RECORD_KEYS):
+        return [
+            f"{named} is not an object of exactly "
+            + ", ".join(f"`{key}`" for key in BUDGET_RECORD_KEYS)
+        ]
+    found = []
+    if not _is_origin(value["repository"]):
+        found.append(f"{named}'s `repository` {value['repository']!r} is not a normalized origin")
+    for key in ("file", "id"):
+        if not isinstance(value[key], str) or not value[key].strip():
+            found.append(f"{named}'s `{key}` {value[key]!r} is not a non-empty string")
+    found.extend(_budget_file_problems(value["file"], named))
+    if not _is_number(value["threshold"]):
+        found.append(f"{named}'s `threshold` {value['threshold']!r} is not a number")
+    if value["direction"] not in tuple(Direction):
+        found.append(
+            f"{named}'s `direction` {value['direction']!r} is not one of "
+            + ", ".join(f"`{one}`" for one in Direction)
+        )
+    return found
+
+
+def _budget_file_problems(file: object, named: str) -> list[str]:
+    """A budget file remains inside the repository whose registration is read."""
+    if isinstance(file, str) and (Path(file).is_absolute() or ".." in Path(file).parts):
+        return [f"{named}'s `file` must stay within its repository"]
+    return []
+
+
+def overrun_budget(value: Mapping[str, object]) -> OverrunBudget:
+    """``value`` as an :class:`OverrunBudget`, once :func:`budget_problems` found nothing."""
+    return OverrunBudget(
+        repository=Origin(str(value["repository"])),
+        file=str(value["file"]),
+        id=str(value["id"]),
+        threshold=float(cast(float, value["threshold"])),
+        direction=Direction(str(value["direction"])),
+    )
 
 
 def _is_item_id(value: object) -> bool:
@@ -1912,6 +2009,11 @@ def from_store_item(  # noqa: PLR0913 - each reading of an item is its own keywo
                 CopyLink(str(source), QualifiedBoardId(str(linked)))
                 for source, linked in links.items()
             )
+        ),
+        budget=(
+            overrun_budget(cast(Mapping[str, object], held[BUDGET_FIELD]))
+            if BUDGET_FIELD in held
+            else None
         ),
     )
 
@@ -3672,6 +3774,774 @@ def open_dispositions(root: Path, run: str) -> Path:
     return path
 
 
+#: **The budget account.** Every change a run landed is measured, once and before the
+#: follow-up dispatch, against every budget its own repository registers under
+#: :data:`BUDGET_LABEL` — a budget measured from onepipeline's telemetry, which only this
+#: host's run-success hook selects (`docs/budgets.md` states the convention and what such a
+#: budget's command may rely on). :func:`open_budgets` writes the account beside the
+#: disposition account, one entry per result onebudgetspec reports, with `result`, `actual`,
+#: `headroom`, `headroom_percent`, `host` and `detail` taken from the library's own report and
+#: the telemetry fields copied unchanged from the engine's per-change document; the agent's
+#: one part is each `over` entry's `disposition`, and `check-budgets` holds it to that.
+BUDGETS_DIRECTORY = "budgets"
+BUDGETS_SCHEMA = 1
+BUDGET_LABEL = "onepipeline"
+BUDGET_KEYS = ("schema", "run", "entries")
+#: The telemetry fields an entry copies from the change's per-change document, unchanged, for
+#: the agent's diagnosis: what the change's cycle went on, and what was not measured.
+TELEMETRY_FIELDS = (
+    "cycle_seconds",
+    "segments",
+    "not_measured",
+    "gate_runs",
+    "dispatches",
+    "publication_attempts",
+)
+BUDGET_ENTRY_KEYS = (
+    "node",
+    "repository",
+    "change_url",
+    "landing",
+    "budget",
+    "result",
+    "actual",
+    "headroom",
+    "headroom_percent",
+    "host",
+    *TELEMETRY_FIELDS,
+    "disposition",
+    "detail",
+)
+#: An entry's `budget`: the budget as onebudgetspec's report names it.
+ENTRY_BUDGET_KEYS = ("file", "id", "unit", "threshold", "direction")
+BUDGET_DISPOSITION_KEYS = ("disposition", "root_cause", "item", "detail")
+#: The per-change telemetry document's version this reads, as the adopted engine's
+#: `docs/contract.md` states it; a document of any other is refused rather than read.
+TELEMETRY_SCHEMA = 1
+#: How long one read of the engine, of `onevcs`, or one budget check may take.
+BUDGET_TIMEOUT_SECONDS = 900
+
+
+class BudgetResult(StrEnum):
+    """What one landed change's entry says about a budget, or that it had none."""
+
+    WITHIN = "within"
+    OVER = "over"
+    ERROR = "error"
+    NO_BUDGET = "no-budget"
+
+
+class BudgetDisposition(StrEnum):
+    """What became of one overrun: the only entries that take a disposition are `over`.
+
+    `filed` is the existing machinery's: a ticket this run wrote for the overrun's cause, or
+    this run's evidence comment on the open item for it. `budget-question` is the rule for a
+    root-cause item a person closed as not planned while the budget still stands — the same
+    budget, as the closed ticket's :data:`BUDGET_FIELD` recorded it, is the one the overrun
+    was measured against: nothing is re-filed, the overrun's evidence goes on the closed item
+    as a comment asking whether the budget should change instead, and the report lists it.
+    """
+
+    FILED = "filed"
+    BUDGET_QUESTION = "budget-question"
+
+
+class BudgetEntry(TypedDict):
+    """The serialized account entry; telemetry values retain the engine's types."""
+
+    node: object
+    repository: object
+    change_url: object
+    landing: object
+    budget: object
+    result: str
+    actual: object
+    headroom: object
+    headroom_percent: object
+    host: object
+    cycle_seconds: object
+    segments: object
+    not_measured: object
+    gate_runs: object
+    dispatches: object
+    publication_attempts: object
+    disposition: list[object]
+    detail: str
+
+
+class DisposedBudget(NamedTuple):
+    """A validated disposition, separated from its external JSON mapping."""
+
+    disposition: BudgetDisposition
+    root_cause: RootCause
+    item: object
+    detail: str
+
+
+def _budget_run(value: str) -> str:
+    """A single account filename component, so CLI input cannot escape its root."""
+    if not value or value in (".", "..") or Path(value).name != value:
+        raise argparse.ArgumentTypeError("RUN-ID must be one safe path component")
+    return value
+
+
+def budgets_path(root: Path, run: str) -> Path:
+    """Where ``run``'s budget account is kept under a `drafts` root."""
+    return root / BUDGETS_DIRECTORY / f"{_budget_run(run)}.json"
+
+
+class Installs(NamedTuple):
+    """The locked installs of the checkout a launch runs from, which every read here uses."""
+
+    bin: Path
+
+    def tool(self, name: str) -> str:
+        return str(self.bin / name)
+
+
+def _ran(
+    command: Sequence[str], *, cwd: Path | None = None, env: Mapping[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    """``command`` run to completion, or :class:`OSError` saying why it could not run."""
+    try:
+        return subprocess.run(  # noqa: S603 - the launching checkout's own locked installs
+            list(command),
+            cwd=cwd,
+            env=None if env is None else dict(env),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=BUDGET_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise OSError(f"`{' '.join(command)}` did not run: {exc}") from None
+
+
+def _said(done: subprocess.CompletedProcess[str]) -> str:
+    """The last line a command printed on stderr, or what it exited with when it said nothing."""
+    lines = done.stderr.strip().splitlines()
+    return lines[-1] if lines else f"it exited {done.returncode} and said nothing"
+
+
+def change_telemetry(run: str, runs_root: Path, installs: Installs) -> list[Mapping[str, object]]:
+    """Every change the engine's per-change telemetry reports for ``run``.
+
+    A run with no run root under ``runs_root`` made no change this host recorded, so it has
+    none. Anything else the engine cannot answer is :class:`OSError`, since an account built
+    over an unread run would report its changes as none.
+    """
+    if not (runs_root / run).is_dir():
+        return []
+    environment = {**os.environ, "ONEPIPELINE_RUNS_DIR": str(runs_root)}
+    command = [installs.tool("onepipeline"), "telemetry", run, "--changes", "--json"]
+    done = _ran(command, env=environment)
+    if done.returncode != 0:
+        raise OSError(f"`{' '.join(command)}` exited {done.returncode}: {_said(done)}")
+    try:
+        document: object = json.loads(done.stdout)
+    except json.JSONDecodeError as broken:
+        raise OSError(f"the engine's per-change telemetry of {run} is not JSON: {broken}") from None
+    changes = document.get("changes") if isinstance(document, Mapping) else None
+    if (
+        not isinstance(document, Mapping)
+        or type(document.get("schema_version")) is not int
+        or document.get("schema_version") != TELEMETRY_SCHEMA
+        or document.get("run_id") != run
+        or not isinstance(changes, list)
+        or not all(isinstance(change, Mapping) for change in changes)
+    ):
+        raise OSError(
+            f"the engine's per-change telemetry of {run} is not a schema-{TELEMETRY_SCHEMA} "
+            "document of that run's changes"
+        )
+    for at, change in enumerate(cast(list[Mapping[str, object]], changes)):
+        if found := _telemetry_problems(change):
+            raise OSError(f"the engine's change {at} in {run}: " + "; ".join(found))
+    return cast(list[Mapping[str, object]], changes)
+
+
+def _telemetry_problems(change: Mapping[str, object]) -> list[str]:
+    """Validate the diagnostic fields the account copies without filling missing values."""
+    found = []
+    for field in ("node", "landing", "repository", "change_url"):
+        value = change.get(field)
+        if (
+            field not in change
+            or (field == "node" and value is None)
+            or (value is not None and (not isinstance(value, str) or not value))
+        ):
+            found.append(f"holds no valid `{field}`")
+    cycle = change.get("cycle_seconds")
+    if "cycle_seconds" not in change or (
+        cycle is not None and (not _is_number(cycle) or cast(float, cycle) < 0)
+    ):
+        found.append("holds no valid `cycle_seconds`")
+    for field in ("dispatches", "publication_attempts"):
+        value = change.get(field)
+        if type(value) is not int or value < 0:
+            found.append(f"holds no valid `{field}`")
+    segments = change.get("segments")
+    if not isinstance(segments, Mapping) or not all(
+        isinstance(key, str) and _is_number(value) and value >= 0 for key, value in segments.items()
+    ):
+        found.append("holds no valid `segments`")
+    for field, kind in (("gate_runs", Mapping), ("not_measured", str)):
+        value = change.get(field)
+        # onepipeline's docs/contract.md owns typed GateRun field validation. This adapter
+        # copies those records untouched and interprets no field; the snapshot comparison
+        # holds them unchanged after dispatch, so no second producer schema belongs here.
+        # llmlint: ignore[boundary_inputs_validated] Typed GateRun fields are producer-validated.
+        if not isinstance(value, list) or not all(isinstance(one, kind) for one in value):
+            found.append(f"holds no valid `{field}`")
+    return found
+
+
+def publication_checkout(repository: str, installs: Installs) -> Path | None:
+    """``repository``'s registered publication checkout, or `None` where none is registered."""
+    done = _ran([installs.tool("onevcs"), "resolve", repository])
+    if done.returncode == 2 and "is not a registered repository" in done.stderr:  # noqa: PLR2004 - onevcs's invalid-input status
+        return None
+    if done.returncode != 0:
+        raise OSError(f"`onevcs resolve {repository}` exited {done.returncode}: {_said(done)}")
+    try:
+        checkout = json.loads(done.stdout).get("publication_checkout")
+    except (json.JSONDecodeError, AttributeError):
+        checkout = None
+    if not isinstance(checkout, str) or not checkout:
+        raise OSError(f"`onevcs resolve {repository}` named no publication checkout")
+    return Path(checkout)
+
+
+def budget_report(
+    checkout: Path, run: str, node: str, runs_root: Path, installs: Installs
+) -> list[Mapping[str, object]] | str:
+    """onebudgetspec's results for ``node``'s change in its repository, or why there are none.
+
+    The check is run once, from the root of the repository's ``checkout``, selecting only the
+    :data:`BUDGET_LABEL` budgets of its root budgets file, with the environment
+    `docs/budgets.md` states such a budget's command receives. A report the library could not
+    give — an invalid file, or one it could not write — is the reason it printed.
+    """
+    environment = {
+        **os.environ,
+        "ONEPIPELINE_RUN_ID": run,
+        "ONEPIPELINE_NODE_ID": node,
+        "ONEPIPELINE_RUNS_DIR": str(runs_root),
+        "PATH": f"{installs.bin}{os.pathsep}{os.environ.get('PATH', '')}",
+    }
+    command = [installs.tool("onebudgetspec"), "check", BUDGETS_FILE]
+    command += ["--label", BUDGET_LABEL, "--output", "json"]
+    done = _ran(command, cwd=checkout, env=environment)
+    try:
+        report: object = json.loads(done.stdout) if done.stdout.strip() else None
+    except json.JSONDecodeError:
+        report = None
+    results = report.get("results") if isinstance(report, Mapping) else None
+    if done.returncode not in (0, 1, 3) or not isinstance(results, list):
+        return f"onebudgetspec gave no report for {checkout / BUDGETS_FILE}: {_said(done)}"
+    found = [problem for result in results for problem in _library_result_problems(result)]
+    if found:
+        raise OSError(f"onebudgetspec's report for {checkout / BUDGETS_FILE} " + "; ".join(found))
+    return cast(list[Mapping[str, object]], results)
+
+
+def _library_result_problems(result: object) -> list[str]:
+    """Whether one of onebudgetspec's results carries what an entry copies from it."""
+    if not isinstance(result, Mapping):
+        return ["holds a result that is not an object"]
+    named = f"names a result {result.get('id')!r} that"
+    if not all(
+        isinstance(result.get(key), str) and str(result[key]).strip()
+        for key in ("id", "file", "unit", "direction")
+    ):
+        return [f"{named} names no id, file, unit or direction"]
+    if not _is_number(result.get("threshold")) or not isinstance(result.get("host"), Mapping):
+        return [f"{named} states no threshold or host"]
+    if result.get("verdict") not in (BudgetResult.WITHIN, BudgetResult.OVER, BudgetResult.ERROR):
+        return [f"{named} states the verdict {result.get('verdict')!r}"]
+    if result["direction"] not in tuple(Direction):
+        return [f"{named} states no valid direction"]
+    if result["verdict"] != BudgetResult.ERROR and not all(
+        _is_number(result.get(key)) for key in ("actual", "headroom", "headroom_percent")
+    ):
+        return [f"{named} states no finite actual or headroom"]
+    for key in ("error", "detail"):
+        if result.get(key) is not None and not isinstance(result[key], str):
+            return [f"{named} states no valid optional {key} string"]
+    return _budget_file_problems(result["file"], named) + _host_problems(
+        cast(Mapping[str, object], result["host"]), named
+    )
+
+
+def _host_problems(host: Mapping[str, object], named: str) -> list[str]:
+    """Validate the library's host conditions before storing or printing them."""
+    if not _is_number(host.get("load1")) or type(host.get("cpus")) is not int:
+        return [f"{named} states no valid host load or CPUs"]
+    if host.get("mem_available_mib") is not None and type(host["mem_available_mib"]) is not int:
+        return [f"{named} states no valid host memory"]
+    conditions = host.get("conditions")
+    if not isinstance(conditions, Mapping) or not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in conditions.items()
+    ):
+        return [f"{named} states no valid host conditions"]
+    return []
+
+
+def _entry(change: Mapping[str, object], result: BudgetResult, detail: str) -> BudgetEntry:
+    """One entry for ``change`` with no budget measured, the telemetry copied unchanged."""
+    return {
+        "node": change.get("node"),
+        "repository": change.get("repository"),
+        "change_url": change.get("change_url"),
+        "landing": change.get("landing"),
+        "budget": None,
+        "result": result.value,
+        "actual": None,
+        "headroom": None,
+        "headroom_percent": None,
+        "host": None,
+        "cycle_seconds": change.get("cycle_seconds"),
+        "segments": change.get("segments"),
+        "not_measured": change.get("not_measured"),
+        "gate_runs": change.get("gate_runs"),
+        "dispatches": change.get("dispatches"),
+        "publication_attempts": change.get("publication_attempts"),
+        "disposition": [],
+        "detail": detail,
+    }
+
+
+def _measured_entry(change: Mapping[str, object], result: Mapping[str, object]) -> BudgetEntry:
+    """One entry for ``change`` from one of onebudgetspec's results, as the library gave it."""
+    entry = _entry(change, BudgetResult(str(result["verdict"])), "")
+    entry["budget"] = {key: result[key] for key in ENTRY_BUDGET_KEYS}
+    entry["actual"] = result.get("actual")
+    entry["headroom"] = result.get("headroom")
+    entry["headroom_percent"] = result.get("headroom_percent")
+    entry["host"] = result["host"]
+    entry["detail"] = str(result.get("error") or result.get("detail") or "")
+    return entry
+
+
+def measured_entries(run: str, runs_root: Path, installs: Installs) -> list[BudgetEntry]:
+    """The account's entries: each landed change against its own repository's budgets."""
+    entries: list[BudgetEntry] = []
+    for change in change_telemetry(run, runs_root, installs):
+        if not isinstance(change.get("landing"), str):
+            continue  # a change that did not land, `preserved` among them, has no entry
+        node, repository = change.get("node"), change.get("repository")
+        if not isinstance(node, str) or not isinstance(repository, str):
+            entries.append(_entry(change, BudgetResult.NO_BUDGET, "the change names no repository"))
+            continue
+        checkout = publication_checkout(repository, installs)
+        if checkout is None:
+            detail = f"{repository} has no checkout registered on this host, so no budget was read"
+            entries.append(_entry(change, BudgetResult.NO_BUDGET, detail))
+            continue
+        if not (checkout / BUDGETS_FILE).is_file():
+            detail = f"{checkout / BUDGETS_FILE} does not exist: {repository} registers no budget"
+            entries.append(_entry(change, BudgetResult.NO_BUDGET, detail))
+            continue
+        results = budget_report(checkout, run, node, runs_root, installs)
+        match results:
+            case str():
+                entries.append(_entry(change, BudgetResult.ERROR, results))
+            case []:
+                detail = (
+                    f"{checkout / BUDGETS_FILE} registers no budget labelled `{BUDGET_LABEL}`, so "
+                    f"{repository} has not opted in"
+                )
+                entries.append(_entry(change, BudgetResult.NO_BUDGET, detail))
+            case _:
+                entries.extend(_measured_entry(change, result) for result in results)
+    return entries
+
+
+def open_budgets(root: Path, run: str, runs_root: Path, installs: Installs) -> Path:
+    """Measure every change ``run`` landed against its budgets, once, and return the account.
+
+    An account already there is a re-dispatch's: it is read as this run's and kept exactly
+    as it stands, dispositions and all, since every budget measures once and a second
+    measurement would replace the one the first pass diagnosed.
+    """
+    path = budgets_path(root, run)
+    if path.is_file():
+        document = _artifact(path)
+        if found := _measurement_problems(document, run):
+            raise Refused([f"{path} is not this run's budget account: {one}" for one in found])
+        return path
+    entries = measured_entries(run, runs_root, installs)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    written = {"schema": BUDGETS_SCHEMA, "run": run, "entries": entries}
+    path.write_text(json.dumps(written, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def _plain(value: object) -> str:
+    """A number as onebudgetspec's own lines print it, or `unknown` for none.
+
+    The library prints Rust's `f64` display: the shortest text that reads back as the same
+    number, never in exponent notation and with no `.0` on a whole number.
+    """
+    if not _is_number(value):
+        return "unknown"
+    text = repr(float(cast(float, value)))
+    if "e" in text:
+        text = format(Decimal(text), "f")
+    return text.removesuffix(".0")
+
+
+def _host_line(host: Mapping[str, object]) -> str:
+    """An entry's host conditions as onebudgetspec's result line ends with them."""
+    memory = host.get("mem_available_mib")
+    conditions = host.get("conditions")
+    line = (
+        f"load={_plain(host.get('load1'))}/{host.get('cpus')} "
+        f"mem_available={'unknown' if memory is None else memory}MiB"
+    )
+    if isinstance(conditions, Mapping):
+        line += "".join(f" {name}={value}" for name, value in sorted(conditions.items()))
+    return line
+
+
+def result_line(entry: Mapping[str, object]) -> str:
+    """The result line onebudgetspec prints for the result ``entry`` copied, from its values.
+
+    An entry the library reported nothing for — `no-budget`, or an `error` with no report —
+    is said in the same spirit, since there is no library line to give.
+    """
+    budget, host = entry.get("budget"), entry.get("host")
+    if not isinstance(budget, Mapping) or not isinstance(host, Mapping):
+        return f"{entry.get('result')} — {entry.get('detail')}"
+    unit = budget.get("unit")
+    if entry.get("result") == BudgetResult.ERROR:
+        measured = f"error — {entry.get('detail') or 'no value was measured'}"
+    else:
+        threshold = _plain(budget.get("threshold"))
+        measured = (
+            f"actual {_plain(entry.get('actual'))} {unit}, budget {threshold} "
+            f"{unit}, headroom {_plain(entry.get('headroom'))} {unit} "
+            f"({_plain(entry.get('headroom_percent'))}%) — {entry.get('result')}"
+        )
+    return f"budget {budget.get('id')}: {measured}; host: {_host_line(host)}"
+
+
+def change_line(entry: Mapping[str, object]) -> str:
+    """One landed change's line in a report: which change, then its result line."""
+    return f"{entry.get('node')} ({entry.get('repository')}): {result_line(entry)}"
+
+
+def _entry_name(entry: Mapping[str, object], at: int) -> str:
+    """How a refusal names one entry: its change, and its budget where it has one."""
+    budget = entry.get("budget")
+    which = f"budget {budget.get('id')!r}" if isinstance(budget, Mapping) else "no budget"
+    return f"entry {at} ({entry.get('node')!r}, {which})"
+
+
+def _budget_entry_problems(entry: Mapping[str, object], named: str) -> list[str]:
+    """Whether one entry holds what :func:`open_budgets` writes, its dispositions aside."""
+    found = []
+    if entry.get("result") not in tuple(BudgetResult):
+        found.append(
+            f"{named} states the result {entry.get('result')!r}, which is not one of "
+            + ", ".join(f"`{one}`" for one in BudgetResult)
+        )
+    budget = entry.get("budget")
+    measured = entry.get("result") in (BudgetResult.WITHIN, BudgetResult.OVER)
+    match budget:
+        case None if measured:
+            found.append(f"{named} is `{entry.get('result')}` and names no budget")
+        case Mapping() if sorted(budget) == sorted(ENTRY_BUDGET_KEYS):
+            found.extend(
+                budget_problems(
+                    {
+                        "repository": entry.get("repository"),
+                        **{key: budget[key] for key in BUDGET_RECORD_KEYS if key != "repository"},
+                    },
+                    named,
+                )
+            )
+            if not isinstance(budget["unit"], str) or not budget["unit"].strip():
+                found.append(f"{named} names no budget unit")
+        case None:
+            pass
+        case _:
+            found.append(f"{named} holds a `budget` that is not one onebudgetspec reported")
+    if measured and not all(
+        _is_number(entry.get(key)) for key in ("actual", "headroom", "headroom_percent")
+    ):
+        found.append(f"{named} states no finite actual or headroom")
+    match entry.get("host"):
+        case None if measured:
+            found.append(f"{named} states no host")
+        case None:
+            pass
+        case Mapping() as host:
+            found.extend(_host_problems(host, named))
+        case _:
+            found.append(f"{named} states no valid host object")
+    if not isinstance(entry.get("detail"), str):
+        found.append(f"{named} states no valid detail string")
+    found.extend(f"{named} {problem}" for problem in _telemetry_problems(entry))
+    if not isinstance(entry.get("disposition"), list):
+        found.append(f"{named} holds a `disposition` that is not a list")
+    return found
+
+
+def _measurement_problems(document: Mapping[str, object], run: str) -> list[str]:
+    """Validate a measurement account without requiring a dispatch's dispositions yet."""
+    found = _envelope_problems(document, run, BUDGET_KEYS, "entries", BUDGETS_SCHEMA)
+    if found:
+        return found
+    for at, entry in enumerate(cast(list[object], document["entries"])):
+        if problems := _entry_problems(entry, BUDGET_ENTRY_KEYS, at):
+            found.extend(problems)
+        else:
+            held = cast(Mapping[str, object], entry)
+            found.extend(_budget_entry_problems(held, _entry_name(held, at)))
+    return found
+
+
+def _disposition_item_problems(item: object, named: str) -> list[str]:
+    """Whether one disposition is an object of the shape every disposition holds."""
+    if not isinstance(item, Mapping):
+        return [f"{named} holds a disposition that is not an object"]
+    if sorted(item) != sorted(BUDGET_DISPOSITION_KEYS):
+        return [
+            f"{named} holds a disposition that is not an object of exactly "
+            + ", ".join(f"`{key}`" for key in BUDGET_DISPOSITION_KEYS)
+        ]
+    found = []
+    if item["disposition"] not in tuple(BudgetDisposition):
+        found.append(
+            f"{named}'s disposition {item['disposition']!r} is not one of "
+            + ", ".join(f"`{one}`" for one in BudgetDisposition)
+        )
+    if not isinstance(item["root_cause"], str) or not SLUG.fullmatch(item["root_cause"]):
+        found.append(f"{named}'s disposition names a `root_cause` that is not a kebab-case slug")
+    found.extend(_prose(item, "detail", f"{named}'s disposition"))
+    return found
+
+
+def _standing(entry: Mapping[str, object]) -> OverrunBudget:
+    """The budget an `over` entry was measured against, as a record's `budget` holds one."""
+    budget = cast(Mapping[str, object], entry["budget"])
+    return OverrunBudget(
+        repository=Origin(str(entry.get("repository"))),
+        file=str(budget["file"]),
+        id=str(budget["id"]),
+        threshold=float(cast(float, budget["threshold"])),
+        direction=Direction(str(budget["direction"])),
+    )
+
+
+class _Filed(NamedTuple):
+    """One `filed` overrun, for the board check: the cause it went under and the item named."""
+
+    cause: RootCause
+    item: str
+
+
+def _question_problems(
+    named: str, item: str, cause: str, standing: OverrunBudget, reads: BoardReads
+) -> list[str]:
+    """Whether ``item`` is the closed root-cause item a `budget-question` may name."""
+    try:
+        held = reads.item(item)
+    except OSError as exc:
+        return [f"{named} names {item}, which the board could not read: {exc}"]
+    found = []
+    if _category(held.get("status")) != Status.WITHDRAWN:
+        found.append(
+            f"{named} names {item}, which is not closed as not planned (`{Status.WITHDRAWN}`), "
+            "so the overrun is filed rather than asked about"
+        )
+    record_held = _held_record(held)
+    if record_held.get("root_cause") != cause:
+        found.append(f"{named} names {item}, whose record is not for the root cause {cause}")
+    recorded = record_held.get(BUDGET_FIELD)
+    if recorded is None or budget_problems(recorded, BUDGET_FIELD):
+        found.append(
+            f"{named} names {item}, whose record states no budget, so nothing says the budget "
+            "it was closed under still stands"
+        )
+    elif (closed := overrun_budget(cast(Mapping[str, object], recorded))) != standing:
+        found.append(
+            f"{named} names {item}, whose recorded budget {closed.record()} "
+            f"differs from the one standing in {standing.repository}'s {standing.file}, "
+            f"{standing.record()}: the budget changed, so the overrun is filed as usual"
+        )
+    if not found:
+        installs = Installs(Path(sys.executable).parent)
+        try:
+            checkout = publication_checkout(str(standing.repository), installs)
+            if checkout is None:
+                raise OSError("no registered publication checkout")
+            listed = _ran(
+                [
+                    installs.tool("onebudgetspec"),
+                    "list",
+                    standing.file,
+                    "--id",
+                    standing.id,
+                    "--output",
+                    "json",
+                ],
+                cwd=checkout,
+            )
+            if listed.returncode != 0:
+                raise OSError(_said(listed))
+            registered = json.loads(listed.stdout)["budgets"]
+            match registered:
+                case [Mapping() as held] if not budget_problems(
+                    {
+                        "repository": str(standing.repository),
+                        "file": standing.file,
+                        **{key: held.get(key) for key in ("id", "threshold", "direction")},
+                    },
+                    named,
+                ) and all(
+                    held.get(key) == standing.record()[key]
+                    for key in ("id", "threshold", "direction")
+                ):
+                    pass
+                case _:
+                    found.append(
+                        f"{named}: the recorded budget no longer stands in {standing.file}"
+                    )
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            found.append(f"{named}: the standing budget could not be read: {exc}")
+    return found
+
+
+def budget_account_problems(  # noqa: C901, PLR0912 - one pass over every entry's rules
+    document: Mapping[str, object],
+    root: Path,
+    run: str,
+    tickets: Mapping[str, Ticket | None],
+    reads: BoardReads,
+    *,
+    board: str | None = None,
+    measured: Mapping[str, object] | None = None,
+) -> list[str]:
+    """Every way a budget account fails to dispose of the run's overruns, naming each entry.
+
+    ``tickets`` is this run's local tickets by root cause, ``reads`` the board reads this
+    check shares, ``board`` the root board whose evidence is read back when the check is
+    asked to, and ``measured`` the account as it was written before the dispatch, whose
+    every value but the dispositions is the library's and the engine's and so is held equal.
+    """
+    found = _envelope_problems(document, run, BUDGET_KEYS, "entries", BUDGETS_SCHEMA)
+    if found:
+        return found
+    entries = cast(list[object], document["entries"])
+    if measured is not None:
+        if problems := _measurement_problems(measured, run):
+            return [f"the measurement snapshot {problem}" for problem in problems]
+        before = measured.get("entries")
+        if not isinstance(before, list) or len(before) != len(entries):
+            return ["its `entries` are not the ones measured before the dispatch"]
+        found.extend(
+            f"entry {at} is not as measured before the dispatch: only `disposition` is the agent's"
+            for at, (now, then) in enumerate(zip(entries, before, strict=True))
+            if not isinstance(now, Mapping)
+            or not isinstance(then, Mapping)
+            or {key: value for key, value in now.items() if key != "disposition"}
+            != {key: value for key, value in then.items() if key != "disposition"}
+        )
+    filed: list[_Filed] = []
+    questions: list[tuple[str, _Filed]] = []
+    for at, entry in enumerate(entries):
+        if problems := _entry_problems(entry, BUDGET_ENTRY_KEYS, at):
+            found.extend(problems)
+            continue
+        entry = cast(Mapping[str, object], entry)
+        named = _entry_name(entry, at)
+        if problems := _budget_entry_problems(entry, named):
+            found.extend(problems)
+            continue
+        items = cast(list[object], entry["disposition"])
+        if entry["result"] != BudgetResult.OVER:
+            if items:
+                found.append(
+                    f"{named} is `{entry['result']}` and carries a disposition, which only an "
+                    f"`{BudgetResult.OVER}` entry takes"
+                )
+            continue
+        if len(items) != 1:
+            found.append(
+                f"{named} is `{BudgetResult.OVER}` and carries {len(items)} dispositions, and an "
+                "overrun carries exactly one"
+            )
+            continue
+        (item,) = items
+        if problems := _disposition_item_problems(item, named):
+            found.extend(problems)
+            continue
+        item = cast(Mapping[str, object], item)
+        disposed = DisposedBudget(
+            BudgetDisposition(str(item["disposition"])),
+            RootCause(str(item["root_cause"])),
+            item["item"],
+            str(item["detail"]),
+        )
+        cause, link, standing = disposed.root_cause, disposed.item, _standing(entry)
+        linked = isinstance(link, str) and QUALIFIED_ID.fullmatch(link) is not None
+        if disposed.disposition == BudgetDisposition.BUDGET_QUESTION:
+            if not linked:
+                found.append(
+                    f"{named} is a `{BudgetDisposition.BUDGET_QUESTION}` naming no closed item"
+                )
+                continue
+            problems = _question_problems(named, str(link), cause, standing, reads)
+            found.extend(problems)
+            if not problems:
+                questions.append((named, _Filed(cause, str(link))))
+            continue
+        if not linked:
+            found.append(f"{named} is `{BudgetDisposition.FILED}` and links no ticket or item")
+            continue
+        ticket = tickets.get(cause)
+        if cause not in tickets:
+            found.append(
+                f"{named} is filed under {cause}, and this run holds no ticket for it at "
+                f"{TASKS_DIRECTORY}/{run}/{TICKETS}/{cause}{TICKET_SUFFIX}"
+            )
+        else:
+            match ticket:
+                case None:
+                    found.append(f"{named} is filed under {cause}, whose ticket is not sound")
+                case Ticket(budget=budget) if budget != standing:
+                    found.append(
+                        f"{named} is filed under {cause}, whose ticket records the budget "
+                        f"{None if budget is None else budget.record()} rather than the one "
+                        f"it overran, {standing.record()}"
+                    )
+                case _:
+                    filed.append(_Filed(cause, str(link)))
+    if found or board is None:
+        return found
+    causes = {one.cause for one in filed}
+    found.extend(
+        filed_board_problems(
+            root,
+            run,
+            causes,
+            board,
+            tickets,
+            {cause: [one.item for one in filed if one.cause == cause] for cause in causes},
+        )
+    )
+    found.extend(
+        f"{named} names {question.item}, which holds no evidence comment of run {run} for "
+        f"{question.cause}, so the question never reached the board"
+        for named, question in questions
+        if _evidence_carrier(run, question.cause, board, reads, (question.item,)) is None
+    )
+    return found
+
+
 def responses_path(feedback: Path) -> Path:
     """Where the response artifact answering one gathered feedback file is kept, beside it."""
     return feedback.with_name(feedback.name.removesuffix(TICKET_SUFFIX) + RESPONSES_SUFFIX)
@@ -4322,6 +5192,27 @@ def disposition_example(run: str) -> str:
     return json.dumps(example, indent=2)
 
 
+def budget_example(run: str, board: str) -> str:
+    """The budget account's one `over` entry an initial dispatch disposes of, as JSON.
+
+    Every value but `disposition` is written before the dispatch, from onebudgetspec's report
+    and the engine's telemetry, and is shown as such; the disposition is the agent's.
+    """
+    written = "<written for you from the library's report or the engine's telemetry; leave it>"
+    entry: dict[str, object] = dict.fromkeys(BUDGET_ENTRY_KEYS, written)
+    entry["result"] = BudgetResult.OVER.value
+    entry["disposition"] = [
+        _keyed(
+            BUDGET_DISPOSITION_KEYS,
+            f"<one of {', '.join(one.value for one in BudgetDisposition)}>",
+            "<root-cause>",
+            f"<{board}:<native id> of the ticket or item the evidence reached, or the closed item>",
+            "<one or two sentences: the cause the telemetry shows, and what became of it>",
+        )
+    ]
+    return json.dumps(_keyed(BUDGET_KEYS, BUDGETS_SCHEMA, run, [entry]), indent=2)
+
+
 def response_example(run: str, feedback_file: str, plan_store: str) -> str:
     """C9's example: the response account a feedback dispatch owes, as JSON."""
     entry = _keyed(
@@ -4402,6 +5293,16 @@ def shape(run: str) -> dict[str, object]:
         "not_reproducible": Disposition.NOT_REPRODUCIBLE.value,
         "already_fixed": Disposition.ALREADY_FIXED.value,
         "too_low_impact": Disposition.TOO_LOW_IMPACT.value,
+        "budget_field": BUDGET_FIELD,
+        "budget_record_keys": ", ".join(f"`{key}`" for key in BUDGET_RECORD_KEYS),
+        "budget_label": BUDGET_LABEL,
+        "budgets_file": BUDGETS_FILE,
+        "within": BudgetResult.WITHIN.value,
+        "over": BudgetResult.OVER.value,
+        "budget_error": BudgetResult.ERROR.value,
+        "no_budget": BudgetResult.NO_BUDGET.value,
+        "budget_question": BudgetDisposition.BUDGET_QUESTION.value,
+        "telemetry_fields": ", ".join(f"`{field}`" for field in TELEMETRY_FIELDS),
         "exits": {
             "sound": SOUND,
             "unsound": UNSOUND,
@@ -4504,6 +5405,8 @@ def answers(
     check_dispositions: str | None = None,
     responses: Path | None = None,
     check_responses: str | None = None,
+    budgets: Path | None = None,
+    check_budgets: str | None = None,
 ) -> dict[str, object]:
     """One dispatch's answers to this host's `follow-up-task` template, for ``mode``.
 
@@ -4541,7 +5444,16 @@ def answers(
     )
     found.extend(
         _mode_problems(
-            mode, dispositions, check_dispositions, responses, check_responses, feedback_file
+            mode,
+            {
+                "--dispositions": dispositions,
+                "--check-dispositions": check_dispositions,
+                "--budgets": budgets,
+                "--check-budgets": check_budgets,
+                "--feedback": feedback_file,
+                "--responses": responses,
+                "--check-responses": check_responses,
+            },
         )
     )
     if found:
@@ -4582,6 +5494,9 @@ def answers(
             "check_dispositions": str(check_dispositions),
             "ticket_example": ticket_example(run, board),
             "disposition_example": disposition_example(run),
+            "budgets": str(budgets),
+            "check_budgets": str(check_budgets),
+            "budget_example": budget_example(run, board),
         }
     else:
         named = cast(Path, feedback_file).name
@@ -4595,34 +5510,24 @@ def answers(
     return answered
 
 
-def _mode_problems(
-    mode: Mode,
-    dispositions: Path | None,
-    check_dispositions: str | None,
-    responses: Path | None,
-    check_responses: str | None,
-    feedback_file: Path | None,
-) -> list[str]:
-    """Every value a mode's own account needs that the caller did not give.
+#: The flags naming the accounts each mode's task states, which a caller has to give.
+OWED_ACCOUNTS = {
+    Mode.INITIAL: ("--dispositions", "--check-dispositions", "--budgets", "--check-budgets"),
+    Mode.FEEDBACK: ("--feedback", "--responses", "--check-responses"),
+}
+
+
+def _mode_problems(mode: Mode, given: Mapping[str, Path | str | None]) -> list[str]:
+    """Every value a mode's own accounts need that the caller did not give.
 
     Each names an artifact the dispatch is held to, so a task rendered without one is a
-    task whose acceptance criteria name a document at the word ``None``.
+    task whose acceptance criteria name a document at the word ``None``. ``given`` is every
+    account flag's value, by flag.
     """
-    owed = {
-        Mode.INITIAL: (
-            ("--dispositions", dispositions),
-            ("--check-dispositions", check_dispositions),
-        ),
-        Mode.FEEDBACK: (
-            ("--feedback", feedback_file),
-            ("--responses", responses),
-            ("--check-responses", check_responses),
-        ),
-    }[mode]
     return [
         f"a task of the {mode.value} mode states its account at {flag}, and none was given"
-        for flag, value in owed
-        if value is None or (isinstance(value, str) and not value.strip())
+        for flag in OWED_ACCOUNTS[mode]
+        if (value := given.get(flag)) is None or (isinstance(value, str) and not value.strip())
     ]
 
 
@@ -4770,6 +5675,71 @@ def _parser() -> _Parser:
         "--board", metavar="SOURCE", help="also verify filed evidence on this board"
     )
     accounted.add_argument("run", metavar="RUN-ID")
+    budgets_opened = commands.add_parser(
+        "open-budgets",
+        help=(
+            "measure every change a run landed against its repository's onepipeline-labelled "
+            "budgets, once, and print the budget account's path"
+        ),
+    )
+    budgets_opened.add_argument("--root", type=Path, required=True, help=root_help)
+    budgets_opened.add_argument(
+        "--runs-root", type=Path, required=True, help="the runs root the run is recorded under"
+    )
+    budgets_opened.add_argument(
+        "--checkout",
+        type=Path,
+        required=True,
+        help="the launching checkout, whose locked installs read the run and its budgets",
+    )
+    budgets_opened.add_argument("run", type=_budget_run, metavar="RUN-ID")
+    budgets_location = commands.add_parser(
+        "budgets-path", help="print a run's budget account path without writing it"
+    )
+    budgets_location.add_argument("--root", type=Path, required=True, help=root_help)
+    budgets_location.add_argument("run", type=_budget_run, metavar="RUN-ID")
+    budgets_checked = commands.add_parser(
+        "check-budgets",
+        help="validate that every overrun in a run's budget account carries one disposition",
+    )
+    budgets_checked.add_argument("--root", type=Path, required=True, help=root_help)
+    budgets_checked.add_argument(
+        "--board", metavar="SOURCE", help="also read each overrun's evidence back on this board"
+    )
+    budgets_checked.add_argument(
+        "--measured",
+        type=Path,
+        metavar="FILE",
+        help="the account as measured before the dispatch, which only dispositions may change",
+    )
+    budgets_checked.add_argument("run", type=_budget_run, metavar="RUN-ID")
+    budgets_reported = commands.add_parser(
+        "budget-results", help="print each landed change's result line from a run's budget account"
+    )
+    budgets_reported.add_argument("--root", type=Path, required=True, help=root_help)
+    budgets_reported.add_argument(
+        "--measured", type=Path, help="report the account as measured before dispatch"
+    )
+    budgets_reported.add_argument("run", type=_budget_run, metavar="RUN-ID")
+    for name, help in (
+        ("write-budget-closeout", "write a per-launch executable budget closeout hook"),
+        (
+            "budget-closeout",
+            "validate and report a launch's budget account, then retire its snapshot",
+        ),
+    ):
+        closeout = commands.add_parser(name, help=help)
+        closeout.add_argument("--root", type=Path, required=True, help=root_help)
+        closeout.add_argument("--board", required=True, metavar="SOURCE")
+        closeout.add_argument("--measured", type=Path, required=True, metavar="FILE")
+        closeout.add_argument("--hook", type=Path, required=True, metavar="FILE")
+        closeout.add_argument("run", type=_budget_run, metavar="RUN-ID")
+    budgets_over = commands.add_parser(
+        "budget-overruns", help="print how many entries of a run's budget account are over"
+    )
+    budgets_over.add_argument("--root", type=Path, required=True, help=root_help)
+    budgets_over.set_defaults(measured=None)
+    budgets_over.add_argument("run", type=_budget_run, metavar="RUN-ID")
     gathered = commands.add_parser(
         "check-gathering",
         help="validate that a file quotes comments one board holds, and nothing more",
@@ -4834,6 +5804,8 @@ def _parser() -> _Parser:
     task.add_argument("--check-dispositions", metavar="COMMAND")
     task.add_argument("--responses", type=Path, metavar="PATH")
     task.add_argument("--check-responses", metavar="COMMAND")
+    task.add_argument("--budgets", type=Path, metavar="PATH")
+    task.add_argument("--check-budgets", metavar="COMMAND")
     return parser
 
 
@@ -4906,6 +5878,124 @@ def _accounted(arguments: argparse.Namespace) -> int:
     if problems:
         return _refused(str(path), problems)
     print(f"{PROG}: {path} accounts for every draft this dispatch was given")
+    return SOUND
+
+
+def _budgets_opened(arguments: argparse.Namespace) -> int:
+    """Record a run's budget account, for the `open-budgets` command."""
+    installs = Installs(arguments.checkout.resolve() / ".venv" / "bin")
+    try:
+        print(open_budgets(arguments.root, arguments.run, arguments.runs_root.resolve(), installs))
+    except (OSError, Refused) as exc:
+        print(f"{PROG}: refused: {exc}", file=sys.stderr)
+        return UNRUNNABLE
+    return SOUND
+
+
+def _budgets_checked(arguments: argparse.Namespace) -> int:
+    """Validate a run's budget account, for the `check-budgets` command."""
+    path = budgets_path(arguments.root, arguments.run)
+    try:
+        if not path.is_file():
+            return _refused(
+                str(path),
+                ["it does not exist, so nothing says how the run's landed changes measured"],
+            )
+        document = _artifact(path)
+        measured = None if arguments.measured is None else _artifact(arguments.measured)
+        problems = budget_account_problems(
+            document,
+            arguments.root,
+            arguments.run,
+            read_run_tickets(arguments.root, arguments.run),
+            BoardReads(),
+            board=arguments.board,
+            measured=measured,
+        )
+    except (OSError, Refused) as exc:
+        print(f"{PROG}: refused: {exc}", file=sys.stderr)
+        return UNRUNNABLE
+    if problems:
+        return _refused(str(path), problems)
+    print(f"{PROG}: {path} disposes of every overrun this run's landed changes measured")
+    return SOUND
+
+
+def _budgets_reported(arguments: argparse.Namespace, *, count: bool = False) -> int:
+    """Print each entry's result line, or with ``count`` how many are over, from the account."""
+    path = arguments.measured or budgets_path(arguments.root, arguments.run)
+    try:
+        document = _artifact(path)
+    except (OSError, Refused) as exc:
+        print(f"{PROG}: refused: {exc}", file=sys.stderr)
+        return UNRUNNABLE
+    if found := _measurement_problems(document, arguments.run):
+        return _refused(str(path), found)
+    entries = cast(list[Mapping[str, object]], document["entries"])
+    if count:
+        print(sum(entry.get("result") == BudgetResult.OVER for entry in entries))
+        return SOUND
+    for entry in entries:
+        print(change_line(entry))
+    return SOUND
+
+
+def _budget_closeout_written(arguments: argparse.Namespace) -> int:
+    """Write only the invocation of the module's closeout, safely quoted for the shell."""
+    try:
+        snapshot = _artifact(arguments.measured)
+        if problems := _measurement_problems(snapshot, arguments.run):
+            return _refused(str(arguments.measured), problems)
+        if arguments.hook.exists() and arguments.hook.stat().st_size:
+            raise OSError(
+                f"{arguments.hook} already holds a hook; use a fresh file for this launch"
+            )
+        command = [
+            sys.executable,
+            "-m",
+            "orchestrator.follow_up_tickets",
+            "budget-closeout",
+            "--root",
+            str(arguments.root.resolve()),
+            "--board",
+            arguments.board,
+            "--measured",
+            str(arguments.measured.resolve()),
+            "--hook",
+            str(arguments.hook.resolve()),
+            arguments.run,
+        ]
+        arguments.hook.write_text("#!/usr/bin/env bash\nexec " + shlex.join(command) + "\n")
+        arguments.hook.chmod(0o700)
+    except (OSError, Refused) as exc:
+        print(
+            f"{PROG}: refused: {exc}; repair the snapshot or hook path, then retry", file=sys.stderr
+        )
+        return UNRUNNABLE
+    print(arguments.hook)
+    return SOUND
+
+
+def _budget_closed_out(arguments: argparse.Namespace) -> int:
+    """The engine's run-end hook: validate against this launch's snapshot and report it."""
+    checked = _budgets_checked(arguments)
+    reported = _budgets_reported(arguments)
+    if status := checked or reported:
+        print(
+            f"{PROG}: closeout refused; snapshot {arguments.measured} and hook {arguments.hook} "
+            "were kept; correct the account, then run that hook again",
+            file=sys.stderr,
+        )
+        return status
+    try:
+        arguments.hook.unlink()
+        arguments.measured.unlink()
+    except OSError as exc:
+        print(
+            f"{PROG}: closeout cleanup failed: {exc}; remove the named file by hand",
+            file=sys.stderr,
+        )
+        return UNRUNNABLE
     return SOUND
 
 
@@ -5016,6 +6106,8 @@ def _answered_template(arguments: argparse.Namespace) -> int:
             check_dispositions=arguments.check_dispositions,
             responses=arguments.responses,
             check_responses=arguments.check_responses,
+            budgets=arguments.budgets,
+            check_budgets=arguments.check_budgets,
         )
     except (OSError, Refused) as exc:
         print(f"{PROG}: refused: {exc}", file=sys.stderr)
@@ -5177,6 +6269,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             return SOUND
         case "check-dispositions":
             return _accounted(arguments)
+        case "open-budgets":
+            return _budgets_opened(arguments)
+        case "budgets-path":
+            print(budgets_path(arguments.root, arguments.run))
+            return SOUND
+        case "check-budgets":
+            return _budgets_checked(arguments)
+        case "write-budget-closeout":
+            return _budget_closeout_written(arguments)
+        case "budget-closeout":
+            return _budget_closed_out(arguments)
+        case "budget-results":
+            return _budgets_reported(arguments)
+        case "budget-overruns":
+            return _budgets_reported(arguments, count=True)
         case "check-responses":
             return _answered(arguments)
         case "check-run":

@@ -1924,7 +1924,8 @@ def test_a_run_with_no_drafts_or_tickets_ends_at_one_line_and_launches_nothing(
 
     assert empty.returncode == OK, empty.stdout + empty.stderr
     assert empty.stdout.splitlines() == [
-        f"follow-ups: run {followed.empty_run} holds no follow-up drafts and no tickets under "
+        f"follow-ups: run {followed.empty_run} holds no follow-up drafts, "
+        "no tickets and no budget overrun under "
         f"{followed.bench.drafts_root}, so there is nothing to verify and no follow-up run was "
         "launched"
     ]
@@ -2356,6 +2357,10 @@ def _answers_command(bench: Bench, run: str, plan_store: str) -> list[str]:
         str(tickets.dispositions_path(bench.drafts_root, run)),
         "--check-dispositions",
         f"{written} check-dispositions --root {bench.drafts_root} {run}",
+        "--budgets",
+        str(tickets.budgets_path(bench.drafts_root, run)),
+        "--check-budgets",
+        f"{written} check-budgets --root {bench.drafts_root} {run}",
     ]
 
 
@@ -3020,7 +3025,7 @@ def test_a_feedback_re_dispatch_brings_a_schema_4_ticket_to_one_fix_updating_its
         assert shown["repositories"] == [REPOSITORY] == [ticket.repository]
         metadata = shown["metadata"]
         assert isinstance(metadata, dict)
-        assert metadata[tickets.KEY]["schema"] == tickets.SCHEMA == 8
+        assert metadata[tickets.KEY]["schema"] == tickets.SCHEMA == 9
         assert _category(shown) == accepted, "bringing a ticket to the current shape undid it"
     metadata_after = after["metadata"]
     assert isinstance(metadata_after, dict)
@@ -3817,6 +3822,11 @@ def _creates_tasks(checkout: Path) -> None:
     pinned engine after being traced, so the recipe's task is the real rendering and the
     trace still records every engine command line it ran.
     """
+    shutil.copytree(
+        REPO_ROOT / "orchestrator",
+        checkout / "orchestrator",
+        ignore=shutil.ignore_patterns("__pycache__"),
+    )
     for relative in TEMPLATE_FILES:
         shutil.copy2(REPO_ROOT / relative, checkout / relative)
     shutil.copytree(REPO_ROOT / TEMPLATE_DIRECTORY, checkout / TEMPLATE_DIRECTORY)
@@ -4052,15 +4062,11 @@ def test_a_reading_the_toolchain_cannot_check_is_refused_naming_bootstrap(
     assert not any(" start " in line for line in traced), traced
 
 
-def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_free_run_id(
-    tmp_path: Path,
-) -> None:
-    """`just follow-ups run-1` writes `authoring:run-1-follow-ups` and launches it, gated.
+def _launchable(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """A doubled-engine checkout `just follow-ups run-1` launches over: its store and account.
 
-    One direct node naming `graphs/follow-up.yaml`, launched on `--dag-graph off` with no
-    other flag. A second launch while a run root already holds the first id launches the
-    same project under the next free id, which the project's `name` — the run id the engine
-    mints — carries.
+    Returns the checkout, the trace the doubles write, and the plan-store CLI it is
+    provisioned with.
     """
     checkout, trace = delegation_checkout.delegation_checkout(tmp_path)
     _creates_tasks(checkout)
@@ -4101,6 +4107,20 @@ def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_fre
         ),
         encoding="utf-8",
     )
+    return checkout, trace, store
+
+
+def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_free_run_id(
+    tmp_path: Path,
+) -> None:
+    """`just follow-ups run-1` writes `authoring:run-1-follow-ups` and launches it, gated.
+
+    One direct node naming `graphs/follow-up.yaml`, launched on `--dag-graph off` with
+    native budget closeout hooks. A second launch while a run root holds the first id launches
+    the same project under the next free id, which the project's `name` — the run id the engine
+    mints — carries.
+    """
+    checkout, trace, store = _launchable(tmp_path)
     launched = (
         *_template_lines(checkout, "authoring:run-1-follow-ups"),
         *(
@@ -4117,7 +4137,9 @@ def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_fre
     first = delegation_checkout.run_recipe(checkout, trace, "follow-ups", "run-1")
 
     assert first.returncode == 0, first.stderr
-    assert trace.read_text().splitlines() == list(launched)
+    assert [line.split(" --success-hook", 1)[0] for line in trace.read_text().splitlines()] == list(
+        launched
+    )
     project = (checkout / ".plans/projects/run-1-follow-ups.md").read_text(encoding="utf-8")
     assert 'title: "run-1-follow-ups"' in project
     assert '"orchestrator.plan-kind": {"kind": "follow-ups", "nodes": ["follow-ups"]}' in project
@@ -4154,11 +4176,75 @@ def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_fre
     second = delegation_checkout.run_recipe(checkout, trace, "follow-ups", "run-1")
 
     assert second.returncode == 0, second.stderr
-    assert trace.read_text().splitlines() == [*launched, *launched]
+    assert [line.split(" --success-hook", 1)[0] for line in trace.read_text().splitlines()] == [
+        *launched,
+        *launched,
+    ]
     project = (checkout / ".plans/projects/run-1-follow-ups.md").read_text(encoding="utf-8")
     assert 'title: "run-1-follow-ups-2"' in project
     # The second launch retired the first one's task before creating its own.
     assert f"template: {REFERENCE}" in _one_task_record(checkout)
+
+
+@pytest.mark.parametrize("recorded", [False, True], ids=["before-the-record", "after-the-record"])
+def test_a_failed_detached_launch_keeps_its_closeout_hook_only_once_the_engine_recorded_the_run(
+    tmp_path: Path, recorded: bool
+) -> None:
+    """A launch that fails leaves its budget hook and snapshot exactly when the engine owns them.
+
+    Failing before the engine wrote the follow-up run's launch record, nothing can ever run
+    the hook, so the recipe removes every scratch file it made. Failing after, the recorded
+    run names that hook for its run-end, so the hook and the snapshot it validates against
+    stay, and only the recipe's own scratch goes.
+    """
+    checkout, trace, _ = _launchable(tmp_path)
+    record = checkout / "runs" / "run-1-follow-ups" / "launch.json"
+    # The engine boundary, doubled for `start` alone: it fails, having written the follow-up
+    # run's launch record first when this case says the engine got that far.
+    engine = checkout / ".venv" / "bin" / "onepipeline"
+    doubled = engine.read_text(encoding="utf-8")
+    engine.write_text(
+        doubled.replace(
+            'exit "${FAKE_ENGINE_EXIT:-0}"',
+            'if [ "${1-}" = start ]; then\n'
+            '  if [ -n "${FAKE_START_RECORD-}" ]; then\n'
+            '    mkdir -p "${FAKE_START_RECORD%/*}"; printf "{}\\n" >"$FAKE_START_RECORD"\n'
+            "  fi\n"
+            "  exit 1\n"
+            "fi\n"
+            'exit "${FAKE_ENGINE_EXIT:-0}"',
+        ),
+        encoding="utf-8",
+    )
+    scratch = checkout / "scratch-root"
+
+    failed = delegation_checkout.run_recipe(
+        checkout,
+        trace,
+        "follow-ups",
+        "run-1",
+        "--detach",
+        env={"FAKE_START_RECORD": str(record)} if recorded else {},
+    )
+
+    assert failed.returncode == 1, failed.stdout + failed.stderr
+    assert "the detached launch of run run-1-follow-ups over run run-1 failed" in failed.stderr
+    assert failed.stdout == "", "a failed launch prints no follow-up run to relay"
+    started = [line for line in trace.read_text(encoding="utf-8").splitlines() if " start " in line]
+    assert len(started) == 1, started
+    words = shlex.split(started[0])
+    hook = Path(words[words.index("--success-hook") + 1])
+    assert words[words.index("--failure-hook") + 1] == str(hook), started
+    assert record.exists() is recorded
+    left = sorted(scratch.iterdir())
+    if recorded:
+        assert hook in left and os.access(hook, os.X_OK), left
+        snapshot = [path for path in left if path != hook]
+        assert len(snapshot) == 1, left
+        assert str(snapshot[0]) in hook.read_text(encoding="utf-8"), "the hook names its snapshot"
+        assert json.loads(snapshot[0].read_text(encoding="utf-8")), "the snapshot is the account"
+    else:
+        assert left == [], f"a launch the engine never recorded left scratch behind: {left}"
 
 
 def _one_task_record(checkout: Path) -> str:
@@ -4213,7 +4299,7 @@ def test_a_run_id_carrying_capitals_launches_the_project_the_store_wrote(
 
     assert launched.returncode == 0, launched.stderr
     traced = trace.read_text().splitlines()
-    assert traced == [
+    assert [line.split(" --success-hook", 1)[0] for line in traced] == [
         *_template_lines(checkout, "authoring:run-1-follow-ups"),
         *(
             delegation_checkout.at(checkout, line)
@@ -4496,3 +4582,527 @@ def test_follow_up_launch_validation_checks_the_board_once_and_refuses_a_late_ch
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker, e2e_not_mocked]  # noqa: E501 - directive rule lists occupy one line
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker, e2e_not_mocked, tests_mirror_real_usage] Required recipe journeys use engine boundary doubles and recorded timestamps.  # noqa: E501 - directive and reason occupy one line
+# The task explicitly requires this existing recipe suite: one launch doubles the engine
+# boundary to verify checkout routing, and the next uses the real engine over recorded telemetry
+# with only the paid model doubled. Recorded event timestamps make overruns deterministic
+# without waiting hours or changing the engine. Existing reads_docs placement follows the
+# suite's configuration dependency.
+@pytest.mark.reads_docs
+@pytest.mark.parametrize("overrun", [True, False])
+def test_follow_ups_measures_each_repository_before_dispatch_and_refuses_an_unaccounted_overrun(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    overrun: bool,
+) -> None:
+    monkeypatch.setenv("ONEVCS_HOME", str(tmp_path / "delivery-registry"))
+    checkout, trace = delegation_checkout.delegation_checkout(tmp_path)
+    _creates_tasks(checkout)
+    bins = checkout / ".venv/bin"
+    for name in ("onetaskgraph", "onebudgetspec", "onevcs"):
+        (bins / name).symlink_to(REPO_ROOT / ".venv/bin" / name)
+    captured = json.loads((REPO_ROOT / "tests/fixtures/cycle-time/adopted-engine.json").read_text())
+    change = next(c for c in captured["changes"] if c["cycle_seconds"] is not None)
+    registered, unlabelled = tmp_path / "budgeted", tmp_path / "unlabelled"
+    witness = tmp_path / "measurements.jsonl"
+    measure = tmp_path / "measure.py"
+    measure.write_text(
+        f"#!{sys.executable}\nimport json, os, pathlib\n"
+        f"with open({str(witness)!r}, 'a') as log:\n"
+        " log.write(json.dumps({'cwd': os.getcwd(), 'node': os.environ['ONEPIPELINE_NODE_ID'],"
+        " 'run': os.environ['ONEPIPELINE_RUN_ID'], 'runs': os.environ['ONEPIPELINE_RUNS_DIR'],"
+        " 'path': os.environ['PATH']}) + '\\n')\n"
+        "pathlib.Path(os.environ['ONEBUDGETSPEC_RESULT']).write_text(json.dumps({"
+        f"'value': 20 if {overrun!r} "
+        "and os.environ['ONEPIPELINE_NODE_ID'] == 'overrun' else 5}))\n"
+    )
+    measure.chmod(0o755)
+    changes = []
+    for root, name, labels in (
+        (registered, "budgeted", ["onepipeline"]),
+        (unlabelled, "unlabelled", []),
+    ):
+        root.mkdir()
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        identity = f"github.com/example/{name}"
+        subprocess.run(
+            [
+                str(bins / "onevcs"),
+                "register",
+                str(root),
+                "--origin",
+                "https://" + identity + ".git",
+            ],
+            check=True,
+            capture_output=True,
+        )
+        (root / "budgets.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "schema_version": 1,
+                    "budgets": [
+                        {
+                            "id": "delivery",
+                            "labels": labels,
+                            "measure": "reported",
+                            "command": [str(measure)],
+                            "unit": "seconds",
+                            "direction": "max",
+                            "threshold": 10,
+                        }
+                    ],
+                }
+            )
+        )
+        for node in ("overrun", "within") if labels else ("opted-out",):
+            changes.append({**change, "node": node, "repository": identity})
+    telemetry = tmp_path / "telemetry.json"
+    telemetry.write_text(json.dumps({"schema_version": 1, "run_id": "run-1", "changes": changes}))
+    (checkout / "runs/run-1").mkdir(parents=True)
+    engine = bins / "onepipeline"
+    program = engine.read_text().replace(
+        'if [ "${1:-}" = template ];',
+        f'if [ "${{1:-}}" = telemetry ]; then cat {shlex.quote(str(telemetry))}; exit 0; fi\n'
+        'if [ "${1:-}" = template ];',
+    )
+    engine.write_text(program)
+    done = delegation_checkout.run_recipe(
+        checkout,
+        trace,
+        "follow-ups",
+        "run-1",
+        env={delegation_checkout.STATUS_ANSWER_ENV: json.dumps(WELL_FORMED)},
+    )
+    root = checkout / ".follow-ups"
+    account = json.loads(tickets.budgets_path(root, "run-1").read_text())
+    match overrun:
+        case True:
+            assert done.returncode == tickets.UNSOUND, done.stdout + done.stderr
+            assert "carries 0 dispositions" in done.stderr
+            assert "budget account" in done.stderr
+            assert tickets.dispositions_path(root, "run-1").is_file()
+            assert [e["result"] for e in account["entries"]] == ["over", "within", "no-budget"]
+            assert _one_task_record(checkout)
+        case False:
+            assert done.returncode == 0, done.stdout + done.stderr
+            assert "no follow-up run was launched" in done.stdout
+            assert len(done.stdout.splitlines()) == 1
+            assert [e["result"] for e in account["entries"]] == ["within", "within", "no-budget"]
+            assert not tickets.dispositions_path(root, "run-1").exists()
+    for entry, source in zip(account["entries"], changes, strict=True):
+        for field in tickets.TELEMETRY_FIELDS:
+            assert entry[field] == source[field]
+        assert tickets.change_line(entry) in (done.stdout if overrun else done.stderr)
+    measured = [json.loads(line) for line in witness.read_text().splitlines()]
+    assert [row["node"] for row in measured] == ["overrun", "within"]
+    assert all(row["cwd"] == str(registered) and row["run"] == "run-1" for row in measured)
+    assert all(row["runs"] == str(checkout / "runs") for row in measured)
+    assert all(row["path"].split(os.pathsep)[0] == str(bins) for row in measured)
+
+
+def _recorded_delivery_run(bench: Bench, run: str, repository: str) -> dict:
+    """Recorded intervals feed the adopted renderer; no duration is guessed by this test."""
+    from probe_run_root import run_root
+
+    root = run_root(bench.runs, run)
+    nodes = ["open-cause", "cancelled-cause", "changed-cause", "within"]
+    plan = {
+        "schema_version": 3,
+        "name": run,
+        "goal": {"text": "Report landed changes"},
+        "tasks": [
+            {
+                "id": node,
+                "repo": repository,
+                "title": "feat: deliver service",
+                "persona": "engineer",
+                "task": "## What\nDeliver.",
+            }
+            for node in nodes
+        ],
+    }
+    (root / "plan.json").write_text(json.dumps(plan))
+    journal = []
+
+    def event(node: str | None, seconds: int, source: str, kind: str, payload: dict) -> None:
+        from datetime import UTC, datetime, timedelta
+
+        stamp = (
+            (datetime(2026, 1, 1, tzinfo=UTC) + timedelta(seconds=seconds))
+            .isoformat(timespec="milliseconds")
+            .replace("+00:00", "Z")
+        )
+        journal.append(
+            {
+                "v": 2,
+                "ts": stamp,
+                "stream": "recorded-delivery",
+                "seq": len(journal),
+                "source": source,
+                "kind": kind,
+                "labels": {"run_id": run, **({"node": node} if node else {})},
+                "payload": payload,
+            }
+        )
+
+    event(None, 0, "pipeline", "run-started", {"plan": plan})
+    for node in nodes:
+        end = 5 if node == "within" else 20
+        event(node, 0, "pipeline", "node-dispatched", {"node": node})
+        event(node, 1, "agentgraph", "member-settled", {})
+        event(
+            node,
+            end,
+            "vcs",
+            "merge-completed",
+            {
+                "identity": repository,
+                "landing": COMMIT,
+                "landed_at": f"2026-01-01T00:00:{end:02d}.000Z",
+            },
+        )
+        event(node, end, "pipeline", "node-settled", {"status": "done", "outcome": "merged"})
+    (root / "events.jsonl").write_text("".join(json.dumps(event) + "\n" for event in journal))
+    result = _run([str(ENGINE), "telemetry", run, "--changes", "--json"], bench)
+    assert result.returncode == 0, result.stderr
+    document = json.loads(result.stdout)
+    assert len(document["changes"]) == 4
+    assert [change["cycle_seconds"] for change in document["changes"]] == [20, 20, 20, 5]
+    return document
+
+
+@pytest.mark.reads_docs
+@pytest.mark.parametrize("tamper", [False, True])
+@pytest.mark.parametrize("detached", [False, True])
+def test_real_follow_ups_disposes_of_open_cancelled_and_changed_budget_causes(
+    tmp_path: Path,
+    tamper: bool,
+    detached: bool,
+) -> None:
+    bench = _bench(tmp_path)
+    bench.environment["ONEVCS_HOME"] = str(tmp_path / "delivery-vcs")
+    main, earlier = "delivery-main", "delivery-earlier"
+    publication = tmp_path / "service"
+    publication.mkdir()
+    subprocess.run(["git", "init", "-q", str(publication)], check=True)
+    registered = _run(
+        [
+            str(REPO_ROOT / ".venv/bin/onevcs"),
+            "register",
+            str(publication),
+            "--origin",
+            "https://" + REPOSITORY + ".git",
+        ],
+        bench,
+    )
+    assert registered.returncode == 0, registered.stderr
+    spec = {
+        "schema_version": 1,
+        "budgets": [
+            {
+                "id": "delivery",
+                "labels": ["onepipeline"],
+                "measure": "reported",
+                "command": [str(REPO_ROOT / "scripts/budget-cycle-time.sh")],
+                "unit": "seconds",
+                "direction": "max",
+                "threshold": 10,
+            }
+        ],
+    }
+    (publication / "budgets.yaml").write_text(yaml.safe_dump(spec))
+    telemetry = _recorded_delivery_run(bench, main, REPOSITORY)
+    standing = tickets.OverrunBudget(
+        tickets.Origin(REPOSITORY), "budgets.yaml", "delivery", 10, "max"
+    )
+    causes = [
+        "service-delivery-over-open",
+        "service-delivery-over-cancelled",
+        "service-delivery-over-changed",
+    ]
+    items = []
+    for cause, changed in zip(causes, (False, False, True), strict=True):
+        ticket = dataclasses.replace(
+            _ticket(
+                earlier,
+                cause,
+                (),
+                f"some-service: {cause}",
+                "Measured delivery overrun",
+                HOST,
+                estimated=True,
+            ),
+            budget=standing._replace(threshold=5) if changed else standing,
+        )
+        path = tickets.ticket_path(bench.drafts_root, earlier, cause)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(tickets.render(ticket))
+        copied = _run(
+            [
+                sys.executable,
+                "-m",
+                "orchestrator.follow_up_tickets",
+                "copy",
+                "--board",
+                BOARD,
+                str(path),
+            ],
+            bench,
+        )
+        assert copied.returncode == 0, copied.stdout + copied.stderr
+        item = f"{BOARD}:{earlier}/tickets/{cause}"
+        _moved(bench, item, tickets.Status.DEFERRED if not items else tickets.Status.WITHDRAWN)
+        items.append(item)
+    before = set(_board_ids(bench))
+    staged = []
+    for cause in (causes[0], causes[2]):
+        ticket = dataclasses.replace(
+            _ticket(
+                main,
+                cause,
+                (),
+                f"some-service: {cause}",
+                "Recorded delivery overrun",
+                HOST,
+                estimated=True,
+            ),
+            budget=standing,
+        )
+        source = _staged(bench, cause, tickets.render(ticket))
+        target = tickets.ticket_path(bench.drafts_root, main, cause)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        staged.append((source, target))
+    update = tmp_path / "account-deliveries.py"
+    update.write_text(
+        "import json, pathlib\n"
+        f"path = pathlib.Path({str(tickets.budgets_path(bench.drafts_root, main))!r})\n"
+        "account = json.loads(path.read_text())\n"
+        f"causes = {causes!r}\nitems = {items!r}\n"
+        f"new_item = {f'{BOARD}:{main}/tickets/{causes[2]}'!r}\n"
+        "for entry in account['entries']:\n"
+        " if entry['result'] != 'over': continue\n"
+        " i = ['open-cause', 'cancelled-cause', 'changed-cause'].index(entry['node'])\n"
+        " entry['disposition'] = [{'disposition': 'budget-question' if i == 1 else 'filed',"
+        " 'root_cause': causes[i], 'item': new_item if i == 2 else items[i],"
+        " 'detail': 'Measured delivery overrun; publication was not measured, so no estimate.'}]\n"
+        f"if {tamper!r}: account['entries'][0]['actual'] += 1\n"
+        "path.write_text(json.dumps(account))\n"
+    )
+    commands = []
+    python = str(REPO_ROOT / ".venv/bin/python3")
+    for source, target in staged:
+        commands.append(_placed(source, target))
+        commands.append([python, "-m", "orchestrator.follow_up_tickets", "validate", str(target)])
+    for i in (0, 1):
+        evidence = _staged(
+            bench,
+            f"evidence-{i}",
+            tickets.render_comment(
+                main,
+                causes[i],
+                "Cycle 20 seconds, budget 10 seconds. Publication is not measured. "
+                + ("Should the budget change?" if i == 1 else "Repeated delivery cost."),
+            ),
+        )
+        commands.append(
+            _from_checkout(
+                str(ONETASKGRAPH_BIN),
+                "task",
+                "comment",
+                "add",
+                items[i],
+                "--body-file",
+                str(evidence),
+            )
+        )
+    commands.append(_re_estimate(python, items[0]))
+    commands.append(_decided_and_copied(python, staged[1][1]))
+    commands.append([python, str(update)])
+    commands.append(
+        [
+            python,
+            "-m",
+            "orchestrator.follow_up_tickets",
+            "check-budgets",
+            "--root",
+            str(bench.drafts_root),
+            main,
+        ]
+    )
+    bench.environment["FAKE_CODEX_RUN_ON_MARKER"] = str(tmp_path / "commands.json")
+    bench.environment["FAKE_CODEX_RUN_ON_MARKER_LOG"] = str(tmp_path / "commands-ran.jsonl")
+    _script(bench, main, commands)
+    followed = _pass(bench, "delivery", main, *(("--detach",) if detached else ()))
+    hook_snapshot = None
+    if detached:
+        assert followed.result.returncode == 0, followed.result.stdout + followed.result.stderr
+        launched = json.loads((bench.runs / followed.run / "launch.json").read_text())
+        hook = Path(launched["success_hook"])
+        assert launched["failure_hook"] == str(hook)
+        command = shlex.split(hook.read_text().split("exec ", 1)[1])
+        hook_snapshot = Path(command[command.index("--measured") + 1])
+        assert not hook_snapshot.is_relative_to(bench.drafts_root)
+        watched = _run(
+            [str(ENGINE), "watch", followed.run, "--until", "settled", "--timeout", "60"], bench
+        )
+        assert watched.returncode == 0, watched.stdout + watched.stderr
+        deadline = time.monotonic() + e2e_timeout(60)
+        expected_exit = f"exit: {1 if tamper else 0};"
+        while True:
+            results = _run(["just", "results", followed.run], bench)
+            if expected_exit in results.stdout:
+                break
+            assert time.monotonic() < deadline, results.stdout + results.stderr
+            time.sleep(0.05)
+        report = results.stdout
+        closeout = (bench.runs / followed.run / "hooks/success.log").read_text()
+        assert "closeout refused" in closeout if tamper else "disposes of every overrun" in closeout
+        assert "closeout refused" in report if tamper else "disposes of every overrun" in report
+        assert hook_snapshot.exists() == tamper
+        assert hook.exists() == tamper
+        assert not any(path.name.endswith("follow-ups-follow-ups") for path in bench.runs.iterdir())
+    else:
+        assert followed.result.returncode == (tickets.UNSOUND if tamper else 0), (
+            followed.result.stdout + followed.result.stderr + _ran(bench)
+        )
+        report = followed.result.stdout
+    if tamper:
+        assert "only `disposition`" in report + followed.result.stderr
+        assert "entry 0" in report + followed.result.stderr
+    after = set(_board_ids(bench))
+    assert after - before == {f"{BOARD}:{main}/tickets/{causes[2]}"}
+    assert len(_comments(bench, items[0])) == 1
+    assert len(_comments(bench, items[1])) == 1
+    assert "Should the budget change?" in _comments(bench, items[1])[0]["body"]
+    account = json.loads(tickets.budgets_path(bench.drafts_root, main).read_text())
+    by_node = {change["node"]: change for change in telemetry["changes"]}
+    for entry in account["entries"]:
+        reported = entry | {"actual": by_node[entry["node"]]["cycle_seconds"]}
+        assert tickets.change_line(reported) in report
+        for field in tickets.TELEMETRY_FIELDS:
+            assert field in by_node[entry["node"]]
+            assert entry[field] == by_node[entry["node"]][field]
+    assert telemetry["schema_version"] == tickets.TELEMETRY_SCHEMA
+    assert [entry["result"] for entry in account["entries"]].count("over") == 3
+    assert (
+        next(e for e in account["entries"] if e["node"] == "cancelled-cause")["disposition"][0][
+            "disposition"
+        ]
+        == "budget-question"
+    )
+    assert (
+        _record(_item(bench, f"{BOARD}:{main}/tickets/{causes[2]}"))["budget"] == standing.record()
+    )
+
+    if detached and tamper:
+        captured = json.loads(hook_snapshot.read_text())
+        account["entries"][0]["actual"] = captured["entries"][0]["actual"]
+        tickets.budgets_path(bench.drafts_root, main).write_text(json.dumps(account))
+        repaired = _run([str(hook)], bench)
+        assert repaired.returncode == 0, repaired.stdout + repaired.stderr
+        assert not hook.exists() and not hook_snapshot.exists()
+    if detached and not tamper:
+        _script(bench, main, [])
+        feedback = tmp_path / "retry-feedback.md"
+        feedback.write_text("Keep the completed budget dispositions.\n")
+        again = _pass(
+            bench,
+            "delivery-retry",
+            main,
+            "--detach",
+            "--feedback",
+            str(feedback),
+        )
+        assert again.result.returncode == 0, again.result.stdout + again.result.stderr
+        retry_launch = json.loads((bench.runs / again.run / "launch.json").read_text())
+        assert retry_launch["success_hook"] != str(hook)
+        assert (
+            _run(
+                [str(ENGINE), "watch", again.run, "--until", "settled", "--timeout", "60"], bench
+            ).returncode
+            == 0
+        )
+        deadline = time.monotonic() + e2e_timeout(60)
+        while Path(retry_launch["success_hook"]).exists():
+            assert time.monotonic() < deadline, _run(["just", "results", again.run], bench).stdout
+            time.sleep(0.05)
+
+
+@pytest.mark.reads_docs
+def test_failed_detached_follow_up_closes_its_budget_account_without_launching_again(
+    tmp_path: Path,
+) -> None:
+    bench = _bench(tmp_path)
+    bench.environment["ONEVCS_HOME"] = str(tmp_path / "delivery-vcs")
+    bench.environment["FAKE_CODEX_FAIL_AFTER_TURN"] = "1"
+    bench.environment["FAKE_CODEX_RUN_ON_MARKER"] = str(tmp_path / "commands.json")
+    bench.environment["FAKE_CODEX_RUN_ON_MARKER_LOG"] = str(tmp_path / "commands-ran.jsonl")
+    main = "delivery-failed"
+    publication = tmp_path / "service"
+    publication.mkdir()
+    subprocess.run(["git", "init", "-q", str(publication)], check=True)
+    registered = _run(
+        [
+            str(REPO_ROOT / ".venv/bin/onevcs"),
+            "register",
+            str(publication),
+            "--origin",
+            "https://github.com/example/service.git",
+        ],
+        bench,
+    )
+    assert registered.returncode == 0, registered.stderr
+    (publication / "budgets.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 1,
+                "budgets": [
+                    {
+                        "id": "delivery",
+                        "labels": ["onepipeline"],
+                        "measure": "reported",
+                        "command": [str(REPO_ROOT / "scripts/budget-cycle-time.sh")],
+                        "unit": "seconds",
+                        "direction": "max",
+                        "threshold": 10,
+                    }
+                ],
+            }
+        )
+    )
+    _recorded_delivery_run(bench, main, "github.com/example/service")
+    _script(bench, main, [])
+    followed = _pass(bench, "failed-delivery", main, "--detach")
+    assert followed.result.returncode == 0, followed.result.stdout + followed.result.stderr
+    launched = json.loads((bench.runs / followed.run / "launch.json").read_text())
+    hook = Path(launched["failure_hook"])
+    command = shlex.split(hook.read_text().split("exec ", 1)[1])
+    snapshot = Path(command[command.index("--measured") + 1])
+    failed = _run(
+        [str(ENGINE), "watch", followed.run, "--until", "settled", "--timeout", "60"], bench
+    )
+    assert failed.returncode == 3, failed.stdout + failed.stderr
+    assert "nothing-driving" in failed.stdout
+    deadline = time.monotonic() + e2e_timeout(60)
+    while True:
+        results = _run(["just", "results", followed.run], bench)
+        if "failure hook fired" in results.stdout and "exit: 1;" in results.stdout:
+            break
+        assert time.monotonic() < deadline, results.stdout + results.stderr
+        time.sleep(0.05)
+    assert "closeout refused" in results.stdout
+    assert "carries 0 dispositions" in results.stdout
+    account = json.loads(snapshot.read_text())
+    for entry in account["entries"]:
+        assert tickets.change_line(entry) in results.stdout
+    assert snapshot.exists() and hook.exists()
+    assert not (bench.runs / followed.run / "hooks/success.log").exists()
+    assert {path.name for path in bench.runs.iterdir()} == {main, followed.run}
+    # These files belong to the deliberately refused test launch; preservation was asserted.
+    hook.unlink()
+    snapshot.unlink()
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker, e2e_not_mocked, tests_mirror_real_usage]  # noqa: E501 - directive rule lists occupy one line

@@ -711,7 +711,14 @@ def _measured(host: Host, environment: dict[str, str]) -> tuple[dict, str]:
     budgets = host.root / "gate-time-only.yaml"
     budgets.write_text(yaml.safe_dump(document), encoding="utf-8")
     ran = subprocess.run(
-        [str(Path(sys.executable).parent / "onebudgetspec"), "check", str(budgets), "--json"],
+        [
+            str(Path(sys.executable).parent / "onebudgetspec"),
+            "check",
+            str(budgets),
+            "--exclude-label",
+            "onepipeline",
+            "--json",
+        ],
         cwd=host.root,
         env={**host.environment(), **environment},
         text=True,

@@ -49,6 +49,17 @@ checked, which are its repo-wide budgets, enforced on the merge path. Each proje
 `budgets.yaml` holds the budgets scoped to that project and is checked by its
 affected-only target, so a budget runs only when a change touches what it measures.
 
+## Delivery budgets after landing
+
+A repository opts in to delivery reporting by registering a budget in its root
+`budgets.yaml` with `labels: [onepipeline]`. Only this host's run-success hook, through
+`just follow-ups`, selects that label; pre-push hooks, CI and Nx targets exclude it.
+An `onepipeline`-labelled budget's command runs from the root of that repository's
+registered publication checkout with `ONEPIPELINE_RUN_ID` naming the run that landed the
+change, `ONEPIPELINE_NODE_ID` naming its node, `ONEPIPELINE_RUNS_DIR` naming the runs root,
+and `PATH` putting the launching checkout's locked install first, so `onepipeline` is the
+adopted engine. This is what such a command may rely on.
+
 ## How a plan states its budgets
 
 - **Every plan writes a budgets document**, the project document `<project>-budgets`,

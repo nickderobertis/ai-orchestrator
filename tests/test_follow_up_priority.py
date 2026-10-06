@@ -955,7 +955,7 @@ def test_re_estimate_refuses_an_item_it_cannot_estimate(
     plan_store.sdk(plan_store.client().task_metadata_set(issue, tickets.KEY, '{"schema": 5}'))
     assert tickets.main(["re-estimate", "--board", BOARD, issue]) == tickets.UNSOUND
     refused = " ".join(capsys.readouterr().err.split())
-    assert "record of schema 5, and this reads schema 6, 7 or 8" in refused
+    assert "record of schema 5, and this reads schema 6, 7, 8 or 9" in refused
     plan_store.sdk(plan_store.client().task_metadata_set(issue, tickets.KEY, '{"schema": 7}'))
     assert tickets.main(["re-estimate", "--board", BOARD, issue]) == tickets.UNSOUND
     assert "no follow-up ticket this can estimate" in capsys.readouterr().err
@@ -1059,7 +1059,7 @@ def test_board_status_refuses_a_bound_items_record_of_no_schema_it_reads(
     assert f"record of schema {schema!r}, which no follow-up tool reads" in refused
     assert tickets.main(["re-estimate", "--board", BOARD, issue]) == tickets.UNSOUND
     refused = " ".join(capsys.readouterr().err.split())
-    assert f"record of schema {schema!r}, and this reads schema 6, 7 or 8" in refused
+    assert f"record of schema {schema!r}, and this reads schema 6, 7, 8 or 9" in refused
     assert _shown(issue)["priority"] == "low"
 
 
