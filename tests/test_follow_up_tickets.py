@@ -6265,8 +6265,31 @@ def test_open_budget_account_uses_each_real_library_result_and_preserves_telemet
             )
             [reported] = json.loads(library.stdout)["results"]
             assert reported["verdict"] == "error"
-            assert entry["detail"] == reported["error"]
-            assert entry["detail"].endswith("budget-cycle-time.sh exited with status 1")
+            # The script's own explanation of why the cycle is absent from the telemetry.
+            direct = subprocess.run(
+                [str(REPO_ROOT / "scripts/budget-cycle-time.sh")],
+                env={
+                    **os.environ,
+                    "ONEPIPELINE_RUN_ID": captured["run_id"],
+                    "ONEPIPELINE_NODE_ID": change["node"],
+                    "ONEBUDGETSPEC_RESULT": str(checkout / "result.json"),
+                    "PATH": f"{launch / '.venv/bin'}{os.pathsep}{os.environ['PATH']}",
+                },
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            assert direct.returncode != 0
+            explanation = direct.stderr.splitlines()[0]
+            assert "was not measured" in explanation
+            assert explanation in entry["detail"]
+            # The reason is the library's complete `error`, unchanged. Each check names its own
+            # result file in the script's stderr, so only that library-made file name varies.
+            result_file = re.compile(r"onebudgetspec-result-[A-Za-z0-9]+\.json")
+            assert len(result_file.findall(entry["detail"])) == 1
+            assert result_file.sub("RESULT", entry["detail"]) == result_file.sub(
+                "RESULT", reported["error"]
+            )
         case "no-budget":
             assert {
                 "missing": "does not exist",
@@ -6335,7 +6358,6 @@ def test_cycle_script_through_installed_budgetspec_reports_verdicts_and_failure_
         result = json.loads(report.stdout)["results"][0]
         if node_kind != "measured":
             assert result["verdict"] == "error"
-            assert result["error"].endswith("budget-cycle-time.sh exited with status 1")
             direct = subprocess.run(
                 [str(REPO_ROOT / "scripts/budget-cycle-time.sh")],
                 env={**environment, "ONEBUDGETSPEC_RESULT": str(checkout / "result.json")},
@@ -6349,6 +6371,7 @@ def test_cycle_script_through_installed_budgetspec_reports_verdicts_and_failure_
                 "absent": "recorded no change",
                 "preserved": "has not landed",
             }[node_kind] in direct.stderr
+            assert direct.stderr.splitlines()[0] in result["error"]
             break
         assert result["verdict"] == verdict
         assert result["actual"] == change["cycle_seconds"]
