@@ -8,7 +8,8 @@ real one dispatches the paid model and a real lifecycle session for every node; 
 with the real tools, what each of the flow's runs leaves behind when it settles:
 
 * the **draft** planner's run writes the plan into the store — a project record, a task
-  rendered from `plan-task`, the budgets document unless the plan predates budgets — and,
+  rendered from `plan-task`, its plan-level budget answers and description unless the plan
+  predates budgets — and,
   when the scenario names spikes, the `<plan>-spikes` project of spike tasks;
 * the **spikes** run takes the run id the engine would mint from the project's
   `onepipeline.name`, and for each spike renders the launch's `--branch-template`, opens a
@@ -37,6 +38,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -72,9 +74,9 @@ class Scenario(TypedDict):
     spike_task: dict[str, object]
     #: The spike node ids the draft writes, none for a draft with no spikes.
     spikes: list[str]
-    #: The budgets document's answers, or none for a plan that writes none.
+    #: The plan-level budget answers, or none for a plan that writes none.
     budgets: dict[str, object] | None
-    #: The design document's answers, beside the budget answers its writer's task quotes.
+    #: The design document's answers, beside the budget answers its writer's task names.
     design: dict[str, object]
     #: Whether the draft writes anything at all.
     write: NotRequired[bool]
@@ -228,6 +230,33 @@ def _document(plan: str, document: str, template: str, answers: dict[str, object
     )
 
 
+def _describe(plan: str, answers: dict[str, object]) -> None:
+    """State ``plan``'s plan-level budget answers the way a planner does.
+
+    Its description rendered from `plan-description` by the store's own `project create`,
+    replacing the project's body and keeping its metadata, beside the same answers as its
+    `orchestrator.plan-budgets` record.
+    """
+    source, _, native = plan.partition(":")
+    _store(
+        "project",
+        "create",
+        source,
+        "--id",
+        native,
+        "--title",
+        native,
+        "--template-loader",
+        "-",
+        "--answers",
+        _with_answers(answers),
+        "--metadata",
+        f"orchestrator.plan-budgets={json.dumps(answers)}",
+        "--no-interactive",
+        stdin=_resolved("plan-description"),
+    )
+
+
 def draft(scenario: Scenario) -> list[Node]:
     plan, root = scenario["plan"], Path(scenario["root"])
     if not scenario.get("write", True):
@@ -243,7 +272,7 @@ def draft(scenario: Scenario) -> list[Node]:
         repository=scenario["repository"],
     )
     if scenario["budgets"] is not None:
-        _document(plan, f"{native}-budgets", "plan-budgets", scenario["budgets"])
+        _describe(plan, scenario["budgets"])
     if scenario["spikes"]:
         _write_project(root, f"{native}-spikes", "Measure the listing before the plan is final")
     publish = ['onepipeline.publish="preserve"'] if scenario.get("spike_publish", True) else []
@@ -474,18 +503,10 @@ def design(scenario: Scenario, project: str) -> list[Node]:
     (own,) = _tasks(project)
     content = str(own["item"]["content"])
     answers = dict(scenario["design"])
-    # The task names the budgets document's file; its answers are the record it renders.
-    named = re.search(r"budgets document `[^`]+`, the file `([^`]+)`", content)
-    predates = re.search(r"The plan predates budgets:.*?\n\n> ([^\n]+)", content, re.S)
-    if named:
-        recorded = re.search(
-            r"\n## Record\n\n```json\n([^\n]*)\n```",
-            Path(named.group(1)).read_text(encoding="utf-8"),
-        )
-        assert recorded is not None, named.group(1)
-        answers.update(json.loads(recorded.group(1)))
-    elif predates:
-        answers["predates_budgets"] = predates.group(1)
+    # The task names the command whose output the budget answers copy; run it, as a writer does.
+    (command,) = set(re.findall(r"`(uv run python -m orchestrator\.plan_budgets [^`]+)`", content))
+    printed = subprocess.run(shlex.split(command), capture_output=True, text=True, check=True)
+    answers.update(json.loads(printed.stdout))
     plan = scenario["plan"]
     _document(plan, f"{plan.partition(':')[2]}-design", "design-doc", answers)
     return [{"id": "design-doc", "status": "done"}]

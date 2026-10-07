@@ -166,7 +166,7 @@ def _plan_project(native: str) -> str:
         },
         native_id=native,
     )
-    # And its budgets document, as every plan carries: this one's work needs no budget.
+    # And its plan-level budget answers, as every plan states: this work needs no budget.
     budgeted(FIXTURE_SOURCE, native, no_budgets([]))
     return f"{FIXTURE_SOURCE}:{native}"
 

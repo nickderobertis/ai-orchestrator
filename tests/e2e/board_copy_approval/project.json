@@ -65,7 +65,8 @@
       "{workspaceRoot}/orchestrator/plan_budgets.py",
       "{workspaceRoot}/scripts/plan-check.sh",
       "{workspaceRoot}/templates/spike-report.md.j2",
-      "{workspaceRoot}/templates/plan-budgets.md.j2",
+      "{workspaceRoot}/templates/plan-description.md.j2",
+      "{workspaceRoot}/templates/plan-task-budgets.md.j2",
       "{workspaceRoot}/config/budgets-migration.yaml",
       "{workspaceRoot}/tests/e2e/board_copy_approval/test_board_copy_spike_evidence_e2e.py"
     ]

@@ -1,22 +1,26 @@
 """`just finish-plan` carries a plan's budgets into its design document — or says it predates them.
 
-Three journeys through the real recipe, with only the paid provider doubled:
+Journeys through the real recipe, with only the paid provider doubled:
 
-* a plan that carries a budgets document, and that no plan kind and no migration entry
-  exempts: the design-document writer's task, as `scripts/finish-plan.sh` composes it,
-  quotes that document's entries, and the document the flow stores shows them in its
-  budgets table once the doubled writer answers from that task;
-* a new plan the migration list does not name, carrying no budgets document: the plan check
-  refuses it naming the document it lacks, and nothing is launched;
-* a plan the migration list names, with no budgets document and a design document approved
+* a plan whose one node owns a budget and whose plan-level answers are its description: the
+  design-document writer's task, as `scripts/finish-plan.sh` composes it, names the command
+  whose output the document's budget answers copy, `python -m orchestrator.plan_budgets
+  <plan>`; the doubled writer runs it and copies its output, and the document the flow stores
+  shows the budget summary, its row linking the owning task;
+* the same plan, its writer changing a target, omitting the budget or naming a wrong owner:
+  the flow refuses the document after the writer and before anything is copied, naming the
+  difference;
+* a new plan the migration list does not name, carrying no plan-level answers: the plan
+  check refuses it naming the record it lacks, and nothing is launched;
+* a plan the migration list names, with no budget answers and a design document approved
   under the template chain in force before budgets existed: once the requirement is in
   force it passes the review and the plan check, the flow launches its design document,
   which renders the predates-budgets line, the user's re-approval is recorded, and the
   launch gate then admits it.
 
 The doubled writer acts as a real one would: it reads its own task out of the plan store,
-answers the design document's budget answers from what that task quotes, and renders the
-document through the pinned engine's resolve piped into the pinned store's `document create`.
+runs the budget command the task names, and renders the document through the pinned
+engine's resolve piped into the pinned store's `document create`.
 
 llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] These journeys sit in
 `plan-tooling` beside the check-plan and finish-plan journeys they extend, and drive the same
@@ -30,7 +34,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -46,6 +49,7 @@ from test_finish_plan_recipe_e2e import (
     DESIGN_RUN_SUFFIX,
     DESIGN_TASK_MARKER,
     DESTINATION,
+    DOCUMENT_REFUSED,
     ENGINE_BIN,
     OK,
     PASSES,
@@ -72,30 +76,39 @@ FIXTURE_SOURCE = plan_fixture_source.SOURCE
 #: The node `_draft` writes, which owns the one budget below.
 NODE = "decide-the-cursor"
 
-#: The budgets document of the budgeted plan: one budget, owned by its one node.
-BUDGETS: dict[str, object] = {
+#: The one budget that node owns.
+BUDGET: dict[str, object] = {
+    "id": "listing-latency",
+    "name": "Time to the first page",
+    "basis": "measured",
+    "repository": "github.com/nickderobertis/some-service",
+    "file": "apps/web/budgets.yaml",
+    "file_change": "add",
+    "measure": "time to the first page of nodes in the browser",
+    "inner_measure_reason": "",
+    "unit": "ms",
+    "direction": "max",
+    "threshold": 800,
+    "workload": "2,000 nodes behind the cursor",
+    "evidence": "spike-listing measured 420 ms",
+    "command": "bun run measure:listing",
+}
+
+#: The budgeted plan's plan-level answers, naming that budget.
+ANSWERS: dict[str, object] = {
+    "overview": "Page the node listing.",
+    "sizing": "2,000 nodes per plan, 3 runs at once.",
     "workload": "2,000 nodes per plan, 3 runs at once.",
-    "checklist": [
-        {"concern": "latency", "budget": "listing-latency", "not_applicable": ""},
-        {"concern": "spend", "budget": "", "not_applicable": "n/a because it calls no paid API"},
-    ],
+    "ten_x_summary": "The listing slows first.",
     "ten_x": "The listing slows first; listing-latency covers it.",
-    "budgets": [
+    "checklist": [
+        {"concern": "latency", "budget": "listing-latency", "not_applicable": "", "summary": ""},
         {
-            "id": "listing-latency",
-            "repository": "github.com/nickderobertis/some-service",
-            "file": "apps/web/budgets.yaml",
-            "measure": "time to the first page of nodes in the browser",
-            "inner_measure_reason": "",
-            "unit": "ms",
-            "direction": "max",
-            "threshold": 800,
-            "workload": "2,000 nodes behind the cursor",
-            "evidence": "spike-listing measured 420 ms",
-            "command": "bun run measure:listing",
-            "node": NODE,
-            "file_change": "add",
-        }
+            "concern": "spend",
+            "budget": "",
+            "not_applicable": "n/a because it calls no paid API",
+            "summary": "It calls no paid API.",
+        },
     ],
     "repo_wide_effects": [],
     "realistic_data": [],
@@ -103,29 +116,32 @@ BUDGETS: dict[str, object] = {
 }
 
 #: The doubled writer: what a design-doc dispatch does, as one program. It reads its own
-#: task out of the store, answers the budget answers from what the task points it at — the
-#: answers recorded in the budgets document at the path the task names, or the reason the
-#: plan predates budgets — and renders the document from those answers and the rest it
-#: composed.
+#: task out of the store, runs the budget command the task names, applies the one change a
+#: journey asks of it to that command's output, and renders the document from those answers
+#: and the rest it composed.
 WRITER = r"""
-import json, os, re, subprocess, sys, tempfile
+import json, os, re, shlex, subprocess, sys, tempfile
 
-(engine, store, source, project, title, document, base, design_project) = sys.argv[1:9]
+(engine, store, source, project, title, document, base, design_project, change) = sys.argv[1:10]
 listed = subprocess.run(
     [store, "task", "list", "--source", "authoring", "--project", design_project, "--json"],
     capture_output=True, text=True, check=True,
 )
 (task,) = [held["item"]["content"] for held in json.loads(listed.stdout)["items"]]
 answers = json.loads(open(base, encoding="utf-8").read())
-named = re.search(r"budgets document `[^`]+`, the file `([^`]+)`", task)
-predates = re.search(r"The plan predates budgets:.*?\n\n> ([^\n]+)", task, re.S)
-if named:
-    recorded = re.search(
-        r"\n## Record\n\n```json\n([^\n]*)\n```", open(named.group(1), encoding="utf-8").read()
-    )
-    answers.update(json.loads(recorded.group(1)))
-elif predates:
-    answers["predates_budgets"] = predates.group(1)
+(command,) = set(re.findall(r"`(uv run python -m orchestrator\.plan_budgets [^`]+)`", task))
+printed = subprocess.run(shlex.split(command), capture_output=True, text=True, check=True)
+budgets = json.loads(printed.stdout)
+match change:
+    case "changed-target":
+        budgets["budgets"][0]["threshold"] = 900
+    case "omitted-budget":
+        budgets["budgets"] = []
+    case "wrong-owner":
+        budgets["budgets"][0]["node"] = "some-other-node"
+    case "invented-predates":
+        budgets["predates_budgets"] = "it was written before budgets"
+answers.update(budgets)
 loader = subprocess.run(
     [engine, "template", "resolve", "design-doc", "--json"],
     capture_output=True, text=True, check=True,
@@ -142,7 +158,7 @@ os.unlink(written.name)
 """
 
 
-def _writes_from_its_task(bench: Bench, drafted: Drafted, run: RunId) -> None:
+def _writes_from_its_task(bench: Bench, drafted: Drafted, run: RunId, change: str = "none") -> None:
     """Script the design-doc dispatch as the program above, run where the dispatch runs."""
     writer = bench.tmp_path / "writer.py"
     writer.write_text(WRITER, encoding="utf-8")
@@ -165,6 +181,7 @@ def _writes_from_its_task(bench: Bench, drafted: Drafted, run: RunId) -> None:
                         drafted.document,
                         str(base),
                         f"{run}{DESIGN_RUN_SUFFIX}",
+                        change,
                     ]
                 ]
             }
@@ -175,30 +192,21 @@ def _writes_from_its_task(bench: Bench, drafted: Drafted, run: RunId) -> None:
     bench.environment[PROMPT_LOG_ENV] = str(bench.tmp_path / f"turns-{drafted.project}.jsonl")
 
 
-def _names_the_budgets_document(task: str, drafted: Drafted, budgets: dict[str, object]) -> None:
-    """The writer's task names the budgets document and a file recording ``budgets`` whole."""
-    assert f"`{drafted.qualified}-budgets`" in task, task
-    path = re.search(r"budgets document `[^`]+`, the file `([^`]+)`", task)
-    assert path is not None, task
-    recorded = re.search(
-        r"\n## Record\n\n```json\n([^\n]*)\n```", Path(path.group(1)).read_text(encoding="utf-8")
-    )
-    assert recorded is not None and json.loads(recorded.group(1)) == budgets
-    assert "`predates_budgets` is empty" in task, task
-    assert "```json" not in task, "the task quotes the budgets rather than naming them"
-    assert len(task.encode("utf-8")) < SINGLE_ARGUMENT_LIMIT
+def _names_the_budget_command(task: str, drafted: Drafted) -> None:
+    """The writer's task names the command its budget answers copy, and quotes none of them."""
+    assert f"`uv run python -m orchestrator.plan_budgets {drafted.qualified}`" in task, task
+    assert "`predates_budgets`, `plan_budgets` and `budgets`" in task, task
+    assert "listing-latency" not in task, "the task quotes the budgets rather than naming them"
 
 
-@pytest.mark.xdist_group("finish-plan")
-def test_a_budgeted_plans_writer_is_handed_its_budgets_and_its_document_shows_them(
-    tmp_path: Path, oneharness_bin: str
-) -> None:
-    if shutil.which("just") is None:
-        pytest.skip("just is not installed")
+def _finish(
+    tmp_path: Path, oneharness_bin: str, name: str, change: str = "none"
+) -> tuple[Bench, Drafted, subprocess.CompletedProcess[str], str]:
+    """Finish a plan whose one node owns the budget, the writer applying ``change``."""
     bench = _bench(tmp_path, oneharness_bin, PASSES)
-    drafted = _draft("finish-plan-budgeted", budgets=BUDGETS)
-    run = RunId("finish-plan-e2e-budgeted")
-    _writes_from_its_task(bench, drafted, run)
+    drafted = _draft(name, budgets=ANSWERS, owned=[BUDGET])
+    run = RunId(f"finish-plan-e2e-{name}")
+    _writes_from_its_task(bench, drafted, run, change)
     try:
         finished = _just(
             "finish-plan",
@@ -209,118 +217,83 @@ def test_a_budgeted_plans_writer_is_handed_its_budgets_and_its_document_shows_th
             DESTINATION,
             environment=bench.environment,
         )
-        assert finished.returncode == OK, f"{finished.stdout}\n{finished.stderr}"
         task = _design_task(bench, run)["content"]
     finally:
         _stop(bench, f"{run}{DESIGN_RUN_SUFFIX}")
+    return bench, drafted, finished, task
 
-    # The writer's task names the budgets document and the file it is at, and says what to
-    # do with it; it quotes no answer, so its size does not grow with the plan's budgets.
-    _names_the_budgets_document(task, drafted, BUDGETS)
 
-    # And the document the flow stored shows them, in the budgets table.
+@pytest.mark.xdist_group("finish-plan")
+def test_a_budgeted_plans_writer_copies_the_budget_command_and_its_document_summarizes_them(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    bench, drafted, finished, task = _finish(tmp_path, oneharness_bin, "finish-plan-budgeted")
+
+    assert finished.returncode == OK, f"{finished.stdout}\n{finished.stderr}"
+    _names_the_budget_command(task, drafted)
     stored = drafted.document_path.read_text(encoding="utf-8")
-    assert "## Budgets\n" in stored, stored
+    listed = subprocess.run(
+        [str(ONETASKGRAPH_BIN), "task", "list", "--source", FIXTURE_SOURCE]
+        + ["--project", drafted.project, "--json"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    (owner,) = [
+        held["item"]["location"]["path"]
+        for held in json.loads(listed.stdout)["items"]
+        if held["item"]["metadata"].get("onepipeline.id") == NODE
+    ]
+    assert "**What we're sizing for.** 2,000 nodes per plan, 3 runs at once." in stored, stored
     assert (
-        "| time to the first page of nodes in the browser | 2,000 nodes behind the cursor "
-        "| at most 800 ms | spike-listing measured 420 ms "
-        "| `bun run measure:listing` in `apps/web/budgets.yaml` |"
+        f"| Time to the first page | ≤ 800 ms | measured | [`{NODE}`]({owner}) "
+        "(see its Budgets section) |"
     ) in stored, stored
-    assert "2,000 nodes per plan, 3 runs at once." in stored, stored
-    assert "- **spend.** n/a because it calls no paid API" in stored, stored
-    assert "predates budgets" not in stored, stored
-
-
-#: Linux's limit on one command-line argument (`MAX_ARG_STRLEN`, 32 pages of 4 KiB): a
-#: value handed to a program as one argv word past it fails the exec with `Argument list
-#: too long`. `authoring:create-repo-baseline-audit`'s budgets document is 431,586 bytes.
-SINGLE_ARGUMENT_LIMIT = 128 * 1024
-
-
-def _plan_sized_budgets() -> dict[str, object]:
-    """52 budgets at the baseline plan's measured prose sizes, all owned by the one node."""
-    prose = "The affected tier's wall clock on a pull request touching one package. " * 24
-    listed = BUDGETS["budgets"]
-    assert isinstance(listed, list) and isinstance(listed[0], dict)
-    return {
-        **BUDGETS,
-        "checklist": [
-            {"concern": "latency", "budget": "listing-latency-00", "not_applicable": ""},
-            {"concern": "gate time", "budget": "listing-latency-01", "not_applicable": ""},
-            {
-                "concern": "spend",
-                "budget": "",
-                "not_applicable": "n/a because it calls no paid API",
-            },
-        ],
-        "budgets": [
-            {
-                **listed[0],
-                "id": f"listing-latency-{index:02d}",
-                "measure": prose[:117],
-                "inner_measure_reason": prose[:357],
-                "workload": prose,
-                "evidence": prose[: 258 + (index * 41) % 524],
-            }
-            for index in range(52)
-        ],
-    }
+    assert "- spend: It calls no paid API." in stored, stored
+    summary = stored.split("## Budgets\n", 1)[1].split("\n## ", 1)[0]
+    assert "spike-listing measured 420 ms" not in summary, "budget detail reached the summary"
+    assert _records(bench.destination), "nothing was copied"
 
 
 @pytest.mark.xdist_group("finish-plan")
-def test_a_plan_whose_budgets_outgrow_one_argument_still_composes_its_writers_task(
-    tmp_path: Path, oneharness_bin: str
+@pytest.mark.parametrize(
+    ("change", "said"),
+    [
+        (
+            "changed-target",
+            "its budget 'listing-latency' states the `threshold` 900, where the records state 800",
+        ),
+        ("omitted-budget", "it omits the budget 'listing-latency', which `decide-the-cursor` owns"),
+        (
+            "wrong-owner",
+            "its budget 'listing-latency' states the `node` 'some-other-node', where the records "
+            "state 'decide-the-cursor'",
+        ),
+        (
+            "invented-predates",
+            "its `predates_budgets` answer is not what `python -m orchestrator.plan_budgets ",
+        ),
+    ],
+)
+def test_a_document_whose_budget_answers_differ_is_refused_before_anything_is_copied(
+    tmp_path: Path, oneharness_bin: str, change: str, said: str
 ) -> None:
-    """A budgets context past the single-argument limit reaches the writer's answers whole.
-
-    The plan's budgets document is measured over the limit first, so the journey cannot
-    pass by being small; then the real recipe composes the
-    design-document writer's task from it — naming the budgets document rather than quoting
-    it, so the task stays under the limit too — the engine dispatches the writer, and the
-    design document the writer stores restates every one of the 52 budgets. The copy onto
-    the board after that is held to GitHub's issue-body limit, which a plan this size
-    exceeds; that is the board's limit rather than this flow's, and not asserted here.
-    """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
-    budgets = _plan_sized_budgets()
-    bench = _bench(tmp_path, oneharness_bin, PASSES)
-    drafted = _draft("finish-plan-plan-sized-budgets", budgets=budgets)
-    # What grows with the plan is the budgets document: the one under test is past the limit,
-    # as `authoring:create-repo-baseline-audit`'s is, so the journey cannot pass by being small.
-    stored_budgets = (
-        drafted.document_path.parent / f"{drafted.qualified.partition(':')[2]}-budgets.md"
-    )
-    assert stored_budgets.stat().st_size > SINGLE_ARGUMENT_LIMIT, stored_budgets.stat().st_size
-    run = RunId("finish-plan-e2e-plan-sized-budgets")
-    _writes_from_its_task(bench, drafted, run)
-    try:
-        finished = _just(
-            "finish-plan",
-            str(_brief(tmp_path, drafted)),
-            "--name",
-            run,
-            "--to",
-            DESTINATION,
-            environment=bench.environment,
-        )
-        assert "Argument list too long" not in finished.stdout + finished.stderr
-        # The writer's task dispatched and its run settled; what follows is the copy onto
-        # the board, which GitHub's issue-body limit decides for documents this size.
-        settled = f"-- {run}{DESIGN_RUN_SUFFIX}  1/1 done  SETTLED  complete"
-        assert settled in finished.stdout + finished.stderr, f"{finished.stdout}\n{finished.stderr}"
-        task = _design_task(bench, run)["content"]
-    finally:
-        _stop(bench, f"{run}{DESIGN_RUN_SUFFIX}")
-    _names_the_budgets_document(task, drafted, budgets)
-    # The writer task dispatched and the writer copied every budget into the document.
-    stored = drafted.document_path.read_text(encoding="utf-8")
-    assert "## Budgets\n" in stored, stored
-    assert stored.count("`bun run measure:listing` in `apps/web/budgets.yaml`") == 52, stored
+    bench, drafted, refused, _ = _finish(tmp_path, oneharness_bin, f"finish-plan-{change}", change)
+
+    assert refused.returncode == DOCUMENT_REFUSED, f"{refused.stdout}\n{refused.stderr}"
+    assert said in refused.stderr, refused.stderr
+    assert "restates budget answers that differ from" in refused.stderr, refused.stderr
+    assert drafted.document_path.exists(), "the writer's document was not stored"
+    assert _records(bench.destination) == [], _records(bench.destination)
 
 
 @pytest.mark.xdist_group("finish-plan")
-def test_a_new_plan_with_no_budgets_document_is_refused_and_nothing_is_launched(
+def test_a_new_plan_with_no_budget_answers_is_refused_and_nothing_is_launched(
     tmp_path: Path, oneharness_bin: str
 ) -> None:
     if shutil.which("just") is None:
@@ -342,8 +315,8 @@ def test_a_new_plan_with_no_budgets_document_is_refused_and_nothing_is_launched(
         _stop(bench, f"{run}{DESIGN_RUN_SUFFIX}")
 
     assert refused.returncode == PLAN_REFUSED, f"{refused.stdout}\n{refused.stderr}"
-    assert (
-        f"{drafted.qualified} carries no `{drafted.qualified}-budgets` document" in refused.stderr
+    assert f"{drafted.qualified} carries no `orchestrator.plan-budgets` metadata" in (
+        refused.stderr
     ), refused.stderr
     assert "no design document was launched and nothing was copied" in refused.stderr
     assert not (bench.runs / f"{run}{DESIGN_RUN_SUFFIX}").exists(), _records(bench.runs)
@@ -357,7 +330,7 @@ PRE_BUDGETS_TEMPLATE = (
 )
 
 #: The reason the migration journey's plan is listed for.
-REASON = "It was approved before plans carried a budgets document, in the migration journey."
+REASON = "It was approved before plans stated budgets, in the migration journey."
 
 
 def _provisioned_copy(tmp_path: Path) -> Path:
@@ -494,7 +467,7 @@ def test_a_listed_plan_predating_budgets_is_documented_as_such_and_re_approved(
         _stop(bench, f"{run}{DESIGN_RUN_SUFFIX}")
     stored = drafted.document_path.read_text(encoding="utf-8")
     assert f"## Budgets\n\nThis plan predates budgets: {REASON}\n" in stored, stored
-    assert "## Budgets-file changes" not in stored, stored
+    assert "What we're sizing for" not in stored, stored
 
     # Re-approving the document the new chain rendered is the user's act, and it admits it.
     still = _in(checkout, bench, "uv", "run", "orchestrator-launch-gate", drafted.qualified)

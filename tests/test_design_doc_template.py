@@ -37,6 +37,7 @@ import pytest
 import yaml
 from published_tools import ONETASKGRAPH_BIN
 
+from orchestrator import plan_budgets
 from orchestrator.root import REPO_ROOT
 
 #: The registered name, the file that supplies it on this host, and the role bound to it.
@@ -71,12 +72,7 @@ SECTIONS = (
 #: The four budget sections, between Architecture and Acceptance criteria, each as the block
 #: that renders it and the heading it renders. Each renders only for a plan that answers
 #: its budget answers, so a document whose plan carries none reads as it always did.
-BUDGET_SECTIONS = (
-    ("budgets", "Budgets"),
-    ("budget_files", "Budgets-file changes"),
-    ("realistic_data", "Realistic data"),
-    ("spike_findings", "Spike findings"),
-)
+BUDGET_SECTIONS = (("budgets", "Budgets"),)
 
 #: The block holding what applies to the whole document, ahead of every section.
 DOCUMENT_GUIDANCE = "document_guidance"
@@ -118,48 +114,14 @@ VARIABLES: dict[str, tuple[str, str | None, Keys | None]] = {
     ),
 }
 
-#: The budget answers, which restate the plan's budgets document and are optional so a
-#: document written for a plan carrying none renders as it did: each variable's type, item
-#: type and object keys, as `plan-budgets` declares them, and the one answer of the design
-#: document's own, the reason a plan predates budgets.
+#: The budget answers, which are what `python -m orchestrator.plan_budgets` prints and are
+#: optional so a document written for a plan carrying none renders as it did: each
+#: variable's type, item type and object keys, and the reason a plan predates budgets.
 BUDGET_VARIABLES: dict[str, tuple[str, str | None, Keys | None]] = {
-    "workload": ("text", None, None),
-    "checklist": ("list", "object", {"concern": None, "budget": None, "not_applicable": None}),
-    "ten_x": ("text", None, None),
-    "budgets": (
-        "list",
-        "object",
-        {
-            key: None
-            for key in (
-                "id",
-                "repository",
-                "file",
-                "measure",
-                "inner_measure_reason",
-                "unit",
-                "direction",
-                "threshold",
-                "workload",
-                "evidence",
-                "command",
-                "node",
-                "file_change",
-            )
-        },
-    ),
-    "repo_wide_effects": ("list", "object", {"repository": None, "budget": None, "effect": None}),
-    "realistic_data": (
-        "list",
-        "object",
-        {"data": None, "choice": None, "reason": None, "artifact": None},
-    ),
-    "spike_findings": ("list", "object", {"spike": None, "finding": None, "changed": None}),
     "predates_budgets": ("text", None, None),
+    "plan_budgets": ("object", None, dict.fromkeys(plan_budgets.PLAN_VARIABLES)),
+    "budgets": ("list", "object", dict.fromkeys(("node", "location", *plan_budgets.BUDGET_KEYS))),
 }
-
-#: The plan's budgets document's own template, whose variables the budget answers restate.
-BUDGETS_TEMPLATE = REPO_ROOT / "templates" / "plan-budgets.md.j2"
 
 #: One phrase per format rule, which only that rule's statement carries. The guidance
 #: comments state each exactly once: none would leave a writer and its judge without it,
@@ -169,10 +131,11 @@ RULES = {
     "reader": "technical product manager with no depth in this domain",
     "prose": "no more technical than the plan's own goal statement",
     "length": "Exactness is spent on what is hard to undo",
-    "sections": "In this order: What, Why, Architecture, then the four budget sections",
-    "budgets restate the budgets document": "restate the plan's budgets document",
+    "sections": "In this order: What, Why, Architecture, Budgets, Acceptance criteria",
+    "budgets copy the writer's answers": "orchestrator.plan_budgets <project>` prints for the",
     "predates budgets": "This plan predates budgets: <reason>",
-    "budgets-file effect stated even when none": 'The effect is stated even when it is "none"',
+    "no budget detail": "So this section carries none of that detail",
+    "no budget section without a budget change": "renders no Budgets section at all",
     "no alert blocks": "No GitHub alert blocks",
     "guidance is never rendered": "never an HTML comment",
     "what and why": "carry no interface detail and no implementation detail",
@@ -614,153 +577,147 @@ def test_repository_guidance_extends_host_with_a_digest_covering_both_files(
     assert resolve(True, host)["digest"] != extending["digest"]
 
 
-def test_the_budget_answers_restate_the_budgets_documents_variables_key_for_key() -> None:
-    """The design document's budget answers are the budgets document's, never a second shape.
-
-    Their names, types, item types and descriptions — where each object answer's keys are
-    stated — are the `plan-budgets` template's own, and the only difference allowed is that
-    here they are optional, so a document written for a plan carrying no budgets renders as
-    it did. This fails the moment the two sets of keys part.
-    """
-    ours = _front_matter()["variables"]
-    theirs = _front_matter(BUDGETS_TEMPLATE)["variables"]
-    restated = {name: ours[name] for name in ours if name not in VARIABLES} | {}
-    restated.pop("predates_budgets")
-
-    assert set(restated) == set(theirs), (set(restated), set(theirs))
-    for name, declared in theirs.items():
-        held = restated[name]
-        assert {key: held.get(key) for key in ("type", "items", "description")} == {
-            key: declared.get(key) for key in ("type", "items", "description")
-        }, name
-        assert declared["required"] is True and held["required"] is False, name
+#: #1568's real budget answers, converted to the shape `python -m orchestrator.plan_budgets`
+#: prints, and the summary they render to, which is what the user reads and approves.
+BUDGET_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "budgets" / "issue-1568.json"
+SUMMARY = REPO_ROOT / "tests" / "fixtures" / "budgets" / "issue-1568-summary.txt"
 
 
-#: Budget answers carrying one budget, a dismissed concern and a second repository whose
-#: repo-wide effect is none, so every budget section has something of each kind to show.
-BUDGET_ANSWERS: dict[str, object] = {
-    "workload": "2,000 nodes per plan, 3 runs at once.",
-    "checklist": [
-        {"concern": "latency", "budget": "listing-latency", "not_applicable": ""},
-        {"concern": "spend", "budget": "", "not_applicable": "n/a because it calls no paid API"},
-    ],
-    "ten_x": "The listing slows first; `listing-latency` covers it.",
-    "budgets": [
-        {
-            "id": "listing-latency",
-            "repository": "github.com/acme/app",
-            "file": "apps/web/budgets.yaml",
-            "measure": "time to the first page in the browser",
-            "inner_measure_reason": "",
-            "unit": "ms",
-            "direction": "max",
-            "threshold": 800,
-            "workload": "2,000 nodes",
-            "evidence": "spike-listing measured 420 ms",
-            "command": "bun run measure:listing",
-            "node": "listing",
-            "file_change": "add",
-        }
-    ],
-    "repo_wide_effects": [
-        {"repository": "github.com/acme/app", "budget": "gate-time", "effect": "+20 s"},
-        {"repository": "github.com/acme/docs", "budget": "", "effect": "none"},
-    ],
-    "realistic_data": [
-        {
-            "data": "plan nodes",
-            "choice": "generator",
-            "reason": "Seeded, and cheap after caching.",
-            "artifact": "tools/gen-nodes.ts",
-        }
-    ],
-    "spike_findings": [
-        {"spike": "spike-listing", "finding": "The API pages at 100.", "changed": "it pages."}
-    ],
-}
+# llmlint: ignore[suppressions_justified] The fixture is the open JSON answer shape the writer copies, read by key and nested index throughout, so its values are `Any` here as the decoded document they are; `orchestrator/plan_budgets.py`'s parsers are its typed reading.  # noqa: E501
+def _budget_answers() -> dict[str, Any]:
+    held: dict[str, Any] = json.loads(BUDGET_FIXTURE.read_text(encoding="utf-8"))
+    return held
 
 
-def test_rendering_budget_answers_gives_the_four_budget_sections_in_place(
+def _section(body: str) -> str:
+    """The `## Budgets` section of ``body``, up to the next section's heading."""
+    return "## Budgets\n" + body.split("## Budgets\n", 1)[1].split("\n## ", 1)[0] + "\n"
+
+
+def test_the_1568_fixture_holds_the_shape_the_budget_measures() -> None:
+    """9 budgets, 6 concerns answered n/a, 4 repositories, one realistic-data choice."""
+    answers = _budget_answers()
+    plan = answers["plan_budgets"]
+
+    assert set(answers) == set(plan_budgets.DESIGN_ANSWERS)
+    assert len(answers["budgets"]) == 9
+    assert sum(1 for entry in plan["checklist"] if entry["not_applicable"]) == 6
+    effects = plan["repo_wide_effects"]
+    assert len({entry["repository"] for entry in effects}) == 4
+    assert sum(1 for entry in effects if entry["effect"] != "none") == 1
+    assert len(plan["realistic_data"]) == 1 and plan["spike_findings"] == []
+    owned = {entry["node"]: [] for entry in answers["budgets"]}
+    for entry in answers["budgets"]:
+        owned[entry["node"]].append(
+            plan_budgets.parse_budgets([{key: entry[key] for key in plan_budgets.BUDGET_KEYS}])[0]
+        )
+    plan_tasks = {"tasks": [{"id": node} for node in owned]}
+    assert plan_budgets.plan_rule_refusals(plan_budgets.parse_plan(plan), owned, plan_tasks) == []
+
+
+def test_the_1568_fixture_renders_the_summary_a_person_approves(
     tmp_path: Path, loader: str
 ) -> None:
-    body = _render(loader, {**ANSWERS, **BUDGET_ANSWERS}, tmp_path)
+    """Sizing, the 10× line, one flat table, then one line per not-budgeted concern and so on."""
+    body = _render(loader, {**ANSWERS, **_budget_answers()}, tmp_path)
+    section = _section(body)
+
+    assert section == SUMMARY.read_text(encoding="utf-8"), section
     sections = re.findall(r"^## (.+)$", body, re.MULTILINE)
-    assert tuple(sections) == (
-        "What",
-        "Why",
-        "Architecture",
-        *(heading for _, heading in BUDGET_SECTIONS),
-        "Acceptance criteria",
-        "Planned tasks",
-    ), body
-
-    budgets = body.split("## Budgets\n", 1)[1].split("\n## ", 1)[0]
-    assert "2,000 nodes per plan, 3 runs at once." in budgets
-    table = [line for line in budgets.splitlines() if line.startswith("|")]
-    assert table == [
-        "| Measure | Realistic workload | Target | Spike evidence | Check |",
-        "| --- | --- | --- | --- | --- |",
-        "| time to the first page in the browser | 2,000 nodes | at most 800 ms "
-        "| spike-listing measured 420 ms | `bun run measure:listing` in `apps/web/budgets.yaml` |",
-    ], table
-    assert "**At 10x realistic usage:** The listing slows first" in budgets
-    assert "- **spend.** n/a because it calls no paid API" in budgets
-    assert "latency." not in budgets, "a concern a budget covers is not listed as unbudgeted"
-
-    files = body.split("## Budgets-file changes\n", 1)[1].split("\n## ", 1)[0]
-    assert files.strip().split("\n\n") == [
-        "### `github.com/acme/app`",
-        "- **`listing-latency`** — add in `apps/web/budgets.yaml`.\n"
-        "- **Repo-wide `gate-time`:** +20 s",
-        "### `github.com/acme/docs`",
-        "- No budget of this plan goes in its budgets files.\n- **Repo-wide:** none",
-    ], files
-
-    data = body.split("## Realistic data\n", 1)[1].split("\n## ", 1)[0]
-    assert data.strip() == (
-        "- **plan nodes:** generator. Seeded, and cheap after caching. (`tools/gen-nodes.ts`)"
-    )
-    spikes = body.split("## Spike findings\n", 1)[1].split("\n## ", 1)[0]
-    assert spikes.strip() == "- **spike-listing:** The API pages at 100. So it pages."
+    assert sections == ["What", "Why", "Architecture", "Budgets", "Acceptance criteria"] + [
+        "Planned tasks"
+    ], sections
+    table = [line for line in section.splitlines() if line.startswith("|")]
+    assert table[0] == "| Budget | Target | Basis | Owned by |"
+    for entry, row in zip(_budget_answers()["budgets"], table[2:], strict=True):
+        assert row == (
+            f"| {entry['name']} | ≤ {entry['threshold']} {entry['unit']} | {entry['basis']} | "
+            f"[`{entry['node']}`]({entry['location']}) (see its Budgets section) |"
+        ), row
+    for entry in _budget_answers()["budgets"]:
+        for detail in ("workload", "evidence", "command", "file", "measure"):
+            assert str(entry[detail]) not in section, (entry["id"], detail)
+    assert "No effect on `onetaskgraph`, `onepipeline` and `onepipeline-ui`." in section, section
 
 
-def test_a_plan_that_predates_budgets_renders_one_line_in_place_of_the_budget_sections(
+def test_a_minimum_budget_and_a_cell_breaking_answer_stay_one_row(
+    tmp_path: Path, loader: str
+) -> None:
+    answers = _budget_answers()
+    first = {**answers["budgets"][0], "direction": "min", "name": "Pages | per\nsecond"}
+    body = _render(loader, {**ANSWERS, **answers, "budgets": [first]}, tmp_path)
+
+    (row,) = [line for line in _section(body).splitlines() if line.startswith("| Pages")]
+    assert row.startswith("| Pages \\| per second | ≥ 2 requests | measured | "), row
+
+
+def test_a_plan_that_predates_budgets_renders_one_line_in_place_of_the_summary(
     tmp_path: Path, loader: str
 ) -> None:
     reason = "It was approved before plans carried budgets."
     body = _render(loader, {**ANSWERS, "predates_budgets": reason}, tmp_path)
 
-    sections = re.findall(r"^## (.+)$", body, re.MULTILINE)
-    assert "Budgets-file changes" not in sections and "Spike findings" not in sections
-    budgets = body.split("## Budgets\n", 1)[1].split("\n## ", 1)[0]
-    assert budgets.strip() == f"This plan predates budgets: {reason}"
-
-
-def test_a_document_answering_no_budget_renders_no_budget_section(
-    tmp_path: Path, loader: str
-) -> None:
-    body = _render(loader, ANSWERS, tmp_path)
-
-    assert not {heading for _, heading in BUDGET_SECTIONS} & set(
-        re.findall(r"^## (.+)$", body, re.MULTILINE)
-    ), body
+    assert _section(body) == f"## Budgets\n\nThis plan predates budgets: {reason}\n\n"
 
 
 @pytest.mark.parametrize(
-    ("direction", "target"),
-    [("max", "at most 800 ms"), ("min", "at least 800 ms"), ("below", "below 800 ms")],
-    ids=["max", "min", "unknown"],
+    "budgets",
+    ["none", "absent"],
 )
-def test_a_budgets_target_reads_its_direction_in_words(
-    tmp_path: Path, loader: str, direction: str, target: str
+def test_a_plan_adding_or_changing_no_budget_renders_no_budget_section(
+    tmp_path: Path, loader: str, budgets: str
 ) -> None:
-    """`max` and `min` read as words, and a value outside both is shown as it stands."""
-    budgets = BUDGET_ANSWERS["budgets"]
-    assert isinstance(budgets, list)
-    body = _render(
-        loader,
-        {**ANSWERS, **BUDGET_ANSWERS, "budgets": [{**budgets[0], "direction": direction}]},
-        tmp_path,
-    )
-    (row,) = [line for line in body.splitlines() if line.startswith("| time to the first page")]
-    assert f"| {target} |" in row, row
+    """No heading, no sizing or 10× line, no table and no summary line of any kind."""
+    answers = _budget_answers()
+    unchanged = [{**entry, "file_change": "none"} for entry in answers["budgets"]]
+    held = {**answers, "budgets": unchanged if budgets == "none" else []}
+    body = _render(loader, {**ANSWERS, **held}, tmp_path)
+
+    assert "## Budgets" not in body
+    for said in (
+        "What we're sizing for",
+        "What breaks first",
+        "| Budget |",
+        "Not budgeted",
+        "Repo-wide effects",
+        "Realistic data",
+        "Spike findings",
+    ):
+        assert said not in body, said
+    assert body == _render(loader, ANSWERS, tmp_path)
+
+
+def test_spike_findings_render_one_line_each_only_when_there_are_any(
+    tmp_path: Path, loader: str
+) -> None:
+    answers = _budget_answers()
+    findings = [
+        {"spike": "spike-a", "finding": "f", "changed": "c", "summary": "Uploads take 0.8 s."},
+        {"spike": "spike-b", "finding": "f", "changed": "c", "summary": "Linear allows 3."},
+    ]
+    plan = {**answers["plan_budgets"], "spike_findings": findings}
+    section = _section(_render(loader, {**ANSWERS, **answers, "plan_budgets": plan}, tmp_path))
+
+    assert section.endswith(
+        "**Spike findings:**\n\n- Uploads take 0.8 s.\n- Linear allows 3.\n\n"
+    ), section
+
+
+def test_a_repository_with_an_effect_is_never_also_listed_as_unaffected(
+    tmp_path: Path, loader: str
+) -> None:
+    """One repository stating an effect and a `none` is affected; two named alike list once."""
+    answers = _budget_answers()
+    effects = [
+        {"repository": "github.com/acme/app", "budget": "gate-time", "effect": "+5 s"}
+        | {"summary": "The gate grows by 5 s."},
+        {"repository": "github.com/acme/app", "budget": "cycle-time", "effect": "none"}
+        | {"summary": ""},
+        {"repository": "github.com/acme/docs", "budget": "", "effect": "none", "summary": ""},
+        {"repository": "gitlab.com/other/docs", "budget": "", "effect": "none", "summary": ""},
+    ]
+    plan = {**answers["plan_budgets"], "repo_wide_effects": effects}
+    section = _section(_render(loader, {**ANSWERS, **answers, "plan_budgets": plan}, tmp_path))
+
+    (line,) = [one for one in section.splitlines() if one.startswith("**Repo-wide effects:**")]
+    assert line == "**Repo-wide effects:** The gate grows by 5 s. No effect on `docs`.", line

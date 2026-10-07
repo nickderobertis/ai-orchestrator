@@ -160,8 +160,9 @@ def _plan(
 ) -> tuple[str, str]:
     """Write a reviewed plan of ``nodes`` and answer its native and qualified ids.
 
-    A ``stamp`` makes it a spikes project naming those nodes; every other plan carries a
-    budgets document needing no budget, so nothing but the spike convention refuses it.
+    A ``stamp`` makes it a spikes project naming those nodes; every other plan states
+    plan-level budget answers needing no budget, so nothing but the spike convention
+    refuses it.
     """
     native = _unique("spikes-check")
     write_plan_project(

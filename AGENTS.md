@@ -1582,7 +1582,7 @@ opens what it needs read-only under `oneharness.plan-review-whole.toml`; a promp
 you did not touch costs nothing; the approval is not a second opinion on the plan, and
 every launch is refused without it save the bounded planning exemption above.
 
-**Every plan states its budgets** in the project document `<project>-budgets`:
+**Every plan states its budgets** on the tasks that own them and in its own description:
 [`docs/budgets.md`](docs/budgets.md) is the convention, and `config/budgets-migration.yaml`
 the one list of plans that predate it.
 

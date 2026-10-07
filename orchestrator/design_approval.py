@@ -162,18 +162,10 @@ REPLACE = (
 #: The one shape a chain digest has, as the engine states it and the store records it.
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 
-#: The plan's **budgets document**, one of the two other kinds of document a plan's project
-#: holds: the template it is rendered from, the reference its rendering records, and the
-#: suffix its id carries after the plan's own native id. Stated here because this module
-#: decides which document of a project is its design document, and
-#: `orchestrator/plan_budgets.py` — the budgets document's reader — names them from here.
-BUDGETS_TEMPLATE = "plan-budgets"
-BUDGETS_REFERENCE = f"onepipeline:{BUDGETS_TEMPLATE}"
-BUDGETS_SUFFIX = "-budgets"
-
-#: The other kind: a **spike's report**, which each spike writes into the plan's project
-#: (`orchestrator/spike_plan.py` states the convention). Known by the template its rendering
-#: records, which travels with every copy where an id does not.
+#: The one other kind of document a plan's project holds: a **spike's report**, which each
+#: spike writes into the plan's project (`orchestrator/spike_plan.py` states the
+#: convention). Known by the template its rendering records, which travels with every copy
+#: where an id does not.
 SPIKE_REPORT_REFERENCE = "onepipeline:spike-report"
 
 
@@ -548,37 +540,31 @@ def located(document: StoreDocument) -> str:
     return plan_store.located(document.location, str(document.qualified_id))
 
 
-def budgets_document_id(project: str) -> str:
-    """The qualified id ``project``'s budgets document has where the plan is drafted."""
-    source, native = plan_store.qualified(project)
-    return f"{source}:{native}{BUDGETS_SUFFIX}"
-
-
-def is_budgets_document(project: str, document: StoreDocument) -> bool:
-    """Whether ``document`` is ``project``'s budgets document rather than its design document.
-
-    By its id where the plan was drafted, and by the template it records being rendered from
-    anywhere — a board mints its own ids, so a copy is known by its provenance alone.
-    """
-    provenance = document.metadata.get(PROVENANCE)
-    return str(document.qualified_id) == budgets_document_id(project) or (
-        isinstance(provenance, dict) and provenance.get("template") == BUDGETS_REFERENCE
-    )
-
-
 def is_spike_report(document: StoreDocument) -> bool:
     """Whether ``document`` is a spike's report, by the template it records being rendered from."""
     provenance = document.metadata.get(PROVENANCE)
     return isinstance(provenance, dict) and provenance.get("template") == SPIKE_REPORT_REFERENCE
 
 
+def is_design_document(document: StoreDocument) -> bool:
+    """Whether ``document`` is a design document, by the template its provenance records."""
+    provenance = document.metadata.get(PROVENANCE)
+    return isinstance(provenance, dict) and provenance.get("template") == TEMPLATE_REFERENCE
+
+
 def design_documents(project: str, documents: Sequence[StoreDocument]) -> list[StoreDocument]:
-    """Every one of ``documents`` that is neither ``project``'s budgets document nor a report."""
-    return [
-        document
-        for document in documents
-        if not is_budgets_document(project, document) and not is_spike_report(document)
-    ]
+    """Every one of ``documents`` that is ``project``'s design document, or could be read as one.
+
+    **The design document is the one recording the design-doc template**, so where any of
+    ``documents`` records it, those are the answer, whatever else the project holds. Where
+    none does, every document that is not a spike's report is answered instead, so the one
+    a person wrote by hand, or rendered from another template, reaches :func:`body_digest`
+    and is refused naming the repair rather than reported as missing.
+    """
+    designs = [document for document in documents if is_design_document(document)]
+    if designs:
+        return designs
+    return [document for document in documents if not is_spike_report(document)]
 
 
 def design_document(project: str) -> StoreDocument:
@@ -590,9 +576,9 @@ def one_document(project: str, documents: Sequence[StoreDocument]) -> StoreDocum
     """The one of ``documents`` that is ``project``'s design document.
 
     A project holds documents rather than *the* document, so "the design document" is the
-    one document of the project that is neither its budgets document, which
-    :func:`is_budgets_document` recognises and the plan check reads instead, nor a spike's
-    report, which :func:`is_spike_report` recognises. Several is
+    one document of the project whose provenance records the design-doc template, which
+    :func:`design_documents` reads off its provenance — a spike's report or any other
+    rendering beside it is never taken for it. Several is
     refused rather than guessed at: an approval
     recorded against the wrong one of two reads as sound from every side afterwards, and
     the person who wrote the second document is the one who can say which is which.

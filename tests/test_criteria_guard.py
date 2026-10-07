@@ -36,11 +36,10 @@ from criteria_examples import (
     RELEASED_ELSEWHERE_IN_PROSE,
     STATES_THE_PROPERTY_INSTEAD,
 )
-from project_fixtures import budgets_document, no_budgets
+from project_fixtures import described, no_budgets
 
 from orchestrator import (
     criteria_guard,
-    plan_budgets,
     plan_check,
     plan_review,
     plan_store,
@@ -70,12 +69,9 @@ from orchestrator.criteria_guard import (
 )
 from orchestrator.root import REPO_ROOT
 
-#: The budgets document every plan here carries: one needing no budget, as a plan whose
-#: tasks name no repository answers it, read back the way the check reads it.
+#: The plan-level budget answers every plan here carries: one needing no budget, as a plan
+#: whose tasks name no repository answers it.
 NO_BUDGETS = no_budgets([])
-PROBE_BUDGETS = plan_budgets.Budgets(
-    plan_store.QualifiedDocumentId("authoring:probe-budgets"), plan_budgets.parse(NO_BUDGETS)
-)
 
 #: The five names `oneagentgraph` compiles in, which `personas/README.md` and
 #: `tests/e2e/test_shipped_persona_catalog_e2e.py` both state. Named here as the
@@ -706,26 +702,26 @@ def project_record(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
     check: it starts carrying no record, and `_planned` writes the key for a plan into it
     the way `just review-plan` would.
     """
-    record: dict[str, object] = {"metadata": {}}
-    monkeypatch.setattr(plan_store, "project_record", lambda _project: record)
-    # And the plan's budgets document, which every plan carries: one needing no budget.
     # llmlint: ignore-block[shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker] The  # noqa: E501
-    # document is rendered by the pinned store's own `template render`, once per process,
+    # description is rendered by the pinned store's own `template render`, once per process,
     # because a hand-written body would not be the rendering its provenance records and the
     # reader under test refuses exactly that. It is not a host tool: the store is the pinned
     # install `uv.lock` names and `templates/` is in `codeWorkspace`, so both are in the key
     # this tier is memoized on, as `tests/test_design_approval.py` says of the same engine.
-    monkeypatch.setattr(
-        plan_store, "read_documents", lambda project: [budgets_document(project, NO_BUDGETS)]
-    )
+    record: dict[str, object] = described(NO_BUDGETS)
     # llmlint: ignore-end[shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]
+    monkeypatch.setattr(plan_store, "project_record", lambda _project: record)
+    # And its documents, which the spike convention reads: a plan holding none.
+    monkeypatch.setattr(plan_store, "read_documents", lambda _project: [])
     return record
 
 
 def _planned(record: dict[str, object], plan: dict[str, object]) -> dict[str, object]:
     """``plan``, once ``record`` carries a plan-level record for exactly it."""
-    key = plan_review.plan_key(plan, plan_review.plan_bar_fingerprint(), PROBE_BUDGETS)
-    record["metadata"] = {plan_review.RECORD_KEY: {"key": key, "by": plan_review.BY_REVIEW}}
+    key = plan_review.plan_key(plan, plan_review.plan_bar_fingerprint(), NO_BUDGETS)
+    held = record["metadata"]
+    assert isinstance(held, dict)
+    record["metadata"] = {**held, plan_review.RECORD_KEY: {"key": key, "by": plan_review.BY_REVIEW}}
     return plan
 
 
@@ -1061,7 +1057,8 @@ def test_the_command_refuses_a_plan_every_task_of_which_is_recorded_and_no_plan_
     """
     plan = _plan(persona="engineer", task=_task(COMPLETE))
     monkeypatch.setattr(plan_store, "read_project", lambda _: (plan, [_recorded()]))
-    assert project_record == {"metadata": {}}
+    metadata = project_record["metadata"]
+    assert isinstance(metadata, dict) and plan_review.RECORD_KEY not in metadata
 
     assert check_directly("authoring:probe") == 1
     captured = capsys.readouterr()
@@ -1463,21 +1460,20 @@ def test_the_criteria_fingerprint_reads_the_files_the_deterministic_bar_is(
         before = moved
 
 
-def test_the_command_refuses_a_plan_carrying_no_budgets_document_naming_the_document(
+def test_the_command_refuses_a_plan_carrying_no_plan_level_budget_answers_naming_them(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     project_record: dict[str, object],
 ) -> None:
     """The direct path reads the budgets the spawned check reads, and says the same thing.
 
-    Every record is in place and the project holds no budgets document, which is a plan
-    with nowhere stating its budgets: refused naming the document it lacks, in the words
-    the spawned check uses, and accepted again once the document is there.
+    Every record is in place and the project holds no plan-level budget answers, which is a
+    plan with nowhere stating its budgets: refused naming the record it lacks, in the words
+    the spawned check uses.
     """
     plan = _plan(persona="engineer", task=_task(COMPLETE))
     monkeypatch.setattr(plan_store, "read_project", lambda _: (plan, [_recorded()]))
-    monkeypatch.setattr(plan_store, "read_documents", lambda _project: [])
-    # Reviewed whole as it stands, with no budgets document, so only the budgets refuse.
+    # Reviewed whole as it stands, with no plan-level answers, so only the budgets refuse.
     key = plan_review.plan_key(plan, plan_review.plan_bar_fingerprint())
     project_record["metadata"] = {plan_review.RECORD_KEY: {"key": key}}
 
@@ -1487,4 +1483,4 @@ def test_the_command_refuses_a_plan_carrying_no_budgets_document_naming_the_docu
         one for one in plan_check.refusals(plan, "authoring:probe") if one["field"] == "budgets"
     ]
     assert captured.err == f"check-plan: budgets: {spawned['reason']}\n", captured.err
-    assert "carries no `authoring:probe-budgets` document" in captured.err
+    assert "carries no `orchestrator.plan-budgets` metadata" in captured.err

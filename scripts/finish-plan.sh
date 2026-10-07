@@ -26,8 +26,9 @@
 #   3. **launch** the design-document node, as its own one-node planning project whose
 #      task is rendered from the `plan-task` template and checked by the engine before
 #      anything is dispatched;
-#   4. **copy** the plan and its documents into the destination a person reviews them in;
-#   5. **report** where that destination holds the project and the document, read back
+#   4. **hold** the written document's budget answers to what the plan's records state;
+#   5. **copy** the plan and its documents into the destination a person reviews them in;
+#   6. **report** where that destination holds the project and the document, read back
 #      out of the store rather than composed from a name.
 #
 # **Every run id this flow will use is decided before anything is launched.** `just plan`
@@ -39,7 +40,8 @@
 # **The refusals are told apart by exit status**, because a builder that could not tell
 # them apart would retry one as the other: 1 is the review refusing the plan's own
 # criteria, 3 is the pre-launch check refusing the plan, 6 is the engine refusing the
-# design-document node's own rendered task, 5 is the destination refusing the copy, 4 is
+# design-document node's own rendered task, 7 is the written document restating budget
+# answers that differ from the plan's records, 5 is the destination refusing the copy, 4 is
 # the design-document launch not settling, and 2 is a flow that could not run at all. There is no repair loop here and there will not be one: the planner's own
 # judge is the repair loop and it has already run, so a refusal hands every refused
 # criterion back and stops.
@@ -52,7 +54,7 @@
 # untouched.
 #
 # llmlint: ignore-file[changed_behavior_has_e2e] What this script *decides* — the order of
-# the five steps, which of them each refusal stops at, the exit status each ends on, the
+# the six steps, which of them each refusal stops at, the exit status each ends on, the
 # one-node project the design launch runs, the file that launch's judge is pointed at (and
 # the plan outside the authoring source whose judge is pointed at none), and the two
 # locations it reports — is driven end
@@ -160,12 +162,11 @@ DAG_GRAPH_FLAG="--dag-graph"
 
 #: The answers the writer's task is rendered from, composed from the brief, the plan's
 #: qualified id, the document id, the resolve command `orchestrator/design_chain.py`'s
-#: rule gives for the plan, and what `orchestrator/plan_budgets.py` states about the plan's
-#: budgets: its budgets document and the file it is at, whose recorded answers the
-#: document's budget sections restate and which the writer and its judge both read there —
-#: named rather than quoted, because a plan of many budgets makes a task too large for the
-#: engine to hand its dispatch as one argument — or the reason the migration list gives
-#: for a plan that predates budgets. The brief's `## What` and `## Why` are quoted into the task's
+#: rule gives for the plan, and the command whose output the document's budget answers
+#: copy, `python -m orchestrator.plan_budgets <plan>` — named rather than quoted, because
+#: a plan of many budgets makes a task too large for the engine to hand its dispatch as one
+#: argument — which the flow holds the written document to before anything is copied.
+#: The brief's `## What` and `## Why` are quoted into the task's
 #: own What and Why rather than the brief being embedded whole, because the brief's
 #: acceptance criteria are the *plan's* and a judge holds a dispatch to every criterion it
 #: finds in its task; the criteria below are this dispatch's. The resolve command is named
@@ -177,8 +178,6 @@ WRITER_ANSWERS_PROGRAM='
 import json, pathlib, re, sys
 
 (brief, plan, document, template, note, resolve) = sys.argv[1:7]
-budgets = json.loads(sys.stdin.read())
-predates, budgets_document, budgets_path = budgets["predates"], budgets["document"], budgets["path"]
 # Line endings and trailing blanks are read the way `scripts/plan-brief.sh` reads a heading
 # when it validates the brief, so a brief it accepted is one this composes from.
 text = pathlib.Path(brief).read_text(encoding="utf-8").replace("\r\n", "\n")
@@ -197,30 +196,20 @@ brief_why = section("Why")
 if not brief_what or not brief_why:
     sys.exit(f"{brief} states no ## What or no ## Why for the task to be composed from")
 variables = f"{resolve} | onetaskgraph template variables --template-loader -"
-budget_answers = "`workload`, `checklist`, `ten_x`, `budgets`, `repo_wide_effects`, `realistic_data` and `spike_findings`"
-if predates:
-    budget_task = (
-        f"The plan predates budgets: `config/budgets-migration.yaml` names `{plan}`, with the "
-        f"reason below, and it carries no budgets document. Answer `predates_budgets` with "
-        f"that reason word for word, and leave {budget_answers} empty.\n\n"
-        f"> {predates}"
-    )
-    budget_criterion = (
-        f"The document\u2019s `predates_budgets` answer is the reason the migration list gives "
-        f"for `{plan}`, word for word, and every budget answer is empty."
-    )
-else:
-    budget_task = (
-        f"The plan\u2019s budgets are stated in its budgets document `{budgets_document}`, "
-        f"the file `{budgets_path}`: read it there, as you read the plan\u2019s tasks. Its "
-        f"answers are the JSON object under its `## Record` heading. The document\u2019s "
-        f"{budget_answers} answers restate those, answer for answer and word for word, and "
-        f"`predates_budgets` is empty."
-    )
-    budget_criterion = (
-        f"The document\u2019s {budget_answers} answers restate the answers recorded in "
-        f"`{budgets_document}`, answer for answer, and its `predates_budgets` answer is empty."
-    )
+budget_answers = "`predates_budgets`, `plan_budgets` and `budgets`"
+budget_command = f"uv run python -m orchestrator.plan_budgets {plan}"
+budget_task = (
+    f"The document\u2019s budget answers, {budget_answers}, are exactly the three values of "
+    f"the JSON object `{budget_command}` prints, run in the checkout this dispatch works in: "
+    f"copy each as it is, and invent none. They hold the plan\u2019s plan-level budget "
+    f"answers and every budget of its tasks, each with the task that owns it and where the "
+    f"store reports that task. This flow refuses a document whose budget answers differ from "
+    f"that output before anything is copied."
+)
+budget_criterion = (
+    f"The document\u2019s {budget_answers} answers are exactly the values `{budget_command}` "
+    f"prints for them."
+)
 answers = {
     "what": (
         f"Write the design document a person reviews the plan `{plan}` as \u2014 terse prose, "
@@ -272,13 +261,15 @@ sys.stdout.write(json.dumps(answers, ensure_ascii=False, indent=2) + "\n")
 #: that reads only the status. Every one of them is a *different next action*: correct
 #: the criteria a reviewer named, correct the plan a check refused, read why a launch did
 #: not settle, repair the destination, repair the task this checkout composes for the
-#: design-document node, or repair this checkout.
+#: design-document node, regenerate a document whose budget answers differ from the
+#: records, or repair this checkout.
 REVIEW_REFUSED=1
 UNRUNNABLE=2
 PLAN_REFUSED=3
 LAUNCH_FAILED=4
 COPY_REFUSED=5
 WRITER_REFUSED=6
+DOCUMENT_REFUSED=7
 
 #: Writes the project this launch runs, and nothing else: its one task is created below
 #: through the `plan-task` template, into the project this writes. The project states the
@@ -566,10 +557,11 @@ document_resolve=$("$python" -m orchestrator.design_chain "$plan_project") ||
     fail "which repository's layer the design document of $plan_project resolves through could not be read out of the plan store; the diagnostic above names why" \
         "repair what it names, then run this command again"
 
-# What the document's budget sections restate: the plan's budgets document and its path, or
-# the reason the migration list gives for a plan that predates budgets. The check above has
-# already refused a plan with neither, so a failure here is a store that stopped answering.
-budgets_context=$("$python" -m orchestrator.plan_budgets "$plan_project") ||
+# What the document's budget answers copy, read once now so a plan whose budgets cannot be
+# read is refused before anything is launched. The check above has already refused a plan
+# with neither plan-level answers nor a migration entry, so a failure here is a store that
+# stopped answering.
+"$python" -m orchestrator.plan_budgets "$plan_project" >/dev/null ||
     fail "what the design document of $plan_project restates about its budgets could not be read; the diagnostic above names why" \
         "repair what it names, then run this command again"
 
@@ -650,10 +642,7 @@ answers_file=$(mktemp "${TMPDIR:-/tmp}/finish-plan-answers.XXXXXX") || {
     fail "a scratch file for the design-document task's answers could not be created" \
         "check that ${TMPDIR:-/tmp} is a directory this launch may write into, then retry"
 }
-# The budgets context reaches the program on stdin, through the `printf` builtin, which is
-# never an exec and so is held to no argument limit: when it carried the document's answers
-# a plan of 52 budgets composed one past Linux's 128 KiB limit on a single argument.
-printf '%s' "$budgets_context" | "$python" -c "$WRITER_ANSWERS_PROGRAM" "$brief" "$plan_project" \
+"$python" -c "$WRITER_ANSWERS_PROGRAM" "$brief" "$plan_project" \
     "$design_document_id" "$DOCUMENT_TEMPLATE" "$PLAN_DIRECT_PLACEMENT_NOTE" "$document_resolve" \
     >"$answers_file" || {
     discard_answers
@@ -779,7 +768,21 @@ if [ "$launch_status" -ne 0 ]; then
     exit "$LAUNCH_FAILED"
 fi
 
-# 4. The copy, which is the step the whole ordering above exists to make safe: what lands
+# 4. The document's budget answers, held to what the records state before anything is
+# copied: the writer copies them from `python -m orchestrator.plan_budgets`, and a changed
+# target, an omitted budget or a wrong owner is named here rather than approved later.
+budgets_status=0
+"$python" -m orchestrator.plan_budgets "$plan_project" --check-design-document || budgets_status=$?
+if [ "$budgets_status" -ne 0 ]; then
+    if [ "$budgets_status" -eq 1 ]; then
+        echo "finish-plan: the design document of $plan_project restates budget answers that differ from its records, as named above, so nothing was copied into '$destination'; regenerate the document with the answers 'python -m orchestrator.plan_budgets $plan_project' prints, then run this command again" >&2
+        exit "$DOCUMENT_REFUSED"
+    fi
+    fail "the budget answers of the design document of $plan_project could not be read; the diagnostic above names why" \
+        "repair what it names, then run this command again"
+fi
+
+# 5. The copy, which is the step the whole ordering above exists to make safe: what lands
 # on the destination is a plan something reviewed and a document written from it.
 copy_status=0
 recipe copy-plan "$plan_project" --to "$destination" || copy_status=$?
@@ -792,7 +795,7 @@ if [ "$copy_status" -ne 0 ]; then
     exit "$UNRUNNABLE"
 fi
 
-# 5. Where the destination holds what just landed, read back out of it. Not composed from
+# 6. Where the destination holds what just landed, read back out of it. Not composed from
 # a project name: a destination decides its own native ids and where its records live, so
 # a board mints a number where a directory keeps the name.
 # llmlint: ignore[tool_output_is_signal] The two locations are what a person opens to review this plan, so they are this command's product and reach the operator's own stream.

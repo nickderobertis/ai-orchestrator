@@ -22,7 +22,7 @@ from pathlib import Path
 
 import follow_up_variables
 import plan_root_variable
-from project_fixtures import budgeted, no_budgets
+from project_fixtures import budgeted, designed, no_budgets
 
 from orchestrator.project_store import write_plan_project
 
@@ -342,7 +342,8 @@ exit "${{FAKE_ENGINE_EXIT:-0}}"
     return checkout, trace
 
 
-#: The recipes whose tail reads the budgets document of the plan a brief names.
+#: The recipes whose tail reads the plan-level budget answers of the plan a brief names, and
+#: holds the design document its doubled launch stands for to them before it copies.
 BUDGETED_RECIPES = ("plan", "finish-plan")
 
 #: What that seeding writes under the checkout, before the recipe runs: the plan records a
@@ -353,7 +354,7 @@ SEEDED_PLAN_RECORDS = frozenset(
         ".plans/projects",
         *(
             f".plans/{kind}/{PLAN_PROJECT.partition(':')[2]}{suffix}.md"
-            for kind, suffix in (("projects", ""), ("documents", "-budgets"))
+            for kind, suffix in (("projects", ""), ("documents", "-design"))
         ),
     }
 )
@@ -388,20 +389,33 @@ def run_recipe(
     plans = checkout / ".plans"
     plans.mkdir(exist_ok=True)
     environment[plan_root_variable.name()] = str(plans)
-    # The tail reads the budgets document of the plan its brief names before it composes the
-    # design-document task, so the plan the brief a tail runs on names carries one, as every
-    # plan does. The colliding brief's plan is left alone: no row's tail reaches it, and the
-    # rows that use it hold the recipe to writing nothing of it.
+    # The tail reads the plan-level budget answers of the plan its brief names before it
+    # composes the design-document task, so the plan the brief a tail runs on names states
+    # them, as every plan does. The colliding brief's plan is left alone: no row's tail
+    # reaches it, and the rows that use it hold the recipe to writing nothing of it.
     native = PLAN_PROJECT.partition(":")[2]
-    seeded = (plans / "documents" / f"{native}-budgets.md").exists()
+    described = plans / "projects" / f"{native}.md"
+    seeded = described.exists() and "orchestrator.plan-budgets" in described.read_text(
+        encoding="utf-8"
+    )
     # llmlint: ignore-block[shell_test_tiers_stay_split] This is seeding, not the layer under
-    # test: the recipe still meets only the doubled `uv` and engine, while the document it
+    # test: the recipe still meets only the doubled `uv` and engine, while the description it
     # reads is written beforehand by the pinned store, because the tail refuses a body that
     # is not its template's rendering and a hand-written one never is. The store is the
     # install `uv.lock` names and `support-project-fixtures` puts its helper in this key.
     if args and args[0] in BUDGETED_RECIPES and not seeded:
         write_plan_project(plans, {"name": native, "tasks": []}, native_id=native)
         budgeted("authoring", native, no_budgets([]), environment)
+        # And the design document a settled writer run leaves, which the doubled engine's
+        # `start` never writes: its budget answers are what `python -m
+        # orchestrator.plan_budgets` prints for a plan of no task, which the tail holds it to.
+        designed(
+            "authoring",
+            native,
+            [],
+            environment,
+            budget_answers={"predates_budgets": "", "plan_budgets": no_budgets([]), "budgets": []},
+        )
     # llmlint: ignore-end[shell_test_tiers_stay_split]
     # The follow-up drafts root every launch exports, stated for the same reason: an
     # unstated one resolves to the real `.follow-ups` of the tree this suite runs in. The

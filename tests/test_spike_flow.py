@@ -300,7 +300,9 @@ def test_the_finalize_note_lists_every_report_and_branch_and_what_the_budgets_ow
     )
 
     assert "- `spike-a`: report `spike-a-report`; branch `plan/spike-a`" in budgeted
-    assert "`authoring:a-new-plan-budgets` current with what the spikes found" in budgeted
+    assert "Keep the plan's budgets current with what the spikes found" in budgeted
+    assert "`orchestrator.budgets` metadata" in budgeted
+    assert "`orchestrator.plan-budgets` metadata" in budgeted
     assert "never in a budgets file" in budgeted
     assert "predates budgets" in migrated and "writes none" in migrated
     assert "escalated exception" in budgeted

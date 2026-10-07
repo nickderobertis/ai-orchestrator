@@ -45,6 +45,7 @@ from criteria_examples import (
     RELEASED_ELSEWHERE_IN_PROSE,
     STATES_THE_PROPERTY_INSTEAD,
 )
+from project_fixtures import older_engine as _older_engine
 from project_fixtures import project_from_plan, reviewed
 from scratch_identity import GIT_IDENTITY, registered, rules_for_hosted, seeded
 from waits import timeout as e2e_timeout
@@ -1819,35 +1820,6 @@ def test_the_recipe_says_the_engines_own_loader_read_the_plan(tmp_path: Path) ->
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr
     assert THROUGH_THE_ENGINE in accepted.stdout, accepted.stdout
     assert "scripts/plan-check.sh" in accepted.stdout, accepted.stdout
-
-
-def _older_engine(root: Path) -> Path:
-    """An engine of the shape this recipe's direct path exists for.
-
-    A real binary refusing `plan check` the way a release before that verb does, rather
-    than a flag on the recipe: the path is chosen by asking the engine what it carries,
-    so the only honest way to drive the other answer is to give it an engine that
-    answers differently. Kept outside `PATH` deliberately — the roles a node's persona
-    resolves to are still read out of the installed binary, so shadowing that would
-    change what is being compared.
-    """
-    directory = root / "older-engine"
-    directory.mkdir(parents=True, exist_ok=True)
-    binary = directory / "onepipeline"
-    # llmlint: ignore[e2e_not_mocked] An engine carrying no `plan check` is not an
-    # artifact this repository can install — it is a release older than the verb — so
-    # the substitute is the absence of that one verb and nothing else. Everything the
-    # journey then drives is real: the recipe, the wrapper, this repository's own
-    # checks, the review bar lifted out of the *installed* engine, and the store.
-    binary.write_text(
-        "#!/usr/bin/env python3\n"
-        "import sys\n"
-        "print(\"error: unrecognized subcommand 'check'\", file=sys.stderr)\n"
-        "raise SystemExit(2)\n",
-        encoding="utf-8",
-    )
-    binary.chmod(0o755)
-    return binary
 
 
 @pytest.mark.parametrize(

@@ -13,7 +13,9 @@ task's content, :data:`METADATA_SEPARATOR`, and a metadata slot — :data:`METAD
 the compact key-sorted JSON of the task's metadata map, :data:`METADATA_CLOSE` — with no
 slot when the map is empty. :func:`compose` is that composition, held to the plugin's
 source in the registered checkout by `tests/test_task_body.py`. The map measured is the
-one this checkout's records carry, because that is the map the copy sends; what the copy
+one this checkout's records carry — a task's `orchestrator.budgets` record among it, which
+can run to as many characters as the `## Budgets` section it renders — because that is the
+map the copy sends; what the copy
 then adds or drops is small and is what the warning threshold covers, and
 :data:`UNMEASURED` states it so every refusal and warning says what its figure is.
 
@@ -30,6 +32,10 @@ it: the copy's pre-flight is the one step that always has the document in front 
 always precedes the write to the board. :func:`document_refusals` and
 :func:`document_warnings` are its two faces, under the same :data:`BODY_LIMIT` and
 :data:`WARN_FROM`.
+
+**So does a plan's own description**, the project issue, whose metadata carries its
+`orchestrator.plan-budgets` record beside the rendering of it: `just check-plan` measures it
+with :func:`measure`, through `orchestrator/plan_budgets.py`, under the same limit.
 """
 
 from __future__ import annotations
@@ -78,9 +84,9 @@ UNMEASURED_KEYS = (
 #: What the figure leaves out, said once for the refusal and the warning alike.
 UNMEASURED = (
     "measured as the record's content followed by the metadata slot the `github-projects` "
-    "source appends — every `onepipeline.*` key and the review record, as compact "
-    "key-sorted JSON — and leaving out what the copy itself adds or routes elsewhere: "
-    + ", ".join(f"`{key}`" for key in UNMEASURED_KEYS)
+    "source appends — every `onepipeline.*` key, the review record and the "
+    "`orchestrator.budgets` record, as compact key-sorted JSON — and leaving out what the "
+    "copy itself adds or routes elsewhere: " + ", ".join(f"`{key}`" for key in UNMEASURED_KEYS)
 )
 
 #: The same account for a design document, whose map carries the template provenance

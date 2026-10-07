@@ -184,11 +184,10 @@ class Store:
         block sequence at the parent key's indent, which is the shape it could not.
         """
         write_plan_project(self.drafts, {"name": native, **STEPPED_PLAN}, native_id=native)
-        self.copy("project", f"{DRAFTING}:{native}")
-        # And its budgets document, which every plan carries, copied beside it the way
-        # `just copy-plan` carries a plan's documents.
+        # And its plan-level budget answers, which every plan states as its description,
+        # carried by the copy with the project.
         budgeted(DRAFTING, native, no_budgets([SERVICE_ORIGIN]))
-        self.copy("document", f"{DRAFTING}:{native}-budgets")
+        self.copy("project", f"{DRAFTING}:{native}")
         return f"{STORED}:{native}"
 
     def document(self, native: str, labels: list[object]) -> str:

@@ -313,7 +313,7 @@ def test_each_task_records_the_engines_template_and_keeps_its_answers_beside_it(
             "pinned engine states for this host's plan-task"
         )
         stored = _answers(authored.tasks[node])
-        assert stored == {"additional_info": "", "spikes": [], **answers}, stored
+        assert stored == {"additional_info": "", "spikes": [], "budgets": [], **answers}, stored
         assert task.content is not None and task.content.startswith(f"## What\n\n{answers['what']}")
     second = _task(authored.stored.qualified, authored.tasks["read-the-cursor"])
     assert second.deps == ("decide-the-cursor",), second.deps

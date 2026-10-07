@@ -779,6 +779,7 @@ def _measured(host: Host, environment: dict[str, str]) -> tuple[dict, str]:
     """The tracked `gate-time` budget measured by the installed check, as the hook asks."""
     document = _tracked_budgets()
     document.pop("conditions", None)
+    document["budgets"] = [_tracked_gate_time()]
     for budget in document["budgets"]:
         budget["command"] = _absolute(budget["command"])
     budgets = host.root / "gate-time-only.yaml"

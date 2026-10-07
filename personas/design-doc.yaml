@@ -40,9 +40,10 @@ system_prompt: |
   about the document, they win. Never edit the rendered body: change an answer and
   regenerate it.
 
-  The budget answers are the one part you do not compose: your task names the plan's
-  budgets document and the file it is at, and you copy the answers recorded there — or,
-  for a plan that predates budgets, it gives the reason to answer instead.
+  The budget answers are the one part you do not compose: your task names the command,
+  `python -m orchestrator.plan_budgets <plan>`, whose output they are, and you copy its
+  three values as they are — the plan's own answers and every budget of its tasks, or, for
+  a plan that predates budgets, the reason to answer instead.
 
 user:
   persona: |

@@ -40,11 +40,12 @@ import short_state
 from nx_workspace import answering_this_checkouts_origin, copy_working_tree
 from project_fixtures import (
     budgeted,
-    budgets_record,
+    described_record,
     designed,
     helper,
     local_project,
     no_budgets,
+    owning,
 )
 from waits import timeout as e2e_timeout
 
@@ -247,7 +248,8 @@ def test_an_unreviewed_plan_is_refused_and_a_reviewed_one_is_accepted(tmp_path: 
     assert whole["key"] == plan_review.plan_key(
         plan_store.read_plan(project, [recorded]),
         plan_review.plan_bar_fingerprint(),
-        plan_budgets.read(project),
+        plan_budgets.plan_record(project),
+        plan_review.owned_by_node([recorded]),
     )
 
     accepted = _just("check-plan", project)
@@ -1184,28 +1186,26 @@ The browser view cannot deep-link to a page until that is settled.
 def _authored_records(native: str) -> dict[str, str]:
     """The plan records a dispatched planner authors, as absolute paths and content."""
     root = plan_store.source_root(AUTHORING)
-    rendered = render_plan_project(
-        {
-            "schema_version": 3,
-            "name": native,
-            "goal": {"text": "Deliver the checkout route"},
-            "tasks": [
-                {
-                    "id": "route",
-                    "persona": "engineer",
-                    "repo": "https://github.com/nickderobertis/some-service",
-                    "title": "feat: add the checkout route",
-                    "task": _task(),
-                }
-            ],
-        },
-        native_id=native,
-    )
-    budgets, written = budgets_record(
-        native, no_budgets(["github.com/nickderobertis/some-service"])
+    plan = {
+        "schema_version": 3,
+        "name": native,
+        "goal": {"text": "Deliver the checkout route"},
+        "tasks": [
+            {
+                "id": "route",
+                "persona": "engineer",
+                "repo": "https://github.com/nickderobertis/some-service",
+                "title": "feat: add the checkout route",
+                "task": _task(),
+            }
+        ],
+    }
+    rendered = render_plan_project(plan, native_id=native)
+    project, described = described_record(
+        plan, native, no_budgets(["github.com/nickderobertis/some-service"])
     )
     return {str(root / relative): content for relative, content in rendered.items()} | {
-        str(root / budgets): written
+        str(root / project): described
     }
 
 
@@ -1329,7 +1329,8 @@ def test_a_planning_run_that_settled_records_what_it_authored_and_nothing_else(
     assert whole["key"] == plan_review.plan_key(
         plan_store.read_plan(f"{AUTHORING}:{authored}", [task]),
         plan_review.plan_bar_fingerprint(),
-        plan_budgets.read(f"{AUTHORING}:{authored}"),
+        plan_budgets.plan_record(f"{AUTHORING}:{authored}"),
+        plan_review.owned_by_node([task]),
     )
     assert _launches(tmp_path) == 0, "the closeout spent a provider turn"
 
@@ -1695,7 +1696,10 @@ def test_a_plan_that_adopts_the_release_its_goal_needs_is_recorded_whole(
     assert whole["by"] == plan_review.BY_REVIEW, whole
     plan, records = plan_store.read_project(project)
     assert whole["key"] == plan_review.plan_key(
-        plan, plan_review.plan_bar_fingerprint(), plan_budgets.read(project)
+        plan,
+        plan_review.plan_bar_fingerprint(),
+        plan_budgets.plan_record(project),
+        plan_review.owned_by_node(records),
     )
 
     accepted = _just("check-plan", project)
@@ -2132,9 +2136,12 @@ def test_a_regenerated_task_body_invalidates_the_plan_level_record_and_only_that
     assert _launches(tmp_path) == 5, "the second review should cost one task and one plan turn"
     whole = _plan_record_of(project)
     assert isinstance(whole, dict)
-    plan, _ = plan_store.read_project(project)
+    plan, records = plan_store.read_project(project)
     assert whole["key"] == plan_review.plan_key(
-        plan, plan_review.plan_bar_fingerprint(), plan_budgets.read(project)
+        plan,
+        plan_review.plan_bar_fingerprint(),
+        plan_budgets.plan_record(project),
+        plan_review.owned_by_node(records),
     )
     assert _just("check-plan", project).returncode == 0
 
@@ -2221,6 +2228,32 @@ HUMAN_ACTION_LEAD = "Merge the change request once its required checks have gone
 HUMAN_DETAIL = "HUMAN-DETAIL-4c1e: tell the user the route is live."
 LONG_WORKLOAD = "500 purchases a minute at the evening peak, across every storefront, " * 4
 
+#: The plan's own three longest answers, each past the excerpt's bound and each distinct, so
+#: an excerpt of one cannot be read as another.
+LONG_PLAN_ANSWERS = {
+    "overview": "Add the checkout route every storefront calls at the point of purchase. " * 4,
+    "workload": "Ten thousand storefronts, each checking out a few hundred carts an hour. " * 4,
+    "ten_x": "At ten times the storefronts the route's database pool saturates first. " * 4,
+}
+
+#: The budget the compact view's agent node owns, its workload past the excerpt's bound.
+LONG_BUDGET: dict[str, object] = {
+    "id": "route-latency",
+    "name": "Route response time",
+    "basis": "measured",
+    "repository": "github.com/nickderobertis/some-service",
+    "file": "budgets.yaml",
+    "file_change": "add",
+    "measure": "time to the route's response at the client",
+    "inner_measure_reason": "",
+    "unit": "ms",
+    "direction": "max",
+    "threshold": 250,
+    "workload": LONG_WORKLOAD,
+    "evidence": "spike-route measured 90 ms",
+    "command": "bun run measure:route",
+}
+
 
 def _compact_view_project() -> str:
     """One agent node with a long lead owning a long-workload budget, one human node."""
@@ -2255,25 +2288,24 @@ def _compact_view_project() -> str:
         "concern": "latency",
         "budget": "route-latency",
         "not_applicable": "",
+        "summary": "",
     }
-    answers["budgets"] = [
-        {
-            "id": "route-latency",
-            "repository": "github.com/nickderobertis/some-service",
-            "file": "budgets.yaml",
-            "measure": "time to the route's response at the client",
-            "inner_measure_reason": "",
-            "unit": "ms",
-            "direction": "max",
-            "threshold": 250,
-            "workload": LONG_WORKLOAD,
-            "evidence": "spike-route measured 90 ms",
-            "command": "bun run measure:route",
-            "node": "route",
-            "file_change": "add",
-        }
-    ]
-    budgeted(plan_fixture_source.SOURCE, native, answers)
+    owning(
+        plan_fixture_source.SOURCE,
+        native,
+        "route",
+        [LONG_BUDGET],
+        answers={
+            "what": LONG_LEAD.strip(),
+            "why": "A buyer cannot check out.",
+            "acceptance_criteria": [
+                "The route answers within the `route-latency` budget at its workload.",
+                "Every claim the dispatch makes about the finished work is true of the tree as "
+                "it finally stands.",
+            ],
+        },
+    )
+    budgeted(plan_fixture_source.SOURCE, native, {**answers, **LONG_PLAN_ANSWERS})
     root = plan_fixture_source.root()
     designed(
         plan_fixture_source.SOURCE,
@@ -2290,9 +2322,10 @@ def test_a_real_review_hands_the_reviewer_the_compact_view_of_a_stored_plan(
 
     Through the real recipe and the real store: a lead past the summary's bound arrives
     cut and marked, a human node's summary is its action and nothing after it, a budget's
-    long workload arrives as a marked excerpt while its short prose arrives whole, and the
-    task files, the budgets document and the design document are each named by a path
-    that opens to the full text the prompt left out.
+    long workload and the plan's long overview, workload and 10x answer each arrive as a
+    marked excerpt while short prose arrives whole, and the task files, the plan's
+    description and the design document are each named by a path that opens to the full
+    text the prompt left out.
     """
     project = _compact_view_project()
     log = tmp_path / "prompts.jsonl"
@@ -2314,14 +2347,20 @@ def test_a_real_review_hands_the_reviewer_the_compact_view_of_a_stored_plan(
     excerpt = LONG_WORKLOAD[: plan_review.EXCERPT_LIMIT] + plan_review.EXCERPT_MARKER
     assert json.dumps(excerpt) in turn and LONG_WORKLOAD not in turn
     assert json.dumps("spike-route measured 90 ms") in turn, "short prose was excerpted"
+    for field, answer in LONG_PLAN_ANSWERS.items():
+        cut = answer[: plan_review.EXCERPT_LIMIT] + plan_review.EXCERPT_MARKER
+        assert json.dumps(cut) in turn, f"the plan's {field} did not arrive as its excerpt"
+        assert answer.strip() not in turn, f"the plan's {field} arrived whole"
 
     for node in ("route", "merge"):
         path = _document(project, node)
         assert f"task file: {path}" in turn, node
-    (budgets_path,) = [
-        line.split("`")[3] for line in turn.splitlines() if line.startswith("`test-fixtures:")
-    ]
-    assert LONG_WORKLOAD.strip() in Path(budgets_path).read_text(encoding="utf-8")
+    assert LONG_WORKLOAD.strip() in _document(project, "route").read_text(encoding="utf-8")
+    description = turn.split("rendered whole as its description at `", 1)[1].split("`", 1)[0]
+    described_whole = Path(description).read_text(encoding="utf-8")
+    assert "## Budgets" in described_whole, description
+    for field, answer in LONG_PLAN_ANSWERS.items():
+        assert answer.strip() in described_whole, f"the description left out the {field}"
     design = turn.split("the design document at `", 1)[1].split("`", 1)[0]
     assert Path(design).is_file(), design
 

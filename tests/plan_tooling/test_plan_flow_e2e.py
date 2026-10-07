@@ -74,10 +74,13 @@ from published_tools import ONETASKGRAPH_BIN
 from scratch_identity import PLANNING_FLOW_ORIGIN, seeded
 from waits import timeout as e2e_timeout
 
-from orchestrator import plan_budgets, plan_copy, plan_review, plan_store
+from orchestrator import design_approval, plan_budgets, plan_copy, plan_review, plan_store
 from orchestrator.criteria_guard import APPENDIX
 from orchestrator.project_store import render_plan_project
 from orchestrator.root import REPO_ROOT
+
+#: The step a stand-in writer runs to copy the budget command's output into its answers.
+MERGES_THE_BUDGETS = Path(__file__).resolve().parent / "merge_answers.py"
 
 #: This journey is its own Nx project's, `plan-tooling`, rather than a marker tier of the
 #: orchestrator project: it drives a whole real planning flow — the installed
@@ -194,12 +197,12 @@ RunId = NewType("RunId", str)
 # llmlint: ignore[suppressions_justified] onetaskgraph owns this open JSON schema; the one
 # field read below is narrowed at its subscript.
 def _design_documents(held: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """The listed documents of a plan but its budgets document, which a copy carries too."""
+    """The listed documents of a plan recording the `design-doc` template, as the gate reads it."""
     return [
         one
         for one in held
         if (one["item"]["metadata"].get("onetaskgraph.template") or {}).get("template")
-        != plan_budgets.TEMPLATE_REFERENCE
+        == design_approval.TEMPLATE_REFERENCE
     ]
 
 
@@ -364,7 +367,9 @@ def _answers(stored: Stored) -> dict[str, object]:
 
     The paid model's answer and nothing else: what renders them, and what makes the result
     a document *of the plan's project* in the plan store, is the pinned engine's resolve
-    piped into the store's own `document create`, which the dispatch runs.
+    piped into the store's own `document create`, which the dispatch runs. Its budget
+    answers are copied in by the dispatch itself, from what the budget command its task
+    names prints.
     """
     return {
         "what": "A paginated node listing.",
@@ -423,7 +428,9 @@ def _renders_the_document(tmp_path: Path, stored: Stored, source: str) -> list[s
     return [
         "bash",
         "-c",
-        '"$1" template resolve design-doc --json | "$2" document create "$3"'
+        'printed=$(uv run python -m orchestrator.plan_budgets "$3:$4") &&'
+        ' python3 "$8" "$7" "$printed" &&'
+        ' "$1" template resolve design-doc --json | "$2" document create "$3"'
         ' --project "$4" --title "$5" --id "$6" --template-loader -'
         ' --answers "$7" --no-interactive',
         "store-the-document",
@@ -434,14 +441,16 @@ def _renders_the_document(tmp_path: Path, stored: Stored, source: str) -> list[s
         f"Design: {stored.project}",
         stored.document,
         str(answers),
+        str(MERGES_THE_BUDGETS),
     ]
 
 
 def _writes_the_budgets(tmp_path: Path, stored: Stored, source: str) -> list[str]:
-    """The command a planner runs to write its plan's budgets document, as every plan has one.
+    """The command a planner runs to state its plan's budget answers, as every plan does.
 
-    The answers are a plan needing no budget; rendering and storing are the pinned engine's
-    resolve piped into the store's own `document create`, run by the dispatch itself.
+    The answers are a plan needing no budget; rendering the plan's description and storing
+    it with its `orchestrator.plan-budgets` record are the pinned engine's resolve piped into
+    the store's own `project create`, run by the dispatch itself.
     """
     tmp_path.mkdir(parents=True, exist_ok=True)
     answers = tmp_path / "budgets-answers.json"
@@ -451,17 +460,16 @@ def _writes_the_budgets(tmp_path: Path, stored: Stored, source: str) -> list[str
     return [
         "bash",
         "-c",
-        '"$1" template resolve plan-budgets --json | "$2" document create "$3"'
-        ' --project "$4" --title "$5" --id "$6" --template-loader -'
-        ' --answers "$7" --no-interactive',
-        "store-the-budgets",
+        '"$1" template resolve plan-description --json | "$2" project create "$3"'
+        ' --id "$4" --title "$4" --template-loader - --answers "$5"'
+        ' --metadata "$6=$(cat "$5")" --no-interactive',
+        "state-the-budgets",
         str(ENGINE_BIN),
         str(ONETASKGRAPH_BIN),
         source,
         stored.project,
-        f"Budgets: {stored.project}",
-        f"{stored.project}{plan_budgets.DOCUMENT_SUFFIX}",
         str(answers),
+        plan_budgets.PLAN_RECORD,
     ]
 
 
@@ -912,7 +920,6 @@ def test_the_flow_leaves_the_plan_and_its_one_document_on_the_destination_it_was
     )
     project = planned.stored.project
     assert landed == [
-        f"documents/{project}-budgets.md",
         f"documents/{planned.stored.document}.md",
         f"projects/{project}.md",
         f"tasks/{project}/decide-the-cursor.md",
@@ -1173,7 +1180,6 @@ def test_a_flow_that_names_no_destination_copies_into_the_board_this_repository_
     )
     project = default_board.stored.project
     assert landed == [
-        f"documents/{project}-budgets.md",
         f"documents/{default_board.stored.document}.md",
         f"projects/{project}.md",
         f"tasks/{project}/decide-the-cursor.md",

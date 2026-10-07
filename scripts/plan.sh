@@ -604,7 +604,7 @@ if [ ! -e "$runs_root/$spikes_run" ]; then
         exec "$script_dir/finish-plan.sh" "$brief" "${tail_arguments[@]}"
     fi
     # The plan and its spikes are each reviewed, then checked, before a spike is launched:
-    # a plan the check refuses — one missing its budgets document, say — is one no spike
+    # a plan the check refuses — one missing its plan-level budget answers, say — is one no spike
     # should be measuring for, and a spike the check refuses is one that would not launch.
     # The draft's closeout has recorded what it wrote, so each review is free and silent
     # then, and spends a judged turn only on what nothing has read — a resume after a

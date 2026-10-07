@@ -513,7 +513,7 @@ def test_a_plan_predating_budgets_goes_through_spikes_and_finalize_to_an_approva
     assert approved.returncode == 0, approved.stdout + approved.stderr
 
 
-def test_a_plan_missing_its_budgets_document_is_refused_at_its_check_before_any_spike(
+def test_a_plan_missing_its_budget_answers_is_refused_at_its_check_before_any_spike(
     workspace: Workspace, tmp_path: Path
 ) -> None:
     flow = _flow(workspace, tmp_path, "unbudgeted", budgets=False)
@@ -521,7 +521,7 @@ def test_a_plan_missing_its_budgets_document_is_refused_at_its_check_before_any_
     refused = _plan(flow)
 
     assert refused.returncode != 0, refused.stdout + refused.stderr
-    assert f"{flow.plan} carries no `{flow.plan}-budgets` document" in refused.stderr
+    assert f"{flow.plan} carries no `orchestrator.plan-budgets` metadata" in refused.stderr
     assert _runs_started(flow) == [flow.run]
 
 

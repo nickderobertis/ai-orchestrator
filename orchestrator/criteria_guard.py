@@ -1529,7 +1529,9 @@ def accepted(counted: Counted, path: str) -> str:
     )
 
 
-def plan_record_refusal(project: str, plan: object) -> str | None:
+def plan_record_refusal(
+    project: str, plan: object, owned: Mapping[str, object] | None = None
+) -> str | None:
     """Why ``plan`` carries no plan-level review record on ``project``, or ``None``.
 
     The one reading of that record for both of `just check-plan`'s paths — the check the
@@ -1542,6 +1544,9 @@ def plan_record_refusal(project: str, plan: object) -> str | None:
     it is being asked about is one that same store just loaded. What is not answered here
     is a review bar this checkout cannot fingerprint: that :class:`OSError` is the
     caller's, because each path already reports that condition in its own shape.
+
+    ``owned`` is each node's budgets record, for :func:`check_directly`'s plan, which the
+    store reads without the metadata the spawned check's document carries for each node.
     """
     try:
         record = plan_store.project_record(project)
@@ -1551,7 +1556,7 @@ def plan_record_refusal(project: str, plan: object) -> str | None:
             f"{exc}; nothing says a reviewer read this plan whole, so review it with "
             f"`just review-plan {project}` once the store answers"
         )
-    if not plan_review.plan_unreviewed(record, plan, budgets=plan_budgets.readable(project)):
+    if not plan_review.plan_unreviewed(record, plan, owned=owned):
         return None
     return (
         f"the project record carries no plan-level review record for the plan's "
@@ -1606,12 +1611,13 @@ def check_directly(project: str) -> int:
             file=sys.stderr,
         )
         return 2
-    budgets = plan_budgets.refusals(project, plan)
+    budgets = plan_budgets.refusals(project, plan, plan_budgets.tasks_of_records(records))
     for refused in budgets:
-        print(f"check-plan: {refused.field}: {refused.reason}", file=sys.stderr)
+        where = f"{refused.node}: " if refused.node is not None else ""
+        print(f"check-plan: {where}{refused.field}: {refused.reason}", file=sys.stderr)
     try:
-        unreviewed = plan_review.unreviewed(records, budgets=plan_budgets.readable(project))
-        whole = plan_record_refusal(project, plan)
+        unreviewed = plan_review.unreviewed(records)
+        whole = plan_record_refusal(project, plan, plan_review.owned_by_node(records))
     # tests/test_criteria_guard.py covers this: the review bar is composed from this
     # checkout's own tracked files, so a recipe journey run from here cannot remove one.
     # llmlint: ignore[changed_behavior_has_e2e] see the note above this line

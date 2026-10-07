@@ -207,8 +207,8 @@ system_prompt: |
   be checked, and say why.
 
   **Read the target repository's budgets files before you propose any**: the one at its
-  root and every project's own. Propose a change to any of them only through the
-  plan's budgets document; only an approved design document changes a budgets file. A
+  root and every project's own. Propose a change to any of them only through a budget of
+  the task that owns it; only an approved design document changes a budgets file. A
   feature budget goes in the budgets file of the project that owns what it measures, so it
   is scoped like the rest of the gate and checked only when a change touches what it
   measures. Only a budget that must always be checked goes in the root file.
@@ -226,16 +226,40 @@ system_prompt: |
   **A target the user asked for that the evidence says is infeasible is an escalated
   exception**, recorded and raised as below, never a quietly loosened number.
 
-  **Every plan writes its budgets document**: the project document `<project>-budgets`,
-  rendered from the `plan-budgets` template the same way a task is rendered from
-  `plan-task` — `onepipeline template resolve plan-budgets --json` piped into
-  `onetaskgraph document create <SOURCE> --project <PROJECT> --id <PROJECT>-budgets
-  --title <TITLE> --template-loader - --answers <FILE> --no-interactive`. Its variable
-  descriptions state the shape of every answer: the workload, the checklist, the 10×
-  answer, each budget proposed, each repository's expected effect on its repo-wide
-  budgets — `none` included — the realistic-data choices, and the spike findings that
-  changed the plan. The review and the plan check read it, and the design document puts it
-  to the user.
+  **Every plan states its budgets in two homes**, in the one shape the plan check holds
+  them to and the templates' variable descriptions state.
+
+  - **Each budget goes on the task that owns it**, the node that implements its command.
+    Render that task from `plan-task` with the budgets as its `budgets` answer, so it
+    carries a `## Budgets` section after its `## Why`, and record the same list as the
+    task's `orchestrator.budgets` metadata (`--metadata orchestrator.budgets=<the list as
+    JSON>` on `task create`). Each budget states its `id`; a `name`, short plain English on
+    one line of at most 60 characters; its `basis`, one of `measured`, `arithmetic`,
+    `design`, `published docs` or `estimate`, chosen by what the number actually rests on;
+    the `repository` and `file` it is registered in and its `file_change`, one of `add`,
+    `change` or `none`; the `measure` and any `inner_measure_reason`; the `unit`, the
+    `direction` (`max` or `min`) and the `threshold`; the `workload`; the `evidence`; and the
+    `command`.
+  - **The plan-level answers go in the plan's own description.** Create the plan project
+    with `onepipeline template resolve plan-description --json | onetaskgraph project
+    create <SOURCE> --id <PROJECT> --title <TITLE> --template-loader - --answers <FILE>
+    --metadata orchestrator.plan-budgets=<the same answers, every variable present, as
+    JSON> --metadata onepipeline.<field>=... --no-interactive`, recording the
+    `orchestrator.plan-budgets` record beside the `plan-description` rendering. Its
+    variable descriptions state each answer's shape: the overview; what the plan is sizing
+    for, at most 600 characters; the full workload; what breaks first at 10×, as a one-line
+    summary of at most 240 characters and in full; the checklist, each concern answered
+    with the `id` of a budget a task owns or an n/a; each repository's expected effect on
+    its repo-wide budgets — `none` included; the realistic-data choices; and the spike
+    findings that changed the plan. Each n/a, each effect that is not `none`, each
+    realistic-data choice and each spike finding carries a one-line `summary` of at most
+    160 characters, which is what the design document shows.
+
+  The records are authoritative: the plan check renders each task's section and the
+  description from them and refuses a body that differs, so change a budget by changing its
+  record and regenerating its task, and a plan-level answer by recreating the description
+  from its record. The review and the plan check read them, and the design document
+  summarizes them for the user, linking each budget to its task.
 
   ## Spikes: measuring before the plan is final
 
@@ -257,8 +281,8 @@ system_prompt: |
   branch, written as a command that performs one measurement, so the node that implements
   the budget can register it, or grow it into, the budget's command. Second, the report
   document `<spike id>-report`, written into the **plan's** project — not the spikes
-  project — rendered from the `spike-report` template the same way the budgets document is
-  rendered from `plan-budgets`. For each candidate budget it reports what is achievable,
+  project — rendered from the `spike-report` template the same way a task is rendered from
+  `plan-task`. For each candidate budget it reports what is achievable,
   what the system's limits allow (rate-limit arithmetic, for example) and what the spike
   consumed itself, and it reports any problem with the plan's design beyond budgets: an
   approach that will not work, an API that does not behave as assumed, a missing
@@ -267,8 +291,8 @@ system_prompt: |
   **When two or more spikes need the same measurement harness, the draft may author it
   once**, as a harness spike: one `spike-<topic>` whose deliverables are that harness and
   its report, with each area spike depending on it, so the engine starts each area
-  spike's session from the branch the harness spike kept. The trade, as the budgets
-  document `spike-preserve-deps-budgets` measured it: a harness spike saves the duplicated
+  spike's session from the branch the harness spike kept. The trade, as the plan
+  `spike-preserve-deps` measured it: a harness spike saves the duplicated
   harness builds — their quota, and the divergent copies finalize and the workers would
   otherwise reconcile — but puts one more dispatch in series on the spikes stage. That
   dispatch adds its fixed cost in quota (its orientation and closing review, roughly
@@ -292,10 +316,11 @@ system_prompt: |
   measurements and the harness instead of rediscovering them. A plan task consumes spike
   work by reference, through that `## Spike evidence`, never through a dependency edge on a
   spike. The workload a spike
-  measured at is planning's: finalize states it in the budgets document and in the
+  measured at is planning's: finalize states it in the owning task's budgets and in the
   dependent task's criteria, never in a budgets file. A plan the host's budgets migration
-  list names needs no budgets document, and its finalize writes none; every other plan's
-  finalize keeps its budgets document current with what the spikes found. **A requested
+  list names states no budget answers, and its finalize writes none; every other plan's
+  finalize keeps its tasks' budgets and its plan-level answers current with what the
+  spikes found. **A requested
   target the evidence calls infeasible becomes an escalated exception**, never a quietly
   loosened number.
 
@@ -666,16 +691,17 @@ user:
        pin for a crate the engine links, the tool's own pin for a tool the host
        runs itself — and saying nothing about which version. A plan that needs
        no adoption is not refused for lacking one; say why it needs none.
-    6. **Its budgets are what its work needs.** The plan's budgets document
-       states a realistic workload with numbers, answers every concern of the
+    6. **Its budgets are what its work needs.** The plan's own answers state
+       a realistic workload with numbers, answers every concern of the
        checklist with a budget or a one-line reason it needs none, and answers
        what the product owner notices first at 10× realistic usage with a budget
        that covers it. Look for what is missing rather than whether each line
        was filled in: a concern the workload makes likely and the checklist
-       dismissed, a budget no node owns or no command checks, a measure taken
-       inward with no reason given, a repo-wide budget written into a task's
-       criteria, a budgets-file change the budgets imply and the document omits,
-       and a requested target quietly loosened rather than escalated. A node
+       dismissed, a budget no command checks, a basis the evidence does not
+       support, a measure taken inward with no reason given, a repo-wide budget
+       written into a task's criteria, a budgets-file change the budgets imply
+       and no budget states, and a requested target quietly loosened rather than
+       escalated. A node
        that owns a budget names that budget and its workload in its criteria.
 
     Exceptions are allowed. A planner that could not meet a constraint, reached

@@ -9,8 +9,7 @@ it meets realistic use is caught before it lands rather than after.
 Budgets are registered with the library
 [`onebudgetspec`](https://github.com/nickderobertis/onebudgetspec). Its budgets file and
 its result format are that library's contract, and its own documentation is the authority
-for the file's shape. This page restates none of it beyond the keys a plan's budgets
-document names.
+for the file's shape. This page restates none of it beyond the keys a plan's budgets name.
 
 ## Principles
 
@@ -42,9 +41,9 @@ document names.
 
 ## The budgets files
 
-<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] this restates the onebudgetspec keys a plan's budgets document names, which the task that added it requires; their reconciliation with the installed library is the `aio-budgets` node's, which adopts that library here, and the vocabularies in it are held to `orchestrator/plan_budgets.py` by `tests/test_plan_budgets_template.py` and `tests/test_plan_budgets.py`. -->
-A budgets file is named `budgets.yaml`. Of each budget in it, a plan's budgets document
-names the `id`, the `command`, the `unit`, the `direction` (`max` or `min`) and the
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] this restates the onebudgetspec keys a plan's budgets name, which the task that added it requires; their reconciliation with the installed library is held by `tests/test_budgets_files.py`, and the vocabularies in it are held to `orchestrator/plan_budgets.py` by `tests/test_plan_budgets_template.py`. -->
+A budgets file is named `budgets.yaml`. Of each budget in it, a plan's budget names the
+`id`, the `command`, the `unit`, the `direction` (`max` or `min`) and the
 `threshold`, and the convention below uses its `description`; onebudgetspec's documentation
 states the rest. **The command performs the measurement**, so there is no workload field:
 anyone who needs the workload reads the command.
@@ -68,37 +67,67 @@ adopted engine. This is what such a command may rely on.
 
 ## How a plan states its budgets
 
-- **Every plan writes a budgets document**, the project document `<project>-budgets`,
-  rendered from this host's `plan-budgets` template (`templates/plan-budgets.md.j2`). Its
-  front matter states the shape of each answer: the realistic workload, a checklist of
-  concerns each answered with a budget or a one-line "n/a because …", the answer to *at
-  10× realistic usage, what does the product owner notice getting worse first?*, the
-  budgets the plan proposes, each repository's expected effect on its repo-wide budgets,
-  the realistic-data choices, and the spike findings that changed the plan. `just
-  review-plan` and `just check-plan` read it, and the design document shows it.
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This restates the data model `orchestrator/plan_budgets.py` states once, which a planner reads here; `tests/test_plan_budgets_template.py` fails the moment its records, vocabularies or caps part from that module's own. -->
+A plan states its budgets in two homes, and `orchestrator/plan_budgets.py` states the shape
+of both once.
+
+- **Each budget lives on the task that owns it.** The node that implements a budget owns its
+  command and its registration, so its task carries the budget: the task's
+  `orchestrator.budgets` metadata holds a list of budgets, and the task, rendered from this
+  host's `plan-task` template with the same list as its `budgets` answer, shows them as a
+  `## Budgets` section after its `## Why`. Each budget states its `id`; a `name`, short plain
+  English on one line of at most 60 characters; its `basis`, how solid the number is, one of
+  `measured`, `arithmetic`, `design`, `published docs` or `estimate`; the `repository` and
+  the `file` it is registered in, with its `file_change`, one of `add`, `change` or `none`;
+  the `measure`, and the `inner_measure_reason` when the measure is taken further inward;
+  the `unit`, the `direction` (`max` or `min`) and the `threshold`; the `workload` it holds
+  at; the `evidence` the number rests on; and the `command`.
+- **The plan-level answers live in the plan's own description.** The project's
+  `orchestrator.plan-budgets` metadata holds them, and the project's description is rendered
+  from the `plan-description` template with the same answers: the plan's overview; what it
+  is sizing for, a paragraph of at most 600 characters; the full realistic workload; what
+  the product owner notices getting worse first at 10× realistic usage, as a one-line
+  summary of at most 240 characters and in full; a checklist of concerns, each answered with
+  the `id` of a budget a task owns or with an "n/a because …"; each repository's expected
+  effect on its repo-wide budgets, `none` where it has none; the realistic-data choices; and
+  the spike findings that changed the plan. Every checklist n/a, every effect that is not
+  `none`, every realistic-data choice and every spike finding carries a one-line `summary`
+  of at most 160 characters, which is what the design document shows.
+- **The metadata is authoritative.** A copy carries metadata and never a template's
+  answers, so the records are what every reader reads, on the board as where the plan was
+  drafted. `just check-plan` renders each task's `## Budgets` section and the plan's
+  description from their records and refuses a body that is not that rendering.
+- **The design document summarizes them.** It shows what the plan is sizing for, what
+  breaks first at 10×, one row per budget with its target, its basis and a link to the task
+  that owns it, and each one-line summary — never a budget's workload, evidence, command or
+  budgets file, which a reader follows the link for. A plan that adds or changes no budget
+  shows no budget section at all. The writer copies these answers from `python -m
+  orchestrator.plan_budgets <project>`, and `just finish-plan` refuses a document whose
+  answers differ.
 - **Only an approved design document changes a budgets file.** A plan proposes its changes
-  to each budgets file in its budgets document, the design document puts them to the user,
-  and approving the design document approves them.
-- **Workload belongs to planning.** The plan's budgets document states it, the design
-  document shows it, and it is never written into a budgets file, where it would drift from
-  the command that actually measures.
-- **The reason for an inner measure** goes in the budget's `description` and in the plan's
-  budgets document.
+  to each budgets file on the tasks that own them, the design document puts them to the
+  user, and approving the design document approves them.
+- **Workload belongs to planning.** The plan and each budget state it, and it is never
+  written into a budgets file, where it would drift from the command that actually
+  measures.
+- **The reason for an inner measure** goes in the budget's `description` and in the
+  budget's `inner_measure_reason`.
 - **A feature budget lives in the budgets file of the project that owns what it
   measures**, so it is scoped like the rest of the gate, and it stays there after its plan
   lands to protect that code from later changes. Only a budget that must always be checked
   goes in the root file.
 - **A check's own cost counts toward the gate-time budget.**
-- **The node that implements a budget owns its command** and its registration in the right
-  file, and its criteria name the budget and the realistic workload it holds at. Repo-wide
-  budgets are enforced on the merge path and never written into a task's criteria.
+- **The task owning a budget names it in its criteria**, with the realistic workload it
+  holds at. Repo-wide budgets are enforced on the merge path and never written into a
+  task's criteria.
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 ## Plans that predate budgets
 
 `config/budgets-migration.yaml` is the one list of plans written before this requirement.
 Each entry is a qualified plan project id and the reason it predates budgets. A plan named
-there is exempt from every refusal about its budgets document and held to everything else,
-and its design document says *"This plan predates budgets: <reason>"* in place of the budget
-sections. Adding to the list is a reviewed change to this repository, so a plan cannot
+there is exempt from every refusal about its plan-level answers and held to everything
+else, and its design document says *"This plan predates budgets: <reason>"* in place of the
+budget summary. Adding to the list is a reviewed change to this repository, so a plan cannot
 exempt itself. The plan kinds exempt from design approval — a planning launch's project and
 a follow-ups launch's — are exempt here too.

@@ -486,12 +486,13 @@ def test_the_key_changes_with_the_bar_in_force() -> None:
     assert plan_review.review_key(_task(), BAR) != plan_review.review_key(_task(), "moved")
 
 
-def test_the_bar_is_the_review_bar_the_verdict_schema_and_the_budgets_template() -> None:
-    """The reviewer reads the budgets document's answers, so its template is part of the bar."""
+def test_the_bar_is_the_review_bar_the_verdict_schema_and_the_budgets_templates() -> None:
+    """The reviewer reads the budget answers, so the templates they render through are bar."""
     assert (
         Path("personas") / "planner.yaml",
         Path("config") / "plan-review-verdict.schema.json",
-        Path("templates") / "plan-budgets.md.j2",
+        Path("templates") / "plan-task-budgets.md.j2",
+        Path("templates") / "plan-description.md.j2",
     ) == plan_review.BAR_FILES
 
 
@@ -1432,13 +1433,22 @@ class _Store:
         monkeypatch.setenv("ONETASKGRAPH_SOURCES__DEMO__CONFIG__ROOT", str(self.root))
         monkeypatch.setattr(plan_store, "read_tasks", self._read)
         monkeypatch.setattr(plan_store, "read_plan", lambda project, records: dict(PLAN))
+        self._store_record = plan_store.project_record
         monkeypatch.setattr(plan_store, "project_record", self._project)
 
     def _project(self, project: str) -> dict[str, object]:
-        """The project record as the store would report it: its metadata, read off disk."""
+        """The project record as the store would report it: its metadata, read off disk.
+
+        The plan-level budget answers are the store's own answer, for a project a test
+        stated them on through the pinned store; the review record is read off the file.
+        """
         _, _, native = project.partition(":")
         record = self.written(native, project=True)
-        return {"metadata": {} if record is None else {plan_review.RECORD_KEY: record}}
+        metadata: dict[str, object] = {} if record is None else {plan_review.RECORD_KEY: record}
+        answers = self._store_record(project).get("metadata")
+        if isinstance(answers, dict) and plan_budgets.PLAN_RECORD in answers:
+            metadata[plan_budgets.PLAN_RECORD] = answers[plan_budgets.PLAN_RECORD]
+        return {"metadata": metadata}
 
     def _read(self, project: str) -> list[StoreTask]:
         assert project == "demo:plan"
@@ -2279,11 +2289,14 @@ def test_a_snapshot_destination_that_is_absent_or_already_a_snapshot_is_written(
         assert json.loads(destination.read_text(encoding="utf-8")) == ["demo:already"]
 
 
-#: One budget a node of the plan owns, and the budgets document answers carrying it.
+#: One budget a node of the plan owns, and the plan-level answers naming it.
 OWNED_BUDGET: dict[str, object] = {
     "id": "route-latency",
+    "name": "Route response time",
+    "basis": "measured",
     "repository": "github.com/acme/app",
     "file": "apps/api/budgets.yaml",
+    "file_change": "add",
     "measure": "time to the route's response at the client",
     "inner_measure_reason": "",
     "unit": "ms",
@@ -2292,39 +2305,54 @@ OWNED_BUDGET: dict[str, object] = {
     "workload": "sentinel-workload: 500 requests a minute",
     "evidence": "spike-route measured 90 ms",
     "command": "bun run measure:route",
-    "node": "route",
-    "file_change": "add",
 }
 BUDGET_ANSWERS: dict[str, object] = {
+    "overview": "Deliver the route.",
+    "sizing": "500 requests a minute.",
     "workload": "sentinel-plan-workload: 500 requests a minute at peak.",
-    "checklist": [{"concern": "latency", "budget": "route-latency", "not_applicable": ""}],
+    "ten_x_summary": "The route slows first.",
     "ten_x": "sentinel-ten-x: the route slows first, and route-latency covers it.",
-    "budgets": [OWNED_BUDGET],
-    "repo_wide_effects": [{"repository": "github.com/acme/app", "budget": "", "effect": "none"}],
+    "checklist": [
+        {"concern": "latency", "budget": "route-latency", "not_applicable": "", "summary": ""}
+    ],
+    "repo_wide_effects": [
+        {"repository": "github.com/acme/app", "budget": "", "effect": "none", "summary": ""}
+    ],
     "realistic_data": [],
     "spike_findings": [],
 }
-BUDGETS = plan_budgets.Budgets(
-    plan_store.QualifiedDocumentId("demo:plan-budgets"), plan_budgets.parse(BUDGET_ANSWERS)
-)
-OWNED = plan_budgets.parse(BUDGET_ANSWERS).budgets[0]
 
 #: One moved value per answer, each still of its declared shape.
 MOVED_ANSWERS: dict[str, object] = {
+    "overview": "Deliver another route.",
+    "sizing": "10 requests a minute.",
     "workload": "10 requests a minute.",
-    "checklist": [{"concern": "spend", "budget": "", "not_applicable": "n/a because free"}],
+    "ten_x_summary": "Nothing slows.",
     "ten_x": "Nothing slows.",
-    "budgets": [{**OWNED_BUDGET, "threshold": 300}],
-    "repo_wide_effects": [{"repository": "github.com/acme/app", "budget": "", "effect": "+1 s"}],
-    "realistic_data": [{"data": "d", "choice": "fixture", "reason": "r", "artifact": "a"}],
-    "spike_findings": [{"spike": "s", "finding": "f", "changed": "c"}],
+    "checklist": [
+        {"concern": "spend", "budget": "", "not_applicable": "n/a because free", "summary": "Free."}
+    ],
+    "repo_wide_effects": [
+        {"repository": "github.com/acme/app", "budget": "", "effect": "+1 s", "summary": "1 s."}
+    ],
+    "realistic_data": [
+        {"data": "d", "choice": "fixture", "reason": "r", "artifact": "a", "summary": "s"}
+    ],
+    "spike_findings": [{"spike": "s", "finding": "f", "changed": "c", "summary": "s"}],
 }
+
+
+def _owning(task: StoreTask, budgets: object = None) -> StoreTask:
+    """``task`` carrying ``budgets`` — the one budget above by default — as its record."""
+    held = [OWNED_BUDGET] if budgets is None else budgets
+    return dataclasses.replace(task, metadata={**task.metadata, plan_budgets.TASK_RECORD: held})
 
 
 def test_the_task_reviewer_is_asked_that_a_node_owning_a_budget_names_it_and_its_workload() -> None:
     asked = " ".join(plan_review.REVIEW_PROMPT.split())
     for sentence in (
-        "One question is asked of a node that owns a budget",
+        "One question is asked of a node that owns a budget: one whose task carries a "
+        "`## Budgets` section, its own budgets",
         "Such a node owns the budget's command",
         "its `## Acceptance criteria` name each budget it owns by its id and the realistic "
         "workload the budget holds at",
@@ -2332,70 +2360,88 @@ def test_the_task_reviewer_is_asked_that_a_node_owning_a_budget_names_it_and_its
         "A node owning no budget is not asked this.",
     ):
         assert sentence in asked, sentence
-    composed = plan_review._prompt("P", _task(), [OWNED])
+    composed = plan_review._prompt("P", _owning(_task()))
     assert composed.startswith(plan_review.REVIEW_PROMPT)
-    assert "## The budgets the plan's budgets document says this node owns" in composed
+    heading = "## The budgets this node owns, as its `orchestrator.budgets` record states them"
+    assert heading in composed
     assert "route-latency" in composed and "sentinel-workload" in composed
-    bare = plan_review._prompt("P", _task())
-    assert bare.endswith(
-        "## The budgets the plan's budgets document says this node owns\n\n(none)\n"
-    )
+    assert plan_review._prompt("P", _task()).endswith(f"{heading}\n\n(none)\n")
 
 
 def test_a_task_key_covers_the_budgets_it_owns_and_nothing_when_it_owns_none() -> None:
     task = _task()
     unowned = plan_review.review_key(task, BAR)
 
-    assert plan_review.review_key(task, BAR, []) == unowned
-    owned = plan_review.review_key(task, BAR, [OWNED])
+    owned = plan_review.review_key(_owning(task), BAR)
     assert owned != unowned
-    moved = plan_review.review_key(task, BAR, [dataclasses.replace(OWNED, workload="10 a minute")])
-    assert moved != owned
-    granted = _recorded(task, owned)
-    assert plan_review.unreviewed([granted], BAR, BUDGETS) == []
-    assert plan_review.unreviewed([granted], BAR) == [granted], "a budget dropped is a new question"
+    for key, value in (("workload", "10 a minute"), ("basis", "estimate"), ("name", "Other")):
+        moved = plan_review.review_key(_owning(task, [{**OWNED_BUDGET, key: value}]), BAR)
+        assert moved != owned, key
+    granted = _recorded(_owning(task), owned)
+    assert plan_review.unreviewed([granted], BAR) == []
+    relieved = dataclasses.replace(granted, metadata=_recorded(task, owned).metadata)
+    assert plan_review.unreviewed([relieved], BAR) == [relieved], "a dropped budget is new"
 
 
 def test_the_plan_reviewer_is_asked_what_the_plan_is_missing_from_its_budgets() -> None:
     asked = " ".join(plan_review.PLAN_REVIEW_PROMPT.split())
     for question in (
-        "On the budgets, ask what the plan is **missing**, not only whether each entry of its "
-        "budgets document was filled in",
+        "On the budgets, ask what the plan is **missing**, not only whether each answer was "
+        "filled in",
         "a concern the stated workload makes likely that the checklist dismissed or never lists",
         "a 10x answer no budget covers",
-        "a budget no node owns, or one with no command to check it",
+        "a budget with no command to check it",
+        "a basis the evidence does not support",
         "a measure taken further inward than where the product owner feels the impact with no "
         "reason given",
         "a repo-wide budget — one in a repository's root `budgets.yaml` — written into a task's "
         "criteria",
-        "a change to a budgets file the budgets imply that the document omits",
+        "a change to a budgets file the budgets imply that no budget states",
         "a target the evidence shows is infeasible, quietly loosened rather than escalated",
-        "A plan that carries no budgets document is not asked this.",
+        "A plan that carries no plan-level answers is not asked this.",
     ):
         assert question in asked, question
 
 
-def test_the_plan_reviewer_is_shown_the_budgets_document_and_the_key_covers_it() -> None:
-    """Shown iff keyed, one level up: every answer the budgets document renders."""
+def test_the_plan_reviewer_is_shown_the_plans_answers_and_every_tasks_budgets_and_keys_them() -> (
+    None
+):
+    """Shown iff keyed, one level up: the plan's own answers and each task's budgets."""
     plan = {"goal": {"text": "Deliver the route"}, "tasks": [{"id": "route"}]}
-    composed = plan_review._plan_prompt(plan, BUDGETS)
+    owned = {"route": [OWNED_BUDGET]}
+    composed = plan_review._plan_prompt(plan, BUDGET_ANSWERS, owned)
 
-    assert "## The plan's budgets document" in composed
-    assert "`demo:plan-budgets`, at `(the store reported no path for it)`" in composed
+    assert "## The plan's budgets" in composed
+    assert "rendered whole as its description at `(the store reported no path for it)`" in (
+        composed
+    )
     for sentinel in ("sentinel-plan-workload", "sentinel-ten-x", "sentinel-workload"):
         assert sentinel in composed, sentinel
-    assert "(this plan carries no budgets document)" in plan_review._plan_prompt(plan)
-    located = plan_review._plan_prompt(plan, BUDGETS, plan_review.PlanView(budgets="/b.md"))
-    assert "`demo:plan-budgets`, at `/b.md`, rendered from the `plan-budgets` template" in located
+    assert "(this plan carries no plan-level budget answers)" in plan_review._plan_prompt(plan)
+    assert "(no task owns a budget)" in plan_review._plan_prompt(plan)
+    located = plan_review._plan_prompt(
+        plan, BUDGET_ANSWERS, owned, plan_review.PlanView(description="/p.md")
+    )
+    assert "rendered whole as its description at `/p.md`" in located
+    # Read off the plan's own metadata when no records are handed in, as the check path does.
+    carried = {
+        "goal": plan["goal"],
+        "tasks": [{"id": "route", "metadata": {plan_budgets.TASK_RECORD: [OWNED_BUDGET]}}],
+    }
+    assert "sentinel-workload" in plan_review._plan_prompt(carried, BUDGET_ANSWERS)
 
-    keyed = plan_review.plan_key(plan, BAR, BUDGETS)
-    assert keyed != plan_review.plan_key(plan, BAR)
+    keyed = plan_review.plan_key(plan, BAR, BUDGET_ANSWERS, owned)
+    assert keyed != plan_review.plan_key(plan, BAR, None, owned)
+    assert keyed != plan_review.plan_key(plan, BAR, BUDGET_ANSWERS)
     for answer in BUDGET_ANSWERS:
-        moved = plan_budgets.Budgets(
-            BUDGETS.document,
-            plan_budgets.parse({**BUDGET_ANSWERS, answer: MOVED_ANSWERS[answer]}),
-        )
-        assert plan_review.plan_key(plan, BAR, moved) != keyed, answer
+        moved = {**BUDGET_ANSWERS, answer: MOVED_ANSWERS[answer]}
+        assert plan_review.plan_key(plan, BAR, moved, owned) != keyed, answer
+    for key in OWNED_BUDGET:
+        changed = {"route": [{**OWNED_BUDGET, key: "moved"}]}
+        assert plan_review.plan_key(plan, BAR, BUDGET_ANSWERS, changed) != keyed, key
+    record = {"metadata": {plan_budgets.PLAN_RECORD: BUDGET_ANSWERS}}
+    assert plan_review.plan_answers(record) == BUDGET_ANSWERS
+    assert plan_review.plan_answers({"metadata": "not a map"}) is None
 
 
 def test_the_review_bar_holds_the_budget_question() -> None:
@@ -2407,9 +2453,10 @@ def test_the_review_bar_holds_the_budget_question() -> None:
     for demand in (
         "Hold it to six things",
         "**Its budgets are what its work needs.**",
-        "states a realistic workload with numbers",
+        "The plan's own answers state a realistic workload with numbers",
         "answers every concern of the checklist with a budget or a one-line reason it needs none",
         "Look for what is missing rather than whether each line was filled in",
+        "a basis the evidence does not support",
         "a repo-wide budget written into a task's criteria",
         "a requested target quietly loosened rather than escalated",
         "A node that owns a budget names that budget and its workload in its criteria.",
@@ -2418,21 +2465,23 @@ def test_the_review_bar_holds_the_budget_question() -> None:
 
 
 # llmlint: ignore-block[shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker] The
-# review reads the budgets document through the plan store, so the store is what this
-# drives: the `_Store` every review test here already writes into, with the document
-# rendered by the pinned store itself. It is not a host tool: the store is the pinned install
-# `uv.lock` names and `templates/` is in `codeWorkspace`, so both are in the key this tier is
-# memoized on, and the module under test is this project's. Only the judged turn is stood in for.
-def test_a_review_reads_the_budgets_document_from_the_store_and_records_keys_over_it(
+# review reads the plan's answers and each task's budgets through the plan store, so the store
+# is what this drives: the `_Store` every review test here already writes into, the
+# description rendered by the pinned tools themselves. It is not a host tool: the store is the
+# pinned install `uv.lock` names and `templates/` is in `codeWorkspace`, so both are in the key
+# this tier is memoized on, and the module under test is this project's. Only the judged turn
+# is stood in for.
+def test_a_review_reads_the_budgets_from_the_store_and_records_keys_over_them(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Through the real store: the document is rendered and read back, the judge doubled.
+    """Through the real store: the records are read back, the judge doubled.
 
-    Each node's prompt shows the budgets it owns and the plan's shows the whole document,
-    and the records written are the keys `just check-plan` then finds — so a plan reviewed
-    with its budgets is reviewed, and its budgets moving after is a plan nobody reviewed.
+    Each node's prompt shows the budgets it owns and the plan's shows the plan's answers and
+    every task's budgets, and the records written are the keys `just check-plan` then finds
+    — so a plan reviewed with its budgets is reviewed, and an answer moving after is a plan
+    nobody reviewed.
     """
-    store = _Store(tmp_path / "store", [_task()])
+    store = _Store(tmp_path / "store", [_owning(_task())])
     store.install(monkeypatch)
     monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: BAR)
     budgeted("demo", "plan", BUDGET_ANSWERS)
@@ -2440,37 +2489,43 @@ def test_a_review_reads_the_budgets_document_from_the_store_and_records_keys_ove
 
     assert plan_review.main(["demo:plan"]) == 0
 
-    read = plan_budgets.read("demo:plan")
-    assert read is not None and read.answers.as_record() == BUDGET_ANSWERS
+    assert plan_budgets.plan_record("demo:plan") == BUDGET_ANSWERS
     assert "sentinel-workload" in prompts[0], prompts[0]
     assert "sentinel-plan-workload" in prompts[1] and "sentinel-ten-x" in prompts[1]
+    assert "sentinel-workload" in prompts[1]
     written = store.written("plan/route")
     assert isinstance(written, dict)
-    assert written["key"] == plan_review.review_key(_task(), BAR, [OWNED])
+    assert written["key"] == plan_review.review_key(_owning(_task()), BAR)
     whole = store.written("plan", project=True)
     assert isinstance(whole, dict)
-    assert whole["key"] == plan_review.plan_key(PLAN, plan_review.plan_bar_fingerprint(), read)
+    owned = {"route": [OWNED_BUDGET]}
+    assert whole["key"] == plan_review.plan_key(
+        PLAN, plan_review.plan_bar_fingerprint(), BUDGET_ANSWERS, owned
+    )
+    assert not plan_review.plan_unreviewed(
+        plan_store.project_record("demo:plan"), PLAN, owned=owned
+    )
 
     moved = {**BUDGET_ANSWERS, "ten_x": "Something else slows first."}
     budgeted("demo", "plan", moved)
-    assert plan_review.plan_unreviewed(
-        plan_store.project_record("demo:plan"), PLAN, budgets=plan_budgets.read("demo:plan")
-    ), "a budgets document changed after the review still read as reviewed"
+    assert plan_review.plan_unreviewed(plan_store.project_record("demo:plan"), PLAN, owned=owned), (
+        "a plan-level answer changed after the review still read as reviewed"
+    )
 
 
 def test_a_review_excerpts_long_budget_prose_only_in_the_plan_level_turn(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The entrypoint keeps owned detail whole while bounding the plan overview."""
-    store = _Store(tmp_path / "store", [_task()])
-    store.install(monkeypatch)
-    monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: BAR)
     prose = {
         field: f"{field}: " + "measured workload and evidence " * 20
         for field in plan_review.EXCERPTED_BUDGET_FIELDS
     }
-    answers = {**BUDGET_ANSWERS, "budgets": [{**OWNED_BUDGET, **prose}]}
-    budgeted("demo", "plan", answers)
+    budget = {**OWNED_BUDGET, **prose}
+    store = _Store(tmp_path / "store", [_owning(_task(), [budget])])
+    store.install(monkeypatch)
+    monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: BAR)
+    budgeted("demo", "plan", BUDGET_ANSWERS)
     prompts = _verdicts(monkeypatch, PASSES, PASSES)
 
     assert plan_review.main(["demo:plan"]) == 0
@@ -2480,11 +2535,11 @@ def test_a_review_excerpts_long_budget_prose_only_in_the_plan_level_turn(
         assert value not in prompts[1], field
         excerpt = value[: plan_review.EXCERPT_LIMIT] + plan_review.EXCERPT_MARKER
         assert json.dumps(excerpt, ensure_ascii=False) in prompts[1], field
-    read = plan_budgets.read("demo:plan")
-    assert read is not None and read.answers.as_record() == answers
     whole = store.written("plan", project=True)
     assert isinstance(whole, dict)
-    assert whole["key"] == plan_review.plan_key(PLAN, plan_review.plan_bar_fingerprint(), read)
+    assert whole["key"] == plan_review.plan_key(
+        PLAN, plan_review.plan_bar_fingerprint(), BUDGET_ANSWERS, {"route": [budget]}
+    )
 
 
 # llmlint: ignore-end[shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]
@@ -2515,7 +2570,7 @@ def test_the_planner_is_told_how_to_state_its_budgets_in_general_terms() -> None
         "**Use the measure of record**",
         "Take a measure further inward only when the outer one cannot be checked, and say why",
         "the one at its root and every project's own",
-        "Propose a change to any of them only through the plan's budgets document",
+        "Propose a change to any of them only through a budget of the task that owns it",
         "**A budget's command performs the measurement.**",
         "The node that implements a budget owns that command and the budget's registration",
         "its acceptance criteria name the budget and the realistic workload it holds at",
@@ -2527,7 +2582,9 @@ def test_the_planner_is_told_how_to_state_its_budgets_in_general_terms() -> None
         "**A target the user asked for that the evidence says is infeasible is an escalated "
         "exception**",
         "never a quietly loosened number",
-        "**Every plan writes its budgets document**",
+        "**Every plan states its budgets in two homes**",
+        "`orchestrator.budgets`",
+        "`orchestrator.plan-budgets`",
     ):
         assert rule in stated, rule
     for host_name in ("nickderobertis", "ai-orchestrator", "petsinc", "hellopatient"):
@@ -2621,12 +2678,15 @@ REPOSITORIES = (
 )
 
 
-def _budget(index: int, node: str, repository: str) -> dict[str, object]:
+def _budget(index: int, repository: str) -> dict[str, object]:
     """One budget at the measured sizes of the baseline plan's prose fields."""
     return {
         "id": f"budget-{index:02d}",
+        "name": f"Measured duration {index:02d}",
+        "basis": "measured",
         "repository": repository,
         "file": "budgets.yaml",
+        "file_change": "add",
         "measure": _prose(f"measure-{index}", 117),
         "inner_measure_reason": _prose(f"inner-{index}", 357),
         "unit": "seconds",
@@ -2635,17 +2695,33 @@ def _budget(index: int, node: str, repository: str) -> dict[str, object]:
         "workload": _prose(f"workload-{index}", 1_037),
         "evidence": _prose(f"evidence-{index}", 258 + (index * 41) % 524),
         "command": f"just measure-{index:02d} --against main --report seconds",
-        "node": node,
-        "file_change": "add",
     }
 
 
-def _fixture_budgets(owners: Sequence[tuple[str, str]]) -> plan_budgets.Budgets:
-    """52 budgets spread over ``owners`` — (node, repository) pairs — at measured sizes."""
-    answers = {
+def _fixture_budgets(
+    owners: Sequence[tuple[str, str]],
+) -> tuple[dict[str, object], dict[str, list[dict[str, object]]]]:
+    """The plan's own answers, and 52 budgets spread over ``owners`` at measured sizes.
+
+    ``owners`` are (node, repository) pairs; the budgets are answered by owning node.
+    """
+    owned: dict[str, list[dict[str, object]]] = {}
+    for index in range(52):
+        node, repository = owners[index % len(owners)]
+        owned.setdefault(node, []).append(_budget(index, repository))
+    answers: dict[str, object] = {
+        "overview": _prose("overview", 600),
+        "sizing": _prose("sizing", 500),
         "workload": _prose("plan-workload", 4_500),
+        "ten_x_summary": _prose("ten-x-summary", 200),
+        "ten_x": _prose("ten-x", 780),
         "checklist": [
-            {"concern": concern, "budget": f"budget-{index:02d}", "not_applicable": ""}
+            {
+                "concern": concern,
+                "budget": f"budget-{index:02d}",
+                "not_applicable": "",
+                "summary": "",
+            }
             for index, concern in enumerate(
                 ("latency", "spend", "resource use", "gate time", "change cycle time")
             )
@@ -2655,30 +2731,38 @@ def _fixture_budgets(owners: Sequence[tuple[str, str]]) -> plan_budgets.Budgets:
                 "concern": "quota and rate-limit headroom",
                 "budget": "",
                 "not_applicable": _prose("quota", 300),
+                "summary": _prose("quota-summary", 140),
             }
         ],
-        "ten_x": _prose("ten-x", 780),
-        "budgets": [_budget(index, *owners[index % len(owners)]) for index in range(52)],
         "repo_wide_effects": [
-            {"repository": repository, "budget": "gate-time", "effect": _prose(repository, 80)}
+            {
+                "repository": repository,
+                "budget": "gate-time",
+                "effect": _prose(repository, 80),
+                "summary": _prose(f"{repository}-summary", 80),
+            }
             for repository in REPOSITORIES
         ],
         "realistic_data": [],
         "spike_findings": [
-            {"spike": f"spike-{index}", "finding": _prose(f"finding-{index}", 200), "changed": "x"}
+            {
+                "spike": f"spike-{index}",
+                "finding": _prose(f"finding-{index}", 200),
+                "changed": "x",
+                "summary": _prose(f"finding-summary-{index}", 140),
+            }
             for index in range(3)
         ],
     }
-    return plan_budgets.Budgets(
-        plan_store.QualifiedDocumentId("authoring:fixture-budgets"), plan_budgets.parse(answers)
-    )
+    return answers, owned
 
 
 class RealisticPlan(NamedTuple):
     """One realistic plan, as the review reads it: the plan, its budgets, where things are."""
 
     plan: dict[str, object]
-    budgets: plan_budgets.Budgets
+    answers: dict[str, object]
+    owned: dict[str, list[dict[str, object]]]
     view: plan_review.PlanView
 
 
@@ -2696,10 +2780,11 @@ def _realistic(nodes: list[dict[str, object]]) -> RealisticPlan:
             }
             for node in nodes
         },
-        budgets="/home/operator/ai-orchestrator/.plans/documents/fixture-budgets.md",
+        description="/home/operator/ai-orchestrator/.plans/projects/fixture.md",
     )
     plan = {"name": "fixture", "goal": {"text": _prose("goal", 900)}, "tasks": nodes}
-    return RealisticPlan(plan, _fixture_budgets(owners), view)
+    answers, owned = _fixture_budgets(owners)
+    return RealisticPlan(plan, answers, owned, view)
 
 
 def baseline_shaped(grown: int = 1) -> RealisticPlan:
@@ -2773,7 +2858,9 @@ REALISTIC = {"baseline-shaped": baseline_shaped, "host-shaped": host_shaped}
 
 
 def _prompt_of(realistic: RealisticPlan) -> str:
-    return plan_review._plan_prompt(realistic.plan, realistic.budgets, realistic.view)
+    return plan_review._plan_prompt(
+        realistic.plan, realistic.answers, realistic.owned, realistic.view
+    )
 
 
 def _node_costs(prompt: str) -> dict[str, int]:
@@ -2812,7 +2899,8 @@ def test_the_plan_level_prompt_is_the_compact_view_of_a_realistic_plan() -> None
     assert isinstance(tasks, list) and len(tasks) == 44
     assert sum(1 for node in tasks if node.get("kind") == "human") == 8
     assert sum(1 for node in tasks if node["repo"] == plan_review.host_repository()) == 1
-    assert len(realistic.budgets.answers.budgets) == 52
+    budgets = [budget for held in realistic.owned.values() for budget in held]
+    assert len(budgets) == 52
 
     for node in tasks:
         node_id = node["id"]
@@ -2834,20 +2922,26 @@ def test_the_plan_level_prompt_is_the_compact_view_of_a_realistic_plan() -> None
     assert appendix.splitlines()[4] not in prompt, "a line of the notes' body was rendered"
     assert prompt.count(str(REPO_ROOT / plan_review.APPENDIX)) == 1
     # Each budget's long prose is a marked excerpt; every other answer is whole.
-    for budget in realistic.budgets.answers.budgets:
+    for budget in budgets:
         for field in plan_review.EXCERPTED_BUDGET_FIELDS:
-            value = getattr(budget, field)
+            value = budget[field]
             if len(value) > plan_review.EXCERPT_LIMIT:
-                assert value not in prompt, (budget.id, field)
+                assert value not in prompt, (budget["id"], field)
                 excerpt = value[: plan_review.EXCERPT_LIMIT] + plan_review.EXCERPT_MARKER
-                assert json.dumps(excerpt, ensure_ascii=False) in prompt, (budget.id, field)
+                assert json.dumps(excerpt, ensure_ascii=False) in prompt, (budget["id"], field)
             else:
-                assert json.dumps(value, ensure_ascii=False) in prompt, (budget.id, field)
-        for field in ("id", "repository", "file", "unit", "command", "node", "file_change"):
-            assert json.dumps(getattr(budget, field), ensure_ascii=False) in prompt
-    record = realistic.budgets.answers.as_record()
-    for answer in ("workload", "checklist", "ten_x", "repo_wide_effects", "spike_findings"):
-        assert json.dumps(record[answer], ensure_ascii=False, separators=(",", ":")) in prompt
+                assert json.dumps(value, ensure_ascii=False) in prompt, (budget["id"], field)
+        for field in ("id", "name", "basis", "repository", "file", "unit", "command"):
+            assert json.dumps(budget[field], ensure_ascii=False) in prompt
+    # And the plan's own: its three longest prose answers excerpted, every other whole.
+    for answer in plan_review.EXCERPTED_PLAN_FIELDS:
+        value = realistic.answers[answer]
+        assert isinstance(value, str) and value not in prompt, answer
+    for answer in ("sizing", "ten_x_summary", "checklist", "repo_wide_effects", "spike_findings"):
+        assert (
+            json.dumps(realistic.answers[answer], ensure_ascii=False, separators=(",", ":"))
+            in prompt
+        ), answer
 
 
 @pytest.mark.reads_docs
@@ -2905,7 +2999,6 @@ BASE_KEYS = {
     "plain": "5a189abfd3877086124ceb40552c81b513359e62159e2fb5829f15f17b7d7ae8",
     "adopting": "0cdc66b36242b3b7d59a6449c1b9277659e79ad9176045921dfb74e294db4f57",
     "stepped": "d92752dcc6ea622936b77b0463e0ff12230e565047448e496b89897e9b83417a",
-    "plain-owning": "2b8ca70ae148330e524a907c76e95a7f2ae104b01d0744d322c05b4b15611ac5",
 }
 BASE_TASKS = {
     "plain": StoreTask(
@@ -2948,42 +3041,12 @@ BASE_TASKS = {
         (),
     ),
 }
-BASE_BUDGET = plan_budgets.parse(
-    {
-        "workload": "w",
-        "checklist": [],
-        "ten_x": "t",
-        "budgets": [
-            {
-                "id": "b1",
-                "repository": "github.com/acme/app",
-                "file": "budgets.yaml",
-                "measure": "m",
-                "inner_measure_reason": "",
-                "unit": "ms",
-                "direction": "max",
-                "threshold": 5,
-                "workload": "w",
-                "evidence": "e",
-                "command": "c",
-                "node": "route",
-                "file_change": "add",
-            }
-        ],
-        "repo_wide_effects": [],
-        "realistic_data": [],
-        "spike_findings": [],
-    }
-)
 
 
 def test_a_task_record_written_under_the_dispatch_base_still_reads_as_current() -> None:
-    """Per-task review is unchanged: every record the base wrote stands under this code."""
+    """A task owning no budget keys as it did: every record the base wrote stands."""
     recorded = [_recorded(task, BASE_KEYS[name]) for name, task in BASE_TASKS.items()]
     assert plan_review.unreviewed(recorded, BASE_BAR) == []
-    owning = _recorded(BASE_TASKS["plain"], BASE_KEYS["plain-owning"])
-    owned = plan_budgets.Budgets(plan_store.QualifiedDocumentId("demo:plan-budgets"), BASE_BUDGET)
-    assert plan_review.unreviewed([owning], BASE_BAR, owned) == []
 
 
 def test_the_plan_key_moves_with_a_budget_a_node_owns_through_its_review_key(
@@ -2991,29 +3054,43 @@ def test_the_plan_key_moves_with_a_budget_a_node_owns_through_its_review_key(
 ) -> None:
     """A node's owned budget reaches the plan key through the node's review key.
 
-    And a plan read twice keys twice alike — the unchanged plan is the one a record
-    stands over. The task bar is varied through the seam the other tests here use for
-    it, `bar_fingerprint`, since `plan_key` derives each review key from it.
+    Whether the node's record arrives in its own metadata — the check path — or is handed
+    in by node id — the store path — the key is one. And a plan read twice keys twice alike.
+    The task bar is varied through the seam the other tests here use for it,
+    `bar_fingerprint`, since `plan_key` derives each review key from it.
     """
     monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: BASE_BAR)
     plan = {"goal": {"text": "Deliver"}, "tasks": [{"id": "route", "task": "## What\n\nIt."}]}
-    budgets = plan_budgets.Budgets(plan_store.QualifiedDocumentId("demo:plan-budgets"), BASE_BUDGET)
-    keyed = plan_review.plan_key(plan, BAR, budgets)
-    assert keyed == plan_review.plan_key(json.loads(json.dumps(plan)), BAR, budgets)
-    (node,) = plan_review.plan_nodes(plan, budgets)
+    owned = {"route": [OWNED_BUDGET]}
+    keyed = plan_review.plan_key(plan, BAR, BUDGET_ANSWERS, owned)
+    assert keyed == plan_review.plan_key(json.loads(json.dumps(plan)), BAR, BUDGET_ANSWERS, owned)
+    carried = {
+        **plan,
+        "tasks": [
+            {
+                "id": "route",
+                "task": "## What\n\nIt.",
+                "metadata": {
+                    "onepipeline.id": "route",
+                    "onepipeline.task": "## What\n\nIt.",
+                    plan_budgets.TASK_RECORD: [OWNED_BUDGET],
+                },
+            }
+        ],
+    }
+    (node,) = plan_review.plan_nodes(plan, owned)
+    (in_metadata,) = plan_review.plan_nodes(carried)
     record = plan_review.task_record_of({"id": "route", "task": "## What\n\nIt."})
-    assert node["review_key"] == plan_review.review_key(record, BASE_BAR, list(BASE_BUDGET.budgets))
-    moved = plan_budgets.Budgets(
-        budgets.document,
-        dataclasses.replace(
-            BASE_BUDGET,
-            budgets=(dataclasses.replace(BASE_BUDGET.budgets[0], evidence="measured again"),),
-        ),
-    )
-    assert plan_review.plan_key(plan, BAR, moved) != keyed
+    assert node["review_key"] == plan_review.review_key(_owning(record), BASE_BAR)
+    assert in_metadata["review_key"] == node["review_key"]
+    moved = {"route": [{**OWNED_BUDGET, "evidence": "measured again"}]}
+    assert plan_review.plan_key(plan, BAR, BUDGET_ANSWERS, moved) != keyed
+    # A node the records say owns nothing keys as one owning nothing, whatever it carried.
+    (bare,) = plan_review.plan_nodes(carried, {"route": None})
+    assert bare["review_key"] == plan_review.review_key(record, BASE_BAR)
     # The task bar the review keys are computed under is part of the plan key too.
     monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: plan_review.BarFingerprint("x"))
-    assert plan_review.plan_key(plan, BAR, budgets) != keyed
+    assert plan_review.plan_key(plan, BAR, BUDGET_ANSWERS, owned) != keyed
 
 
 def test_the_size_guard_never_sits_below_the_budget_it_guards() -> None:
@@ -3090,10 +3167,16 @@ def test_the_view_names_where_each_task_and_document_is(tmp_path: Path) -> None:
     """Paths read off the store's answer, and only those that are files here.
 
     A location that is a URL — a board item's — is not named as a file the reviewer may
-    open, and a budgets document the store cannot decide is none.
+    open; the design document is the one recording the design-doc template, beside any
+    other rendering the project holds; and the plan's description is its project's file.
     """
     store = tmp_path / "store"
-    for relative in ("tasks/route.md", "documents/plan-budgets.md", "documents/plan-design.md"):
+    for relative in (
+        "tasks/route.md",
+        "documents/plan-report.md",
+        "documents/plan-design.md",
+        "projects/plan.md",
+    ):
         (store / relative).parent.mkdir(parents=True, exist_ok=True)
         (store / relative).write_text("held\n", encoding="utf-8")
     task = dataclasses.replace(_recorded(_task(), "k"), location=str(store / "tasks/route.md"))
@@ -3117,20 +3200,25 @@ def test_the_view_names_where_each_task_and_document_is(tmp_path: Path) -> None:
             location={"path": path},
         )
 
-    budgets = document("demo:plan-budgets", str(store / "documents/plan-budgets.md"))
-    design = document("demo:plan-design", str(store / "documents/plan-design.md"))
-    view = plan_review.plan_view("demo:plan", [task, unlocated, on_a_board], [budgets, design])
+    report = document(
+        "demo:plan-report", str(store / "documents/plan-report.md"), "onepipeline:spike-report"
+    )
+    design = document(
+        "demo:plan-design", str(store / "documents/plan-design.md"), "onepipeline:design-doc"
+    )
+    held = {"location": {"path": str(store / "projects/plan.md")}}
+    view = plan_review.plan_view("demo:plan", [task, unlocated, on_a_board], [report, design], held)
     assert view.tasks == {"route": str(store / "tasks/route.md")}
     assert view.records["route"] == {"key": "k", "by": "review-plan"}
     assert view.records["other"] is None
-    assert view.budgets == str(store / "documents/plan-budgets.md")
     assert view.design == str(store / "documents/plan-design.md")
+    assert view.description == str(store / "projects/plan.md")
     composed = plan_review._plan_prompt({"tasks": [{"id": "route"}]}, view=view)
     assert f"the design document at `{store / 'documents/plan-design.md'}`" in composed
 
-    twice = document("demo:other-budgets", "/store/documents/b.md", plan_budgets.TEMPLATE_REFERENCE)
-    undecided = plan_review.plan_view("demo:plan", [task], [budgets, twice])
-    assert undecided.budgets is None and undecided.design is None
+    twice = document("demo:other-design", "/store/documents/b.md", "onepipeline:design-doc")
+    undecided = plan_review.plan_view("demo:plan", [task], [design, twice])
+    assert undecided.design is None and undecided.description is None
 
 
 @pytest.mark.parametrize(
@@ -3155,19 +3243,20 @@ def test_a_location_that_is_a_file_here_is_its_path(tmp_path: Path) -> None:
     assert plan_store.local_file(str(tmp_path)) is None, "a directory is not a file to read"
 
 
-def test_the_reviewer_reads_budget_detail_by_the_heading_the_budgets_template_renders() -> None:
-    """The prompt sends the reviewer to a budget's own section, never the whole document.
+def test_the_reviewer_reads_budget_detail_by_the_heading_the_task_template_renders() -> None:
+    """The prompt sends the reviewer to a budget's own section in the task that owns it.
 
-    The heading it names is the one `templates/plan-budgets.md.j2` renders each budget's
-    section under, so a search for it finds that section and no other.
+    The heading it names is the one `templates/plan-task-budgets.md.j2` renders each budget
+    under, so a search for it in that task's file finds that budget and no other.
     """
-    template = (REPO_ROOT / "templates" / "plan-budgets.md.j2").read_text(encoding="utf-8")
-    assert plan_review.BUDGET_HEADING.replace("<id>", "{{ budget.id }}") in template
+    template = plan_budgets.TASK_PARTIAL.read_text(encoding="utf-8")
+    assert plan_review.BUDGET_HEADING.replace("<name>", "{{ budget.name }}") in template
     composed = " ".join(plan_review._plan_prompt({"tasks": [{"id": "bare"}]}).split())
-    assert f"under its `{plan_review.BUDGET_HEADING}` heading" in composed
-    assert "Never read the whole budgets document, nor its `## Record` line" in composed
+    assert f"under its `{plan_review.BUDGET_HEADING}` heading, inside that task's `## Budgets`" in (
+        composed
+    )
     asked = " ".join(plan_review.PLAN_REVIEW_PROMPT.split())
-    assert "a budget's detail by its id, never the whole budgets document" in asked
+    assert "where a question below turns on its criteria or on a budget's detail" in asked
 
 
 @pytest.mark.reads_docs

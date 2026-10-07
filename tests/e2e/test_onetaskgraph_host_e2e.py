@@ -4564,7 +4564,7 @@ def _write_rendered_project(
         )
         assert made.returncode == 0, made.stdout + made.stderr
         created[node] = made.stdout.strip()
-    # And its budgets document, which every plan carries: this one's work needs no budget.
+    # And its plan-level budget answers, which every plan states: its work needs no budget.
     budgeted(
         AUTHORING_SOURCE,
         RENDERED_PROJECT,

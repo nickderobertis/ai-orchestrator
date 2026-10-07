@@ -104,7 +104,8 @@ just plan brief.md                       # the planner drafts into `authoring`, 
                                          # closeout records what it wrote, any spikes run
                                          # and a planner finalizes from them, and the tail
                                          # then reviews the plan, checks it, launches the
-                                         # design document, copies both onto `plans`, and
+                                         # design document, holds its budget answers to the
+                                         # plan's records, copies both onto `plans`, and
                                          # reports where that board holds them
 just approve-design plans:<project>      # the user's approval of the copy they read
 just orchestrate plans:<project>
@@ -120,8 +121,9 @@ is why the copy comes before the approval rather than after it.
 **`just finish-plan brief.md` is that tail on its own**, and is what an operator runs
 after editing a plan the planner authored: the edit leaves that task carrying no review
 record for what it now says, so the review spends a real judged turn on it before anything
-else happens. It is the same five steps in the same order, because `just plan` reaches
-them by running that script rather than by repeating them.
+else happens. It is the same six steps in the same order — review, check, launch the
+document, hold its budget answers to the plan's records, copy, report — because `just
+plan` reaches them by running that script rather than by repeating them.
 
 **The ordering is the point, and the second launch is what buys it.** A design document
 describes a plan, so one written before anything reviewed that plan describes content
@@ -145,8 +147,9 @@ reach every run's channel.
 correct and a caller scripting the flow branches on the status: **1** is the review
 refusing the plan's own criteria, **3** is the pre-launch check refusing the plan, **6** is
 the engine refusing the design-document node's own rendered task, **4** is the document
-launch not settling, **5** is the destination refusing the copy, and **2** is a flow that
-could not run at all. There is no repair loop between them — the planner's own
+launch not settling, **7** is the written document restating budget answers that differ
+from what `python -m orchestrator.plan_budgets <plan>` prints, **5** is the destination
+refusing the copy, and **2** is a flow that could not run at all. There is no repair loop between them — the planner's own
 judge is the repair loop and it has already run — so a refusal hands every refused
 criterion back and stops.
 
@@ -642,10 +645,13 @@ directions of it.
 
 ### A plan's budgets
 
-Every plan states its measurable requirements — its budgets — in one project document
-beside it, `<project>-budgets`, rendered from `templates/plan-budgets.md.j2`. `just
-review-plan` reads it, `just check-plan` refuses a plan carrying none, and the design
-document shows it. [`budgets.md`](budgets.md) states the principles and the convention, and
+Every plan states its measurable requirements — its budgets — in two homes: each budget on
+the task that owns it, as its `orchestrator.budgets` metadata rendered as the task's
+`## Budgets` section, and the plan-level answers as the project's `orchestrator.plan-budgets`
+metadata, rendered as its own description from `templates/plan-description.md.j2`. `just
+review-plan` reads them, `just check-plan` refuses a plan carrying no plan-level answers or a
+body that is not its record's rendering, and the design document summarizes them, linking
+each budget to its task. [`budgets.md`](budgets.md) states the principles and the convention, and
 `config/budgets-migration.yaml` is the one list of plans that predate the requirement.
 
 ### Spikes: measuring before the plan is final

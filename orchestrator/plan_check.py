@@ -162,15 +162,13 @@ def _review_refusals(document: object, project: str) -> Iterator[Refusal]:
     Per task rather than one naming them all, because the verb renders a refusal
     against the node it is about — and an operator reading a list of nodes inside one
     plan-wide refusal has to work out which of them it is talking about. Each key covers
-    the budgets the plan's budgets document says that task owns, read from the store by
-    the project the wrapper named.
+    the budgets that task owns, read from the metadata the document carries for it.
     """
     tasks = document.get("tasks") if isinstance(document, dict) else None
     records = [
         plan_review.task_record_of(task) for task in (tasks if isinstance(tasks, list) else [])
     ]
-    named = None if project == UNNAMED_PROJECT else project
-    for task in plan_review.unreviewed(records, budgets=plan_budgets.readable(named)):
+    for task in plan_review.unreviewed(records):
         yield Refusal(
             node=task.node_id,
             field="metadata",
@@ -243,12 +241,12 @@ def refusals(document: object, project: str) -> list[Refusal]:
         Refusal(node=refused.node, field=refused.field, reason=refused.reason)
         for refused in task_body.refusals(document)
     )
-    # Read only for a project the wrapper named: the budgets document is a document of the
-    # project, which the loaded plan does not carry, and a check handed no id is refused
-    # below for want of the plan-level record already.
+    # Read only for a project the wrapper named: the plan-level answers and the description
+    # are the project's, which the loaded plan does not carry, and a check handed no id is
+    # refused below for want of the plan-level record already.
     if named is not None:
         found.extend(
-            Refusal(node=None, field=refused.field, reason=refused.reason)
+            Refusal(node=refused.node, field=refused.field, reason=refused.reason)
             for refused in plan_budgets.refusals(named, document)
         )
         # The spike convention reads the project's plan-kind stamp and its documents, which

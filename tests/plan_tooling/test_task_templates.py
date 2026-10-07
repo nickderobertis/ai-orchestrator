@@ -162,7 +162,7 @@ def test_the_engine_lists_this_hosts_names_through_the_launch_environment(
         "plan-task",
         "follow-up-task",
         "design-doc",
-        "plan-budgets",
+        "plan-description",
         "spike-report",
     }, by_name
     assert (by_name["plan-task"]["layer"], by_name["plan-task"]["path"]) == (
@@ -171,9 +171,9 @@ def test_the_engine_lists_this_hosts_names_through_the_launch_environment(
     )
     assert by_name["follow-up-task"]["role"] == "task"
     assert by_name["design-doc"]["role"] == "document"
-    assert by_name["plan-budgets"]["role"] == "document"
+    assert by_name["plan-description"]["role"] == "project"
     assert by_name["spike-report"]["role"] == "document"
-    for name in ("follow-up-task", "design-doc", "plan-budgets", "spike-report"):
+    for name in ("follow-up-task", "design-doc", "plan-description", "spike-report"):
         assert by_name[name]["description"].strip(), by_name[name]
 
 
@@ -228,7 +228,7 @@ def test_the_template_extends_the_engines_base_and_opens_no_criteria_heading_its
     assert '{% include "dispatch-appendix.md" %}' in source
 
 
-def test_the_variables_are_the_four_this_host_declares_and_the_inherited_criteria(
+def test_the_variables_are_the_five_this_host_declares_and_the_inherited_criteria(
     launch_environment: dict[str, str],
 ) -> None:
     listed = _run(
@@ -239,13 +239,22 @@ def test_the_variables_are_the_four_this_host_declares_and_the_inherited_criteri
 
     assert listed.returncode == 0, listed.stderr
     variables = {one["name"]: one for one in json.loads(listed.stdout)["variables"]}
-    assert set(variables) == {"what", "why", "additional_info", "spikes", "acceptance_criteria"}
+    assert set(variables) == {
+        "what",
+        "why",
+        "additional_info",
+        "spikes",
+        "budgets",
+        "acceptance_criteria",
+    }
     for name in ("what", "why"):
         assert (variables[name]["type"], variables[name]["required"]) == ("text", True)
     assert variables["additional_info"]["required"] is False
     assert variables["additional_info"]["default"] == ""
     assert (variables["spikes"]["type"], variables["spikes"]["required"]) == ("list", False)
     assert variables["spikes"]["default"] == []
+    assert (variables["budgets"]["type"], variables["budgets"]["required"]) == ("list", False)
+    assert variables["budgets"]["default"] == []
     assert variables["acceptance_criteria"]["type"] == "list"
     assert variables["acceptance_criteria"]["required"] is True
     assert variables["acceptance_criteria"]["declared_in"] == BASE

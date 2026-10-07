@@ -65,6 +65,9 @@ from orchestrator.plan_store import QualifiedProjectId
 from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
 
+#: The step a stand-in writer runs to copy the budget command's output into its answers.
+MERGES_THE_BUDGETS = Path(__file__).resolve().parent / "merge_answers.py"
+
 FAKE_BACKEND = helper("fake_backend.py")
 FAKE_CODEX = helper("fake_codex.py")
 PAID_PROVIDER_GUARD = helper("no-paid-provider")
@@ -289,7 +292,7 @@ def _draft(bench: Bench, name: str, nodes: tuple[Node, ...]) -> str:
         },
         native_id=name,
     )
-    # Every plan carries its budgets document; this one's work needs no budget.
+    # Every plan states its plan-level budget answers; this one's work needs no budget.
     budgeted(
         AUTHORING,
         name,
@@ -347,7 +350,9 @@ def _scripted(bench: Bench, name: str, nodes: tuple[Node, ...]) -> None:
                     [
                         "bash",
                         "-c",
-                        '"$1" template resolve design-doc ${8:+--repository "$8"} --json'
+                        'printed=$(uv run python -m orchestrator.plan_budgets "$3:$4") &&'
+                        ' python3 "$9" "$7" "$printed" &&'
+                        ' "$1" template resolve design-doc ${8:+--repository "$8"} --json'
                         ' | "$2" document create "$3" --project "$4" --title "$5" --id "$6"'
                         ' --template-loader - --answers "$7" --no-interactive',
                         "store-the-document",
@@ -359,6 +364,7 @@ def _scripted(bench: Bench, name: str, nodes: tuple[Node, ...]) -> None:
                         f"{name}-design",
                         str(answers),
                         repository,
+                        str(MERGES_THE_BUDGETS),
                     ]
                 ],
                 COMMIT_MARKER: COMMIT_COMMANDS,
@@ -722,12 +728,15 @@ def test_a_mixed_plan_runs_as_one_from_its_board_home_and_its_linear_member(
         routed, bench, "plans", "document", "list", "--project", home, "--json", seconds=120
     )
     assert documents.returncode == 0, documents.stdout + documents.stderr
-    # The home holds the plan's two documents: the one it is read as, and its budgets.
+    # The home holds the plan's one document, the one it is read as; its budget answers are
+    # its own description, and its home project carries them.
     templates = sorted(
         (held["item"]["metadata"].get("onetaskgraph.template") or {}).get("template", "")
         for held in json.loads(documents.stdout)["items"]
     )
-    assert templates == ["onepipeline:design-doc", "onepipeline:plan-budgets"], documents.stdout
+    assert templates == ["onepipeline:design-doc"], documents.stdout
+    described = json.loads(shown.stdout)["items"][0]["item"]["metadata"]
+    assert "orchestrator.plan-budgets" in described, described
 
     launch, _, journal = _approved_and_settled(routed, bench, home, watching=False)
 

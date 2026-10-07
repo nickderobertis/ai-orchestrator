@@ -1,0 +1,31 @@
+## Budgets
+
+**What we're sizing for.** A visual plan of 2 to 12 images (up to 24 in its largest first copy, about 500 KB each), copied 1 to 4 times, with up to 3 managers finishing plans at once on one shared board token.
+
+**What breaks first at 10×.** At 10 concurrent first copies, GitHub's secondary rate limiter refuses copies; accepted past 3 at once, which is budgeted.
+
+| Budget | Target | Basis | Owned by |
+| --- | --- | --- | --- |
+| GitHub requests per new image | ≤ 2 requests | measured | [`otg-assets-github`](https://github.com/nickderobertis/onetaskgraph/issues/3304) (see its Budgets section) |
+| GitHub requests per unchanged image | ≤ 0 requests | design | [`otg-assets-github`](https://github.com/nickderobertis/onetaskgraph/issues/3304) (see its Budgets section) |
+| Linear requests per new image | ≤ 3 requests | published docs | [`otg-assets-linear`](https://github.com/nickderobertis/onetaskgraph/issues/3305) (see its Budgets section) |
+| Linear requests per unchanged image | ≤ 0 requests | design | [`otg-assets-linear`](https://github.com/nickderobertis/onetaskgraph/issues/3305) (see its Budgets section) |
+| GitHub copy time for a 24-image plan | ≤ 60 seconds | arithmetic | [`otg-assets-github`](https://github.com/nickderobertis/onetaskgraph/issues/3304) (see its Budgets section) |
+| GitHub copies refused, 3 at once | ≤ 0 copies | arithmetic | [`otg-assets-github`](https://github.com/nickderobertis/onetaskgraph/issues/3304) (see its Budgets section) |
+| Slowest of 3 concurrent GitHub copies | ≤ 240 seconds | arithmetic | [`otg-assets-github`](https://github.com/nickderobertis/onetaskgraph/issues/3304) (see its Budgets section) |
+| Linear copy time for a 24-image plan | ≤ 90 seconds | arithmetic | [`otg-assets-linear`](https://github.com/nickderobertis/onetaskgraph/issues/3305) (see its Budgets section) |
+| Linear copies refused, 3 at once | ≤ 0 copies | design | [`otg-assets-linear`](https://github.com/nickderobertis/onetaskgraph/issues/3305) (see its Budgets section) |
+
+**Not budgeted:**
+
+- how the work scales with data: Requests grow linearly per image and each is budgeted; image size is capped by each destination.
+- spend: Accepted exception: the one new dispatch, `spike-visual`, is capped at 40 turns.
+- latency (the visual spike delays the design document): Accepted exception: the spike delays the document by at most its 40-turn cap.
+- resource use: At most about 12 MB of images per plan, in the gitignored authoring root.
+- gate time: A few seconds of new tests, absorbed by the existing gate-time budget.
+- change cycle time: The existing cycle-time budget already measures every landed change.
+
+**Repo-wide effects:** ai-orchestrator's gate grows a few seconds against its 1800 s gate-time budget. No effect on `onetaskgraph`, `onepipeline` and `onepipeline-ui`.
+
+**Realistic data:** Generated noise PNGs of 50 to 500 KB: real-sized uploads with nothing to commit or maintain.
+

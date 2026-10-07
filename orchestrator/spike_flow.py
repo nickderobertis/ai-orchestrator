@@ -21,8 +21,8 @@ Between them sit four questions only this host can answer, each a subcommand her
   `onevcs`'s own records of the run (`recoverable --label run=<run>`), never off its journal,
   and refused when one kept none;
 * ``note <plan project> <run>`` — the finalize planner's instructions: every spike's report
-  and branch, the spikes above each in its stacking chain, and what the plan's budgets
-  document owes.
+  and branch, the spikes above each in its stacking chain, and what the plan's budget
+  answers owe.
 
 **A spike may build on a spike.** Where several spikes need one measurement harness, the
 draft authors it as a harness spike the others depend on, and the engine starts each
@@ -420,13 +420,16 @@ def note(
     if plan_budgets.migrated(_qualified(project)) is not None:
         budgets = (
             "The plan predates budgets: the host's budgets migration list names it, so it "
-            "carries no budgets document and this dispatch writes none."
+            "states no budget answers and this dispatch writes none."
         )
     else:
         budgets = (
-            f"Keep the plan's budgets document `{plan_budgets.document_id(project)}` current "
-            "with what the spikes found, and state the workload each spike measured at there "
-            "and in the criteria of the task that builds on it, never in a budgets file."
+            "Keep the plan's budgets current with what the spikes found: each budget on the "
+            "task that owns it, regenerated with its `budgets` answer and its "
+            f"`{plan_budgets.TASK_RECORD}` metadata alike, and the plan-level answers, the "
+            "spike findings among them, in the plan's description, recreated from its "
+            f"`{plan_budgets.PLAN_RECORD}` metadata. State the workload each spike measured at "
+            "there and in the criteria of the task that builds on it, never in a budgets file."
         )
     listed = "\n".join(
         f"- `{spike}`: report `{spike_plan.report_id(spike)}`; branch `{branch}`"

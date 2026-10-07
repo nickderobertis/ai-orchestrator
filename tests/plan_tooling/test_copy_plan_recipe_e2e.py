@@ -26,17 +26,26 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any, NewType
 
 import plan_fixture_source
 import pytest
-from project_fixtures import FIXTURE_UNIT, approved, budgeted, local_project, no_budgets, reviewed
+from project_fixtures import (
+    FIXTURE_UNIT,
+    approved,
+    budgeted,
+    local_project,
+    no_budgets,
+    owning,
+    reviewed,
+)
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
-from orchestrator import design_approval, plan_budgets, plan_review, plan_store
+from orchestrator import design_approval, plan_review, plan_store
 from orchestrator.criteria_guard import APPENDIX
 from orchestrator.root import REPO_ROOT
 
@@ -184,15 +193,13 @@ def _stored_documents(project: str) -> list[dict[str, object]]:
 
 
 def _design_documents(project: str) -> list[dict[str, object]]:
-    """Every document of ``project`` but its budgets document, which a copy carries too."""
+    """Every document of ``project`` recording the `design-doc` template, as the gate reads it."""
     return [
         document
         for document in _stored_documents(project)
-        if not (
-            isinstance(provenance := document["metadata"], dict)
-            and isinstance(rendered := provenance.get("onetaskgraph.template"), dict)
-            and rendered.get("template") == plan_budgets.TEMPLATE_REFERENCE
-        )
+        if isinstance(provenance := document["metadata"], dict)
+        and isinstance(rendered := provenance.get("onetaskgraph.template"), dict)
+        and rendered.get("template") == design_approval.TEMPLATE_REFERENCE
     ]
 
 
@@ -266,7 +273,7 @@ def test_a_plan_is_drafted_locally_cleared_there_copied_up_and_checked(
     assert _records(destination) == [], "a trial run wrote to the destination"
     # The trial reports every record the copy would create — the document among them, so
     # the flag reached the document copy — and names no destination, because nothing was.
-    would_create = {f"{project}", f"{project}/route", f"{project}-budgets", f"{project}-design"}
+    would_create = {f"{project}", f"{project}/route", f"{project}-design"}
     assert {one["source"] for one in _reported(trial.stdout)} == would_create, trial.stdout
     assert {(one["action"], one.get("destination")) for one in _reported(trial.stdout)} == {
         ("created", None)
@@ -279,7 +286,6 @@ def test_a_plan_is_drafted_locally_cleared_there_copied_up_and_checked(
     assert [(one["action"], one["destination"]) for one in _reported(copy.stdout)] == [
         ("created", copied_id),
         ("created", f"{copied_id}/route"),
-        ("created", f"{copied_id}-budgets"),
         ("created", f"{copied_id}-design"),
     ], copy.stdout
     # The plan's **document** lands beside its tasks, and that is the store's own
@@ -287,7 +293,6 @@ def test_a_plan_is_drafted_locally_cleared_there_copied_up_and_checked(
     # and its tasks and no document at all, so a plan copied without this arrives with
     # nothing for a person to approve it as and can never be launched.
     assert _records(destination) == [
-        f"documents/{native}-budgets.md",
         f"documents/{native}-design.md",
         f"projects/{native}.md",
         f"tasks/{native}/route.md",
@@ -526,7 +531,6 @@ def test_an_argument_this_recipe_has_no_opinion_about_reaches_the_store_s_copy_v
     assert again.returncode == 0, again.stdout + again.stderr
     assert "updated" in again.stdout, again.stdout
     assert _records(destination) == [
-        f"documents/{native}-budgets.md",
         f"documents/{native}-design.md",
         f"projects/{native}.md",
         f"tasks/{native}/route.md",
@@ -607,7 +611,6 @@ def test_the_whole_flow_still_lands_from_inside_a_run_that_named_the_store_binar
     copy = _just("copy-plan", project, "--to", DESTINATION)
     assert copy.returncode == 0, copy.stdout + copy.stderr
     assert _records(destination) == [
-        f"documents/{native}-budgets.md",
         f"documents/{native}-design.md",
         f"projects/{native}.md",
         f"tasks/{native}/route.md",
@@ -756,11 +759,14 @@ def test_a_copied_design_document_points_its_task_references_at_the_destination(
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
-#: A budget the `route` node owns, in the budgets document `_budgets` answers.
+#: A budget a node owns: its `orchestrator.budgets` record and its `## Budgets` section.
 OWNED_BUDGET: dict[str, object] = {
     "id": "route-latency",
+    "name": "Route response time",
+    "basis": "measured",
     "repository": REPOSITORY,
     "file": "apps/api/budgets.yaml",
+    "file_change": "add",
     "measure": "time to the route's response at the client",
     "inner_measure_reason": "",
     "unit": "ms",
@@ -769,18 +775,41 @@ OWNED_BUDGET: dict[str, object] = {
     "workload": "500 requests a minute",
     "evidence": "spike-route measured 90 ms",
     "command": "bun run measure:route",
-    "node": "route",
-    "file_change": "add",
 }
 
 
-def _budgets(**changes: object) -> dict[str, object]:
-    """The budgets document's answers with the `route` node owning one budget."""
+def _budgets(*owned: str, **changes: object) -> dict[str, object]:
+    """The plan-level answers, each budget id of ``owned`` covering one concern."""
     answers = no_budgets([REPOSITORY])
     checklist = answers["checklist"]
     assert isinstance(checklist, list)
-    checklist[0] = {"concern": "latency", "budget": "route-latency", "not_applicable": ""}
-    return {**answers, "budgets": [OWNED_BUDGET], **changes}
+    for index, budget in enumerate(owned):
+        checklist[index] = {
+            "concern": f"concern {index}",
+            "budget": budget,
+            "not_applicable": "",
+            "summary": "",
+        }
+    return {**answers, **changes}
+
+
+def _owns(project: str, node: str, budgets: list[dict[str, object]]) -> None:
+    """Make ``node`` own ``budgets`` as a planner does: regenerated with them, and recorded."""
+    source, _, native = project.partition(":")
+    owning(source, native, node, budgets, answers=TASK_ANSWERS)
+
+
+#: The answers a budget-owning node's task is regenerated from, through `plan-task`.
+TASK_ANSWERS: dict[str, object] = {
+    "what": "Add the checkout route.",
+    "why": "A buyer cannot check out.",
+    "acceptance_criteria": [
+        "The route accepts a valid request and rejects an invalid one.",
+        "A request-level test drives the route end to end.",
+        "Every claim the dispatch makes about the finished work is true of the tree as it "
+        "finally stands.",
+    ],
+}
 
 
 # llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This journey sits beside this module's other `just copy-plan` journeys and drives the same recipe under the same `planToolingWorkspace` inputs, which `tests/plan_tooling/AGENTS.md` states as this project's split; a project of its own would be keyed on those inputs too and add only a target.  # noqa: E501
@@ -788,18 +817,15 @@ def _budgets(**changes: object) -> dict[str, object]:
     ("changed", "said"),
     [
         (
-            {"budgets": [{**OWNED_BUDGET, "workload": "5,000 requests a minute"}]},
+            "an-owned-budget",
             "1 task(s) carry no review record for their current authored content: route",
         ),
-        (
-            {"ten_x": "Nothing slows: the route is cached."},
-            "carries no plan-level one for the plan as it stands",
-        ),
+        ("a-plan-wide-answer", "carries no plan-level one for the plan as it stands"),
     ],
     ids=["an-owned-budget", "a-plan-wide-answer"],
 )
 def test_a_budget_changed_after_the_review_stops_the_copy_and_copies_nothing(
-    destination: Path, changed: dict[str, object], said: str
+    destination: Path, changed: str, said: str
 ) -> None:
     """The review covered the budgets, so a budget moved after it is one nobody reviewed.
 
@@ -810,15 +836,141 @@ def test_a_budget_changed_after_the_review_stops_the_copy_and_copies_nothing(
     """
     project = _project("copy-budgets")
     native = project.partition(":")[2]
-    budgeted(plan_fixture_source.SOURCE, native, _budgets())
+    _owns(project, "route", [OWNED_BUDGET])
+    budgeted(plan_fixture_source.SOURCE, native, _budgets("route-latency"))
     reviewed(project)
     trial = _just("copy-plan", project, "--to", DESTINATION, "--dry-run")
     assert trial.returncode == 0, trial.stdout + trial.stderr
 
-    budgeted(plan_fixture_source.SOURCE, native, _budgets(**changed))
+    if changed == "an-owned-budget":
+        moved = {**OWNED_BUDGET, "workload": "5,000 requests a minute"}
+        owning(plan_fixture_source.SOURCE, native, "route", [moved])
+    else:
+        moved_answers = _budgets("route-latency", ten_x="Nothing slows: the route is cached.")
+        budgeted(plan_fixture_source.SOURCE, native, moved_answers)
     refused = _just("copy-plan", project, "--to", DESTINATION)
 
     assert refused.returncode == 1, refused.stdout + refused.stderr
     assert said in refused.stderr, refused.stderr
     assert f"just review-plan {project}" in refused.stderr, refused.stderr
     assert _records(destination) == [], "a refused copy wrote to the destination"
+
+
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This journey sits beside this module's other `just copy-plan` journeys and drives the same recipe under the same `planToolingWorkspace` inputs, which `tests/plan_tooling/AGENTS.md` states as this project's split; a project of its own would be keyed on those inputs too and add only a target.  # noqa: E501
+def test_each_owned_by_link_points_at_the_copied_task_after_a_local_copy(
+    destination: Path,
+) -> None:
+    """The design document's budget table links each owner where the copy put it.
+
+    Its answers are what `python -m orchestrator.plan_budgets` prints for the plan — each
+    budget with its owning node and the location the drafting store reports for that task —
+    rendered into the document through the design-doc template. After `just copy-plan`,
+    every Owned-by link in the copied document is the location the destination reports for
+    the same task, and none is the drafting store's.
+    """
+    project = _project("copy-owned-links", "route", "worker")
+    _, _, native = project.partition(":")
+    copied_id = f"{DESTINATION}:{native}"
+    second = {**OWNED_BUDGET, "id": "worker-throughput", "name": "Worker throughput"}
+    _owns(project, "route", [OWNED_BUDGET])
+    _owns(project, "worker", [second])
+    budgeted(plan_fixture_source.SOURCE, native, _budgets("route-latency", "worker-throughput"))
+    printed = subprocess.run(
+        [sys.executable, "-m", "orchestrator.plan_budgets", project],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert printed.returncode == 0, printed.stderr
+    answers = json.loads(printed.stdout)
+    supplied = destination.parent / "budget-answers.json"
+    supplied.write_text(printed.stdout, encoding="utf-8")
+    document = design_approval.design_document(project)
+    resolved = subprocess.run(
+        [str(REPO_ROOT / ".venv" / "bin" / "onepipeline"), "template", "resolve"]
+        + ["design-doc", "--json", "--template-root", str(REPO_ROOT / "templates")],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert resolved.returncode == 0, resolved.stderr
+    rendered = subprocess.run(
+        [str(ONETASKGRAPH_BIN), "document", "render", str(document.qualified_id)]
+        + ["--template-loader", "-", "--answers", str(supplied), "--no-interactive"],
+        cwd=REPO_ROOT,
+        input=resolved.stdout,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert rendered.returncode == 0, rendered.stderr
+    approved(project)
+    # llmlint: ignore[e2e_not_mocked] `reviewed` substitutes the paid provider process alone.
+    reviewed(project)
+    drafted = _reported_locations(project)
+    owners = {entry["node"]: entry["location"] for entry in answers["budgets"]}
+    assert owners == drafted, (owners, drafted)
+
+    copy = _just("copy-plan", project, "--to", DESTINATION)
+    assert copy.returncode == 0, copy.stdout + copy.stderr
+
+    landed = _reported_locations(copied_id)
+    (copied,) = _design_documents(copied_id)
+    content = copied["content"]
+    assert isinstance(content, str), copied
+    for node, where in landed.items():
+        assert f"[`{node}`]({where}) (see its Budgets section)" in content, (node, content)
+        assert drafted[node] not in content, f"{node} still links the drafting store: {content}"
+
+
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This journey sits beside this module's other `just copy-plan` journeys and drives the same recipe under the same `planToolingWorkspace` inputs, which `tests/plan_tooling/AGENTS.md` states as this project's split; a project of its own would be keyed on those inputs too and add only a target.  # noqa: E501
+def test_a_copied_description_is_checked_where_it_landed_and_an_edit_after_is_refused(
+    destination: Path,
+) -> None:
+    """A description `just copy-plan` landed is checked against its record on the copy.
+
+    The plan's overview names its task by the location the drafting store reports. The
+    adopted store's `project copy` carries a description verbatim — it rewrites references
+    in a copied document, never in a project's body — so the landed description is still
+    its record's rendering, drafting location and all, and `just check-plan` accepts it. The
+    day the store rewrites it, the first assertion below fails, and the copy is then held to
+    the body digest the store re-records, `plan_budgets.description_refusals` says how. An
+    edit after the copy is refused either way.
+    """
+    project = _project("copy-described-references")
+    source, _, native = project.partition(":")
+    copied_id = f"{DESTINATION}:{native}"
+    route = _reported_locations(project)[plan_store.NodeId("route")]
+    overview = f"Add the checkout route, planned at {route}."
+    budgeted(source, native, {**no_budgets([REPOSITORY]), "overview": overview})
+    # llmlint: ignore[e2e_not_mocked] `reviewed` substitutes the paid provider process alone.
+    reviewed(project)
+
+    copy = _just("copy-plan", project, "--to", DESTINATION)
+    assert copy.returncode == 0, copy.stdout + copy.stderr
+
+    content = _stored_project(copied_id)["content"]
+    assert isinstance(content, str), content
+    assert f"planned at {route}." in content, content
+
+    checked = _just("check-plan", copied_id)
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+
+    # The description alone, after the front matter: the record in that front matter keeps
+    # its overview, so the body and the record now state different answers.
+    stored = destination / "projects" / f"{native}.md"
+    front, marker, body = stored.read_text(encoding="utf-8").rpartition("\n---\n")
+    edited = body.replace("Add the checkout route,", "Add every route,")
+    assert marker and edited != body
+    stored.write_text(front + marker + edited, encoding="utf-8")
+
+    refused = _just("check-plan", copied_id)
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "is not the `plan-description` rendering of its `orchestrator.plan-budgets`" in (
+        refused.stderr
+    ), refused.stderr

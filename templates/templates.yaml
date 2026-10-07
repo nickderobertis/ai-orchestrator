@@ -10,9 +10,9 @@ templates:
   design-doc:
     role: document
     description: The design document a plan is read and approved as.
-  plan-budgets:
-    role: document
-    description: A plan's budgets document, stored as the project document `<project>-budgets`.
+  plan-description:
+    role: project
+    description: A plan's own description, carrying its plan-level budget answers.
   spike-report:
     role: document
     description: A spike's report, stored as the document `<spike id>-report` of the plan's own project.

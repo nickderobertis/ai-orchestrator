@@ -1,20 +1,20 @@
 # The plans that predate the budgets requirement, and the one source of which those are.
 #
-# Every plan states its budgets in a `<project>-budgets` document rendered from the
-# `plan-budgets` template (`docs/budgets.md`), and `just check-plan` refuses a plan that
-# carries none — unless this list names it. A plan named here is exempt from every refusal
-# about its budgets document and held to everything else, and its design document says
-# "This plan predates budgets: <reason>" in place of the budget sections.
+# Every plan states its plan-level budget answers as its project's `orchestrator.plan-budgets`
+# metadata, rendered as its description from the `plan-description` template
+# (`docs/budgets.md`), and `just check-plan` refuses a plan that carries none — unless this
+# list names it. A plan named here is exempt from every refusal about its plan-level answers
+# and held to everything else, and its design document says "This plan predates budgets:
+# <reason>" in place of the budget summary.
 #
 # Adding to this list is a reviewed change to this repository, so a plan cannot exempt
 # itself. Each entry is a qualified plan project id and a sentence saying why that plan
 # predates the requirement. `orchestrator/plan_budgets.py` reads it, and
-# `tests/test_budgets_migration.py` holds it to its shape and compares it with the
-# `authoring` source and the `plans` board.
+# `tests/test_plan_budgets.py` holds the list to its shape. The list is historical;
+# current store contents do not change which plans predate the requirement.
 #
 # The first entries were taken when the requirement landed: every project the `authoring`
-# source held then, and every project on the `plans` board, none of which carried a
-# budgets document.
+# source held then, and every project on the `plans` board, none of which stated budgets.
 
 - project: "authoring:I_kwDOTXCWqs8AAAABUh9u9g"
   reason: "`I_kwDOTXCWqs8AAAABUh9u9g` (goal: Plans and follow-up tickets for `petsinc` repositories live in Linear (workspace `hellopatient`, team ENG), and everything else stays on the `plans` …) was authored before the plan-budgets template existed, so it states no budgets."

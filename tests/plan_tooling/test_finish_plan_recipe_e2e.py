@@ -47,13 +47,20 @@ from fake_backend import (
     RecordedTurn,
 )
 from nx_workspace import answering_this_checkouts_origin, copy_working_tree
-from project_fixtures import budgeted, helper, no_budgets, register_stand_in
+from project_fixtures import (
+    budget_section,
+    budgeted,
+    helper,
+    no_budgets,
+    owning,
+    register_stand_in,
+)
 from published_tools import ONETASKGRAPH_BIN
 from scratch_identity import PLANNING_FLOW_ORIGIN, Identity, seeded
 from test_approve_design_recipe_e2e import RETIRED_DESIGN, RETIRED_TEMPLATE
 from waits import timeout as e2e_timeout
 
-from orchestrator import design_approval, design_chain, plan_budgets, plan_review, plan_store
+from orchestrator import design_approval, design_chain, plan_review, plan_store
 from orchestrator.criteria_guard import APPENDIX
 from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
@@ -149,6 +156,7 @@ PLAN_REFUSED = 3
 LAUNCH_FAILED = 4
 COPY_REFUSED = 5
 WRITER_REFUSED = 6
+DOCUMENT_REFUSED = 7
 
 #: Criteria that answer every demand the tracked appendix and the shipped `engineer` bar
 #: make, so a plan carrying them is refused by nothing this module is not about.
@@ -195,12 +203,12 @@ RunId = NewType("RunId", str)
 # llmlint: ignore[suppressions_justified] onetaskgraph owns this open JSON schema; the one
 # field read below is narrowed at its subscript.
 def _design_documents(held: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """The listed documents of a plan but its budgets document, which a copy carries too."""
+    """The listed documents of a plan recording the `design-doc` template, as the gate reads it."""
     return [
         one
         for one in held
         if (one["item"]["metadata"].get("onetaskgraph.template") or {}).get("template")
-        != plan_budgets.TEMPLATE_REFERENCE
+        == design_approval.TEMPLATE_REFERENCE
     ]
 
 
@@ -217,10 +225,10 @@ class Drafted(NamedTuple):
     document_path: Path
 
 
-def _task(criteria: str) -> str:
+def _task(criteria: str, section: str = "") -> str:
     return (
         "## What\n\nAdd the paginated listing and the test that drives it.\n\n"
-        "## Why\n\nAn operator cannot see past the first screen of nodes.\n\n"
+        f"## Why\n\nAn operator cannot see past the first screen of nodes.\n\n{section}"
         f"## Acceptance criteria\n\n{criteria}\n\n"
         f"{(REPO_ROOT / APPENDIX).read_text(encoding='utf-8').strip()}\n"
     )
@@ -235,6 +243,7 @@ def _draft(
     document_suffix: str = FIXTURE_DOCUMENT_SUFFIX,
     repositories: Sequence[str] = (),
     budgets: Mapping[str, object] | bool = True,
+    owned: Sequence[Mapping[str, object]] = (),
 ) -> Drafted:
     """Draft an unreviewed plan into a local store, with no design document yet.
 
@@ -252,14 +261,16 @@ def _draft(
     journey would produce. ``repositories`` gives the plan one task per origin, each naming
     that one repository; with none, its one task names no repository.
 
-    The plan carries its budgets document, as every plan does: one needing no budget unless
-    ``budgets`` gives its answers, and none at all when it is ``False``.
+    The plan carries its plan-level budget answers, as every plan does: one needing no
+    budget unless ``budgets`` gives its answers, and none at all when it is ``False``. Its
+    first task owns ``owned``: its body carries their `## Budgets` section and its
+    `orchestrator.budgets` record holds them.
     """
     native = f"test-{os.getpid()}-{name}"
     # Resolved here rather than as a default argument: this process's own fixture root is
     # stated by a session fixture, which runs long after this module is imported.
     root = plan_fixture_source.root() if root is None else root
-    write_plan_project(
+    written = write_plan_project(
         root,
         {
             "schema_version": 3,
@@ -272,7 +283,9 @@ def _draft(
                     "title": "feat: page the node listing"
                     if index == 0
                     else f"feat: page the node listing in part {index}",
-                    "task": _task(criteria),
+                    "task": _task(
+                        criteria, budget_section(list(owned)) if owned and index == 0 else ""
+                    ),
                     **({"repo": repositories[index]} if repositories else {}),
                 }
                 for index in range(max(1, len(repositories)))
@@ -280,11 +293,15 @@ def _draft(
         },
         native_id=native,
     )
+    variable = f"ONETASKGRAPH_SOURCES__{source.upper().replace('-', '_')}__CONFIG__ROOT"
+    if owned:
+        owning(
+            source, written, "decide-the-cursor", list(owned), {**os.environ, variable: str(root)}
+        )
     if budgets is not False:
-        variable = f"ONETASKGRAPH_SOURCES__{source.upper().replace('-', '_')}__CONFIG__ROOT"
         budgeted(
             source,
-            native,
+            written,
             no_budgets(repositories) if budgets is True else budgets,
             {**os.environ, variable: str(root)},
         )
@@ -329,6 +346,11 @@ def _answers(drafted: Drafted) -> dict[str, object]:
             }
         ],
     }
+
+
+#: The step a stand-in writer runs to copy the budget command's output into its answers:
+#: the file of answers, then the command's printed JSON, merged over it in place.
+MERGES_THE_BUDGETS = Path(__file__).resolve().parent / "merge_answers.py"
 
 
 def _staged_answers(tmp_path: Path, drafted: Drafted) -> Path:
@@ -421,7 +443,11 @@ def _stores_the_document(bench: Bench, drafted: Drafted, repository: str | None 
                         # The pinned engine's resolve, piped into the pinned store's own
                         # create, into the plan's own source and project: what the task
                         # tells the dispatch to run, run where the dispatch runs it.
-                        '"$1" template resolve design-doc ${8:+--repository "$8"} --json'
+                        # The budget answers are what the task's budget command prints,
+                        # copied into the answers as the writer copies them.
+                        'printed=$(uv run python -m orchestrator.plan_budgets "$3:$4") &&'
+                        ' python3 "$9" "$7" "$printed" &&'
+                        ' "$1" template resolve design-doc ${8:+--repository "$8"} --json'
                         ' | "$2" document create "$3"'
                         ' --project "$4" --title "$5" --id "$6" --template-loader -'
                         ' --answers "$7" --no-interactive',
@@ -434,6 +460,7 @@ def _stores_the_document(bench: Bench, drafted: Drafted, repository: str | None 
                         drafted.document,
                         str(answers),
                         repository or "",
+                        str(MERGES_THE_BUDGETS),
                     ]
                 ]
             }
@@ -664,7 +691,6 @@ def test_the_tail_leaves_the_plan_and_its_one_document_on_the_destination(
     """
     project = finished.drafted.project
     assert _records(finished.bench.destination) == [
-        f"documents/{project}-budgets.md",
         f"documents/{finished.drafted.document}.md",
         f"projects/{project}.md",
         f"tasks/{project}/decide-the-cursor.md",

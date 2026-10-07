@@ -59,10 +59,10 @@ exactly as for a task's record, and `just check-plan` and `just copy-plan` both 
 plan whose project carries none.
 
 **That turn reads a compact view of the plan, the way a person reviews one: from an
-overview, opening detail where it matters.** It is shown the goal, the budgets document
-with each budget's longest prose excerpted, and per node its authored fields, the
-per-task record that proves a per-task turn read its whole task, the task file's path and
-a bounded summary — and it runs read-only under its own role file,
+overview, opening detail where it matters.** It is shown the goal, the plan's budget
+answers and every task's budgets with their longest prose excerpted, and per node its
+authored fields, the per-task record that proves a per-task turn read its whole task, the
+task file's path and a bounded summary — and it runs read-only under its own role file,
 :data:`HARNESS_WHOLE_CONFIG`, opening the files its judgment needs. Every task body ends
 with the same operational notes, and a fleet-wide plan's bodies run to megabytes, so a
 prompt carrying them whole outgrew every candidate's window; this one grows with how many
@@ -127,14 +127,16 @@ ReviewKey = NewType("ReviewKey", str)
 RECORD_KEY = "orchestrator.plan-review"
 
 #: The bar this review is held to, the schema its verdict is validated against, and the
-#: template the plan's budgets document is rendered from — whose answers the reviewer
-#: reads beside the nodes. All three are hashed into every key, so editing any of them
+#: two templates a plan's budget answers are rendered through — a task's `## Budgets`
+#: section and the plan's own description — whose answers the reviewer reads. All four
+#: are hashed into every key, so editing any of them
 #: invalidates every record made under the previous one — a content-only key would leave a
 #: stale pass standing after the bar it was granted under had moved.
 BAR_FILES = (
     Path("personas") / "planner.yaml",
     Path("config") / "plan-review-verdict.schema.json",
-    Path("templates") / "plan-budgets.md.j2",
+    Path("templates") / "plan-task-budgets.md.j2",
+    Path("templates") / "plan-description.md.j2",
 )
 
 #: The harness side that spends the judged turn: the supervisory routing, a finite
@@ -289,8 +291,8 @@ telling the worker to go and find one — is a second answer the worker follows 
 engine's, and is refused. The immutable-anchor exemption above applies only to a
 release already published; a release the node waits for is not yet an anchor.
 
-One question is asked of a node that owns a budget: one the plan's budgets document
-names as owning it, shown below the task. Such a node owns the budget's command — the
+One question is asked of a node that owns a budget: one whose task carries a
+`## Budgets` section, its own budgets. Such a node owns the budget's command — the
 command that performs the measurement — and its registration in the budgets file the
 entry names, and its `## Acceptance criteria` name each budget it owns by its id and
 the realistic workload the budget holds at. Refuse the criteria of such a node that
@@ -674,9 +676,7 @@ def meaning_bearing(value: object) -> object:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip("\n")
 
 
-def review_key(
-    task: StoreTask, bar: BarFingerprint, owned: Sequence[plan_budgets.Budget] = ()
-) -> ReviewKey:
+def review_key(task: StoreTask, bar: BarFingerprint) -> ReviewKey:
     """The digest ``task``'s current authored content, reviewed under ``bar``, hashes to.
 
     **Exactly the authored fields, and the bar.** The title, the body prose, the
@@ -704,10 +704,11 @@ def review_key(
     different question and is re-reviewed. So are its `adoption`, `consumes` and
     `merge_policy`, for the reason their constants give.
 
-    ``owned`` is every budget the plan's budgets document says this node owns, which the
-    reviewer is shown beside the task and asked about: a node handed a budget after its
-    review, or relieved of one, is a different question too. It is keyed only when there
-    is one, so a node owning none keys exactly as it did before budgets existed.
+    The budgets the task owns, its `orchestrator.budgets` record, are in it too: the
+    reviewer is shown them beside the task and asked about them, so a node handed a budget
+    after its review, or relieved of one, is a different question. They are keyed only when
+    the task carries a record, so a node owning none keys exactly as it did before budgets
+    existed.
     """
     authored = {
         "adoption": task.metadata.get(ADOPTION),
@@ -723,8 +724,9 @@ def review_key(
         "task": task.content,
         "title": task.title,
     }
-    if owned:
-        authored["budgets"] = [dataclasses.asdict(budget) for budget in owned]
+    owned = plan_budgets.task_record(task.metadata)
+    if owned is not None:
+        authored["budgets"] = owned
     return content_key(authored, bar)
 
 
@@ -814,23 +816,13 @@ def _recorded_key(metadata: Mapping[str, object]) -> ReviewKey | None:
     return ReviewKey(key) if isinstance(key, str) else None
 
 
-def unreviewed(
-    records: Sequence[StoreTask],
-    bar: BarFingerprint | None = None,
-    budgets: plan_budgets.Budgets | None = None,
-) -> list[StoreTask]:
+def unreviewed(records: Sequence[StoreTask], bar: BarFingerprint | None = None) -> list[StoreTask]:
     """Every task of ``records`` whose current authored content carries no review record.
 
-    ``budgets`` is the plan's budgets document, whose budgets each task's key covers as far
-    as that task owns them.
+    Each task's key covers the budgets it owns, read from its own metadata.
     """
     resolved = bar_fingerprint() if bar is None else bar
-    owned = plan_budgets.owned(budgets)
-    return [
-        task
-        for task in records
-        if recorded(task) != review_key(task, resolved, owned.get(task.node_id, []))
-    ]
+    return [task for task in records if recorded(task) != review_key(task, resolved)]
 
 
 def write_record(project: str, task: StoreTask, key: ReviewKey, by: By) -> Path:
@@ -1000,7 +992,7 @@ def _steps(task: StoreTask) -> str:
     return f"\n\n## Its steps, in the order they run, as their author wrote them\n\n{sections}"
 
 
-def _prompt(plan_name: str, task: StoreTask, owned: Sequence[plan_budgets.Budget] = ()) -> str:
+def _prompt(plan_name: str, task: StoreTask) -> str:
     """One task, rendered for review under the bar this repository holds a plan to."""
     bar = (REPO_ROOT / BAR_FILES[0]).read_text(encoding="utf-8")
     # Every field :func:`review_key` hashes is rendered here, and that is a property
@@ -1027,18 +1019,20 @@ def _prompt(plan_name: str, task: StoreTask, owned: Sequence[plan_budgets.Budget
         f"{json.dumps(authored, indent=2, ensure_ascii=False)}\n\n"
         f"{task.content or '(this task states no body prose)'}"
         f"{_steps(task)}\n\n"
-        f"## The budgets the plan's budgets document says this node owns\n\n"
-        f"{_owned_section(owned)}\n"
+        f"## The budgets this node owns, as its `{plan_budgets.TASK_RECORD}` record states them\n\n"
+        f"{_owned_section(plan_budgets.task_record(task.metadata))}\n"
     )
 
 
-def _owned_section(owned: Sequence[plan_budgets.Budget]) -> str:
-    """The budgets a node owns as its reviewer reads them, every field of each."""
-    if not owned:
+def _owned_section(owned: object) -> str:
+    """The budgets a node owns as its reviewer reads them, every field of each.
+
+    The same answers its body's `## Budgets` section renders, which the plan check holds
+    the body to; shown as the record because the record is what its key covers.
+    """
+    if owned is None:
         return "(none)"
-    return json.dumps(
-        [dataclasses.asdict(budget) for budget in owned], indent=2, ensure_ascii=False
-    )
+    return json.dumps(owned, indent=2, ensure_ascii=False)
 
 
 def _host_sections() -> str:
@@ -1068,13 +1062,13 @@ goal needs in force on this host, and whether its budgets are what its work need
 Below is the review bar, then the plan's goal, then the table of what this host
 installs from each producer it depends on — the wheel, and the `config/<pin>.version`
 file that wheel governs — with the two rungs a node waits on a release under, then the
-plan's budgets document, and then a compact view of every node of the plan: its
-authored fields, the record of the per-task review that read its whole task, the
-absolute path of its task file, and a summary of what it does. No task body is shown
-beyond that summary, and a budget's longest prose is excerpted; each path listed is a
-file you may open read-only, and you open only what your judgment needs — a node's task
-file, up to the operational notes it ends with, where a question below turns on its
-criteria, and a budget's detail by its id, never the whole budgets document.
+plan's budgets — its plan-level answers and every budget each task owns — and then a
+compact view of every node of the plan: its authored fields, the record of the per-task
+review that read its whole task, the absolute path of its task file, and a summary of
+what it does. No task body is shown beyond that summary, and a budget's longest prose is
+excerpted; each path listed is a file you may open read-only, and you open only what
+your judgment needs — a node's task file, up to the operational notes it ends with,
+where a question below turns on its criteria or on a budget's detail.
 
 On the adoption, ask two questions.
 
@@ -1108,21 +1102,22 @@ A plan that omits the adoption its goal needs is refused with a finding whose
 `fast` where the release is needed, a `consumes` on a node of this repository, a
 version literal — is refused with a finding whose `criterion` names the node's id.
 
-On the budgets, ask what the plan is **missing**, not only whether each entry of its
-budgets document was filled in. The document states the realistic workload, a
-checklist of concerns each answered with a budget or a one-line "n/a because ...", the
-answer to what the product owner notices getting worse first at 10x realistic usage,
-the budgets the plan proposes, each repository's expected effect on its repo-wide
-budgets, the realistic-data choices and the spike findings. Read it against the goal
-and every node, and refuse what is missing: a concern the stated workload makes likely
-that the checklist dismissed or never lists; a 10x answer no budget covers; a budget no
-node owns, or one with no command to check it; a measure taken further inward than
-where the product owner feels the impact with no reason given; a repo-wide budget — one
-in a repository's root `budgets.yaml` — written into a task's criteria as a threshold
-the worker must meet; a change to a budgets file the budgets imply that the document
-omits; and a target the evidence shows is infeasible, quietly loosened rather than
-escalated. A finding about the document as a whole names `the plan`, and one about a
-node names its id. A plan that carries no budgets document is not asked this.
+On the budgets, ask what the plan is **missing**, not only whether each answer was
+filled in. The plan-level answers state what the plan is sized for, the realistic
+workload, a checklist of concerns each answered with a budget or a "n/a because ...",
+the answer to what the product owner notices getting worse first at 10x realistic
+usage, each repository's expected effect on its repo-wide budgets, the realistic-data
+choices and the spike findings; each task states the budgets it owns, with the basis
+each number rests on. Read them against the goal and every node, and refuse what is
+missing: a concern the stated workload makes likely that the checklist dismissed or
+never lists; a 10x answer no budget covers; a budget with no command to check it; a
+measure taken further inward than where the product owner feels the impact with no
+reason given; a basis the evidence does not support; a repo-wide budget — one in a
+repository's root `budgets.yaml` — written into a task's criteria as a threshold the
+worker must meet; a change to a budgets file the budgets imply that no budget states;
+and a target the evidence shows is infeasible, quietly loosened rather than escalated.
+A finding about the plan's own answers names `the plan`, and one about a node names its
+id. A plan that carries no plan-level answers is not asked this.
 
 A verdict that passes carries no findings; one that refuses carries one per thing to
 correct, and says in each `why` what the plan would have to state instead.
@@ -1160,7 +1155,7 @@ RUNGS = (
 #: own instructions, tools and the appended schema — 21,592 tokens, the first call's
 #: input on a 637-character prompt — an output reserve of 16,000 tokens (the proof turns
 #: answered in at most 5,411), and file-read headroom for about four whole task bodies and
-#: the budget sections a judgment reads by id, 400,000 characters taken at a conservative
+#: the budget sections a judgment reads by heading, 400,000 characters taken at a conservative
 #: 3.5 characters a token, 114,286 tokens. What remains, 54,842 tokens, at the 3.86
 #: characters a token the real 167,170-character baseline prompt measured, is 211,690
 #: characters, so the limit is 210,000. It must never sit below the
@@ -1171,8 +1166,8 @@ RUNGS = (
 #: own reading is bounded by its own window less 20% — 206,720 tokens for Codex. Never
 #: re-derive this limit from a Claude token count: Claude Code spends about 65,000 tokens
 #: of its own before the prompt and its reads come back line-numbered. A whole read of a
-#: large budgets document is what overflows Codex, which is why the prompt sends the
-#: reviewer to a budget's section by id.
+#: large budget section is what overflows Codex, which is why the prompt sends the
+#: reviewer to one budget's section by its heading.
 PLAN_PROMPT_LIMIT = 210_000
 
 #: What a finding of the plan-level turn names when it is about the plan rather than
@@ -1315,7 +1310,7 @@ SHOWN_FIELDS = (
 )
 
 
-def plan_nodes(plan: object, budgets: plan_budgets.Budgets | None = None) -> list[KeyedNode]:
+def plan_nodes(plan: object, owned: Mapping[str, object] | None = None) -> list[KeyedNode]:
     """Every node of ``plan``, narrowed to a :class:`KeyedNode`, sorted by id.
 
     Read for its meaning field by field, exactly as a task's record is, and sorted so
@@ -1326,9 +1321,11 @@ def plan_nodes(plan: object, budgets: plan_budgets.Budgets | None = None) -> lis
     exactly as an unreadable one would.
 
     Each node's ``review_key`` is computed under the task bar this checkout fingerprints
-    (:func:`bar_fingerprint`) and ``budgets``, the plan's budgets document, whose budgets
-    a node's key covers as far as it owns them — exactly the key its task's own record
-    must hold.
+    (:func:`bar_fingerprint`) over the budgets the node owns — exactly the key its task's
+    own record must hold. The document the engine's `plan check` hands the registered check
+    carries each node's metadata, its budgets record among it; `read_plan`'s nodes carry
+    none, so the path reading the store hands each node's record in as ``owned``, by node
+    id, and both paths key one thing.
     """
     tasks = plan.get("tasks") if isinstance(plan, Mapping) else None
     readable = [
@@ -1337,11 +1334,12 @@ def plan_nodes(plan: object, budgets: plan_budgets.Budgets | None = None) -> lis
     if not readable:
         return []
     bar = bar_fingerprint()
-    owned = plan_budgets.owned(budgets)
     nodes: list[KeyedNode] = []
     for task in readable:
         deps = task.get("deps")
         record = task_record_of(task)
+        if owned is not None:
+            record = with_budgets(record, owned.get(record.node_id))
         nodes.append(
             KeyedNode(
                 id=meaning_bearing(task.get("id")),
@@ -1356,7 +1354,7 @@ def plan_nodes(plan: object, budgets: plan_budgets.Budgets | None = None) -> lis
                 kind=meaning_bearing(task.get("kind")),
                 expects_no_diff=meaning_bearing(task.get("expects_no_diff")),
                 persona=meaning_bearing(task.get("persona")),
-                review_key=review_key(record, bar, owned.get(record.node_id, [])),
+                review_key=review_key(record, bar),
             )
         )
     return sorted(nodes, key=lambda node: json.dumps(node["id"], sort_keys=True))
@@ -1370,17 +1368,36 @@ def plan_goal(plan: object) -> object:
     return goal
 
 
+def with_budgets(record: StoreTask, owned: object) -> StoreTask:
+    """``record`` carrying ``owned`` as its budgets record, or none when ``owned`` is ``None``."""
+    metadata = {
+        key: value for key, value in record.metadata.items() if key != plan_budgets.TASK_RECORD
+    }
+    if owned is not None:
+        metadata[plan_budgets.TASK_RECORD] = owned
+    return dataclasses.replace(record, metadata=metadata)
+
+
+def owned_by_node(records: Sequence[StoreTask]) -> dict[str, object]:
+    """Every record's budgets record by node id, for :func:`plan_nodes` on the store path."""
+    return {record.node_id: plan_budgets.task_record(record.metadata) for record in records}
+
+
 def plan_key(
-    plan: object, bar: BarFingerprint, budgets: plan_budgets.Budgets | None = None
+    plan: object,
+    bar: BarFingerprint,
+    answers: object = None,
+    owned: Mapping[str, object] | None = None,
 ) -> ReviewKey:
     """The digest ``plan``'s goal, nodes and budgets hash to under ``bar``.
 
     Over the plan in the engine's loaded shape, so the store path and the check path
-    compute one key, and over the answers of the plan's budgets document, which the
-    reviewer reads beside the nodes: a budget changed after the review is one nobody
-    reviewed — keyed only when there is one, so a plan carrying none keys as it did
-    before budgets existed. The `shape` field keeps it from ever equalling a task's key or
-    a live edit's.
+    compute one key, and over ``answers``, the plan-level budget answers its project's
+    `orchestrator.plan-budgets` record holds, which the reviewer reads beside the nodes: an
+    answer changed after the review is one nobody reviewed — keyed only when there is one,
+    so a plan carrying none keys as it did before budgets existed. ``owned`` is each node's
+    budgets record, for a plan read from the store (:func:`plan_nodes`). The `shape` field
+    keeps it from ever equalling a task's key or a live edit's.
 
     **Each node is keyed by its fields and its task's review key, never by its body.**
     The review key covers the body, the steps and the budgets the node owns, so a change
@@ -1392,11 +1409,11 @@ def plan_key(
     """
     authored: dict[str, object] = {
         "goal": plan_goal(plan),
-        "nodes": plan_nodes(plan, budgets),
+        "nodes": plan_nodes(plan, owned),
         "shape": "plan",
     }
-    if budgets is not None:
-        authored["budgets"] = budgets.answers.as_record()
+    if answers is not None:
+        authored["budgets"] = answers
     return content_key(authored, bar)
 
 
@@ -1410,11 +1427,20 @@ def plan_unreviewed(
     record: Mapping[str, object],
     plan: object,
     bar: BarFingerprint | None = None,
-    budgets: plan_budgets.Budgets | None = None,
+    owned: Mapping[str, object] | None = None,
 ) -> bool:
-    """Whether ``plan`` as it stands carries no plan-level record on its project ``record``."""
+    """Whether ``plan`` as it stands carries no plan-level record on its project ``record``.
+
+    The plan-level budget answers the key covers are the project ``record``'s own.
+    """
     resolved = plan_bar_fingerprint() if bar is None else bar
-    return plan_recorded(record) != plan_key(plan, resolved, budgets)
+    return plan_recorded(record) != plan_key(plan, resolved, plan_answers(record), owned)
+
+
+def plan_answers(record: Mapping[str, object]) -> object:
+    """The plan-level budget answers the project ``record`` carries, or ``None``."""
+    metadata = record.get("metadata")
+    return metadata.get(plan_budgets.PLAN_RECORD) if isinstance(metadata, Mapping) else None
 
 
 def write_plan_record(project: str, key: ReviewKey, by: By) -> Path:
@@ -1445,36 +1471,31 @@ class PlanView:
     tasks: Mapping[str, str] = dataclasses.field(default_factory=dict)
     #: Each node's per-task review record as stored, by node id.
     records: Mapping[str, object] = dataclasses.field(default_factory=dict)
-    #: The budgets document's file, when the plan carries one the store located.
-    budgets: str | None = None
     #: The design document's file, when the plan carries exactly one the store located.
     design: str | None = None
+    #: The project's own file, whose description renders the plan's answers whole.
+    description: str | None = None
 
 
 # llmlint: ignore[changed_behavior_has_e2e] Through the real recipe only a local store
 # reaches this: `review` refuses a store no record can be written into (`unwritable`)
-# before any view is built, and `just check-plan` refuses a plan carrying two budgets
-# documents. So a board location and an undecidable budgets document are reachable only
-# by handing this the store's answer directly, which `tests/test_plan_review.py` does;
-# the local paths it names are driven end to end by `tests/plan_tooling/test_plan_review_e2e.py`.
+# before any view is built. So a board location is reachable only by handing this the
+# store's answer directly, which `tests/test_plan_review.py` does; the local paths it
+# names are driven end to end by `tests/plan_tooling/test_plan_review_e2e.py`.
 def plan_view(
     project: str,
     records: Sequence[StoreTask],
     documents: Sequence[plan_store.StoreDocument],
+    held: Mapping[str, object] | None = None,
 ) -> PlanView:
-    """Where ``project``'s tasks and documents are, read off what the store answered.
+    """Where ``project``'s tasks, documents and description are, read off the store's answers.
 
-    Only a location that is a file on this host is named, because the reviewer is told it
-    may open each one: a board item's URL named as a file would be a read that fails.
+    ``held`` is the project record, whose location is the file its description is in. Only
+    a location that is a file on this host is named, because the reviewer is told it may
+    open each one: a board item's URL named as a file would be a read that fails.
     """
-    budgets = None
+    location = held.get("location") if held is not None else None
     design = None
-    try:
-        held = plan_budgets.find(project, documents)
-    except plan_budgets.BudgetsError:
-        held = None
-    if held is not None:
-        budgets = plan_store.local_file(design_approval.located(held))
     designs = design_approval.design_documents(project, documents)
     if len(designs) == 1:
         design = plan_store.local_file(design_approval.located(designs[0]))
@@ -1485,8 +1506,10 @@ def plan_view(
             if (path := plan_store.local_file(task.location)) is not None
         },
         records={task.node_id: task.metadata.get(RECORD_KEY) for task in records},
-        budgets=budgets,
         design=design,
+        description=plan_store.local_file(
+            plan_store.located(location if isinstance(location, Mapping) else None, project)
+        ),
     )
 
 
@@ -1496,10 +1519,12 @@ def plan_view(
 SUMMARY_LIMIT = 600
 SUMMARY_MARKER = " [excerpt; full task at the path above]"
 
-#: The four prose fields of a budget the plan-level prompt excerpts, the bound each is
-#: cut at when it is longer, and what marks the cut. Every other answer of the budgets
-#: document is rendered whole, and the whole document is at the path the section names.
+#: The four prose fields of a budget the plan-level prompt excerpts, the three prose
+#: answers of the plan's own it excerpts, the bound each is cut at when it is longer, and
+#: what marks the cut. Every other answer is rendered whole; a budget is whole in its
+#: owning task's `## Budgets` section, and the plan's answers in its description.
 EXCERPTED_BUDGET_FIELDS = ("measure", "workload", "evidence", "inner_measure_reason")
+EXCERPTED_PLAN_FIELDS = ("overview", "workload", "ten_x")
 EXCERPT_LIMIT = 160
 EXCERPT_MARKER = " [excerpt]"
 
@@ -1518,24 +1543,23 @@ APPENDIX_STATEMENT = (
     "same text for every node, read from `{path}`. They are not rendered here."
 )
 OPENING = (
-    "You may open any path listed above read-only — a task file, the budgets document, "
+    "You may open any path listed above read-only — a task file, the plan's description, "
     "the operational notes{design} — and you open only what your judgment needs. Open a "
     "task file where a judgment turns on that node's criteria, and read it only as far as "
     "its `{notes_heading}` heading: what follows is the same for every agent node, the "
-    "operational notes named above. Read a budget's detail by "
-    "its id: the section under its `{budget_heading}` heading in the budgets document, "
-    "found by a search for that heading and read as a range of lines. Never read the "
-    "whole budgets document, nor its `## Record` line, which repeats every answer on one "
-    "line: every budget's answers are already above, and the whole document outgrows the "
-    "room a reviewer has. A summary is the first paragraph of the task's `## What`, cut "
-    "where marked; a node's acceptance criteria are never shown here, so a finding about "
-    "them rests on the task file you opened."
+    "operational notes named above. Read a budget's detail in the task file of the node "
+    "that owns it: the section under its `{budget_heading}` heading, inside that task's "
+    "`## Budgets` section, found by a search for that heading and read as a range of "
+    "lines. Read the plan's own answers whole in its description, under its `## Budgets` "
+    "heading. A summary is the first paragraph of the task's `## What`, cut where marked; "
+    "a node's acceptance criteria are never shown here, so a finding about them rests on "
+    "the task file you opened."
 )
 
-#: The heading the `plan-budgets` template renders each budget's section under, with
-#: `<id>` standing for the budget's id; `tests/test_plan_review.py` holds it to the
-#: template.
-BUDGET_HEADING = "### `<id>`"
+#: The heading `templates/plan-task-budgets.md.j2` renders each budget under in its task,
+#: with `<name>` standing for the budget's name; `tests/test_plan_review.py` holds it to
+#: the template.
+BUDGET_HEADING = "### <name>"
 
 #: The heading this host's operational notes open under in every agent task, past which
 #: a task file holds nothing particular to its node; `tests/test_plan_review.py` holds it
@@ -1549,6 +1573,7 @@ COMPACT_VIEW: dict[str, object] = {
     "summary_limit": SUMMARY_LIMIT,
     "summary_marker": SUMMARY_MARKER,
     "excerpted_budget_fields": list(EXCERPTED_BUDGET_FIELDS),
+    "excerpted_plan_fields": list(EXCERPTED_PLAN_FIELDS),
     "excerpt_limit": EXCERPT_LIMIT,
     "excerpt_marker": EXCERPT_MARKER,
     "shown_fields": list(SHOWN_FIELDS),
@@ -1629,7 +1654,10 @@ def _node_section(node: KeyedNode, raw: Mapping[str, object], view: PlanView) ->
 
 
 def _plan_prompt(
-    plan: object, budgets: plan_budgets.Budgets | None = None, view: PlanView | None = None
+    plan: object,
+    answers: object = None,
+    owned: Mapping[str, object] | None = None,
+    view: PlanView | None = None,
 ) -> str:
     """One plan whole, rendered as the compact view the plan-level reviewer reads.
 
@@ -1655,8 +1683,16 @@ def _plan_prompt(
     }
     sections = [
         _node_section(node, raw_by_id[_compact(node["id"])], shown)
-        for node in plan_nodes(plan, budgets)
+        for node in plan_nodes(plan, owned)
     ]
+    held = (
+        owned
+        if owned is not None
+        else {
+            str(record.node_id): plan_budgets.task_record(record.metadata)
+            for record in (task_record_of(task) for task in raw_by_id.values())
+        }
+    )
     design = f", the design document at `{shown.design}`" if shown.design else ""
     return (
         f"{PLAN_REVIEW_PROMPT}\n"
@@ -1667,7 +1703,7 @@ def _plan_prompt(
         f"## This host's own repository\n\n"
         f"`{host_repository()}` — the origin a node's `repo` is compared with to decide "
         f"whether it is a node of this host's own repository.\n\n"
-        f"## The plan's budgets document\n\n{_budgets_section(budgets, shown.budgets)}\n\n"
+        f"## The plan's budgets\n\n{_budgets_section(answers, held, shown.description)}\n\n"
         f"## The operational notes\n\n"
         f"{APPENDIX_STATEMENT.format(path=REPO_ROOT / APPENDIX)}\n\n"
         f"## Every node of the plan, compactly\n\n" + "\n\n".join(sections) + "\n\n"
@@ -1679,30 +1715,42 @@ def _plan_prompt(
     )
 
 
-def _budgets_section(budgets: plan_budgets.Budgets | None, path: str | None = None) -> str:
-    """The plan's budgets document as the plan-level reviewer reads it.
+def _budgets_section(answers: object, owned: Mapping[str, object], path: str | None = None) -> str:
+    """The plan's budget answers and every task's budgets, as the plan-level reviewer reads them.
 
-    Every answer whole, but for each budget's four prose fields, each cut to a marked
-    excerpt when it is longer than :data:`EXCERPT_LIMIT` — so an empty field still reads
-    as empty — and the whole document at the path the opening line names.
+    Every answer whole, but for the plan's three longest prose answers and each budget's
+    four prose fields, each cut to a marked excerpt when it is longer than
+    :data:`EXCERPT_LIMIT` — so an empty field still reads as empty. The plan's answers are
+    whole in its description at ``path``, and each budget in its owning task's file.
     """
-    if budgets is None:
-        return "(this plan carries no budgets document)"
-    record = budgets.answers.as_record()
-    held = record.get("budgets")
-    record["budgets"] = [
-        {
-            field: _excerpt(value) if field in EXCERPTED_BUDGET_FIELDS else value
-            for field, value in budget.items()
-        }
-        for budget in (held if isinstance(held, list) else [])
-        if isinstance(budget, Mapping)
-    ]
+    if isinstance(answers, Mapping):
+        stated = _compact(
+            {
+                field: _excerpt(value) if field in EXCERPTED_PLAN_FIELDS else value
+                for field, value in answers.items()
+            }
+        )
+    else:
+        stated = "(this plan carries no plan-level budget answers)"
+    budgets = {
+        node: [
+            {
+                field: _excerpt(value) if field in EXCERPTED_BUDGET_FIELDS else value
+                for field, value in budget.items()
+            }
+            for budget in held
+            if isinstance(budget, Mapping)
+        ]
+        for node, held in sorted(owned.items())
+        if isinstance(held, list) and held
+    }
     return (
-        f"`{budgets.document}`, at `{path or '(the store reported no path for it)'}`, "
-        f"rendered from the `{plan_budgets.TEMPLATE_NAME}` template; each budget is also "
-        f"covered by the per-task review key of the node that owns it:\n\n"
-        f"{_compact(record)}"
+        f"The plan's own answers, its `{plan_budgets.PLAN_RECORD}` record, rendered whole as "
+        f"its description at `{path or '(the store reported no path for it)'}`:\n\n"
+        f"{stated}\n\n"
+        f"The budgets each task owns, its `{plan_budgets.TASK_RECORD}` record by node id, each "
+        f"also covered by that node's per-task review key:\n\n"
+        f"{_compact(budgets) if budgets else '(no task owns a budget)'}"
     )
 
 
@@ -1745,19 +1793,16 @@ def review(project: str) -> Reviewed:
         )
     records = plan_store.read_tasks(project)
     bar = bar_fingerprint()
-    budgets = plan_budgets.readable(project)
-    owned = plan_budgets.owned(budgets)
-    pending = unreviewed(records, bar, budgets)
+    pending = unreviewed(records, bar)
     plan = plan_store.read_plan(project, records)
     plan_name = plan.get("name", project)
     refused: list[Refusal] = []
     recorded = 0
     for index, task in enumerate(pending):
-        mine = owned.get(task.node_id, [])
         try:
-            answered = verdict(_prompt(str(plan_name), task, mine))
+            answered = verdict(_prompt(str(plan_name), task))
             if answered["passes"]:
-                write_record(project, task, review_key(task, bar, mine), BY_REVIEW)
+                write_record(project, task, review_key(task, bar), BY_REVIEW)
                 recorded += 1
         # Reviewing a task and recording its pass are caught together, because they fail
         # the same way from the operator's side: this plan is not fully reviewed, some of
@@ -1783,14 +1828,20 @@ def review(project: str) -> Reviewed:
     # is about to change.
     try:
         plan_bar = plan_bar_fingerprint()
-        if not plan_unreviewed(plan_store.project_record(project), plan, plan_bar, budgets):
+        project_record = plan_store.project_record(project)
+        owned = owned_by_node(records)
+        if not plan_unreviewed(project_record, plan, plan_bar, owned):
             return Reviewed(recorded, held, refused, plan=PlanReview.HELD)
         # The records again, now carrying every pass this run wrote, so the view shows
         # each node's record as it stands rather than as it stood before the run.
         view = plan_view(
-            project, plan_store.read_tasks(project), plan_store.read_documents(project)
+            project,
+            plan_store.read_tasks(project),
+            plan_store.read_documents(project),
+            project_record,
         )
-        prompt = _plan_prompt(plan, budgets, view)
+        answers = plan_answers(project_record)
+        prompt = _plan_prompt(plan, answers, owned, view)
         if len(prompt) > PLAN_PROMPT_LIMIT:
             return Reviewed(
                 recorded,
@@ -1802,7 +1853,7 @@ def review(project: str) -> Reviewed:
             )
         answered = verdict(prompt, HARNESS_WHOLE_COMMAND, HARNESS_WHOLE_CONFIG)
         if answered["passes"]:
-            write_plan_record(project, plan_key(plan, plan_bar, budgets), BY_REVIEW)
+            write_plan_record(project, plan_key(plan, plan_bar, answers, owned), BY_REVIEW)
             return Reviewed(recorded, held, refused, plan=PlanReview.RECORDED)
     except OSError as exc:
         return Reviewed(
@@ -1959,14 +2010,14 @@ def record_projects_new_since(before: Sequence[str]) -> Recorded:
                 continue
             try:
                 tasks = plan_store.read_tasks(project)
-                budgets = plan_budgets.readable(project)
-                owned = plan_budgets.owned(budgets)
                 for task in tasks:
-                    mine = owned.get(task.node_id, [])
-                    write_record(project, task, review_key(task, bar, mine), BY_PLANNING)
+                    write_record(project, task, review_key(task, bar), BY_PLANNING)
                     written.append(task.qualified_id)
                 plan = plan_store.read_plan(project, tasks)
-                write_plan_record(project, plan_key(plan, plan_bar, budgets), BY_PLANNING)
+                answers = plan_answers(plan_store.project_record(project))
+                write_plan_record(
+                    project, plan_key(plan, plan_bar, answers, owned_by_node(tasks)), BY_PLANNING
+                )
                 plans.append(project)
             except OSError as exc:
                 passed_over.append(f"{project}: {exc}")

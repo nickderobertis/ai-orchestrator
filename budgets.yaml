@@ -42,3 +42,16 @@ budgets:
     unit: seconds
     direction: max
     threshold: 10800
+  - id: design-doc-budget-summary-length
+    description: >-
+      Characters of the `## Budgets` section a design document renders, for #1568's real
+      budget answers converted to the summary's shape (9 budgets, 6 concerns answered n/a, 4
+      repositories, 1 realistic-data choice, no spike finding): what a person reads before
+      approving a plan, which has to stay short enough to review on a phone. Rendered from the
+      committed fixture through the design-doc template of the workspace project at this
+      repository's root, so a template change that lengthens the summary is caught.
+    measure: reported
+    command: ["scripts/budget-design-doc-summary.sh"]
+    unit: characters
+    direction: max
+    threshold: 3000

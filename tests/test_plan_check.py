@@ -19,11 +19,10 @@ import subprocess
 
 import pytest
 from criteria_examples import RELEASED_ELSEWHERE
-from project_fixtures import budgets_document, no_budgets
+from project_fixtures import described, no_budgets
 
 from orchestrator import (
     criteria_guard,
-    plan_budgets,
     plan_check,
     plan_review,
     plan_store,
@@ -31,12 +30,9 @@ from orchestrator import (
 )
 from orchestrator.root import REPO_ROOT
 
-#: The budgets document every plan here carries: one needing no budget, as a plan whose
-#: tasks name no repository answers it, read back the way the check reads it.
+#: The plan-level budget answers every plan here carries: one needing no budget, as a plan
+#: whose tasks name no repository answers it.
 NO_BUDGETS = no_budgets([])
-PROBE_BUDGETS = plan_budgets.Budgets(
-    plan_store.QualifiedDocumentId("authoring:probe-budgets"), plan_budgets.parse(NO_BUDGETS)
-)
 
 #: A synthetic appendix, for the reason `tests/test_criteria_guard.py` states: reading
 #: the tracked one would put these in the whole-workspace tier, where coverage is not
@@ -57,30 +53,31 @@ def project_record(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
     """The project record the store answers for every project here.
 
     Stood in at the store CLI, which is the one boundary the plan-level record crosses
-    into this module: it starts carrying no record, and `_planned` writes the key for a
+    into this module: it starts carrying the plan-level budget answers of a plan needing no
+    budget, rendered as its description, and no review record, and `_planned` writes the key for a
     document into it the way `just review-plan` would. A test about a task's own refusal
     plans its document first, so the one refusal it reads is the one it is about.
     """
-    record: dict[str, object] = {"metadata": {}}
-    monkeypatch.setattr(plan_store, "project_record", lambda _project: record)
-    # And the plan's budgets document, which every plan carries: one needing no budget.
     # llmlint: ignore-block[shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker] The  # noqa: E501
-    # document is rendered by the pinned store's own `template render`, once per process,
+    # description is rendered by the pinned store's own `template render`, once per process,
     # because a hand-written body would not be the rendering its provenance records and the
     # reader under test refuses exactly that. It is not a host tool: the store is the pinned
     # install `uv.lock` names and `templates/` is in `codeWorkspace`, so both are in the key
     # this tier is memoized on, as `tests/test_design_approval.py` says of the same engine.
-    monkeypatch.setattr(
-        plan_store, "read_documents", lambda project: [budgets_document(project, NO_BUDGETS)]
-    )
+    record: dict[str, object] = described(NO_BUDGETS)
     # llmlint: ignore-end[shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]
+    monkeypatch.setattr(plan_store, "project_record", lambda _project: record)
+    # And its documents, which the spike convention reads: a plan holding none.
+    monkeypatch.setattr(plan_store, "read_documents", lambda _project: [])
     return record
 
 
 def _planned(record: dict[str, object], document: dict[str, object]) -> dict[str, object]:
     """``document``, once ``record`` carries a plan-level record for exactly it."""
-    key = plan_review.plan_key(document, plan_review.plan_bar_fingerprint(), PROBE_BUDGETS)
-    record["metadata"] = {plan_review.RECORD_KEY: {"key": key, "by": plan_review.BY_REVIEW}}
+    key = plan_review.plan_key(document, plan_review.plan_bar_fingerprint(), NO_BUDGETS)
+    held = record["metadata"]
+    assert isinstance(held, dict)
+    record["metadata"] = {**held, plan_review.RECORD_KEY: {"key": key, "by": plan_review.BY_REVIEW}}
     return document
 
 
@@ -130,7 +127,8 @@ def test_a_plan_every_task_of_which_is_recorded_is_refused_for_want_of_the_plan_
     field the record lives in, and the command that records one.
     """
     document = _document(_reviewed(_node()))
-    assert project_record == {"metadata": {}}
+    metadata = project_record["metadata"]
+    assert isinstance(metadata, dict) and plan_review.RECORD_KEY not in metadata
 
     (refusal,) = plan_check.refusals(document, "authoring:probe")
 
@@ -810,16 +808,15 @@ def test_a_require_rendered_answer_that_is_neither_true_nor_false_is_refused_bef
     assert plan_check.REQUIRE_RENDERED_ENV in reported and "'yes'" in reported, reported
 
 
-def test_a_plan_carrying_no_budgets_document_is_refused_against_the_plan(
+def test_a_plan_carrying_no_plan_level_budget_answers_is_refused_against_the_plan(
     monkeypatch: pytest.MonkeyPatch, project_record: dict[str, object]
 ) -> None:
-    """Refused about the plan rather than a node, on the `budgets` field, naming the document.
+    """Refused about the plan rather than a node, on the `budgets` field, naming the record.
 
     And refused in the answer's own shape, so the verb renders it beside the loader's.
     """
     document = _document(_reviewed(_node()))
-    monkeypatch.setattr(plan_store, "read_documents", lambda _project: [])
-    # Reviewed whole as it stands, with no budgets document, so only the budgets refuse.
+    # Reviewed whole as it stands, with no plan-level answers, so only the budgets refuse.
     key = plan_review.plan_key(document, plan_review.plan_bar_fingerprint())
     project_record["metadata"] = {plan_review.RECORD_KEY: {"key": key}}
 
@@ -827,12 +824,12 @@ def test_a_plan_carrying_no_budgets_document_is_refused_against_the_plan(
 
     assert refusal["node"] is None
     assert refusal["field"] == "budgets"
-    assert "authoring:probe carries no `authoring:probe-budgets` document" in refusal["reason"]
+    assert "authoring:probe carries no `orchestrator.plan-budgets` metadata" in refusal["reason"]
     assert "config/budgets-migration.yaml" in refusal["reason"]
 
 
 def test_a_check_handed_no_project_reads_no_budgets(project_record: dict[str, object]) -> None:
-    """The budgets are a document of the project, so with no id they are not asked about.
+    """The plan-level answers are the project's, so with no id they are not asked about.
 
     The plan is refused for want of the plan-level record already, and that refusal says
     to run the check with the project named.

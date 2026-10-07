@@ -1,0 +1,60 @@
+---
+onetaskgraph_template: 1
+description: >-
+  A plan task's `## Budgets` section: every budget the task owns, in full. `plan-task`
+  includes it after the task's `## Why`, and `just check-plan` renders it alone from the
+  task's `orchestrator.budgets` metadata to hold the task's body to that record.
+variables:
+  # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The `budgets` description restates the shape `orchestrator/plan_budgets.py` states once, and `tests/test_plan_budgets_template.py` fails the moment the two part: the keys, the vocabularies and the name's cap are each compared with that module's own.
+  budgets:
+    description: >-
+      One object per budget this task owns, or `[]` when it owns none, with exactly these
+      keys. `id` (string, the budget's id in its budgets file). `name` (string, a short
+      plain-English name on one line, at most 60 characters). `basis` (string, how solid
+      the number is: `measured`, `arithmetic`, `design`, `published docs` or `estimate`).
+      `repository` (string, the normalized origin `host/owner/name` of the repository the
+      budget goes in). `file` (string, the repository-relative path of the `budgets.yaml`
+      it goes in: `budgets.yaml` for a repo-wide budget, or a project's own file for a
+      scoped one). `file_change` (string, `add`, `change` or `none`: what the task does
+      to that file's entry). `measure` (string, what is measured, in words, as near as
+      possible to where the product owner feels it). `inner_measure_reason` (string, why
+      the measure is taken further inward than that, or `""` when it is not). `unit`
+      (string), `direction` (string, `max` or `min`) and `threshold` (a finite number),
+      each meaning what it means in onebudgetspec. `workload` (string, the realistic
+      workload the threshold holds at, which is never written into the budgets file).
+      `evidence` (string, where the number came from: a spike report's id and figures, or
+      the measurement it rests on). `command` (string, the command that performs the
+      measurement, as it will be registered). The same list is the task's
+      `orchestrator.budgets` metadata.
+    type: list
+    items: object
+    default: []
+  # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+---
+{#-
+  THE READERS. The worker this task dispatches, its judge, and a person following a design
+  document's link to this section. The heading is exactly `## Budgets`, so the section's
+  anchor is `budgets`; each budget's own heading is its name.
+-#}
+{% if budgets %}
+## Budgets
+
+{% for budget in budgets %}
+### {{ budget.name }}
+
+- **Id:** `{{ budget.id }}`
+- **Measure:** {{ budget.measure }}
+{% if budget.inner_measure_reason %}
+- **Inner measure, because:** {{ budget.inner_measure_reason }}
+{% endif %}
+- **Target:** {% if budget.direction == "max" %}at most{% elif budget.direction == "min" %}at least{% else %}{{ budget.direction }}{% endif %} {{ budget.threshold }} {{ budget.unit }}
+- **Basis:** {{ budget.basis }}
+- **Workload:** {{ budget.workload }}
+- **Evidence:** {{ budget.evidence }}
+- **Command:** {% if "`" in budget.command %}{{ budget.command }}{% else %}`{{ budget.command }}`{% endif %}
+
+- **Registered in:** `{{ budget.file }}` of `{{ budget.repository }}`, {% if budget.file_change == "add" %}an entry this task adds{% elif budget.file_change == "change" %}an entry this task changes{% elif budget.file_change == "none" %}an entry this task leaves as it is{% else %}{{ budget.file_change }}{% endif %}
+
+
+{% endfor %}
+{% endif %}
