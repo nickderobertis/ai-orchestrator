@@ -48,6 +48,10 @@ RUN = "listing-run"
 OTHER_RUN = "earlier-run"
 CAUSE = "cursor-skips-last-page"
 REPOSITORY = "github.com/nickderobertis/some-service"
+#: A second repository a ticket's fix may change beside its record's `repository`, and the
+#: repository the committed `followups` files the issue of a ticket listing several in.
+OTHER_REPOSITORY = "github.com/nickderobertis/another-service"
+DEFAULT_REPOSITORY = "github.com/nickderobertis/ai-orchestrator"
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
 #: A well-formed hostname that is not this machine's: the validator checks the shape alone.
 HOST = "verifier-01.build.example"
@@ -352,7 +356,7 @@ def _item(ticket: tickets.Ticket | None = None) -> dict[str, object]:
         "priority": held.priority.value,
         "labels": [],
         "project": None,
-        "repositories": [held.repository],
+        "repositories": list(held.repositories),
         "metadata": {tickets.KEY: tickets.record(held)},
     }
 
@@ -427,8 +431,16 @@ def _status(word: str) -> Callable[[dict[str, object]], None]:
         (_set("repositories", []), "the ticket carries no `repositories`"),
         (_no_repositories, "the ticket carries no `repositories`"),
         (
-            _set("repositories", [REPOSITORY, "github.com/nickderobertis/another-service"]),
-            "`repositories` names 2 entries",
+            _set("repositories", [REPOSITORY, REPOSITORY]),
+            f"`repositories` names {REPOSITORY!r} 2 times",
+        ),
+        (
+            _set("repositories", [REPOSITORY, "nickderobertis/another-service"]),
+            "entry 'nickderobertis/another-service' is not a normalized origin",
+        ),
+        (
+            _set("repositories", [REPOSITORY, OTHER_REPOSITORY]),
+            f"`basis` names no commit for the ticket's own repository {OTHER_REPOSITORY!r}",
         ),
         (
             _set("repositories", ["github.com/nickderobertis/another-service"]),
@@ -739,6 +751,39 @@ def test_the_impact_guidance_and_severities_speak_of_the_repository_not_of_orche
         assert spoken in guidance, guidance
 
 
+def _spanning(*repositories: str, filed_in: str = DEFAULT_REPOSITORY) -> tickets.Ticket:
+    """The sound ticket listing ``repositories``, its record naming ``filed_in``."""
+    return _ticket(
+        repository=tickets.Origin(filed_in),
+        title=f"{tickets.repository_name(filed_in)}: the listing cursor skips the last page",
+        changes=tuple(tickets.Origin(one) for one in repositories),
+        basis=tuple(
+            sorted(
+                tickets.Basis(tickets.Origin(one), tickets.Commit(COMMIT)) for one in repositories
+            )
+        ),
+    )
+
+
+def test_a_ticket_listing_several_repositories_reads_back_as_the_ticket_it_was_rendered_from() -> (
+    None
+):
+    """Its record's `repository` need not be one it lists; its basis is a commit for each."""
+    spanning = _spanning(REPOSITORY, OTHER_REPOSITORY)
+    item = _item(spanning)
+
+    assert item["repositories"] == [REPOSITORY, OTHER_REPOSITORY]
+    assert tickets.problems(item, run=RUN, root_cause=CAUSE) == []
+    read = tickets.from_store_item(item, run=RUN, root_cause=CAUSE)
+    assert read == spanning
+    assert read.repositories == (REPOSITORY, OTHER_REPOSITORY)
+    assert _ticket().repositories == (REPOSITORY,)
+    assert (
+        'repositories: ["github.com/nickderobertis/some-service", "github.com/nickderobertis/'
+        in (tickets.render(spanning))
+    )
+
+
 def test_a_repositories_entry_is_compared_only_against_a_record_repository_that_is_an_origin() -> (
     None
 ):
@@ -975,7 +1020,7 @@ FEEDBACK_FILE = Path("/drafts-root/feedback/listing-run/20260101T000000Z.md")
 BOARD_STATUS = "python -m orchestrator.follow_up_tickets board-status"
 BOARD_ITEMS = "python -m orchestrator.follow_up_tickets board-items"
 #: What every search the task spells names, so it asks the board the ticket is filed on.
-ON_ITS_BOARD = "--repository <the ticket's repository>"
+ON_ITS_BOARD = "--repository <each repository the ticket lists>"
 COPY = "python -m orchestrator.follow_up_tickets copy"
 RE_ESTIMATE = "python -m orchestrator.follow_up_tickets re-estimate"
 VALIDATE = "python -m orchestrator.follow_up_tickets validate"
@@ -1480,7 +1525,8 @@ def test_the_re_dispatch_brings_an_older_ticket_to_one_fix_and_no_repository() -
 
     assert (
         "a ticket of an older schema is brought to the current shape before it is copied, its "
-        "`repositories` naming its record's `repository`, its `host` read from this machine with "
+        "`repositories` listing every repository its fix changes, its `host` read from this "
+        "machine with "
         "`hostname`, and its `## Impact` section written from the evidence the ticket already "
         "carries, re-verifying only a claim that no longer holds; its `## Repository` section "
         "removed, any path the ticket still needs moved into `## Root cause`; its "
@@ -1551,11 +1597,20 @@ def test_the_contract_renders_the_ticket_with_every_key_heading_and_status_rule(
     assert "no `project`" in contract
     flat = _flat(contract)
     assert (
-        "**Its `repositories` names exactly one normalized origin, its record's `repository`**"
+        "**Its `repositories` lists every repository its fix changes, each once, as a normalized "
+        "origin**, and those repositories decide the board it is filed on."
     ) in flat
     assert (
-        "On a GitHub board its issue is created in that one repository and added to the board "
+        "on a GitHub board its issue is created in that one repository and added to the board "
         "as an item, and that repository must belong to the board's owner"
+    ) in flat
+    assert (
+        "**A ticket listing several repositories is filed in the board's default repository "
+        "rather than in any one of them**, as the store files a task naming several: on a GitHub "
+        "board its issue is created in the repository that board's configuration names, and its "
+        f"record's `repository` names that default repository — `{VALIDATE}` refuses the ticket "
+        "naming it otherwise. It takes a route only when every repository it lists matches that "
+        "route"
     ) in flat
     assert (
         "A repository one of the board's routes names — `github.com/petsinc/*`, which goes to "
@@ -1570,7 +1625,8 @@ def test_the_contract_renders_the_ticket_with_every_key_heading_and_status_rule(
         "copy nothing for that ticket, never retry it with `repositories` removed or changed to "
         "get it filed, and report what was printed"
     ) in flat
-    assert '\nrepositories: ["<normalized origin the root cause lives in' in contract
+    assert '\nrepositories: ["<normalized origin of every repository its fix changes' in contract
+    assert '"repository": "<normalized origin its issue is filed in' in contract
     assert f"A new ticket is `{tickets.Status.PROPOSED}`" in flat
     assert "A ticket the board already holds carries the status the board holds it at" in flat
     assert f"withdraws is `{tickets.Status.WITHDRAWN}`" in flat
@@ -1626,7 +1682,7 @@ def test_feedback_reaches_the_task_verbatim_under_its_own_heading() -> None:
     ) in flat
     assert (
         "a ticket of an older schema is brought to the current shape before it is copied, "
-        "its `repositories` naming its record's `repository`, its `host` read from this "
+        "its `repositories` listing every repository its fix changes, its `host` read from this "
         "machine with `hostname`, and its `## Impact` section written from the evidence the "
         "ticket already carries, re-verifying only a claim that no longer holds"
     ) in flat
@@ -2784,6 +2840,27 @@ def test_board_status_that_cannot_ask_the_board_is_unrunnable(
     assert "is not where a ticket is stored" in capsys.readouterr().err
 
 
+def test_board_status_routes_no_ticket_whose_repositories_list_none(
+    drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Its board is routed by `repositories`, so one listing none is asked about nowhere.
+
+    An entry that is no origin never reaches this: the store refuses to read such a ticket.
+    """
+    held = _ticket()
+    ticket = _write(
+        drafts_root,
+        held,
+        tickets.render(held).replace(f'repositories: ["{REPOSITORY}"]', "repositories: []"),
+    )
+
+    status = tickets.main(["board-status", "--board", tickets.BOARD, str(ticket)])
+
+    captured = capsys.readouterr()
+    assert (status, captured.out) == (tickets.UNRUNNABLE, "")
+    assert "the ticket lists no `repositories` that are normalized origins" in captured.err
+
+
 #: A repository under an owner the committed `followups` source does not configure.
 FOREIGN_REPOSITORY = "github.com/contoso/work"
 
@@ -3648,8 +3725,8 @@ def test_the_task_writes_each_ticket_against_the_accepted_fixes_its_searches_ret
         "wrote a few seconds ago.",
         "On Linear it is Linear's own search of the project's issue titles and descriptions, "
         "matched regardless of case.",
-        "`--repository` asks the board the ticket is filed on, and neither search is narrowed "
-        "further",
+        "`--repository`, given once for each repository the ticket lists, asks the board the "
+        "ticket is filed on, and neither search is narrowed further",
         "Only an unbound ticket needs these duplicate searches; nothing in this task lists "
         "the board.",
         "An item at `Deferred` is open: no agent picks it up to work on, but it is searched "
@@ -5634,8 +5711,8 @@ def _routed_ticket(**departures: object) -> tickets.Ticket:
 
 def test_the_family_is_the_board_and_every_source_its_routes_name(routed: Path) -> None:
     assert tickets.boards(BOARD) == (BOARD, ROUTED)
-    assert tickets.ticket_board(BOARD, ROUTED_REPOSITORY) == ROUTED
-    assert tickets.ticket_board(BOARD, REPOSITORY) == BOARD
+    assert tickets.ticket_board(BOARD, [ROUTED_REPOSITORY]) == ROUTED
+    assert tickets.ticket_board(BOARD, [REPOSITORY]) == BOARD
 
 
 def test_a_routed_ticket_is_filed_bound_decided_and_searched_on_the_board_its_route_names(
@@ -5686,6 +5763,77 @@ def test_a_ticket_no_route_names_stays_on_the_root_board(
     assert status == tickets.SOUND
     assert json.loads(printed)["destination"] == f"{BOARD}:{RUN}/tickets/{CAUSE}"
     assert not any(routed.rglob("*.md"))
+
+
+#: A second `petsinc` repository, which the stand-in board's route matches as it does the first.
+ROUTED_SIBLING = "github.com/petsinc/hp-web"
+
+
+def test_a_ticket_listing_several_repositories_takes_a_route_only_when_every_one_matches(
+    routed: Path,
+) -> None:
+    """The store's own rule: one repository outside a route keeps the ticket on the root board."""
+    assert tickets.ticket_board(BOARD, [ROUTED_REPOSITORY, ROUTED_SIBLING]) == ROUTED
+    assert tickets.ticket_board(BOARD, [ROUTED_REPOSITORY, REPOSITORY]) == BOARD
+    assert tickets.ticket_board(BOARD, [REPOSITORY, ROUTED_REPOSITORY]) == BOARD
+
+
+@pytest.mark.parametrize(
+    ("listed", "filed_in", "lands_on"),
+    [
+        ((ROUTED_REPOSITORY, ROUTED_SIBLING), ROUTED_REPOSITORY, ROUTED),
+        ((ROUTED_REPOSITORY, REPOSITORY), ROUTED_REPOSITORY, BOARD),
+        ((REPOSITORY, ROUTED_REPOSITORY), REPOSITORY, BOARD),
+    ],
+    ids=["every-one-routed", "routed-record-beside-another", "record-beside-a-routed-one"],
+)
+def test_a_ticket_listing_several_repositories_is_filed_where_its_route_sends_them_all(
+    routed: Path,
+    board: Path,
+    drafts_root: Path,
+    capsys: pytest.CaptureFixture[str],
+    listed: tuple[str, ...],
+    filed_in: str,
+    lands_on: str,
+) -> None:
+    """Decided, copied and searched on the board every listed repository routes it to.
+
+    Whichever of them the record names, and the copy there carries every one it lists. Both
+    stand-ins file no issue in a repository, so the record names one of those it lists.
+    """
+    ticket = _write(drafts_root, _spanning(*listed, filed_in=filed_in))
+    destination = f"{lands_on}:{RUN}/tickets/{CAUSE}"
+
+    assert _decided(ticket, capsys) == (tickets.SOUND, "backlog\n", "")
+    status, printed, reported = _copied(ticket, capsys)
+
+    assert (status, reported) == (tickets.SOUND, "")
+    assert json.loads(printed) == {"action": "created", "destination": destination}
+    assert _board_item(destination)["repositories"] == list(listed)
+    elsewhere = routed if lands_on == BOARD else board
+    assert not any(elsewhere.rglob("*.md")), f"the ticket reached a board other than {lands_on}"
+    query = ("--metadata", tickets.root_cause_query(CAUSE))
+    searched = [one for repository in listed for one in ("--repository", repository)]
+    assert _listed(capsys, *query, *searched) == (tickets.SOUND, [destination], "")
+
+
+def test_a_ticket_listing_several_repositories_whose_record_names_none_of_them_is_not_copied(
+    routed: Path, board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A stand-in files no issue in a repository, so the record names one the ticket lists."""
+    ticket = _write(drafts_root, _spanning(ROUTED_REPOSITORY, ROUTED_SIBLING))
+
+    decided = _decided(ticket, capsys)
+    status, printed, reported = _copied(ticket, capsys)
+
+    for refused in (decided, (status, printed, reported)):
+        assert refused[:2] == (tickets.UNRUNNABLE, "")
+        assert (
+            f"so it is filed on {ROUTED!r}, which files no issue in any repository; its record's "
+            f"`repository` {DEFAULT_REPOSITORY!r} names one of the repositories it lists"
+        ) in refused[2]
+    assert not any(routed.rglob("*.md"))
+    assert not any(board.rglob("*.md"))
 
 
 @pytest.mark.parametrize(
@@ -5752,6 +5900,58 @@ def test_the_dispositions_check_and_a_re_estimate_read_a_routed_ticket_where_it_
     assert "is not an item of the board" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(
+    ("listed", "lands_on"),
+    [((ROUTED_REPOSITORY, ROUTED_SIBLING), ROUTED), ((ROUTED_REPOSITORY, REPOSITORY), BOARD)],
+    ids=["every-one-routed", "one-routed"],
+)
+def test_the_dispositions_check_and_a_re_estimate_read_a_spanning_ticket_where_it_was_filed(
+    routed: Path,
+    drafts_root: Path,
+    capsys: pytest.CaptureFixture[str],
+    listed: tuple[str, ...],
+    lands_on: str,
+) -> None:
+    """The account and a re-estimate find a ticket listing several on the board they all route to.
+
+    A board item verified in each listed repository re-estimates; one whose basis has lost a
+    listed repository's commit is refused, since its record no longer covers that repository.
+    """
+    _drafted(drafts_root, RUN, "a-cursor-draft")
+    spanning = dataclasses.replace(
+        _spanning(*listed, filed_in=ROUTED_REPOSITORY), drafts=(tickets.QualifiedDraftId(DRAFT),)
+    )
+    ticket = _write(drafts_root, spanning)
+    tickets.open_dispositions(drafts_root, RUN).write_text(
+        json.dumps(_account(_disposed())), encoding="utf-8"
+    )
+    check = ["check-dispositions", "--root", str(drafts_root), "--board", BOARD, RUN]
+
+    assert tickets.main(check) == tickets.UNSOUND
+    assert f"evidence comment of run {RUN} on {lands_on}" in capsys.readouterr().err
+    assert _decided(ticket, capsys)[0] == tickets.SOUND
+    assert _copied(ticket, capsys)[0] == tickets.SOUND
+
+    assert tickets.main(check) == tickets.SOUND
+    assert "accounts for every draft" in capsys.readouterr().out
+    issue = f"{lands_on}:{RUN}/tickets/{CAUSE}"
+    assert tickets.main(["re-estimate", "--board", BOARD, issue]) == tickets.SOUND
+    assert json.loads(capsys.readouterr().out)["item"] == issue
+
+    location = _board_item(issue)["location"]
+    assert isinstance(location, dict)
+    held = Path(str(location["path"]))
+    unverified = listed[1]
+    text = held.read_text("utf-8")
+    dropped = re.sub(rf"^ +{re.escape(unverified)}: {COMMIT}\n", "", text, flags=re.M)
+    assert dropped != text, text
+    held.write_text(dropped, encoding="utf-8")
+    assert tickets.main(["re-estimate", "--board", BOARD, issue]) == tickets.UNSOUND
+    assert f"`basis` names no commit for the ticket's own repository {unverified!r}" in (
+        capsys.readouterr().err
+    )
+
+
 #: An accepted ticket on the routed board, with the issue URL Linear reports for one, which a
 #: ticket written against its fix names in its body; and a source outside the family.
 ROUTED_ACCEPTED = tickets.QualifiedBoardId(f"{ROUTED}:{OTHER_RUN}/tickets/intake-schema-renames")
@@ -5805,17 +6005,149 @@ def test_a_petsinc_root_cause_passes_the_owner_rule_by_its_route_and_an_outsider
     the owner; the route is read from configuration alone, so nothing reaches either board.
     """
     owner = tickets.board_owner(tickets.BOARD)
-    linear = tickets.ticket_board(tickets.BOARD, ROUTED_REPOSITORY)
+    linear = tickets.ticket_board(tickets.BOARD, [ROUTED_REPOSITORY])
 
     assert linear == "hellopatient-followups"
     assert tickets.boards(tickets.BOARD) == (tickets.BOARD, linear)
     assert tickets.owner_refusal(tickets.BOARD, owner, ROUTED_REPOSITORY, linear) is None
     assert tickets.owner_refusal(tickets.BOARD, owner, REPOSITORY, tickets.BOARD) is None
-    outside = tickets.ticket_board(tickets.BOARD, FOREIGN_REPOSITORY)
+    outside = tickets.ticket_board(tickets.BOARD, [FOREIGN_REPOSITORY])
     refusal = tickets.owner_refusal(tickets.BOARD, owner, FOREIGN_REPOSITORY, outside)
     assert outside == tickets.BOARD
     assert isinstance(refusal, tickets.OutsideOwner)
     assert "no route of the board sends it elsewhere" in str(refusal)
+
+
+def test_the_committed_followups_files_a_ticket_listing_several_in_its_configured_repository() -> (
+    None
+):
+    """A ticket listing one is filed in it; several, where the store files a parentless task.
+
+    The committed `followups` configures `nickderobertis/ai-orchestrator`, which a ticket
+    listing several is created in; Hello Patient's Linear, which a route sends a ticket listing
+    only `petsinc` repositories to, configures none, so it files no issue in a repository.
+    """
+    linear = tickets.ticket_board(tickets.BOARD, [ROUTED_REPOSITORY, ROUTED_SIBLING])
+
+    assert linear == "hellopatient-followups"
+    assert tickets.ticket_board(tickets.BOARD, [REPOSITORY, ROUTED_REPOSITORY]) == tickets.BOARD
+    assert tickets.filing_repository(tickets.BOARD, [REPOSITORY]) == REPOSITORY
+    assert tickets.filing_repository(tickets.BOARD, [REPOSITORY, ROUTED_REPOSITORY]) == (
+        DEFAULT_REPOSITORY
+    )
+    assert tickets.filing_repository(linear, [ROUTED_REPOSITORY, ROUTED_SIBLING]) is None
+
+
+@pytest.mark.parametrize(
+    ("ticket", "refusal"),
+    [
+        (_ticket(), None),
+        (_spanning(REPOSITORY, OTHER_REPOSITORY), None),
+        (_spanning(DEFAULT_REPOSITORY, OTHER_REPOSITORY), None),
+        (_spanning(REPOSITORY, ROUTED_REPOSITORY), None),
+        (_spanning(ROUTED_REPOSITORY, ROUTED_SIBLING, filed_in=ROUTED_REPOSITORY), None),
+        (
+            _spanning(REPOSITORY, OTHER_REPOSITORY, filed_in=REPOSITORY),
+            f"so its issue is created in 'followups''s configured repository "
+            f"{DEFAULT_REPOSITORY!r}, as the store creates a task naming several; its record's "
+            f"`repository` names {DEFAULT_REPOSITORY!r}, not {REPOSITORY!r}, and its title opens "
+            "`ai-orchestrator: `",
+        ),
+        (
+            _spanning(ROUTED_REPOSITORY, REPOSITORY, filed_in=ROUTED_REPOSITORY),
+            f"its record's `repository` names {DEFAULT_REPOSITORY!r}, not {ROUTED_REPOSITORY!r}",
+        ),
+        (
+            _spanning(ROUTED_REPOSITORY, ROUTED_SIBLING),
+            "so it is filed on 'hellopatient-followups', which files no issue in any repository",
+        ),
+    ],
+    ids=[
+        "one",
+        "several",
+        "several-listing-the-default",
+        "several-beside-a-routed-one",
+        "several-all-routed",
+        "several-in-a-listed-one",
+        "routed-record-beside-another",
+        "all-routed-in-the-default",
+    ],
+)
+def test_validate_holds_a_ticket_to_where_the_committed_followups_files_its_issue(
+    drafts_root: Path,
+    capsys: pytest.CaptureFixture[str],
+    ticket: tickets.Ticket,
+    refusal: str | None,
+) -> None:
+    """The `validate` the agent runs, against the committed boards' configuration alone."""
+    path = _write(drafts_root, ticket)
+
+    status = tickets.main(["validate", str(path)])
+
+    captured = capsys.readouterr()
+    if refusal is None:
+        assert (status, captured.err) == (tickets.SOUND, ""), captured.err
+    else:
+        assert status == tickets.UNSOUND
+        assert refusal in captured.err
+
+
+def test_validate_names_a_ticket_whose_board_configuration_cannot_be_read(
+    drafts_root: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unrunnable for that ticket, and still unrunnable when an unsound one is validated after.
+
+    The worse answer stands across the run, so a later refusal never hides that the board's
+    configuration could not be read.
+    """
+    path = _write(drafts_root, _spanning(REPOSITORY, OTHER_REPOSITORY))
+    unsound = _ticket(root_cause=tickets.RootCause("an-unsound-ticket"))
+    later = _write(
+        drafts_root,
+        unsound,
+        tickets.render(unsound).replace(f'"host": "{HOST}"', '"host": "under_score"'),
+    )
+    monkeypatch.setenv(
+        f"ONETASKGRAPH_SOURCES__{tickets.BOARD.upper()}__CONFIG__REPOSITORY", "not a repository"
+    )
+
+    status = tickets.main(["validate", str(path), str(later)])
+
+    captured = capsys.readouterr()
+    assert status == tickets.UNRUNNABLE
+    assert (
+        f"refused: source {tickets.BOARD!r} configures a repository 'not a repository' that is "
+        "not owner/name"
+    ) in captured.err
+    assert f"{later} is not a sound ticket" in captured.err
+
+
+def test_validate_refuses_a_stored_ticket_listing_one_repository_twice(
+    drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Refused by the agent's `validate`, naming the repository listed twice.
+
+    The `local-md` store a ticket is written in refuses the list itself, so its refusal is the
+    one the agent reads; :func:`tickets.problems` names the same for an item read from a board.
+    """
+    held = _spanning(DEFAULT_REPOSITORY, OTHER_REPOSITORY)
+    path = _write(
+        drafts_root,
+        held,
+        tickets.render(held).replace(
+            f'repositories: ["{DEFAULT_REPOSITORY}", "{OTHER_REPOSITORY}"]',
+            f'repositories: ["{DEFAULT_REPOSITORY}", "{OTHER_REPOSITORY}", "{OTHER_REPOSITORY}"]',
+        ),
+    )
+
+    status = tickets.main(["validate", str(path)])
+
+    captured = capsys.readouterr()
+    assert status == tickets.UNSOUND
+    assert (
+        f'\\"{OTHER_REPOSITORY}\\" is listed twice; a repository list names each origin once'
+        in (captured.err)
+    )
 
 
 #: A run id `just follow-ups` launches that Linear's Markdown normalization would rewrite in a

@@ -1902,6 +1902,125 @@ def test_a_follow_up_copy_carries_the_decided_priority_onto_the_boards_priority_
     )
 
 
+#: Two repositories outside the board's owner that the committed `followups` route sends to
+#: Hello Patient's Linear, and the local folder a journey points that route at instead.
+PETSINC_API = "github.com/petsinc/hp-api"
+PETSINC_WEB = "github.com/petsinc/hp-web"
+ROUTED_FOLLOWUPS = "routedfollowups"
+
+
+def _spanning_ticket(filed_in: str, *listed: str) -> follow_up_tickets.Ticket:
+    """The agent's ticket whose fix changes each of ``listed``, its issue filed in ``filed_in``."""
+    single = _follow_up_ticket(CONFIGURED_REPOSITORY)
+    origins = tuple(follow_up_tickets.Origin(one) for one in listed)
+    commit = single.basis[0].commit
+    return replace(
+        single,
+        title=f"{follow_up_tickets.repository_name(filed_in)}: {PROPOSED_CAUSE.replace('-', ' ')}",
+        repository=follow_up_tickets.Origin(filed_in),
+        changes=origins,
+        basis=tuple(sorted(follow_up_tickets.Basis(one, commit) for one in origins)),
+    )
+
+
+def _routing_petsinc_to_a_folder(environment: dict[str, str], root: Path) -> dict[str, str]:
+    """``environment`` with the `followups` route pointed at a local folder rather than Linear."""
+    root.mkdir()
+    return environment | {
+        "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__PLUGIN": plan_store.WRITABLE_PLUGIN,
+        "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__CONFIG__ROOT": str(root),
+        "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__REPOSITORIES": "github.com/petsinc/*",
+        "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__TO": ROUTED_FOLLOWUPS,
+    }
+
+
+@pytest.mark.parametrize(
+    "listed",
+    [(_hosted(SIBLING_REPOSITORY), PETSINC_API), (PETSINC_API, _hosted(SIBLING_REPOSITORY))],
+    ids=["owner-first", "routed-first"],
+)
+def test_a_ticket_whose_fix_changes_several_repositories_is_filed_in_the_boards_own_repository(
+    tmp_path: Path, listed: tuple[str, ...]
+) -> None:
+    """Decided, validated and copied as the agent does: on `followups`, its issue in the default.
+
+    The fix changes a repository of the board's owner and a `petsinc` one, which no route
+    matches together, so the store keeps it on `followups` and creates its issue in the
+    repository that source configures, whichever is listed first. A re-copy updates that
+    issue, its copy carries both repositories, and no issue was created in either of them; a
+    re-estimate reads the item, verified in the two it lists rather than where it was filed.
+    """
+    environment, drafts_root = _followups_environment(tmp_path)
+    filed_in = _hosted(CONFIGURED_REPOSITORY)
+    ticket = _written_ticket(drafts_root, _spanning_ticket(filed_in, *listed))
+    routed = _routing_petsinc_to_a_folder(environment, tmp_path / "routed")
+
+    with _serving_followups(routed, fields=True):
+        destination = _decided_and_copied(routed, ticket)
+        assert _decided_and_copied(routed, ticket) == destination
+        estimated = _re_estimated(routed, destination)
+        shown = _followups_item(routed, destination)
+        local = _followups_item(
+            routed, follow_up_tickets.qualified_id(PROPOSED_RUN, PROPOSED_CAUSE)
+        )
+
+    assert destination.startswith(f"{follow_up_tickets.BOARD}:"), destination
+    assert estimated["item"] == destination
+    (created,) = BOARD.created
+    assert created.repository == CONFIGURED_REPOSITORY
+    assert _estimate_record(shown)["repository"] == filed_in
+    assert shown["repositories"] == list(listed)
+    assert local["repositories"] == list(listed)
+    bound = _estimate_record(local)[follow_up_tickets.BINDING_FIELD]
+    assert destination == f"{follow_up_tickets.BOARD}:{bound}"
+    assert not any((tmp_path / "routed").rglob("*.md")), "the route took a ticket it never matched"
+
+
+def test_a_ticket_whose_fix_changes_only_routed_repositories_is_filed_where_the_route_sends_them(
+    tmp_path: Path,
+) -> None:
+    """Every listed repository matches the route, so the store files it there and not on GitHub.
+
+    The routed board files no issue in a repository, so the record names one of those listed;
+    the local folder the route is pointed at holds the copy, carrying both.
+    """
+    environment, drafts_root = _followups_environment(tmp_path)
+    ticket = _written_ticket(drafts_root, _spanning_ticket(PETSINC_API, PETSINC_API, PETSINC_WEB))
+    routed = _routing_petsinc_to_a_folder(environment, tmp_path / "routed")
+
+    with _serving_followups(routed, fields=True):
+        destination = _decided_and_copied(routed, ticket)
+        shown = _followups_item(routed, destination)
+
+    assert destination.startswith(f"{ROUTED_FOLLOWUPS}:"), destination
+    assert shown["repositories"] == [PETSINC_API, PETSINC_WEB]
+    assert BOARD.created == [], "a ticket the route takes reached the GitHub board"
+
+
+def test_a_ticket_whose_fix_changes_several_repositories_is_refused_naming_where_it_is_filed(
+    tmp_path: Path,
+) -> None:
+    """A record naming one of the listed repositories, not the default, is refused before a copy.
+
+    `board-status` is the agent's first command on a ticket, so it is where the refusal is
+    met; the copy after it is refused too, and nothing reaches the board.
+    """
+    environment, drafts_root = _followups_environment(tmp_path)
+    sibling = _hosted(SIBLING_REPOSITORY)
+    ticket = _written_ticket(drafts_root, _spanning_ticket(sibling, sibling, PETSINC_API))
+    routed = _routing_petsinc_to_a_folder(environment, tmp_path / "routed")
+
+    with _serving_followups(routed, fields=True):
+        decided = _board_status(routed, ticket)
+        copied = _follow_up_module(routed, "copy", "--board", follow_up_tickets.BOARD, str(ticket))
+
+    configured = _hosted(CONFIGURED_REPOSITORY)
+    assert (decided.returncode, decided.stdout) == (follow_up_tickets.UNRUNNABLE, "")
+    assert f"its record's `repository` names {configured!r}, not {sibling!r}" in decided.stderr
+    assert copied.returncode == follow_up_tickets.UNRUNNABLE, copied.stdout + copied.stderr
+    assert BOARD.created == [], "a refused ticket reached the board"
+
+
 #: The run whose evidence comment reaches the tickets below, and the root cause of the second.
 LATER_RUN = "a-later-run"
 HELD_CAUSE = "a-priority-a-person-holds"

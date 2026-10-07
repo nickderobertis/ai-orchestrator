@@ -150,7 +150,7 @@ RECIPE_PYTHON = str(REPO_ROOT / "scripts" / ".." / ".venv" / "bin" / "python3")
 #: the store's environment layer as well as onto `--to`.
 BOARD = "standin"
 #: What every search the task spells names, so it asks the board the ticket is filed on.
-ON_ITS_BOARD = "--repository <the ticket's repository>"
+ON_ITS_BOARD = "--repository <each repository the ticket lists>"
 #: How many items one page of the stand-in holds, set through the store's own environment
 #: layer for the setting: small enough that the board spans pages before the first pass
 #: runs, so a listing that read one page would read it as smaller than it is — the shape

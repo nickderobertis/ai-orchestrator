@@ -28,13 +28,15 @@ agent validates each ticket it writes through this module's `validate` command, 
 the status it carries through its `board-status` command, before copying it. And the
 journeys read the board back through :func:`from_store_item` and :func:`comment_owner`.
 
-**A ticket is filed on the board its repository routes it to.** `followups` is the root of a
+**A ticket is filed on the board its repositories route it to.** `followups` is the root of a
 run's **destination family**: it and every source its `routes` send a ticket to
 (`onetaskgraph.yaml` sends a `github.com/petsinc/*` root cause to Hello Patient's Linear,
 `hellopatient-followups`). Every command taking `--board` takes that root and acts on each
-ticket at **its board** — :func:`ticket_board`, the store's own `sources route` for the
-ticket's repository — so a ticket's binding, origin search, survivor, estimate and copy all
-live where its item does, and nothing here names the routed source.
+ticket at **its board** — :func:`ticket_board`, the store's own `sources route` for every
+repository the ticket's `repositories` lists — so a ticket's binding, origin search, survivor,
+estimate and copy all live where its item does, and nothing here names the routed source. A
+ticket whose fix changes several repositories lists them all and is filed exactly as the store
+files a parentless task naming several (:func:`filing_problems`), never by any one of them.
 
 **The board is the record of the user's decision, and a ticket names its machine.** A ticket
 reaches the board as a proposal and a person accepts it there, so the status a copy writes
@@ -94,10 +96,13 @@ BOARD = "followups"
 
 #: The version of the record below. A reader refuses any other: a ticket is a stored shape
 #: that outlives the agent that wrote it. Schema 2 added `host` and the proposal statuses;
-#: schema 3 added `repositories`, which files a ticket's issue in its root cause's repository;
+#: schema 3 added `repositories`, the repositories a ticket's issue is filed and routed by;
 #: schema 4 added the body's `## Impact` section; schema 5 removed `## Repository`, which the
 #: record's `repository` already says, and replaced `## Suggested fixes` with `## Suggested fix`,
 #: stating the one fix, beside an optional `## Rejected fixes` for the others considered.
+#: A ticket listing several repositories moved no schema: `repositories` is the store's
+#: own field, and the record's `repository` keeps its meaning, the repository its issue is filed
+#: in, so every ticket already on the board reads as it did.
 #: A dependency on an accepted ticket moved no schema: it lives in the store's own
 #: :data:`DEPENDENCY_FIELD`, outside this record, so no ticket on the board is of an older
 #: shape for it and there is nothing to bring forward. Schema 6 added the optional
@@ -1055,7 +1060,9 @@ class Ticket:
     judgment is recorded; and ``priority`` the front matter's :data:`PRIORITY_FIELD`.
     ``origin`` and ``links`` are the store's own :data:`ORIGIN_KEY` and :data:`COPIES_KEY`, as
     read, so a rewrite of the ticket carries them through unchanged; ``links`` is sorted by
-    source, empty until a copy records one.
+    source, empty until a copy records one. ``changes`` is every repository the ticket's fix
+    changes when its `repositories` lists more than one, in the order listed, and empty for a
+    ticket listing only its ``repository``; :attr:`repositories` is the list either way.
     """
 
     title: str
@@ -1077,6 +1084,12 @@ class Ticket:
     origin: plan_store.QualifiedTaskId | None = None
     links: tuple[CopyLink, ...] = ()
     budget: OverrunBudget | None = None
+    changes: tuple[Origin, ...] = ()
+
+    @property
+    def repositories(self) -> tuple[Origin, ...]:
+        """The store's `repositories`: every repository the fix changes, which routes it."""
+        return self.changes or (self.repository,)
 
     def link(self, board: str) -> BoardItemId | None:
         """The native id of the item the store's link names on ``board``, or `None`."""
@@ -1171,8 +1184,8 @@ def dependency_entries(ticket: Ticket) -> list[dict[str, str]]:
 def render(ticket: Ticket) -> str:
     """One ticket as the `local-md` record it is stored as.
 
-    No `project`, and `repositories` naming exactly the record's `repository` — derived from
-    it rather than held beside it, so nothing written here can make the two differ. The
+    No `project`, and `repositories` naming every repository the fix changes, which is the
+    record's `repository` alone for a ticket whose fix changes one repository. The
     store's :data:`DEPENDENCY_FIELD` is written only when the ticket depends on something,
     and its :data:`ORIGIN_KEY` and :data:`COPIES_KEY` only as the ticket holds them, each in
     the one-line form the store itself writes into a `local-md` record.
@@ -1181,7 +1194,7 @@ def render(ticket: Ticket) -> str:
         "title": ticket.title,
         "status": ticket.status.value,
         PRIORITY_FIELD: str(ticket.priority),
-        "repositories": [ticket.repository],
+        "repositories": list(ticket.repositories),
     }
     if ticket.depends_on:
         fields[DEPENDENCY_FIELD] = dependency_entries(ticket)
@@ -1264,7 +1277,8 @@ def _drafts_problems(consumed: object, runs: object) -> list[str]:
     return found
 
 
-def _basis_problems(basis: object, repository: object) -> list[str]:
+def _basis_problems(basis: object, verified: Sequence[object]) -> list[str]:
+    """How ``basis`` is not a commit per verified repository: each of ``verified`` an origin."""
     if not isinstance(basis, Mapping) or not basis:
         return ["`basis` is not a non-empty mapping of normalized origin to commit"]
     found = [
@@ -1272,8 +1286,11 @@ def _basis_problems(basis: object, repository: object) -> list[str]:
         for origin, commit in basis.items()
         if not _is_origin(origin) or not isinstance(commit, str) or not COMMIT.fullmatch(commit)
     ]
-    if isinstance(repository, str) and repository not in basis:
-        found.append(f"`basis` names no commit for the ticket's own repository {repository!r}")
+    found.extend(
+        f"`basis` names no commit for the ticket's own repository {repository!r}"
+        for repository in verified
+        if isinstance(repository, str) and repository not in basis
+    )
     return found
 
 
@@ -1304,6 +1321,7 @@ def _record_problems(
     root_cause: str | None,
     pending: bool = False,
     for_copy: bool = False,
+    repositories: object = None,
 ) -> list[str]:
     """Every way a record is not the current one.
 
@@ -1312,6 +1330,8 @@ def _record_problems(
     `board-status` does before writing the estimate: a :data:`UNESTIMATED_SCHEMA` record, and
     one with no :data:`ESTIMATE_FIELD` yet, are both what it is about to bring forward.
     ``for_copy`` holds a ticket about to be copied to carrying a frequency judgment.
+    ``repositories`` is the item's own list: a ticket listing several is verified in each of
+    them, and its record's `repository` — where its issue is filed — need not be one.
     """
     found = []
     readable = (*SOUND_SCHEMAS, UNESTIMATED_SCHEMA) if pending else SOUND_SCHEMAS
@@ -1376,7 +1396,8 @@ def _record_problems(
     # Its optional budget is validated below; no other ticket may omit its source drafts.
     if held["drafts"] != [] or BUDGET_FIELD not in held:
         found.extend(_drafts_problems(held["drafts"], held["owning_runs"]))
-    found.extend(_basis_problems(held["basis"], repository))
+    verified = repositories if isinstance(repositories, list) and len(repositories) > 1 else []
+    found.extend(_basis_problems(held["basis"], verified or [repository]))
     if not _real_time(held["verified_at"]):
         found.append(
             f"`verified_at` {held['verified_at']!r} is not an RFC 3339 UTC time like "
@@ -1503,27 +1524,35 @@ def _links_problems(links: object) -> list[str]:
 
 
 def _repositories_problems(repositories: object, repository: object) -> list[str]:
-    """How `repositories` is not exactly the record's `repository`, where the issue is created."""
-    match repositories:
-        case [named]:
-            if _is_origin(repository) and named != repository:
-                return [
-                    f"the ticket's `repositories` names {named!r}, not its record's "
-                    f"`repository` {repository!r}; the two name the one repository its issue "
-                    "is created in"
-                ]
-            return []
-        case [_, _, *_] as several:
-            return [
-                f"the ticket's `repositories` names {len(several)} entries; a ticket names "
-                "exactly one, its record's `repository`, which is the repository its issue is "
-                "created in"
-            ]
-        case _:
-            return [
-                "the ticket carries no `repositories`; a ticket names exactly one, its record's "
-                "`repository`, which is the repository its issue is created in"
-            ]
+    """How `repositories` does not list, once each, every repository the ticket's fix changes.
+
+    A ticket listing one repository is filed in it, so that one is its record's `repository`.
+    One listing several is filed where the store files a parentless task naming several, which
+    only the board it routes to can say, so :func:`filing_problems` holds its record to that.
+    """
+    if not isinstance(repositories, list) or not repositories:
+        return [
+            "the ticket carries no `repositories`; it lists every repository its fix changes, "
+            "and a ticket whose fix changes one lists that one, its record's `repository`"
+        ]
+    found = [
+        f"the ticket's `repositories` entry {named!r} is not a normalized origin like "
+        "github.com/owner/name"
+        for named in repositories
+        if not _is_origin(named)
+    ]
+    found.extend(
+        f"the ticket's `repositories` names {named!r} {count} times; list each repository once"
+        for named, count in Counter(str(one) for one in repositories).items()
+        if count > 1
+    )
+    if len(repositories) == 1 and _is_origin(repository) and repositories[0] != repository:
+        found.append(
+            f"the ticket's `repositories` names {repositories[0]!r}, not its record's "
+            f"`repository` {repository!r}; a ticket whose fix changes one repository is filed "
+            "in it, so the two name the same one"
+        )
+    return found
 
 
 def _impact_problems(
@@ -1905,7 +1934,12 @@ def problems(  # noqa: PLR0913 - each reading of an item is its own keyword
     if isinstance(held, Mapping):
         found.extend(
             _record_problems(
-                held, run=run, root_cause=root_cause, pending=pending, for_copy=for_copy
+                held,
+                run=run,
+                root_cause=root_cause,
+                pending=pending,
+                for_copy=for_copy,
+                repositories=item.get("repositories"),
             )
         )
         found.extend(_origin_problems(metadata.get(ORIGIN_KEY), held))
@@ -1982,6 +2016,8 @@ def from_store_item(  # noqa: PLR0913 - each reading of an item is its own keywo
     links = metadata.get(COPIES_KEY) or {}
     assert isinstance(links, Mapping)  # noqa: S101
     origin = metadata.get(ORIGIN_KEY)
+    listed = item["repositories"]
+    assert isinstance(listed, list)  # noqa: S101
     return Ticket(
         title=str(item["title"]),
         status=Status(str(_category(item["status"]))),
@@ -2015,6 +2051,7 @@ def from_store_item(  # noqa: PLR0913 - each reading of an item is its own keywo
             if BUDGET_FIELD in held
             else None
         ),
+        changes=tuple(Origin(str(one)) for one in listed) if len(listed) > 1 else (),
     )
 
 
@@ -2207,15 +2244,68 @@ def boards(board: str) -> tuple[str, ...]:
     return (board, *(to for to in plan_store.routed_sources(board) if to != board))
 
 
-def ticket_board(board: str, repository: str) -> str:
-    """The board of ``board``'s family a ticket of ``repository`` is filed on.
+def ticket_board(board: str, repositories: Sequence[str]) -> str:
+    """The board of ``board``'s family a ticket listing ``repositories`` is filed on.
 
     The store's own `sources route`, which reads configuration alone: the source a route of
-    ``board`` sends the repository to, or ``board`` itself when none matches. It is where the
-    store's `task copy --to <board>` lands that ticket, so every read of its item asks there.
+    ``board`` sends the repositories to — one every listed repository matches — or ``board``
+    itself when none does. It is where the store's `task copy --to <board>` lands that
+    ticket, so every read of its item asks there.
     """
-    routed = plan_store.sdk(plan_store.client().sources_route(board, repository=[repository]))
+    routed = plan_store.sdk(plan_store.client().sources_route(board, repository=list(repositories)))
     return routed.destination.root
+
+
+def filing_repository(routed: str, repositories: Sequence[str]) -> str | None:
+    """The normalized origin ``routed`` creates the issue of a ticket listing ``repositories`` in.
+
+    The store's rule for a parentless task: one listed repository is where it is created, and
+    several leave it to the source's configured `repository`. `None` for a ticket listing
+    several on a source configuring none — a Linear or `local-md` board, which files no issue
+    in any repository.
+    """
+    if len(repositories) == 1:
+        return repositories[0]
+    configured = plan_store.configured_settings().get(f"sources.{routed}.config.repository")
+    if configured is None:
+        return None
+    if not isinstance(configured, str) or not _is_origin(origin := f"{GITHUB}/{configured}"):
+        raise OSError(
+            f"source {routed!r} configures a repository {configured!r} that is not owner/name"
+        )
+    return origin
+
+
+def filing_problems(ticket: Ticket, board: str) -> list[str]:
+    """How ``ticket``'s record disagrees with where ``board``'s family files its issue.
+
+    A ticket listing one repository is held to it by :func:`problems` alone, so nothing is
+    asked of the store for it. One listing several is filed as the store files a parentless
+    task naming them: on the board a route every listed repository matches sends it to, and
+    there in that board's configured repository, which its record's `repository` names — or,
+    on a board filing no issue in a repository, one of the repositories it lists.
+    """
+    if not ticket.changes:
+        return []
+    routed = ticket_board(board, ticket.changes)
+    filed = filing_repository(routed, ticket.changes)
+    listed = ", ".join(ticket.changes)
+    if filed is None:
+        if ticket.repository in ticket.changes:
+            return []
+        return [
+            f"the ticket lists several repositories ({listed}), so it is filed on {routed!r}, "
+            "which files no issue in any repository; its record's `repository` "
+            f"{ticket.repository!r} names one of the repositories it lists"
+        ]
+    if ticket.repository == filed:
+        return []
+    return [
+        f"the ticket lists several repositories ({listed}), so its issue is created in "
+        f"{routed!r}'s configured repository {filed!r}, as the store creates a task naming "
+        f"several; its record's `repository` names {filed!r}, not {ticket.repository!r}, and "
+        f"its title opens `{repository_name(filed)}: `"
+    ]
 
 
 def owner_refusal(
@@ -2238,6 +2328,19 @@ def _held_record(item: Mapping[str, object]) -> Mapping[str, object]:
     metadata = item.get("metadata")
     held = metadata.get(KEY) if isinstance(metadata, Mapping) else None
     return held if isinstance(held, Mapping) else {}
+
+
+def ticket_repositories(item: Mapping[str, object]) -> list[str]:
+    """The `repositories` the stored ticket lists, which its board is routed by."""
+    listed = item.get("repositories")
+    if not isinstance(listed, list) or not listed or not all(map(_is_origin, listed)):
+        raise Refused(
+            [
+                "the ticket lists no `repositories` that are normalized origins; validate the "
+                "ticket before asking the board about it"
+            ]
+        )
+    return [str(one) for one in listed]
 
 
 def ticket_repository(ticket: str, item: Mapping[str, object]) -> str:
@@ -2344,12 +2447,12 @@ def board_items(  # noqa: PLR0913 - each narrowing is its own keyword
     metadata: Sequence[str] = (),
     origin: str | None = None,
     statuses: Sequence[str] = (),
-    repository: str | None = None,
+    repositories: Sequence[str] = (),
 ) -> list[QualifiedTask]:
     """Every item of ``board`` one narrowing query selects, every page, in listing order.
 
-    ``repository`` asks the board a ticket of that repository is filed on instead —
-    :func:`ticket_board`, the root's route for it — which is where its duplicate and the
+    ``repositories`` asks the board a ticket listing them is filed on instead —
+    :func:`ticket_board`, the root's route for them — which is where its duplicate and the
     accepted fixes on its board are; the query is otherwise sent as it would be to ``board``.
 
     The one board query the follow-up agent is given, and never a listing of the whole board:
@@ -2391,15 +2494,16 @@ def board_items(  # noqa: PLR0913 - each narrowing is its own keyword
                 "the whole board; name the text, the metadata value or the origin it looks for"
             ]
         )
-    if repository is not None:
-        if not _is_origin(repository):
+    if repositories:
+        if unnamed := [one for one in repositories if not _is_origin(one)]:
             raise Refused(
                 [
                     f"--repository {repository!r} is not a normalized origin like "
                     "github.com/owner/name, so it names no board to ask"
+                    for repository in unnamed
                 ]
             )
-        board = ticket_board(board, repository)
+        board = ticket_board(board, repositories)
     query: dict[str, object] = {"source": [board]}
     if search is not None:
         query["search"] = search
@@ -2645,7 +2749,9 @@ def copy_ticket(path: Path, board: str) -> Copied:
     recorded to it.
     """
     ticket = read_ticket(path, for_copy=True)
-    routed = ticket_board(board, ticket.repository)
+    if misfiled := filing_problems(ticket, board):
+        raise Refused(misfiled)
+    routed = ticket_board(board, ticket.repositories)
     bound = _followed(ticket, routed)
     if ticket.board_item is None and bound is not None:
         raise Misbound(
@@ -2859,7 +2965,9 @@ def re_estimate(board: str, issue: str) -> ReEstimated:
     # The whole record is held to its shape before anything is written from it, as
     # `board-status` reads a ticket: a schema-6 record, or one storing no estimate yet, is
     # what this brings forward, and nothing else about it may be unsound.
-    if unsound := _record_problems(held, run=None, root_cause=None, pending=True):
+    if unsound := _record_problems(
+        held, run=None, root_cause=None, pending=True, repositories=item.get("repositories")
+    ):
         raise Refused([f"{issue}'s `{KEY}` record is not sound: {problem}" for problem in unsound])
     # The item is written below as the ticket its record describes, so it has to be the item
     # copied from that ticket: the store's origin names it in the drafts source, and nothing
@@ -3626,7 +3734,7 @@ def filed_board_problems(
         if ticket is None:
             # The local shape was refused, so no board evidence can make this ticket sound.
             raise Refused([f"the filed root cause {cause} has no readable local ticket"])
-        routed = ticket_board(board, ticket.repository)
+        routed = ticket_board(board, ticket.repositories)
         carrier = _own_carrier(ticket, qualified_id(run, cause), routed, reads)
         copied = carrier is not None
         if carrier is None:
@@ -5125,7 +5233,8 @@ def ticket_example(run: str, board: str) -> str:
         status=Status.PROPOSED,
         root_cause=RootCause("<root-cause>"),
         repository=Origin(
-            "<normalized origin the root cause lives in, like github.com/owner/name>"
+            "<normalized origin its issue is filed in, like github.com/owner/name: the one "
+            "repository its fix changes, or the board's default repository when it changes several>"
         ),
         created_by_run=RunId(run),
         owning_runs=(
@@ -5135,10 +5244,11 @@ def ticket_example(run: str, board: str) -> str:
         drafts=(QualifiedDraftId(f"{SOURCE}:{run}/{drafts.DRAFTS}/<draft-id>"),),
         basis=(
             Basis(
-                Origin("<normalized origin>"),
+                Origin("<normalized origin of each repository `repositories` lists>"),
                 Commit("<the 40-character commit the claims were verified at>"),
             ),
         ),
+        changes=(Origin("<normalized origin of every repository its fix changes, each once>"),),
         verified_at=Timestamp("<now, in RFC 3339 UTC: YYYY-MM-DDTHH:MM:SSZ>"),
         host=Host("<exactly what `hostname` prints on the machine you run on>"),
         body=_example_body(),
@@ -5619,10 +5729,13 @@ def _parser() -> _Parser:
     listing.add_argument("--board", required=True, metavar="SOURCE")
     listing.add_argument(
         "--repository",
+        action="append",
+        default=[],
         metavar="ORIGIN",
         help=(
-            "ask the board a ticket of this repository is filed on — the root board, or the "
-            "source one of its routes sends the repository to — rather than the root board"
+            "ask the board a ticket listing these repositories is filed on — the root board, "
+            "or the source one of its routes sends them all to — rather than the root board; "
+            "repeat for each repository the ticket lists"
         ),
     )
     listing.add_argument(
@@ -5810,12 +5923,18 @@ def _parser() -> _Parser:
 
 
 def _validated(paths: Sequence[Path]) -> int:
+    """Validate each ticket, one listing several repositories against where it is filed."""
     status = SOUND
     for path in paths:
         try:
-            read_ticket(path, for_copy=True)
+            if misfiled := filing_problems(read_ticket(path, for_copy=True), BOARD):
+                raise Refused(misfiled)
+        except OSError as exc:
+            status = UNRUNNABLE
+            print(f"{PROG}: {path}: refused: {exc}", file=sys.stderr)
+            continue
         except Refused as refusal:
-            status = UNSOUND
+            status = max(status, UNSOUND)
             print(f"{PROG}: {path} is not a sound ticket:", file=sys.stderr)
             for problem in refusal.problems:
                 print(f"  - {problem}", file=sys.stderr)
@@ -6126,7 +6245,7 @@ def _listed(arguments: argparse.Namespace) -> int:
             metadata=arguments.metadata,
             origin=arguments.origin,
             statuses=arguments.status,
-            repository=arguments.repository,
+            repositories=arguments.repository,
         )
     except (OSError, Refused) as exc:
         print(f"{PROG}: refused: {exc}", file=sys.stderr)
@@ -6147,12 +6266,14 @@ def _placed(arguments: argparse.Namespace) -> int:
         # unreadable one is refused before the ticket's record is held to anything.
         owner = board_owner(arguments.board)
         repository = ticket_repository(ticket, item)
-        routed = ticket_board(arguments.board, repository)
+        routed = ticket_board(arguments.board, ticket_repositories(item))
         if refusal := owner_refusal(arguments.board, owner, repository, routed):
             raise refusal
         if unheld := dependency_problems(ticket, item, arguments.board, stored.edges):
             raise NotAccepted(unheld)
         local = ticket_from(arguments.path, stored, pending=True)
+        if misfiled := filing_problems(local, arguments.board):
+            raise Refused(misfiled)
         reads = BoardReads()
         placement = correspond(arguments.path, routed, pending=True, ticket=local, reads=reads)
         status = status_before_copy(placement.category, withdraw=arguments.withdraw)

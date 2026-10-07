@@ -217,8 +217,9 @@ louder rather than duplicated.
   `git grep <pattern> origin/<base>`. Never check out, commit to, or otherwise modify any
   checkout, and never clone. A repository with no registered checkout cannot be verified.
 - **The board.** `{{ board }}` is the plan source verified tickets are copied onto, and the
-  root of the boards they are filed on: a ticket lands on the board its repository routes it
-  to, which `{{ plan_store }} sources route {{ board }} --repository <its repository> --json`
+  root of the boards they are filed on: a ticket lands on the board the repositories its
+  `repositories` lists route it to — a route takes it only when every one of them matches —
+  which `{{ plan_store }} sources route {{ board }} --repository <each repository it lists> --json`
   answers from configuration alone — `{{ board }}` itself, a GitHub Projects board whose
   items are GitHub issues, or the source one of its routes names, such as Hello Patient's
   Linear, whose Agent Follow-ups project holds a `github.com/petsinc/*` root cause's ticket as
@@ -227,7 +228,7 @@ louder rather than duplicated.
   listed whole: reading every item of one spends a share of its API's allowance — GitHub's
   hourly one on `{{ board }}` — that grows with the board, and every session on this host
   shares that allowance. Ask it one narrowing question at a time with
-  `{{ board_items }} --board {{ board }} --repository <the ticket's repository>`, naming at least one
+  `{{ board_items }} --board {{ board }} --repository <each repository the ticket lists>`, naming at least one
   of `--metadata <KEY>[/<SEGMENT>…]=<VALUE>`, `--origin <qualified id>` and `--search <text>`;
   it refuses a query naming none, reads every page the store answers, and prints the result
   as one JSON document. `--status <word>`, repeated, keeps only the items at those statuses of
@@ -276,7 +277,7 @@ Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Review
 1. **Record the basis first.** Before verifying anything, fetch `origin` in the registered
    checkout of every repository a draft names, and record `git rev-parse origin/<base>`.
    That commit is the basis every claim about that repository is verified at, and it is
-   what the ticket's `basis` records.
+   what the ticket's `basis` records, for every repository its `repositories` lists.
 2. **Verify each draft against that basis.** Read what the draft claims, its transcript and
    the tree, and decide whether the claim holds at the basis commit.
 3. **Drop a draft you cannot verify, or one the basis already fixes.** Keep the id of every
@@ -309,11 +310,11 @@ Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Review
    `{{ board_status }}` alone runs recovery discovery and applies the duplicate rule. Read its bound item through `{{ board_status }}` and copy onto that item.
    For an unbound ticket, ask each distinct question once, and never by origin: step 8's
    `{{ board_status }}` asks by origin, and nothing else does. Ask once by its root cause,
-   `{{ board_items }} --board {{ board }} --repository <the ticket's repository> --metadata {{ shape.record_key }}/root_cause=<root-cause>`,
-   then by text, `{{ board_items }} --board {{ board }} --repository <the ticket's repository> --search <text>`, once per distinct question about
+   `{{ board_items }} --board {{ board }} --repository <each repository the ticket lists> --metadata {{ shape.record_key }}/root_cause=<root-cause>`,
+   then by text, `{{ board_items }} --board {{ board }} --repository <each repository the ticket lists> --search <text>`, once per distinct question about
    its failing function, file, command or message. Reuse every answer tooling or an earlier
-   step already obtained in this dispatch; never repeat the same search. `--repository`
-   asks the board the ticket is filed on, and neither search is narrowed further: both answer
+   step already obtained in this dispatch; never repeat the same search. `--repository`,
+   given once for each repository the ticket lists, asks the board the ticket is filed on, and neither search is narrowed further: both answer
    whichever repository on that board an item lives in. On a GitHub board the
    text search is GitHub's own search of the board's issues: it matches whole words before
    it confirms the text, so search for words an issue would carry rather than a fragment of
@@ -451,13 +452,22 @@ A ticket is a local Markdown task in the `{{ shape.drafts_source }}` source, wri
 `{{ shape.ticket_id }}` — where `<root-cause>` is a kebab-case slug.
 
 - It carries **no `project`**, so it lands on the board as a standalone item.
-- **Its `repositories` names exactly one normalized origin, its record's `repository`**:
-  the repository the root cause lives in, which decides the board it is filed on. On a GitHub
-  board its issue is created in that one repository and added to the board as an item, and
-  that repository must belong to the board's owner, as `github.com/<owner>/<name>`. A
-  repository one of the board's routes names — `github.com/petsinc/*`, which goes to Hello
-  Patient's Linear — is filed as an issue of the source that route names instead, whatever its
-  owner.
+- **Its `repositories` lists every repository its fix changes, each once, as a normalized
+  origin**, and those repositories decide the board it is filed on. A fix that changes one
+  repository lists that one, the repository its root cause lives in, and the record's
+  `repository` names it too: on a GitHub board its issue is created in that one repository
+  and added to the board as an item, and that repository must belong to the board's owner, as
+  `github.com/<owner>/<name>`. A repository one of the board's routes names —
+  `github.com/petsinc/*`, which goes to Hello Patient's Linear — is filed as an issue of the
+  source that route names instead, whatever its owner.
+- **A ticket listing several repositories is filed in the board's default repository rather
+  than in any one of them**, as the store files a task naming several: on a GitHub board its
+  issue is created in the repository that board's configuration names, and its record's
+  `repository` names that default repository — `{{ validate }}` refuses the ticket naming it
+  otherwise. It takes a route only when every repository it lists matches that route, so a
+  ticket listing a `github.com/petsinc/*` repository beside one elsewhere stays on
+  `{{ board }}`; one a route takes to a board filing no issue in a repository, such as Hello
+  Patient's Linear, names one of the repositories it lists as its record's `repository`.
 - Its title is `<repository name>: <the root cause in one line>`, at most
   {{ shape.title_limit }} characters, where the repository name is the last segment of `repository`.
 - **Its status is the board's to decide.** A new ticket is `{{ shape.proposed }}`, a proposal

@@ -92,7 +92,7 @@ def instruction(
     step selects.
     """
     named = re.escape(board or "")
-    routed = re.escape(" --repository <the ticket's repository>")
+    routed = re.escape(" --repository <each repository the ticket lists>")
     if run is not None:
         found = re.search(
             rf"`([^`\n]*?task list --source drafts --project {re.escape(run)} --json)`", task
@@ -206,12 +206,14 @@ def main() -> int:
             wanted = f"<store> task list --source drafts --project {arguments.run} --json"
         elif arguments.search is not None:
             wanted = (
-                f"<board-items> --board {arguments.board} --repository <the ticket's repository> "
+                f"<board-items> --board {arguments.board} "
+                "--repository <each repository the ticket lists> "
                 "--search <text>"
             )
         else:
             wanted = (
-                f"<board-items> --board {arguments.board} --repository <the ticket's repository> "
+                f"<board-items> --board {arguments.board} "
+                "--repository <each repository the ticket lists> "
                 "--metadata <record>/root_cause=<root-cause>"
             )
         record = _unanswered(f"the task names no `{wanted}` instruction")

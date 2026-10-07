@@ -1080,12 +1080,16 @@ from the binding, and every copy the task prescribes goes through `copy`: a bare
 updates whichever carrier the store lists first.
 <!-- llmlint: ignore-end[instruction_layer_localized] -->
 
-**The `followups` board is the user's decision.** A ticket's issue is created in the
-repository its root cause lives in, which must be under the board's owner, as an item of
-the one board; a ticket naming a repository outside that owner is refused and reported,
-never filed — unless the board's route sends it elsewhere: a `github.com/petsinc/*` root
-cause's ticket is filed in Hello Patient's Linear, `hellopatient-followups`, an issue of its
-Agent Follow-ups project, where that team triages it under the same contract. A ticket's record's `host` names the
+<!-- llmlint: ignore-block[instruction_layer_localized] This paragraph is the manager's own loop rather than an `orchestrator/` implementation constraint: the manager reads it to know which board and repository a follow-up run files each ticket in, and so which links to relay and who accepts each item, and no nested instruction file is one the manager reads; `tests/test_follow_up_ticket_docs.py` holds the commands it names to `orchestrator/follow_up_tickets.py`. -->
+**The `followups` board is the user's decision.** A ticket lists every repository its fix
+changes. One whose fix changes one repository has its issue created in it, which must be
+under the board's owner, as an item of the one board; a ticket naming a repository outside
+that owner is refused and reported, never filed — unless the board's route sends it
+elsewhere: a `github.com/petsinc/*` root cause's ticket is filed in Hello Patient's Linear,
+`hellopatient-followups`, an issue of its Agent Follow-ups project, where that team triages
+it under the same contract. One listing several is filed as the store files a task naming
+several — in the board's configured repository, and routed only when every repository it
+lists matches the route. A ticket's record's `host` names the
 machine its verification ran on, and its evidence states the same host. A new ticket
 reaches the board in `Proposal`; the user moving it to `Todo` is what accepts it, and a
 later copy keeps whatever status the board holds, so a re-dispatch never moves an item
@@ -1095,6 +1099,7 @@ ticket to `Deferred`: not accepted and picked up by no agent, it still takes a l
 evidence, and no run withdraws it either. **A dispatch briefed to pick up accepted follow-up
 tickets selects `Todo` items only.** `python -m orchestrator.follow_up_tickets statuses`
 prints the vocabulary every agent reads, copied here:
+<!-- llmlint: ignore-end[instruction_layer_localized] -->
 
 <!-- llmlint: ignore-block[agents_md_durable_and_terse] The node that added the `Deferred` status requires this section to carry the module's rendered vocabulary, so a manager briefing a dispatch to pick up accepted tickets reads what `Todo` means without running a command; `tests/test_follow_up_ticket_docs.py` fails when this copy differs from `status_vocabulary()`, so it cannot drift from its one source. -->
 <!-- llmlint: ignore-block[instruction_layer_localized] `.github/CODEOWNERS` routes ownership, but a diff-scoped run never shows it to this rule; lift once it does. -->

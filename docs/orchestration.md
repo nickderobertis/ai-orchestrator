@@ -2044,15 +2044,18 @@ its own harness config. It verifies each draft against the registered checkouts'
 ticket per root cause beside the drafts (`tasks/<run-id>/tickets/`), and copies each onto
 the `followups` GitHub Projects board, where every session's tickets accumulate —
 commenting on another run's open issue for the same root cause instead of filing a second.
-A ticket's issue is created in the repository its root cause lives in, as an item of the
-one board: the ticket's `repositories` names that one repository, which must be under the
+A ticket's `repositories` lists every repository its fix changes. A ticket listing one has
+its issue created in that repository, as an item of the one board; it must be under the
 board's owner, and `board-status` refuses a ticket naming a repository outside that owner
 before anything is asked of the board, so it is reported rather than filed. The one
 exception is a repository the board's route sends elsewhere: a `github.com/petsinc/*` root
 cause's ticket is filed in Hello Patient's Linear, `hellopatient-followups`, as an issue of
-its Agent Follow-ups project, where that team triages it. Every command a follow-up run
+its Agent Follow-ups project, where that team triages it. A ticket listing several is filed
+exactly as the store files a parentless task naming several: in the board's configured
+repository, which its record's `repository` names, and routed only when every repository it
+lists matches a route. Every command a follow-up run
 runs takes `followups` as the root of those boards and acts on each ticket at the board
-its repository routes it to, as the store's own `sources route` answers it, and the
+its repositories route it to, as the store's own `sources route` answers it, and the
 comment gathering reads every one of them, from a watermark of its own.
 `orchestrator/follow_up_tickets.py` is the one source of the ticket's shape and of
 ownership on that board: a run changes only the issues its own tickets created and the

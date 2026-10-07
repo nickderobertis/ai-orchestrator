@@ -141,16 +141,18 @@ def test_each_follow_up_section_describes_the_host_and_the_proposal(
 
 
 @pytest.mark.parametrize(("document", "heading"), SECTIONS.items())
-def test_each_follow_up_section_files_a_tickets_issue_in_its_root_causes_repository(
+def test_each_follow_up_section_files_a_tickets_issue_where_the_store_files_its_repositories(
     document: str, heading: str
 ) -> None:
-    """Each section says where a ticket's issue is created, and no longer says the board's own."""
+    """Each section says where a ticket's issue is created, for one repository and for several."""
     flat = " ".join(section(document, heading).split())
 
     for described in (
-        "issue is created in the repository its root cause lives in",
+        "lists every repository its fix changes",
         "under the board's owner",
         "as an item of the one board",
+        "in the board's configured repository",
+        "routed only when every repository it lists matches",
     ):
         assert described in flat, f"{document}'s section {heading!r} does not say {described!r}"
     assert "board's own repository" not in flat, (
