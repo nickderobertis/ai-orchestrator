@@ -52,6 +52,16 @@ OWNERS = (PLANNER, MANAGER, MECHANICS)
 #: its own test below rather than a link to resolve here.
 CROSS_REFERENCING_OWNERS = (MANAGER, MECHANICS)
 
+#: The manager's statement of how it talks to its user, one phrase per rule: ask in the
+#: chat unless truly blocked, restate open questions, write self-contained plain updates,
+#: and send them regularly. Read by both the ownership check and the once-in-the-loop one.
+USER_COMMUNICATION = (
+    "use it only when you can do nothing useful until the answer arrives",
+    "It restates every question still awaiting the user",
+    "who may not have read any earlier message",
+    "at least every thirty minutes while work runs",
+)
+
 #: Every statement must appear in its own document and in neither of the other two.
 OWNED_STATEMENTS = (
     # The planner's judgment: how big a node is, where to cut it, what one node
@@ -95,6 +105,8 @@ OWNED_STATEMENTS = (
     Owned(MANAGER.document, "marks a blocking surface nobody is waiting on"),
     Owned(MANAGER.document, "never that the asker has gone"),
     Owned(MANAGER.document, "raw interrupt reaches the worker's turn alone and leaves"),
+    # How the manager talks to its user: one phrase per rule of that statement.
+    *(Owned(MANAGER.document, phrase) for phrase in USER_COMMUNICATION),
     # How a node says it depends on another repository's *release* rather than on the
     # work. The split is the same one and for the same reason: choosing a node's
     # adoption mode and writing its task around the references the framework appends
@@ -248,6 +260,28 @@ def test_each_statement_of_the_doctrine_is_made_in_exactly_one_document(owned: O
             "owns; cross-reference the owner instead of copying it, or the two copies "
             "drift apart"
         )
+
+
+@pytest.mark.reads_docs
+@pytest.mark.parametrize("phrase", USER_COMMUNICATION)
+def test_the_user_communication_statement_is_written_once_in_the_manager_loop(
+    phrase: str,
+) -> None:
+    """Each anchor phrase is written exactly once in the document, inside the manager loop.
+
+    This holds where and how often the phrases are written, and nothing about what they
+    say or how any manager behaves.
+    """
+    wanted = _flat(phrase)
+    occurrences = _flat(_text(MANAGER.document)).count(wanted)
+    assert occurrences == 1, (
+        f"{MANAGER.document} writes {phrase!r} {occurrences} time(s); the statement of how "
+        "a manager talks to its user is written once"
+    )
+    assert wanted in _flat(_section(MANAGER)), (
+        f"{MANAGER.document} writes {phrase!r} outside {MANAGER.section!r}, where a manager "
+        "reads how to talk to its user"
+    )
 
 
 @pytest.mark.reads_docs

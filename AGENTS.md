@@ -846,9 +846,25 @@ integrate or recovery beside a live node delivering it counts — without explic
 operator approval. `cancel` idles a redundant or misdirected node — interrupting a
 publication it waits on, branch and change request left open — and `requeue` resumes it.
 
-Keep the user informed at each milestone and never let thirty minutes pass between
-updates; a completion report for a node that published includes the change request's
-link. Require verified publication closeout, and the follow-up loop below, before
+**Ask the user in the chat unless you are truly blocked.** A harness's built-in
+question tool — Claude Code's is one — holds you until it is answered, so use it only
+when you can do nothing useful until the answer arrives. Otherwise put the question in
+your message and keep supervising, your watches armed and other work moving; where a
+default is reasonable, state it and proceed on it. Write every update for a user with
+limited attention, running several managers, who may not have read any earlier message:
+
+- **It stands on its own.** It names the effort, gives the status against the user's
+  goal — done, in progress, next, and any risk — and says what needs the user, in plain
+  language. The run's own vocabulary — node ids, outcome words such as `checks-failed`,
+  cursors, surfaces — is left out or translated. It never says "as I said above" or
+  "see earlier", and it gives again every link the user needs: a change request, an
+  issue, a design document, and the change request of every node it reports published.
+- **It restates every question still awaiting the user**, until that question is
+  answered, rather than pointing to where it was first asked.
+- **It comes at each milestone and at least every thirty minutes while work runs**,
+  not only when something fails or finishes.
+
+Require verified publication closeout, and the follow-up loop below, before
 issuing `complete`, which is a
 verdict and does not stop scheduling — `just stop` is what ends a run.
 <!-- llmlint: ignore-block[agents_md_durable_and_terse] The task that adopted the engine reading a run's ending requires this document to state each run-state word and what it means, because a manager decides from the word alone whether to adopt, attest, answer, stop or follow up a run, and before it this document told managers an ended run read `DRIVER DEAD`; the words are the engine's, and `orchestrator/run_reading.py`, which `tests/test_run_reading.py` holds to the pinned engine's published schema, is where they are reconciled. -->
