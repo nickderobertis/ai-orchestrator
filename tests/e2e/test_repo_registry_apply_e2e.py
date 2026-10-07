@@ -94,6 +94,7 @@ RULE_MATCH = re.compile(
 #: this also covers identities registered after the onevcs adoption.
 POLICY_EXCEPTIONS = {
     "github.com/nickderobertis/ai-orchestrator": ("local-direct", "none"),
+    "github.com/nickderobertis/printops": ("local-direct", "none"),
     "github.com/nickderobertis/spanish-language-tutor": ("local-direct", "none"),
     "github.com/petsinc/cd-chat-tool-call-challenge": ("change-open", "required"),
     "github.com/petsinc/hellopatient": ("change-open", "required"),
@@ -840,6 +841,7 @@ def test_the_team_repository_still_needs_a_review(applied: Applied) -> None:
     "identity",
     (
         "github.com/nickderobertis/ai-orchestrator",
+        "github.com/nickderobertis/printops",
         "github.com/nickderobertis/spanish-language-tutor",
     ),
 )

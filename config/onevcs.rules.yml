@@ -45,8 +45,9 @@
 # The verifier that remains is the repository's own, and it is the one that could
 # always refuse the merge:
 #
-#   - **Remote-publishing identities** — every rule below but the first — merge when
-#     GitHub's required status checks pass. Those checks are the merge path. A
+#   - **Remote-publishing identities** — every rule below but the `local-direct`
+#     ones — merge when GitHub's required status checks pass. Those checks are the
+#     merge path. A
 #     second tier run here front-ran them and threw the answer away: it judged a
 #     tree the required checks were about to judge again, on a different runner,
 #     and its verdict bound nothing. Where it ran *less* than they do it was worse
@@ -57,8 +58,10 @@
 #     required checks. Verification instead comes from an executable `pre-push` hook,
 #     when the checkout has one, which `onevcs` reaches by carrying the lender's
 #     `core.hooksPath` into the disposable publication clone. `ai-orchestrator` has
-#     that hook; `spanish-language-tutor` does not yet, so its merge-path audit
-#     truthfully reports no coverage.
+#     that hook; `printops`' is the committed `.githooks/pre-push` running its own
+#     `just check`, active once its checkout's `core.hooksPath` points at it;
+#     `spanish-language-tutor` has none yet, so its merge-path audit truthfully
+#     reports no coverage.
 #
 # `just repos --audit-gate-coverage` reports what those required checks are, per
 # identity, read off each repository's own branch protection and rulesets at the
@@ -88,6 +91,10 @@ rules:
   # change request, so these are the rules to be most careful editing. Their
   # verifier is a hook, when present, rather than a set of required checks.
   - match: {host: github.com, owner: nickderobertis, name: ai-orchestrator}
+    publication: local-direct
+    approvals: none
+
+  - match: {host: github.com, owner: nickderobertis, name: printops}
     publication: local-direct
     approvals: none
 
