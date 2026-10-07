@@ -16,7 +16,9 @@ or a recipe reaches it, and each journey fails on the release before the fix:
   https://github.com/nickderobertis/onetaskgraph/pull/915, first cut as 0.2.29, and
   since https://github.com/nickderobertis/onetaskgraph/pull/1791, first cut as 0.2.37,
   a mapping is an option name or `null` and nothing else, so the closed-state form is
-  refused by the configuration schema before a source is built at all;
+  refused by the configuration schema before a source is built at all; since 0.3.0
+  (https://github.com/nickderobertis/onetaskgraph/issues/3262) a mapping is scoped by item
+  kind, and the closed-state form written under one is refused as no status name;
 * `onejudge run` names each `user.artifacts` path in its judge side's prompt —
   https://github.com/nickderobertis/onejudge/pull/86, first cut as 0.11.0;
 * a `local-md` source's relative root resolves against the directory of the
@@ -530,25 +532,28 @@ def test_the_board_source_refuses_an_unknown_status_mapped_to_a_closed_state(
     """An `unknown` word can never be filed as finished or withdrawn work.
 
     The release that first carried the fix refused the closed-state form by name, because a
-    copy read such an item back as `done` or `cancelled`; the installed release has no
-    closed-state form to refuse, a mapping being an option name, `null`, or an object
-    naming a `task` or `project` item kind, so the same configuration is refused naming the
-    source's field, the category and the key that is no item kind. Either way the mapping
+    copy read such an item back as `done` or `cancelled`; the installed release scopes a
+    mapping by item kind and has no closed-state form, each kind's mapping being an option
+    name or `null`, so the closed-state form written under the `task` kind is refused naming
+    the category, the kind and the value that is no status name. Either way the mapping
     never reaches a board.
     """
-    refused = _board_source(tmp_path, f"{{closed: {closed}}}")
+    refused = _board_source(tmp_path, f"{{task: {{closed: {closed}}}}}")
 
     said = refused.stdout + refused.stderr
     assert refused.returncode != 0, said
-    assert "sources.board.config.status_mapping" in said, said
-    assert 'status_mapping.unknown names "closed", which is not an item kind' in said, said
+    assert (
+        f'status_mapping.unknown.task is {{"closed":"{closed}"}}, which is not a status name'
+        in said
+    ), said
+    assert "could not be reached" not in said, said
 
 
 def test_the_board_source_mapping_unknown_to_an_option_reaches_for_the_board(
     tmp_path: Path,
 ) -> None:
-    """The control: the same source, mapped to an option, is refused only by the endpoint."""
-    answered = _board_source(tmp_path, "Needs attention")
+    """The control: the same source, its `task` kind mapped to an option, reaches the endpoint."""
+    answered = _board_source(tmp_path, "{task: Needs attention}")
 
     said = answered.stdout + answered.stderr
     assert "status_mapping.unknown" not in said, said

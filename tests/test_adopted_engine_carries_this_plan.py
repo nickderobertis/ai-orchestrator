@@ -809,6 +809,19 @@ PRESERVE_ON_PRESERVE_LANDINGS = (
     ),
 )
 
+#: The engine-side node of the plan that cuts a design document's budget sections to a
+#: summary, with the plan-level answers in the plan's own description: the engine registers
+#: a project template and checks a stored project's rendering, which no project-template
+#: verb here uses until that plan's `budget-summary` node does.
+PROJECT_ROLE_LANDINGS = (
+    Landing(
+        node="onepipeline-project-role",
+        change_request=778,
+        commit="f8af9bb5b461f06455a42959d065ca2f64e260dd",
+        did="register project templates and check a stored project's rendering",
+    ),
+)
+
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
     Landing(
@@ -848,6 +861,7 @@ LANDINGS = (
     *APPROVED_BUDGETS_LANDINGS,
     *REPARENT_WAITING_HUMAN_LANDINGS,
     *PRESERVE_ON_PRESERVE_LANDINGS,
+    *PROJECT_ROLE_LANDINGS,
 )
 
 
