@@ -583,7 +583,9 @@ otherwise stays on `plans` beside a `hellopatient` member project; approve and l
 home id `just finish-plan` reports. There a plan task reads Todo once copied,
 Queued once a run claims it, In Progress while its node works, Needs Attention when that node
 failed, parked or was skipped, and Done once it settled; Proposed, Backlog and Canceled are
-proposed, deferred and withdrawn.
+proposed, deferred and withdrawn. The member project reads Planned once copied,
+Accepted once claimed, In Progress while working, Blocked when attention is needed, and
+Completed once done; Proposal, Idea and Canceled mean proposed, deferred and withdrawn.
 <!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 
 **A board field — a `Status` option, or the `Priority` field a source's

@@ -403,12 +403,34 @@ def test_each_document_names_every_linear_state_and_the_route_the_store_applies(
     assert f"`{LINEAR}`" in text, f"{name} never names the `{LINEAR}` source"
 
 
+# llmlint: ignore-block[shell_test_tiers_stay_split] This is a Python documentation
+# drift check, not a shell journey: it compares table rows with the installed CLI's
+# local config resolution, contacting no service and dispatching no worker. Its existing
+# reads_docs tier is the same as the neighboring routing-prose check of that resolution.
 def test_the_orchestration_table_gives_each_state_the_category_the_source_writes_it_for() -> None:
     """Every row of the state table is one entry of the mapping, and every entry has a row."""
-    rows = dict(
-        re.findall(r"^\| ([A-Z][A-Za-z ]+?) \| `([a-z-]+)` \|", _document(ORCHESTRATION), re.M)
-    )
-    expected = {state: category for category, state in _linear_states().items()}
+    rows = {
+        category: (task, project)
+        for category, task, project in re.findall(
+            r"^\| `([a-z-]+)` \| ([A-Z][A-Za-z ]+?) \| ([A-Z][A-Za-z ]+?) \|",
+            _document(ORCHESTRATION)
+            .split("| category | Linear task state", 1)[1]
+            .split("Linear's Triage", 1)[0],
+            re.M,
+        )
+    }
+    states = _linear_states()
+    categories = {key.split(".")[0] for key in states}
+    expected = {
+        category: (
+            states.get(category + ".task", states.get(category)),
+            states.get(category + ".project", states.get(category)),
+        )
+        for category in categories
+    }
     assert rows == expected, (
         f"{ORCHESTRATION}'s Linear state table reads {rows}, and onetaskgraph.yaml maps {expected}"
     )
+
+
+# llmlint: ignore-end[shell_test_tiers_stay_split]

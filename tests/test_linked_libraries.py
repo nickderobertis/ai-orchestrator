@@ -679,7 +679,7 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 LINKED_HARNESS_CORES = (
     LinkedCore(dependent="oneagentgraph", dependent_version="0.5.5", core="0.24.1"),
     LinkedCore(dependent="onejudge", dependent_version="0.17.1", core="0.24.1"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.62.0", core="0.24.1"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.63.0", core="0.24.1"),
 )
 
 #: How a crate names itself in a compiled binary: cargo embeds the registry source
@@ -823,6 +823,15 @@ def test_a_workspace_pin_names_the_one_release_its_linked_family_resolved(
     assert {version for versions in family.values() for version in versions} == {pinned}, (
         f"config/{pin}.version adopts {pinned} while the adopted engine links {family}. "
         f"Move the pin to the one release the family resolves"
+    )
+
+
+def test_the_engine_links_the_store_that_maps_statuses_per_item_kind() -> None:
+    """A dispatch must use the mapping grammar this host gives its routed source."""
+    linked = Release.parse(_linked_version("onetaskgraph-linear"))
+    assert linked >= Release(0, 3, 0), (
+        f"the engine links onetaskgraph-linear {linked}, below the 0.3.0 that maps "
+        "task states and member-project statuses separately"
     )
 
 

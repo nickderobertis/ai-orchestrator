@@ -116,30 +116,26 @@ sources:
       # falls back to the plugin's default name, which is onetaskgraph's own test key.
       api_key_env: HELLOPATIENT_LINEAR_API_KEY
       team: ENG
+      # Categories describe both a plan task and its member project: backlog is proposed,
+      # draft deferred, todo accepted but unclaimed, queued claimed but not started,
+      # in-progress working, unknown needing attention, done finished, cancelled withdrawn.
+      # Task names resolve in ENG's workflow; project names resolve among the workspace's
+      # project statuses. Compare both live with `just plans sources fields hellopatient`.
+      # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] These user-approved
+      # names are the source configuration, not a second implementation of Linear's
+      # vocabulary. Dispatches lack the production credential, so the manager compares
+      # them live after settlement with the fields command above; schema and resolution
+      # are held here by tests/test_plan_source_roots.py. Missing names fail at the write.
       status_mapping:
-        # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This is the one
-        # source of the workflow states each category is written as; its other party is the
-        # ENG team's live workflow, which no check here may read, since that needs the
-        # production key. A state the team lacks is refused by name at the first write that
-        # names it. Every category is mapped to a named state, so no write picks the first
-        # state of a type, and `Triage`, which has its own meaning in Linear, is never written.
-        # A proposal nobody has accepted yet: what a new copy is filed at.
-        backlog: Proposed
-        # Deferred for later by a person, and picked up by no agent.
-        draft: Backlog
-        # Accepted, and nothing has claimed it.
-        todo: Todo
-        # Claimed by a launched run whose node has not started.
-        queued: Queued
-        # A node is working on it.
+        backlog: { task: Proposed, project: Proposal }
+        draft: { task: Backlog, project: Idea }
+        todo: { task: Todo, project: Planned }
+        queued: { task: Queued, project: Accepted }
         in-progress: In Progress
-        # A node failed, parked or was skipped, and a person has to look.
-        unknown: Needs Attention
-        # Finished: the node settled done.
-        done: Done
-        # Withdrawn.
+        unknown: { task: Needs Attention, project: Blocked }
+        done: { task: Done, project: Completed }
         cancelled: Canceled
-        # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+      # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
   # Hello Patient's Linear Agent Follow-ups project, which the `followups` route above files a
   # `petsinc` root cause's ticket in. Not a default source, for the reason `followups` is not:
   # a verified follow-up ticket is not a plan. Last, below the GitHub sources, for the reason

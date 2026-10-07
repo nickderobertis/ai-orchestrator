@@ -435,6 +435,23 @@ HELLOPATIENT_STATES = {
     "done": "Done",
     "cancelled": "Canceled",
 }
+#: Member projects use the workspace's separate status vocabulary.
+HELLOPATIENT_PROJECT_STATUSES = {
+    "backlog": "Proposal",
+    "draft": "Idea",
+    "todo": "Planned",
+    "queued": "Accepted",
+    "in-progress": "In Progress",
+    "unknown": "Blocked",
+    "done": "Completed",
+    "cancelled": "Canceled",
+}
+HELLOPATIENT_MAPPING = {
+    category: state
+    if state == HELLOPATIENT_PROJECT_STATUSES[category]
+    else {"task": state, "project": HELLOPATIENT_PROJECT_STATUSES[category]}
+    for category, state in HELLOPATIENT_STATES.items()
+}
 #: Where the `plans` source sends a task whose repositories are all Hello Patient's.
 PLANS_ROUTES = [{"repositories": ["github.com/petsinc/*"], "to": "hellopatient"}]
 #: The values the `hellopatient-followups` Linear source is declared with, which are never
@@ -547,7 +564,15 @@ def test_the_linear_sources_resolve_their_states_endpoint_and_routes() -> None:
     assert properties["endpoint"]["default"] == LINEAR_ENDPOINT, properties["endpoint"]
     for name in LINEAR_SOURCES:
         config = _resolved_block(resolved, f"sources.{name}.config.")
-        assert config.get("status_mapping") == HELLOPATIENT_STATES, (name, config)
+        mapping = config.get("status_mapping")
+        expected = HELLOPATIENT_MAPPING if name == "hellopatient" else HELLOPATIENT_STATES
+        assert mapping == expected, (name, config)
+        assert isinstance(mapping, dict)
+        task_states = {
+            category: entry["task"] if isinstance(entry, dict) else entry
+            for category, entry in mapping.items()
+        }
+        assert task_states == HELLOPATIENT_STATES
         assert "endpoint" not in config, (name, config)
     assert resolved["sources.plans.routes"] == PLANS_ROUTES, resolved["sources.plans.routes"]
     assert plan_store.routed_sources("plans") == ("hellopatient",)
@@ -585,6 +610,14 @@ def test_the_linear_source_configuration_is_one_the_linear_plugin_accepts(name: 
     )
     assert len(refused) == 2 and any("workspace" in one for one in refused), refused
     assert any("triage" in one for one in refused), refused
+    refused_kind = _schema_refusals(
+        config
+        | {
+            "status_mapping": mapping
+            | {"todo": {"task": "Todo", "project": "Planned", "unknown-kind": "Todo"}}
+        }
+    )
+    assert refused_kind, "a per-kind mapping with an unknown key must be refused"
 
 
 # llmlint: ignore-end[shell_test_tiers_stay_split]

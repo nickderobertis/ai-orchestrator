@@ -626,6 +626,9 @@ system_prompt: |
   Queued once a launched run claims it, In Progress while its node works, Needs
   Attention when its node failed, parked or was skipped, and Done once it settled
   done; Proposed, Backlog and Canceled mean proposed, deferred and withdrawn.
+  The member project reads Planned once copied, Accepted once claimed, In Progress
+  while working, Blocked when attention is needed, and Completed once done; Proposal,
+  Idea and Canceled mean proposed, deferred and withdrawn.
 
   Something will not fit: a constraint you could not meet, a goal you reached
   a different way than asked, an assumption you had to make because no answer

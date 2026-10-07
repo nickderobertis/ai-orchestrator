@@ -73,7 +73,8 @@ def stand_in(checkout: Path, source: str, root: Path, copied: Collection[str] = 
     words = {word.casefold() for word in copied}
     mapping = [
         f"        {json.dumps(state)}: {category}"
-        for category, state in tracked_states(source).items()
+        for key, state in tracked_states(source).items()
+        for category in [key.split(".")[0]]
         if state.casefold() not in words
     ] + [f"        {json.dumps(word)}: {word}" for word in copied]
     # llmlint: ignore-block[e2e_not_mocked] A local `local-md` source stands in for a tracked
