@@ -3,10 +3,14 @@
 The root `budgets.yaml` is what every push of this repository is held to, and its shape is
 stated here in full so a budget that moved, or one added without a decision, fails rather
 than passing as itself. Its threshold has one source, the file: nothing that measures or
-refuses a push restates it. A project's own `budgets.yaml` is measured by its `budget` Nx
-target, which a project declares only by opting in, so the file and the target are held
-together here; the root project never declares one, because the root file is the hook's to
-check, once, after the gate it measures. And the vocabulary this host's plan-budgets
+checks it restates it. `gate-time` is labelled `host-variable`, so the hook warns rather
+than refuses a passing push over it — gate wall clock on a shared, variably loaded host is
+not a consistent measurement, so a strict absolute threshold belongs on a consistent system
+such as a CI runner — while a failed gate or an errored measurement still refuses. A
+project's own `budgets.yaml` is measured by its `budget` Nx target, which a project declares
+only by opting in, so the file and the target are held together here; the root project
+never declares one, because the root file is the hook's to check, once, after the gate it
+measures. And the vocabulary this host's plan-budgets
 template and `orchestrator/plan_budgets.py` copy from onebudgetspec — the `direction`
 values and the file name — is read from the installed library's own `onebudgetspec
 schema`, so a release that moved either fails here.
@@ -38,7 +42,7 @@ TEMPLATE = REPO_ROOT / "templates" / "plan-budgets.md.j2"
 #: The installed onebudgetspec, beside the interpreter: the locked install the hook and the
 #: Nx targets run.
 CHECKER = Path(sys.executable).parent / "onebudgetspec"
-#: The files that measure `gate-time` or refuse a push over it, none of which may state its
+#: The files that measure `gate-time` or check a push against it, none of which may state its
 #: threshold: the journeys read it from the file, and the scripts never need it.
 MEASURING = (
     ".githooks/pre-push",
@@ -75,6 +79,7 @@ def test_the_root_file_holds_gate_time_cycle_time_and_the_dispatches_condition()
     ]
     assert gate_time == {
         "id": "gate-time",
+        "labels": ["host-variable"],
         "measure": "reported",
         "command": ["scripts/budget-gate-time.sh"],
         "unit": "seconds",
@@ -82,6 +87,7 @@ def test_the_root_file_holds_gate_time_cycle_time_and_the_dispatches_condition()
     }
     assert isinstance(threshold, int | float) and threshold > 0, threshold
     assert "pre-push gate" in description and "record_local_direct_gate" in description
+    assert "warns rather than refuses" in description and "CI runner" in description
     assert cycle_time.pop("threshold") > 0
     description = cycle_time.pop("description")
     assert "reported after landing" in description and "never blocks" in description
@@ -109,7 +115,7 @@ def test_the_installed_library_validates_the_whole_tree() -> None:
 
 @pytest.mark.parametrize("identifier", ["gate-time", "cycle-time"])
 def test_each_delivery_threshold_is_stated_in_the_budgets_file_alone(identifier: str) -> None:
-    """Nothing that measures `gate-time`, or refuses a push over it, restates the number."""
+    """Nothing that measures `gate-time`, or checks a push against it, restates the number."""
     budget = next(entry for entry in _root()["budgets"] if entry["id"] == identifier)
     number = re.compile(rf"(?<![\d.]){re.escape(f'{budget["threshold"]:g}')}(?![\d])")
 

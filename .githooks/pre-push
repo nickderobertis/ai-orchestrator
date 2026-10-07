@@ -47,7 +47,10 @@ fi
 #
 # The push is then held to the root `budgets.yaml`, whose `gate-time` budget is that same
 # recorded duration; `scripts/gate-budgets.sh` says how the step measures once and what
-# it refuses.
+# it refuses. Over `gate-time`, labelled `host-variable`, warns rather than refuses: gate
+# wall clock on a shared, variably loaded host is not a consistent measurement, so a
+# strict absolute threshold belongs on a consistent system such as a CI runner. A failed
+# gate, an errored measurement, or over any other root budget still refuses the push.
 # shellcheck source=scripts/gate-budgets.sh
 . "$hook_root/scripts/gate-budgets.sh"
 # llmlint: ignore[changed_behavior_has_e2e] Driving this line would run the complete gate, which ai-orchestrator#1164 rejects as a second test; tests/e2e/test_gate_time_budget_e2e.py drives gate_within_budgets itself with a stand-in gate of known duration, and every publication of this repository runs this line for real.

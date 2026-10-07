@@ -1837,8 +1837,11 @@ Squash-merge via PR; PRs follow `.github/pull_request_template.md`. With no CI, 
 gate`, so nothing reaches the remote unproven, and every dispatched agent clears its
 own findings before committing. The push is then held to the root `budgets.yaml`, whose
 `gate-time` budget is that gate's own measured duration and whose threshold is stated
-there alone: over budget refuses the push, as a defect to optimize rather than re-measure,
-and a project's own budgets live in a `budgets.yaml` beside its `project.json`. The one
+there alone. It is labelled `host-variable`, so over it on a passing gate warns and does
+not refuse: still a defect to optimize, but gate wall clock on a shared, variably loaded
+host is not a consistent measurement, and a strict absolute threshold belongs on a
+consistent system such as a CI runner. A failed gate, an errored measurement, or over any
+other root budget still refuses the push, and a project's own budgets live in a `budgets.yaml` beside its `project.json`. The one
 exception is `onevcs preserve`, the only verb that may push without the hook: it puts an
 unproven **branch ref, never a base**, on the origin, opens no change request, and nothing can merge that ref without a publication
 that does run the merge path — the words `just shutdown`'s report prints about every

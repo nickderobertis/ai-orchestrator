@@ -27,7 +27,13 @@ document names.
 - **Every result shows actual, budget and headroom**, so a passing result still says how
   close it came.
 - **Over budget is a defect on any host.** Close to the line and sometimes over means
-  optimize.
+  optimize. On this host's pre-push hook, a root budget labelled `host-variable` — the
+  gate's own wall clock, `gate-time` — is still measured and reported on every push, but
+  over it warns rather than refuses: on a shared, variably loaded host that measurement is
+  not consistent, so a strict absolute threshold on it can only be a gate on a consistent
+  system such as a CI runner. A failed gate, an errored measurement, and over any other
+  root budget still refuse the push. The label is read only by the hook's check of the
+  root file; a project's own `budget` Nx target (`nx.json`) checks every budget strictly.
 - **Host conditions are recorded for the manager's judgement.** Each result carries the
   conditions it was taken under, such as load, memory and other work running, so the
   manager can tell an extreme or unlikely circumstance from a regression.

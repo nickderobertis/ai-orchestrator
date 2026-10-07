@@ -4,7 +4,9 @@
 complete gate and the root `budgets.yaml`: the gate is timed once by
 `record_local_direct_gate`, which records that duration against this push with the host
 conditions it sampled while the gate ran, and the installed onebudgetspec then checks the
-budgets once, its `gate-time` command reading the recording back. These journeys drive
+budgets as two selections — the `host-variable` budgets, whose over result warns, and
+every other budget, whose over result refuses — its `gate-time` command reading the
+recording back. These journeys drive
 that function as the hook calls it — the real scripts, the real `just host` view the
 dispatch count is read from, and the installed onebudgetspec — with a stand-in gate of
 known duration in place of `just gate`, the way `tests/e2e/test_lock_timeout_bound_e2e.py`
@@ -70,6 +72,9 @@ ROOT_BUDGETS = REPO_ROOT / "budgets.yaml"
 #: The label every budget measured from onepipeline's telemetry carries, which only this
 #: host's run-success hook selects.
 ONEPIPELINE_LABEL = "onepipeline"
+#: The label of a budget whose measurement varies with this shared host's load, which the
+#: hook warns about rather than refuses when over.
+HOST_VARIABLE_LABEL = "host-variable"
 #: How often the journeys sample the host: often enough that each value a stand-in gate
 #: holds for a second or more is read.
 SAMPLE_SECONDS = "0.2"
@@ -388,17 +393,85 @@ def test_conditions_no_sample_could_read_are_unknown(host: Host, load_source: st
     assert "it could not read the runs root" in pushed.stderr, pushed.stderr
 
 
-def test_a_gate_over_budget_is_refused_and_told_to_optimize(host: Host) -> None:
-    """Refused, naming the budget, saying to optimize, and pointing at the conditions."""
+def _strict(identifier: str, command: list[str]) -> dict:
+    """A root budget carrying no `host-variable` label, measured as ``command``'s duration."""
+    return {
+        "id": identifier,
+        "measure": "elapsed",
+        "command": command,
+        "unit": "seconds",
+        "direction": "max",
+        "threshold": 1,
+    }
+
+
+def test_a_passing_gate_over_its_host_variable_budget_is_admitted_with_a_warning(
+    host: Host,
+) -> None:
+    """Admitted, printing the over line, warning to optimize and saying why it does not block."""
+    assert HOST_VARIABLE_LABEL in _tracked_gate_time()["labels"]
+
     pushed = _push(host, host.budgets(threshold=1), host.gate("sleep 2"))
+
+    assert pushed.returncode == 0, pushed.stdout + pushed.stderr
+    _ran_once(host, pushed)
+    assert "— over" in pushed.result(), pushed.result()
+    assert "dispatches_max=" in pushed.result() and "load1_max=" in pushed.result()
+    (warning,) = [line for line in pushed.stderr.splitlines() if "warning:" in line]
+    assert "budget gate-time is over" in warning, warning
+    assert "should still be optimized" in warning, warning
+    assert "host conditions" in warning, warning
+    assert "does not block this push" in warning, warning
+    assert "shared, variably loaded host is not a consistent measurement" in warning, warning
+    assert "consistent system such as a CI runner" in warning, warning
+    assert "refused" not in pushed.stderr, pushed.stderr
+
+
+def test_a_gate_over_a_strict_budget_is_refused_and_told_to_optimize(host: Host) -> None:
+    """Refused, naming the budget, saying to optimize, and pointing at the conditions."""
+    budgets = host.budgets(extra=[_strict("strict-probe", ["sleep", "1.5"])])
+
+    pushed = _push(host, budgets, host.gate("true"))
+
+    assert pushed.returncode == 1, pushed.stdout + pushed.stderr
+    _ran_once(host, pushed)
+    assert "— within" in pushed.result(), pushed.result()
+    assert "— over" in pushed.result("strict-probe"), pushed.stdout
+    assert "budget strict-probe is over" in pushed.stderr, pushed.stderr
+    assert "this push is refused" in pushed.stderr and "optimize" in pushed.stderr
+    assert "host conditions" in pushed.stderr and "manager" in pushed.stderr, pushed.stderr
+    assert "warning:" not in pushed.stderr, pushed.stderr
+
+
+def test_a_host_variable_over_beside_a_strict_over_is_still_refused(host: Host) -> None:
+    """The warning about `gate-time` does not turn the strict budget's refusal into an admission."""
+    budgets = host.budgets(threshold=1, extra=[_strict("strict-probe", ["sleep", "1.5"])])
+
+    pushed = _push(host, budgets, host.gate("sleep 2"))
 
     assert pushed.returncode == 1, pushed.stdout + pushed.stderr
     _ran_once(host, pushed)
     assert "— over" in pushed.result(), pushed.result()
-    assert "dispatches_max=" in pushed.result() and "load1_max=" in pushed.result()
-    assert "budget gate-time is over" in pushed.stderr, pushed.stderr
-    assert "optimize" in pushed.stderr, pushed.stderr
-    assert "host conditions" in pushed.stderr and "manager" in pushed.stderr, pushed.stderr
+    assert "— over" in pushed.result("strict-probe"), pushed.stdout
+    (refusal,) = [line for line in pushed.stderr.splitlines() if "this push is refused" in line]
+    assert "budget strict-probe is over" in refusal and "optimize" in refusal, refusal
+    assert "gate-time" not in refusal, refusal
+
+
+def test_a_host_variable_over_beside_a_strict_error_is_refused_naming_the_file(
+    host: Host,
+) -> None:
+    """A strict budget whose command fails is an errored check, whatever `gate-time` says."""
+    budgets = host.budgets(threshold=1, extra=[_strict("strict-probe", ["false"])])
+
+    pushed = _push(host, budgets, host.gate("sleep 2"))
+
+    assert pushed.returncode == 1, pushed.stdout + pushed.stderr
+    _ran_once(host, pushed)
+    assert "— over" in pushed.result(), pushed.result()
+    assert pushed.result("strict-probe").startswith("budget strict-probe: error —"), pushed.stdout
+    assert f"the budget check of {budgets} errored" in pushed.stderr, pushed.stderr
+    assert "warning:" not in pushed.stderr, pushed.stderr
 
 
 def test_a_failing_gate_still_reports_its_result_and_keeps_its_own_refusal(host: Host) -> None:
