@@ -37,7 +37,8 @@ variables:
       it was measured at), `achievable` (what is achievable, with the measured figure),
       `limits` (what the system's limits allow, with the arithmetic, such as a rate limit
       divided across a run) and `consumed` (what the spike itself consumed: calls, quota,
-      spend, time).
+      spend, time). `[]` for a spike that measured none itself, such as a harness spike
+      other spikes start from.
     type: list
     items: object
     required: true
@@ -58,6 +59,11 @@ variables:
   decomposition and contracts; the worker of every task that builds on the spike starts
   from it, and reaches the harness on the branch it names.
 
+  A HARNESS SPIKE. A spike other spikes depend on and start from usually measures no
+  candidate budget itself, so an empty `candidates` renders as a sentence saying so rather
+  than a table with a header and no rows. Its dependencies are not recorded here: they are
+  the spikes project's own edges, and a report copying them would be a second graph.
+
   THIS TEMPLATE. Guidance is always a Jinja comment, never an HTML comment, so a rendered
   document carries none of it.
 #}
@@ -76,11 +82,15 @@ variables:
 
 ## Candidate budgets
 
+{% if candidates %}
 | Budget | Measure | Workload | Achievable | Limits allow | Consumed |
 | --- | --- | --- | --- | --- | --- |
 {% for candidate in candidates %}
 | {{ cell(candidate.budget) }} | {{ cell(candidate.measure) }} | {{ cell(candidate.workload) }} | {{ cell(candidate.achievable) }} | {{ cell(candidate.limits) }} | {{ cell(candidate.consumed) }} |
 {% endfor %}
+{% else %}
+This spike measured no candidate budget itself.
+{% endif %}
 
 ## Design findings
 

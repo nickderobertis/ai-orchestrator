@@ -21,7 +21,18 @@ Between them sit four questions only this host can answer, each a subcommand her
   `onevcs`'s own records of the run (`recoverable --label run=<run>`), never off its journal,
   and refused when one kept none;
 * ``note <plan project> <run>`` — the finalize planner's instructions: every spike's report
-  and branch, and what the plan's budgets document owes.
+  and branch, the spikes above each in its stacking chain, and what the plan's budgets
+  document owes.
+
+**A spike may build on a spike.** Where several spikes need one measurement harness, the
+draft authors it as a harness spike the others depend on, and the engine starts each
+dependent's session from the branch its **base dependency** kept: the same-repository spike
+dependency whose own stacking chain holds every other. A spike's stacking chain is that
+base dependency, then its base dependency, and so on; a dependency on another repository's
+spike orders the dependent without carrying its harness, so it is never part of one. The
+chains are read from the spikes project's own dependency edges and nowhere else, because a
+second copy of the graph would need keeping in step with the first. A spike that failed
+skips its dependents, and a retry of it re-points them onto its replacement's branch.
 
 **A retried spike is two names.** The engine retries `spike-x` as `spike-x-2`, so the branch is
 the one `onevcs` recorded for the node standing in the ledger, while the report is the one the
@@ -39,11 +50,18 @@ import json
 import os
 import re
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import NamedTuple, NewType
 
-from orchestrator import design_approval, plan_budgets, plan_store, spike_branches, spike_plan
+from orchestrator import (
+    design_approval,
+    plan_budgets,
+    plan_store,
+    project_store,
+    spike_branches,
+    spike_plan,
+)
 from orchestrator.plan_store import NodeId, QualifiedProjectId
 from orchestrator.spike_plan import Branch
 
@@ -65,6 +83,8 @@ RunId = NewType("RunId", str)
 RESULT = "result.json"
 DONE = "done"
 PRESERVED = "preserved"
+FAILED = "failed"
+SKIPPED = "skipped"
 SUPERSEDED_BY = "superseded_by"
 
 #: The project metadata key the engine mints a run id from.
@@ -108,6 +128,58 @@ def spike_nodes(project: QualifiedProjectId) -> list[NodeId]:
     if project not in {str(held.qualified_id) for held in plan_store.read_projects(source)}:
         return []
     return [task.node_id for task in plan_store.read_tasks(project)]
+
+
+def _repository(task: plan_store.StoreTask) -> str:
+    """The repository ``task`` measures, as a normalized origin where it names one."""
+    named = task.repositories[0] if task.repositories else task.metadata.get("onepipeline.repo")
+    if not isinstance(named, str):
+        return ""
+    return project_store.hosted_origin(named) or named
+
+
+def stacking_chains(project: QualifiedProjectId) -> dict[NodeId, tuple[NodeId, ...]]:
+    """Each spike of ``project`` that builds on another, with the spikes above it, nearest first.
+
+    Read from the project's own dependency edges. A spike's chain is its base dependency —
+    the same-repository dependency whose own chain holds every other same-repository one —
+    then that spike's chain; a dependency on another repository's spike orders only and is
+    never part of it. A spike whose same-repository dependencies lie on no one chain is one
+    the engine refuses to launch, so meeting one here is refused rather than guessed at.
+    """
+    if project not in {
+        str(held.qualified_id) for held in plan_store.read_projects(project.partition(":")[0])
+    }:
+        return {}
+    tasks = {task.node_id: task for task in plan_store.read_tasks(project)}
+    chains: dict[NodeId, tuple[NodeId, ...]] = {}
+
+    def chain(node: NodeId, seen: frozenset[NodeId]) -> tuple[NodeId, ...]:
+        if node in chains:
+            return chains[node]
+        if node in seen:
+            raise ValueError(f"{project} records a dependency cycle through {node}")
+        own = tasks[node]
+        candidates = [
+            dep for dep in own.deps if dep in tasks and _repository(tasks[dep]) == _repository(own)
+        ]
+        found: tuple[NodeId, ...] = ()
+        for candidate in candidates:
+            above = (candidate, *chain(candidate, seen | {node}))
+            if set(candidates) <= set(above):
+                found = above
+                break
+        if candidates and not found:
+            raise ValueError(
+                f"{project} records {node} depending on {', '.join(candidates)} in its own "
+                f"repository, which lie on no one stacking chain"
+            )
+        chains[node] = found
+        return found
+
+    for node in tasks:
+        chain(node, frozenset())
+    return {node: above for node, above in chains.items() if above}
 
 
 def prepare(project: QualifiedProjectId, run: RunId) -> list[NodeId]:
@@ -269,10 +341,28 @@ def settled(
             spike = first[spike]
         answered.append(Standing(node.id, spike))
     if unsettled:
-        raise Stop(f"run {run} did not settle with every node {DONE}: {', '.join(unsettled)}")
+        raise Stop(
+            f"run {run} did not settle with every node {DONE}: {', '.join(unsettled)}"
+            + _skipped_behind(run, ledger)
+        )
     if not answered:
         raise Stop(f"run {run} has not settled: {path} records no node standing")
     return answered
+
+
+def _skipped_behind(run: RunId, ledger: Mapping[NodeId, LedgerNode]) -> str:
+    """What to do about spikes the engine skipped behind a failed one, or ``""`` for none."""
+    standing = [node for node in ledger.values() if node.superseded_by is None]
+    failed = [node.id for node in standing if node.status == FAILED]
+    skipped = [node.id for node in standing if node.status == SKIPPED]
+    if not failed or not skipped:
+        return ""
+    behind, spike = ("it", "the failed spike") if len(failed) == 1 else ("them", "a failed spike")
+    return (
+        f". {', '.join(failed)} failed, and the engine skipped {', '.join(skipped)} behind "
+        f"{behind} as dependents: retrying {spike} re-runs its dependents on its replacement's "
+        f"branch, and once run {run} settles, the flow's `--resume spikes` carries it on"
+    )
 
 
 #: What a name in `onevcs`'s answer may not hold: each is printed in one tab-separated line.
@@ -317,8 +407,16 @@ def branches(run: RunId) -> dict[NodeId, Branch]:
     return {one.spike: kept[one.node] for one in standing}
 
 
-def note(project: QualifiedProjectId, kept: Mapping[NodeId, Branch]) -> str:
-    """The finalize planner's instructions for ``project``, whose spikes kept ``kept``."""
+def note(
+    project: QualifiedProjectId,
+    kept: Mapping[NodeId, Branch],
+    above: Mapping[NodeId, Sequence[NodeId]] | None = None,
+) -> str:
+    """The finalize planner's instructions for ``project``, whose spikes kept ``kept``.
+
+    ``above`` is each spike's stacking chain, as :func:`stacking_chains` reads it; a task
+    building on a spike links every spike above it too, because its harness is there.
+    """
     if plan_budgets.migrated(_qualified(project)) is not None:
         budgets = (
             "The plan predates budgets: the host's budgets migration list names it, so it "
@@ -334,6 +432,19 @@ def note(project: QualifiedProjectId, kept: Mapping[NodeId, Branch]) -> str:
         f"- `{spike}`: report `{spike_plan.report_id(spike)}`; branch `{branch}`"
         for spike, branch in kept.items()
     )
+    stacked = "\n".join(
+        f"- `{spike}`: above it, {', '.join(f'`{one}`' for one in chain)}"
+        for spike, chain in (above or {}).items()
+        if chain
+    )
+    stacking = (
+        "\n\nSome spikes build on others, each starting from the branch the spike above it "
+        "kept. A task that builds on such a spike also links, through the same `spikes` "
+        "answer, every spike above it in its stacking chain, since that is where its harness "
+        f"is. Each spike's stacking chain, nearest first:\n\n{stacked}"
+        if stacked
+        else ""
+    )
     return (
         "## Finalize this plan from its spikes\n\n"
         f"This dispatch is the planning flow's finalize stage. The plan `{project}` was "
@@ -344,7 +455,7 @@ def note(project: QualifiedProjectId, kept: Mapping[NodeId, Branch]) -> str:
         "builds on a spike to that spike's report and branch through the task's `spikes` "
         f"answer, regenerating the task rather than editing its body. {budgets} A requested "
         "target the evidence calls infeasible is an escalated exception, never a quietly "
-        f"loosened number.\n\nThe spikes, and the branches they kept:\n\n{listed}\n"
+        f"loosened number.\n\nThe spikes, and the branches they kept:\n\n{listed}{stacking}\n"
     )
 
 
@@ -377,7 +488,10 @@ def main(argv: list[str] | None = None) -> int:
                 for spike, branch in branches(run).items():
                     print(f"{spike}\t{branch}")
             case _:
-                sys.stdout.write(note(_qualified(args.project), branches(run)))
+                plan = _qualified(args.project)
+                kept = branches(run)
+                chains = stacking_chains(QualifiedProjectId(spike_plan.spikes_project(plan)))
+                sys.stdout.write(note(plan, kept, chains))
     except Stop as exc:
         print(f"plan: {exc}", file=sys.stderr)
         return 1

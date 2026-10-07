@@ -14,7 +14,14 @@ with the real tools, what each of the flow's runs leaves behind when it settles:
   `onepipeline.name`, and for each spike renders the launch's `--branch-template`, opens a
   real `onevcs` session cutting that branch labelled with the run and the node, commits a
   harness, preserves the branch on its origin, closes the session, and writes the spike's
-  report into the plan's project from the `spike-report` template;
+  report into the plan's project from the `spike-report` template. It places them as the
+  adopted engine does: a spike depending on spikes waits for them, and its session is
+  opened with its **base dependency**'s kept branch as its base — the dependency whose own
+  chain holds every other, read off the spikes project's own edges — while a spike behind
+  a failed or skipped one is `skipped`;
+* ``retry`` — not an engine verb, but what a manager's `retry` of a failed spike leaves once
+  the driver has settled it: the failed spike `cancelled` and superseded by `<spike>-2`, which
+  keeps a branch of its own, and every spike skipped behind it run from that branch;
 * the **finalize** planner's run reads its own task's list of spikes and regenerates the
   plan's task with the `spikes` answer linking each report and branch;
 * the **design** run renders the design document into the plan's project.
@@ -71,6 +78,12 @@ class Scenario(TypedDict):
     design: dict[str, object]
     #: Whether the draft writes anything at all.
     write: NotRequired[bool]
+    #: Each spike's dependencies on other spikes, written as the spikes project's own edges.
+    spike_deps: NotRequired[dict[str, list[str]]]
+    #: Spikes that measured no candidate budget themselves, as a harness spike often has not.
+    unmeasured: NotRequired[list[str]]
+    #: The one spike the finalized task builds on, where it does not build on every spike.
+    builds_on: NotRequired[str]
     #: Whether each spike task declares the `preserve` its convention requires.
     spike_publish: NotRequired[bool]
     #: Spikes settling `failed`, and spikes settling `done` on another outcome.
@@ -161,10 +174,16 @@ def _write_project(root: Path, native: str, goal: str) -> None:
 
 
 def _create_task(
-    project: str, title: str, answers: dict[str, object], *meta: str, repository: str
-) -> None:
+    project: str,
+    title: str,
+    answers: dict[str, object],
+    *meta: str,
+    repository: str,
+    depends_on: tuple[str, ...] = (),
+) -> str:
+    """Create one task rendered from `plan-task`, answering its qualified id."""
     source, _, native = project.partition(":")
-    _store(
+    created = _store(
         "task",
         "create",
         source,
@@ -180,8 +199,12 @@ def _create_task(
         "--repository",
         repository,
         *(flag for one in meta for flag in ("--metadata", one)),
+        *(flag for one in depends_on for flag in ("--depends-on", one)),
+        "--json",
         stdin=_resolved("plan-task"),
     )
+    (held,) = _object(json.loads(created))["items"]
+    return str(held["id"])
 
 
 def _document(plan: str, document: str, template: str, answers: dict[str, object]) -> None:
@@ -224,8 +247,9 @@ def draft(scenario: Scenario) -> list[Node]:
     if scenario["spikes"]:
         _write_project(root, f"{native}-spikes", "Measure the listing before the plan is final")
     publish = ['onepipeline.publish="preserve"'] if scenario.get("spike_publish", True) else []
+    created: dict[str, str] = {}
     for spike in scenario["spikes"]:
-        _create_task(
+        created[spike] = _create_task(
             f"{plan}-spikes",
             f"feat(spikes): measure {spike}",
             scenario["spike_task"],
@@ -233,12 +257,16 @@ def draft(scenario: Scenario) -> list[Node]:
             'onepipeline.persona="engineer"',
             *publish,
             repository=scenario["repository"],
+            depends_on=tuple(created[dep] for dep in scenario.get("spike_deps", {}).get(spike, [])),
         )
     return [{"id": "plan", "status": "done"}]
 
 
-def _kept(scenario: Scenario, template: str, run: str, node: str) -> Node:
-    """Leave ``node``'s branch as a spike's session does, and answer its ledger entry."""
+def _kept(scenario: Scenario, template: str, run: str, node: str, base: str | None = None) -> Node:
+    """Leave ``node``'s branch as a spike's session does, and answer its ledger entry.
+
+    ``base`` is the kept branch of the spike it builds on, which its session starts from.
+    """
     onevcs, repository = os.environ[ONEVCS], scenario["repository"]
     branch_name = template.replace("{{ node.id }}", node)
     if scenario.get("unrecorded"):
@@ -246,11 +274,12 @@ def _kept(scenario: Scenario, template: str, run: str, node: str) -> Node:
     opened = json.loads(
         _run(
             [onevcs, "session", "open", repository, "--branch-name", branch_name]
+            + ([] if base is None else ["--base", base])
             + ["--label", f"run={run}", "--label", f"node={node}"]
         )
     )
     worktree = Path(opened["worktree"])
-    (worktree / "harness.sh").write_text(f"echo measuring {node}\n", encoding="utf-8")
+    (worktree / f"{node}.sh").write_text(f"echo measuring {node}\n", encoding="utf-8")
     _run(["git", "add", "-A"], cwd=worktree)
     _run(["git", *COMMITTER, "commit", "-qm", f"feat: {node} harness"], cwd=worktree)
     head = _run(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
@@ -267,52 +296,141 @@ def _kept(scenario: Scenario, template: str, run: str, node: str) -> Node:
     }
 
 
-def spikes(scenario: Scenario, project: str, template: str, run: str) -> list[Node]:
-    settled: list[Node] = []
-    for task in _tasks(project):
-        node = str(task["item"]["metadata"]["onepipeline.id"])
-        if node in scenario.get("fail", []):
-            settled.append({"id": node, "status": "failed", "outcome": "task-failed"})
+def _spike_tasks(project: str) -> dict[str, list[str]]:
+    """Each spike of ``project`` and the spikes it depends on, off the project's own edges."""
+    tasks = _tasks(project)
+    node_of = {str(task["id"]): str(task["item"]["metadata"]["onepipeline.id"]) for task in tasks}
+    return {
+        node_of[str(task["id"])]: [
+            node_of[str(edge["to"]["id"])]
+            for edge in _object(json.loads(_store("task", "deps", str(task["id"]), "--json")))[
+                "items"
+            ]
+        ]
+        for task in tasks
+    }
+
+
+def _base(deps: list[str], graph: dict[str, list[str]]) -> str | None:
+    """The dependency whose own chain holds every other, as the engine selects it."""
+
+    def above(node: str) -> set[str]:
+        return {node}.union(*(above(dep) for dep in graph[node]))
+
+    based = [dep for dep in deps if set(deps) <= above(dep)]
+    assert len(based) == 1 or not deps, f"the engine refuses the fan-in {deps}"
+    return based[0] if based else None
+
+
+def _report(scenario: Scenario, node: str, kept: Node) -> None:
+    """Write ``node``'s report, the one its task names, whichever attempt kept the branch."""
+    measured = node not in scenario.get("unmeasured", [])
+    _document(
+        scenario["plan"],
+        f"{node}-report",
+        "spike-report",
+        {
+            "spike": node,
+            "branch": kept.get("branch", ""),
+            "harness": f"`{node}.sh` at the branch's root; run `sh {node}.sh`.",
+            "method": "Twenty pages of the real listing at 2,000 nodes.",
+            "candidates": [
+                {
+                    "budget": "listing-latency",
+                    "measure": "time to the first page",
+                    "workload": "2,000 nodes",
+                    "achievable": "420 ms",
+                    "limits": "5,000 calls an hour",
+                    "consumed": "20 calls",
+                }
+            ]
+            if measured
+            else [],
+            "findings": [],
+        },
+    )
+
+
+def _settle(
+    scenario: Scenario,
+    graph: dict[str, list[str]],
+    template: str,
+    run: str,
+    settled: dict[str, list[Node]],
+    *,
+    failing: list[str],
+    retried: list[str],
+) -> None:
+    """Settle every spike of ``graph`` not yet in ``settled``, each once its dependencies have."""
+    while len(settled) < len(graph):
+        node = next(
+            one for one in graph if one not in settled and all(dep in settled for dep in graph[one])
+        )
+        standing = {dep: settled[dep][-1] for dep in graph[node]}
+        if any(entry["status"] != "done" for entry in standing.values()):
+            settled[node] = [{"id": node, "status": "skipped"}]
             continue
-        standing = node
-        if node in scenario.get("retried", []):
+        if node in failing:
+            settled[node] = [{"id": node, "status": "failed", "outcome": "task-failed"}]
+            continue
+        entries: list[Node] = []
+        attempt = node
+        if node in retried:
             # The engine's retry: the first attempt settles `cancelled`, superseded by its
             # replacement, which runs as a node of its own and cuts a branch named for it.
-            standing = f"{node}-2"
-            settled.append(
+            attempt = f"{node}-2"
+            entries.append(
                 {
                     "id": node,
                     "status": "cancelled",
                     "outcome": "task-failed",
-                    "superseded_by": standing,
+                    "superseded_by": attempt,
                 }
             )
-        kept = _kept(scenario, template, run, standing)
-        # The report is the one the spike's task names, whichever attempt wrote it.
-        _document(
-            scenario["plan"],
-            f"{node}-report",
-            "spike-report",
-            {
-                "spike": node,
-                "branch": kept.get("branch", ""),
-                "harness": "`harness.sh` at the branch's root; run `sh harness.sh`.",
-                "method": "Twenty pages of the real listing at 2,000 nodes.",
-                "candidates": [
-                    {
-                        "budget": "listing-latency",
-                        "measure": "time to the first page",
-                        "workload": "2,000 nodes",
-                        "achievable": "420 ms",
-                        "limits": "5,000 calls an hour",
-                        "consumed": "20 calls",
-                    }
-                ],
-                "findings": [],
-            },
+        base = _base(graph[node], graph)
+        kept = _kept(
+            scenario, template, run, attempt, None if base is None else standing[base]["branch"]
         )
-        settled.append(kept)
-    return settled
+        _report(scenario, node, kept)
+        settled[node] = [*entries, kept]
+
+
+def spikes(scenario: Scenario, project: str, template: str, run: str) -> list[Node]:
+    graph = _spike_tasks(project)
+    settled: dict[str, list[Node]] = {}
+    _settle(
+        scenario,
+        graph,
+        template,
+        run,
+        settled,
+        failing=scenario.get("fail", []),
+        retried=scenario.get("retried", []),
+    )
+    return [entry for node in graph for entry in settled[node]]
+
+
+def retry(scenario: Scenario, project: str, template: str) -> int:
+    """Settle a manager's `retry` of every failed spike of the spikes run of ``project``.
+
+    The failed spike is superseded by `<spike>-2`, which keeps a branch of its own, and every
+    spike skipped behind it runs from that branch, as the engine re-points them onto it.
+    """
+    run = _run_id(project)
+    record = Path(os.environ.get("ONEPIPELINE_RUNS_DIR", "runs")) / run / "result.json"
+    ledger = _object(json.loads(record.read_text(encoding="utf-8")))
+    graph = _spike_tasks(project)
+    held: dict[str, Node] = {str(entry["id"]): cast(Node, entry) for entry in ledger["nodes"]}
+    failed = [node for node in graph if held[node]["status"] == "failed"]
+    settled = {
+        node: [held[node]] for node in graph if held[node]["status"] not in ("failed", "skipped")
+    }
+    _settle(scenario, graph, template, run, settled, failing=[], retried=failed)
+    nodes = [entry for node in graph for entry in settled[node]]
+    done = all(entry["status"] in ("done", "cancelled") for entry in nodes)
+    ledger |= {"state": "complete" if done else "failed", "ok": done, "nodes": nodes}
+    record.write_text(json.dumps(ledger), encoding="utf-8")
+    return 0
 
 
 #: How the finalize planner's task lists each spike, in `orchestrator/spike_flow.py`'s words.
@@ -325,7 +443,15 @@ def finalize(scenario: Scenario, project: str) -> list[Node]:
     if scenario.get("fail_finalize"):
         return [{"id": "finalize", "status": "failed", "outcome": "task-failed"}]
     (own,) = _tasks(project)
-    listed = [match.groupdict() for match in LISTED.finditer(str(own["item"]["content"]))]
+    content = str(own["item"]["content"])
+    listed = [match.groupdict() for match in LISTED.finditer(content)]
+    built_on = scenario.get("builds_on")
+    if built_on is not None:
+        # The task builds on one spike: it links that one and every spike the note names
+        # above it in its stacking chain, which is where that spike's harness is.
+        line = re.search(rf"^- `{re.escape(built_on)}`: above it, (.+)$", content, re.M)
+        above = re.findall(r"`([^`]+)`", line.group(1)) if line else []
+        listed = [one for one in listed if one["spike"] in {built_on, *above}]
     for task in _tasks(scenario["plan"]):
         answered = json.loads(_store("task", "answers", str(task["id"]), "--json"))
         answers = _object(_object(answered).get("answers", answered))
@@ -420,10 +546,14 @@ def start(arguments: list[str]) -> int:
 
 
 def main() -> int:
-    arguments = sys.argv[1:]
-    if arguments[:1] != ["start"]:
-        os.execv(os.environ[REAL], [os.environ[REAL], *arguments])
-    return start(arguments[1:])
+    match sys.argv[1:]:
+        case ["retry", project, template]:
+            scenario = cast(Scenario, json.loads(os.environ[SCENARIO]))
+            return retry(scenario, project, template)
+        case ["start", *arguments]:
+            return start(arguments)
+        case arguments:
+            os.execv(os.environ[REAL], [os.environ[REAL], *arguments])
 
 
 if __name__ == "__main__":

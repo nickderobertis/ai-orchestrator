@@ -264,11 +264,34 @@ system_prompt: |
   approach that will not work, an API that does not behave as assumed, a missing
   dependency.
 
+  **When two or more spikes need the same measurement harness, the draft may author it
+  once**, as a harness spike: one `spike-<topic>` whose deliverables are that harness and
+  its report, with each area spike depending on it, so the engine starts each area
+  spike's session from the branch the harness spike kept. The trade, as the budgets
+  document `spike-preserve-deps-budgets` measured it: a harness spike saves the duplicated
+  harness builds — their quota, and the divergent copies finalize and the workers would
+  otherwise reconcile — but puts one more dispatch in series on the spikes stage. That
+  dispatch adds its fixed cost in quota (its orientation and closing review, roughly
+  breaking even against the builds saved at two area spikes) and about one orientation of
+  wall clock (a median of 13.3 minutes over 309 dispatches on this host), the latter offset
+  where the plan's concurrency is below its spike count. So author one when two or more
+  spikes need a harness that is substantial relative to that cost, never by default. Its
+  report is the same `spike-report` template, often with no candidate budget of its own.
+  Same-repository spike dependencies must lie on one stacking chain — a spike's base
+  dependency, that spike's base dependency, and so on — each spike starting from the one it
+  builds on; a fan-in no chain resolves is refused at launch, and a path through another
+  repository's spike orders without carrying its harness. A dependency on a spike in
+  another repository orders only, so the dependent's task names that harness by reference.
+
   **A finalize dispatch reworks the plan from every report**: the targets, and the
   decomposition and contracts wherever a spike exposed a design problem. It links each
   dependent task to the reports and branches it builds on through that task's `spikes`
-  answer, one `{spike, report, branch}` per spike, so its worker starts from the
-  measurements and the harness instead of rediscovering them. The workload a spike
+  answer, one `{spike, report, branch}` per spike — each spike the task builds on, plus
+  every spike above it in its stacking chain, read from the spikes project's own
+  dependency edges, which the finalize note states — so its worker starts from the
+  measurements and the harness instead of rediscovering them. A plan task consumes spike
+  work by reference, through that `## Spike evidence`, never through a dependency edge on a
+  spike. The workload a spike
   measured at is planning's: finalize states it in the budgets document and in the
   dependent task's criteria, never in a budgets file. A plan the host's budgets migration
   list names needs no budgets document, and its finalize writes none; every other plan's

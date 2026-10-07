@@ -548,3 +548,69 @@ def test_a_task_building_on_no_spike_renders_the_body_it_rendered_before_spikes_
         assert now == _render_from(launch_environment, root, "plan-task", answers, tmp_path)
         assert now == _render(launch_environment, {**answers, "spikes": []}, tmp_path)
         assert SPIKE_EVIDENCE not in now
+
+
+#: A spike report's answers with one candidate budget, as an area spike gives them.
+MEASURED_REPORT: dict[str, object] = {
+    "spike": "spike-listing",
+    "branch": "nick/p/spike-listing",
+    "harness": "`spikes/listing.py`; run `uv run spikes/listing.py --pages 20`.",
+    "method": "Twenty pages of the real listing at 2,000 nodes.",
+    "candidates": [
+        {
+            "budget": "listing-latency",
+            "measure": "time to the first page",
+            "workload": "2,000 nodes",
+            "achievable": "420 ms",
+            "limits": "5,000 calls an hour",
+            "consumed": "20 calls",
+        }
+    ],
+    "findings": [],
+}
+
+
+def test_a_harness_spike_that_measured_no_candidate_says_so_rather_than_an_empty_table(
+    launch_environment: dict[str, str], tmp_path: Path
+) -> None:
+    body = _render_from(
+        launch_environment,
+        ROOT,
+        "spike-report",
+        {**MEASURED_REPORT, "spike": "spike-harness", "candidates": []},
+        tmp_path,
+    )
+
+    section = body.split("## Candidate budgets", 1)[1].split("## Design findings", 1)[0]
+    assert section.strip() == "This spike measured no candidate budget itself.", section
+    assert "| Budget |" not in body, body
+
+
+def test_a_spike_report_with_candidates_renders_the_body_it_rendered_before_harness_spikes(
+    launch_environment: dict[str, str], tmp_path: Path
+) -> None:
+    """The template with the empty-candidates branch taken out renders the same.
+
+    That template is this one as it stood before the branch was added: the conditional
+    around the table and its `else` sentence are the whole of what it added to the body, so
+    taking them out mechanically is the earlier template, without a copy of it to drift.
+    """
+    source = SPIKE_REPORT.read_text(encoding="utf-8")
+    opened = "{% if candidates %}\n"
+    closed = re.search(
+        r"\{% else %\}\nThis spike measured no candidate[^\n]*\n\{% endif %\}\n", source
+    )
+    assert opened in source and closed is not None, "the empty-candidates branch moved"
+    before = source.replace(opened, "").replace(closed.group(0), "")
+    root = tmp_path / "before"
+    root.mkdir()
+    for kept in ROOT.iterdir():
+        if kept.is_file():
+            (root / kept.name).write_text(kept.read_text(encoding="utf-8"), encoding="utf-8")
+    (root / SPIKE_REPORT.name).write_text(before, encoding="utf-8")
+
+    for findings in ([], ["The listing API ignores its page size."]):
+        answers = {**MEASURED_REPORT, "findings": findings}
+        now = _render_from(launch_environment, ROOT, "spike-report", answers, tmp_path)
+        assert now == _render_from(launch_environment, root, "spike-report", answers, tmp_path)
+        assert "| listing-latency | time to the first page |" in now, now

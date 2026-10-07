@@ -49,6 +49,7 @@ import short_state
 from nx_workspace import answering_this_checkouts_origin, copy_working_tree
 from project_fixtures import no_budgets
 from scratch_identity import PLANNING_FLOW_ORIGIN, seeded
+from spike_flow_engine import Node
 from test_plan_flow_e2e import (
     DESTINATION,
     FAKE_CODEX,
@@ -170,12 +171,13 @@ def _flow(
     budgets: bool = True,
     plan: PlanProject | None = None,
     session: bool = True,
+    topics: tuple[str, ...] = ("listing", "quota"),
     **scenario: object,
 ) -> Flow:
     """A brief, a scratch registry and the doubled engine's scenario for one journey."""
     run = RunId(f"spike-flow-{key}-{os.getpid()}")
     qualified = plan or PlanProject(f"{FIXTURE_SOURCE}:test-{os.getpid()}-{key}-plan")
-    named = tuple(SpikeId(f"spike-{key}-{topic}") for topic in ("listing", "quota") if spikes)
+    named = tuple(SpikeId(f"spike-{key}-{topic}") for topic in topics if spikes)
     identity = seeded(tmp_path / "identity", origin=PLANNING_FLOW_ORIGIN)
     environment = dict(os.environ)
     for name in INHERITED_ENVIRONMENT:
@@ -747,3 +749,142 @@ def test_a_resume_from_finalize_still_runs_spikes_that_never_ran(
     assert resumed.returncode == 0, resumed.stdout + resumed.stderr
     assert _runs_started(flow) == _stage_runs(flow)
     assert set(_branches(flow)) <= set(_acknowledged(flow)), _acknowledged(flow)
+
+
+def _stacked(workspace: Workspace, tmp_path: Path, key: str, *, fail: bool = False) -> Flow:
+    """A flow whose draft wrote a harness spike and two area spikes depending on it."""
+    harness, listing, quota = (f"spike-{key}-{topic}" for topic in ("harness", "listing", "quota"))
+    return _flow(
+        workspace,
+        tmp_path,
+        key,
+        topics=("harness", "listing", "quota"),
+        spike_deps={listing: [harness], quota: [harness]},
+        unmeasured=[harness],
+        builds_on=listing,
+        fail=[harness] if fail else [],
+    )
+
+
+def _ledger(flow: Flow) -> dict[str, Node]:
+    """The spikes run's ledger nodes by id, as the engine's `result.json` records them."""
+    record = json.loads((flow.runs / f"{flow.run}-spikes" / "result.json").read_text("utf-8"))
+    nodes = cast(list[Node], record["nodes"])
+    return {node["id"]: node for node in nodes}
+
+
+def _descends(flow: Flow, ancestor: str, head: str) -> bool:
+    """Whether ``head`` descends from ``ancestor`` on the identity's own origin."""
+    origin = flow.runs.parent / "identity" / "origin.git"
+    return (
+        subprocess.run(
+            ["git", "-C", str(origin), "merge-base", "--is-ancestor", ancestor, head],
+            check=False,
+        ).returncode
+        == 0
+    )
+
+
+def _finalize_note(flow: Flow) -> str:
+    """The finalize planner's task, which carries the note `spike_flow.py` wrote for it."""
+    (task,) = _items(
+        _store(flow, "task", "list", "--source", "authoring", "--project", f"{flow.run}-finalize")
+    )
+    return str(task["item"]["content"])
+
+
+def _plan_task(flow: Flow) -> str:
+    (task,) = _items(
+        _store(
+            flow,
+            "task",
+            "list",
+            "--source",
+            FIXTURE_SOURCE,
+            "--project",
+            flow.plan.partition(":")[2],
+        )
+    )
+    return str(task["item"]["content"])
+
+
+def test_area_spikes_start_from_the_harness_spikes_kept_branch_and_finalize_links_both(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    flow = _stacked(workspace, tmp_path, "stacked")
+    harness, listing, quota = flow.spikes
+
+    done = _plan(flow)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert _runs_started(flow) == _stage_runs(flow)
+    ledger = _ledger(flow)
+    for area in (listing, quota):
+        assert ledger[area]["head"] != ledger[harness]["head"]
+        assert _descends(flow, ledger[harness]["head"], ledger[area]["head"]), (
+            f"{area}'s kept branch does not descend from {harness}'s kept head"
+        )
+    assert not _descends(flow, ledger[listing]["head"], ledger[quota]["head"])
+    acknowledged = _acknowledged(flow)
+    for branch in _branches(flow):
+        assert branch in acknowledged, f"{branch} was not acknowledged: {acknowledged}"
+    note = _finalize_note(flow)
+    for area in (listing, quota):
+        assert f"- `{area}`: above it, `{harness}`" in note, note
+    assert f"- `{harness}`: above it" not in note, note
+    # The task builds on the listing spike: it links that spike and the harness above it,
+    # and nothing the quota spike measured.
+    content = _plan_task(flow)
+    for spike in (listing, harness):
+        assert f"- `{spike}`: report `{spike}-report`" in content, content
+    assert f"`{quota}`" not in content, content
+    checked = _just(flow, "check-plan", flow.plan)
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+
+
+def test_a_failed_harness_spike_stops_naming_it_and_each_skipped_dependent_then_its_retry_finalizes(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    flow = _stacked(workspace, tmp_path, "unharnessed", fail=True)
+    harness, listing, quota = flow.spikes
+
+    stopped = _plan(flow)
+
+    assert stopped.returncode == 1, stopped.stdout + stopped.stderr
+    assert f"{harness} failed" in stopped.stderr, stopped.stderr
+    assert f"skipped {listing}, {quota} behind it as dependents" in stopped.stderr
+    assert "retrying the failed spike re-runs its dependents on its replacement's branch" in (
+        stopped.stderr
+    )
+    assert "--resume spikes" in stopped.stderr
+    assert _runs_started(flow) == [flow.run, f"{flow.run}-spikes"]
+
+    # The manager's `retry` of the harness, settled by the driver: its replacement keeps a
+    # branch of its own, and both area spikes run from it.
+    native = flow.plan.partition(":")[2]
+    retried = subprocess.run(
+        [sys.executable, str(STAND_IN), "retry", spike_plan.spikes_project(flow.plan)]
+        + [f"{native}/{{{{ node.id }}}}"],
+        cwd=flow.checkout,
+        env=flow.environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(300),
+        check=False,
+    )
+    assert retried.returncode == 0, retried.stdout + retried.stderr
+    resumed = _resumed(flow, stopped)
+
+    assert resumed.returncode == 0, resumed.stdout + resumed.stderr
+    assert _runs_started(flow) == _stage_runs(flow), "the resume relaunched the spikes"
+    ledger = _ledger(flow)
+    replacement = f"{harness}-2"
+    for area in (listing, quota):
+        assert _descends(flow, ledger[replacement]["head"], ledger[area]["head"])
+    assert f"{native}/{replacement}" in _acknowledged(flow), _acknowledged(flow)
+    note = _finalize_note(flow)
+    assert f"- `{harness}`: report `{harness}-report`; branch `{native}/{replacement}`" in note
+    assert f"- `{listing}`: above it, `{harness}`" in note, note
+    content = _plan_task(flow)
+    assert f"- `{harness}`: report `{harness}-report`" in content, content
+    assert f"branch `{native}/{replacement}`" in content, content

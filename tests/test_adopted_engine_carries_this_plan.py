@@ -795,6 +795,20 @@ REPARENT_WAITING_HUMAN_LANDINGS = (
     ),
 )
 
+#: The engine-side node of the plan letting a spike build on a shared harness spike's kept
+#: branch (https://github.com/nickderobertis/onepipeline/pull/776): a `publish: "preserve"`
+#: node may depend on preserve nodes, and its session starts from its base dependency's kept
+#: branch. `tests/plan_tooling/test_check_plan_spikes_e2e.py` holds the adopted `plan check`
+#: to accepting a harness spike's fan-out and refusing a fan-in no stacking chain resolves.
+PRESERVE_ON_PRESERVE_LANDINGS = (
+    Landing(
+        node="op-preserve-on-preserve",
+        change_request=776,
+        commit="1a47dc37666998e0230b0c04c1616eee9d0bbba8",
+        did="let a preserved node build on a preserved dependency's kept branch",
+    ),
+)
+
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
     Landing(
@@ -833,6 +847,7 @@ LANDINGS = (
     *ACCEPTED_FOLLOW_UPS_1002_LANDINGS,
     *APPROVED_BUDGETS_LANDINGS,
     *REPARENT_WAITING_HUMAN_LANDINGS,
+    *PRESERVE_ON_PRESERVE_LANDINGS,
 )
 
 

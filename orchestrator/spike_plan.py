@@ -25,8 +25,15 @@ plan's main run succeeds:
   document whose ``onetaskgraph.origin`` — the plan store's own record of what a copy was
   copied from — names that id. The store has no document lookup by origin, so the check
   reads the plan project's own documents, one project-scoped read;
+* a spike may depend on other spikes — a shared harness spike the area spikes build on —
+  and the engine starts it from the branch its base dependency kept, so same-repository
+  spike dependencies lie on one stacking chain; the engine's ``plan check`` refuses a fan-in
+  no chain resolves, a dependency on another repository's spike orders only, and those
+  edges are the spikes project's own, which no report copies;
 * a task building on spikes links each through the ``plan-task`` template's ``spikes``
-  answer — ``{spike, report, branch}`` — which renders as a ``## Spike evidence`` section.
+  answer — ``{spike, report, branch}`` — which renders as a ``## Spike evidence`` section:
+  each spike it builds on and every spike above it in that spike's stacking chain, never a
+  dependency edge on a spike.
 
 That section is what the check reads, rather than the store's stored answers: a store keeps
 a task's answers only where it was drafted and never copies them, while the rendered body

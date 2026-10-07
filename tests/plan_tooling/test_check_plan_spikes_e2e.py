@@ -245,6 +245,44 @@ def test_a_well_formed_spikes_project_passes_with_no_budgets_document() -> None:
     assert checked.returncode == 0, checked.stdout + checked.stderr
 
 
+def test_area_spikes_depending_on_one_harness_spike_pass() -> None:
+    """The adopted engine starts each area spike from the harness spike's kept branch."""
+    harness, listing, quota = (
+        _unique(f"spike-{topic}") for topic in ("harness", "listing", "quota")
+    )
+    _, project = _plan(
+        [
+            _spike_node(harness),
+            _spike_node(listing, deps=[harness]),
+            _spike_node(quota, deps=[harness]),
+        ],
+        stamp=[harness, listing, quota],
+        budgets=False,
+    )
+
+    checked = _check(reviewed(project))
+
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+
+
+def test_a_spike_fanning_in_from_spikes_on_no_one_stacking_chain_is_refused_by_the_engine() -> None:
+    """A session starts from one kept branch, so two independent harnesses are refused."""
+    left, right, joined = (_unique(f"spike-{topic}") for topic in ("left", "right", "joined"))
+    _, project = _plan(
+        [_spike_node(left), _spike_node(right), _spike_node(joined, deps=[left, right])],
+        stamp=[left, right, joined],
+        budgets=False,
+    )
+
+    checked = _check(reviewed(project))
+
+    assert checked.returncode != 0, checked.stdout + checked.stderr
+    said = checked.stdout + checked.stderr
+    assert any(
+        joined in line and "on separate stacking chains" in line for line in said.splitlines()
+    ), said
+
+
 def test_a_node_of_a_spikes_project_not_named_as_a_spike_is_refused() -> None:
     spike = _unique("spike-listing")
     _, project = _plan(

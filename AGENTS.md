@@ -1490,7 +1490,7 @@ finish-plan` for review and the design document. A draft that needs measuring wr
 `spike-<topic>` nodes into `<plan project>-spikes`; each keeps its branch as `<host
 prefix>/<plan native id>/spike-<topic>`, acknowledged with `just unpublished
 --acknowledge`, and writes its report as the document `<spike id>-report` of the plan's
-own project. The plan's successful main run discards those branches, its success hook
+own project. A spike may depend on a shared harness spike, and starts from its branch. The plan's successful main run discards those branches, its success hook
 running `just reclaim-branch --discard` on each; a failed run and an
 unlaunched plan keep them, listed by `git ls-remote --heads origin '*/spike-*'`. Every stop
 prints the `--resume` command that carries the flow on.

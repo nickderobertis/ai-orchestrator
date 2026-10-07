@@ -144,8 +144,11 @@
 # exists; the plan and the spikes are reviewed and checked before any spike launches,
 # because a plan the check refuses is not one to measure for; and the finalize planner runs
 # only once every spike settled `preserved` and its branch is acknowledged, because it
-# reworks the plan from all of their reports at once. A draft that wrote no spikes goes
-# straight to the tail. `orchestrator/spike_flow.py` answers each read between the stages.
+# reworks the plan from all of their reports at once. The order among the spikes is the
+# engine's: one building on a harness spike starts from its kept branch, and one behind a
+# failed spike is skipped, which the stop below names with the retry that re-runs it. A
+# draft that wrote no spikes goes straight to the tail. `orchestrator/spike_flow.py`
+# answers each read between the stages.
 #
 # **Every stop says how to carry on.** A stage that does not settle, and any step that
 # refuses, stops the flow before the next stage and prints the one `--resume` command that

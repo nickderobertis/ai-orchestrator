@@ -61,6 +61,10 @@ PREFIX = "nick/"
 #: to delete. Its topic sorts between the other two, so the listing reaches it in the middle.
 DISCARDED = ("spike-a", "spike-b")
 HELD = "spike-ab"
+#: A shared harness spike and the two area spikes stacked on it, each area's session opened
+#: from the harness's kept branch as the adopted engine opens it: three branches of their own.
+HARNESS = "spike-harness"
+STACKED = ("spike-harness-listing", "spike-harness-quota")
 
 
 class Seeded(NamedTuple):
@@ -76,6 +80,8 @@ class Seeded(NamedTuple):
     spikes: tuple[str, ...]
     held: str
     unrelated: tuple[str, ...]
+    #: The harness spike's branch, then each area spike's branch stacked on it.
+    stacked: tuple[str, ...]
 
 
 class Ended(NamedTuple):
@@ -106,8 +112,13 @@ def _onevcs(environment: dict[str, str], *arguments: str) -> str:
     return done.stdout
 
 
-def _spike(environment: dict[str, str], identity: Identity, plan: str, spike: str) -> str:
-    """Leave ``spike``'s branch the way a spike node does, and answer its name."""
+def _spike(
+    environment: dict[str, str], identity: Identity, plan: str, spike: str, base: str = ""
+) -> str:
+    """Leave ``spike``'s branch the way a spike node does, and answer its name.
+
+    ``base`` is the kept branch of the spike it builds on, which its session starts from.
+    """
     opened = json.loads(
         _onevcs(
             environment,
@@ -122,10 +133,13 @@ def _spike(environment: dict[str, str], identity: Identity, plan: str, spike: st
             f"run={plan}-spikes",
             "--label",
             f"node={spike}",
+            *(["--base", base] if base else []),
         )
     )
     worktree = Path(opened["worktree"])
-    (worktree / "harness.sh").write_text(f"echo measuring {spike}\n", encoding="utf-8")
+    (worktree / f"{spike}.sh" if base else worktree / "harness.sh").write_text(
+        f"echo measuring {spike}\n", encoding="utf-8"
+    )
     git("add", "-A", cwd=worktree)
     git(*GIT_IDENTITY, "commit", "-qm", f"feat: {spike} harness", cwd=worktree)
     _onevcs(environment, "preserve", "--repo", str(identity.publication), opened["branch"])
@@ -154,7 +168,22 @@ def _seeded(bench: Bench, identity: Identity, run: str, plan: str) -> Seeded:
         _pushed(identity, f"{PREFIX}{plan}/build-listing"),
         _pushed(identity, f"{PREFIX}{plan}-later/spike-a"),
     )
-    return Seeded(identity, run, plan, spikes, held, unrelated)
+    harness = _spike(bench.environment, identity, plan, HARNESS)
+    stacked = (
+        harness,
+        *(_spike(bench.environment, identity, plan, area, harness) for area in STACKED),
+    )
+    # Each area branch descends from the harness spike's kept head, as the engine placed it.
+    git("fetch", "-q", "origin", cwd=identity.publication)
+    for area in stacked[1:]:
+        git(
+            "merge-base",
+            "--is-ancestor",
+            f"origin/{harness}",
+            f"origin/{area}",
+            cwd=identity.publication,
+        )
+    return Seeded(identity, run, plan, spikes, held, unrelated, stacked)
 
 
 def _remote(identity: Identity) -> frozenset[str]:
@@ -287,6 +316,20 @@ def test_a_success_ending_discards_the_plans_spike_branches_from_the_origin_and_
         assert spike not in succeeded.local, f"{spike} is still held locally: {succeeded.local}"
     for kept in seeded_.unrelated:
         assert kept in succeeded.remote, f"{kept}, which is no spike of the plan, was deleted"
+
+
+def test_a_success_ending_discards_a_harness_spike_and_the_area_spikes_stacked_on_it(
+    succeeded: Ended,
+) -> None:
+    """Each spike of a stacked set keeps a branch of its own, so each is discarded."""
+    harness, *areas = succeeded.seeded.stacked
+
+    for branch in (harness, *areas):
+        assert branch not in succeeded.remote, f"{branch} is still on the origin: {succeeded.log}"
+        assert branch not in succeeded.local, f"{branch} is still held locally"
+    (discarded,) = [line for line in succeeded.log.splitlines() if "discarded the spike" in line]
+    for branch in (harness, *areas):
+        assert f"{branch} of {succeeded.seeded.identity.publication}" in discarded, discarded
 
 
 def test_a_success_ending_reports_each_discard_and_the_branch_it_could_not_discard(

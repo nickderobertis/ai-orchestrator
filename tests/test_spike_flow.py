@@ -437,3 +437,145 @@ def test_a_spikes_project_whose_plan_id_cannot_name_its_branches_is_refused(
     """Refused before anything is launched: the id goes into the spikes' branch template."""
     assert spike_flow.main(["prepare", project, "flow-spikes"]) == 2
     assert said in capsys.readouterr().err
+
+
+#: The repositories the stacked spikes below measure: two spellings of one, and another.
+SERVICE = "github.com/nickderobertis/some-service"
+OTHER = "github.com/nickderobertis/other-service"
+
+
+def _stacked(*tasks: dict[str, object]) -> str:
+    """A spikes project of ``tasks``, each a spike measuring the repository it names."""
+    native = f"spike-flow-{os.getpid()}-{next(_SEQUENCE)}-spikes"
+    write_plan_project(
+        plan_fixture_source.root(),
+        {
+            "schema_version": 3,
+            "goal": {"text": "Measure before the plan is final"},
+            "name": native,
+            "tasks": [{"task": "Measure.", **task} for task in tasks],
+        },
+        native_id=native,
+    )
+    return f"{plan_fixture_source.SOURCE}:{native}"
+
+
+def test_each_spike_stacked_on_another_is_answered_with_the_spikes_above_it_nearest_first() -> None:
+    """A two-level chain, a fan-out from it, a cross-repository edge and an alias spelling."""
+    project = _stacked(
+        {"id": "spike-harness", "repo": f"https://{SERVICE}.git"},
+        {"id": "spike-deeper", "repo": SERVICE, "deps": ["spike-harness"]},
+        {"id": "spike-listing", "repo": SERVICE, "deps": ["spike-deeper", "spike-harness"]},
+        {"id": "spike-quota", "repo": SERVICE, "deps": ["spike-harness", "spike-elsewhere"]},
+        {"id": "spike-elsewhere", "repo": OTHER},
+        {"id": "spike-aliased", "repo": "some-alias", "deps": ["spike-harness"]},
+        {"id": "spike-unplaced", "deps": ["spike-harness"]},
+    )
+
+    chains = spike_flow.stacking_chains(project)
+
+    assert chains == {
+        "spike-deeper": ("spike-harness",),
+        "spike-listing": ("spike-deeper", "spike-harness"),
+        # The other repository's spike orders `spike-quota` and carries no harness to it.
+        "spike-quota": ("spike-harness",),
+    }
+
+
+@pytest.mark.parametrize(
+    ("tasks", "said"),
+    [
+        (
+            [
+                {"id": "spike-left", "repo": SERVICE},
+                {"id": "spike-right", "repo": SERVICE},
+                {"id": "spike-joined", "repo": SERVICE, "deps": ["spike-left", "spike-right"]},
+            ],
+            "spike-joined depending on spike-left, spike-right in its own repository, which "
+            "lie on no one stacking chain",
+        ),
+        (
+            [
+                {"id": "spike-a", "repo": SERVICE, "deps": ["spike-b"]},
+                {"id": "spike-b", "repo": SERVICE, "deps": ["spike-a"]},
+            ],
+            "records a dependency cycle through spike-a",
+        ),
+    ],
+    ids=["unresolved-fan-in", "cycle"],
+)
+def test_spikes_on_no_one_stacking_chain_are_refused_rather_than_guessed_at(
+    tasks: list[dict[str, object]], said: str
+) -> None:
+    project = _stacked(*tasks)
+
+    with pytest.raises(ValueError, match=said):
+        spike_flow.stacking_chains(project)
+
+
+def test_a_spikes_project_the_store_does_not_hold_stacks_nothing() -> None:
+    assert spike_flow.stacking_chains(f"{plan_fixture_source.SOURCE}:no-such-plan-spikes") == {}
+
+
+def test_the_finalize_note_names_the_spikes_above_each_stacked_spike_from_the_projects_edges() -> (
+    None
+):
+    spikes = _stacked(
+        {"id": "spike-harness", "repo": SERVICE},
+        {"id": "spike-listing", "repo": SERVICE, "deps": ["spike-harness"]},
+    )
+    kept = {
+        NodeId("spike-harness"): Branch("plan/spike-harness"),
+        NodeId("spike-listing"): Branch("plan/spike-listing"),
+    }
+
+    said = spike_flow.note(spikes.removesuffix("-spikes"), kept, spike_flow.stacking_chains(spikes))
+    flat = spike_flow.note(spikes.removesuffix("-spikes"), kept, {})
+
+    assert "- `spike-harness`: report `spike-harness-report`; branch `plan/spike-harness`" in said
+    assert "- `spike-listing`: report `spike-listing-report`; branch `plan/spike-listing`" in said
+    assert "- `spike-listing`: above it, `spike-harness`" in said, said
+    assert "every spike above it in its stacking chain" in said
+    assert "- `spike-harness`: above it" not in said
+    assert "stacking chain" not in flat
+
+
+def test_a_failed_spike_whose_dependents_were_skipped_stops_naming_each_and_the_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _ledger(
+        tmp_path,
+        monkeypatch,
+        "flow-spikes",
+        [
+            {"id": "spike-harness", "status": "failed", "outcome": "task-failed"},
+            {"id": "spike-listing", "status": "skipped"},
+            {"id": "spike-quota", "status": "skipped"},
+        ],
+    )
+
+    assert spike_flow.main(["settled", "flow-spikes", "--spikes"]) == 1
+    said = capsys.readouterr().err
+
+    assert "spike-harness failed" in said
+    assert "skipped spike-listing, spike-quota behind it as dependents" in said, said
+    assert "retrying the failed spike re-runs its dependents on its replacement's branch" in said
+    assert "once run flow-spikes settles, the flow's `--resume spikes` carries it on" in said
+
+
+def test_spikes_skipped_behind_several_failures_name_every_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _ledger(
+        tmp_path,
+        monkeypatch,
+        "flow-spikes",
+        [
+            {"id": "spike-a", "status": "failed"},
+            {"id": "spike-b", "status": "failed"},
+            {"id": "spike-c", "status": "skipped"},
+        ],
+    )
+
+    with pytest.raises(spike_flow.Stop, match="spike-a, spike-b failed, and the engine skipped"):
+        spike_flow.settled("flow-spikes", spikes=True)

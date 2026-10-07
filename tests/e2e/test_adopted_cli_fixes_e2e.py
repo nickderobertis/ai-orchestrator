@@ -531,16 +531,17 @@ def test_the_board_source_refuses_an_unknown_status_mapped_to_a_closed_state(
 
     The release that first carried the fix refused the closed-state form by name, because a
     copy read such an item back as `done` or `cancelled`; the installed release has no
-    closed-state form to refuse, a mapping being an option name or `null`, so the same
-    configuration is refused by the schema, naming the field and the value it will not
-    take. Either way the mapping never reaches a board.
+    closed-state form to refuse, a mapping being an option name, `null`, or an object
+    naming a `task` or `project` item kind, so the same configuration is refused naming the
+    source's field, the category and the key that is no item kind. Either way the mapping
+    never reaches a board.
     """
     refused = _board_source(tmp_path, f"{{closed: {closed}}}")
 
     said = refused.stdout + refused.stderr
     assert refused.returncode != 0, said
-    assert "sources.board.config.status_mapping.unknown" in said, said
-    assert f'{{"closed":"{closed}"}} is not valid' in said, said
+    assert "sources.board.config.status_mapping" in said, said
+    assert 'status_mapping.unknown names "closed", which is not an item kind' in said, said
 
 
 def test_the_board_source_mapping_unknown_to_an_option_reaches_for_the_board(

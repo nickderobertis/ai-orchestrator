@@ -1532,6 +1532,27 @@ def test_the_settlement_the_spike_stage_waits_for_is_one_the_engine_writes(
     assert (spike_flow.DONE, spike_flow.PRESERVED) in engine_settlements, sorted(engine_settlements)
 
 
+def test_the_statuses_the_spike_stage_names_a_skipped_dependent_by_are_ones_the_engine_writes() -> (
+    None
+):
+    """`orchestrator/spike_flow.py` names a spike behind a failed one by the engine's words.
+
+    The stop that names the failed spike and each dependent the engine skipped behind it
+    reads a ledger node's status as `failed` and `skipped`, so a release spelling either
+    another way would leave that stop naming nothing to retry.
+    """
+    shipped = "\n".join(
+        TEST_MODULE.sub("", _source(ONEPIPELINE, name)) for name in _rust_files(ONEPIPELINE)
+    )
+    words = set(dict(NODE_STATUS_WORD.findall(shipped)).values())
+
+    read = {spike_flow.DONE, spike_flow.FAILED, spike_flow.SKIPPED}
+    assert read <= words, (
+        f"onepipeline {ONEPIPELINE.ref} writes the node statuses {sorted(words)}, and "
+        f"orchestrator/spike_flow.py reads {sorted(read - words)} among {sorted(read)}"
+    )
+
+
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 
