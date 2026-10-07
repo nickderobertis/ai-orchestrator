@@ -570,6 +570,8 @@ def _settled_under_the_gate_environment(
 
 #: Justfiles a reviewed checkout may hold that its recipe runner cannot read, each with
 #: what the runner itself says: one Just's own lexer refuses, and one that is gone.
+#: Matched without regard to case, because `just` 1.58.0 lowercases the words its older
+#: releases capitalised.
 UNREAD_JUSTFILES: dict[str, tuple[str | None, str]] = {
     "unterminated-string": ('name := "unterminated\n', "error: Unterminated string"),
     "missing": (None, "error: Failed to read justfile at"),
@@ -606,7 +608,7 @@ def test_a_reviewed_checkout_whose_justfile_cannot_be_read_is_settled_by_what_th
         report = undefined_recipes(persona_at(REPO_ROOT / PERSONA), stand_in)
 
     assert runner.returncode != 0, runner.stdout
-    assert runner_says in runner.stderr, runner.stderr
+    assert runner_says.casefold() in runner.stderr.casefold(), runner.stderr
     assert report is not None
     assert f"could not parse the recipes of {stand_in}" in report, report
     assert "could not be reconciled against it at all" in report, report

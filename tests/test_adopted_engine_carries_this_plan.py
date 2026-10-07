@@ -781,6 +781,20 @@ APPROVED_BUDGETS_LANDINGS = (
     ),
 )
 
+#: The engine-side node of the plan adopting onepipeline issue #668
+#: (https://github.com/nickderobertis/onepipeline/issues/668): a manager may `reparent` a
+#: waiting, unattested `kind: human` approval, which re-gates it behind its new
+#: prerequisites. `tests/e2e/test_reparent_waiting_human_adopted_e2e.py` drives it through
+#: `just channel-reply` and `just status` on this host.
+REPARENT_WAITING_HUMAN_LANDINGS = (
+    Landing(
+        node="op-reparent-waiting-human",
+        change_request=777,
+        commit="941958c6ba5fd5fc6be38a13e404c2e1a8d82d17",
+        did="let a waiting, unattested human approval be reparented and re-gated",
+    ),
+)
+
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
     Landing(
@@ -818,6 +832,7 @@ LANDINGS = (
     *TICKET_FIXES_LANDINGS,
     *ACCEPTED_FOLLOW_UPS_1002_LANDINGS,
     *APPROVED_BUDGETS_LANDINGS,
+    *REPARENT_WAITING_HUMAN_LANDINGS,
 )
 
 
