@@ -1353,7 +1353,8 @@ no-unprivileged-userns host, dispatch codex with
 The same constraint applies inside a worker's gate: llmlint normally requests a
 read-only oneharness judge, which makes codex create a bubblewrap network
 namespace and can fail at loopback setup with `RTM_NEWADDR`. llmlint still has no
-mode override at the `LLMLINT_MIN` floor `scripts/setup-llmlint.sh` declares, so
+mode override at the rename-aware `LLMLINT_MIN` floor that
+`scripts/setup-llmlint.sh` declares, so
 dispatches point `LLMLINT_ONEHARNESS_BIN` at
 `scripts/llmlint-oneharness.sh`. The wrapper keeps Codex in `read-only` mode and
 adds only its network permission, avoiding the unsupported network namespace
@@ -1563,7 +1564,10 @@ plugins offline from its installed llmlint binary, not from the plugin URL, so a
 unreleased rule cannot be activated downstream. After the release is available,
 bump each consumer's `LLMLINT_MIN` floor and refresh its lock/install state; that
 floor bump is the rollout switch that makes the normal gate use the new bundled
-rule. Run the llmlint release gate before downstream consumer gates.
+rule. The floor declared in `scripts/setup-llmlint.sh` also makes `--diff` review
+renamed files by their
+edits and holds edited renames to the version-bump rule. Run the llmlint release
+gate before downstream consumer gates.
 
 ## Testing against a harness without a paid model
 

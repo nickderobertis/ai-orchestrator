@@ -63,6 +63,9 @@ pytestmark = pytest.mark.reads_recipes
 #: The installer's floor, read off the script so a release below it can be offered and
 #: refused for the floor the script really declares.
 FLOOR = installer_floor()
+#: A higher admissible release and a still newer incompatible release, relative to the floor.
+ADMISSIBLE = Version(f"{FLOOR}.1")
+INCOMPATIBLE = Version(f"{FLOOR.major}.{FLOOR.minor}.{FLOOR.micro + 1}")
 #: The executable the fake `llmlint-cli` wheels provide, as the real one does: `uv
 #: tool install` refuses a package that provides none, and the installer runs it.
 ENTRY_POINT = "llmlint"
@@ -213,14 +216,14 @@ def _below_floor() -> Version:
 def _offer(pin: Version) -> tuple[Release, ...]:
     """Several admissible releases, a newer one the pin does not admit, one below the floor.
 
-    `0.4.1.1` admits exactly the pin, so it is the highest the rule allows.
+    `ADMISSIBLE` admits exactly the pin, so it is the highest the rule allows.
     """
     above = _above(pin)
     return (
         Release(LLMLINT_DISTRIBUTION, str(_below_floor())),
-        Release(LLMLINT_DISTRIBUTION, "0.4.1", (f"{ONEHARNESS_DISTRIBUTION}>=0.3.21",)),
-        Release(LLMLINT_DISTRIBUTION, "0.4.1.1", (f"{ONEHARNESS_DISTRIBUTION}>={pin}",)),
-        Release(LLMLINT_DISTRIBUTION, "0.4.2", (f"{ONEHARNESS_DISTRIBUTION}>={above}",)),
+        Release(LLMLINT_DISTRIBUTION, str(FLOOR), (f"{ONEHARNESS_DISTRIBUTION}>={pin}",)),
+        Release(LLMLINT_DISTRIBUTION, str(ADMISSIBLE), (f"{ONEHARNESS_DISTRIBUTION}>={pin}",)),
+        Release(LLMLINT_DISTRIBUTION, str(INCOMPATIBLE), (f"{ONEHARNESS_DISTRIBUTION}>={above}",)),
         Release(ONEHARNESS_DISTRIBUTION, str(pin)),
         Release(ONEHARNESS_DISTRIBUTION, str(above)),
     )
@@ -239,8 +242,8 @@ def test_the_installer_selects_the_highest_release_the_pin_admits(
     assert completed.returncode == 0, completed.stderr
     installed = installed_llmlint(tool_home.tool_dir)
     assert installed is not None, completed.stderr
-    assert installed.version == "0.4.1.1", (
-        f"installed {installed.version} where 0.4.1.1 is the highest release at or above "
+    assert installed.version == str(ADMISSIBLE), (
+        f"installed {installed.version} where {ADMISSIBLE} is the highest release at or above "
         f"{FLOOR} admitting {ONEHARNESS_DISTRIBUTION} {pin}:\n{completed.stderr}"
     )
     # The rule itself, read the way the host drift gate reads it: the installed
@@ -256,8 +259,10 @@ def test_the_installer_selects_the_highest_release_the_pin_admits(
         check=True,
         env=env,
     )
-    assert shim.stdout.strip() == f"{ENTRY_POINT} 0.4.1.1"
-    assert f"ready ({ENTRY_POINT}: {ENTRY_POINT} 0.4.1.1)" in completed.stderr, completed.stderr
+    assert shim.stdout.strip() == f"{ENTRY_POINT} {ADMISSIBLE}"
+    assert f"ready ({ENTRY_POINT}: {ENTRY_POINT} {ADMISSIBLE})" in completed.stderr, (
+        completed.stderr
+    )
 
 
 @pytest.mark.skipif(shutil.which("uv") is None, reason="the installer runs `uv tool install`")
@@ -275,13 +280,13 @@ def test_the_installer_leaves_the_host_alone_when_no_release_admits_the_pin(
     above = _above(pin)
     listing = (
         Release(LLMLINT_DISTRIBUTION, str(_below_floor())),
-        Release(LLMLINT_DISTRIBUTION, "0.4.2", (f"{ONEHARNESS_DISTRIBUTION}>={above}",)),
+        Release(LLMLINT_DISTRIBUTION, str(INCOMPATIBLE), (f"{ONEHARNESS_DISTRIBUTION}>={above}",)),
         Release(ONEHARNESS_DISTRIBUTION, str(pin)),
         Release(ONEHARNESS_DISTRIBUTION, str(above)),
     )
     env = tool_home.environment(_index(tmp_path / "index", listing))
     subprocess.run(
-        ["uv", "tool", "install", f"{LLMLINT_DISTRIBUTION}==0.4.2"],
+        ["uv", "tool", "install", f"{LLMLINT_DISTRIBUTION}=={INCOMPATIBLE}"],
         text=True,
         capture_output=True,
         check=True,
@@ -301,9 +306,11 @@ def test_the_installer_leaves_the_host_alone_when_no_release_admits_the_pin(
     # What was found: uv's own resolution names the requirement nothing offered met.
     assert f"{ONEHARNESS_DISTRIBUTION}>={above}" in completed.stderr, completed.stderr
     installed = installed_llmlint(tool_home.tool_dir)
-    assert installed is not None and installed.version == "0.4.2", completed.stderr
+    assert installed is not None and installed.version == str(INCOMPATIBLE), completed.stderr
     assert receipt.read_text(encoding="utf-8") == before
-    assert f"ready ({ENTRY_POINT}: {ENTRY_POINT} 0.4.2)" in completed.stderr, completed.stderr
+    assert f"ready ({ENTRY_POINT}: {ENTRY_POINT} {INCOMPATIBLE})" in completed.stderr, (
+        completed.stderr
+    )
 
 
 @pytest.mark.skipif(shutil.which("uv") is None, reason="the installer runs `uv tool install`")
