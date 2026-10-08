@@ -152,11 +152,12 @@ of both once.
   a compatibility limitation. Linear and local destinations use task URLs too; Linear's
   anchor capability remains unverified. No URL is persisted in budget metadata.
   Only explicitly in-scope n/a summaries and actual named root effects appear — never a budget's workload, evidence, command or
-  budgets file, which a reader follows the link for. A plan that adds or changes no budget
-  still shows informative omissions and effects. A plan with none of these facts shows
-  no Budgets section. The writer copies these answers from `python -m
-  orchestrator.plan_budgets <project>`, and `just finish-plan` refuses a document whose
-  answers differ.
+  budgets file, which a reader follows the link for. A plan with no budget still shows
+  its named root effects, with its omissions beside them. A plan with no budget and no
+  named root effect shows no Budgets section, however many concerns it answered n/a; those
+  answers stay in its description and each task's `## Budgets` section. The writer copies
+  these answers from `python -m orchestrator.plan_budgets <project>`, and `just
+  finish-plan` refuses a document whose answers differ.
 - **Only an approved design document changes a budgets file.** A plan proposes its changes
   to each budgets file on the tasks that own them, the design document puts them to the
   user, and approving the design document approves them.

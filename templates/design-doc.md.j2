@@ -109,7 +109,7 @@ variables:
 
   SECTIONS. In this order: What, Why, Architecture, Budgets, Acceptance criteria and
   Planned tasks. A plan the migration list names renders one line in place of the Budgets
-  summary. A plan with no budget, scoped omission or named root effect renders no Budgets section at all.
+  summary.
   There is no separate Contracts section, and no answer adds a heading of its own.
 
   HIGHLIGHTING. No GitHub alert blocks (`> [!CAUTION]` and the like) anywhere. The bold
@@ -255,7 +255,10 @@ variables:
   finish-plan flow refuses a document whose budget answers differ from that output. A plan
   the migration list `config/budgets-migration.yaml` names prints its reason as
   `predates_budgets` and renders "This plan predates budgets: <reason>" in place of the
-  summary.
+  summary. Otherwise a plan with no budget and no named root effect renders no Budgets
+  section at all, whatever its not-applicable answers, which the plan's own description and
+  each task's `## Budgets` section still record. A plan with a budget or a root effect
+  lists its in-scope not-applicable answers under "Not budgeted".
 #}
 {% endblock %}
 {% block budgets %}
@@ -272,7 +275,7 @@ variables:
 
 This plan predates budgets: {{ predates_budgets }}
 
-{% elif budgets or omissions.items or effects.items %}
+{% elif budgets or effects.items %}
 ## Budgets
 
 **Sizing.** {{ plan_budgets.sizing }}

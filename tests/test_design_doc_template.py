@@ -696,6 +696,25 @@ def test_informative_omissions_and_effects_render_without_a_feature_budget_chang
     assert ("| Budget |" in body) == (budgets == "none")
 
 
+def test_a_plan_with_only_not_applicable_answers_renders_no_budgets_section(
+    tmp_path: Path, loader: str
+) -> None:
+    """No budget and no named root effect: the n/a answers stay in the plan, not the document."""
+    answers = _budget_answers()
+    effects = [
+        {**entry, "effect": "none"} for entry in answers["plan_budgets"]["repo_wide_effects"]
+    ]
+    plan = {**answers["plan_budgets"], "repo_wide_effects": effects}
+    assert any(entry["not_applicable"] for entry in plan["checklist"])
+    body = _render(loader, {**ANSWERS, **answers, "budgets": [], "plan_budgets": plan}, tmp_path)
+
+    assert "## Budgets" not in body
+    for text in ("Sizing", "At 10×", "Not budgeted", "Repo-wide effects"):
+        assert text not in body, text
+    sections = re.findall(r"^## (.+)$", body, re.MULTILINE)
+    assert sections == ["What", "Why", "Architecture", "Acceptance criteria", "Planned tasks"]
+
+
 def test_spike_findings_render_one_line_each_only_when_there_are_any(
     tmp_path: Path, loader: str
 ) -> None:
