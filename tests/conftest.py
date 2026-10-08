@@ -48,6 +48,8 @@ from nx_inputs import (
     MANAGER_ALLOWLIST_WORKSPACE,
     MERGE_POLICY_ROOT,
     MERGE_POLICY_WORKSPACE,
+    PLAN_STORE_ASSETS_ROOT,
+    PLAN_STORE_ASSETS_WORKSPACE,
     PLAN_TOOLING_ROOT,
     PLAN_TOOLING_WORKSPACE,
     PROJECT_STORE_RACE_ROOT,
@@ -177,6 +179,13 @@ OWNED_PROJECTS = {
         key=SESSION_SETUP_PYPI_WORKSPACE, docs_tier=False, target=SESSION_SETUP_PYPI_SCOPED
     ),
     PROJECT_STORE_RACE_ROOT: OwnedProject(key=PROJECT_STORE_RACE_WORKSPACE, docs_tier=False),
+    # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
+    # catalog of test projects, where every project has its entry, and
+    # `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
+    # describes; the plan-store-assets entry sits beside the others' rather than in a domain of
+    # its own because the catalog is the domain.
+    PLAN_STORE_ASSETS_ROOT: OwnedProject(key=PLAN_STORE_ASSETS_WORKSPACE, docs_tier=False),
+    # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     UNPUBLISHED_VIEW_ROOT: OwnedProject(key=UNPUBLISHED_VIEW_WORKSPACE, docs_tier=False),
     UNFINISHED_ROOT: OwnedProject(key=UNFINISHED_WORKSPACE, docs_tier=False),
     # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one

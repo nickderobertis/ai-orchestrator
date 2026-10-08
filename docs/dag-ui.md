@@ -236,7 +236,7 @@ serves another fails there instead of being noticed by a person.
 
 ### What the adopted view renders, and what it has nothing to render
 
-**`onepipeline-ui` 0.26.3**, the release `config/onepipeline-ui.version` pins, carries
+**`onepipeline-ui` 0.26.4**, the release `config/onepipeline-ui.version` pins, carries
 what made this a supervising surface: the project list and per-project page are the
 landing view, the run page carries the channel with its byte-for-byte reply composer,
 `attest`, `stop` with the owner-naming refusal, `adopt`, a held `watch` with its

@@ -1,0 +1,40 @@
+{
+  "name": "plan-store-assets",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/plan_store_assets",
+  "tags": [
+    "scope:plan-store-assets",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-published-tools"
+  ],
+  "namedInputs": {
+    "planStoreAssetsWorkspace": [
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/onetaskgraph.yaml",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/tests/plan_store_assets/**/*",
+      "{workspaceRoot}/tests/fixtures/planner-channel.json"
+    ]
+  },
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/plan_store_assets --no-cov",
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "planStoreAssetsWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ]
+    }
+  }
+}

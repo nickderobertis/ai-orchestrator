@@ -96,6 +96,8 @@ from nx_inputs import (
     HOST_VIEWS_SCOPED,
     MANAGER_ALLOWLIST_PROJECT,
     MANAGER_ALLOWLIST_SCOPED,
+    PLAN_STORE_ASSETS_PROJECT,
+    PLAN_STORE_ASSETS_SCOPED,
     PROJECT_STORE_RACE_PROJECT,
     PROJECT_STORE_RACE_SCOPED,
     RECIPE_SCOPED,
@@ -853,6 +855,13 @@ SKIPPABLE_TIERS = frozenset(
         (HOST_SWEEP_PROJECT, HOST_SWEEP_SCOPED),
         # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
         (PROJECT_STORE_RACE_PROJECT, PROJECT_STORE_RACE_SCOPED),
+        # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
+        # catalog of test projects, where every project has its entry, and
+        # `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
+        # describes; the plan-store-assets entry sits beside the others' rather than in a domain of
+        # its own because the catalog is the domain.
+        (PLAN_STORE_ASSETS_PROJECT, PLAN_STORE_ASSETS_SCOPED),
+        # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
         (UNPUBLISHED_VIEW_PROJECT, UNPUBLISHED_VIEW_SCOPED),
         (UNFINISHED_PROJECT, UNFINISHED_SCOPED),
         # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one

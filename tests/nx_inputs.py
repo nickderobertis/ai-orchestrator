@@ -114,6 +114,16 @@ HOST_SWEEP_WORKSPACE = "hostSweepWorkspace"
 #: project's own files, and the suite modules `tests/conftest.py` imports — nothing
 #: else, because the race reads a temporary root and nothing of this checkout.
 PROJECT_STORE_RACE_WORKSPACE = "projectStoreRaceWorkspace"
+# llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one catalog
+# of test projects, where every project has its entry, and `tests/test_nx_cache_scope.py` fails when
+# a project's tests fall outside the tiers it describes; the plan-store-assets entry sits beside the
+# others' rather than in a domain of its own because the catalog is the domain.
+#: The key `plan-store-assets:test` is memoized on: the lock that decides which plan-store
+#: CLI answers, the store configuration it loads from this checkout, the project's own
+#: files, and the suite modules `tests/conftest.py` imports — nothing else, because the
+#: journey writes only temporary roots.
+PLAN_STORE_ASSETS_WORKSPACE = "planStoreAssetsWorkspace"
+# llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 #: The key `unpublished-view:test` is memoized on. Files rather than trees, for the reason
 #: `unwatchedWorkspace` names, and measured the same way: the tier traced under `strace -f
 #: -e trace=openat,execve`, each opened path normalized and intersected with what git
@@ -515,6 +525,21 @@ PROJECT_STORE_RACE_PROJECT = "project-store-race"
 PROJECT_STORE_RACE_SCOPED = "test"
 #: The directory it owns, which every other project's tiers ignore.
 PROJECT_STORE_RACE_ROOT = "tests/project_store_race"
+
+# llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one catalog
+# of test projects, where every project has its entry, and `tests/test_nx_cache_scope.py` fails when
+# a project's tests fall outside the tiers it describes; the plan-store-assets entry sits beside the
+# others' rather than in a domain of its own because the catalog is the domain.
+#: The project whose test target owns the journey over a document's image assets: the
+#: locked plan-store CLI creating one with `--asset`, copying it into a second `local-md`
+#: source and reading both back. A project of its own because it drives a real host tool,
+#: a cost `nx affected` can only keep off an unrelated edit where it is a separate project.
+PLAN_STORE_ASSETS_PROJECT = "plan-store-assets"
+#: That project's one test target: nothing here reads this repository's prose.
+PLAN_STORE_ASSETS_SCOPED = "test"
+#: The directory it owns, which every other project's tiers ignore.
+PLAN_STORE_ASSETS_ROOT = "tests/plan_store_assets"
+# llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
 #: The project whose test target owns the journey over `just unpublished`: the real
 #: recipe, wrapper and module over a scratch `onevcs` registry holding a branch in every

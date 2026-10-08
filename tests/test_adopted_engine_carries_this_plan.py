@@ -822,6 +822,19 @@ PROJECT_ROLE_LANDINGS = (
     ),
 )
 
+#: The engine-side node of the visual-plans plan: the engine links the onetaskgraph release
+#: whose documents carry image assets through every copy, which the settlement write-back
+#: and a dispatch's store reads go through. `tests/plan_store_assets/test_plan_store_assets_e2e.py`
+#: drives the same release's CLI through a create, a copy and a read.
+IMAGE_ASSETS_LANDINGS = (
+    Landing(
+        node="op-relink-assets",
+        change_request=806,
+        commit="3ae975d2aaa0abe66592a6fe700063603447b3a8",
+        did="link the onetaskgraph release that carries image assets",
+    ),
+)
+
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
     Landing(
@@ -868,6 +881,7 @@ LANDINGS = (
     *REPARENT_WAITING_HUMAN_LANDINGS,
     *PRESERVE_ON_PRESERVE_LANDINGS,
     *PROJECT_ROLE_LANDINGS,
+    *IMAGE_ASSETS_LANDINGS,
 )
 
 

@@ -80,6 +80,8 @@ from nx_inputs import (
     MERGE_POLICY_SCOPED,
     NX_CACHE_CHECK,
     OPT_IN_TARGETS,
+    PLAN_STORE_ASSETS_ROOT,
+    PLAN_STORE_ASSETS_SCOPED,
     PLAN_TOOLING_DOCS_SCOPED,
     PLAN_TOOLING_PROJECT,
     PLAN_TOOLING_ROOT,
@@ -980,7 +982,8 @@ def _collected_once(selection: tuple[str, ...]) -> frozenset[str]:
 #: updates and one board item per lineage in one, the `run-end-hooks` project owns the
 #: journey that fires the run-end hooks through a real launch in one, the
 #: `project-store-race` project owns the clock-bounded replacement race over the record
-#: store in one, the `unpublished-view` project owns the
+#: store in one, the `plan-store-assets` project owns the journey over a document's image
+#: assets in one, the `unpublished-view` project owns the
 #: journey over `just unpublished` in one, the `unfinished` project owns the journeys over
 #: `just unfinished` in one, the `graceful-cancel` project owns the journey over a cancel
 #: whose dispatch ends inside its grace period in one, the `manager-allowlist` project owns the
@@ -1009,6 +1012,13 @@ SUITE_TIERS = (
     (f"{WRITEBACK_BUDGET_ROOT}/project.json", WRITEBACK_BUDGET_SCOPED),
     (f"{RUN_END_HOOKS_ROOT}/project.json", RUN_END_HOOKS_SCOPED),
     (f"{PROJECT_STORE_RACE_ROOT}/project.json", PROJECT_STORE_RACE_SCOPED),
+    # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
+    # catalog of test projects, where every project has its entry, and
+    # `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
+    # describes; the plan-store-assets entry sits beside the others' rather than in a domain of
+    # its own because the catalog is the domain.
+    (f"{PLAN_STORE_ASSETS_ROOT}/project.json", PLAN_STORE_ASSETS_SCOPED),
+    # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     (f"{UNPUBLISHED_VIEW_ROOT}/project.json", UNPUBLISHED_VIEW_SCOPED),
     (f"{UNFINISHED_ROOT}/project.json", UNFINISHED_SCOPED),
     # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
