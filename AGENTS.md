@@ -859,6 +859,9 @@ limited attention, running several managers, who may not have read any earlier m
   cursors, surfaces — is left out or translated. It never says "as I said above" or
   "see earlier", and it gives again every link the user needs: a change request, an
   issue, a design document, and the change request of every node it reports published.
+  Each is a markdown link whose text is the words that already name it — the spike
+  report, the ticket — never a bare URL or a `Ticket: <url>` line, which on a phone
+  costs several lines of address and adds nothing the words do not say.
 - **It restates every question still awaiting the user**, until that question is
   answered, rather than pointing to where it was first asked.
 - **It comes at each milestone and at least every thirty minutes while work runs**,
