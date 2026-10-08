@@ -32,7 +32,10 @@
       "{workspaceRoot}/pyproject.toml",
       "{workspaceRoot}/uv.lock"
     ],
-    "testSupport": []
+    "testSupport": [],
+    "production": [
+      "default"
+    ]
   },
   "targetDefaults": {
     "build": {
@@ -110,15 +113,28 @@
     "bootstrap": {
       "cache": false
     },
-    "budget": {
-      "command": "uv run onebudgetspec check {projectRoot}/budgets.yaml --exclude-label onepipeline",
+    "budgets": {
+      "command": "uv run onebudgetspec check {projectRoot}/budgets.yaml --exclude-label host --exclude-label onepipeline",
       "options": {
         "cwd": "."
       },
+      "metadata": {
+        "description": "Cached, so it skips every budget labelled host: label each elapsed or host-reading budget host, and the uncached budgets-host target runs it."
+      },
       "cache": true,
       "inputs": [
-        "default"
+        "{projectRoot}/**/*",
+        "^production",
+        "{workspaceRoot}/config/onebudgetspec.version",
+        "{workspaceRoot}/uv.lock"
       ]
+    },
+    "budgets-host": {
+      "command": "uv run onebudgetspec check {projectRoot}/budgets.yaml --label host --exclude-label onepipeline",
+      "options": {
+        "cwd": "."
+      },
+      "cache": false
     },
     "validate-budgets": {
       "cache": false

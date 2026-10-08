@@ -40,7 +40,7 @@ set -euo pipefail
 # conditions; a `host-variable` budget over with nothing else wrong admits the push with a
 # warning saying the same and why it does not block.
 gate_within_budgets() {
-    local budgets=$1 gate_status=0 variable_status=0 strict_status=0 checker
+    local budgets="$1" gate_status=0 variable_status=0 strict_status=0 checker
     local variable_report strict_report over
     shift
     checker="${BASH_SOURCE[0]%/*}/../.venv/bin/onebudgetspec"
@@ -51,7 +51,7 @@ gate_within_budgets() {
     unset ORCHESTRATOR_GATE_PUSH
     local ORCHESTRATOR_GATE_PUSH="$EPOCHSECONDS-$$-$SRANDOM"
 
-    record_local_direct_gate "$@" || gate_status=$?
+    record_local_direct_gate "$@" || gate_status="$?"
 
     if [ ! -x "$checker" ]; then
         echo "pre-push: no onebudgetspec is installed at $checker, so $budgets cannot be checked; run 'just bootstrap' to install the pinned release, then push again" >&2
@@ -59,10 +59,10 @@ gate_within_budgets() {
     fi
     # The result lines are the library's own, printed as it wrote them once it has
     # finished, and read once more for the ids of any budget over.
-    variable_report=$(ORCHESTRATOR_GATE_PUSH=$ORCHESTRATOR_GATE_PUSH "$checker" check "$budgets" \
-        --label host-variable --exclude-label onepipeline) || variable_status=$?
-    strict_report=$(ORCHESTRATOR_GATE_PUSH=$ORCHESTRATOR_GATE_PUSH "$checker" check "$budgets" \
-        --exclude-label onepipeline --exclude-label host-variable) || strict_status=$?
+    variable_report="$(ORCHESTRATOR_GATE_PUSH="$ORCHESTRATOR_GATE_PUSH" "$checker" check "$budgets" \
+        --label host-variable --exclude-label onepipeline)" || variable_status="$?"
+    strict_report="$(ORCHESTRATOR_GATE_PUSH="$ORCHESTRATOR_GATE_PUSH" "$checker" check "$budgets" \
+        --exclude-label onepipeline --exclude-label host-variable)" || strict_status="$?"
     if [ -n "$variable_report" ]; then
         printf '%s\n' "$variable_report"
     fi
@@ -79,12 +79,12 @@ gate_within_budgets() {
         return 1
     fi
     if [ "$strict_status" -eq 1 ]; then
-        over=$(_budgets_over "$strict_report")
+        over="$(_budgets_over "$strict_report")"
         echo "pre-push: budget ${over:+${over// /, } }is over in $budgets, so this push is refused: optimize what it measures until it is within, rather than pushing again to re-measure it. The manager judges whether this host was in an extreme state from the host conditions printed with the result above: dispatches and load when it was checked, dispatches_max and load1_max at their peak while the gate ran" >&2
         return 1
     fi
     if [ "$variable_status" -eq 1 ]; then
-        over=$(_budgets_over "$variable_report")
+        over="$(_budgets_over "$variable_report")"
         echo "pre-push: warning: budget ${over:+${over// /, } }is over in $budgets and should still be optimized; the host conditions printed with the result above say how loaded this host was while it was measured. It does not block this push because it is labelled host-variable: gate wall clock on a shared, variably loaded host is not a consistent measurement, so a strict absolute threshold on it can only be a gate on a consistent system such as a CI runner" >&2
     fi
     return 0

@@ -92,7 +92,7 @@ def precision(report_config: dict[str, object]) -> int:
 def targets() -> dict[str, dict]:
     """The real Nx target declarations this module's fixture project imitates.
 
-    A target that names no ``command`` of its own (``budget`` among them) runs the one
+    A target that names no ``command`` of its own (``budgets`` among them) runs the one
     ``nx.json``'s ``targetDefaults`` states, so each is read with that default merged
     under it: a floor declared there is as much a second floor as one declared here.
     """

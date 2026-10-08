@@ -576,11 +576,15 @@ MANAGER_ALLOWLIST_ROOT = "tests/manager_allowlist"
 #: it is seconds of work, and a floor that always runs is one no replay can skip.
 COVERAGE_SCOPED = "coverage"
 
-#: The target that measures a project's own `budgets.yaml`, which a project declares
-#: only when it holds one: `nx.json`'s `targetDefaults` states its command and its memo,
-#: so a project opts in with `"budget": {}`, and its budgets then run only when a change
-#: touches it. `tests/test_budgets_files.py` holds the file and the target together.
-BUDGET_SCOPED = "budget"
+#: The targets that measure a project's own `budgets.yaml`, which a project declares only
+#: when it holds one: `nx.json`'s `targetDefaults` states their commands and memos, so a
+#: project opts in with `"budgets": {}, "budgets-host": {}`. The memoized `budgets` runs
+#: its deterministic budgets only when a change touches it; every budget labelled `host` —
+#: an `elapsed` one, or one reading the host — is left to the unmemoized `budgets-host`,
+#: which therefore runs whatever the diff. `tests/test_budgets_files.py` holds the file
+#: and the targets together.
+BUDGET_SCOPED = "budgets"
+BUDGET_HOST_SCOPED = "budgets-host"
 #: The uncached tier that validates every `budgets.yaml` in the tree, whichever project
 #: holds it, so a malformed one never reaches a push however narrow the diff.
 BUDGETS_VALIDATION_SCOPED = "validate-budgets"
@@ -598,15 +602,20 @@ SELECTED_TARGETS = (
     RECIPE_SCOPED,
     BUDGET_SCOPED,
 )
-#: Of those, the targets a project declares only by opting in, so the tree may hold no
-#: owner of one yet; its memo is then read from `targetDefaults` alone.
-OPT_IN_TARGETS = (BUDGET_SCOPED,)
+#: The targets a project declares only by opting in, so the tree may hold no owner of one
+#: yet; its memo is then read from `targetDefaults` alone.
+OPT_IN_TARGETS = (BUDGET_SCOPED, BUDGET_HOST_SCOPED)
 #: The deterministic tier's targets no diff can select, so `just check` runs them over
 #: every project every time: their subjects are what lives outside this workspace, what
-#: the tiers beside them just measured, and every budgets file in the tree. All three are
-#: uncached for those same reasons, so the two lists partition along the line the memo
-#: argument draws.
-UNCONDITIONAL_TARGETS = (CHECKOUT_SCOPED, COVERAGE_SCOPED, BUDGETS_VALIDATION_SCOPED)
+#: the tiers beside them just measured, every budgets file in the tree, and the host a
+#: `host` budget reads. All four are uncached for those same reasons, so the two lists
+#: partition along the line the memo argument draws.
+UNCONDITIONAL_TARGETS = (
+    CHECKOUT_SCOPED,
+    COVERAGE_SCOPED,
+    BUDGETS_VALIDATION_SCOPED,
+    BUDGET_HOST_SCOPED,
+)
 
 
 def nx_config() -> dict:

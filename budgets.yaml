@@ -1,14 +1,6 @@
-# The budgets every push of this repository is held to, checked once per push by
-# `.githooks/pre-push` after the complete gate. A project's own budgets go in a
-# `budgets.yaml` beside its `project.json`, checked by its `budget` Nx target when a
-# change touches it. A budget labelled `onepipeline` is measured from onepipeline's
-# telemetry and is selected only by this host's run-success hook; every other check
-# excludes that label. A budget labelled `host-variable` measures something that varies
-# with the load on this shared host, and the hook warns rather than refuses when one is
-# over: it is still a defect to optimize, but on a shared, variably loaded host it is not a
-# consistent measurement, so a strict absolute threshold on it can only be a gate on a
-# consistent system such as a CI runner. Over any other budget, a failed gate, or a
-# measurement that errored still refuses the push.
+# The budgets every push of this repository is held to. A budget labelled `onepipeline`
+# is a delivery budget, reported once its change has landed rather than on a push;
+# docs/budgets.md is the convention.
 schema_version: 1
 conditions:
   - name: dispatches
@@ -16,14 +8,9 @@ conditions:
 budgets:
   - id: gate-time
     description: >-
-      Wall clock of the complete pre-push gate on a publishing push of this repository,
-      as that push ran it, with the Nx cache as the push found it. The measurement is the
-      hook's own timing of that gate, recorded by record_local_direct_gate; nothing times
-      or runs the gate a second time. It is measured and reported on every publishing push,
-      and when over on a passing gate the push warns rather than refuses: gate wall clock
-      on a shared, variably loaded host is not a consistent measurement, so a strict
-      absolute threshold on it can only be a gate on a consistent system such as a CI
-      runner. A gate-time that could not be measured still refuses the push.
+      Wall clock of this repository's complete pre-push gate on a publishing push, with
+      the Nx cache as that push found it. It protects how long every change waits to
+      publish.
     labels: [host-variable]
     measure: reported
     command: ["scripts/budget-gate-time.sh"]
@@ -32,10 +19,8 @@ budgets:
     threshold: 1800
   - id: cycle-time
     description: >-
-      A landed change's time from its first dispatch to its landing on the base, the measure
-      of record for delivery, read from the adopted engine's per-change telemetry. It exists
-      only once the change has landed, so it is reported after landing, by this host's
-      run-success hook through `just follow-ups`, and never blocks the change it measures.
+      A landed change's time from its first dispatch to its landing on the base. It
+      protects how quickly delivered work reaches the base.
     labels: [onepipeline]
     measure: reported
     command: ["scripts/budget-cycle-time.sh"]

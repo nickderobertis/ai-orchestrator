@@ -203,7 +203,7 @@
         "cwd": "."
       }
     },
-    "budget": {
+    "budgets": {
       "inputs": [
         "default",
         "{workspaceRoot}/tests/test_plan_review.py",
@@ -216,6 +216,7 @@
           "dependencies": true
         }
       ]
-    }
+    },
+    "budgets-host": {}
   }
 }

@@ -7,13 +7,13 @@ checks it restates it. `gate-time` is labelled `host-variable`, so the hook warn
 than refuses a passing push over it — gate wall clock on a shared, variably loaded host is
 not a consistent measurement, so a strict absolute threshold belongs on a consistent system
 such as a CI runner — while a failed gate or an errored measurement still refuses. A
-project's own `budgets.yaml` is measured by its `budget` Nx target, which a project declares
-only by opting in, so the file and the target are held together here; the root project
-never declares one, because the root file is the hook's to check, once, after the gate it
-measures. And the vocabulary this host's task-budgets
-partial and `orchestrator/plan_budgets.py` copy from onebudgetspec — the `direction`
-values and the file name — is read from the installed library's own `onebudgetspec
-schema`, so a release that moved either fails here.
+project's own `budgets.yaml` is measured by its `budgets` and `budgets-host` Nx targets,
+which a project declares only by opting in, so the file and the targets are held together
+here; the root project never declares them, because the root file is the hook's to check,
+once, after the gate it measures. And the vocabulary this host's task-budgets partial and
+`orchestrator/plan_budgets.py` copy from onebudgetspec — the `direction` values and the file
+name — is read from the installed library's own `onebudgetspec schema`, so a release that
+moved either fails here.
 
 llmlint: ignore-file[shell_test_tiers_stay_split] The installed onebudgetspec is run twice
 here, `schema` and `validate`, each in milliseconds and reading nothing outside this
@@ -34,7 +34,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from nx_inputs import BUDGET_SCOPED, project_declarations
+from nx_inputs import BUDGET_HOST_SCOPED, BUDGET_SCOPED, project_declarations
 
 from orchestrator.plan_budgets import BUDGETS_FILE, Direction
 from orchestrator.root import REPO_ROOT
@@ -48,7 +48,7 @@ SUMMARY_BUDGET = "design-doc-budget-summary-length"
 #: The installed onebudgetspec, beside the interpreter: the locked install the hook and the
 #: Nx targets run.
 CHECKER = Path(sys.executable).parent / "onebudgetspec"
-#: The files that measure `gate-time` or check a push against it, none of which may state its
+#: The files that measure `gate-time` or refuse a push over it, none of which may state its
 #: threshold: the journeys read it from the file, and the scripts never need it.
 MEASURING = (
     ".githooks/pre-push",
@@ -92,11 +92,10 @@ def test_the_root_file_holds_gate_time_cycle_time_and_the_dispatches_condition()
         "direction": "max",
     }
     assert isinstance(threshold, int | float) and threshold > 0, threshold
-    assert "pre-push gate" in description and "record_local_direct_gate" in description
-    assert "warns rather than refuses" in description and "CI runner" in description
+    assert "pre-push gate" in description and "It protects" in description
     assert cycle_time.pop("threshold") > 0
     description = cycle_time.pop("description")
-    assert "reported after landing" in description and "never blocks" in description
+    assert "first dispatch" in description and "It protects" in description
     assert cycle_time == {
         "id": "cycle-time",
         "labels": ["onepipeline"],
@@ -274,7 +273,7 @@ def test_the_installed_library_validates_the_whole_tree() -> None:
 
 @pytest.mark.parametrize("identifier", ["gate-time", "cycle-time"])
 def test_each_delivery_threshold_is_stated_in_the_budgets_file_alone(identifier: str) -> None:
-    """Nothing that measures `gate-time`, or checks a push against it, restates the number."""
+    """Nothing that measures `gate-time`, or refuses a push over it, restates the number."""
     budget = next(entry for entry in _root()["budgets"] if entry["id"] == identifier)
     number = re.compile(rf"(?<![\d.]){re.escape(f'{budget["threshold"]:g}')}(?![\d])")
 
@@ -291,23 +290,28 @@ def test_each_delivery_threshold_is_stated_in_the_budgets_file_alone(identifier:
     assert restating == [], f"{restating} restate the {identifier} threshold budgets.yaml states"
 
 
-def test_a_project_declares_a_budget_target_exactly_when_it_holds_its_own_budgets_file() -> None:
-    """The root project holds the root file and never the target: the hook checks that one."""
+def test_a_project_declares_the_budgets_targets_exactly_when_it_holds_its_own_budgets_file() -> (
+    None
+):
+    """The root project holds the root file and never the targets: the hook checks that one.
+
+    Both targets, because which of a file's budgets are `host` ones can change with any
+    edit to it, and a project declaring only `budgets` would then measure them nowhere.
+    """
     declarations = project_declarations()
-    with_target = {
-        root
-        for root, declared in declarations.items()
-        if BUDGET_SCOPED in declared.get("targets", {})
-    }
     with_file = {
         root for root in declarations if root and (REPO_ROOT / root / BUDGETS_FILE).is_file()
     }
+    for target in (BUDGET_SCOPED, BUDGET_HOST_SCOPED):
+        with_target = {
+            root for root, declared in declarations.items() if target in declared.get("targets", {})
+        }
 
-    assert "" not in with_target, "the root project declares a budget target"
-    assert with_target == with_file, (
-        f"projects with a budget target: {sorted(with_target)}; projects holding their own "
-        f"{BUDGETS_FILE}: {sorted(with_file)}"
-    )
+        assert "" not in with_target, f"the root project declares a {target} target"
+        assert with_target == with_file, (
+            f"projects with a {target} target: {sorted(with_target)}; projects holding their "
+            f"own {BUDGETS_FILE}: {sorted(with_file)}"
+        )
 
 
 def test_the_direction_vocabulary_and_file_name_are_the_installed_librarys() -> None:

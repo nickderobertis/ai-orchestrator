@@ -1106,7 +1106,9 @@ split at those seams rather than at convenient ones:
 - **`orchestrator:test`** runs everything else, keyed on `codeWorkspace` — the
   whole workspace with `docs/**` and `**/*.md` removed.
 
-`just check` runs these in three phases, because Nx takes one selection per invocation:
+`just check` runs these in three phases, because Nx takes one selection per invocation,
+with budgets labelled `host` running on every check and the others running when a
+change touches what they measure:
 the diff selection (`format-check`, `lint`, `typecheck`, `test`, `test-docs`,
 `test-recipes` over the projects `scripts/nx-selection.sh` picks), the unconditional
 `test-checkouts` and `coverage`, and `workspace:check-nx-cache`. Every phase runs

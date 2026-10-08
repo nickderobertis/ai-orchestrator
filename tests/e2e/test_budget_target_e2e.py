@@ -1,18 +1,21 @@
-"""A project's own budgets, run by `just check`'s affected selection and nothing wider.
+"""A project's own budgets, run by `just check`: deterministic ones by its diff, host ones always.
 
-A project that holds a `budgets.yaml` declares the `budget` target, which `nx.json`'s
-`targetDefaults` defines: the installed onebudgetspec checks that one file, excluding every
-`onepipeline`-labelled budget, cached on the project's inputs like the other targets. `just
-check` runs it among the targets its diff selection picks, so a project's budgets run only
-when a change touches that project; and `workspace:validate-budgets`, among the targets
-the recipe runs whatever the diff, validates every budgets file in the tree.
+A project that holds a `budgets.yaml` declares the `budgets` and `budgets-host` targets,
+which `nx.json`'s `targetDefaults` defines, each checking that one file with the installed
+onebudgetspec and excluding every `onepipeline`-labelled budget. `budgets` skips the
+budgets labelled `host` — the `elapsed` ones and those reading the host — and is cached on
+the project's tree, its dependencies' production inputs and the onebudgetspec pin; `just
+check` runs it among the targets its diff selection picks, so a project's deterministic
+budgets run only when a change touches that project. `budgets-host` runs exactly the `host`
+ones, uncached, among the targets the recipe runs whatever the diff, beside
+`workspace:validate-budgets`, which validates every budgets file in the tree.
 
 These journeys build a scratch Nx workspace — this checkout's `nx.json`, root
 `project.json`, `scripts/` and locked installs, and two projects of their own, each
 registering a budget whose command records that it ran and reports the value a file of
-that project holds — and drive it through the real `scripts/nx-selection.sh` and
-`scripts/nx.sh`, with the target lists the recipe names (`tests/nx_inputs.py`, which
-`tests/test_nx_cache_scope.py` holds to the recipe).
+that project holds, and a `host` one timed as it runs. The focused cache journeys drive
+real Nx; the unconditional-host journey drives the shipped `just check` recipe, including
+its real cross-worktree cache check, without registering the parent suite as a target.
 
 llmlint: ignore-file[e2e_not_mocked] Nothing is substituted: the two projects are the
 subject, and every command they register is real; the only thing standing in is what a
@@ -28,17 +31,11 @@ seconds, against a scratch workspace and nothing outside it, so a test project o
 would narrow the key of a few seconds of work at the price of a catalog entry in each of
 the places `tests/nx_inputs.py` and `tests/test_nx_cache_scope.py` hold every project to.
 
-llmlint: ignore-file[tests_mirror_real_usage] The user-facing surface over these is `just
-check`, which cannot be driven from inside the suite it runs: its last phase builds the
-cross-worktree cache fixture this scratch workspace does not carry. Its sequencing and
-aggregate verdict, the phase that always runs included, are driven through the real recipe
-in `tests/e2e/test_workspace_contract_e2e.py`, and `tests/test_nx_cache_scope.py` holds
-the target lists read here to the recipe's own; these journeys take the other half — what
-real Nx runs for that selection, as `tests/e2e/test_nx_cache_scope_e2e.py` does.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -57,9 +54,20 @@ pytestmark = [*WORKSPACE_INSTALL_MARKS]
 
 #: What the scratch workspace takes from this checkout: the Nx configuration and the root
 #: project the validation tier belongs to, the locked installs `scripts/nx.sh` heals from,
-#: and the scripts the recipe runs.
-COPIED = ("nx.json", "project.json", "package.json", "bun.lock", "pyproject.toml", "uv.lock")
+#: the onebudgetspec pin the `budgets` key names, and the scripts the recipe runs.
+COPIED = (
+    "justfile",
+    "nx.json",
+    "project.json",
+    "package.json",
+    "bun.lock",
+    "pyproject.toml",
+    "uv.lock",
+    "config/onebudgetspec.version",
+)
 PROJECTS = ("alpha", "beta")
+#: The project `alpha` depends on, whose production inputs its budgets are keyed on.
+DEPENDENCY = "lib"
 THRESHOLD = 10
 #: What Nx prints when it replays a target rather than running it.
 CACHE_HIT = "read the output from the cache"
@@ -68,7 +76,7 @@ ORIGIN = "https://example.invalid/budget-target.git"
 
 
 def _budgets(project: str, marker: Path) -> dict:
-    """A project's own file: one budget measured from `value`, one labelled `onepipeline`."""
+    """A project's own file: one budget measured from `value`, one `host`, one `onepipeline`."""
     return {
         "schema_version": 1,
         "budgets": [
@@ -82,6 +90,15 @@ def _budgets(project: str, marker: Path) -> dict:
                     'printf \'{"value": %s}\' "$(cat value)" >"$ONEBUDGETSPEC_RESULT"',
                 ],
                 "unit": "bytes",
+                "direction": "max",
+                "threshold": THRESHOLD,
+            },
+            {
+                "id": f"{project}-wall",
+                "labels": ["host"],
+                "measure": "elapsed",
+                "command": ["sh", "-c", f'echo {project}-wall >>"{marker}"'],
+                "unit": "seconds",
                 "direction": "max",
                 "threshold": THRESHOLD,
             },
@@ -161,9 +178,13 @@ class Workspace:
         A person's edit lands seconds later; the journey's lands within a second when two
         checks run fast, so it is stamped the way an edit would be.
         """
-        path = self.root / project / "value"
+        self.write(f"{project}/value", f"{value}\n")
+
+    def write(self, relative: str, text: str) -> None:
+        """Replace a file of the workspace, stamped as `measure` explains."""
+        path = self.root / relative
         previous = path.stat().st_mtime_ns
-        path.write_text(f"{value}\n", encoding="utf-8")
+        path.write_text(text, encoding="utf-8")
         stamp = max(path.stat().st_mtime_ns, (previous // 1_000_000_000 + 1) * 1_000_000_000)
         os.utime(path, ns=(stamp, stamp))
 
@@ -173,6 +194,7 @@ def workspace(tmp_path: Path) -> Workspace:
     root = tmp_path / "workspace"
     root.mkdir()
     for relative in COPIED:
+        (root / relative).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(REPO_ROOT / relative, root / relative)
     listing = subprocess.run(
         ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "scripts"],
@@ -186,11 +208,19 @@ def workspace(tmp_path: Path) -> Workspace:
         shutil.copy2(REPO_ROOT / relative, root / relative)
     (root / ".gitignore").write_text("node_modules\n.nx\n.logs\n", encoding="utf-8")
     (root / "node_modules").symlink_to(NODE_MODULES, target_is_directory=True)
+    shutil.copytree(REPO_ROOT / "tests/fixtures/nx-cache", root / "tests/fixtures/nx-cache")
     marker = tmp_path / "ran"
+    (root / DEPENDENCY).mkdir()
+    (root / DEPENDENCY / "project.json").write_text(
+        f'{{"name": "{DEPENDENCY}", "projectType": "library"}}\n', encoding="utf-8"
+    )
+    (root / DEPENDENCY / "source").write_text("measured\n", encoding="utf-8")
     for project in PROJECTS:
         (root / project).mkdir()
         (root / project / "project.json").write_text(
-            f'{{"name": "{project}", "projectType": "library", "targets": {{"budget": {{}}}}}}\n',
+            f'{{"name": "{project}", "projectType": "library", '
+            f'"implicitDependencies": {json.dumps([DEPENDENCY] if project == "alpha" else [])}, '
+            '"targets": {"budgets": {}, "budgets-host": {}}}\n',
             encoding="utf-8",
         )
         (root / project / "budgets.yaml").write_text(
@@ -240,6 +270,52 @@ def test_only_the_touched_projects_budgets_run_and_replay_until_its_inputs_move(
     assert "actual 6 bytes" not in remeasured.stdout, remeasured.stdout
 
 
+def test_a_host_budget_measures_on_every_check_while_a_deterministic_one_replays(
+    workspace: Workspace,
+) -> None:
+    """Twice over an unchanged tree: the `elapsed` budget runs both times, `reported` once."""
+    workspace.measure("alpha", 6)
+    selected: list[subprocess.CompletedProcess[str]] = []
+
+    for _ in range(2):
+        selected.append(workspace.check())
+        assert selected[-1].returncode == 0, selected[-1].stdout + selected[-1].stderr
+        always = workspace.unconditional()
+        assert always.returncode == 0, always.stdout + always.stderr
+
+    ran = workspace.ran()
+    assert ran.count("alpha-size") == 1, f"the deterministic budget did not replay: {ran}"
+    assert CACHE_HIT in selected[1].stdout, selected[1].stdout
+    assert ran.count("alpha-wall") == 2, f"the host budget was not measured each time: {ran}"
+    assert ran.count("beta-wall") == 2, f"an untouched project's host budget was skipped: {ran}"
+    assert not [entry for entry in ran if entry.endswith("-telemetry")], ran
+
+
+@pytest.mark.parametrize(
+    "moved",
+    [f"{DEPENDENCY}/source", "config/onebudgetspec.version", "uv.lock"],
+    ids=["dependency-production-input", "checker-pin", "checker-lock"],
+)
+def test_a_deterministic_budget_remeasures_when_what_it_measures_or_its_checker_moves(
+    workspace: Workspace, moved: str
+) -> None:
+    """The key beyond the project's own tree: its dependencies, and the checker's pin."""
+    workspace.measure("alpha", 6)
+    for _ in range(2):
+        replayed = workspace.check()
+        assert replayed.returncode == 0, replayed.stdout + replayed.stderr
+    assert CACHE_HIT in replayed.stdout, replayed.stdout
+    assert workspace.ran() == ["alpha-size"], workspace.ran()
+
+    workspace.write(moved, (workspace.root / moved).read_text(encoding="utf-8") + "\n")
+    remeasured = workspace.check()
+
+    assert remeasured.returncode == 0, remeasured.stdout + remeasured.stderr
+    assert workspace.ran().count("alpha-size") == 2, (
+        f"moving {moved} replayed alpha's budgets rather than measuring them: {workspace.ran()}"
+    )
+
+
 def test_an_over_budget_result_in_the_touched_project_fails_the_check(
     workspace: Workspace,
 ) -> None:
@@ -270,4 +346,24 @@ def test_the_validation_tier_refuses_a_malformed_nested_budgets_file(
     assert refused.returncode != 0, refused.stdout + refused.stderr
     reported = refused.stdout + refused.stderr
     assert "beta/budgets.yaml" in reported and "thresold" in reported, reported
-    assert workspace.ran() == [], "validation ran a budget's command"
+    measured = [entry for entry in workspace.ran() if not entry.endswith("-wall")]
+    assert measured == [], "validation ran a budget's command"
+
+
+# The fixture also reads uv.lock and the checker pin, outside recipeWorkspace,
+# so this journey belongs to the broader code-keyed tier.
+def test_real_check_measures_host_budgets_when_no_project_is_touched(
+    workspace: Workspace,
+) -> None:
+    """A file outside all project roots still gets every host budget checked."""
+    (workspace.root / "operator-note.txt").write_text("outside projects\n", encoding="utf-8")
+
+    for _ in range(2):
+        checked = workspace._run("just", "check")
+        assert checked.returncode == 0, checked.stdout + checked.stderr
+        assert "all deterministic checks passed" in checked.stdout, checked.stdout
+
+    ran = workspace.ran()
+    assert ran.count("alpha-wall") == 2, ran
+    assert ran.count("beta-wall") == 2, ran
+    assert not [entry for entry in ran if not entry.endswith("-wall")], ran

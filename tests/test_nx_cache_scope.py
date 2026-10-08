@@ -303,6 +303,12 @@ def test_every_tier_a_diff_can_deselect_is_one_a_memo_would_have_answered() -> N
 
     for target in UNCONDITIONAL_TARGETS:
         owners = _owners(target)
+        if not owners and target in OPT_IN_TARGETS:
+            assert not _memoizes(target, {"targets": {target: {}}}), (
+                f"{target} is a tier that always runs that a project opts into, so "
+                "nx.json's targetDefaults must leave it unmemoized for every project that does"
+            )
+            continue
         assert owners, f"the deterministic tier always runs {target}, which no project declares"
         for root, declaration in owners:
             assert not _memoizes(target, declaration), (
@@ -1548,11 +1554,20 @@ def test_no_configuration_names_a_path_that_does_not_exist() -> None:
         assert named <= names, f"{root or '.'}/project.json names {sorted(named - names)}"
 
 
-#: The named inputs `nx.json` itself declares: the keys every project shares, and the
+#: The named inputs `nx.json` itself declares: the keys every project shares — `production`
+#: among them, what a project's budgets take of each dependency they measure — and the
 #: empty `testSupport` a project that is not a unit contributes. A tier's own key is
 #: declared in its own `project.json`, where it reads as that project's.
 SHARED_NAMED_INPUTS = frozenset(
-    {"default", "sharedGlobals", WHOLE_WORKSPACE, CODE_WORKSPACE, NX_CACHE_CHECK, TEST_SUPPORT}
+    {
+        "default",
+        "production",
+        "sharedGlobals",
+        WHOLE_WORKSPACE,
+        CODE_WORKSPACE,
+        NX_CACHE_CHECK,
+        TEST_SUPPORT,
+    }
 )
 
 

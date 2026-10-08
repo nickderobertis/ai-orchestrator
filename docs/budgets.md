@@ -32,7 +32,7 @@ for the file's shape. This page restates none of it beyond the keys a plan's bud
   not consistent, so a strict absolute threshold on it can only be a gate on a consistent
   system such as a CI runner. A failed gate, an errored measurement, and over any other
   root budget still refuse the push. The label is read only by the hook's check of the
-  root file; a project's own `budget` Nx target (`nx.json`) checks every budget strictly.
+  root file; a project's own `budgets` Nx target (`nx.json`) checks every budget strictly.
 - **Host conditions are recorded for the manager's judgement.** Each result carries the
   conditions it was taken under, such as load, memory and other work running, so the
   manager can tell an extreme or unlikely circumstance from a regression.
@@ -52,7 +52,8 @@ anyone who needs the workload reads the command.
 Files nest. A repository's **root** `budgets.yaml` holds the budgets that must always be
 checked, which are its repo-wide budgets, enforced on the merge path. Each project's own
 `budgets.yaml` holds the budgets scoped to that project and is checked by its
-affected-only target, so a budget runs only when a change touches what it measures.
+affected-only target, so a budget runs only when a change touches what it measures, save
+one labelled `host`, which every check runs.
 
 ## Delivery budgets after landing
 

@@ -366,9 +366,7 @@ What each tool is *for here*. How to use it is the tool's own to say — in
   dispatch reaches the bus through the crates the engine links. `onemessagebus --help`;
   https://github.com/nickderobertis/onemessagebus.
 - **`onebudgetspec`** — budgets registered in `budgets.yaml` files, each naming the
-  command that measures it, and the check that gates on them: the root file holds what
-  every push of this repository is held to, and a project's own file is checked when a
-  change touches that project. `config/onebudgetspec.version` governs the CLI the hook
+  command that measures it, and the check that gates on them. `config/onebudgetspec.version` governs the CLI the hook
   and `just check` run; it governs no dispatch. `onebudgetspec --help`;
   https://github.com/nickderobertis/onebudgetspec.
 - **`llmlint`** — the judged lint tier (`llmlint.yml`; `just lint-llm`, `just

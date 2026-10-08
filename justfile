@@ -61,8 +61,9 @@ bootstrap:
 # no diff can speak for, and the cross-worktree cache contract. `test-checkouts` reads
 # other repositories and `coverage` reads what the tier beside it just measured, so
 # both stay out of the selection — as `workspace:check-nx-cache` always has. A project's
-# own `budgets.yaml` is measured by its `budget` target, so in the selection: its budgets
-# run only when a change touches it. Every `budgets.yaml` in the tree is validated by
+# own `budgets.yaml` is measured by its `budgets` target, so in the selection: its budgets
+# run only when a change touches it. Its `host` budgets, which no memo can answer, are
+# `budgets-host`'s, outside it. Every `budgets.yaml` in the tree is validated by
 # `workspace:validate-budgets` outside it, because a malformed one anywhere must never
 # reach a push, whichever project the change touched. Nx takes
 # one selection per invocation, so these are three invocations, and every one of them
@@ -72,7 +73,7 @@ bootstrap:
 # is in which half.
 # llmlint: ignore[changed_behavior_has_e2e] The public recipe is the real deterministic gate invoked by this task and pre-push; its sequencing failures use subprocess doubles to avoid recursively invoking the same full suite.
 check:
-    @source ./scripts/preserved-log.sh; preserved_log_open "{{repo_root}}" check; log=$PRESERVED_LOG; selection=$(./scripts/nx-selection.sh) || { echo "check: could not decide which projects to run over; repair the failure scripts/nx-selection.sh reported and retry" >&2; exit 1; }; read -ra selected <<<"$selection"; failed=(); ./scripts/nx.sh "${selected[@]}" -t format-check,lint,typecheck,test,test-docs,test-recipes,budget 2>&1 | redact_secrets >>"$log" || failed+=("the diff selection"); ./scripts/nx.sh run-many -t test-checkouts,coverage,validate-budgets 2>&1 | redact_secrets >>"$log" || failed+=("test-checkouts,coverage,validate-budgets"); ./scripts/nx.sh run workspace:check-nx-cache 2>&1 | redact_secrets >>"$log" || failed+=("workspace:check-nx-cache"); if (( ${#failed[@]} )); then cat "$log" >&2; phases=$(printf '%s; ' "${failed[@]}"); echo "check: deterministic checks failed in ${#failed[@]} of 3 phases (${phases%; }); fix every reported finding and retry (full output: $log)" >&2; exit 1; fi; total=$(./scripts/coverage-total.sh "{{repo_root}}"); echo "check: all deterministic checks passed${total:+ (line coverage ${total}%)}; project selection: $selection"
+    @source ./scripts/preserved-log.sh; preserved_log_open "{{repo_root}}" check; log=$PRESERVED_LOG; selection=$(./scripts/nx-selection.sh) || { echo "check: could not decide which projects to run over; repair the failure scripts/nx-selection.sh reported and retry" >&2; exit 1; }; read -ra selected <<<"$selection"; failed=(); ./scripts/nx.sh "${selected[@]}" -t format-check,lint,typecheck,test,test-docs,test-recipes,budgets 2>&1 | redact_secrets >>"$log" || failed+=("the diff selection"); ./scripts/nx.sh run-many -t test-checkouts,coverage,validate-budgets,budgets-host 2>&1 | redact_secrets >>"$log" || failed+=("test-checkouts,coverage,validate-budgets,budgets-host"); ./scripts/nx.sh run workspace:check-nx-cache 2>&1 | redact_secrets >>"$log" || failed+=("workspace:check-nx-cache"); if (( ${#failed[@]} )); then cat "$log" >&2; phases=$(printf '%s; ' "${failed[@]}"); echo "check: deterministic checks failed in ${#failed[@]} of 3 phases (${phases%; }); fix every reported finding and retry (full output: $log)" >&2; exit 1; fi; total=$(./scripts/coverage-total.sh "{{repo_root}}"); echo "check: all deterministic checks passed${total:+ (line coverage ${total}%)}; project selection: $selection"
 
 # Complete pre-push gate: deterministic checks followed by llmlint on this branch.
 #
