@@ -632,7 +632,7 @@ def test_the_1568_fixture_renders_the_summary_a_person_approves(
     for entry, row in zip(_budget_answers()["budgets"], table[2:], strict=True):
         assert row == (
             f"| {entry['name']} | ≤ {entry['threshold']} {entry['unit']} | {entry['basis']} | "
-            f"[`{entry['node']}`]({entry['location']}) (see its Budgets section) |"
+            f"[`{entry['node']}`]({entry['location']}#budgets) |"
         ), row
     for entry in _budget_answers()["budgets"]:
         for detail in ("workload", "evidence", "command", "file", "measure"):

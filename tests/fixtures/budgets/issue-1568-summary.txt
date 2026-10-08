@@ -6,15 +6,15 @@
 
 | Budget | Target | Basis | Owned by |
 | --- | --- | --- | --- |
-| GitHub requests per new image | ≤ 2 requests | measured | [`otg-assets-github`](https://github.com/nickderobertis/onetaskgraph/issues/3304) (see its Budgets section) |
-| GitHub requests per unchanged image | ≤ 0 requests | design | [`otg-assets-github`](https://github.com/nickderobertis/onetaskgraph/issues/3304) (see its Budgets section) |
-| Linear requests per new image | ≤ 3 requests | published docs | [`otg-assets-linear`](https://github.com/nickderobertis/onetaskgraph/issues/3305) (see its Budgets section) |
-| Linear requests per unchanged image | ≤ 0 requests | design | [`otg-assets-linear`](https://github.com/nickderobertis/onetaskgraph/issues/3305) (see its Budgets section) |
-| GitHub copy time for a 24-image plan | ≤ 60 seconds | arithmetic | [`otg-assets-github`](https://github.com/nickderobertis/onetaskgraph/issues/3304) (see its Budgets section) |
-| GitHub copies refused, 3 at once | ≤ 0 copies | arithmetic | [`otg-assets-github`](https://github.com/nickderobertis/onetaskgraph/issues/3304) (see its Budgets section) |
-| Slowest of 3 concurrent GitHub copies | ≤ 240 seconds | arithmetic | [`otg-assets-github`](https://github.com/nickderobertis/onetaskgraph/issues/3304) (see its Budgets section) |
-| Linear copy time for a 24-image plan | ≤ 90 seconds | arithmetic | [`otg-assets-linear`](https://github.com/nickderobertis/onetaskgraph/issues/3305) (see its Budgets section) |
-| Linear copies refused, 3 at once | ≤ 0 copies | design | [`otg-assets-linear`](https://github.com/nickderobertis/onetaskgraph/issues/3305) (see its Budgets section) |
+| GitHub requests per new image | ≤ 2 requests | measured | [`otg-assets-github`](https://github.com/nickderobertis/onetaskgraph/issues/3304#budgets) |
+| GitHub requests per unchanged image | ≤ 0 requests | design | [`otg-assets-github`](https://github.com/nickderobertis/onetaskgraph/issues/3304#budgets) |
+| Linear requests per new image | ≤ 3 requests | published docs | [`otg-assets-linear`](https://github.com/nickderobertis/onetaskgraph/issues/3305#budgets) |
+| Linear requests per unchanged image | ≤ 0 requests | design | [`otg-assets-linear`](https://github.com/nickderobertis/onetaskgraph/issues/3305#budgets) |
+| GitHub copy time for a 24-image plan | ≤ 60 seconds | arithmetic | [`otg-assets-github`](https://github.com/nickderobertis/onetaskgraph/issues/3304#budgets) |
+| GitHub copies refused, 3 at once | ≤ 0 copies | arithmetic | [`otg-assets-github`](https://github.com/nickderobertis/onetaskgraph/issues/3304#budgets) |
+| Slowest of 3 concurrent GitHub copies | ≤ 240 seconds | arithmetic | [`otg-assets-github`](https://github.com/nickderobertis/onetaskgraph/issues/3304#budgets) |
+| Linear copy time for a 24-image plan | ≤ 90 seconds | arithmetic | [`otg-assets-linear`](https://github.com/nickderobertis/onetaskgraph/issues/3305#budgets) |
+| Linear copies refused, 3 at once | ≤ 0 copies | design | [`otg-assets-linear`](https://github.com/nickderobertis/onetaskgraph/issues/3305#budgets) |
 
 **Not budgeted:**
 

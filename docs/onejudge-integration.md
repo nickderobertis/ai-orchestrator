@@ -237,8 +237,8 @@ members:
 **This host stacks none today.** `config/onejudge.base.yaml`'s `provider:` names the one
 `oneharness.judge.toml`, every member of the graphs under `graphs/` keeps a single judge
 side, and every dispatch keeps its single simulated user; stacking one is a change to a
-graph and a manager's decision. The shape is stated in [onejudge v0.17.1's
-`judges.md`](https://github.com/nickderobertis/onejudge/blob/v0.17.1/docs/judges.md)
+graph and a manager's decision. The shape is stated in [onejudge v0.17.2's
+`judges.md`](https://github.com/nickderobertis/onejudge/blob/v0.17.2/docs/judges.md)
 — the config, how a panel decides, and what each surface carries per judge — and, for a
 graph member, in [oneagentgraph v0.5.5's
 `contract.md`](https://github.com/nickderobertis/oneagentgraph/blob/v0.5.5/docs/contract.md).
@@ -1572,7 +1572,7 @@ gate before downstream consumer gates.
 ## Testing against a harness without a paid model
 
 onejudge's `command` provider speaks a small JSON-lines protocol
-([onejudge v0.17.1 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.17.1/docs/protocol.md)),
+([onejudge v0.17.2 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.17.2/docs/protocol.md)),
 so any command can stand in for the harness — which is how the engines that
 dispatch prove themselves in their own repositories. What this repository's own
 suite drives is the layer above: the real recipes, the real wrapper scripts, and

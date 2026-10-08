@@ -866,7 +866,7 @@ def test_each_owned_by_link_points_at_the_copied_task_after_a_local_copy(
     budget with its owning node and the location the drafting store reports for that task —
     rendered into the document through the design-doc template. After `just copy-plan`,
     every Owned-by link in the copied document is the location the destination reports for
-    the same task, and none is the drafting store's.
+    the same task with its Budgets fragment, and none is the drafting store's.
     """
     project = _project("copy-owned-links", "route", "worker")
     _, _, native = project.partition(":")
@@ -923,8 +923,10 @@ def test_each_owned_by_link_points_at_the_copied_task_after_a_local_copy(
     (copied,) = _design_documents(copied_id)
     content = copied["content"]
     assert isinstance(content, str), copied
+    assert "(see its Budgets section)" not in content
     for node, where in landed.items():
-        assert f"[`{node}`]({where}) (see its Budgets section)" in content, (node, content)
+        assert "\n## Budgets\n" in Path(where).read_text(encoding="utf-8")
+        assert f"[`{node}`]({where}#budgets)" in content, (node, content)
         assert drafted[node] not in content, f"{node} still links the drafting store: {content}"
 
 

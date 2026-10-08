@@ -259,7 +259,7 @@ This plan predates budgets: {{ predates_budgets }}
 | Budget | Target | Basis | Owned by |
 | --- | --- | --- | --- |
 {% for budget in budgets %}
-| {{ cell(budget.name) }} | {% if budget.direction == "min" %}≥{% else %}≤{% endif %} {{ budget.threshold }} {{ cell(budget.unit) }} | {{ cell(budget.basis) }} | [`{{ budget.node }}`]({{ budget.location }}) (see its Budgets section) |
+| {{ cell(budget.name) }} | {% if budget.direction == "min" %}≥{% else %}≤{% endif %} {{ budget.threshold }} {{ cell(budget.unit) }} | {{ cell(budget.basis) }} | [`{{ budget.node }}`]({{ budget.location }}#budgets) |
 {% endfor %}
 
 {% for entry in (plan_budgets.checklist or []) if entry.not_applicable %}

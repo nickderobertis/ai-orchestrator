@@ -249,8 +249,7 @@ def test_a_budgeted_plans_writer_copies_the_budget_command_and_its_document_summ
     ]
     assert "**What we're sizing for.** 2,000 nodes per plan, 3 runs at once." in stored, stored
     assert (
-        f"| Time to the first page | ≤ 800 ms | measured | [`{NODE}`]({owner}) "
-        "(see its Budgets section) |"
+        f"| Time to the first page | ≤ 800 ms | measured | [`{NODE}`]({owner}#budgets) |"
     ) in stored, stored
     assert "- spend: It calls no paid API." in stored, stored
     summary = stored.split("## Budgets\n", 1)[1].split("\n## ", 1)[0]

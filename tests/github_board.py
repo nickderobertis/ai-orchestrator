@@ -1809,7 +1809,7 @@ class DocumentPrice(NamedTuple):
 #: The plan-store CLI release every request bound below was measured on, held to
 #: `onetaskgraph --version`. Each bound is one named constant so a later release is
 #: re-measured one step at a time.
-BUDGET_MEASURED_ON = "onetaskgraph 0.3.2"
+BUDGET_MEASURED_ON = "onetaskgraph 0.3.6"
 #: How many other items the `followups` stand-in holds when one ticket is filed on it: enough
 #: that a request walking the board, or a search it answers unnarrowed, is a cost that grows
 #: with the board rather than one a single item hides.
