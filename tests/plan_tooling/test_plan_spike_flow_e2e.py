@@ -445,6 +445,16 @@ def test_resume_spikes_finds_kept_branches_in_another_registered_repository(
     (kept,) = json.loads(all_identities.stdout)
     spike = flow.spikes[0]
     assert kept["labels"]["node"] == spike
+    registry = Path(flow.environment["ONEVCS_HOME"])
+    records = list((registry / "sessions").glob("*.json"))
+    assert records, "the real session lifecycle wrote no records"
+    for record in records:
+        if json.loads(record.read_text()).get("labels", {}).get("run") == f"{flow.run}-spikes":
+            record.unlink()
+    forgotten = subprocess.run(
+        command, cwd=Path("/"), env=flow.environment, capture_output=True, text=True, check=True
+    )
+    assert json.loads(forgotten.stdout) == []
     resumed = _plan(flow, "--resume", "spikes")
     assert resumed.returncode == 0, resumed.stdout + resumed.stderr
     assert _runs_started(flow) == _stage_runs(flow), "the resume relaunched completed spikes"

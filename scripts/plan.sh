@@ -642,7 +642,7 @@ if [ ! -e "$runs_root/$spikes_run" ]; then
 fi
 
 # Read how the spikes settled — every node `done`, as `preserved` — and acknowledge each
-# branch they kept, read off `onevcs`'s own records of that run rather than its journal. A
+# branch they kept, discovered by this plan's naming contract in each spike's repository. A
 # flow whose draft wrote no spikes has no spikes run, and nothing to read here; a launch
 # this made is always read, so one that left no run behind stops here rather than passing
 # for a draft with no spikes.

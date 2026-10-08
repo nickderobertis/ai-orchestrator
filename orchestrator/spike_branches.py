@@ -32,6 +32,7 @@ line break in it would read as another record.
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import re
 import shutil
@@ -39,7 +40,7 @@ import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from typing import NewType
+from typing import NamedTuple, NewType
 
 from orchestrator import design_approval, plan_store, spike_plan
 from orchestrator.plan_store import QualifiedProjectId
@@ -162,20 +163,102 @@ def installed_onevcs() -> str:
     return str(installed) if installed.is_file() else (shutil.which("onevcs") or "onevcs")
 
 
-def spike_branches(repository: str, plan: PlanId) -> list[Branch]:
-    """The spike branches of ``plan`` on ``repository``'s origin, as its origin lists them."""
+class Repository(NamedTuple):
+    """The identity and registered publication checkout onevcs resolved."""
+
+    identity: str
+    checkout: Path
+
+
+def resolve(repository: str) -> Repository:
+    """Resolve a spike's own repository through onevcs, refusing an unreadable answer."""
     resolved = answer([installed_onevcs(), "resolve", repository])
     try:
-        checkout = json.loads(resolved).get("publication_checkout")
+        identity = json.loads(resolved)
+        checkout = identity.get("publication_checkout")
     except (ValueError, AttributeError) as exc:
         raise Unlisted(f"`onevcs resolve {repository}` did not answer with its identity") from exc
     if not isinstance(checkout, str) or not checkout:
         raise Unlisted(f"`onevcs resolve {repository}` named no publication checkout")
+    name = identity.get("identity")
+    if not isinstance(name, str) or not name:
+        raise Unlisted(f"`onevcs resolve {repository}` named no identity")
+    return Repository(name, Path(checkout))
+
+
+def spike_branches(
+    repository: str,
+    plan: PlanId,
+    *,
+    local: bool = False,
+    resolved: Repository | None = None,
+) -> list[Branch]:
+    """The plan's origin branches, optionally including its registered local checkouts."""
+    held = resolve(repository) if resolved is None else resolved
     listed = answer(
         ["git", "ls-remote", "--heads", "origin", f"*/{plan}/{spike_plan.SPIKE_PREFIX}*"],
-        cwd=Path(checkout),
+        cwd=held.checkout,
     )
-    return [_spike_branch(line, plan) for line in listed.splitlines() if line]
+    lines = [line for line in listed.splitlines() if line]
+    kept: dict[Branch, str] = {}
+    for line in lines:
+        branch = _spike_branch(line, plan)
+        if branch in kept:
+            raise Unlisted(f"`git ls-remote` answered duplicate branch {branch}")
+        kept[branch] = line.split("\t")[0]
+    if local:
+        for path in registered_checkouts(held.identity):
+            refs = answer(
+                [
+                    "git",
+                    "for-each-ref",
+                    "--format=%(objectname)%09%(refname)",
+                    "refs/heads",
+                ],
+                cwd=path,
+            )
+            seen: set[Branch] = set()
+            for line in refs.splitlines():
+                matched = LS_REMOTE_LINE.fullmatch(line)
+                if matched is None:
+                    raise Unlisted(f"`git for-each-ref` answered an unreadable ref: {line!r}")
+                name = matched["branch"]
+                if not (
+                    fnmatch.fnmatchcase(name, f"*/{plan}/{spike_plan.SPIKE_PREFIX}*")
+                    or fnmatch.fnmatchcase(name, f"{plan}/{spike_plan.SPIKE_PREFIX}*")
+                ):
+                    continue
+                branch = _spike_branch(line, plan)
+                head = line.split("\t")[0]
+                if branch in seen or (branch in kept and kept[branch] != head):
+                    raise Unlisted(f"registered checkouts answered conflicting branch {branch}")
+                seen.add(branch)
+                kept[branch] = head
+    return list(kept)
+
+
+def registered_checkouts(identity: object) -> list[Path]:
+    """The checkouts of one resolved identity, off the existing onevcs repos table."""
+    if not isinstance(identity, str) or not identity:
+        raise Unlisted("`onevcs resolve` named no identity")
+    listing = answer([installed_onevcs(), "repos"])
+    current: str | None = None
+    paths: list[Path] = []
+    for line in listing.splitlines():
+        if line.startswith("  "):
+            matched = re.fullmatch(r"  [^\t\s][^\t]*\t(\S[^\t]*)", line)
+            if matched is None or current is None:
+                raise Unlisted(f"`onevcs repos` answered an unreadable checkout: {line!r}")
+            if current == identity:
+                paths.append(Path(matched[1]))
+        else:
+            matched = re.fullmatch(r"([^\s\t]+)\t(\S[^\t]*)", line)
+            if matched is None:
+                raise Unlisted(f"`onevcs repos` answered an unreadable identity: {line!r}")
+            current = matched[1]
+    if not paths:
+        raise Unlisted(f"`onevcs repos` named no registered checkouts for {identity}")
+    return paths
 
 
 #: One line of `git ls-remote --heads`: a commit, a tab, and the ref it names.
@@ -196,6 +279,10 @@ def _spike_branch(line: str, plan: PlanId) -> Branch:
     own = rf"(?:.+/)?{re.escape(plan)}/{re.escape(spike_plan.SPIKE_PREFIX)}[^/]+"
     if re.fullmatch(own, branch) is None:
         raise Unlisted(f"`git ls-remote` named {branch}, which is not a spike branch of {plan}")
+    try:
+        answer(["git", "check-ref-format", f"refs/heads/{branch}"])
+    except Unlisted as exc:
+        raise Unlisted(f"the listing named an unsafe branch: {branch!r}: {exc}") from exc
     return Branch(branch)
 
 

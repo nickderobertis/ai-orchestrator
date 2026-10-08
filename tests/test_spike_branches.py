@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -190,8 +192,9 @@ def test_a_repository_onevcs_cannot_resolve_is_unlisted_naming_why(
         ('{"publication_checkout": 7}', "named no publication checkout"),
         ("[]", "did not answer with its identity"),
         ("not json", "did not answer with its identity"),
+        ('{"publication_checkout": "/registered"}', "named no identity"),
     ],
-    ids=["none", "not-a-path", "not-an-object", "not-json"],
+    ids=["none", "not-a-path", "not-an-object", "not-json", "no-identity"],
 )
 def test_a_resolve_answer_naming_no_checkout_is_unlisted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, answered: str, said: str
@@ -313,3 +316,98 @@ def test_a_listed_line_that_is_no_spike_of_the_plan_stops_the_listing(line: str,
     """What this answers is deleted, so a line it cannot vouch for is refused, never passed."""
     with pytest.raises(spike_branches.Unlisted, match=said):
         spike_branches._spike_branch(line, spike_branches.PlanId("cursor-plan"))
+
+
+# llmlint: ignore-block[shell_test_tiers_stay_split] This task requires this module’s
+# coverage at the real local Git/onevcs boundary, with seconds-long isolated registries;
+# the plan recipe journey stays in the separate plan-tooling tier.
+def test_resume_listing_includes_all_registered_checkouts_of_only_its_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkout = _origin(tmp_path, monkeypatch, "host/cursor-plan/spike-a")
+    sibling = tmp_path / "sibling"
+    git("clone", "-q", str(tmp_path / "origin.git"), str(sibling))
+    subprocess.run([str(ONEVCS), "register", str(sibling)], check=True, capture_output=True)
+    git("branch", "different/host/cursor-plan/spike-b", cwd=sibling)
+    git("branch", "different/host/another-plan/spike-c", cwd=sibling)
+    listed = spike_branches.spike_branches(
+        str(checkout), spike_branches.PlanId("cursor-plan"), local=True
+    )
+    assert set(listed) == {"host/cursor-plan/spike-a", "different/host/cursor-plan/spike-b"}
+    git("switch", "-q", "different/host/cursor-plan/spike-b", cwd=sibling)
+    (sibling / "harness").write_text("measure", encoding="utf-8")
+    git("add", "-A", cwd=sibling)
+    git(*COMMITTER, "commit", "-qm", "feat: harness", cwd=sibling)
+    git("branch", "host/cursor-plan/spike-a", cwd=sibling)
+    with pytest.raises(spike_branches.Unlisted, match="conflicting branch"):
+        spike_branches.spike_branches(
+            str(checkout), spike_branches.PlanId("cursor-plan"), local=True
+        )
+
+
+@pytest.mark.parametrize(
+    ("verb", "output", "said"),
+    [
+        ("ls-remote", "not a ref", "names no branch"),
+        ("ls-remote", "a" * 40 + "\trefs/heads/host/cursor-plan/spike-a..b", "unsafe branch"),
+        (
+            "ls-remote",
+            ("a" * 40 + "\trefs/heads/host/cursor-plan/spike-a\n") * 2,
+            "duplicate branch",
+        ),
+        ("for-each-ref", "not a ref", "unreadable ref"),
+    ],
+)
+def test_resume_refuses_malformed_duplicate_and_unsafe_git_answers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    verb: str,
+    output: str,
+    said: str,
+) -> None:
+    checkout = _origin(tmp_path, monkeypatch)
+    real_git = shutil.which("git")
+    assert real_git is not None
+    binary = tmp_path / "bin" / "git"
+    binary.parent.mkdir()
+    binary.write_text(
+        f'#!/bin/sh\nif [ "$1" = {shlex.quote(verb)} ]; then\n'
+        f"printf '%s\\n' {shlex.quote(output)}\nelse\n"
+        f'exec {shlex.quote(real_git)} "$@"\nfi\n',
+        encoding="utf-8",
+    )
+    binary.chmod(0o755)
+    monkeypatch.setenv("PATH", str(binary.parent) + os.pathsep + os.environ["PATH"])
+    with pytest.raises(spike_branches.Unlisted, match=said):
+        spike_branches.spike_branches(
+            str(checkout), spike_branches.PlanId("cursor-plan"), local=True
+        )
+
+
+# llmlint: ignore-end[shell_test_tiers_stay_split]
+
+
+@pytest.mark.parametrize(
+    ("identity", "listing", "said"),
+    [
+        (None, "", "named no identity"),
+        ("repo", "  checkout\t/path", "unreadable checkout"),
+        ("repo", "repo\tgate\n  broken", "unreadable checkout"),
+        ("repo", "broken", "unreadable identity"),
+        ("repo", "other\tgate\n  checkout\t/path", "no registered checkouts"),
+    ],
+)
+def test_resume_refuses_unreadable_registered_checkout_answers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    identity: str | None,
+    listing: str,
+    said: str,
+) -> None:
+    answering = tmp_path / "onevcs"
+    answering.write_text(f"#!/bin/sh\nprintf '%s\\n' {shlex.quote(listing)}\n", encoding="utf-8")
+    answering.chmod(0o755)
+    monkeypatch.setattr(spike_branches, "installed_onevcs", lambda: str(answering))
+    with pytest.raises(spike_branches.Unlisted, match=said):
+        spike_branches.registered_checkouts(identity)

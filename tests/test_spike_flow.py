@@ -4,7 +4,7 @@
 This holds each answer the flow branches on against real stores: a spikes project written
 into this process's own plan store and stamped through the store's own SDK, a run's ledger
 record under a runs root of its own, and the branches a run kept as the pinned `onevcs`
-records them in a scratch registry — including the shapes no launch produces on demand.
+origins and registered checkouts list them in a scratch registry, even without sessions.
 
 llmlint: ignore-file[test_tiers_split_by_project_not_by_marker] These are the coverage tier's
 measure of an `orchestrator/` module, whose every line the 100% floor `pyproject.toml` sets
@@ -25,7 +25,7 @@ import plan_fixture_source
 import pytest
 from conftest import git
 
-from orchestrator import design_approval, plan_store, spike_branches, spike_flow
+from orchestrator import design_approval, plan_store, spike_flow
 from orchestrator.plan_store import NodeId
 from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
@@ -56,6 +56,27 @@ def _ledger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, run: str, nodes: ob
     root = tmp_path / "runs" / run
     root.mkdir(parents=True)
     (root / spike_flow.RESULT).write_text(json.dumps({"nodes": nodes}), encoding="utf-8")
+    checkout = tmp_path / "checkout"
+    if checkout.exists() and isinstance(nodes, list):
+        replacements = {n.get("superseded_by") for n in nodes if isinstance(n, dict)}
+        originals = [
+            n["id"] for n in nodes if isinstance(n, dict) and n.get("id") not in replacements
+        ]
+        write_plan_project(
+            plan_fixture_source.root(),
+            {
+                "schema_version": 3,
+                "goal": {"text": "Measure."},
+                "name": "plan-spikes",
+                "tasks": [
+                    {"id": node, "task": "Measure.", "repo": str(checkout)} for node in originals
+                ],
+            },
+            native_id="plan-spikes",
+        )
+        (root / spike_flow.LAUNCH_RECORD).write_text(
+            json.dumps({"project": f"{plan_fixture_source.SOURCE}:plan-spikes"}), encoding="utf-8"
+        )
 
 
 def test_a_draft_with_spikes_has_its_project_named_for_its_run_and_stamped(
@@ -181,7 +202,13 @@ def test_a_run_with_no_ledger_record_has_not_settled(
         spike_flow.settled("flow")
 
 
-def _kept(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, run: str, *nodes: str) -> None:
+def _kept(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    run: str,
+    *nodes: str,
+    prefix: str = "",
+) -> None:
     """Leave each of ``nodes``' branches the way a spike node does, in a scratch registry.
 
     A node named ``""`` is a branch of the run whose session names no node.
@@ -211,7 +238,7 @@ def _kept(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, run: str, *nodes: str
                 "open",
                 str(checkout),
                 "--branch-name",
-                f"plan/{node or 'unlabelled'}",
+                f"{prefix}plan/{node or 'spike-unlabelled'}",
                 "--label",
                 f"run={run}",
                 *(["--label", f"node={node}"] if node else []),
@@ -223,13 +250,18 @@ def _kept(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, run: str, *nodes: str
         git(*COMMITTER, "commit", "-qm", f"feat: {node}", cwd=worktree)
         onevcs("preserve", "--repo", str(checkout), opened["branch"])
         onevcs("session", "close", opened["token"])
+    records = list((tmp_path / "onevcs" / "sessions").glob("*.json"))
+    assert records
+    for record in records:
+        record.unlink()
+    assert not list((tmp_path / "onevcs" / "sessions").glob("*.json"))
 
 
 def _preserved(*nodes: str) -> list[dict[str, str]]:
     return [{"id": node, "status": "done", "outcome": "preserved"} for node in nodes]
 
 
-def test_each_spike_is_answered_with_the_branch_onevcs_recorded_for_its_run(
+def test_each_spike_is_answered_by_name_without_session_records(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     _kept(tmp_path, monkeypatch, "flow-spikes", "spike-a", "", "spike-b")
@@ -249,7 +281,7 @@ def test_each_spike_is_answered_with_the_branch_onevcs_recorded_for_its_run(
 def test_branches_and_note_find_another_identity_from_a_registered_flow_checkout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    _kept(tmp_path, monkeypatch, "flow-spikes", "spike-a", "spike-b-2")
+    _kept(tmp_path, monkeypatch, "flow-spikes", "spike-a", "spike-b-2", prefix="arbitrary/host/")
     flow = tmp_path / "flow"
     git("clone", "-q", str(tmp_path / "origin.git"), str(flow))
     git("clone", "-q", "--bare", str(tmp_path / "origin.git"), str(tmp_path / "flow-origin.git"))
@@ -269,24 +301,30 @@ def test_branches_and_note_find_another_identity_from_a_registered_flow_checkout
         ],
     )
     monkeypatch.chdir(flow)
-    command = [str(ONEVCS), "recoverable", "--label", "run=flow-spikes", "--json"]
-    assert json.loads(spike_branches.answer(command)) == []
-    assert len(json.loads(spike_branches.answer(command, cwd=Path("/")))) == 2
     assert spike_flow.main(["branches", "flow-spikes"]) == 0
     assert capsys.readouterr().out.splitlines() == [
-        "spike-a\tplan/spike-a",
-        "spike-b\tplan/spike-b-2",
+        "spike-a\tarbitrary/host/plan/spike-a",
+        "spike-b\tarbitrary/host/plan/spike-b-2",
     ]
     assert spike_flow.main(["note", "authoring:a-new-plan", "flow-spikes"]) == 0
     note = capsys.readouterr().out
     for spike, branch in (("spike-a", "spike-a"), ("spike-b", "spike-b-2")):
-        assert f"- `{spike}`: report `{spike}-report`; branch `plan/{branch}`" in note
+        assert (
+            f"- `{spike}`: report `{spike}-report`; branch `arbitrary/host/plan/{branch}`" in note
+        )
+
+    # Another registered identity still holds the same branch names. It cannot answer
+    # for this spike once its own origin and registered checkout no longer hold it.
+    git("push", "-q", "origin", ":arbitrary/host/plan/spike-a", cwd=tmp_path / "checkout")
+    git("branch", "-D", "arbitrary/host/plan/spike-a", cwd=tmp_path / "checkout")
+    assert spike_flow.main(["branches", "flow-spikes"]) == 1
+    assert "no kept branch" in capsys.readouterr().err
 
 
 # llmlint: ignore-end[shell_test_tiers_stay_split]
 
 
-def test_a_spike_onevcs_recorded_no_branch_for_stops_naming_it(
+def test_a_spike_with_no_kept_branch_stops_naming_it_without_session_records(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     _kept(tmp_path, monkeypatch, "flow-spikes", "spike-a")
@@ -355,12 +393,17 @@ def test_the_finalize_note_lists_every_report_and_branch_and_what_the_budgets_ow
 def test_a_question_that_cannot_be_asked_exits_two(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    project = _stacked({"id": "spike-a", "repo": "a-registered-repository"})
     _ledger(tmp_path, monkeypatch, "flow-spikes", _preserved("spike-a"))
+    launch = tmp_path / "runs" / "flow-spikes" / spike_flow.LAUNCH_RECORD
+    launch.write_text(json.dumps({"project": project}), encoding="utf-8")
     monkeypatch.setenv("ONEVCS_HOME", str(tmp_path / "unreadable"))
     (tmp_path / "unreadable").write_text("not a directory", encoding="utf-8")
 
     assert spike_flow.main(["branches", "flow-spikes"]) == 2
-    assert capsys.readouterr().err.startswith("plan: ")
+    said = capsys.readouterr().err
+    assert said.startswith("plan: ")
+    assert "onevcs resolve a-registered-repository" in said and "exited" in said
 
 
 @pytest.mark.parametrize(
@@ -379,47 +422,55 @@ def test_a_run_id_that_is_not_a_name_is_refused_before_anything_is_read(
     assert "is not a run id" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize(
-    ("answered", "said"),
-    [
-        ("{}", "answered no list of branches"),
-        ('[{"labels": 7}]', "an entry of no known shape"),
-        ('[{"labels": {"node": ""}, "branch": {"branch": "b"}}]', "an entry of no known shape"),
-        ('[{"labels": {"node": "spike-a"}, "branch": {"branch": ""}}]', "of no known shape"),
-        (
-            '[{"labels": {"node": "spike-a\\u0009x"}, "branch": {"branch": "b"}}]',
-            "of no known shape",
-        ),
-        (
-            '[{"labels": {"node": "spike-a"}, "branch": {"branch": "b"}},'
-            ' {"labels": {"node": "spike-a"}, "branch": {"branch": "c"}}]',
-            "answered two branches for spike-a: b and c",
-        ),
-    ],
-    ids=[
-        "not-a-list",
-        "an-entry-of-no-shape",
-        "a-blank-node",
-        "a-blank-branch",
-        "a-node-splitting-the-record",
-        "two-branches-for-one-node",
-    ],
-)
-def test_a_recoverable_answer_of_no_known_shape_is_refused(
+# llmlint: ignore-block[shell_test_tiers_stay_split] The task expressly requires these
+# regressions in tests/test_spike_flow.py. They drive the module's real local Git/onevcs
+# boundary in an isolated registry; the plan recipe journey remains in plan-tooling.
+@pytest.mark.parametrize("nodes", [("spike-a", "spike-a-2"), ("spike-a-2", "spike-a-3")])
+def test_multiple_kept_branches_without_session_labels_are_refused(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    answered: str,
-    said: str,
+    nodes: tuple[str, str],
 ) -> None:
-    answering = tmp_path / "onevcs"
-    answering.write_text(f"#!/bin/sh\necho '{answered}'\n", encoding="utf-8")
-    answering.chmod(0o755)
-    monkeypatch.setattr(spike_branches, "installed_onevcs", lambda: str(answering))
+    _kept(tmp_path, monkeypatch, "flow-spikes", *nodes)
     _ledger(tmp_path, monkeypatch, "flow-spikes", _preserved("spike-a"))
-
     assert spike_flow.main(["branches", "flow-spikes"]) == 2
-    assert said in capsys.readouterr().err
+    assert "ambiguous" in capsys.readouterr().err
+
+
+def test_a_retry_can_keep_its_original_branch_without_session_labels(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _kept(tmp_path, monkeypatch, "flow-spikes", "spike-a")
+    _ledger(
+        tmp_path,
+        monkeypatch,
+        "flow-spikes",
+        [
+            {"id": "spike-a", "status": "cancelled", "superseded_by": "spike-a-2"},
+            *_preserved("spike-a-2"),
+        ],
+    )
+    assert spike_flow.main(["branches", "flow-spikes"]) == 0
+    assert capsys.readouterr().out == "spike-a\tplan/spike-a\n"
+    assert spike_flow.main(["note", "authoring:a-new-plan", "flow-spikes"]) == 0
+    assert "- `spike-a`: report `spike-a-report`; branch `plan/spike-a`" in capsys.readouterr().out
+
+
+def test_numeric_retry_matching_an_original_spike_is_refused(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _kept(tmp_path, monkeypatch, "flow-spikes", "spike-a-2")
+    _ledger(tmp_path, monkeypatch, "flow-spikes", _preserved("spike-a", "spike-a-2"))
+    assert spike_flow.main(["branches", "flow-spikes"]) == 2
+    assert "could be a retry" in capsys.readouterr().err
+
+
+# llmlint: ignore-end[shell_test_tiers_stay_split]
 
 
 def test_the_run_grammar_and_runs_root_are_the_ones_plan_brief_sh_names() -> None:
@@ -625,3 +676,38 @@ def test_spikes_skipped_behind_several_failures_name_every_failure(
 
     with pytest.raises(spike_flow.Stop, match="spike-a, spike-b failed, and the engine skipped"):
         spike_flow.settled("flow-spikes", spikes=True)
+
+
+@pytest.mark.parametrize(
+    ("task", "standing", "said"),
+    [
+        ({"id": "spike-a"}, "spike-missing", "no original spike task"),
+        ({"id": "ordinary"}, "ordinary", "no original spike task"),
+        ({"id": "spike-a"}, "spike-a", "unsafe spike or repository"),
+        ({"id": "spike-a", "repo": "bad\trepository"}, "spike-a", "unsafe spike or repository"),
+    ],
+)
+def test_resume_refuses_original_tasks_that_cannot_identify_a_spike_repository(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    task: dict[str, object],
+    standing: str,
+    said: str,
+) -> None:
+    project = _stacked(task)
+    _ledger(tmp_path, monkeypatch, "flow-spikes", _preserved(standing))
+    root = tmp_path / "runs" / "flow-spikes"
+    (root / spike_flow.LAUNCH_RECORD).write_text(json.dumps({"project": project}), encoding="utf-8")
+    assert spike_flow.main(["branches", "flow-spikes"]) == 2
+    assert said in capsys.readouterr().err
+
+
+def test_branches_refuses_a_settled_run_launched_from_a_non_spikes_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _ledger(tmp_path, monkeypatch, "flow-spikes", _preserved("spike-a"))
+    launch = tmp_path / "runs" / "flow-spikes" / spike_flow.LAUNCH_RECORD
+    launch.write_text(json.dumps({"project": "authoring:ordinary-plan"}), encoding="utf-8")
+    assert spike_flow.main(["branches", "flow-spikes"]) == 2
+    assert "authoring:ordinary-plan is not a plan's spikes project" in capsys.readouterr().err

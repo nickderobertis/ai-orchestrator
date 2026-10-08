@@ -682,6 +682,11 @@ branch, after which `--resume spikes` carries the flow on. The finalize note nam
 spike's stacking chain, read from the spikes project's own dependency edges, and a task
 building on a spike links every spike above it too; no report copies those edges.
 
+The resume reads preserved branches by this plan's native id and each original spike's
+repository, from origin heads and registered checkouts, independently of session records.
+A retry may retain its original branch or cut a numeric suffix; missing or ambiguous
+branches stop finalization. Report ids stay those of the original spikes.
+
 **A spike branch is kept until the plan's main run succeeds**: the success hook,
 `scripts/run-ended.sh`, discards every `*/<plan native id>/spike-*` branch on the origin of
 each repository the run changes with `just reclaim-branch <branch> --repo <repository>

@@ -200,7 +200,7 @@ def _spike_node_refusals(task: Mapping[str, object], stamped: bool) -> Iterator[
 RETRY_SUFFIX = re.compile(r"-([2-9]|[1-9][0-9]+)\Z")
 
 
-def _branch_refusal(node: NodeId, linked: Evidence, spikes: frozenset[NodeId]) -> Refused | None:
+def branch_refusal(node: NodeId, linked: Evidence, spikes: frozenset[NodeId]) -> Refused | None:
     """Why ``linked``'s branch is not one its spike kept, or ``None`` when it is.
 
     A spike's branch ends `/<spike>`, or `/<spike>-<n>` for `n` of 2 or more where a retry of
@@ -259,7 +259,7 @@ def _evidence_refusals(
                 f"documents; a spike's report is the document `{named}` it writes there from "
                 f"the `spike-report` template, so link the one it wrote",
             )
-        refused = _branch_refusal(node, linked, spikes)
+        refused = branch_refusal(node, linked, spikes)
         if refused is not None:
             yield refused
 

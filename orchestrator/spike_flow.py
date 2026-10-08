@@ -18,8 +18,8 @@ Between them sit four questions only this host can answer, each a subcommand her
   answered for by its replacement, which `tests/run_end_hooks/test_run_end_hooks_e2e.py`
   reads off a ledger the installed engine wrote over a real retry;
 * ``branches <run>`` — the branch each spike of that settled spikes run kept, read off
-  `onevcs`'s own records of the run (`recoverable --label run=<run>`), never off its journal,
-  and refused when one kept none;
+  the plan naming contract on each spike repository’s origin and registered checkouts,
+  independently of session labels, and refused when missing or ambiguous;
 * ``note <plan project> <run>`` — the finalize planner's instructions: every spike's report
   and branch, the spikes above each in its stacking chain, and what the plan's budget
   answers owe.
@@ -35,7 +35,7 @@ second copy of the graph would need keeping in step with the first. A spike that
 skips its dependents, and a retry of it re-points them onto its replacement's branch.
 
 **A retried spike is two names.** The engine retries `spike-x` as `spike-x-2`, so the branch is
-the one `onevcs` recorded for the node standing in the ledger, while the report is the one the
+discovered by its original name or a numeric retry suffix, while the report is the one the
 spike's task named, `spike-x-report`: each standing node is answered with the spike it is a
 retry of, by walking the ledger's `superseded_by` links back to the first.
 
@@ -365,47 +365,62 @@ def _skipped_behind(run: RunId, ledger: Mapping[NodeId, LedgerNode]) -> str:
     )
 
 
-#: What a name in `onevcs`'s answer may not hold: each is printed in one tab-separated line.
-_SPLITS_A_RECORD = re.compile(r"[\t\r\n]")
-
-
 def branches(run: RunId) -> dict[NodeId, Branch]:
-    """The branch each spike of the settled spikes run ``run`` kept, by the spike it is."""
+    """The branches of this plan's settled spikes, independent of session records."""
     standing = settled(run, spikes=True)
-    listed = json.loads(
-        spike_branches.answer(
-            [spike_branches.installed_onevcs(), "recoverable"]
-            + ["--label", f"run={_run_id(run)}", "--json"],
-            cwd=Path("/"),
-        )
+    root = Path(os.environ.get(RUNS_ROOT_ENV) or DEFAULT_RUNS_ROOT) / _run_id(run)
+    project = spike_branches.launched_project(root)
+    native = project.partition(":")[2]
+    if not native.endswith(spike_plan.SPIKES_SUFFIX):
+        raise ValueError(f"{project} is not a plan's spikes project")
+    plan = spike_branches.plan_native_id(
+        QualifiedProjectId(project.removesuffix(spike_plan.SPIKES_SUFFIX))
     )
-    if not isinstance(listed, list):
-        raise ValueError(f"`onevcs recoverable` answered no list of branches: {listed!r}")
+    tasks = plan_store.read_tasks(project)
+    originals = {task.node_id: task for task in tasks}
+    spikes = frozenset(originals)
+    resolved: dict[str, spike_branches.Repository] = {}
+    listed: dict[str, list[Branch]] = {}
     kept: dict[NodeId, Branch] = {}
-    for entry in listed:
-        match entry:
-            case {"labels": {"node": str() as node}, "branch": {"branch": str() as branch}} if (
-                node and branch and not _SPLITS_A_RECORD.search(node + branch)
-            ):
-                if kept.get(NodeId(node), branch) != branch:
-                    raise ValueError(
-                        f"`onevcs recoverable` answered two branches for {node}: "
-                        f"{kept[NodeId(node)]} and {branch}"
-                    )
-                kept[NodeId(node)] = Branch(branch)
-            case {"labels": dict() as labels, "branch": dict()} if "node" not in labels:
+    for one in standing:
+        task = originals.get(one.spike)
+        if task is None or not spike_plan.is_spike(one.spike):
+            raise ValueError(f"{project} records no original spike task for {one.spike}")
+        repository = _repository(task)
+        if not repository or any(c in repository + one.spike for c in "\t\r\n"):
+            raise ValueError(f"{project} records an unsafe spike or repository for {one.spike}")
+        if repository not in resolved:
+            resolved[repository] = spike_branches.resolve(repository)
+        own = resolved[repository]
+        if own.identity not in listed:
+            listed[own.identity] = spike_branches.spike_branches(
+                repository, plan, local=True, resolved=own
+            )
+        candidates: list[Branch] = []
+        for branch in listed[own.identity]:
+            last = branch.rpartition("/")[2]
+            retry = spike_plan.RETRY_SUFFIX.search(last)
+            if last != one.spike and not (retry is not None and last[: retry.start()] == one.spike):
                 continue
-            case _:
-                raise ValueError(
-                    f"`onevcs recoverable` answered an entry of no known shape: {entry!r}"
-                )
-    missing = [one.node for one in standing if one.node not in kept]
-    if missing:
-        raise Stop(
-            f"onevcs records no kept branch of run {run} for {', '.join(missing)}, so there is "
-            f"no harness to link; read it with `just recoverable` before finalizing"
-        )
-    return {one.spike: kept[one.node] for one in standing}
+            linked = spike_plan.Evidence(one.spike, spike_plan.report_id(one.spike), branch)
+            refusal = spike_plan.branch_refusal(one.spike, linked, spikes)
+            if refusal is not None:
+                raise ValueError(refusal.reason)
+            candidates.append(branch)
+        if not candidates:
+            raise Stop(
+                f"the repository records no kept branch of run {run} for {one.spike}, so "
+                "there is no harness to link; inspect its origin and registered checkouts "
+                "before finalizing"
+            )
+        if len(candidates) != 1:
+            raise ValueError(
+                f"the repository answered two or more branches for {one.spike}: "
+                + ", ".join(candidates)
+                + "; the kept branch is ambiguous"
+            )
+        kept[one.spike] = candidates[0]
+    return kept
 
 
 def note(
