@@ -1,0 +1,197 @@
+{
+  "project": {
+    "id": "legacy",
+    "title": "Legacy stored plan",
+    "content": "Let a plan with visual changes carry before-and-after screenshots into its design document, copied with the plan to the GitHub and Linear boards as image assets.\n\n## Budgets\n\n**What we're sizing for.** A visual plan of 2 to 12 images (up to 24 in its largest first copy, about 500 KB each), copied 1 to 4 times, with up to 3 managers finishing plans at once on one shared board token.\n\n### Workload\n\nA plan with visual changes has 1 to 6 expected visual changes, typically 2, so its `spike-visual-report` and its design document each hold 2 to 12 images (typically 4), each a PNG of 50 to 500 KB captured from a browser page or a rendered terminal. Such a plan is copied to its board once by `just finish-plan` and re-copied 1 to 3 more times as it is edited, so a first copy carries up to 24 new images and a re-copy usually none. On GitHub, a first copy of the largest visual plan sends about 49 content-creating requests: 24 uploads plus about 25 issue and board mutations for the plan's own records (project issue, about 7 task issues, 3 document issues and their board items). It also sends 24 verifying reads. This host plans 1 to 3 plans a day, about a third of them visual. **The burst that matters is concurrency**: up to 3 managers on this host may finish plans at once, sharing the `plans` board token and Hello Patient's Linear key. That makes about 147 content-creating requests to GitHub within a couple of minutes, against GitHub's published secondary limit of 80 content-creating requests a minute (and 500 an hour), which onetaskgraph's github-projects plugin paces one process at by default (one every 750 ms) and waits out for at most 120 s per call. Every check that counts or times image copies uses generated PNGs of that size, and every timed or rate-limited journey runs on a simulated clock, so the published limits are enforced in virtual time and no check sleeps for real: each between 50 KB and 500 KB (50,000 to 500,000 bytes), and for the largest plan 24 images of about 500 KB each (450,000 to 500,000 bytes), about 12 MB uploaded, hashed, stored and serialized per copy. Plans without visual change carry no asset at all. A visual plan also dispatches one `spike-visual`, capped at 40 turns by the manager's ruling (see spend).\n\n### At 10x realistic usage\n\n**At 10 concurrent first copies, GitHub's secondary rate limiter refuses copies; accepted past 3 at once, which is budgeted.**\n\nThe first user-visible failure is a copy refused by GitHub's secondary rate limiter on the shared `plans` token. That happens when several managers finish visual plans at once, not because of the per-image request count. At realistic concurrency (3 simultaneous first copies of 24-image plans, about 147 content-creating requests against 80 a minute) it is covered by `github-concurrent-copies-refused` (0 refused copies), with the wait it costs bounded by `github-concurrent-copy-seconds` (240 s for the slowest copy). Each plugin must pace uploads with its mutations and wait out a limiter refusal within its bounded retry budget for those to hold. At 10× (about 10 simultaneous copies, about 490 content-creating requests in one burst, near GitHub's 500-an-hour ceiling as well) no per-process pacing can avoid it: each call's 120 s retry budget runs out and copies are refused by name, naming the limiter. Copy latency is unbounded until the person re-runs the copy. That residual is not budgeted: the manager accepted throttling past the budgeted 3 concurrent first copies by ruling on exception 7, and a limiter shared across processes on the host, which covering it would need, is not planned.\n\n### Checklist\n\n- **latency (GitHub copy a person waits on):** covered by `github-asset-copy-seconds`.\n- **latency (Linear copy a person waits on):** covered by `linear-asset-copy-seconds`.\n- **rate-limit headroom under concurrent copies (GitHub secondary limiter):** covered by `github-concurrent-copies-refused`.\n- **latency under concurrent copies (GitHub):** covered by `github-concurrent-copy-seconds`.\n- **rate-limit headroom under concurrent copies (Linear key):** covered by `linear-concurrent-copies-refused`.\n- **quota and rate-limit headroom (GitHub):** covered by `github-asset-requests-per-new-asset`.\n- **quota and rate-limit headroom (GitHub, re-copy):** covered by `github-asset-requests-per-unchanged-asset`.\n- **quota and rate-limit headroom (Linear):** covered by `linear-asset-requests-per-new-asset`.\n- **quota and rate-limit headroom (Linear, re-copy):** covered by `linear-asset-requests-per-unchanged-asset`.\n- **how the work scales with data:** not budgeted. n/a because requests grow linearly with the number of images and are bounded per image by the four request budgets, and image size is bounded by each destination's own upload limit, which the plugin refuses by name rather than degrading.\n- **spend:** not budgeted. n/a by the manager's ruling, an accepted exception (exception 8): the only new spend is one `spike-visual` dispatch per visual plan, which the user asked for cheap (mocked, unverified, minimal), and its cost is bounded by a hard turn cap, `max_turns` no larger than 40, which aio-visual-screenshots' planner guidance sets on every `spike-visual`, rather than by a measured budget, a command or a budgets-file change. A plan with no visual change dispatches nothing new.\n- **latency (the visual spike delays the design document):** not budgeted. n/a by the same accepted exception (exception 8): the `spike-visual` dispatch delays the design document by at most its 40-turn cap, and no planning-latency budget or measurement is added for it.\n- **resource use:** not budgeted. n/a because the stored images are at most about 12 MB per plan (24 images of up to 500 KB) under the gitignored authoring root, beside the documents they belong to.\n- **gate time:** not budgeted. n/a for a new budget. onetaskgraph has no gate-time budget, and ai-orchestrator's `gate-time` (1800 s) absorbs its few template tests and two journeys, which add a few seconds. For onetaskgraph, the asset journeys run once, in the ordinary `test` targets of `onetaskgraph-github-projects-e2e` and `onetaskgraph-linear-e2e`, and only when a change affects those domains. They add an estimated 10 to 30 s of real time to each of those test runs: generating about 110 noise PNGs (about 55 MB), passing them through the loopback, and spawning the binary. They never sleep for pacing, backoff or loopback latency, because those run on a simulated clock. Each node reports the figure it measured, and holds its three-process journey under 60 s of real time. The `budgets` targets add only telemetry analysis, well under a second per budget. They run no journey a second time and are cached on the domain tree, the measured production code and the onebudgetspec pin. The plan as first written would instead have re-run every journey for its budget and slept through about 6 to 10 minutes of real pacing and backoff per affected check.\n- **change cycle time:** not budgeted. n/a because ai-orchestrator's `cycle-time` budget already measures each landed change, and this plan expects no effect on it beyond the chain's own release waits.\n\n### Repo-wide effects\n\n- **`github.com/nickderobertis/onetaskgraph`**: none\n- **`github.com/nickderobertis/onepipeline`**: none\n- **`github.com/nickderobertis/onepipeline-ui`**: none\n- **`github.com/nickderobertis/ai-orchestrator`** (`gate-time`): A few seconds more for the new template-rendering tests and the approve-design and finish-plan journeys, against a 1800 s threshold.\n\n### Realistic data\n\n- **Screenshot images carried by a copy**, generator: Real screenshots cannot be had before the feature exists, and a generated image of the same size exercises the same upload, hashing, storage and serialization as one. So each test generates PNGs of seeded pseudo-random pixels, which compression cannot shrink, distinct per image (one changed between copies), sized as real screenshots are: each 50 KB to 500 KB, and for the largest-plan measurements 24 images of about 500 KB each. Generating them costs well under a second, where committed fixture images of that size would add about 12 MB to a repository and need upkeep; they are never committed. Artifact: onetaskgraph's test-image generator in `crates/onetaskgraph-e2e-support` (added by otg-assets-core), used by the plugin domains' journeys, whose recorded telemetry the budgets analyse; ai-orchestrator's finish-plan and approve-design journeys generate theirs the same way. The positive planning-flow journey generates its disposable target's visual content in the test, sized so the real renderer's captures of it are each 50,000 to 500,000 bytes (at least one of about 500 KB), and asserts every capture's encoded size before copying it.\n\n### Spike findings\n\nNo spike finding changed this plan.\n",
+    "status": {
+      "category": "todo",
+      "name": "todo"
+    },
+    "labels": [],
+    "url": null,
+    "location": {
+      "path": "/home/nick/projects/ai-orchestrator/runs/Design-document--readable-decisions-and-useful-budget-summaries/scratch/3194775-0/legacy-capture/store/projects/legacy.md"
+    },
+    "created_at": null,
+    "updated_at": null,
+    "metadata": {
+      "onetaskgraph.template": {
+        "answers_digest": "sha256:f0370830574cdb6290fea244593e79fe49ddb4eaa2c8b01de0483a3ff3b5f8b8",
+        "body_digest": "sha256:3527d21a0a51815e93c1d44b19309b77b498bbf1a0cd1256e98e177e51283586",
+        "digest": "sha256:20634261d034e324c57eb40f6f07e9f4346638500fa74e1e07f84a7ae6b61b6f",
+        "template": "onepipeline:plan-description"
+      },
+      "orchestrator.plan-budgets": {
+        "checklist": [
+          {
+            "budget": "github-asset-copy-seconds",
+            "concern": "latency (GitHub copy a person waits on)",
+            "not_applicable": "",
+            "summary": ""
+          },
+          {
+            "budget": "linear-asset-copy-seconds",
+            "concern": "latency (Linear copy a person waits on)",
+            "not_applicable": "",
+            "summary": ""
+          },
+          {
+            "budget": "github-concurrent-copies-refused",
+            "concern": "rate-limit headroom under concurrent copies (GitHub secondary limiter)",
+            "not_applicable": "",
+            "summary": ""
+          },
+          {
+            "budget": "github-concurrent-copy-seconds",
+            "concern": "latency under concurrent copies (GitHub)",
+            "not_applicable": "",
+            "summary": ""
+          },
+          {
+            "budget": "linear-concurrent-copies-refused",
+            "concern": "rate-limit headroom under concurrent copies (Linear key)",
+            "not_applicable": "",
+            "summary": ""
+          },
+          {
+            "budget": "github-asset-requests-per-new-asset",
+            "concern": "quota and rate-limit headroom (GitHub)",
+            "not_applicable": "",
+            "summary": ""
+          },
+          {
+            "budget": "github-asset-requests-per-unchanged-asset",
+            "concern": "quota and rate-limit headroom (GitHub, re-copy)",
+            "not_applicable": "",
+            "summary": ""
+          },
+          {
+            "budget": "linear-asset-requests-per-new-asset",
+            "concern": "quota and rate-limit headroom (Linear)",
+            "not_applicable": "",
+            "summary": ""
+          },
+          {
+            "budget": "linear-asset-requests-per-unchanged-asset",
+            "concern": "quota and rate-limit headroom (Linear, re-copy)",
+            "not_applicable": "",
+            "summary": ""
+          },
+          {
+            "budget": "",
+            "concern": "how the work scales with data",
+            "not_applicable": "n/a because requests grow linearly with the number of images and are bounded per image by the four request budgets, and image size is bounded by each destination's own upload limit, which the plugin refuses by name rather than degrading.",
+            "summary": "Requests grow linearly per image and each is budgeted; image size is capped by each destination."
+          },
+          {
+            "budget": "",
+            "concern": "spend",
+            "not_applicable": "n/a by the manager's ruling, an accepted exception (exception 8): the only new spend is one `spike-visual` dispatch per visual plan, which the user asked for cheap (mocked, unverified, minimal), and its cost is bounded by a hard turn cap, `max_turns` no larger than 40, which aio-visual-screenshots' planner guidance sets on every `spike-visual`, rather than by a measured budget, a command or a budgets-file change. A plan with no visual change dispatches nothing new.",
+            "summary": "Accepted exception: the one new dispatch, `spike-visual`, is capped at 40 turns."
+          },
+          {
+            "budget": "",
+            "concern": "latency (the visual spike delays the design document)",
+            "not_applicable": "n/a by the same accepted exception (exception 8): the `spike-visual` dispatch delays the design document by at most its 40-turn cap, and no planning-latency budget or measurement is added for it.",
+            "summary": "Accepted exception: the spike delays the document by at most its 40-turn cap."
+          },
+          {
+            "budget": "",
+            "concern": "resource use",
+            "not_applicable": "n/a because the stored images are at most about 12 MB per plan (24 images of up to 500 KB) under the gitignored authoring root, beside the documents they belong to.",
+            "summary": "At most about 12 MB of images per plan, in the gitignored authoring root."
+          },
+          {
+            "budget": "",
+            "concern": "gate time",
+            "not_applicable": "n/a for a new budget. onetaskgraph has no gate-time budget, and ai-orchestrator's `gate-time` (1800 s) absorbs its few template tests and two journeys, which add a few seconds. For onetaskgraph, the asset journeys run once, in the ordinary `test` targets of `onetaskgraph-github-projects-e2e` and `onetaskgraph-linear-e2e`, and only when a change affects those domains. They add an estimated 10 to 30 s of real time to each of those test runs: generating about 110 noise PNGs (about 55 MB), passing them through the loopback, and spawning the binary. They never sleep for pacing, backoff or loopback latency, because those run on a simulated clock. Each node reports the figure it measured, and holds its three-process journey under 60 s of real time. The `budgets` targets add only telemetry analysis, well under a second per budget. They run no journey a second time and are cached on the domain tree, the measured production code and the onebudgetspec pin. The plan as first written would instead have re-run every journey for its budget and slept through about 6 to 10 minutes of real pacing and backoff per affected check.",
+            "summary": "A few seconds of new tests, absorbed by the existing gate-time budget."
+          },
+          {
+            "budget": "",
+            "concern": "change cycle time",
+            "not_applicable": "n/a because ai-orchestrator's `cycle-time` budget already measures each landed change, and this plan expects no effect on it beyond the chain's own release waits.",
+            "summary": "The existing cycle-time budget already measures every landed change."
+          }
+        ],
+        "overview": "Let a plan with visual changes carry before-and-after screenshots into its design document, copied with the plan to the GitHub and Linear boards as image assets.",
+        "realistic_data": [
+          {
+            "artifact": "onetaskgraph's test-image generator in `crates/onetaskgraph-e2e-support` (added by otg-assets-core), used by the plugin domains' journeys, whose recorded telemetry the budgets analyse; ai-orchestrator's finish-plan and approve-design journeys generate theirs the same way. The positive planning-flow journey generates its disposable target's visual content in the test, sized so the real renderer's captures of it are each 50,000 to 500,000 bytes (at least one of about 500 KB), and asserts every capture's encoded size before copying it.",
+            "choice": "generator",
+            "data": "Screenshot images carried by a copy",
+            "reason": "Real screenshots cannot be had before the feature exists, and a generated image of the same size exercises the same upload, hashing, storage and serialization as one. So each test generates PNGs of seeded pseudo-random pixels, which compression cannot shrink, distinct per image (one changed between copies), sized as real screenshots are: each 50 KB to 500 KB, and for the largest-plan measurements 24 images of about 500 KB each. Generating them costs well under a second, where committed fixture images of that size would add about 12 MB to a repository and need upkeep; they are never committed.",
+            "summary": "Generated noise PNGs of 50 to 500 KB: real-sized uploads with nothing to commit or maintain."
+          }
+        ],
+        "repo_wide_effects": [
+          {
+            "budget": "",
+            "effect": "none",
+            "repository": "github.com/nickderobertis/onetaskgraph",
+            "summary": ""
+          },
+          {
+            "budget": "",
+            "effect": "none",
+            "repository": "github.com/nickderobertis/onepipeline",
+            "summary": ""
+          },
+          {
+            "budget": "",
+            "effect": "none",
+            "repository": "github.com/nickderobertis/onepipeline-ui",
+            "summary": ""
+          },
+          {
+            "budget": "gate-time",
+            "effect": "A few seconds more for the new template-rendering tests and the approve-design and finish-plan journeys, against a 1800 s threshold.",
+            "repository": "github.com/nickderobertis/ai-orchestrator",
+            "summary": "ai-orchestrator's gate grows a few seconds against its 1800 s gate-time budget."
+          }
+        ],
+        "sizing": "A visual plan of 2 to 12 images (up to 24 in its largest first copy, about 500 KB each), copied 1 to 4 times, with up to 3 managers finishing plans at once on one shared board token.",
+        "spike_findings": [],
+        "ten_x": "The first user-visible failure is a copy refused by GitHub's secondary rate limiter on the shared `plans` token. That happens when several managers finish visual plans at once, not because of the per-image request count. At realistic concurrency (3 simultaneous first copies of 24-image plans, about 147 content-creating requests against 80 a minute) it is covered by `github-concurrent-copies-refused` (0 refused copies), with the wait it costs bounded by `github-concurrent-copy-seconds` (240 s for the slowest copy). Each plugin must pace uploads with its mutations and wait out a limiter refusal within its bounded retry budget for those to hold. At 10× (about 10 simultaneous copies, about 490 content-creating requests in one burst, near GitHub's 500-an-hour ceiling as well) no per-process pacing can avoid it: each call's 120 s retry budget runs out and copies are refused by name, naming the limiter. Copy latency is unbounded until the person re-runs the copy. That residual is not budgeted: the manager accepted throttling past the budgeted 3 concurrent first copies by ruling on exception 7, and a limiter shared across processes on the host, which covering it would need, is not planned.",
+        "ten_x_summary": "At 10 concurrent first copies, GitHub's secondary rate limiter refuses copies; accepted past 3 at once, which is budgeted.",
+        "workload": "A plan with visual changes has 1 to 6 expected visual changes, typically 2, so its `spike-visual-report` and its design document each hold 2 to 12 images (typically 4), each a PNG of 50 to 500 KB captured from a browser page or a rendered terminal. Such a plan is copied to its board once by `just finish-plan` and re-copied 1 to 3 more times as it is edited, so a first copy carries up to 24 new images and a re-copy usually none. On GitHub, a first copy of the largest visual plan sends about 49 content-creating requests: 24 uploads plus about 25 issue and board mutations for the plan's own records (project issue, about 7 task issues, 3 document issues and their board items). It also sends 24 verifying reads. This host plans 1 to 3 plans a day, about a third of them visual. **The burst that matters is concurrency**: up to 3 managers on this host may finish plans at once, sharing the `plans` board token and Hello Patient's Linear key. That makes about 147 content-creating requests to GitHub within a couple of minutes, against GitHub's published secondary limit of 80 content-creating requests a minute (and 500 an hour), which onetaskgraph's github-projects plugin paces one process at by default (one every 750 ms) and waits out for at most 120 s per call. Every check that counts or times image copies uses generated PNGs of that size, and every timed or rate-limited journey runs on a simulated clock, so the published limits are enforced in virtual time and no check sleeps for real: each between 50 KB and 500 KB (50,000 to 500,000 bytes), and for the largest plan 24 images of about 500 KB each (450,000 to 500,000 bytes), about 12 MB uploaded, hashed, stored and serialized per copy. Plans without visual change carry no asset at all. A visual plan also dispatches one `spike-visual`, capped at 40 turns by the manager's ruling (see spend)."
+      }
+    },
+    "repositories": []
+  },
+  "budgets": [
+    {
+      "id": "github-asset-requests-per-new-asset",
+      "name": "GitHub requests per new image",
+      "basis": "measured",
+      "repository": "github.com/nickderobertis/onetaskgraph",
+      "file": "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
+      "file_change": "add",
+      "measure": "Requests the github-projects plugin sends to GitHub for one image a copy carries that the destination record does not yet hold: the upload and the authenticated read that verifies it, beyond the requests the same copy sends without the image.",
+      "inner_measure_reason": "Headroom on the shared board token is the measure of record and no check may reach the live board or its token, so it is counted at a loopback GitHub endpoint through the real binary.",
+      "unit": "requests",
+      "direction": "max",
+      "threshold": 2,
+      "workload": "A document copy carrying 6 new images, and a task copy carrying 2, into a github-projects source pointed at the loopback endpoint; the repository-id read is counted once per source instance and excluded from the per-image figure. Each image is a PNG generated in the journey, between 50 KB and 500 KB (50,000 to 500,000 bytes), spread across that range and including one of about 500 KB (450,000 to 500,000 bytes); the journey records each image's size and the analysis fails without a figure when the count or any size differs.",
+      "evidence": "Manager's probe, 2026-10-06: one upload (HTTP 201, 0.8 s) plus one authenticated GET (200) per image; no spike.",
+      "command": "Analysis of the telemetry the GitHub Projects (`onetaskgraph-github-projects-e2e`) domain's asset journeys record during its ordinary `test` target, reported through `onebudgetspec_core::report` by the command (or the one generic runner reading `ONEBUDGETSPEC_BUDGET_ID`) the convention lands in `otg-linear-budgets-domain`. It runs no journey and no `cargo test`, and it is cached on the domain tree, the measured production code and the onebudgetspec pin."
+    },
+    {
+      "id": "github-asset-requests-per-unchanged-asset",
+      "name": "GitHub requests per unchanged image",
+      "basis": "design",
+      "repository": "github.com/nickderobertis/onetaskgraph",
+      "file": "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
+      "file_change": "add",
+      "measure": "Requests the github-projects plugin sends for one image on a re-copy, when the destination record's `onetaskgraph.assets` already records that image's sha256.",
+      "inner_measure_reason": "As for github-asset-requests-per-new-asset: counted at a loopback endpoint because no check may reach the live board.",
+      "unit": "requests",
+      "direction": "max",
+      "threshold": 0,
+      "workload": "The same document and task re-copied 3 times with unchanged images, then once with one image's bytes changed (that one counted against the new-asset budget instead). The images are those of the new-asset budget's workload, sized the same.",
+      "evidence": "Design: the recorded `{sha256, url}` makes an unchanged image cost nothing; no spike.",
+      "command": "Analysis of the telemetry the GitHub Projects (`onetaskgraph-github-projects-e2e`) domain's asset journeys record during its ordinary `test` target, reported through `onebudgetspec_core::report` by the command (or the one generic runner reading `ONEBUDGETSPEC_BUDGET_ID`) the convention lands in `otg-linear-budgets-domain`. It runs no journey and no `cargo test`, and it is cached on the domain tree, the measured production code and the onebudgetspec pin."
+    }
+  ],
+  "section": "## Budgets\n\n### GitHub requests per new image\n\n- **Id:** `github-asset-requests-per-new-asset`\n- **Measure:** Requests the github-projects plugin sends to GitHub for one image a copy carries that the destination record does not yet hold: the upload and the authenticated read that verifies it, beyond the requests the same copy sends without the image.\n- **Inner measure, because:** Headroom on the shared board token is the measure of record and no check may reach the live board or its token, so it is counted at a loopback GitHub endpoint through the real binary.\n- **Target:** at most 2 requests\n- **Basis:** measured\n- **Workload:** A document copy carrying 6 new images, and a task copy carrying 2, into a github-projects source pointed at the loopback endpoint; the repository-id read is counted once per source instance and excluded from the per-image figure. Each image is a PNG generated in the journey, between 50 KB and 500 KB (50,000 to 500,000 bytes), spread across that range and including one of about 500 KB (450,000 to 500,000 bytes); the journey records each image's size and the analysis fails without a figure when the count or any size differs.\n- **Evidence:** Manager's probe, 2026-10-06: one upload (HTTP 201, 0.8 s) plus one authenticated GET (200) per image; no spike.\n- **Command:** Analysis of the telemetry the GitHub Projects (`onetaskgraph-github-projects-e2e`) domain's asset journeys record during its ordinary `test` target, reported through `onebudgetspec_core::report` by the command (or the one generic runner reading `ONEBUDGETSPEC_BUDGET_ID`) the convention lands in `otg-linear-budgets-domain`. It runs no journey and no `cargo test`, and it is cached on the domain tree, the measured production code and the onebudgetspec pin.\n- **Registered in:** `crates/onetaskgraph-github-projects-e2e/budgets.yaml` of `github.com/nickderobertis/onetaskgraph`, an entry this task adds\n\n### GitHub requests per unchanged image\n\n- **Id:** `github-asset-requests-per-unchanged-asset`\n- **Measure:** Requests the github-projects plugin sends for one image on a re-copy, when the destination record's `onetaskgraph.assets` already records that image's sha256.\n- **Inner measure, because:** As for github-asset-requests-per-new-asset: counted at a loopback endpoint because no check may reach the live board.\n- **Target:** at most 0 requests\n- **Basis:** design\n- **Workload:** The same document and task re-copied 3 times with unchanged images, then once with one image's bytes changed (that one counted against the new-asset budget instead). The images are those of the new-asset budget's workload, sized the same.\n- **Evidence:** Design: the recorded `{sha256, url}` makes an unchanged image cost nothing; no spike.\n- **Command:** Analysis of the telemetry the GitHub Projects (`onetaskgraph-github-projects-e2e`) domain's asset journeys record during its ordinary `test` target, reported through `onebudgetspec_core::report` by the command (or the one generic runner reading `ONEBUDGETSPEC_BUDGET_ID`) the convention lands in `otg-linear-budgets-domain`. It runs no journey and no `cargo test`, and it is cached on the domain tree, the measured production code and the onebudgetspec pin.\n- **Registered in:** `crates/onetaskgraph-github-projects-e2e/budgets.yaml` of `github.com/nickderobertis/onetaskgraph`, an entry this task adds\n\n"
+}

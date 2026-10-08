@@ -1116,12 +1116,20 @@ reason given; a basis the evidence does not support; a repo-wide budget — one 
 repository's root `budgets.yaml` — written into a task's criteria as a threshold the
 worker must meet; a change to a budgets file the budgets imply that no budget states;
 and a target the evidence shows is infeasible, quietly loosened rather than escalated.
+Modern records declare schema_version={budget_schema_version}. Read scope semantically:
+covered concerns are in scope and reference owned budgets; only explicitly in-scope omissions
+belong in Not budgeted. Gate time and change cycle time belong only to expected effects on existing
+root budgets. Verify each named root budget from the changed repository's own file;
+consolidate effects per repository/budget and reject unaffected/registration-only entries.
+Check direct versus telemetry against what the command executes, and whole-command runtime
+against evidence at the workload, independently of target/unit/basis. Realistic-data detail
+stays in the project description and fixture/generator notes of the owning task.
 A finding about the plan's own answers names `the plan`, and one about a node names its
 id. A plan that carries no plan-level answers is not asked this.
 
 A verdict that passes carries no findings; one that refuses carries one per thing to
 correct, and says in each `why` what the plan would have to state instead.
-"""
+""".replace("{budget_schema_version}", str(plan_budgets.SCHEMA_VERSION))
 
 #: The two rungs a node of a plan waits on a release under, stated beside the table in
 #: the plan-level prompt: this repository's own, from `config/onevcs.releases.yml`, and

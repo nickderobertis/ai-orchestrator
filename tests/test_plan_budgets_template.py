@@ -167,7 +167,7 @@ def test_the_description_declares_the_plan_level_answers_in_the_models_order(
 ) -> None:
     declared = _declared(loader)
 
-    assert tuple(declared) == plan_budgets.PLAN_VARIABLES
+    assert tuple(declared) == plan_budgets.MODERN_PLAN_VARIABLES
     for name in plan_budgets.PLAN_TEXTS:
         assert (declared[name]["type"], declared[name]["required"]) == ("text", True), name
     for name, model in plan_budgets.PLAN_LISTS.items():
@@ -311,7 +311,7 @@ def test_the_partials_description_states_the_models_keys_and_vocabularies() -> N
     described = _descriptions(PARTIAL)["budgets"]
 
     named = re.findall(r"`(\w+)` \(", described)
-    assert tuple(named) == plan_budgets.BUDGET_KEYS, named
+    assert tuple(named) == plan_budgets.MODERN_BUDGET_KEYS, named
     assert "`threshold` (a finite number)" in described
     for field, vocabulary in (
         ("direction", plan_budgets.Direction),
@@ -333,9 +333,7 @@ def test_the_descriptions_answers_state_the_models_caps_and_vocabularies() -> No
     assert f"at most {plan_budgets.TEN_X_SUMMARY_LIMIT} characters" in described["ten_x_summary"]
     for name in plan_budgets.PLAN_LISTS:
         assert f"at most {plan_budgets.SUMMARY_LIMIT} characters" in described[name], name
-    assert (
-        f"exactly `{plan_budgets.NO_EFFECT}` when there is none" in (described["repo_wide_effects"])
-    )
+    assert f"never `{plan_budgets.NO_EFFECT}`" in (described["repo_wide_effects"])
     choices = re.search(r"`choice` \((.*?)\)", described["realistic_data"])
     assert choices is not None
     assert re.findall(r"`([\w-]+)`", choices.group(1)) == list(plan_budgets.DataChoice)
@@ -408,3 +406,24 @@ def test_nothing_reads_renders_or_names_the_retired_budgets_document() -> None:
     agents = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
     held.extend(f"AGENTS.md: {found.group(0)}" for found in RETIRED.finditer(agents))
     assert held == []
+
+
+@pytest.mark.reads_docs
+def test_modern_budget_contract_guidance_is_held_to_the_authority() -> None:
+    partial = _descriptions(PARTIAL)["budgets"]
+    declared = _descriptions(DESCRIPTION)
+    for key in plan_budgets.MODERN_BUDGET_KEYS:
+        assert f"`{key}`" in partial
+    for source in plan_budgets.Source:
+        assert f"`{source}`" in partial
+    for path in (REPO_ROOT / "docs/budgets.md", REPO_ROOT / "personas/planner.yaml"):
+        text = path.read_text()
+        for key in ("schema_version", "source", "check_runtime_seconds", "in_scope"):
+            assert key in text, (path, key)
+        for source in plan_budgets.Source:
+            assert source in text, (path, source)
+        for concern in plan_budgets.CANONICAL_ROOT_CONCERNS:
+            assert concern in " ".join(text.casefold().split()), (path, concern)
+    assert "`in_scope` (boolean)" in declared["checklist"]
+    for rule in ("Each repository/budget pair occurs once", "never `none`", "changed repositories"):
+        assert rule in declared["repo_wide_effects"], rule

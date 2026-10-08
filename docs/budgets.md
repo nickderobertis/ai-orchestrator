@@ -82,7 +82,14 @@ of both once.
   the `file` it is registered in, with its `file_change`, one of `add`, `change` or `none`;
   the `measure`, and the `inner_measure_reason` when the measure is taken further inward;
   the `unit`, the `direction` (`max` or `min`) and the `threshold`; the `workload` it holds
-  at; the `evidence` the number rests on; and the `command`.
+  at; the `evidence` the number rests on; and the `command`. Modern records also state
+  `schema_version` (integer literal 2), `source` (`direct` or `telemetry`) and
+  `check_runtime_seconds` (finite number >= 0, excluding booleans). Direct executes the
+  work/check whose result it measures; a command executing work and recording results is
+  direct. Telemetry reads existing timing/history records without executing measured work.
+  Runtime estimates elapsed seconds of the entire command at the stated workload, including
+  setup/reads, distinct from the target, unit and basis; evidence states its source.
+  Never infer mode or runtime from basis or command text.
 - **The plan-level answers live in the plan's own description.** The project's
   `orchestrator.plan-budgets` metadata holds them, and the project's description is rendered
   from the `plan-description` template with the same answers: the plan's overview; what it
@@ -90,19 +97,39 @@ of both once.
   the product owner notices getting worse first at 10× realistic usage, as a one-line
   summary of at most 240 characters and in full; a checklist of concerns, each answered with
   the `id` of a budget a task owns or with an "n/a because …"; each repository's expected
-  effect on its repo-wide budgets, `none` where it has none; the realistic-data choices; and
-  the spike findings that changed the plan. Every checklist n/a, every effect that is not
-  `none`, every realistic-data choice and every spike finding carries a one-line `summary`
-  of at most 160 characters, which is what the design document shows.
+  effect on existing root budgets, or `[]` if none; the realistic-data choices; and
+  the spike findings that changed the plan. Every checklist n/a, every actual effect,
+  every realistic-data choice and every spike finding carries a one-line `summary`
+  of at most 160 characters. Realistic-data detail stays in the description; owning task
+  implementation/data notes identify fixtures or generators, never the design summary.
+  Modern plan records have `schema_version` (integer literal 2). Each checklist entry has
+  `in_scope` (boolean), beside `concern`, `budget`, `not_applicable` and `summary` (strings).
+  Exactly one of budget/not_applicable is nonempty; covered concerns are in_scope=true and
+  reference an owned budget. N/a keeps the full reason and capped summary. False means
+  outside these changes; true with n/a means deliberately unbudgeted within these changes.
+  Gate time and change cycle time are not feature concerns: existing root budgets govern
+  them, and an anticipated effect belongs only in repo_wide_effects.
+  Each effect has exactly `repository`, `budget`, `effect`, `summary` (strings): normalized
+  changed-repository origin, nonempty root-budget id, actual nonempty effect (never `none`),
+  and a one-line summary of at most 160 characters. Each repository/budget pair occurs once;
+  consolidate effects and verify the existing root budget in the repository read. Feature
+  registration and unaffected repositories do not belong here.
 - **The metadata is authoritative.** A copy carries metadata and never a template's
   answers, so the records are what every reader reads, on the board as where the plan was
   drafted. `just check-plan` renders each task's `## Budgets` section and the plan's
   description from their records and refuses a body that is not that rendering.
 - **The design document summarizes them.** It shows what the plan is sizing for, what
-  breaks first at 10×, one row per budget with its target, its basis and a link to the task
-  that owns it, and each one-line summary — never a budget's workload, evidence, command or
+  breaks first at 10×, linked budget names, targets, basis, direct/telemetry measurement
+  mode and approximate check seconds. Each GitHub issue destination links to its explicit
+  `user-content-<budget id>` anchor; the template HTML-escapes the authoritative id and
+  percent-encodes the fragment. Destination comes from current task.location, never the
+  budget repository. Legacy sections have no new anchor: their summary uses the task URL,
+  a compatibility limitation. Linear and local destinations use task URLs too; Linear's
+  anchor capability remains unverified. No URL is persisted in budget metadata.
+  Only explicitly in-scope n/a summaries and actual named root effects appear — never a budget's workload, evidence, command or
   budgets file, which a reader follows the link for. A plan that adds or changes no budget
-  shows no budget section at all. The writer copies these answers from `python -m
+  still shows informative omissions and effects. A plan with none of these facts shows
+  no Budgets section. The writer copies these answers from `python -m
   orchestrator.plan_budgets <project>`, and `just finish-plan` refuses a document whose
   answers differ.
 - **Only an approved design document changes a budgets file.** A plan proposes its changes
@@ -132,3 +159,10 @@ else, and its design document says *"This plan predates budgets: <reason>"* in p
 budget summary. Adding to the list is a reviewed change to this repository, so a plan cannot
 exempt itself. The plan kinds exempt from design approval — a planning launch's project and
 a follow-ups launch's — are exempt here too.
+
+Exact current key sets are the implicit legacy format. Version 2 selects modern records;
+unknown versions, extra keys, partial fields and malformed types are refused. Legacy
+metadata, rendered task/project bodies, copied records and digests stay unchanged, without
+invented source/runtime facts. Newly rendered legacy summaries say `not recorded` for both,
+omit ambiguous legacy n/a entries and exclude unnamed/none effects. Existing migration
+exemptions remain unchanged. `orchestrator/plan_budgets.py` is the schema authority.

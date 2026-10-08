@@ -4,8 +4,7 @@
 # The `design-doc-budget-summary-length` budget the root `budgets.yaml` registers. It
 # renders the design document from the committed fixture `tests/fixtures/budgets/issue-
 # 1568.json` — #1568's budget answers in the shape `python -m orchestrator.plan_budgets`
-# prints: 9 budgets, 6 concerns answered n/a, 4 repositories (one with an effect, three
-# with none), 1 realistic-data choice and no spike finding — through the design-doc template
+# prints: 9 budgets, 6 concerns answered n/a, 4 changed repositories (one actual named root effect), 1 realistic-data choice and no spike finding — through the design-doc template
 # as the pinned engine resolves it from this checkout's `templates/`, rendered by the pinned
 # plan store, and counts the characters (Unicode code points) of its `## Budgets` section,
 # heading included, up to the next section's heading. The other answers the template
@@ -56,7 +55,7 @@ shaped = (
     and isinstance(answers["budgets"], list)
     and all(
         isinstance(entry, dict)
-        and set(entry) == {"node", "location", *plan_budgets.BUDGET_KEYS}
+        and set(entry) in ({"node", "location", *plan_budgets.BUDGET_KEYS}, {"node", "location", *plan_budgets.MODERN_BUDGET_KEYS})
         and isinstance(entry["node"], str)
         and isinstance(entry["location"], str)
         for entry in answers["budgets"]
@@ -72,7 +71,7 @@ if not shaped:
 try:
     plan_budgets.parse_plan(answers["plan_budgets"])
     plan_budgets.parse_budgets(
-        [{key: entry[key] for key in plan_budgets.BUDGET_KEYS} for entry in answers["budgets"]]
+        [{key: value for key, value in entry.items() if key not in {"node", "location"}} for entry in answers["budgets"]]
     )
 except plan_budgets.BudgetsError as exc:
     sys.exit(f"budget-design-doc-summary: the fixture's answers are malformed: {exc}")

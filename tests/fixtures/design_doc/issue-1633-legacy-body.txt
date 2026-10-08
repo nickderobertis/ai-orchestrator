@@ -1,0 +1,425 @@
+## What
+
+Make the manager’s Stop check cheap while still distinguishing no work, owed work and unreadable evidence. Move the reusable work into the libraries and remove the replaced Python from ai-orchestrator. Preserved branches must remain visible to their manager after cleanup. The approved targets are 200 ms warm, 500 ms cold and 500 ms warm at ten times the workload on CI; this host’s timings are reported separately.
+
+## Why
+
+Managers currently wait 2–50 seconds for a check that can refuse their stop even when nothing is owed. On issue #1587 the user rejected longer deadlines: “we need to optimize”, and asked whether more of the script should move upstream. They want automatic closeout to be cheap without losing its protection against forgotten work.
+
+## Architecture
+
+onevcs supplies recovery evidence; onepipeline uses it in the same process to decide what a manager owes and answer the Stop hook. onepipeline-ui relinks that engine so browser-adopted runs use the same release, then ai-orchestrator adopts all three published wheels and becomes a thin consumer. The four tasks follow that release chain through each repository’s own merge path; the final adoption waits for published wheels, declares no crate consumes and alone delivers issue #1587.
+
+### Recovery evidence — `onevcs` (`crates/onevcs/src`)
+
+The recovery library finds branches whose work may still need landing. It will batch or reuse confirmed repeated reads, narrow session and provenance scans, and skip presentation work that a decision does not need; it will also retain the session records that keep preserved work attributable to its manager.
+
+#### Public decision-detail query
+
+**Reversibility: high cost** — Outside Rust callers and CLI scripts would have to adopt another public query shape.
+
+Full remains the default report. Decision returns the same rows and decision evidence, including the current branch tip; only the explicitly named presentation fields may be omitted or empty.
+
+```diff
+ // Recoverable: existing fields unchanged
++#[serde(default)]
++pub tip: Option<String>  // JSON "tip" on every row; null only if ref unreadable
+ // Selection: existing fields unchanged
++#[serde(default)]
++pub detail: Detail
++
++#[derive(Default)]
++#[serde(rename_all = "kebab-case")]
++pub enum Detail { #[default] Full, Decision }
+```
+```rust
+// Existing signatures retained:
+Vcs::recoverable_matching(&self, scope: Scope, selection: &Selection)
+    -> Result<Vec<Recoverable>>
+// preserved_matching retains its signature too.
+```
+```diff
+ onevcs recoverable --help
++  --detail <full|decision>  Detail to compute [default: full]
+```
+```text
+Decision equals Full for:
+identity, branch.branch, branch.base, checkout, tip,
+landed (state and evidence), held_by (presence and value), retirement,
+session, labels, recover_command.
+Only Decision may reduce:
+stopped_because = ""; branch.change_url / branch.change_base = null;
+net_negative / on_origin absent when computing them costs Git work.
+Selection::default() = whole Full report.
+recoverable --json and recoverable --all --json both include tip.
+Label matching, withheld rows, Landed/Retirement vocabulary and unknown-token
+refusal retain v0.42.0 semantics on the same retained records.
+```
+
+#### Retain evidence until the work is gone
+
+**Reversibility: high cost** — A manager cannot reconstruct labels from a session record that sweep has deleted.
+
+Sweep will use recovery’s landing and retirement evidence, so being pushed to origin is not proof that preserved work has landed. This is a behavioural change with no new stored shape: retain closed records and labels for no, unknown, in-part, superseded-with-changes or unreadable evidence past the age floor, even with the disposable worktree gone; deletion still requires confident no-work proof and existing owner, occupancy and dirtiness protections. Already-lost records are not recovered.
+
+**Reversible:**
+
+- **Disposable proof cache.** `$ONEVCS_HOME/cache/recoverable/v1/` may store derived immutable proofs keyed by identity, branch, tip, base tip and format version, guarded by config/attributes, replace refs/grafts, shallow boundaries, alternates/object availability, layout/backend and Git semantics; deletion, corruption or unreadability recomputes without changing answers.
+- **Fresh mutable evidence.** Holders, dirtiness, leases, running publication, recorded landings and supersessions remain fresh reads; session-scoped indexes detect new, changed and deleted records and preserve baseline refusals.
+- **Batched reads.** `recoverable`, `preserved` and their matching forms share the savings; custom ref reads must match Git’s complete names, values and refusals or safely delegate, and `git` is resolved once per process.
+- **Existing storage.** Registry, session and stream formats remain readable and writable by v0.42.x; no migration accompanies `tip` or `Detail`.
+- **Contract authority.** `docs/contract.md` and the declared Rust types own the query and sweep contracts, reconciled by CLI, serde and recorded-surface tests.
+
+### Native verdict and Stop guard — `onepipeline`
+
+The engine already knows the manager that launched each run and answers the Stop hook. It will own selection, counting, acknowledgements and human-readable landing commands, consulting the recovery library directly beside its existing check for unwatched runs.
+
+#### Public unpublished listing
+
+**Reversibility: high cost** — External CLI and SDK consumers would have to change their calls and parsers.
+
+Session reads select launcher-labelled Decision rows across all identities; a mismatched label or incomplete recovery read is unanswered, never none. A row counts only when it has no holder, its landed state is no, unknown or in-part, and no acknowledgement matches its identity, branch and current tip; a null tip cannot be acknowledged as standing.
+
+```text
+onepipeline unpublished
+  [--session <ID> | --host | --token <S-TOKEN>...]
+  [--format text|json] [--disk] [--acknowledgements <DIR>]
+  [--pr-author-graph <PATH>]
+
+--session: defaults to ONEPIPELINE_LAUNCHER_SESSION; blank refused.
+--host: all registered identities, empty Selection.
+--token: Selection.sessions; unknown token refused.
+--format: text by default.
+--disk: opt-in allocated-byte reads; never used by Stop guard.
+Exit: 0 none; 7 owed; 1 unanswered; 2 refused.
+SDK: a src/verbs.rs function, with binary parity held by tests/parity.rs.
+```
+```typescript
+// JSON wire schema. All listed keys are present; nullable values use null.
+// Arrays may be empty. Integer aliases describe JSON numbers, not strings.
+type UInt = number;    // integer >= 0
+type PositiveInt = number; // integer >= 1
+type Sha = string;    // onevcs host::Sha, a transparent commit-hash string;
+                      // no new fixed-width restriction is imposed here
+type Url = string;    // serialized url::Url
+type SessionToken = string; // onevcs session::SessionToken
+type Labels = { [key: string]: string };
+
+type Listing = {
+  target: { kind: "session"; session: string }
+        | { kind: "host" }
+        | { kind: "tokens"; tokens: SessionToken[] };
+  verdict: "none" | "owed" | "unanswered";
+  rows: Row[];
+  unresolved: string[];
+};
+type Row = {
+  identity: string;                  // repository identity
+  branch: string;                    // branch name
+  base: string;                      // base branch name
+  provenance: "complete" | "incomplete-step";
+  tip: string | null;                // full commit object name in row's checkout;
+                                     // null only when branch ref cannot be read
+  landed: Landed;
+  change_url: Url | null;
+  stopped_because: string;           // may be "" under Decision
+  session: SessionToken | null;
+  run: string | null;                // run label, else null
+  node: string | null;               // node label, else null
+  manager_session: string | null;    // launcher label, else null
+  recover_command: string[];         // whole onevcs argv
+  land_command: string[];            // rewritten landing argv;
+                                     // [] when recover_command is empty
+  retirement: Retirement | null;     // whole onevcs value; absence caveat below
+  in_flight: boolean;                // whether onevcs reports held_by
+  counted: boolean;                  // no holder, counted landed state,
+                                     // and no standing acknowledgement
+  acknowledgement: Acknowledgement | null;
+  disk: Disk | null;                 // null when disk reading not requested
+};
+type Landed =
+  | { state: "yes"; evidence: LandingEvidence }
+  | { state: "in-part"; evidence: LandingEvidence; unlanded: PositiveInt }
+  | { state: "no" }
+  | { state: "unknown" };
+type LandingEvidence =
+  | { tier: "recorded-landing"; commit: Sha }
+  | { tier: "change-request"; commit: Sha; change_url: Url }
+  | { tier: "trailer"; commit: Sha };
+
+type Retirement = {
+  class: "retirable" | "superseded-with-changes" | "keep";
+  reason: KeepReason | null;
+  cause: UnknownCause | null;
+  identity: string;
+  branch: string;
+  tip: Sha;
+  base: string;
+  proof: RetirementProof | null;
+  content_free_commits: Sha[];
+  superseded_by: SupersededBy | null;
+  differing_paths: string[];
+  holders: BranchHolder[];
+};
+type KeepReason = "held-by-live-session" | "excluded" | "open-change-request"
+  | "checked-out" | "dirty-worktree" | "unmerged-unique-commits"
+  | "unknown" | "is-base";
+type UnknownCause = {
+  operation: string;  // nonblank; open vocabulary, not an enum
+  subject: string;    // nonblank path, origin or change-request description
+  error: string;      // nonblank diagnostic
+};
+type RetirementProof =
+  | { kind: "merged-change-request"; change_url: Url; head: Sha }
+  | { kind: "recorded-landing"; commit: Sha }
+  | { kind: "content-identical"; base_commit: Sha };
+type SupersededBy = {
+  branch: string;
+  landing: string;    // recorded commit or change-request URL
+  labels: Labels;
+};
+type BranchHolder = {
+  kind: "checkout" | "slot" | "run-clone" | "origin";
+  location: string;   // path, or origin URL for kind "origin"
+};
+// Retirement relationships from onevcs, not independent optional decisions:
+// reason is non-null exactly for keep; proof exactly for retirable.
+// cause can be non-null only with reason unknown; older records may lack it.
+// superseded-with-changes names superseded_by.
+// differing_paths is nonempty for superseded-with-changes and for keep with
+// unmerged-unique-commits (the producer's documented output relationship).
+
+type Acknowledgement = {
+  branch: string;
+  identity: string;
+  tip: string;       // 40–64 lowercase hexadecimal characters
+  reason: string;    // nonblank, single line
+  at: string;        // UTC YYYY-MM-DDTHH:MM:SSZ
+};
+type Disk = {
+  run_root: string | null;     // run-root path; current wrapper permits null
+  run_root_bytes: UInt | null; // allocated bytes; null is not measured zero
+  build_output: {
+    [name: string]: UInt;     // present entries from target, node_modules,
+                              // .venv, .nx, dist; map may be empty
+  };
+};
+```
+```text
+Authority and limits of this schema:
+The task op-unpublished-verdict fixes the new listing's fields, targets,
+verdicts, argv arrays, label nulls and acknowledgement format. onevcs v0.42.0
+crates/onevcs/src/session.rs (Recoverable, PreservedBranch, Provenance),
+landed.rs (Landed, LandingEvidence), retire.rs (Retirement and nested types)
+and host.rs (Sha) supply the unchanged nested wire types above.
+The producer task adds tip; Decision may return change_url null and
+stopped_because empty. Nested onevcs objects are passed through whole,
+not projected onto a smaller local evidence schema.
+
+Not separately fixed by the plan: absent-retirement normalization and disk
+failure/missing-path representation. The schema above shows the existing
+orchestrator/unpublished.py Row/_rendered and Disk.entry behaviour:
+retirement null when the optional producer value is absent; nullable disk
+path/byte count and an empty or partial build-output map. onevcs itself
+omits absent Recoverable.retirement. The task names the output key and a
+Disk object but does not explicitly settle those edge encodings or their
+unresolved/verdict effects. These are current behaviour to reconcile in
+the engine's canonical types, not newly approved choices in this document;
+any shared-contract departure must go to the manager.
+
+Disk covers the parent of <s-token>/worktree and its named build outputs
+without following symlinks. Text lists counted rows with landing and
+acknowledgement commands, marks in-flight and acknowledged rows, and ends
+with a summary. For superseded-with-changes, evidence and onevcs reclaim
+come first. Unresolved diagnostics go to stderr in text and unresolved
+in JSON.
+```
+```text
+Printed landing argv:
+recover_command publish-branch -> onepipeline publish-branch <same args>
+recover_command recover        -> onepipeline repo-recover <same args>
+Append --pr-author-graph <absolute PATH> when configured;
+otherwise append --no-draft and say no drafter is configured.
+integrate and reclaim remain onevcs verbs.
+Unreadable graph path: exit 2 before reading recovery evidence.
+```
+
+#### Compatible acknowledgement files
+
+**Reversibility: high cost** — Installed harnesses and managers retain version-1 files; their readers and existing decisions must remain compatible.
+
+Acknowledging means deliberately leaving a branch at its current tip, with a reason. Moving that tip invalidates the acknowledgement; invalid records never exempt work from counting.
+
+```text
+onepipeline unpublished --acknowledge <BRANCH> --reason <TEXT>
+  [--repo <IDENTITY>] [--session <ID>] [--acknowledgements <DIR>]
+
+Refuse before writing: blank or multiline reason; unidentified session;
+branch absent from --host; ambiguous branch without --repo.
+After writing: session listing, exit 0 or 7 according to remaining work.
+
+Default DIR: absolute XDG_STATE_HOME, otherwise ~/.local/state,
+joined with onepipeline/unpublished/acknowledged.
+File: <DIR>/<sha256 hex of session-id UTF-8 bytes>.json
+```
+```json
+{
+  "version": 1,
+  "acknowledged": [
+    {"branch":"<branch>","identity":"<identity>","tip":"<40–64 lowercase hex>",
+     "reason":"<nonblank single-line reason>","at":"<UTC YYYY-MM-DDTHH:MM:SSZ>"}
+  ]
+}
+```
+```text
+Atomic replacement: temporary file then rename; retain other entries,
+replace the same identity-and-branch entry.
+Invalid entry: ignore with unresolved diagnostic.
+Duplicate identity/branch: apply neither entry.
+Unreadable or non-version-1 file: apply no acknowledgements and explain;
+all otherwise eligible rows count.
+```
+
+#### Native Stop integration
+
+**Reversibility: high cost** — Hook users outside this repository would have to update a released flag or continuation behaviour.
+
+The unpublished decision runs concurrently in the guard’s process with the unwatched-run check, and the stronger response wins. Owed and unanswered block, both reasons appear when both checks block, and no helper shell, Python or source process computes this decision.
+
+```diff
+ onepipeline stop-guard --help
++  --unpublished
++  --unpublished-acknowledgements <DIR>
++  --unpublished-pr-author-graph <PATH>
+```
+```text
+With --unpublished:
+  none -> no unpublished block
+  owed -> block with text listing
+  unanswered -> block naming the failure, never warn or allow
+Continuation memory: <sha256(session)>.unpublished beside guard memory;
+an unchanged reason on continuation stands aside under existing rules.
+Without --unpublished: existing output stays byte-identical.
+Generic --source and existing continuation contracts remain supported.
+```
+
+**Reversible:**
+
+- **Linked producer.** `onevcs` and `onevcs-testing` move together in `Cargo.toml` and `Cargo.lock`, and `recoverable_matching` is called with `Detail::Decision` in-process.
+- **Contract authority.** `docs/contract-divergences.md`, `docs/stop-guard.md`, canonical listing/acknowledgement types and schema/CLI/parity tests keep the public copies aligned.
+- **CI measurements.** `scripts/stop-guard-unpublished-budget.mjs` measures the current binary for warm, `--cold`, `--scale 10` and `--ci-cost` registrations in root `budgets.yaml`; it validates each verdict and measures Git executions separately.
+- **Fixture generation.** The latency commands use real Git and in-process onevcs-owned records; `--ci-cost` starts without fixtures and includes preparation, all suites and cleanup, while individual call timings exclude preparation.
+
+### Reader release — `onepipeline-ui`
+
+The API server carries an engine that can drive browser-adopted runs. Relinking it produces the matching release required before this host can adopt the new engine.
+
+**Reversible:**
+
+- **Dependency alignment.** `Cargo.toml` pins the new `onepipeline` exactly and updates direct `onevcs`; `Cargo.lock` resolves one matching onevcs and all provisioned test engines use that release.
+- **Existing surface.** No route, response field, view or CLI flag changes; existing server and browser journeys exercise the relink.
+
+### Host adoption — `ai-orchestrator`
+
+The host will configure the native hook and pass recipe calls directly to the engine, deleting the replaced Python, tests and prose. Adoption moves the CLI, engine and reader pins together between runs; old drivers keep their launched binaries, so compatibility with their existing registry, session and stream files must be proved before the host-wide move.
+
+#### Recipe interface replacement
+
+**Reversibility: high cost** — People or scripts using the published just recipes must update their invocations and JSON readers.
+
+The recipe forwards arguments, output and exit status to the locked engine, supplying this host’s existing acknowledgement directory and drafter graph. Every caller, permission rule, test and document is updated together; no local compatibility adapter preserves the removed forms.
+
+```diff
+ just unpublished --help  (recipe interface)
+-  --json                  # array of rows
++  --format json           # {target, verdict, rows, unresolved}
+-  --no-disk
++  --disk                  # omitted means no disk read
+-  --own
+-  --stop-verdict
+-  --print-surface
+-  --session <s-token>
++  --token <s-token>
+   --host
+   --session <manager-id>  # own manager remains the default
+   --acknowledge <branch> --reason <text>
+```
+```diff
+ // Listing row
+- resume_command
++ land_command
+```
+```text
+Exit statuses stay 0 / 7 / 1 / 2, including 0 / 7 after acknowledgement.
+just unfinished reads onepipeline unpublished --format json and its exit;
+it does not reimplement the decision.
+```
+
+**Reversible:**
+
+- **Direct hook.** `.claude/settings.json` calls `"$CLAUDE_PROJECT_DIR/.venv/bin/onepipeline" stop-guard --wake-budget 2100 --format claude-code --unpublished --unpublished-acknowledgements "${XDG_STATE_HOME:-$HOME/.local/state}/ai-orchestrator/stop-unfinished/acknowledged" --unpublished-pr-author-graph "$CLAUDE_PROJECT_DIR/graphs/pr-author.yaml"`, with no `--source` and the unchanged 30-second timeout.
+- **Thin recipe.** `just unpublished` passes the same acknowledgement directory and absolute `graphs/pr-author.yaml` to `onepipeline unpublished`; `scripts/plan.sh` continues to interpret acknowledgement exits 0 and 7.
+- **Safe coordinated pins.** `config/onevcs.version`, `config/onepipeline.version`, `config/onepipeline-ui.version`, `pyproject.toml` and `uv.lock` adopt the published releases together, with linked-wheel metadata/SBOM and engine-contract checks plus an old-written storage compatibility proof.
+- **Deletion and callers.** Delete the replaced `orchestrator/unpublished.py` logic, shell module call, internal tests and vocabulary/prose copies; update `orchestrator/unfinished.py`, `scripts/unfinished.sh`, Nx inputs, manager invocation tests, allowlist source and rendered permissions.
+- **Host measurement.** Measure the exact declared hook through `sh -c` and the real recipes for none, owed and unreadable, cold/warm under ambient and generated load, reporting ten-call median/max, load1, live dispatch count and separate Git counts without a host latency gate.
+
+## Budgets
+
+**What we're sizing for.** One Stop call per manager turn over 20 identities, 371 retained sessions, 41 launcher-labelled and 2,308 streams, spanning all recovery states. Shared-host measurements include ambient and 16 generated workers; CI enforces warm 200 ms, cold 500 ms and 10× warm 500 ms on equivalent isolated data.
+
+**What breaks first at 10×.** At 10×, broader session/provenance reads slow Stop closeout first; stop-guard-unpublished-latency-10x holds warm calls to 500 ms on CI.
+
+| Budget | Target | Basis | Owned by |
+| --- | --- | --- | --- |
+| Warm Stop verdict latency | ≤ 0.2 seconds | design | [`op-unpublished-verdict`](https://github.com/nickderobertis/onepipeline/issues/800) (see its Budgets section) |
+| Cold Stop verdict latency | ≤ 0.5 seconds | design | [`op-unpublished-verdict`](https://github.com/nickderobertis/onepipeline/issues/800) (see its Budgets section) |
+| Stop verdict latency at ten times the workload | ≤ 0.5 seconds | design | [`op-unpublished-verdict`](https://github.com/nickderobertis/onepipeline/issues/800) (see its Budgets section) |
+| Cold fixture and latency suite CI time | ≤ 180 seconds | estimate | [`op-unpublished-verdict`](https://github.com/nickderobertis/onepipeline/issues/800) (see its Budgets section) |
+| Cold recovery Git executions at 1× | ≤ 726 executions | measured | [`vcs-fast-recoverable`](https://github.com/nickderobertis/onevcs/issues/324) (see its Budgets section) |
+| Warm recovery Git executions at 1× | ≤ 19 executions | measured | [`vcs-fast-recoverable`](https://github.com/nickderobertis/onevcs/issues/324) (see its Budgets section) |
+| Cold recovery Git executions at 10× | ≤ 7295 executions | measured | [`vcs-fast-recoverable`](https://github.com/nickderobertis/onevcs/issues/324) (see its Budgets section) |
+| Warm recovery Git executions at 10× | ≤ 187 executions | measured | [`vcs-fast-recoverable`](https://github.com/nickderobertis/onevcs/issues/324) (see its Budgets section) |
+
+**Not budgeted:**
+
+- quota and rate-limit headroom: Local-only query; no API or model quota.
+- spend: No paid work in a verdict; planning spend unmeasured.
+- change cycle time: Existing cycle-time records the necessary four-release chain.
+- 10x cold latency: No 10× cold target approved; record its figure without promising a bound.
+
+**Repo-wide effects:** Register measured Git-count ceiling; merge path enforces it. Register measured Git-count ceiling; merge path enforces it. Register measured Git-count ceiling; merge path enforces it. Register measured Git-count ceiling; merge path enforces it. Cold fixture creation plus three suites is bounded to 180 s; estimated target, implementation owes measurement. Delete replaced Python tests; retain real hook/recipe and compatibility journeys. No effect on `onepipeline-ui`.
+
+**Realistic data:** Real host observations plus real Git/onevcs-type generation; cold preparation and suites bounded to 180 s.
+
+**Spike findings:**
+
+- Producer floor approaches warm target; cold/10× need more work, combined CI remains unmeasured.
+- Use confirmed costs; remove refuted claims about deduplication and withheld presentation.
+- Production proof reuse needs Git-context guards and full ref/refusal parity.
+- Prototype is evidence, not landable API; its lint waiver does not cover implementation.
+- Keep measured fixture sizes; cold generation plus latency suites has an estimated 180 s CI bound.
+
+## Acceptance criteria
+
+- Real Git and real-binary journeys preserve every recovery row and decision fact against v0.42.0 under label and session selections; Full and Decision differ only in the allowed presentation fields, and each tip matches its checkout’s ref.
+- Cached and uncached answers, including refusals, agree after Git-context, ref, source-record and mutable-state changes; missing or corrupt caches recompute, and deleting caches changes no verdict.
+- A closed launcher-labelled preserved-on-origin branch older than four hours survives real sweep with its record and labels, including when its disposable worktree is gone; the recipe and native hook still count it, honour an acknowledgement at that tip, and block again after the tip moves. Confidently landed or retirable twins remain reclaimable under existing safety rules.
+- The real unpublished and unfinished recipes and the declared Stop hook prove none, owed and unreadable outcomes; no holder or standing acknowledgement counts, no other launcher leaks in, and no unreadable recovery evidence is accepted as none. Existing version-1 acknowledgements, invalid-entry handling and 0/7 acknowledgement exits remain compatible.
+- The native guard runs both checks concurrently in-process, preserves existing output without --unpublished, respects continuation memory and combines both blocking reasons. Printed landing commands run the configured drafter from another directory; a real publication journey with the model doubled proves its body is used.
+- CI enforces warm 200 ms, cold 500 ms and 10× warm 500 ms on current-binary none/owed/unreadable calls, and a 180-second cold fixture-plus-suite bound; onevcs registers the four measured Git-count ceilings. Targeted measurements report current values, ten-call median/max, load and separate Git counts; shared-host results are reported without gating. Misses require measured escalation, never weaker correctness or larger deadlines.
+- The three published wheels and host pins agree with their linked releases; v0.42.0 can still read storage after the adopted onevcs uses it. The reader adds no API or UI surface and its existing journeys pass, with any allowed base failure demonstrated in the same environment.
+- The host has one direct native Stop call with its original timeout, thin recipes, and no replaced Python decision or removed recipe forms in callers, permissions, tests or prose. Each task’s targeted tests and stated checks pass, and verification claims describe the finished tree.
+
+## Planned tasks
+
+| Task | Unit | What it delivers | Depends on | Where it lives |
+| --- | --- | --- | --- | --- |
+| feat(recoverable): answer decision reads cheaply and retain preserved session labels | Recovery evidence | Cheap decision evidence and preserved-session retention | none | https://github.com/nickderobertis/onevcs/issues/324 |
+| feat(unpublished): answer whether a session owes a preserved branch, natively in the stop guard | Native verdict and Stop guard | Native verdict, acknowledgements and CI measurements | feat(recoverable): answer decision reads cheaply and retain preserved session labels | https://github.com/nickderobertis/onepipeline/issues/800 |
+| fix(deps): link the engine that answers the unpublished verdict in its stop guard | Reader release | Reader wheel linking the matching engine | feat(unpublished): answer whether a session owes a preserved branch, natively in the stop guard; feat(recoverable): answer decision reads cheaply and retain preserved session labels | https://github.com/nickderobertis/onepipeline-ui/issues/254 |
+| feat(hooks): answer the stop hook's unpublished verdict from the engine and drop the python view | Host adoption | Published-wheel adoption, direct hook and Python removal | feat(recoverable): answer decision reads cheaply and retain preserved session labels; feat(unpublished): answer whether a session owes a preserved branch, natively in the stop guard; fix(deps): link the engine that answers the unpublished verdict in its stop guard | https://github.com/nickderobertis/ai-orchestrator/issues/1630 |
+
+
+<!-- onetaskgraph.metadata
+{"onetaskgraph.origin":"authoring:stop-verdict-fast-design","onetaskgraph.repositories":[],"onetaskgraph.template":{"answers_digest":"sha256:2850c0cc406dfea344c8839ca632a0fe3c81b0f995756c74d8b6f2d67901d6c0","body_digest":"sha256:d3f9937b4d51d186426714592425bb8097f98c732b3ccb145835d379586607d3","digest":"sha256:862aa2fd765ba07d9c034344a842f76c8c91d4adeb1e6a41a1735548728dc7cd","template":"onepipeline:design-doc"}}
+-->

@@ -694,11 +694,17 @@ def test_a_copy_whose_references_the_store_rewrote_is_held_to_the_stores_own_rul
 
 
 def test_the_answers_digest_is_the_one_the_store_records() -> None:
-    project = _plan()
+    answers = {
+        **ANSWERS,
+        "schema_version": 2,
+        "checklist": [{**entry, "in_scope": True} for entry in ANSWERS["checklist"]],
+        "repo_wide_effects": [],
+    }
+    project = _plan(answers)
 
     provenance = plan_store.project_record(project)["metadata"]["onetaskgraph.template"]
 
-    assert provenance["answers_digest"] == plan_budgets.answers_digest(ANSWERS)
+    assert provenance["answers_digest"] == plan_budgets.answers_digest(answers)
 
 
 def test_a_description_over_the_issue_body_limit_is_refused() -> None:
@@ -1134,3 +1140,142 @@ def test_a_record_that_is_not_json_or_not_an_object_of_answers_is_refused() -> N
         plan_budgets.render_section({"not": object()})
     with pytest.raises(plan_budgets.BudgetsError, match="is not an object of answers"):
         plan_budgets.render_description(["not", "an", "object"])
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("schema_version", True),
+        ("schema_version", 1),
+        ("schema_version", "2"),
+        ("source", "history"),
+        ("source", False),
+        ("check_runtime_seconds", True),
+        ("check_runtime_seconds", -1),
+        ("check_runtime_seconds", float("inf")),
+        ("check_runtime_seconds", "1"),
+    ],
+)
+def test_modern_budget_fields_are_not_inferred(field: str, value: object) -> None:
+    modern = {**BUDGET, "schema_version": 2, "source": "telemetry", "check_runtime_seconds": 0}
+    modern[field] = value
+    with pytest.raises(plan_budgets.BudgetsError, match=field):
+        plan_budgets.parse_budgets([modern])
+
+
+@pytest.mark.parametrize("missing", ["schema_version", "source", "check_runtime_seconds"])
+def test_partial_modern_budgets_are_refused(missing: str) -> None:
+    modern = {**BUDGET, "schema_version": 2, "source": "direct", "check_runtime_seconds": 1}
+    del modern[missing]
+    with pytest.raises(plan_budgets.BudgetsError, match="exactly the keys"):
+        plan_budgets.parse_budgets([modern])
+
+
+@pytest.mark.parametrize(
+    "change,reason",
+    [
+        (
+            {
+                "checklist": [
+                    {
+                        "concern": "latency",
+                        "budget": "listing-latency",
+                        "not_applicable": "",
+                        "summary": "",
+                        "in_scope": False,
+                    }
+                ]
+            },
+            "in_scope=true",
+        ),
+        (
+            {
+                "checklist": [
+                    {
+                        "concern": "gate time",
+                        "budget": "",
+                        "not_applicable": "Root gate.",
+                        "summary": "Root gate.",
+                        "in_scope": True,
+                    }
+                ]
+            },
+            "existing root budgets",
+        ),
+        (
+            {
+                "repo_wide_effects": [
+                    {"repository": REPOSITORY, "budget": "", "effect": "none", "summary": ""}
+                ]
+            },
+            "nonempty root budget",
+        ),
+        (
+            {
+                "repo_wide_effects": [
+                    {
+                        "repository": "github.com/acme/unchanged",
+                        "budget": "gate-time",
+                        "effect": "+1s",
+                        "summary": "+1s",
+                    }
+                ]
+            },
+            "changed repository",
+        ),
+    ],
+)
+def test_modern_scope_and_effect_rules(change: dict[str, object], reason: str) -> None:
+    answers = {
+        **ANSWERS,
+        "schema_version": 2,
+        "checklist": [{**e, "in_scope": True} for e in ANSWERS["checklist"]],
+        "repo_wide_effects": [],
+        **change,
+    }
+    found = plan_budgets.plan_rule_refusals(
+        plan_budgets.parse_plan(answers), {NODE: [plan_budgets.parse_budgets([BUDGET])[0]]}, PLAN
+    )
+    assert any(reason in r.reason for r in found), found
+
+
+def test_modern_effect_pairs_are_consolidated() -> None:
+    effect = {"repository": REPOSITORY, "budget": "gate-time", "effect": "+1s", "summary": "+1s"}
+    answers = {
+        **ANSWERS,
+        "schema_version": 2,
+        "checklist": [],
+        "repo_wide_effects": [effect, effect],
+    }
+    found = plan_budgets.plan_rule_refusals(plan_budgets.parse_plan(answers), {}, PLAN)
+    assert any("consolidate" in r.reason for r in found)
+
+
+def test_stored_legacy_records_keep_their_bodies_and_digests() -> None:
+    fixture = json.loads(
+        (REPO_ROOT / "tests/fixtures/budgets/legacy-stored-records.json").read_text()
+    )
+    before = json.dumps(fixture, sort_keys=True)
+    project = fixture["project"]
+    record = project["metadata"][plan_budgets.PLAN_RECORD]
+    assert not isinstance(plan_budgets.parse_plan(record), plan_budgets.ModernPlanAnswers)
+    assert all(
+        not isinstance(b, plan_budgets.ModernBudget)
+        for b in plan_budgets.parse_budgets(fixture["budgets"])
+    )
+    assert plan_budgets.render_description(record) == project["content"]
+    assert plan_budgets.render_section(fixture["budgets"]) == fixture["section"]
+    provenance = project["metadata"][design_approval.PROVENANCE]
+    assert provenance["answers_digest"] == plan_budgets.answers_digest(record)
+    assert plan_budgets.description_refusals("copied:legacy", project) == []
+    project["metadata"][plan_store.ORIGIN_KEY] = "authoring:legacy"
+    assert plan_budgets.description_refusals("copied:legacy", project) == []
+    del project["metadata"][plan_store.ORIGIN_KEY]
+    assert json.dumps(fixture, sort_keys=True) == before
+
+
+@pytest.mark.parametrize("version", [3, True, "2", 2.0])
+def test_a_modern_plan_record_of_another_version_is_refused(version: object) -> None:
+    answers = {**ANSWERS, "schema_version": version, "checklist": [], "repo_wide_effects": []}
+    with pytest.raises(plan_budgets.BudgetsError, match="integer literal 2"):
+        plan_budgets.parse_plan(answers)

@@ -25,7 +25,14 @@ variables:
       `evidence` (string, where the number came from: a spike report's id and figures, or
       the measurement it rests on). `command` (string, the command that performs the
       measurement, as it will be registered). The same list is the task's
-      `orchestrator.budgets` metadata.
+      `orchestrator.budgets` metadata. Newly authored records also have `schema_version`
+      (integer literal 2), `source` (string, `direct` or `telemetry`) and
+      `check_runtime_seconds` (finite number >= 0, excluding booleans). Direct executes
+      the work/check it measures, including commands recording their result; telemetry
+      reads existing timing/history records without executing measured work. Runtime
+      estimates elapsed seconds of the entire command at the stated workload, including
+      setup/reads, distinct from target, unit and basis. Evidence states the estimate's
+      source. Never infer either field from basis or command. Exact legacy keys remain readable.
     type: list
     items: object
     default: []
@@ -40,6 +47,9 @@ variables:
 ## Budgets
 
 {% for budget in budgets %}
+{% if (budget.schema_version | default(0)) == 2 %}
+<a id="{{ budget.id | e }}"></a>
+{% endif %}
 ### {{ budget.name }}
 
 - **Id:** `{{ budget.id }}`
@@ -49,6 +59,10 @@ variables:
 {% endif %}
 - **Target:** {% if budget.direction == "max" %}at most{% elif budget.direction == "min" %}at least{% else %}{{ budget.direction }}{% endif %} {{ budget.threshold }} {{ budget.unit }}
 - **Basis:** {{ budget.basis }}
+{% if (budget.schema_version | default(0)) == 2 %}
+- **Measurement source:** {{ budget.source }}
+- **Check runtime:** approximately {{ budget.check_runtime_seconds }} seconds
+{% endif %}
 - **Workload:** {{ budget.workload }}
 - **Evidence:** {{ budget.evidence }}
 - **Command:** {% if "`" in budget.command %}{{ budget.command }}{% else %}`{{ budget.command }}`{% endif %}

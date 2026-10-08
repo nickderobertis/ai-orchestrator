@@ -2562,8 +2562,8 @@ def test_the_planner_is_told_how_to_state_its_budgets_in_general_terms() -> None
         "**Workload first.**",
         "Those numbers reach the acceptance criteria",
         "latency; quota and rate-limit headroom; how the work scales with data; spend; resource "
-        "use; gate time; change cycle time",
-        'Every concern gets a budget or a one-line "n/a because …"',
+        "use",
+        'Every concern gets a budget or a full "n/a because …"',
         "*at 10× realistic usage, what does the product owner notice getting worse first?*",
         "a set of general problem classes, never a closed list",
         "grows a new class each time a real miss",

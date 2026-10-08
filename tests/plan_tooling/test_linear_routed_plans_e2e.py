@@ -756,3 +756,128 @@ def test_a_mixed_plan_runs_as_one_from_its_board_home_and_its_linear_member(
     assert {node: str(held["id"]).partition(":")[0] for node, held in finished.items()} == placed
     # llmlint: ignore-end[e2e_not_mocked]
     # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]  # noqa: E501
+
+
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This routed-copy journey uses the existing loopback board and copied-checkout harness in plan-tooling; that harness reads the tracked tree, so wholeWorkspace is its actual input rather than avoidable unrelated selection.  # noqa: E501
+# llmlint: ignore[e2e_not_mocked] This uses the established routing harness's paid-provider double, loopback GitHub Projects API and local-md Linear stand-in; production boards are shared and tests may not write them. Recipes, store, routing and destination records are real.  # noqa: E501
+@COPIES_THE_TRACKED_TREE
+@pytest.mark.xdist_group("linear-routed")
+def test_modern_budget_links_are_recomputed_after_a_routed_copy(
+    routed: Routed, gated: tuple[Bench, Mapping[str, str]]
+) -> None:
+    """Real routing creates current GitHub and local Linear destinations from authoring."""
+    from project_fixtures import owning
+
+    bench, _ = gated
+    name = f"test-{os.getpid()}-modern-budget-links"
+    project = _draft(bench, name, MIXED)
+    for node in MIXED[:2]:
+        budget = {
+            "id": f"{node.id}-copy-seconds",
+            "name": f"{node.id} copy time",
+            "schema_version": 2,
+            "source": "telemetry",
+            "check_runtime_seconds": 1,
+            "basis": "design",
+            "repository": PETSINC,
+            "file": "apps/web/budgets.yaml",
+            "file_change": "none",
+            "measure": "elapsed seconds of loopback copy",
+            "inner_measure_reason": "",
+            "unit": "seconds",
+            "direction": "max",
+            "threshold": 60,
+            "workload": "One loopback fixture copy.",
+            "evidence": "Synthetic routing fixture; whole record-read runtime estimated at 1 s.",
+            "command": "Read the fixture copy timing record without launching another copy.",
+        }
+        owning(
+            AUTHORING,
+            name,
+            node.id,
+            [budget],
+            bench.environment,
+            answers={
+                "what": COMMIT_MARKER if node.petsinc else "Reply with done.",
+                "why": "Exercise routing with a modern budget record.",
+                "acceptance_criteria": [
+                    "The route is exercised end to end.",
+                    "Every claim the dispatch makes about the finished work is true of the tree "
+                    "as it finally stands.",
+                ],
+            },
+        )
+    answers = no_budgets([PETSINC])
+    answers.update(schema_version=2, checklist=[], repo_wide_effects=[])
+    budgeted(AUTHORING, name, answers, bench.environment)
+    _scripted(bench, name, MIXED)
+    try:
+        finished = _just(routed, bench, "finish-plan", str(_brief(bench, project)), "--name", name)
+        assert finished.returncode == 0, finished.stdout + finished.stderr
+        (home,) = HOME_LINE.findall(finished.stdout + finished.stderr)
+        printed = subprocess.run(
+            [str(routed.checkout / ".venv/bin/python"), "-m", "orchestrator.plan_budgets", home],
+            cwd=routed.checkout,
+            env=bench.environment,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        writer = json.loads(printed.stdout)
+        locations = {
+            node: held["item"]["location"]
+            for node, held in _items(routed, bench, QualifiedProjectId(home)).items()
+        }
+        for budget in writer["budgets"]:
+            destination = locations[budget["node"]]
+            assert budget["location"] == destination.get("url", destination.get("path"))
+            assert "section_url" not in budget
+            assert str(bench.authoring) not in budget["location"]
+        assert writer["budgets"][0]["schema_version"] == 2
+        # Re-render using current destination answers; no source-host fragment is persisted.
+        base = _design_answers(MIXED)
+        supplied = bench.tmp_path / "destination-answers.json"
+        supplied.write_text(json.dumps({**base, **writer}), encoding="utf-8")
+        resolved = subprocess.run(
+            [
+                str(routed.checkout / ".venv/bin/onepipeline"),
+                "template",
+                "resolve",
+                "design-doc",
+                "--json",
+                "--template-root",
+                str(routed.checkout / "templates"),
+            ],
+            cwd=routed.checkout,
+            env=bench.environment,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        rendered = subprocess.run(
+            [
+                str(ONETASKGRAPH_BIN),
+                "template",
+                "render",
+                "--template-loader",
+                "-",
+                "--answers",
+                str(supplied),
+                "--no-interactive",
+            ],
+            input=resolved.stdout,
+            cwd=routed.checkout,
+            env=bench.environment,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout
+        for index, budget in enumerate(writer["budgets"], 1):
+            fragment = (
+                f"#user-content-{budget['id']}"
+                if budget["location"].startswith("https://github.com/")
+                else ""
+            )
+            assert f"[{index}]: {budget['location']}{fragment}\n" in rendered
+    finally:
+        _just(routed, bench, "stop", f"{name}-design", seconds=60)

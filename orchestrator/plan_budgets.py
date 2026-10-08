@@ -119,6 +119,13 @@ class Basis(StrEnum):
 BUDGETS_FILE = "budgets.yaml"
 
 
+class Source(StrEnum):
+    """Whether a command executes measured work or reads existing records."""
+
+    DIRECT = "direct"
+    TELEMETRY = "telemetry"
+
+
 class DataChoice(StrEnum):
     """How the plan makes one kind of data realistic."""
 
@@ -165,6 +172,15 @@ class Budget:
 
 
 @dataclass(frozen=True)
+class ModernBudget(Budget):
+    """Version two adds explicit command mode and elapsed runtime."""
+
+    schema_version: int
+    source: Source
+    check_runtime_seconds: int | float
+
+
+@dataclass(frozen=True)
 class ChecklistEntry:
     """One concern the plan was checked against, answered with a budget or a reason."""
 
@@ -172,6 +188,13 @@ class ChecklistEntry:
     budget: BudgetId
     not_applicable: str
     summary: str
+
+
+@dataclass(frozen=True)
+class ModernChecklistEntry(ChecklistEntry):
+    """Scope is author-declared, never inferred from a reason."""
+
+    in_scope: bool
 
 
 @dataclass(frozen=True)
@@ -218,6 +241,19 @@ class PlanAnswers:
     repo_wide_effects: tuple[RepoWideEffect, ...]
     realistic_data: tuple[RealisticData, ...]
     spike_findings: tuple[SpikeFinding, ...]
+
+
+@dataclass(frozen=True)
+class ModernPlanAnswers(PlanAnswers):
+    """The versioned project record; legacy records retain their exact shape."""
+
+    schema_version: int
+
+
+SCHEMA_VERSION = 2
+CANONICAL_ROOT_CONCERNS = ("gate time", "change cycle time")
+MODERN_BUDGET_KEYS = tuple(field.name for field in dataclasses.fields(ModernBudget))
+MODERN_PLAN_VARIABLES = tuple(field.name for field in dataclasses.fields(ModernPlanAnswers))
 
 
 #: The keys of a task's budget, and the plan description's variables, each in order.
@@ -276,6 +312,15 @@ class _Kind(NamedTuple):
 
 #: The field types an entry model declares, by the annotation it is declared under.
 _KINDS = {
+    "int": _Kind(
+        lambda v: type(v) is int and v == SCHEMA_VERSION, "integer literal 2", lambda v: v
+    ),
+    "bool": _Kind(lambda v: type(v) is bool, "a boolean", lambda v: v),
+    "Source": _Kind(
+        lambda v: isinstance(v, str) and v in tuple(Source),
+        "direct or telemetry",
+        lambda v: Source(str(v)),
+    ),
     "str": _Kind(lambda value: isinstance(value, str), "a string", lambda value: value),
     "BudgetId": _Kind(
         lambda value: isinstance(value, str), "a string", lambda value: BudgetId(str(value))
@@ -347,26 +392,46 @@ def _entries[E: _EntryModel](held: object, field: str, model: type[E]) -> tuple[
 
 def parse_budgets(record: object) -> tuple[Budget, ...]:
     """A task's ``record`` as its budgets, or :class:`BudgetsError` naming what is malformed."""
-    return _entries(record, TASK_RECORD, Budget)
+    if not isinstance(record, list):
+        raise BudgetsError(f"`{TASK_RECORD}` is not a list of objects")
+    if all(not isinstance(entry, dict) or "schema_version" not in entry for entry in record):
+        return _entries(record, TASK_RECORD, Budget)
+    parsed: list[Budget] = []
+    for position, entry in enumerate(record, 1):
+        model = ModernBudget if isinstance(entry, dict) and "schema_version" in entry else Budget
+        budget = _entries([entry], f"{TASK_RECORD}[{position}]", model)[0]
+        if isinstance(budget, ModernBudget) and budget.check_runtime_seconds < 0:
+            raise BudgetsError(f"`{TASK_RECORD}[{position}].check_runtime_seconds` must be >= 0")
+        parsed.append(budget)
+    return tuple(parsed)
 
 
 def parse_plan(record: object) -> PlanAnswers:
     """A project's ``record`` as the plan-level answers, or :class:`BudgetsError`."""
-    if not isinstance(record, dict) or set(record) != set(PLAN_VARIABLES):
+    modern = isinstance(record, dict) and "schema_version" in record
+    keys = MODERN_PLAN_VARIABLES if modern else PLAN_VARIABLES
+    if not isinstance(record, dict) or set(record) != set(keys):
         raise BudgetsError(
-            f"`{PLAN_RECORD}` does not hold exactly the {len(PLAN_VARIABLES)} answers "
-            f"{', '.join(PLAN_VARIABLES)}"
+            f"`{PLAN_RECORD}` does not hold exactly the {len(keys)} answers {', '.join(keys)}"
         )
     for text in PLAN_TEXTS:
         if not isinstance(record[text], str):
             raise BudgetsError(f"`{PLAN_RECORD}`'s `{text}` answer is not text")
-    return PlanAnswers(
+    if modern and (
+        type(record["schema_version"]) is not int or record["schema_version"] != SCHEMA_VERSION
+    ):
+        raise BudgetsError("`schema_version` must be integer literal 2")
+    model = ModernPlanAnswers if modern else PlanAnswers
+    return model(
+        **({"schema_version": SCHEMA_VERSION} if modern else {}),
         overview=record["overview"],
         sizing=record["sizing"],
         workload=record["workload"],
         ten_x_summary=record["ten_x_summary"],
         ten_x=record["ten_x"],
-        checklist=_entries(record["checklist"], "checklist", ChecklistEntry),
+        checklist=_entries(
+            record["checklist"], "checklist", ModernChecklistEntry if modern else ChecklistEntry
+        ),
         repo_wide_effects=_entries(
             record["repo_wide_effects"], "repo_wide_effects", RepoWideEffect
         ),
@@ -683,6 +748,15 @@ def plan_rule_refusals(
     for position, entry in enumerate(answers.checklist, start=1):
         concern = entry.concern.strip() or f"entry {position}"
         covered, not_applicable = entry.budget.strip(), entry.not_applicable.strip()
+        if isinstance(entry, ModernChecklistEntry):
+            if covered and not entry.in_scope:
+                refuse("checklist", f"{concern}: a covered concern must have in_scope=true")
+            if concern.casefold() in CANONICAL_ROOT_CONCERNS:
+                refuse(
+                    "checklist",
+                    f"{concern}: existing root budgets govern this; "
+                    "expected effects belong in repo_wide_effects",
+                )
         if bool(covered) == bool(not_applicable):
             refuse(
                 "checklist",
@@ -710,8 +784,34 @@ def plan_rule_refusals(
             "budgets",
             f"the budget id(s) {', '.join(map(repr, repeated))} repeat across the plan's tasks",
         )
+    modern = isinstance(answers, ModernPlanAnswers)
+    pairs: set[tuple[str, str]] = set()
     for position, effect in enumerate(answers.repo_wide_effects, start=1):
         named = f"repo-wide effect {position} ({effect.repository.strip() or 'no repository'})"
+        if modern:
+            pair = (effect.repository, effect.budget)
+            if pair in pairs:
+                refuse(
+                    "repo_wide_effects",
+                    f"{named} repeats repository/budget {pair!r}; consolidate its effects",
+                )
+            pairs.add(pair)
+            if (
+                not effect.budget.strip()
+                or not effect.effect.strip()
+                or effect.effect.strip().casefold() == NO_EFFECT
+            ):
+                refuse(
+                    "repo_wide_effects",
+                    f"{named} must name a nonempty root budget and an actual effect, never none",
+                )
+            if effect.repository != _origin(
+                effect.repository
+            ) or effect.repository not in _plan_repositories(plan):
+                refuse(
+                    "repo_wide_effects",
+                    f"{named} must name the normalized origin of a changed repository",
+                )
         if not effect.effect.strip():
             refuse(
                 "repo_wide_effects",
@@ -745,7 +845,7 @@ def plan_rule_refusals(
         for entry in answers.repo_wide_effects
         if entry.effect.strip()
     }
-    for repository in sorted(_plan_repositories(plan) - stated):
+    for repository in sorted(_plan_repositories(plan) - stated) if not modern else []:
         refuse(
             "repo_wide_effects",
             f"`repo_wide_effects` states no effect for {repository}, a repository the plan's "
@@ -1013,6 +1113,7 @@ def design_refusals(project: str) -> tuple[str, list[str]]:
     stated = writer_answers(project)
     document = str(design_approval.design_document(project).qualified_id)
     answered = plan_store.sdk(plan_store.client().document_answers(document)).model_dump()
+    design_approval.validate_content(answered)
     found = [
         f"its `{name}` answer is not what `python -m orchestrator.plan_budgets {project}` "
         f"prints for it"

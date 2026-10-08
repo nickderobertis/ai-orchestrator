@@ -1,0 +1,25 @@
+# #1568 summary workload adaptation
+
+The original stored answers are preserved in issue-1568-legacy.json. The modern
+fixture preserves all nine budget names, targets, bases and task URLs and the four
+changed repositories. Manager ruling c-86c86f3637c99e5f05c5f82c3cc1fafa permits
+replacing gate time and change cycle time with image retention and upload bandwidth,
+with full reasons, because modern feature checklists exclude root concerns. Six
+explicitly in-scope omissions still exercise the unchanged 3000-character ceiling.
+
+The first seven telemetry cells and eighth direct cell are illustrative workload
+estimates, not historical command facts or measured runtimes. The illustrative direct
+row uses a loopback journey command description; its historical telemetry command is
+retained in the exact legacy fixture. The ninth stays legacy
+and has neither source nor runtime. Realistic-data detail stays in project answers.
+The production summary command runtime estimate is 1 second: the spike's complete
+prototype took 0.148521053 seconds, plus estimated resolution/startup overhead;
+this is an estimate, not measured production timing.
+
+## Later renderer comparison
+
+The manager can repeat `gh api markdown -f mode=gfm -F text=@<input.md>` over the
+exact `markdown` in github-explicit-anchors.json, then compare the returned HTML id
+inventory with its `ids`. The captured renderer output is evidence for explicit
+anchors, not live issue navigation. First-board-copy navigation remains a manager
+check; Linear heading capability remains unverified.

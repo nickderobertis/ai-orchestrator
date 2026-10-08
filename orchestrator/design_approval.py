@@ -84,7 +84,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import NamedTuple, NewType
+from typing import Literal, NamedTuple, NewType, TypedDict
 
 from orchestrator import design_chain, plan_store
 from orchestrator.plan_store import NodeId, StoreDocument
@@ -404,6 +404,7 @@ def body_digest(document: StoreDocument, digest: ChainDigest, repository: str | 
             f"`{regenerate}` would lay its design-doc answers over that template's stored "
             f"ones, so replace it from them with `{replace}`"
         )
+    validate_document_content(document)
     if recorded != digest and not fits_in_place(document, repository):
         raise Unrendered(
             f"{document.qualified_id} was rendered from the {TEMPLATE_NAME} template at "
@@ -916,3 +917,138 @@ def gate_main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+class ProsePart(TypedDict):
+    """Markdown explanation, outside literal artifacts."""
+
+    type: Literal["prose"]
+    text: str
+
+
+class CodePart(TypedDict):
+    """Literal content; the template supplies the language-labelled safe fence."""
+
+    type: Literal["code"]
+    language: str
+    text: str
+
+
+class ModernDecision(TypedDict):
+    """Ordered decision content authored for the current template."""
+
+    name: str
+    justification: str
+    content: list[ProsePart | CodePart]
+
+
+class LegacyDecision(TypedDict):
+    """Historical text rendered without interpreting its artifact."""
+
+    name: str
+    justification: str
+    summary: str
+    artifact: str
+
+
+DECISION_KEYS = frozenset(ModernDecision.__annotations__)
+LEGACY_DECISION_KEYS = frozenset(LegacyDecision.__annotations__)
+PART_KEYS = {
+    "prose": frozenset(ProsePart.__annotations__),
+    "code": frozenset(CodePart.__annotations__),
+}
+LANGUAGE = re.compile(r"[A-Za-z0-9_+\-]+\Z")
+# CommonMark opening fence rule, including container prefixes; inline code is not a fence.
+PROSE_FENCE = re.compile(
+    r"^(?: {0,3}> ?)*(?: {0,3}(?:[-+*]|[0-9]+[.)]) +)? {0,3}(?:`{3,}[^`]*|~{3,}.*)$", re.MULTILINE
+)
+
+
+LIST_PREFIX = re.compile(r"^( {0,3})(?:[-+*]|[0-9]+[.)])( +)")
+
+
+def has_prose_fence(text: str) -> bool:
+    """Apply the opening-fence rule after stripping active list-container indentation."""
+    containers: list[int] = []
+    for line in text.expandtabs(4).splitlines():
+        line = re.sub(r"^(?: {0,3}> ?)+", "", line)
+        indent = len(line) - len(line.lstrip(" "))
+        while containers and line.strip() and indent < containers[-1]:
+            containers.pop()
+        if containers:
+            line = line[containers[-1] :]
+        prefix = LIST_PREFIX.match(line)
+        if prefix:
+            offset = containers[-1] if containers else 0
+            containers.append(offset + prefix.end())
+            line = line[prefix.end() :]
+        if PROSE_FENCE.search(line):
+            return True
+    return False
+
+
+def validate_content(answers: object) -> None:
+    """Refuse malformed ordered decisions before a design document reaches approval."""
+    # llmlint: ignore[changed_behavior_has_e2e] document_answers returns the SDK answer object and this boundary calls model_dump(), which always supplies a dict; the defensive non-object branch is unreachable through the CLI and is covered directly rather than replacing that typed SDK boundary.  # noqa: E501
+    if not isinstance(answers, dict):
+        raise Unrendered("design answers must be an object")
+    units = answers.get("units", [])
+    if not isinstance(units, list):
+        raise Unrendered("design answers `units` must be a list")
+    for index, unit in enumerate(units, 1):
+        if not isinstance(unit, dict) or not isinstance(unit.get("decisions"), list):
+            raise Unrendered(f"units[{index}].decisions must be a list")
+        for position, decision in enumerate(unit["decisions"], 1):
+            field = f"units[{index}].decisions[{position}]"
+            if not isinstance(decision, dict) or set(decision) not in (
+                DECISION_KEYS,
+                LEGACY_DECISION_KEYS,
+            ):
+                raise Unrendered(
+                    f"{field} must hold exactly name, justification, content or the exact legacy "
+                    "name, justification, summary, artifact"
+                )
+            if set(decision) == LEGACY_DECISION_KEYS:
+                if not all(isinstance(value, str) for value in decision.values()):
+                    raise Unrendered(f"{field} legacy fields must be strings")
+                continue
+            if not all(isinstance(decision[key], str) for key in ("name", "justification")):
+                raise Unrendered(f"{field} name and justification must be strings")
+            parts = decision["content"]
+            if not isinstance(parts, list) or not parts:
+                raise Unrendered(f"{field}.content must be a nonempty ordered list")
+            for number, part in enumerate(parts, 1):
+                named = f"{field}.content[{number}]"
+                match part:
+                    case {"type": "prose", "text": str() as text} if (
+                        set(part) == PART_KEYS["prose"]
+                    ):
+                        if has_prose_fence(text):
+                            raise Unrendered(
+                                f"{named}.text contains a fenced-code block; "
+                                "supply literal code in a code part"
+                            )
+                    case {"type": "code", "language": str() as language, "text": str() as text} if (
+                        set(part) == PART_KEYS["code"]
+                    ):
+                        if not LANGUAGE.fullmatch(language):
+                            raise Unrendered(
+                                f"{named}.language must be a nonempty "
+                                "letters/digits/underscore/plus/hyphen fence info token"
+                            )
+                    case _:
+                        raise Unrendered(
+                            f"{named} must be exactly a prose {{type, text}} or code "
+                            "{type, language, text} part with string text/language"
+                        )
+                if not text.strip():
+                    raise Unrendered(f"{named}.text must be nonblank text")
+
+
+def validate_document_content(document: StoreDocument) -> None:
+    """Read answers at their origin; copies without stored answers keep their provenance path."""
+    origin = document.metadata.get(plan_store.ORIGIN_KEY)
+    if isinstance(origin, str) and QUALIFIED.fullmatch(origin):
+        return
+    answers = plan_store.sdk(plan_store.client().document_answers(str(document.qualified_id)))
+    validate_content(answers.model_dump())

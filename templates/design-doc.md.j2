@@ -32,9 +32,15 @@ variables:
       keys `title` (its short bold title) and `text` (its one sentence); and `decisions` (a
       list of objects, the unit's high-cost decisions, or `[]` when it has none). Each decision has the keys `name`
       (string, its heading), `justification` (string, naming who would have to act to undo
-      it), `summary` (text, its plain meaning) and `artifact` (text, one or more fenced
-      blocks, or `""` for a behavioural decision). The template renders each decision's
-      reversibility line from its `justification`; the level is not an answer.
+      it) and `content` (a nonempty ordered list). Each part is exactly either
+      {type: "prose", text: string} or {type: "code", language: string, text: string}.
+      Prose is nonblank Markdown explanation without fenced-code blocks; inline code is
+      allowed. Code is nonblank literal text, never a pre-fenced block. Language is a
+      nonempty single-line fence info token: letters, digits, underscore, plus or hyphen;
+      use `text` for untyped output. No extra keys, mixed shapes or unknown tags.
+      Exact legacy decisions instead retain `name`, `justification`, `summary` and
+      `artifact`, all strings, rendered historically without classification. Decisions
+      may use either exact shape while deliberately regenerating a document.
     type: list
     items: object
     required: true
@@ -67,7 +73,7 @@ variables:
       record as `python -m orchestrator.plan_budgets <project>` prints it, or `{}` for a
       plan that predates budgets. Its keys are `overview`, `sizing`, `workload`,
       `ten_x_summary`, `ten_x`, `checklist`, `repo_wide_effects`, `realistic_data` and
-      `spike_findings`, as the `plan-description` template declares them.
+      `spike_findings` and modern `schema_version` (integer literal 2), as the `plan-description` template declares them.
     type: object
     required: false
     default: {}
@@ -77,7 +83,8 @@ variables:
       <project>` prints them, or `[]`: each object is the budget as its task's
       `orchestrator.budgets` record holds it — `id`, `name`, `basis`, `repository`, `file`,
       `file_change`, `measure`, `inner_measure_reason`, `unit`, `direction`, `threshold`,
-      `workload`, `evidence` and `command` — with two keys added, `node` (the id of the task
+      `workload`, `evidence` and `command`, plus modern `schema_version`, `source` and
+      `check_runtime_seconds` — with two keys added, `node` (the id of the task
       that owns it) and `location` (where the plan store reports that task).
     type: list
     items: object
@@ -102,7 +109,7 @@ variables:
 
   SECTIONS. In this order: What, Why, Architecture, Budgets, Acceptance criteria and
   Planned tasks. A plan the migration list names renders one line in place of the Budgets
-  summary, and a plan that adds or changes no budget renders no Budgets section at all.
+  summary. A plan with no budget, scoped omission or named root effect renders no Budgets section at all.
   There is no separate Contracts section, and no answer adds a heading of its own.
 
   HIGHLIGHTING. No GitHub alert blocks (`> [!CAUTION]` and the like) anywhere. The bold
@@ -156,7 +163,10 @@ variables:
     - One `#### <decision>` per high-cost decision the unit owns, and only for those, so a
       unit with none has no `####`. Each opens with `**Reversibility: high cost** —` and a
       justification naming who would have to act to undo it. Then one or two plain
-      sentences say what the decision means. Then the literal artifact: a `diff` block for
+      sentences say what the decision means. Supply ordered prose/code parts, interleaving
+      explanations and literal artifacts as needed. The template owns every language label
+      and safe backtick fence. Never author fences, and never disguise explanation as code.
+      A prose-only behavioural decision is valid. For literal artifacts use: a `diff` block for
       a changed shape, the full shape for a new one, a `--help` diff for a CLI, a text
       sketch for a UI. A behavioural decision with no artifact says so in one sentence.
     - Then, after the high-cost subsections, a `**Reversible:**` line followed by one
@@ -196,11 +206,29 @@ variables:
 
 **Reversibility: high cost** — {{ decision.justification }}
 
+{% if decision.content is defined %}
+{% for part in decision.content %}
+{% if part.type == "prose" %}
+{{ part.text }}
+
+{% else %}
+{% set fence = namespace(value="```") %}
+{% for unused in range((part.text | length) - (part.text | replace("`", "") | length)) %}
+{% set fence.value = fence.value + "`" %}
+{% endfor %}
+{{ fence.value }}{{ part.language }}
+{{ part.text }}
+{{ fence.value }}
+
+{% endif %}
+{% endfor %}
+{% else %}
 {{ decision.summary }}
 
 {% if decision.artifact %}
 {{ decision.artifact }}
 
+{% endif %}
 {% endif %}
 {% endfor %}
 {% if unit.reversible %}
@@ -231,58 +259,51 @@ variables:
 #}
 {% endblock %}
 {% block budgets %}
-{% set changes = namespace(any=false) %}
-{% for budget in budgets if budget.file_change in ["add", "change"] %}
-{% set changes.any = true %}
+{% set effects = namespace(items=[]) %}
+{% for entry in (plan_budgets.repo_wide_effects | default([])) if entry.budget and entry.effect and entry.effect != "none" %}
+{% set effects.items = effects.items + [entry] %}
+{% endfor %}
+{% set omissions = namespace(items=[]) %}
+{% for entry in (plan_budgets.checklist | default([])) if entry.not_applicable and (entry.in_scope | default(false)) == true %}
+{% set omissions.items = omissions.items + [entry] %}
 {% endfor %}
 {% if predates_budgets %}
 ## Budgets
 
 This plan predates budgets: {{ predates_budgets }}
 
-{% elif changes.any %}
-{% set effects = plan_budgets.repo_wide_effects or [] %}
-{% set affected = effects | rejectattr("effect", "equalto", "none") | list %}
-{% set unaffected = namespace(names=[]) %}
-{% for entry in effects if entry.effect == "none" %}
-{% set short = entry.repository | split("/") | last %}
-{% if short not in unaffected.names and not (affected | selectattr("repository", "equalto", entry.repository) | list) %}
-{% set unaffected.names = unaffected.names + [short] %}
-{% endif %}
-{% endfor %}
+{% elif budgets or omissions.items or effects.items %}
 ## Budgets
 
-**What we're sizing for.** {{ plan_budgets.sizing }}
+**Sizing.** {{ plan_budgets.sizing }}
 
-**What breaks first at 10×.** {{ plan_budgets.ten_x_summary }}
+**At 10×.** {{ plan_budgets.ten_x_summary }}
 
-| Budget | Target | Basis | Owned by |
-| --- | --- | --- | --- |
+{% if budgets %}
+| Budget | Target | Basis | How it is measured | Check runtime |
+| --- | --- | --- | --- | --- |
 {% for budget in budgets %}
-| {{ cell(budget.name) }} | {% if budget.direction == "min" %}≥{% else %}≤{% endif %} {{ budget.threshold }} {{ cell(budget.unit) }} | {{ cell(budget.basis) }} | [`{{ budget.node }}`]({{ budget.location }}#budgets) |
+| [{{ cell(budget.name) }}][{{ loop.index }}] | {% if budget.direction == "min" %}≥{% else %}≤{% endif %}{{ budget.threshold }} {{ cell(budget.unit) }} | {{ cell(budget.basis) }} | {{ (budget.source | default("not recorded")) }} | {% if (budget.schema_version | default(0)) == 2 %}≈{{ budget.check_runtime_seconds }} s{% else %}not recorded{% endif %} |
 {% endfor %}
 
-{% for entry in (plan_budgets.checklist or []) if entry.not_applicable %}
-{% if loop.first %}
+{% for budget in budgets %}
+[{{ loop.index }}]: {{ budget.location }}{% if (budget.schema_version | default(0)) == 2 and budget.location is startingwith("https://github.com/") %}#user-content-{{ budget.id | urlencode }}{% endif %}{{ "\n" -}}
+{% endfor %}
+
+{% endif %}
+{% if omissions.items %}
 **Not budgeted:**
 
-{% endif %}
+{% for entry in omissions.items %}
 - {{ entry.concern }}: {{ entry.summary }}
-{% if loop.last %}
-
-{% endif %}
 {% endfor %}
-{% if effects %}
-**Repo-wide effects:**{% for entry in affected %} {{ entry.summary }}{% endfor %}{% if unaffected.names %} No effect on {% for name in unaffected.names %}{% if not loop.first %}{% if loop.last %} and {% else %}, {% endif %}{% endif %}`{{ name }}`{% endfor %}.{% endif %}
-
 
 {% endif %}
-{% if plan_budgets.realistic_data %}
-**Realistic data:**{% for entry in plan_budgets.realistic_data %} {{ entry.summary }}{% endfor %}
-
+{% if effects.items %}
+**Repo-wide effects:**{% for entry in effects.items %} `{{ entry.repository | split("/") | last }}` / `{{ entry.budget }}`: {{ entry.summary }}{% endfor %}
 
 {% endif %}
-{% for entry in (plan_budgets.spike_findings or []) %}
+{% for entry in (plan_budgets.spike_findings | default([])) %}
 {% if loop.first %}
 **Spike findings:**
 

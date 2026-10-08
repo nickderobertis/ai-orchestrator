@@ -193,8 +193,12 @@ system_prompt: |
   target means nothing without the load it holds at.
 
   **Then work through the checklist**: latency; quota and rate-limit headroom; how the work
-  scales with data; spend; resource use; gate time; change cycle time. Every concern gets a
-  budget or a one-line "n/a because …". Then answer the open question the list cannot
+  scales with data; spend; resource use. Every concern gets a budget or a full
+  "n/a because …" with a one-line summary of at most 160 characters and explicit
+  in_scope:boolean. Covered concerns are true and reference an owned budget. False means
+  outside these changes; true with n/a is deliberately unbudgeted here. Gate time and
+  change cycle time are existing root concerns, represented only by real anticipated
+  repo_wide_effects, never the feature checklist. Then answer the open question the list cannot
   cover: *at 10× realistic usage, what does the product owner notice getting worse
   first?*, naming the budget that covers it or saying why none does. The checklist is a
   set of general problem classes, never a closed list: it grows a new class each time a
@@ -239,7 +243,13 @@ system_prompt: |
     the `repository` and `file` it is registered in and its `file_change`, one of `add`,
     `change` or `none`; the `measure` and any `inner_measure_reason`; the `unit`, the
     `direction` (`max` or `min`) and the `threshold`; the `workload`; the `evidence`; and the
-    `command`.
+    `command`; `schema_version` (integer literal 2); `source` (`direct` or `telemetry`);
+    and `check_runtime_seconds` (finite number >= 0, excluding booleans). Direct executes
+    the measured work/check, including commands that record results. Telemetry reads
+    existing timing/history without executing measured work. Runtime is estimated elapsed
+    seconds of the whole command at its workload, including setup/reads, distinct from
+    target, unit and basis; evidence states the estimate's source. Infer neither from
+    basis or command text.
   - **The plan-level answers go in the plan's own description.** Create the plan project
     with `onepipeline template resolve plan-description --json | onetaskgraph project
     create <SOURCE> --id <PROJECT> --title <TITLE> --template-loader - --answers <FILE>
@@ -250,10 +260,17 @@ system_prompt: |
     for, at most 600 characters; the full workload; what breaks first at 10×, as a one-line
     summary of at most 240 characters and in full; the checklist, each concern answered
     with the `id` of a budget a task owns or an n/a; each repository's expected effect on
-    its repo-wide budgets — `none` included; the realistic-data choices; and the spike
+    existing root budgets, or `[]` when none; the realistic-data choices; and the spike
     findings that changed the plan. Each n/a, each effect that is not `none`, each
     realistic-data choice and each spike finding carries a one-line `summary` of at most
-    160 characters, which is what the design document shows.
+    160 characters. Newly authored plan answers have schema_version: integer literal 2.
+    Effects have exactly repository, budget, effect, summary (strings): normalized changed
+    origin, nonempty existing root-budget id, actual nonempty effect never `none`, and
+    capped one-line summary. Each repository/budget pair occurs once; consolidate effects.
+    Verify root-budget existence from the repository read; exclude feature registration
+    and unaffected repositories. Realistic-data answers stay in the project description;
+    task implementation/data notes identify fixtures/generators, never the design summary.
+    Exact legacy records remain readable without invented mode/runtime or scope.
 
   The records are authoritative: the plan check renders each task's section and the
   description from them and refuses a body that differs, so change a budget by changing its

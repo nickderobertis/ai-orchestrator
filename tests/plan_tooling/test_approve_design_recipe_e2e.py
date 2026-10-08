@@ -1743,3 +1743,183 @@ def test_a_plan_in_one_layered_repository_is_approved_on_the_chain_it_was_render
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This extends the existing approve-design recipe journey in its installed-host-tool project, using the same Store and recipe inputs; extracting its shared recipe/store harness into another project is outside this contract change.  # noqa: E501
+@pytest.mark.xdist_group("approve-design")
+def test_authored_answer_read_failure_refuses_approval_and_regeneration_recovers(
+    store: Store, runs: Path
+) -> None:
+    project = store.plan("authored-content-read")
+    record = store.document("authored-content-read")
+    original = record.read_text(encoding="utf-8")
+    prefix, marker, _ = original.partition("\n<!-- onetaskgraph:template-answers")
+    assert marker, "the authored store did not keep its rendering answers"
+    # llmlint: ignore[tests_mirror_real_usage] Deliberately induce an authored local-md record with unreadable answers while retaining its body/provenance, matching the legacy host record observed in this task. No authoring verb deletes only stored answers; document create below is the real recovery surface.  # noqa: E501
+    record.write_text(prefix, encoding="utf-8")
+    refused = _just("approve-design", project, runs=runs)
+    assert refused.returncode != 0
+    assert "no stored template answers" in refused.stderr
+    # The normal document authoring surface restores answers; no metadata bypass is used.
+    store.document("authored-content-read")
+    approved = _just("approve-design", project, runs=runs)
+    assert approved.returncode == 0, approved.stdout + approved.stderr
+
+
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] These malformed-answer and recovery cases extend the existing approve-design recipe/store journey in plan-tooling with the same harness and inputs; a separate project would require extracting that shared harness, outside this contract change.  # noqa: E501
+@pytest.mark.xdist_group("approve-design")
+@pytest.mark.parametrize(
+    "decision",
+    [
+        "valid-legacy",
+        "valid-mixed",
+        "valid-container-exit",
+        "invalid-units",
+        "invalid-unit",
+        "invalid-decisions",
+        {
+            "name": "n",
+            "justification": "j",
+            "content": [{"type": "prose", "text": "- item\n    ```python\n    x\n    ```"}],
+        },
+        {
+            "name": "n",
+            "justification": "j",
+            "content": [{"type": "prose", "text": "> - item\n>     ```text\n>     x\n>     ```"}],
+        },
+        {
+            "name": "n",
+            "justification": "j",
+            "content": [
+                {"type": "prose", "text": "- item\n  - nested\n      ~~~text\n      x\n      ~~~"}
+            ],
+        },
+        {"name": "n", "justification": "j", "content": []},
+        {"name": "n", "justification": "j", "content": "text"},
+        {"name": False, "justification": "j", "content": [{"type": "prose", "text": "x"}]},
+        {"name": "n", "justification": False, "content": [{"type": "prose", "text": "x"}]},
+        {"name": "n", "justification": "j", "content": [{"type": "unknown", "text": "x"}]},
+        {"name": "n", "justification": "j", "content": [{"type": "code", "text": "x"}]},
+        {
+            "name": "n",
+            "justification": "j",
+            "content": [{"type": "code", "language": "x y", "text": "x"}],
+        },
+        {
+            "name": "n",
+            "justification": "j",
+            "content": [{"type": "code", "language": "text", "text": " "}],
+        },
+        {"name": "n", "justification": "j", "content": [{"type": "prose", "text": False}]},
+        {"name": "n", "justification": "j", "content": [{"type": "prose", "text": " "}]},
+        {
+            "name": "n",
+            "justification": "j",
+            "content": [{"type": "prose", "text": "x", "language": "text"}],
+        },
+        {
+            "name": "n",
+            "justification": "j",
+            "content": [{"type": "prose", "text": "x"}],
+            "summary": "old",
+            "artifact": "",
+        },
+        {"name": "n", "justification": "j", "summary": "old", "artifact": False},
+    ],
+)
+def test_nested_decision_shapes_are_checked_at_approval_despite_rendering_overrides(
+    store: Store, runs: Path, tmp_path: Path, decision: object
+) -> None:
+    """Real approval accepts both lanes and refuses invalid shapes despite rendering layers."""
+    root = tmp_path / "rendering-layer"
+    shutil.copytree(REPO_ROOT / "templates", root)
+    template = root / "design-doc.md.j2"
+    body = template.read_text(encoding="utf-8")
+    start = body.index("{% block architecture %}")
+    end = body.index("{% endblock %}", start) + len("{% endblock %}")
+    match decision:
+        case "invalid-units":
+            body = (
+                body[:start].replace("    type: list\n    items: object", "    type: text", 1)
+                + body[start:]
+            )
+        case "invalid-unit":
+            body = body[:start].replace("    items: object", "    items: string", 1) + body[start:]
+    start = body.index("{% block architecture %}")
+    end = body.index("{% endblock %}", start) + len("{% endblock %}")
+    template.write_text(
+        body[:start]
+        + "{% block architecture %}\n## Architecture\n\nRepository-specific overview.\n"
+        "{% endblock %}" + body[end:],
+        encoding="utf-8",
+    )
+    native = "nested-decision-contract"
+    project = store.plan(native)
+    answers = {
+        **DESIGN,
+        "units": [
+            {
+                "name": "Engine",
+                "repository": "onepipeline",
+                "part": "",
+                "summary": "A unit.",
+                "reversible": [],
+                "decisions": [decision],
+            }
+        ],
+    }
+    expected = "units[1].decisions[1]"
+    legacy = {
+        "name": "historical",
+        "justification": "j",
+        "summary": "Historical prose.",
+        "artifact": "",
+    }
+    match decision:
+        case "valid-legacy":
+            answers["units"][0]["decisions"] = [legacy]
+        case "valid-mixed":
+            answers["units"][0]["decisions"] = [
+                legacy,
+                {
+                    "name": "modern",
+                    "justification": "j",
+                    "content": [{"type": "prose", "text": "Modern explanation."}],
+                },
+            ]
+        case "valid-container-exit":
+            answers["units"][0]["decisions"] = [
+                {
+                    "name": "exit",
+                    "justification": "j",
+                    "content": [
+                        {
+                            "type": "prose",
+                            "text": "- item\n\nOutside the list.\n\n"
+                            "    ```literal\n    indented output",
+                        }
+                    ],
+                },
+            ]
+        case "invalid-units":
+            answers["units"] = "not a list"
+            expected = "`units` must be a list"
+        case "invalid-unit":
+            answers["units"] = ["not an object"]
+            expected = "units[1].decisions"
+        case "invalid-decisions":
+            answers["units"][0]["decisions"] = "not a list"
+            expected = "units[1].decisions"
+    valid = isinstance(decision, str) and decision.startswith("valid-")
+    store.document(native, answers, template_root=REPO_ROOT / "templates" if valid else root)
+    if valid:
+        approved = _just("approve-design", project, runs=runs)
+        assert approved.returncode == 0, approved.stdout + approved.stderr
+        return
+    refused = _just("approve-design", project, runs=runs)
+    assert refused.returncode != 0
+    assert expected in refused.stderr, refused.stderr
+    # Deliberate regeneration via the real authoring boundary repairs the answer record.
+    store.document(native)
+    approved = _just("approve-design", project, runs=runs)
+    assert approved.returncode == 0, approved.stdout + approved.stderr

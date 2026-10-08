@@ -1,0 +1,91 @@
+{
+  "what": "Readable listing decisions from #1633.",
+  "why": "Review explanations outside literal interfaces.",
+  "architecture": "The engine publishes the listing and its landing commands.",
+  "units": [
+    {
+      "name": "Session verdict",
+      "repository": "onepipeline",
+      "part": "src/verbs.rs",
+      "summary": "The engine owns the listing.",
+      "reversible": [],
+      "decisions": [
+        {
+          "name": "Public unpublished listing",
+          "justification": "External CLI and SDK consumers would have to change their calls and parsers.",
+          "content": [
+            {
+              "type": "prose",
+              "text": "Session reads select launcher-labelled Decision rows across all identities; a mismatched label or incomplete recovery read is unanswered, never none. A row counts only when it has no holder, its landed state is no, unknown or in-part, and no acknowledgement matches its identity, branch and current tip; a null tip cannot be acknowledged as standing."
+            },
+            {
+              "type": "code",
+              "language": "text",
+              "text": "onepipeline unpublished\n  [--session <ID> | --host | --token <S-TOKEN>...]\n  [--format text|json] [--disk] [--acknowledgements <DIR>]\n  [--pr-author-graph <PATH>]\n\n--session: defaults to ONEPIPELINE_LAUNCHER_SESSION; blank refused.\n--host: all registered identities, empty Selection.\n--token: Selection.sessions; unknown token refused.\n--format: text by default.\n--disk: opt-in allocated-byte reads; never used by Stop guard.\nExit: 0 none; 7 owed; 1 unanswered; 2 refused.\nSDK: a src/verbs.rs function, with binary parity held by tests/parity.rs."
+            },
+            {
+              "type": "code",
+              "language": "typescript",
+              "text": "// JSON wire schema. All listed keys are present; nullable values use null.\n// Arrays may be empty. Integer aliases describe JSON numbers, not strings.\ntype UInt = number;    // integer >= 0\ntype PositiveInt = number; // integer >= 1\ntype Sha = string;    // onevcs host::Sha, a transparent commit-hash string;\n                      // no new fixed-width restriction is imposed here\ntype Url = string;    // serialized url::Url\ntype SessionToken = string; // onevcs session::SessionToken\ntype Labels = { [key: string]: string };\n\ntype Listing = {\n  target: { kind: \"session\"; session: string }\n        | { kind: \"host\" }\n        | { kind: \"tokens\"; tokens: SessionToken[] };\n  verdict: \"none\" | \"owed\" | \"unanswered\";\n  rows: Row[];\n  unresolved: string[];\n};\ntype Row = {\n  identity: string;                  // repository identity\n  branch: string;                    // branch name\n  base: string;                      // base branch name\n  provenance: \"complete\" | \"incomplete-step\";\n  tip: string | null;                // full commit object name in row's checkout;\n                                     // null only when branch ref cannot be read\n  landed: Landed;\n  change_url: Url | null;\n  stopped_because: string;           // may be \"\" under Decision\n  session: SessionToken | null;\n  run: string | null;                // run label, else null\n  node: string | null;               // node label, else null\n  manager_session: string | null;    // launcher label, else null\n  recover_command: string[];         // whole onevcs argv\n  land_command: string[];            // rewritten landing argv;\n                                     // [] when recover_command is empty\n  retirement: Retirement | null;     // whole onevcs value; absence caveat below\n  in_flight: boolean;                // whether onevcs reports held_by\n  counted: boolean;                  // no holder, counted landed state,\n                                     // and no standing acknowledgement\n  acknowledgement: Acknowledgement | null;\n  disk: Disk | null;                 // null when disk reading not requested\n};\ntype Landed =\n  | { state: \"yes\"; evidence: LandingEvidence }\n  | { state: \"in-part\"; evidence: LandingEvidence; unlanded: PositiveInt }\n  | { state: \"no\" }\n  | { state: \"unknown\" };\ntype LandingEvidence =\n  | { tier: \"recorded-landing\"; commit: Sha }\n  | { tier: \"change-request\"; commit: Sha; change_url: Url }\n  | { tier: \"trailer\"; commit: Sha };\n\ntype Retirement = {\n  class: \"retirable\" | \"superseded-with-changes\" | \"keep\";\n  reason: KeepReason | null;\n  cause: UnknownCause | null;\n  identity: string;\n  branch: string;\n  tip: Sha;\n  base: string;\n  proof: RetirementProof | null;\n  content_free_commits: Sha[];\n  superseded_by: SupersededBy | null;\n  differing_paths: string[];\n  holders: BranchHolder[];\n};\ntype KeepReason = \"held-by-live-session\" | \"excluded\" | \"open-change-request\"\n  | \"checked-out\" | \"dirty-worktree\" | \"unmerged-unique-commits\"\n  | \"unknown\" | \"is-base\";\ntype UnknownCause = {\n  operation: string;  // nonblank; open vocabulary, not an enum\n  subject: string;    // nonblank path, origin or change-request description\n  error: string;      // nonblank diagnostic\n};\ntype RetirementProof =\n  | { kind: \"merged-change-request\"; change_url: Url; head: Sha }\n  | { kind: \"recorded-landing\"; commit: Sha }\n  | { kind: \"content-identical\"; base_commit: Sha };\ntype SupersededBy = {\n  branch: string;\n  landing: string;    // recorded commit or change-request URL\n  labels: Labels;\n};\ntype BranchHolder = {\n  kind: \"checkout\" | \"slot\" | \"run-clone\" | \"origin\";\n  location: string;   // path, or origin URL for kind \"origin\"\n};\n// Retirement relationships from onevcs, not independent optional decisions:\n// reason is non-null exactly for keep; proof exactly for retirable.\n// cause can be non-null only with reason unknown; older records may lack it.\n// superseded-with-changes names superseded_by.\n// differing_paths is nonempty for superseded-with-changes and for keep with\n// unmerged-unique-commits (the producer's documented output relationship).\n\ntype Acknowledgement = {\n  branch: string;\n  identity: string;\n  tip: string;       // 40–64 lowercase hexadecimal characters\n  reason: string;    // nonblank, single line\n  at: string;        // UTC YYYY-MM-DDTHH:MM:SSZ\n};\ntype Disk = {\n  run_root: string | null;     // run-root path; current wrapper permits null\n  run_root_bytes: UInt | null; // allocated bytes; null is not measured zero\n  build_output: {\n    [name: string]: UInt;     // present entries from target, node_modules,\n                              // .venv, .nx, dist; map may be empty\n  };\n};"
+            },
+            {
+              "type": "prose",
+              "text": "Authority and limits of this schema:\nThe task op-unpublished-verdict fixes the new listing's fields, targets,\nverdicts, argv arrays, label nulls and acknowledgement format. onevcs v0.42.0\ncrates/onevcs/src/session.rs (Recoverable, PreservedBranch, Provenance),\nlanded.rs (Landed, LandingEvidence), retire.rs (Retirement and nested types)\nand host.rs (Sha) supply the unchanged nested wire types above.\nThe producer task adds tip; Decision may return change_url null and\nstopped_because empty. Nested onevcs objects are passed through whole,\nnot projected onto a smaller local evidence schema.\n\nNot separately fixed by the plan: absent-retirement normalization and disk\nfailure/missing-path representation. The schema above shows the existing\norchestrator/unpublished.py Row/_rendered and Disk.entry behaviour:\nretirement null when the optional producer value is absent; nullable disk\npath/byte count and an empty or partial build-output map. onevcs itself\nomits absent Recoverable.retirement. The task names the output key and a\nDisk object but does not explicitly settle those edge encodings or their\nunresolved/verdict effects. These are current behaviour to reconcile in\nthe engine's canonical types, not newly approved choices in this document;\nany shared-contract departure must go to the manager.\n\nDisk covers the parent of `<s-token>/worktree` and its named build outputs\nwithout following symlinks. Text lists counted rows with landing and\nacknowledgement commands, marks in-flight and acknowledged rows, and ends\nwith a summary. For superseded-with-changes, evidence and onevcs reclaim\ncome first. Unresolved diagnostics go to stderr in text and unresolved\nin JSON."
+            },
+            {
+              "type": "prose",
+              "text": "Printed landing argv selects the engine publication verbs:"
+            },
+            {
+              "type": "code",
+              "language": "text",
+              "text": "recover_command publish-branch -> onepipeline publish-branch <same args>\nrecover_command recover        -> onepipeline repo-recover <same args>"
+            },
+            {
+              "type": "prose",
+              "text": "Append `--pr-author-graph <absolute PATH>` when configured; otherwise append `--no-draft` and say no drafter is configured. integrate and reclaim remain onevcs verbs. Unreadable graph path: exit 2 before reading recovery evidence."
+            }
+          ]
+        },
+        {
+          "name": "Existing state remains readable",
+          "justification": "Older installed readers keep their records.",
+          "content": [
+            {
+              "type": "prose",
+              "text": "Registry and session formats remain readable. This behavioural decision has no new stored shape."
+            }
+          ]
+        },
+        {
+          "name": "Literal output remains literal",
+          "justification": "Consumers copy the literal output.",
+          "content": [
+            {
+              "type": "prose",
+              "text": "Indented output may contain backticks, including inline `code`."
+            },
+            {
+              "type": "code",
+              "language": "text",
+              "text": "  first\n    ```json\n    {\"literal\": \"```\"}\n    ```\n  last"
+            },
+            {
+              "type": "prose",
+              "text": "The next command is separate explanatory context."
+            },
+            {
+              "type": "code",
+              "language": "bash",
+              "text": "onepipeline unpublished\n  --host"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "acceptance_criteria": [
+    "Explanations are prose and commands remain literal."
+  ],
+  "planned_tasks": []
+}

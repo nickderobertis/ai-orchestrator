@@ -1,0 +1,4 @@
+Translated from ai-orchestrator #1633 revision 2026-10-08T06:02:36Z.
+Read-only GitHub userContentEdits capture; Authority and limits and Printed landing argv
+are explanations outside the literal schema/argv. The additional literal-output decision
+is a regression input for indentation and embedded backticks, not historical #1633 content.

@@ -45,7 +45,7 @@ from project_fixtures import (
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
-from orchestrator import design_approval, plan_review, plan_store
+from orchestrator import design_approval, plan_budgets, plan_review, plan_store
 from orchestrator.criteria_guard import APPENDIX
 from orchestrator.root import REPO_ROOT
 
@@ -857,7 +857,7 @@ def test_a_budget_changed_after_the_review_stops_the_copy_and_copies_nothing(
 
 
 # llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This journey sits beside this module's other `just copy-plan` journeys and drives the same recipe under the same `planToolingWorkspace` inputs, which `tests/plan_tooling/AGENTS.md` states as this project's split; a project of its own would be keyed on those inputs too and add only a target.  # noqa: E501
-def test_each_owned_by_link_points_at_the_copied_task_after_a_local_copy(
+def test_each_budget_name_link_points_at_the_copied_task_after_a_local_copy(
     destination: Path,
 ) -> None:
     """The design document's budget table links each owner where the copy put it.
@@ -865,16 +865,21 @@ def test_each_owned_by_link_points_at_the_copied_task_after_a_local_copy(
     Its answers are what `python -m orchestrator.plan_budgets` prints for the plan — each
     budget with its owning node and the location the drafting store reports for that task —
     rendered into the document through the design-doc template. After `just copy-plan`,
-    every Owned-by link in the copied document is the location the destination reports for
-    the same task with its Budgets fragment, and none is the drafting store's.
+    every linked budget name in the copied document uses the location the destination
+    reports for its task, with no fragment for local destinations, and none is the drafting store's.
     """
     project = _project("copy-owned-links", "route", "worker")
     _, _, native = project.partition(":")
     copied_id = f"{DESTINATION}:{native}"
-    second = {**OWNED_BUDGET, "id": "worker-throughput", "name": "Worker throughput"}
-    _owns(project, "route", [OWNED_BUDGET])
+    modern = {**OWNED_BUDGET, "schema_version": 2, "source": "direct", "check_runtime_seconds": 1}
+    second = {**modern, "id": "worker-throughput", "name": "Worker throughput"}
+    _owns(project, "route", [modern])
     _owns(project, "worker", [second])
-    budgeted(plan_fixture_source.SOURCE, native, _budgets("route-latency", "worker-throughput"))
+    answers = _budgets("route-latency", "worker-throughput")
+    answers["schema_version"] = 2
+    answers["checklist"] = [{**entry, "in_scope": True} for entry in answers["checklist"]]
+    answers["repo_wide_effects"] = []
+    budgeted(plan_fixture_source.SOURCE, native, answers)
     printed = subprocess.run(
         [sys.executable, "-m", "orchestrator.plan_budgets", project],
         cwd=REPO_ROOT,
@@ -926,8 +931,11 @@ def test_each_owned_by_link_points_at_the_copied_task_after_a_local_copy(
     assert "(see its Budgets section)" not in content
     for node, where in landed.items():
         assert "\n## Budgets\n" in Path(where).read_text(encoding="utf-8")
-        assert f"[`{node}`]({where}#budgets)" in content, (node, content)
+        assert f": {where}\n" in content and "#user-content-" not in content, (node, content)
         assert drafted[node] not in content, f"{node} still links the drafting store: {content}"
+    recomputed = plan_budgets.writer_answers(copied_id)
+    assert {entry["node"]: entry["location"] for entry in recomputed["budgets"]} == landed
+    assert all("section_url" not in entry for entry in recomputed["budgets"])
 
 
 # llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This journey sits beside this module's other `just copy-plan` journeys and drives the same recipe under the same `planToolingWorkspace` inputs, which `tests/plan_tooling/AGENTS.md` states as this project's split; a project of its own would be keyed on those inputs too and add only a target.  # noqa: E501

@@ -39,7 +39,7 @@ from project_fixtures import budget_section, budgeted, older_engine, owning, rev
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
-from orchestrator import design_approval, plan_budgets
+from orchestrator import design_approval, plan_budgets, plan_store
 from orchestrator.criteria_guard import APPENDIX
 from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
@@ -440,3 +440,296 @@ def test_a_planning_launchs_project_passes_with_no_budget_answers() -> None:
 
     assert checked.returncode == 0, checked.stdout + checked.stderr
     assert "budgets" not in checked.stderr, checked.stderr
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        None,
+        "source",
+        "runtime",
+        "negative-runtime",
+        "plan-version",
+        "version",
+        "scope",
+        "duplicate-effect",
+        "root-concern",
+        "empty-budget",
+        "empty-effect",
+        "none-effect",
+        "unchanged-repo",
+        "unnormalized-repo",
+        "scope-type",
+    ],
+)
+def test_modern_records_pass_or_refuse_through_check_plan(invalid: str | None) -> None:
+    answers = {**copy.deepcopy(ANSWERS), "schema_version": 2}
+    answers["checklist"] = [{**e, "in_scope": True} for e in answers["checklist"]]
+    budget = {**BUDGET, "schema_version": 2, "source": "telemetry", "check_runtime_seconds": 0}
+    reason = ""
+    match invalid:
+        case "source":
+            budget["source"] = "history"
+            reason = "source"
+        case "runtime":
+            budget["check_runtime_seconds"] = True
+            reason = "check_runtime_seconds"
+        case "negative-runtime":
+            budget["check_runtime_seconds"] = -1
+            reason = "must be >= 0"
+        case "plan-version":
+            answers["schema_version"] = 3
+            reason = "schema_version"
+        case "version":
+            budget["schema_version"] = 3
+            reason = "schema_version"
+        case "scope":
+            answers["checklist"][0]["in_scope"] = False
+            reason = "in_scope=true"
+        case "duplicate-effect":
+            answers["repo_wide_effects"] *= 2
+            reason = "consolidate"
+        case "root-concern":
+            answers["checklist"][0]["concern"] = "gate time"
+            reason = "existing root budgets"
+        case "empty-budget":
+            answers["repo_wide_effects"][0]["budget"] = ""
+            reason = "nonempty root budget"
+        case "empty-effect":
+            answers["repo_wide_effects"][0]["effect"] = ""
+            reason = "actual effect"
+        case "none-effect":
+            answers["repo_wide_effects"][0]["effect"] = "none"
+            reason = "never none"
+        case "unchanged-repo":
+            answers["repo_wide_effects"][0]["repository"] = "github.com/acme/unchanged"
+            reason = "changed repository"
+        case "unnormalized-repo":
+            answers["repo_wide_effects"][0]["repository"] = f"https://{REPOSITORY}"
+            reason = "normalized origin"
+        case "scope-type":
+            answers["checklist"][0]["in_scope"] = 1
+            reason = "not a boolean"
+    project = _drafted(answers, [budget])
+    checked = _check(project)
+    if invalid:
+        assert checked.returncode == 1, checked.stdout + checked.stderr
+        assert reason in checked.stderr, checked.stderr
+    else:
+        assert checked.returncode == 0, checked.stdout + checked.stderr
+
+
+@pytest.mark.reads_docs
+def test_explicit_anchor_capture_and_ordered_example_through_real_templates(tmp_path: Path) -> None:
+    """The current CLI renderer agrees with the captured supplied-content GitHub DOM ids."""
+    artifact = json.loads(
+        (REPO_ROOT / "tests/fixtures/budgets/github-explicit-anchors.json").read_text()
+    )
+    task = budget_section(artifact["budgets"])
+    assert task == artifact["markdown"]
+    assert artifact["html"] and artifact["captured_at"] and artifact["command"]
+    assert artifact["ids"] == [f"user-content-{b['id']}" for b in artifact["budgets"]]
+    for budget in artifact["budgets"]:
+        assert f'<a id="{budget["id"]}"></a>\n### {budget["name"]}' in task
+        assert f'id="user-content-{budget["id"]}"' in artifact["html"]
+    answers = json.loads((REPO_ROOT / "tests/fixtures/design_doc/modern-answers.json").read_text())
+    assert (
+        "2026-10-08T06:02:36Z"
+        in (REPO_ROOT / "tests/fixtures/design_doc/modern-source.txt").read_text()
+    )
+    answers.update(
+        predates_budgets="",
+        plan_budgets={**ANSWERS, "schema_version": 2},
+        budgets=[
+            {
+                **b,
+                "node": "listing",
+                "location": "https://github.com/nickderobertis/onetaskgraph/issues/3304",
+            }
+            for b in artifact["budgets"]
+        ],
+    )
+    written = tmp_path / "answers.json"
+    written.write_text(json.dumps(answers), encoding="utf-8")
+    loader = subprocess.run(
+        [
+            str(REPO_ROOT / ".venv/bin/onepipeline"),
+            "template",
+            "resolve",
+            "design-doc",
+            "--json",
+            "--template-root",
+            str(REPO_ROOT / "templates"),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    rendered = subprocess.run(
+        [
+            str(ONETASKGRAPH_BIN),
+            "template",
+            "render",
+            "--template-loader",
+            "-",
+            "--answers",
+            str(written),
+            "--no-interactive",
+        ],
+        input=loader,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    for index, budget in enumerate(artifact["budgets"], 1):
+        assert (
+            f"[{index}]: https://github.com/nickderobertis/onetaskgraph/issues/3304#user-content-{budget['id']}\n"
+            in rendered
+        )
+        assert f"[{budget['name']}][{index}]" in rendered
+    expected = (REPO_ROOT / "tests/fixtures/design_doc/modern-body.txt").read_text()
+    architecture = rendered.split("## Architecture\n", 1)[1].split("\n## Budgets", 1)[0]
+    assert (
+        architecture
+        == expected.split("## Architecture\n", 1)[1].split("\n## Acceptance criteria", 1)[0]
+    )
+    parts = answers["units"][0]["decisions"][-1]["content"]
+    offsets = [rendered.index(part["text"]) for part in parts]
+    assert offsets == sorted(offsets)
+    assert "`````````text\n  first\n    ```json" in rendered
+    assert "```text\nAuthority and limits" not in rendered
+
+
+@pytest.mark.reads_docs
+def test_budget_links_escape_ids_and_fall_back_for_legacy_and_other_hosts(tmp_path: Path) -> None:
+    import html
+    from urllib.parse import unquote, urlsplit
+
+    identifier = 'id "quoted" & café / space'
+    modern = {
+        **BUDGET,
+        "id": identifier,
+        "schema_version": 2,
+        "source": "direct",
+        "check_runtime_seconds": 0,
+    }
+    section = budget_section([modern])
+    anchor = section.split('<a id="', 1)[1].split('"></a>', 1)[0]
+    assert html.unescape(anchor) == identifier
+    assert '<a id="id &quot;quoted&quot; &amp;' in section
+    # Public render surface, with store answers rather than a second URL resolver.
+    loader = tmp_path / "loader.json"
+    resolved = subprocess.run(
+        [
+            str(REPO_ROOT / ".venv/bin/onepipeline"),
+            "template",
+            "resolve",
+            "design-doc",
+            "--json",
+            "--template-root",
+            str(REPO_ROOT / "templates"),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    loader.write_text(resolved.stdout, encoding="utf-8")
+    base = json.loads((REPO_ROOT / "tests/fixtures/design_doc/modern-answers.json").read_text())
+    for budget, location in (
+        (modern, "https://github.com/a/b/issues/1"),
+        (modern, "https://linear.app/team/issue/ENG-1"),
+        (modern, "authoring:listing"),
+        (BUDGET, "https://github.com/a/b/issues/1"),
+    ):
+        answers = {
+            **base,
+            "plan_budgets": ANSWERS,
+            "budgets": [{**budget, "node": "listing", "location": location}],
+        }
+        rendered = plan_store.sdk(
+            plan_store.client().template_render(template_loader=str(loader), answers=answers)
+        ).body
+        url = next(
+            line.removeprefix("[1]: ") for line in rendered.splitlines() if line.startswith("[1]: ")
+        )
+        parsed = urlsplit(url)
+        expected = urlsplit(location)
+        assert (parsed.scheme, parsed.netloc, parsed.path) == (
+            expected.scheme,
+            expected.netloc,
+            expected.path,
+        )
+        assert unquote(parsed.fragment) == (
+            f"user-content-{identifier}"
+            if budget is modern and expected.netloc == "github.com"
+            else ""
+        )
+
+
+@pytest.mark.reads_docs
+@pytest.mark.parametrize("modern", [True, False])
+def test_summary_omits_unscoped_and_unnamed_legacy_facts_without_losing_scoped_facts(
+    tmp_path: Path, modern: bool
+) -> None:
+    base = json.loads((REPO_ROOT / "tests/fixtures/design_doc/modern-answers.json").read_text())
+    omission = {
+        "concern": "retention",
+        "budget": "",
+        "not_applicable": "Existing storage keeps assets.",
+        "summary": "Retention stays unchanged.",
+    }
+    effect = {
+        "repository": REPOSITORY,
+        "budget": "gate-time",
+        "effect": "+1 s",
+        "summary": "Expected gate effect.",
+    }
+    record = {**ANSWERS, "checklist": [omission], "repo_wide_effects": [effect]}
+    if modern:
+        record.update(
+            schema_version=2,
+            checklist=[
+                {**omission, "in_scope": True},
+                {
+                    **omission,
+                    "concern": "outside changes",
+                    "summary": "EXCLUDED OUTSIDE",
+                    "in_scope": False,
+                },
+            ],
+        )
+    else:
+        record["repo_wide_effects"] += [
+            {**effect, "budget": "", "summary": "EXCLUDED UNNAMED"},
+            {**effect, "effect": "none", "summary": ""},
+        ]
+    plan_budgets.parse_plan(record)
+    loader = tmp_path / "loader.json"
+    resolved = subprocess.run(
+        [
+            str(REPO_ROOT / ".venv/bin/onepipeline"),
+            "template",
+            "resolve",
+            "design-doc",
+            "--json",
+            "--template-root",
+            str(REPO_ROOT / "templates"),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    loader.write_text(resolved.stdout, encoding="utf-8")
+    rendered = plan_store.sdk(
+        plan_store.client().template_render(
+            template_loader=str(loader), answers={**base, "plan_budgets": record, "budgets": []}
+        )
+    ).body
+    assert "## Budgets" in rendered and "Expected gate effect." in rendered
+    assert (
+        "Retention stays unchanged." in rendered
+        if modern
+        else "Retention stays unchanged." not in rendered
+    )
+    assert "EXCLUDED" not in rendered
+    assert "Realistic data" not in rendered and "| Budget |" not in rendered

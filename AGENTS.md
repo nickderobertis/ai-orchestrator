@@ -1587,7 +1587,9 @@ every launch is refused without it save the bounded planning exemption above.
 
 **Every plan states its budgets** on the tasks that own them and in its own description:
 [`docs/budgets.md`](docs/budgets.md) is the convention, and `config/budgets-migration.yaml`
-the one list of plans that predate it.
+the one list of plans that predate it. `orchestrator/plan_budgets.py` owns the versioned
+record authority; reviewers establish concern scope and root-budget existence from the
+changed repositories, while read compatibility preserves older plans.
 
 ### What every launch exports
 

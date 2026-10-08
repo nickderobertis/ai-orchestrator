@@ -119,8 +119,12 @@ VARIABLES: dict[str, tuple[str, str | None, Keys | None]] = {
 #: variable's type, item type and object keys, and the reason a plan predates budgets.
 BUDGET_VARIABLES: dict[str, tuple[str, str | None, Keys | None]] = {
     "predates_budgets": ("text", None, None),
-    "plan_budgets": ("object", None, dict.fromkeys(plan_budgets.PLAN_VARIABLES)),
-    "budgets": ("list", "object", dict.fromkeys(("node", "location", *plan_budgets.BUDGET_KEYS))),
+    "plan_budgets": ("object", None, dict.fromkeys(plan_budgets.MODERN_PLAN_VARIABLES)),
+    "budgets": (
+        "list",
+        "object",
+        dict.fromkeys(("node", "location", *plan_budgets.MODERN_BUDGET_KEYS)),
+    ),
 }
 
 #: One phrase per format rule, which only that rule's statement carries. The guidance
@@ -141,7 +145,7 @@ RULES = {
     "what and why": "carry no interface detail and no implementation detail",
     "one subsection per unit": "Every unit that changes gets one subsection",
     "high-cost decisions": "per high-cost decision the unit owns",
-    "the literal artifact": "Then the literal artifact",
+    "the literal artifact": "The template owns every language label",
     "reversible bullets": "one bullet per trivial or low-cost decision",
     "no links between sections": "no links between sections",
     "reversibility levels": "defined by who would have to act to undo the decision",
@@ -603,15 +607,20 @@ def test_the_1568_fixture_holds_the_shape_the_budget_measures() -> None:
     assert len(answers["budgets"]) == 9
     assert sum(1 for entry in plan["checklist"] if entry["not_applicable"]) == 6
     effects = plan["repo_wide_effects"]
-    assert len({entry["repository"] for entry in effects}) == 4
+    assert len({entry["repository"] for entry in effects}) == 1
     assert sum(1 for entry in effects if entry["effect"] != "none") == 1
     assert len(plan["realistic_data"]) == 1 and plan["spike_findings"] == []
     owned = {entry["node"]: [] for entry in answers["budgets"]}
     for entry in answers["budgets"]:
         owned[entry["node"]].append(
-            plan_budgets.parse_budgets([{key: entry[key] for key in plan_budgets.BUDGET_KEYS}])[0]
+            plan_budgets.parse_budgets(
+                [{key: value for key, value in entry.items() if key not in {"node", "location"}}]
+            )[0]
         )
-    plan_tasks = {"tasks": [{"id": node} for node in owned]}
+    legacy = json.loads(BUDGET_FIXTURE.with_name("issue-1568-legacy.json").read_text())
+    repositories = {e["repository"] for e in legacy["plan_budgets"]["repo_wide_effects"]}
+    assert len(repositories) == 4
+    plan_tasks = {"tasks": [{"id": str(i), "repo": repo} for i, repo in enumerate(repositories)]}
     assert plan_budgets.plan_rule_refusals(plan_budgets.parse_plan(plan), owned, plan_tasks) == []
 
 
@@ -628,16 +637,24 @@ def test_the_1568_fixture_renders_the_summary_a_person_approves(
         "Planned tasks"
     ], sections
     table = [line for line in section.splitlines() if line.startswith("|")]
-    assert table[0] == "| Budget | Target | Basis | Owned by |"
-    for entry, row in zip(_budget_answers()["budgets"], table[2:], strict=True):
+    assert table[0] == "| Budget | Target | Basis | How it is measured | Check runtime |"
+    for index, (entry, row) in enumerate(
+        zip(_budget_answers()["budgets"], table[2:], strict=True), 1
+    ):
+        mode = entry.get("source", "not recorded")
+        runtime = (
+            f"≈{entry['check_runtime_seconds']} s"
+            if entry.get("schema_version") == 2
+            else "not recorded"
+        )
         assert row == (
-            f"| {entry['name']} | ≤ {entry['threshold']} {entry['unit']} | {entry['basis']} | "
-            f"[`{entry['node']}`]({entry['location']}#budgets) |"
+            f"| [{entry['name']}][{index}] | ≤{entry['threshold']} {entry['unit']} | "
+            f"{entry['basis']} | {mode} | {runtime} |"
         ), row
     for entry in _budget_answers()["budgets"]:
         for detail in ("workload", "evidence", "command", "file", "measure"):
             assert str(entry[detail]) not in section, (entry["id"], detail)
-    assert "No effect on `onetaskgraph`, `onepipeline` and `onepipeline-ui`." in section, section
+    assert "No effect on" not in section and "Realistic data" not in section
 
 
 def test_a_minimum_budget_and_a_cell_breaking_answer_stay_one_row(
@@ -647,8 +664,8 @@ def test_a_minimum_budget_and_a_cell_breaking_answer_stay_one_row(
     first = {**answers["budgets"][0], "direction": "min", "name": "Pages | per\nsecond"}
     body = _render(loader, {**ANSWERS, **answers, "budgets": [first]}, tmp_path)
 
-    (row,) = [line for line in _section(body).splitlines() if line.startswith("| Pages")]
-    assert row.startswith("| Pages \\| per second | ≥ 2 requests | measured | "), row
+    (row,) = [line for line in _section(body).splitlines() if line.startswith("| [Pages")]
+    assert row.startswith("| [Pages \\| per second][1] | ≥2 requests | measured | "), row
 
 
 def test_a_plan_that_predates_budgets_renders_one_line_in_place_of_the_summary(
@@ -664,27 +681,19 @@ def test_a_plan_that_predates_budgets_renders_one_line_in_place_of_the_summary(
     "budgets",
     ["none", "absent"],
 )
-def test_a_plan_adding_or_changing_no_budget_renders_no_budget_section(
+def test_informative_omissions_and_effects_render_without_a_feature_budget_change(
     tmp_path: Path, loader: str, budgets: str
 ) -> None:
-    """No heading, no sizing or 10× line, no table and no summary line of any kind."""
+    """Omissions and root effects remain visible even without feature registration."""
     answers = _budget_answers()
     unchanged = [{**entry, "file_change": "none"} for entry in answers["budgets"]]
     held = {**answers, "budgets": unchanged if budgets == "none" else []}
     body = _render(loader, {**ANSWERS, **held}, tmp_path)
 
-    assert "## Budgets" not in body
-    for said in (
-        "What we're sizing for",
-        "What breaks first",
-        "| Budget |",
-        "Not budgeted",
-        "Repo-wide effects",
-        "Realistic data",
-        "Spike findings",
-    ):
-        assert said not in body, said
-    assert body == _render(loader, ANSWERS, tmp_path)
+    assert "## Budgets" in body
+    assert "Not budgeted" in body and "Repo-wide effects" in body
+    assert "Realistic data" not in _section(body)
+    assert ("| Budget |" in body) == (budgets == "none")
 
 
 def test_spike_findings_render_one_line_each_only_when_there_are_any(
@@ -720,4 +729,23 @@ def test_a_repository_with_an_effect_is_never_also_listed_as_unaffected(
     section = _section(_render(loader, {**ANSWERS, **answers, "plan_budgets": plan}, tmp_path))
 
     (line,) = [one for one in section.splitlines() if one.startswith("**Repo-wide effects:**")]
-    assert line == "**Repo-wide effects:** The gate grows by 5 s. No effect on `docs`.", line
+    assert line == "**Repo-wide effects:** `app` / `gate-time`: The gate grows by 5 s.", line
+
+
+def test_modern_architecture_description_restates_the_reader_models() -> None:
+    from orchestrator import design_approval
+
+    description = yaml.safe_load(TEMPLATE.read_text().split("---\n", 2)[1])["variables"]["units"][
+        "description"
+    ]
+    for model in (
+        design_approval.ModernDecision,
+        design_approval.ProsePart,
+        design_approval.CodePart,
+    ):
+        for key in model.__annotations__:
+            assert f"`{key}`" in description or f"{key}:" in description, key
+    for tag in design_approval.PART_KEYS:
+        assert f'"{tag}"' in description
+    assert "letters, digits, underscore, plus or hyphen" in description
+    assert "nonempty ordered list" in description

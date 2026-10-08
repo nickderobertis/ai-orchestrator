@@ -39,23 +39,27 @@ variables:
     required: true
   checklist:
     description: >-
-      One object per concern the plan was checked against, with four string keys: `concern`
-      (the concern, such as latency or gate time), `budget` (the `id` of the budget, on one
+      One object per feature concern with `in_scope` (boolean) and four string keys: `concern`
+      (the concern, such as latency), `budget` (the `id` of the budget, on one
       of the plan's tasks, that covers it), `not_applicable` (a full "n/a because ...") and
       `summary` (that reason on one line of at most 160 characters). Exactly one of `budget`
       and `not_applicable` is non-empty, the other `""`, and `summary` is non-empty exactly
-      when `not_applicable` is.
+      when `not_applicable` is. Covered concerns have in_scope=true and reference an owned
+      budget. in_scope=false means outside these changes; true with n/a is deliberately
+      unbudgeted within these changes. Gate time and change cycle time belong only in
+      repo_wide_effects, governed by existing root budgets.
     type: list
     items: object
     required: true
   repo_wide_effects:
     description: >-
-      At least one object per repository the plan's tasks change, with four string keys:
-      `repository` (its normalized origin), `budget` (the `id` of a budget in that
-      repository's root `budgets.yaml`, or `""` when it has none), `effect` (the expected
-      effect of the plan on it, never empty, and exactly `none` when there is none) and
-      `summary` (that effect on one line of at most 160 characters, non-empty exactly when
-      `effect` is not `none`).
+      Only actual expected effects on existing root budgets of changed repositories,
+      or `[]`. Exactly four string keys: `repository` (normalized origin), `budget`
+      (nonempty root-budget id), `effect` (nonempty, never `none`) and `summary`
+      (one line of at most 160 characters). Each repository/budget pair occurs once;
+      consolidate effects. Verify root-budget existence from the repository read.
+      Feature registration and unaffected repositories do not belong here. Legacy
+      records retain their historical rules.
     type: list
     items: object
     required: true
@@ -78,6 +82,11 @@ variables:
     type: list
     items: object
     default: []
+  schema_version:
+    description: >-
+      Integer literal 2 for newly authored answers. Omitted only for exact legacy records.
+    type: integer
+    required: false
   # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 ---
 {#-

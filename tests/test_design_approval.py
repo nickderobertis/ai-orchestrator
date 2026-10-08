@@ -104,6 +104,7 @@ OTHERWISE: Mapping[str, object] = {
 #: the tests that read them against a real store.
 RULE = design_chain.plan_repository
 FITS = design_approval.fits_in_place
+CONTENT_READER = design_approval.validate_document_content
 
 
 @pytest.fixture(autouse=True)
@@ -118,6 +119,8 @@ def _the_working_directory_layer_answers(monkeypatch: pytest.MonkeyPatch) -> Non
     """
     monkeypatch.setattr(design_approval.design_chain, "plan_repository", lambda _project: None)
     monkeypatch.setattr(design_approval, "fits_in_place", lambda *_arguments: True)
+    # Key tests use fabricated document records; the real-store tests restore this reader.
+    monkeypatch.setattr(design_approval, "validate_document_content", lambda _document: None)
 
 
 @pytest.fixture
@@ -1403,6 +1406,7 @@ def _designed(root: Path, monkeypatch: pytest.MonkeyPatch, answers: Mapping[str,
     Rendered through the pinned engine's resolve piped into the pinned store's `document
     create`, the way a writer renders one, from ``answers`` as the store then holds them.
     """
+    monkeypatch.setattr(design_approval, "validate_document_content", CONTENT_READER)
     monkeypatch.setenv("ONETASKGRAPH_SOURCES__SHAPED__PLUGIN", "local-md")
     monkeypatch.setenv("ONETASKGRAPH_SOURCES__SHAPED__CONFIG__ROOT", str(root))
     (root / "projects").mkdir(parents=True)
@@ -1526,3 +1530,98 @@ def test_a_document_whose_stored_answers_the_template_no_longer_takes_is_sent_to
 
 
 # llmlint: ignore-end[shell_test_tiers_stay_split]
+
+
+@pytest.mark.parametrize(
+    "decision",
+    [
+        {"name": "n", "justification": "j", "content": []},
+        {"name": "n", "justification": "j", "content": "text"},
+        {"name": "n", "justification": "j", "content": [{"type": "unknown", "text": "x"}]},
+        {"name": "n", "justification": "j", "content": [{"type": "code", "text": "x"}]},
+        {"name": "n", "justification": "j", "content": [{"type": "prose", "text": " "}]},
+        {
+            "name": "n",
+            "justification": "j",
+            "content": [{"type": "prose", "text": "```json\nx\n```"}],
+        },
+        {
+            "name": "n",
+            "justification": "j",
+            "content": [{"type": "code", "language": "x y", "text": "x"}],
+        },
+        {
+            "name": "n",
+            "justification": "j",
+            "content": [{"type": "code", "language": "x\ny", "text": "x"}],
+        },
+        {
+            "name": "n",
+            "justification": "j",
+            "content": [{"type": "prose", "text": "x", "language": "text"}],
+        },
+        {"name": "n", "justification": "j", "content": [{"type": "prose", "text": False}]},
+        {"name": "n", "justification": "j", "summary": "x", "artifact": "", "content": []},
+        {"name": "n", "justification": "j", "summary": "x", "artifact": False},
+    ],
+)
+def test_ordered_decisions_are_validated_at_the_approval_reader(decision: object) -> None:
+    """The nested schema refuses malformed parts with an actionable decision path."""
+    with pytest.raises(design_approval.Unrendered, match=r"units\[1\].decisions\[1\]"):
+        design_approval.validate_content({"units": [{"decisions": [decision]}]})
+
+
+def test_modern_and_legacy_decisions_coexist_at_the_reader() -> None:
+    modern = {
+        "name": "n",
+        "justification": "j",
+        "content": [
+            {"type": "prose", "text": "Inline `code` remains explanation."},
+            {"type": "code", "language": "text", "text": "  ```literal\n    x"},
+        ],
+    }
+    legacy = {"name": "old", "justification": "j", "summary": "Historical.", "artifact": ""}
+    assert design_approval.validate_content({"units": [{"decisions": [modern, legacy]}]}) is None
+
+
+@pytest.mark.parametrize("answers", [None, [], "not an object"])
+def test_non_object_design_answers_are_refused_defensively(answers: object) -> None:
+    with pytest.raises(design_approval.Unrendered, match="answers must be an object"):
+        design_approval.validate_content(answers)
+
+
+@pytest.mark.parametrize(
+    "prose, fenced",
+    [
+        ("- item\n    ```python\n    x\n    ```", True),
+        ("- item\n  - nested\n      ~~~text\n      x\n      ~~~", True),
+        ("> - item\n>     ```text\n>     x\n>     ```", True),
+        ("    ```literal\n    indented code", False),
+        ("Inline `code` and ```inline``` remain prose.", False),
+    ],
+)
+def test_prose_fence_rule_resolves_list_and_quote_containers(prose: str, fenced: bool) -> None:
+    assert design_approval.has_prose_fence(prose) is fenced
+
+
+@pytest.mark.parametrize(
+    "answers, said",
+    [
+        ({"units": "not a list"}, r"`units` must be a list"),
+        ({"units": [{"decisions": "x"}]}, r"units\[1\]\.decisions must be a list"),
+        ({"units": ["not a unit"]}, r"units\[1\]\.decisions must be a list"),
+        (
+            {"units": [{"decisions": [{"name": 1, "justification": "j", "content": []}]}]},
+            r"units\[1\]\.decisions\[1\] name and justification must be strings",
+        ),
+    ],
+)
+def test_malformed_units_and_decision_fields_are_refused(answers: object, said: str) -> None:
+    with pytest.raises(design_approval.Unrendered, match=said):
+        design_approval.validate_content(answers)
+
+
+def test_prose_fence_rule_leaves_a_list_container_on_dedent() -> None:
+    """A fence after the list ends is an ordinary top-level fence."""
+    assert design_approval.has_prose_fence("- item\n\nback out\n```text\nx\n```") is True
+    assert design_approval.has_prose_fence("- item\n\nback out\n  ~~ not a fence") is False

@@ -231,8 +231,9 @@ def test_the_summary_command_reports_failure_without_leaving_scratch(
                 case "malformed-record":
                     answers["plan_budgets"]["sizing"] = 42
                 case _:
-                    for budget in answers["budgets"]:
-                        budget["file_change"] = "none"
+                    answers["budgets"] = []
+                    answers["plan_budgets"]["checklist"] = []
+                    answers["plan_budgets"]["repo_wide_effects"] = []
             fixture.write_text(json.dumps(answers), encoding="utf-8")
     ran = subprocess.run(
         [str(script)], cwd=root, env=environment, capture_output=True, text=True, timeout=120

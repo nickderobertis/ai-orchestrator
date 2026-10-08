@@ -11,109 +11,112 @@
         "budget": "github-asset-copy-seconds",
         "concern": "latency (GitHub copy a person waits on)",
         "not_applicable": "",
-        "summary": "",
-        "in_scope": true
+        "summary": ""
       },
       {
         "budget": "linear-asset-copy-seconds",
         "concern": "latency (Linear copy a person waits on)",
         "not_applicable": "",
-        "summary": "",
-        "in_scope": true
+        "summary": ""
       },
       {
         "budget": "github-concurrent-copies-refused",
         "concern": "rate-limit headroom under concurrent copies (GitHub secondary limiter)",
         "not_applicable": "",
-        "summary": "",
-        "in_scope": true
+        "summary": ""
       },
       {
         "budget": "github-concurrent-copy-seconds",
         "concern": "latency under concurrent copies (GitHub)",
         "not_applicable": "",
-        "summary": "",
-        "in_scope": true
+        "summary": ""
       },
       {
         "budget": "linear-concurrent-copies-refused",
         "concern": "rate-limit headroom under concurrent copies (Linear key)",
         "not_applicable": "",
-        "summary": "",
-        "in_scope": true
+        "summary": ""
       },
       {
         "budget": "github-asset-requests-per-new-asset",
         "concern": "quota and rate-limit headroom (GitHub)",
         "not_applicable": "",
-        "summary": "",
-        "in_scope": true
+        "summary": ""
       },
       {
         "budget": "github-asset-requests-per-unchanged-asset",
         "concern": "quota and rate-limit headroom (GitHub, re-copy)",
         "not_applicable": "",
-        "summary": "",
-        "in_scope": true
+        "summary": ""
       },
       {
         "budget": "linear-asset-requests-per-new-asset",
         "concern": "quota and rate-limit headroom (Linear)",
         "not_applicable": "",
-        "summary": "",
-        "in_scope": true
+        "summary": ""
       },
       {
         "budget": "linear-asset-requests-per-unchanged-asset",
         "concern": "quota and rate-limit headroom (Linear, re-copy)",
         "not_applicable": "",
-        "summary": "",
-        "in_scope": true
+        "summary": ""
       },
       {
         "budget": "",
         "concern": "how the work scales with data",
         "not_applicable": "n/a because requests grow linearly with the number of images and are bounded per image by the four request budgets, and image size is bounded by each destination's own upload limit, which the plugin refuses by name rather than degrading.",
-        "summary": "Requests grow linearly per image and each is budgeted; image size is capped by each destination.",
-        "in_scope": true
+        "summary": "Requests grow linearly per image and each is budgeted; image size is capped by each destination."
       },
       {
         "budget": "",
         "concern": "spend",
         "not_applicable": "n/a by the manager's ruling, an accepted exception (exception 8): the only new spend is one `spike-visual` dispatch per visual plan, which the user asked for cheap (mocked, unverified, minimal), and its cost is bounded by a hard turn cap, `max_turns` no larger than 40, which aio-visual-screenshots' planner guidance sets on every `spike-visual`, rather than by a measured budget, a command or a budgets-file change. A plan with no visual change dispatches nothing new.",
-        "summary": "Accepted exception: the one new dispatch, `spike-visual`, is capped at 40 turns.",
-        "in_scope": true
+        "summary": "Accepted exception: the one new dispatch, `spike-visual`, is capped at 40 turns."
       },
       {
         "budget": "",
         "concern": "latency (the visual spike delays the design document)",
         "not_applicable": "n/a by the same accepted exception (exception 8): the `spike-visual` dispatch delays the design document by at most its 40-turn cap, and no planning-latency budget or measurement is added for it.",
-        "summary": "Accepted exception: the spike delays the document by at most its 40-turn cap.",
-        "in_scope": true
+        "summary": "Accepted exception: the spike delays the document by at most its 40-turn cap."
       },
       {
         "budget": "",
         "concern": "resource use",
         "not_applicable": "n/a because the stored images are at most about 12 MB per plan (24 images of up to 500 KB) under the gitignored authoring root, beside the documents they belong to.",
-        "summary": "At most about 12 MB of images per plan, in the gitignored authoring root.",
-        "in_scope": true
+        "summary": "At most about 12 MB of images per plan, in the gitignored authoring root."
       },
       {
         "budget": "",
-        "concern": "image retention",
-        "not_applicable": "n/a because assets remain in the existing gitignored authoring root; these changes add no retention service or deletion policy.",
-        "summary": "Existing authoring storage keeps assets; no retention or deletion policy is added.",
-        "in_scope": true
+        "concern": "gate time",
+        "not_applicable": "n/a for a new budget. onetaskgraph has no gate-time budget, and ai-orchestrator's `gate-time` (1800 s) absorbs its few template tests and two journeys, which add a few seconds. For onetaskgraph, the asset journeys run once, in the ordinary `test` targets of `onetaskgraph-github-projects-e2e` and `onetaskgraph-linear-e2e`, and only when a change affects those domains. They add an estimated 10 to 30 s of real time to each of those test runs: generating about 110 noise PNGs (about 55 MB), passing them through the loopback, and spawning the binary. They never sleep for pacing, backoff or loopback latency, because those run on a simulated clock. Each node reports the figure it measured, and holds its three-process journey under 60 s of real time. The `budgets` targets add only telemetry analysis, well under a second per budget. They run no journey a second time and are cached on the domain tree, the measured production code and the onebudgetspec pin. The plan as first written would instead have re-run every journey for its budget and slept through about 6 to 10 minutes of real pacing and backoff per affected check.",
+        "summary": "A few seconds of new tests, absorbed by the existing gate-time budget."
       },
       {
         "budget": "",
-        "concern": "upload bandwidth",
-        "not_applicable": "n/a because at most 12 MB is uploaded per largest copy, using existing destination transports; these changes add no bandwidth control.",
-        "summary": "Largest copies upload 12 MB on existing transports, without bandwidth control.",
-        "in_scope": true
+        "concern": "change cycle time",
+        "not_applicable": "n/a because ai-orchestrator's `cycle-time` budget already measures each landed change, and this plan expects no effect on it beyond the chain's own release waits.",
+        "summary": "The existing cycle-time budget already measures every landed change."
       }
     ],
     "repo_wide_effects": [
+      {
+        "repository": "github.com/nickderobertis/onetaskgraph",
+        "budget": "",
+        "effect": "none",
+        "summary": ""
+      },
+      {
+        "repository": "github.com/nickderobertis/onepipeline",
+        "budget": "",
+        "effect": "none",
+        "summary": ""
+      },
+      {
+        "repository": "github.com/nickderobertis/onepipeline-ui",
+        "budget": "",
+        "effect": "none",
+        "summary": ""
+      },
       {
         "repository": "github.com/nickderobertis/ai-orchestrator",
         "budget": "gate-time",
@@ -130,8 +133,7 @@
         "summary": "Generated noise PNGs of 50 to 500 KB: real-sized uploads with nothing to commit or maintain."
       }
     ],
-    "spike_findings": [],
-    "schema_version": 2
+    "spike_findings": []
   },
   "budgets": [
     {
@@ -149,11 +151,8 @@
       "direction": "max",
       "threshold": 2,
       "workload": "A document copy carrying 6 new images, and a task copy carrying 2, into a github-projects source pointed at the loopback endpoint; the repository-id read is counted once per source instance and excluded from the per-image figure. Each image is a PNG generated in the journey, between 50 KB and 500 KB (50,000 to 500,000 bytes), spread across that range and including one of about 500 KB (450,000 to 500,000 bytes); the journey records each image's size and the analysis fails without a figure when the count or any size differs.",
-      "evidence": "Manager's probe, 2026-10-06: one upload (HTTP 201, 0.8 s) plus one authenticated GET (200) per image; no spike. Summary workload illustration: command runtime is estimated at 1 seconds from the historical gate-time explanation, not a measured command timing.",
-      "command": "Analysis of the telemetry the GitHub Projects (`onetaskgraph-github-projects-e2e`) domain's asset journeys record during its ordinary `test` target, reported through `onebudgetspec_core::report` by the command (or the one generic runner reading `ONEBUDGETSPEC_BUDGET_ID`) the convention lands in `otg-linear-budgets-domain`. It runs no journey and no `cargo test`, and it is cached on the domain tree, the measured production code and the onebudgetspec pin.",
-      "schema_version": 2,
-      "source": "telemetry",
-      "check_runtime_seconds": 1
+      "evidence": "Manager's probe, 2026-10-06: one upload (HTTP 201, 0.8 s) plus one authenticated GET (200) per image; no spike.",
+      "command": "Analysis of the telemetry the GitHub Projects (`onetaskgraph-github-projects-e2e`) domain's asset journeys record during its ordinary `test` target, reported through `onebudgetspec_core::report` by the command (or the one generic runner reading `ONEBUDGETSPEC_BUDGET_ID`) the convention lands in `otg-linear-budgets-domain`. It runs no journey and no `cargo test`, and it is cached on the domain tree, the measured production code and the onebudgetspec pin."
     },
     {
       "node": "otg-assets-github",
@@ -170,11 +169,8 @@
       "direction": "max",
       "threshold": 0,
       "workload": "The same document and task re-copied 3 times with unchanged images, then once with one image's bytes changed (that one counted against the new-asset budget instead). The images are those of the new-asset budget's workload, sized the same.",
-      "evidence": "Design: the recorded `{sha256, url}` makes an unchanged image cost nothing; no spike. Summary workload illustration: command runtime is estimated at 1 seconds from the historical gate-time explanation, not a measured command timing.",
-      "command": "Analysis of the telemetry the GitHub Projects (`onetaskgraph-github-projects-e2e`) domain's asset journeys record during its ordinary `test` target, reported through `onebudgetspec_core::report` by the command (or the one generic runner reading `ONEBUDGETSPEC_BUDGET_ID`) the convention lands in `otg-linear-budgets-domain`. It runs no journey and no `cargo test`, and it is cached on the domain tree, the measured production code and the onebudgetspec pin.",
-      "schema_version": 2,
-      "source": "telemetry",
-      "check_runtime_seconds": 1
+      "evidence": "Design: the recorded `{sha256, url}` makes an unchanged image cost nothing; no spike.",
+      "command": "Analysis of the telemetry the GitHub Projects (`onetaskgraph-github-projects-e2e`) domain's asset journeys record during its ordinary `test` target, reported through `onebudgetspec_core::report` by the command (or the one generic runner reading `ONEBUDGETSPEC_BUDGET_ID`) the convention lands in `otg-linear-budgets-domain`. It runs no journey and no `cargo test`, and it is cached on the domain tree, the measured production code and the onebudgetspec pin."
     },
     {
       "node": "otg-assets-linear",
@@ -191,11 +187,8 @@
       "direction": "max",
       "threshold": 3,
       "workload": "A document copy carrying 6 new images, and an issue copy carrying 2, into a linear source pointed at the loopback workspace. Each image is a PNG generated in the journey, between 50 KB and 500 KB (50,000 to 500,000 bytes), spread across that range and including one of about 500 KB (450,000 to 500,000 bytes); the journey records each image's size and the analysis fails without a figure when the count or any size differs.",
-      "evidence": "Linear's documented upload flow is one mutation plus one PUT; one verifying GET mirrors the GitHub plugin's check; no spike. Summary workload illustration: command runtime is estimated at 1 seconds from the historical gate-time explanation, not a measured command timing.",
-      "command": "Analysis of the telemetry the Linear (`onetaskgraph-linear-e2e`) domain's asset journeys record during its ordinary `test` target, reported through `onebudgetspec_core::report` by the command (or the one generic runner reading `ONEBUDGETSPEC_BUDGET_ID`) the convention lands in `otg-linear-budgets-domain`. It runs no journey and no `cargo test`, and it is cached on the domain tree, the measured production code and the onebudgetspec pin.",
-      "schema_version": 2,
-      "source": "telemetry",
-      "check_runtime_seconds": 1
+      "evidence": "Linear's documented upload flow is one mutation plus one PUT; one verifying GET mirrors the GitHub plugin's check; no spike.",
+      "command": "Analysis of the telemetry the Linear (`onetaskgraph-linear-e2e`) domain's asset journeys record during its ordinary `test` target, reported through `onebudgetspec_core::report` by the command (or the one generic runner reading `ONEBUDGETSPEC_BUDGET_ID`) the convention lands in `otg-linear-budgets-domain`. It runs no journey and no `cargo test`, and it is cached on the domain tree, the measured production code and the onebudgetspec pin."
     },
     {
       "node": "otg-assets-linear",
@@ -212,11 +205,8 @@
       "direction": "max",
       "threshold": 0,
       "workload": "The same document and issue re-copied 3 times with unchanged images. The images are those of the new-asset budget's workload, sized the same.",
-      "evidence": "Design: the recorded `{sha256, url}` makes an unchanged image cost nothing; no spike. Summary workload illustration: command runtime is estimated at 1 seconds from the historical gate-time explanation, not a measured command timing.",
-      "command": "Analysis of the telemetry the Linear (`onetaskgraph-linear-e2e`) domain's asset journeys record during its ordinary `test` target, reported through `onebudgetspec_core::report` by the command (or the one generic runner reading `ONEBUDGETSPEC_BUDGET_ID`) the convention lands in `otg-linear-budgets-domain`. It runs no journey and no `cargo test`, and it is cached on the domain tree, the measured production code and the onebudgetspec pin.",
-      "schema_version": 2,
-      "source": "telemetry",
-      "check_runtime_seconds": 1
+      "evidence": "Design: the recorded `{sha256, url}` makes an unchanged image cost nothing; no spike.",
+      "command": "Analysis of the telemetry the Linear (`onetaskgraph-linear-e2e`) domain's asset journeys record during its ordinary `test` target, reported through `onebudgetspec_core::report` by the command (or the one generic runner reading `ONEBUDGETSPEC_BUDGET_ID`) the convention lands in `otg-linear-budgets-domain`. It runs no journey and no `cargo test`, and it is cached on the domain tree, the measured production code and the onebudgetspec pin."
     },
     {
       "node": "otg-assets-github",
@@ -233,11 +223,8 @@
       "direction": "max",
       "threshold": 60,
       "workload": "One project copy carrying a plan with 7 tasks and 3 documents, two of them holding 12 new images each (24 uploads, 24 verifying reads, about 25 mutations), default pacing (750 ms between content-creating requests). Every image is a PNG generated in the journey of about 500 KB (450,000 to 500,000 bytes), about 12 MB per copy, received in full by the loopback; the journey records each image's size and the analysis fails without a figure when the count or any size differs.",
-      "evidence": "Arithmetic: about 49 content-creating requests paced at 750 ms is at least 37 s of simulated time, and the 0.8 s uploads overlap that spacing; manager's probe of 0.8 s per upload. No spike. Summary workload illustration: command runtime is estimated at 1 seconds from the historical gate-time explanation, not a measured command timing.",
-      "command": "Analysis of the telemetry the GitHub Projects (`onetaskgraph-github-projects-e2e`) domain's asset journeys record during its ordinary `test` target, reported through `onebudgetspec_core::report` by the command (or the one generic runner reading `ONEBUDGETSPEC_BUDGET_ID`) the convention lands in `otg-linear-budgets-domain`. It runs no journey and no `cargo test`, and it is cached on the domain tree, the measured production code and the onebudgetspec pin.",
-      "schema_version": 2,
-      "source": "telemetry",
-      "check_runtime_seconds": 1
+      "evidence": "Arithmetic: about 49 content-creating requests paced at 750 ms is at least 37 s of simulated time, and the 0.8 s uploads overlap that spacing; manager's probe of 0.8 s per upload. No spike.",
+      "command": "Analysis of the telemetry the GitHub Projects (`onetaskgraph-github-projects-e2e`) domain's asset journeys record during its ordinary `test` target, reported through `onebudgetspec_core::report` by the command (or the one generic runner reading `ONEBUDGETSPEC_BUDGET_ID`) the convention lands in `otg-linear-budgets-domain`. It runs no journey and no `cargo test`, and it is cached on the domain tree, the measured production code and the onebudgetspec pin."
     },
     {
       "node": "otg-assets-github",
@@ -254,11 +241,8 @@
       "direction": "max",
       "threshold": 0,
       "workload": "3 processes start the same-sized copy within 1 s of each other, each a plan with 24 new images and about 25 mutations (about 147 content-creating requests in all), each with default pacing and retry budget (120 s per call). Each copy's 24 images are generated PNGs of about 500 KB (450,000 to 500,000 bytes), about 36 MB across the three copies; the journey records each image's size and the analysis fails without a figure when the count or any size differs.",
-      "evidence": "Arithmetic: 147 requests at 80 a minute drain in about 110 s, and no single call waits more than one 60 s window, which is inside the 120 s retry budget. No spike. Summary workload illustration: command runtime is estimated at 1 seconds from the historical gate-time explanation, not a measured command timing.",
-      "command": "Analysis of the telemetry the GitHub Projects (`onetaskgraph-github-projects-e2e`) domain's asset journeys record during its ordinary `test` target, reported through `onebudgetspec_core::report` by the command (or the one generic runner reading `ONEBUDGETSPEC_BUDGET_ID`) the convention lands in `otg-linear-budgets-domain`. It runs no journey and no `cargo test`, and it is cached on the domain tree, the measured production code and the onebudgetspec pin.",
-      "schema_version": 2,
-      "source": "telemetry",
-      "check_runtime_seconds": 1
+      "evidence": "Arithmetic: 147 requests at 80 a minute drain in about 110 s, and no single call waits more than one 60 s window, which is inside the 120 s retry budget. No spike.",
+      "command": "Analysis of the telemetry the GitHub Projects (`onetaskgraph-github-projects-e2e`) domain's asset journeys record during its ordinary `test` target, reported through `onebudgetspec_core::report` by the command (or the one generic runner reading `ONEBUDGETSPEC_BUDGET_ID`) the convention lands in `otg-linear-budgets-domain`. It runs no journey and no `cargo test`, and it is cached on the domain tree, the measured production code and the onebudgetspec pin."
     },
     {
       "node": "otg-assets-github",
@@ -275,11 +259,8 @@
       "direction": "max",
       "threshold": 240,
       "workload": "The same 3 concurrent copies as github-concurrent-copies-refused, with the loopback latencies of github-asset-copy-seconds. The images are sized as in github-concurrent-copies-refused.",
-      "evidence": "Arithmetic: about 110 s to drain at the limiter's rate, plus waits that overshoot it by up to one backoff step each. No spike. Summary workload illustration: command runtime is estimated at 1 seconds from the historical gate-time explanation, not a measured command timing.",
-      "command": "Analysis of the telemetry the GitHub Projects (`onetaskgraph-github-projects-e2e`) domain's asset journeys record during its ordinary `test` target, reported through `onebudgetspec_core::report` by the command (or the one generic runner reading `ONEBUDGETSPEC_BUDGET_ID`) the convention lands in `otg-linear-budgets-domain`. It runs no journey and no `cargo test`, and it is cached on the domain tree, the measured production code and the onebudgetspec pin.",
-      "schema_version": 2,
-      "source": "telemetry",
-      "check_runtime_seconds": 1
+      "evidence": "Arithmetic: about 110 s to drain at the limiter's rate, plus waits that overshoot it by up to one backoff step each. No spike.",
+      "command": "Analysis of the telemetry the GitHub Projects (`onetaskgraph-github-projects-e2e`) domain's asset journeys record during its ordinary `test` target, reported through `onebudgetspec_core::report` by the command (or the one generic runner reading `ONEBUDGETSPEC_BUDGET_ID`) the convention lands in `otg-linear-budgets-domain`. It runs no journey and no `cargo test`, and it is cached on the domain tree, the measured production code and the onebudgetspec pin."
     },
     {
       "node": "otg-assets-linear",
@@ -296,11 +277,8 @@
       "direction": "max",
       "threshold": 90,
       "workload": "One project copy carrying a plan with 7 issues and 3 documents, two of them holding 12 new images each (24 `fileUpload` mutations, 24 PUTs, 24 verifying reads). Every image is a PNG generated in the journey of about 500 KB (450,000 to 500,000 bytes), about 12 MB per copy, received in full by the loopback; the journey records each image's size and the analysis fails without a figure when the count or any size differs.",
-      "evidence": "Arithmetic: 24 × (0.2 + 0.8 + 0.2) s is about 29 s serially, plus the plan's own writes. No spike. Summary workload illustration: command runtime is estimated at 20 seconds from the historical gate-time explanation, not a measured command timing.",
-      "command": "Illustrative direct workload: execute the Linear loopback 24-image asset-copy journey and report its elapsed seconds, including setup; do not read historical telemetry.",
-      "schema_version": 2,
-      "source": "direct",
-      "check_runtime_seconds": 20
+      "evidence": "Arithmetic: 24 × (0.2 + 0.8 + 0.2) s is about 29 s serially, plus the plan's own writes. No spike.",
+      "command": "Analysis of the telemetry the Linear (`onetaskgraph-linear-e2e`) domain's asset journeys record during its ordinary `test` target, reported through `onebudgetspec_core::report` by the command (or the one generic runner reading `ONEBUDGETSPEC_BUDGET_ID`) the convention lands in `otg-linear-budgets-domain`. It runs no journey and no `cargo test`, and it is cached on the domain tree, the measured production code and the onebudgetspec pin."
     },
     {
       "node": "otg-assets-linear",

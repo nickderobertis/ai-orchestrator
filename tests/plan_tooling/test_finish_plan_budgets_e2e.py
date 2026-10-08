@@ -115,6 +115,12 @@ ANSWERS: dict[str, object] = {
     "spike_findings": [],
 }
 
+# Newly created current-template plans state v2 explicitly; legacy is read compatibility.
+BUDGET.update(schema_version=2, source="direct", check_runtime_seconds=1)
+ANSWERS.update(schema_version=2)
+for entry in ANSWERS["checklist"]:
+    entry["in_scope"] = True
+
 #: The doubled writer: what a design-doc dispatch does, as one program. It reads its own
 #: task out of the store, runs the budget command the task names, applies the one change a
 #: journey asks of it to that command's output, and renders the document from those answers
@@ -142,6 +148,10 @@ match change:
     case "invented-predates":
         budgets["predates_budgets"] = "it was written before budgets"
 answers.update(budgets)
+if change == "fenced-prose":
+    answers["units"][0]["decisions"][0]["content"] = [
+        {"type": "prose", "text": "```text\nexplanation\n```"}
+    ]
 loader = subprocess.run(
     [engine, "template", "resolve", "design-doc", "--json"],
     capture_output=True, text=True, check=True,
@@ -163,7 +173,10 @@ def _writes_from_its_task(bench: Bench, drafted: Drafted, run: RunId, change: st
     writer = bench.tmp_path / "writer.py"
     writer.write_text(WRITER, encoding="utf-8")
     base = bench.tmp_path / f"{drafted.document}.base.json"
-    base.write_text(json.dumps(_answers(drafted)), encoding="utf-8")
+    answers = _answers(drafted)
+    example = json.loads((REPO_ROOT / "tests/fixtures/design_doc/modern-answers.json").read_text())
+    answers["units"] = example["units"]
+    base.write_text(json.dumps(answers), encoding="utf-8")
     keyed = bench.tmp_path / f"commands-{drafted.project}.json"
     source, _, project = drafted.qualified.partition(":")
     keyed.write_text(
@@ -223,6 +236,7 @@ def _finish(
     return bench, drafted, finished, task
 
 
+@pytest.mark.reads_docs
 @pytest.mark.xdist_group("finish-plan")
 def test_a_budgeted_plans_writer_copies_the_budget_command_and_its_document_summarizes_them(
     tmp_path: Path, oneharness_bin: str
@@ -247,20 +261,23 @@ def test_a_budgeted_plans_writer_copies_the_budget_command_and_its_document_summ
         for held in json.loads(listed.stdout)["items"]
         if held["item"]["metadata"].get("onepipeline.id") == NODE
     ]
-    assert "**What we're sizing for.** 2,000 nodes per plan, 3 runs at once." in stored, stored
-    assert (
-        f"| Time to the first page | ≤ 800 ms | measured | [`{NODE}`]({owner}#budgets) |"
-    ) in stored, stored
+    assert "**Sizing.** 2,000 nodes per plan, 3 runs at once." in stored, stored
+    assert "| [Time to the first page][1] | ≤800 ms | measured | direct | ≈1 s |" in stored
+    assert f"[1]: {owner}\n" in stored and "#user-content-" not in stored
+    assert "Authority and limits of this schema:" in stored
+    assert "Printed landing argv selects" in stored
     assert "- spend: It calls no paid API." in stored, stored
     summary = stored.split("## Budgets\n", 1)[1].split("\n## ", 1)[0]
     assert "spike-listing measured 420 ms" not in summary, "budget detail reached the summary"
     assert _records(bench.destination), "nothing was copied"
 
 
+@pytest.mark.reads_docs
 @pytest.mark.xdist_group("finish-plan")
 @pytest.mark.parametrize(
     ("change", "said"),
     [
+        ("fenced-prose", "contains a fenced-code block"),
         (
             "changed-target",
             "its budget 'listing-latency' states the `threshold` 900, where the records state 800",
@@ -284,9 +301,11 @@ def test_a_document_whose_budget_answers_differ_is_refused_before_anything_is_co
         pytest.skip("just is not installed")
     bench, drafted, refused, _ = _finish(tmp_path, oneharness_bin, f"finish-plan-{change}", change)
 
-    assert refused.returncode == DOCUMENT_REFUSED, f"{refused.stdout}\n{refused.stderr}"
+    expected = 2 if change == "fenced-prose" else DOCUMENT_REFUSED
+    assert refused.returncode == expected, f"{refused.stdout}\n{refused.stderr}"
     assert said in refused.stderr, refused.stderr
-    assert "restates budget answers that differ from" in refused.stderr, refused.stderr
+    if change != "fenced-prose":
+        assert "restates budget answers that differ from" in refused.stderr, refused.stderr
     assert drafted.document_path.exists(), "the writer's document was not stored"
     assert _records(bench.destination) == [], _records(bench.destination)
 
