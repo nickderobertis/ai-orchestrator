@@ -36,6 +36,8 @@ from nx_inputs import (
     CODE_SCOPED,
     DAG_UI_ROOT,
     DAG_UI_WORKSPACE,
+    E2E_ROOT,
+    E2E_WORKSPACE,
     GRACEFUL_CANCEL_ROOT,
     GRACEFUL_CANCEL_WORKSPACE,
     HOST_SWEEP_ROOT,
@@ -51,7 +53,6 @@ from nx_inputs import (
     PROJECT_STORE_RACE_ROOT,
     PROJECT_STORE_RACE_WORKSPACE,
     RECIPE_SCOPED,
-    RECIPE_WORKSPACE,
     RUN_END_HOOKS_ROOT,
     RUN_END_HOOKS_WORKSPACE,
     SESSION_OPEN_CONFLICT_ROOT,
@@ -63,6 +64,7 @@ from nx_inputs import (
     SESSION_SETUP_WORKSPACE,
     UNFINISHED_ROOT,
     UNFINISHED_WORKSPACE,
+    UNIT_WORKSPACE,
     UNPUBLISHED_VIEW_ROOT,
     UNPUBLISHED_VIEW_WORKSPACE,
     UNWATCHED_ROOT,
@@ -70,6 +72,8 @@ from nx_inputs import (
     WRITEBACK_BUDGET_ROOT,
     WRITEBACK_BUDGET_WORKSPACE,
     covers,
+    marker_tier_root,
+    project_declarations,
     repository_relative,
     target_input_globs,
 )
@@ -446,7 +450,7 @@ def _no_nx_daemon(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _outside_the_code_key(file: object, globs: list[str]) -> str | None:
-    """Return the repository-relative path ``file`` names when `codeWorkspace` omits it.
+    """Return the repository-relative path ``file`` names when `unitWorkspace` omits it.
 
     Only this checkout's own content counts. A throwaway copy of the tree — which is
     what every workspace journey reads — lives outside `REPO_ROOT` and is not the
@@ -461,9 +465,9 @@ def _outside_the_code_key(file: object, globs: list[str]) -> str | None:
     if isinstance(named, bytes):
         named = named.decode("utf-8", "replace")
     # Every open in the suite passes through here, so decide on a substring before
-    # paying for a syscall. The code key drops exactly one thing: this repository's
-    # prose.
-    if not (named.endswith(".md") or DOCUMENTATION_DIRECTORY in named):
+    # paying for a syscall. The unit key drops exactly two things: this repository's
+    # prose, and the journeys the `orchestrator-e2e` project owns.
+    if not (named.endswith(".md") or DOCUMENTATION_DIRECTORY in named or E2E_ROOT in named):
         return None
     relative = repository_relative(named)
     if relative is None or covers(globs, relative):
@@ -495,9 +499,11 @@ def _code_key_reads_are_declared(
 ) -> None:
     """Hold a test to the cache key its tier is memoized on.
 
-    `orchestrator:test` is keyed on less than the workspace so that editing prose
-    stops charging for a suite that would return the same verdict. That key is only
-    sound while the tests it covers genuinely ignore what it drops, and "genuinely"
+    `orchestrator:test` and `orchestrator-e2e:test` are keyed on less than the workspace
+    — the first without prose or the journeys, the second without prose or any other
+    test project's files — so that editing what a tier cannot read stops charging for a
+    suite that would return the same verdict. That key is only sound while the tests it
+    covers genuinely ignore what it drops, and "genuinely"
     cannot be a reviewer's recollection: a test that quietly starts asserting on
     `AGENTS.md` would replay a green verdict for a tree whose tests would have failed.
 
@@ -524,9 +530,16 @@ def _code_key_reads_are_declared(
     # than on this one; the guard below this one is what holds it to that key.
     if _owned_project(request) is not None:
         return
+    root = _marker_tier_root(request)
     # Resolved before the wrapper is installed: reading the declaration through the
     # guard that consults it is a loop waiting for its first prose-shaped path.
-    globs = target_input_globs("orchestrator", CODE_SCOPED)
+    globs = target_input_globs(root, CODE_SCOPED)
+    # The journeys' key leaves out far more than prose — every other test project's
+    # files — so a journey's every read is held to it; the unit key drops only what the
+    # substring test in `_outside_the_code_key` names.
+    outside = _outside_a_key if root == E2E_ROOT else _outside_the_code_key
+    key = E2E_WORKSPACE if root == E2E_ROOT else UNIT_WORKSPACE
+    project = project_declarations()[root]["name"]
     opener = builtins.open
 
     # `Any` throughout because this stands in for `open` itself: its signature is a
@@ -535,12 +548,13 @@ def _code_key_reads_are_declared(
     # Restating those overloads here would narrow real call sites to satisfy a
     # wrapper that only inspects the first argument and forwards the rest untouched.
     def guarded(file: Any, *args: Any, **kwargs: Any) -> Any:
-        uncovered = _outside_the_code_key(file, globs)
+        uncovered = outside(file, globs)
         if uncovered is not None:
             raise AssertionError(
-                f"{request.node.name} reads {uncovered}, which the code-only test key "
-                f"does not cover; mark it @pytest.mark.{READS_DOCS_MARKER} so it runs "
-                "in the whole-workspace tier"
+                f"{request.node.name} reads {uncovered}, which {project}:{CODE_SCOPED}'s "
+                f"key does not cover; mark it @pytest.mark.{READS_DOCS_MARKER} so it runs "
+                f"in the whole-workspace tier, or add the path to {key} in "
+                f"{root}/project.json when the tier is meant to be keyed on it"
             )
         return opener(file, *args, **kwargs)
 
@@ -548,6 +562,13 @@ def _code_key_reads_are_declared(
     # `builtins`, so a guard on one alone would miss every `Path.read_text`.
     monkeypatch.setattr(builtins, "open", guarded)
     monkeypatch.setattr(io, "open", guarded)
+
+
+def _marker_tier_root(request: pytest.FixtureRequest) -> str:
+    """The root of the marker-routed project this test belongs to: the journeys' or the
+    orchestrator project's, by where its module lives."""
+    module = repository_relative(request.node.path)
+    return "orchestrator" if module is None else marker_tier_root(module)
 
 
 def _owned_directory(request: pytest.FixtureRequest) -> str | None:
@@ -625,13 +646,14 @@ def _recipe_reads_are_declared(
 ) -> None:
     """Hold the recipe tier to the narrow key its verdict is memoized on.
 
-    `orchestrator:test-recipes` exists because the costliest journeys in this suite
-    drive `just` recipes and shell scripts and read nothing else of this repository —
+    `orchestrator:test-recipes` and `orchestrator-e2e:test-recipes` exist because the
+    costliest tests in this suite drive `just` recipes and shell scripts and read nothing
+    else of this repository —
     so a commit that touches neither may replay their verdict instead of paying for
     them again. That is a much narrower claim than the code-only key makes, and a
-    narrower claim needs stricter enforcement, not looser: any read outside
-    `recipeWorkspace` is a file that can change this tier's answer without changing
-    its hash.
+    narrower claim needs stricter enforcement, not looser: any read outside the
+    project's own recipe key — `recipeWorkspace` or `e2eRecipeWorkspace` — is a file
+    that can change this tier's answer without changing its hash.
 
     So the same enforcement `reads_docs` gets, against the same declaration Nx
     hashes rather than a restatement of it — a marked test that opens anything else
@@ -641,12 +663,13 @@ def _recipe_reads_are_declared(
     """
     if request.node.get_closest_marker(READS_RECIPES_MARKER) is None:
         return
-    globs = target_input_globs("orchestrator", RECIPE_SCOPED)
+    root = _marker_tier_root(request)
+    globs = target_input_globs(root, RECIPE_SCOPED)
+    key = project_declarations()[root]["targets"][RECIPE_SCOPED]["inputs"][0]
     module = repository_relative(request.node.path)
     assert module is not None and covers(globs, module), (
         f"{request.node.name} is declared @pytest.mark.{READS_RECIPES_MARKER} from {module}, "
-        f"which orchestrator/project.json's {RECIPE_WORKSPACE} does not cover; add the "
-        "module to that key "
+        f"which {root}/project.json's {key} does not cover; add the module to that key "
         "or the tier replays a verdict recorded before this test existed"
     )
     opener = builtins.open

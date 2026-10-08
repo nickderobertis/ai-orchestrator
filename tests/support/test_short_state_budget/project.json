@@ -1,0 +1,25 @@
+{
+  "name": "support-test-short-state-budget",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "tags": [
+    "type:test-support"
+  ],
+  "implicitDependencies": [
+    "support-short-state",
+    "support-waits"
+  ],
+  "namedInputs": {
+    "testSupport": [
+      "{workspaceRoot}/tests/test_short_state_budget.py"
+    ]
+  },
+  "targets": {
+    "test-support": {
+      "executor": "nx:noop",
+      "inputs": [
+        "testSupport"
+      ]
+    }
+  }
+}

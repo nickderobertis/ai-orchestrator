@@ -1,0 +1,23 @@
+{
+  "name": "support-test-observer-judge-ops",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "tags": [
+    "type:test-support"
+  ],
+  "namedInputs": {
+    "testSupport": [
+      "{workspaceRoot}/tests/test_observer_judge_ops.py",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/scripts/onepipeline.sh"
+    ]
+  },
+  "targets": {
+    "test-support": {
+      "executor": "nx:noop",
+      "inputs": [
+        "testSupport"
+      ]
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "support-test-dispatch-appendix",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "tags": [
+    "type:test-support"
+  ],
+  "namedInputs": {
+    "testSupport": [
+      "{workspaceRoot}/tests/test_dispatch_appendix.py"
+    ]
+  },
+  "targets": {
+    "test-support": {
+      "executor": "nx:noop",
+      "inputs": [
+        "testSupport"
+      ]
+    }
+  }
+}

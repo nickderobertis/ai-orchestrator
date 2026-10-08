@@ -53,7 +53,7 @@ NODE_MODULES = REPO_ROOT / "node_modules"
 #: halves therefore spell this one constant: the journeys that re-provision this
 #: checkout, and the deadline-based channel journeys whose every step is a `just`
 #: recipe waiting on the lock those journeys take. All of them run in the code-keyed
-#: `orchestrator:test` tier, where `-n 4 --dist loadgroup` decides who runs beside whom.
+#: `orchestrator-e2e:test` tier, where `-n 4 --dist loadgroup` decides who runs beside whom.
 #: AGENTS.md's four-xdist-workers invariant carries the measurements, including why host
 #: CPU is not what this constraint is about.
 #:

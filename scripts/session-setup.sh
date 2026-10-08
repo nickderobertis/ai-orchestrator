@@ -4,6 +4,12 @@
 # (`just session-setup` / `just bootstrap`).
 #
 # What it ensures:
+#   0. `just` itself, the entry point to every recipe this setup and a session run. A
+#      fresh cloud image may ship uv but not `just`, so when none resolves, `rust-just`
+#      at or above `JUST_MIN` — the PyPI package carrying the prebuilt binary — is
+#      installed through `uv tool`. Quiet when one is present; a failed install is
+#      logged and the rest of setup continues, its recipe-driven steps reporting that
+#      `just` is unavailable.
 #   1. The exact `onejudge` SDK version adopted in `config/onejudge.version` is
 #      installed from PyPI. Its dependency supplies the matching `onejudge-cli`
 #      wheel, and setup verifies both the Python import and resolved binary.
@@ -80,6 +86,10 @@ readonly CARGO_BIN="$HOME/.cargo/bin"
 # The one place the `cargo-sweep` release this host maintains its pool with is pinned;
 # `tests/test_workspaces_file.py` reads it from here and holds the installed binary to it.
 readonly CARGO_SWEEP_VERSION="0.8.0"
+# The floor `ensure_just` installs `rust-just` at when no `just` resolves: the release
+# this justfile's recipes are exercised under on this host. A floor rather than a pin,
+# so `uv tool` takes the newest release above it.
+readonly JUST_MIN="1.42.4"
 readonly NODE_BIN="$HOME/.local/node/bin"   # npm global prefix (codex lands here)
 readonly PROJECT_VENV_BIN="$REPO_ROOT/.venv/bin"
 export PATH="$PROJECT_VENV_BIN:$BIN_DIR:$CARGO_BIN:$NODE_BIN:$PATH"
@@ -186,6 +196,27 @@ expose_codex() {
     log "could not expose $codex_binary at $BIN_DIR/codex (continuing)"
   fi
   hash -r
+}
+
+ensure_just() {
+  command -v just >/dev/null 2>&1 && return 0
+  if ! command -v uv >/dev/null 2>&1; then
+    log "cannot install just: uv is not installed (install uv: https://docs.astral.sh/uv/)"
+    return 0
+  fi
+  log "installing rust-just >= $JUST_MIN via uv tool"
+  if ! uv tool install --upgrade "rust-just>=$JUST_MIN" >&2; then
+    log "rust-just install failed (continuing)"
+    return 0
+  fi
+  hash -r
+  # `uv tool` links into its own bin directory, which a caller may have moved with
+  # UV_TOOL_BIN_DIR; put it on PATH so the steps below and the persisted session
+  # environment both resolve what was installed.
+  if ! command -v just >/dev/null 2>&1; then
+    PATH="$(uv tool dir --bin):$PATH"
+    hash -r
+  fi
 }
 
 ensure_codex() {
@@ -457,6 +488,7 @@ fi
 # proven in onevcs's repository, and `tests/test_upstream_workaround_rule.py` keeps
 # the retired lease from returning. A journey here would re-test a published CLI.
 toolchain_failed=0
+ensure_just
 install_project_dependencies || toolchain_failed=1
 create_plan_root || toolchain_failed=1
 # The host sweep, detached (step 10 above): never waited on, and a report from it — the

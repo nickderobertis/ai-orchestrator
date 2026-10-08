@@ -57,3 +57,41 @@ Conventions for this repository's tests.
   selection, and oneharness history settings — inherited, the last queue every turn on
   a host-wide history index — and a test that means to exercise one sets it itself.
 - Every recipe needs a real journey here before it is done.
+
+## The journeys' project
+
+The modules directly under `tests/e2e/` are `orchestrator-e2e`'s, and the unit and
+drift-gate modules directly under `tests/` are `orchestrator`'s; `tests/nx_inputs.py` says
+why each key is what it is.
+
+- **Markers route a journey between `orchestrator-e2e:test`, `test-recipes` and
+  `test-checkouts`**, as they route a unit test between the orchestrator project's
+  targets. A `reads_docs` journey is collected by `orchestrator:test-docs` instead: a
+  target keyed on the whole workspace would select the journeys for every diff.
+- **A journey imports a unit or drift-gate module only through a test-support unit**
+  carrying it under `tests/support/`, because only an edge selects the journeys when that
+  module changes.
+- **A unit or drift-gate test that opens a journey by path names it in
+  `journeysTheUnitGatesRead`** in `tests/e2e/project.json`, or `orchestrator:test`
+  replays over an edit to it; `tests/conftest.py` fails the read until it does.
+- **A directory added at the repository root joins `e2eWorkspace`**, which names what
+  it keeps; `tests/test_nx_cache_scope.py` fails until it does.
+
+## Project boundaries
+
+Every Nx project carries a tag one row below names, and every edge it declares or
+Nx infers is to a project tagged with what that row allows.
+`tests/test_project_boundaries.py` reads this table and Nx's own project graph, and fails on
+a project no row names or an edge no row allows, naming the project, the edge and the rule.
+
+| A project tagged | may depend only on projects tagged |
+| --- | --- |
+| `type:test-support` | `type:test-support` |
+| `type:tests` | `type:test-support` |
+| `scope:orchestrator` | `type:test-support` |
+| `scope:workspace` | nothing |
+
+So no project depends on a project that collects tests, and a test-support unit depends
+only on other units. A unit is `type:test-support` under `tests/support/`; a project
+collecting tests is `type:tests`; the `orchestrator` project depends on units because its
+own test targets import them.

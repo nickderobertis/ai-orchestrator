@@ -1,0 +1,25 @@
+{
+  "name": "support-test-shared-dispatch-bar",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "tags": [
+    "type:test-support"
+  ],
+  "implicitDependencies": [
+    "support-shared-dispatch-bar",
+    "support-test-dispatch-appendix"
+  ],
+  "namedInputs": {
+    "testSupport": [
+      "{workspaceRoot}/tests/test_shared_dispatch_bar.py"
+    ]
+  },
+  "targets": {
+    "test-support": {
+      "executor": "nx:noop",
+      "inputs": [
+        "testSupport"
+      ]
+    }
+  }
+}

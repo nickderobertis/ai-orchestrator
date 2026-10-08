@@ -41,6 +41,15 @@ import pytest
 
 from orchestrator.root import REPO_ROOT
 
+# Every test module of the suite is this gate's subject — it reads and collects the e2e
+# journeys as well as the unit modules — so it runs in the tier keyed on the whole
+# workspace: `orchestrator:test` is not keyed on the journeys, and a journey edit has to
+# re-run the gate that holds it.
+# llmlint: ignore[test_tiers_split_by_project_not_by_marker] The marker names the key this
+# gate reads — every module of the suite — rather than a cost tier; no project could own a
+# gate whose subject is every project's imports.
+pytestmark = pytest.mark.reads_docs
+
 #: The importable SDK modules this repository adapts, each from a distribution
 #: `pyproject.toml` pins. Reconciled against what the tree imports below, so this is a
 #: statement to read rather than a list to maintain by hand.

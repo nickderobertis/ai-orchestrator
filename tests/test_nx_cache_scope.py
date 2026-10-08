@@ -62,6 +62,9 @@ from nx_inputs import (
     DAG_UI_ROOT,
     DAG_UI_SCOPED,
     DOCS_SCOPED,
+    E2E_COVERAGE_DATA,
+    E2E_PROJECT,
+    E2E_ROOT,
     FROM_DEPENDENCIES,
     GRACEFUL_CANCEL_ROOT,
     GRACEFUL_CANCEL_SCOPED,
@@ -69,8 +72,10 @@ from nx_inputs import (
     HOST_SWEEP_SCOPED,
     HOST_VIEWS_ROOT,
     HOST_VIEWS_SCOPED,
+    JOURNEYS_THE_UNIT_GATES_READ,
     MANAGER_ALLOWLIST_ROOT,
     MANAGER_ALLOWLIST_SCOPED,
+    MARKER_TIER_ROOTS,
     MERGE_POLICY_ROOT,
     MERGE_POLICY_SCOPED,
     NX_CACHE_CHECK,
@@ -97,6 +102,8 @@ from nx_inputs import (
     UNCONDITIONAL_TARGETS,
     UNFINISHED_ROOT,
     UNFINISHED_SCOPED,
+    UNIT_COVERAGE_DATA,
+    UNIT_WORKSPACE,
     UNPUBLISHED_VIEW_ROOT,
     UNPUBLISHED_VIEW_SCOPED,
     UNWATCHED_ROOT,
@@ -129,6 +136,15 @@ CODE_WORKSPACE_GLOBS = [
     "!{workspaceRoot}/docs/**/*",
     "!{workspaceRoot}/**/*.md",
 ]
+
+# Every test module of the suite is this gate's subject — it reads and collects the e2e
+# journeys as well as the unit modules — so it runs in the tier keyed on the whole
+# workspace: `orchestrator:test` is not keyed on the journeys, and a journey edit has to
+# re-run the gate that holds it.
+# llmlint: ignore[test_tiers_split_by_project_not_by_marker] The marker names the key this
+# gate reads — every module of the suite — rather than a cost tier; no project could own a
+# gate whose subject is every project's tests.
+pytestmark = pytest.mark.reads_docs
 
 
 def _tracked() -> frozenset[str]:
@@ -208,6 +224,17 @@ def test_workspace_scoped_targets_are_keyed_on_the_whole_workspace() -> None:
         f"{PLAN_TOOLING_PROJECT}:{PLAN_TOOLING_DOCS_SCOPED} collects the journeys that "
         "copy this checkout, so its cached verdict must be keyed on the whole workspace"
     )
+    # The journeys that read prose or copy this checkout are collected by that same
+    # whole-workspace tier, and `orchestrator-e2e` holds no target keyed on the whole
+    # workspace: one would select it for every diff, which is what it exists to avoid.
+    assert f"--ignore={E2E_ROOT} " not in project["targets"][DOCS_SCOPED]["command"]
+    journeys = json.loads((REPO_ROOT / f"{E2E_ROOT}/project.json").read_text(encoding="utf-8"))
+    assert DOCS_SCOPED not in journeys["targets"], sorted(journeys["targets"])
+    assert not [
+        target
+        for target, spec in journeys["targets"].items()
+        if WHOLE_WORKSPACE in spec.get("inputs", [])
+    ], f"{E2E_PROJECT} keys a target on {WHOLE_WORKSPACE}"
     llmlint = _nx_config()["targetDefaults"]["lint-llm-diff"]["inputs"]
     assert llmlint[0] == WHOLE_WORKSPACE, (
         "the llmlint tier judges the whole workspace diff and shares this one key"
@@ -378,32 +405,53 @@ def test_the_marker_that_routes_a_test_to_its_tier_means_the_same_thing_everywhe
             f"pytest must register {marker!r} in [tool.pytest.ini_options] markers"
         )
 
-    targets = json.loads((REPO_ROOT / "orchestrator/project.json").read_text(encoding="utf-8"))[
-        "targets"
-    ]
-    # Every code-keyed selector has to exclude both narrower tiers, not merely the
-    # first one written down: a tier that dropped one of them would run those tests
-    # twice and key the second run on a tree they do not read.
-    code_selectors = [
-        selector
-        for target in CODE_KEYED
-        for selector in re.findall(r"-m '([^']+)'", targets[target]["command"])
-    ]
-    assert len(code_selectors) == len(CODE_KEYED), code_selectors
-    excluded = (
-        f"not {READS_DOCS_MARKER} and not {READS_RECIPES_MARKER} and not {READS_CHECKOUTS_MARKER}"
-    )
-    assert all(selector.startswith(excluded) for selector in code_selectors), code_selectors
+    # The same four markers route a test between the four targets of each of the two
+    # projects that select by marker — the orchestrator project over the unit and
+    # drift-gate modules, `orchestrator-e2e` over the journeys — so every assertion below
+    # holds of both.
+    for root in MARKER_TIER_ROOTS:
+        targets = json.loads((REPO_ROOT / root / "project.json").read_text(encoding="utf-8"))[
+            "targets"
+        ]
+        # Every code-keyed selector has to exclude both narrower tiers, not merely the
+        # first one written down: a tier that dropped one of them would run those tests
+        # twice and key the second run on a tree they do not read.
+        code_selectors = [
+            selector
+            for target in CODE_KEYED
+            for selector in re.findall(r"-m '([^']+)'", targets[target]["command"])
+        ]
+        assert len(code_selectors) == len(CODE_KEYED), (root, code_selectors)
+        excluded = (
+            f"not {READS_DOCS_MARKER} and not {READS_RECIPES_MARKER} "
+            f"and not {READS_CHECKOUTS_MARKER}"
+        )
+        assert all(selector.startswith(excluded) for selector in code_selectors), code_selectors
 
-    # And the selectors have to partition: a test is in exactly one tier.
-    for marker, target in (
-        (READS_DOCS_MARKER, DOCS_SCOPED),
-        (READS_RECIPES_MARKER, RECIPE_SCOPED),
-        (READS_CHECKOUTS_MARKER, CHECKOUT_SCOPED),
-    ):
-        assert f"-m {marker}" in targets[target]["command"]
-        marked = re.search(r"-m '?(not )?(\w+)'?", targets[target]["command"])
-        assert marked is not None and marked.group(1) is None
+        # And the selectors have to partition: a test is in exactly one tier. The
+        # journeys' prose readers are the one marker whose tier is the orchestrator
+        # project's wherever the test lives, so the journey project has no target for it.
+        for marker, target in (
+            (READS_DOCS_MARKER, DOCS_SCOPED),
+            (READS_RECIPES_MARKER, RECIPE_SCOPED),
+            (READS_CHECKOUTS_MARKER, CHECKOUT_SCOPED),
+        ):
+            if root == E2E_ROOT and target == DOCS_SCOPED:
+                assert target not in targets, f"{E2E_PROJECT} declares {target}"
+                continue
+            assert f"-m {marker}" in targets[target]["command"], (root, target)
+            marked = re.search(r"-m '?(not )?(\w+)'?", targets[target]["command"])
+            assert marked is not None and marked.group(1) is None
+
+        # Which of the two projects owns a test is where it lives, `reads_docs` aside: the
+        # journeys' targets collect their directory and the orchestrator project's ignore
+        # it, so neither charges the other's cost to its own key.
+        for target in (RECIPE_SCOPED, CHECKOUT_SCOPED, *CODE_KEYED):
+            collects_journeys = f"pytest {E2E_ROOT} " in targets[target]["command"]
+            ignores_journeys = f"--ignore={E2E_ROOT} " in targets[target]["command"]
+            assert (collects_journeys, ignores_journeys) == (
+                (True, False) if root == E2E_ROOT else (False, True)
+            ), f"{root}:{target} does not keep to its side of {E2E_ROOT}"
 
     # The same marker routes inside the project that owns the host-tool journeys, and
     # there it chooses between that project's own two targets rather than handing a
@@ -418,6 +466,9 @@ def test_the_marker_that_routes_a_test_to_its_tier_means_the_same_thing_everywhe
     assert f"-m {READS_DOCS_MARKER}" in host_tools[PLAN_TOOLING_DOCS_SCOPED]["command"]
     # And no other project may collect that directory, or its cost is charged to a key
     # that does not describe it.
+    targets = json.loads((REPO_ROOT / "orchestrator/project.json").read_text(encoding="utf-8"))[
+        "targets"
+    ]
     for target in (DOCS_SCOPED, RECIPE_SCOPED, CHECKOUT_SCOPED, *CODE_KEYED):
         assert f"--ignore={PLAN_TOOLING_ROOT}" in targets[target]["command"], (
             f"orchestrator:{target} collects {PLAN_TOOLING_ROOT}, which the "
@@ -437,6 +488,9 @@ PARALLEL_SITES = (
     ("orchestrator/project.json", DOCS_SCOPED),
     ("orchestrator/project.json", RECIPE_SCOPED),
     ("orchestrator/project.json", CHECKOUT_SCOPED),
+    (f"{E2E_ROOT}/project.json", CODE_SCOPED),
+    (f"{E2E_ROOT}/project.json", RECIPE_SCOPED),
+    (f"{E2E_ROOT}/project.json", CHECKOUT_SCOPED),
     ("justfile", "test-e2e"),
 )
 
@@ -459,7 +513,7 @@ def _worker_contracts(path: str, target: str) -> list[tuple[str, str]]:
 
 
 def test_every_parallel_declaration_names_the_same_worker_contract() -> None:
-    """The worker count and distribution are one contract, written in eight places.
+    """The worker count and distribution are one contract, written in eleven places.
 
     Nothing derives them from a shared value — pytest takes them as command-line
     flags and Nx targets are literal commands — so the reconciliation has to be a
@@ -933,9 +987,10 @@ def _collected_once(selection: tuple[str, ...]) -> frozenset[str]:
 #: journeys over `just sync-allowlist` and `just probe-allowlist` in one, the `host-views`
 #: project owns the journeys
 #: over `just status` and `just host` in one, the `session-open-conflict` project owns the
-#: journey over a continued branch's conflict with its moved base in one, and the
-#: orchestrator project owns the rest
-#: in four.
+#: journey over a continued branch's conflict with its moved base in one, the
+#: `orchestrator-e2e` project owns the rest of the journeys under `tests/e2e/` in three, and
+#: the orchestrator project owns the unit and drift-gate modules in four — the fourth,
+#: `test-docs`, collecting every prose-reading journey as well.
 SUITE_TIERS = (
     (f"{PLAN_TOOLING_ROOT}/project.json", PLAN_TOOLING_SCOPED),
     (f"{PLAN_TOOLING_ROOT}/project.json", PLAN_TOOLING_DOCS_SCOPED),
@@ -987,6 +1042,13 @@ SUITE_TIERS = (
     ("orchestrator/project.json", DOCS_SCOPED),
     ("orchestrator/project.json", RECIPE_SCOPED),
     ("orchestrator/project.json", CHECKOUT_SCOPED),
+    # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
+    # catalog of test projects, which this module partitions the whole suite across, so every
+    # project's entry sits here; the journey project's three tiers are rows of it.
+    (f"{E2E_ROOT}/project.json", CODE_SCOPED),
+    (f"{E2E_ROOT}/project.json", RECIPE_SCOPED),
+    (f"{E2E_ROOT}/project.json", CHECKOUT_SCOPED),
+    # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 )
 
 
@@ -1027,27 +1089,82 @@ def test_every_tier_of_the_suite_partitions_it_between_them() -> None:
 
 
 def test_the_code_only_test_key_drops_prose_and_nothing_else() -> None:
-    """The narrowed key is narrowed by exactly one thing, which has a tier of its own."""
+    """The shared code key is narrowed by exactly one thing, which has a tier of its own.
+
+    Each project's code tier narrows it once more, by what that project's tests cannot
+    read: the unit tier by the journeys `orchestrator-e2e` owns, taking back the ones its
+    own gates open by path, and the journey tier by every other test project's files.
+    """
     named = _nx_config()["namedInputs"]
     assert named[CODE_WORKSPACE] == CODE_WORKSPACE_GLOBS, (
-        "orchestrator:test replays a verdict for every tracked path this key covers, "
-        "so narrowing it further would memoize a claim about code it never read"
+        "both code tiers replay a verdict for every tracked path this key covers, "
+        "so narrowing it further would memoize a claim about code they never read"
     )
 
     project = json.loads((REPO_ROOT / "orchestrator/project.json").read_text(encoding="utf-8"))
-    for target in CODE_KEYED:
-        assert project["targets"][target]["inputs"] == [CODE_WORKSPACE], (
-            f"orchestrator:{target} runs part of the Python code suite, so it must be "
-            "keyed on everything that suite reads"
-        )
+    assert project["targets"][CODE_SCOPED]["inputs"] == [
+        UNIT_WORKSPACE,
+        {"input": JOURNEYS_THE_UNIT_GATES_READ, "projects": [E2E_PROJECT]},
+    ], project["targets"][CODE_SCOPED]["inputs"]
+    assert project["namedInputs"][UNIT_WORKSPACE][0] == CODE_WORKSPACE
 
     globs = _effective_inputs("orchestrator", CODE_SCOPED)
+    taken_back = set(named_input_globs(JOURNEYS_THE_UNIT_GATES_READ, project_root=E2E_ROOT))
     missed = sorted(path for path in _tracked() if not covers(globs, path))
-    assert missed and all(_is_documentation(path) for path in missed), (
-        f"only documentation may fall outside this key: {missed}"
-    )
+    journeys = [path for path in missed if path.startswith(f"{E2E_ROOT}/")]
+    assert missed and all(
+        _is_documentation(path) or path.startswith(f"{E2E_ROOT}/") for path in missed
+    ), f"only documentation and the journeys may fall outside the unit key: {missed}"
+    assert journeys and not any(path in taken_back for path in journeys), journeys
     # The whole-workspace tier is what covers the rest, so it must actually exist.
     assert DOCS_SCOPED in project["targets"]
+
+    # The journeys' key drops the unit and drift-gate modules and every other test
+    # project's directory, and nothing outside `tests/` but prose and the working notes
+    # `scratch/` keeps tracked — a directory git otherwise ignores, which no test reads.
+    e2e = _effective_inputs(E2E_ROOT, CODE_SCOPED)
+    outside = sorted(
+        path
+        for path in _tracked()
+        if not covers(e2e, path)
+        and not path.startswith(("tests/", "scratch/"))
+        and not _is_documentation(path)
+    )
+    assert not outside, f"{E2E_PROJECT}:{CODE_SCOPED} misses {outside} outside tests/"
+    assert not covers(e2e, "tests/test_labels.py")
+    assert covers(e2e, f"{E2E_ROOT}/test_sweep_e2e.py")
+
+
+def test_the_journey_key_leaves_out_every_other_test_project() -> None:
+    """No other test project's files, and no unit or drift-gate module, are in the journeys' key.
+
+    The key names what it keeps — the tree outside `tests/`, the fixtures, and the
+    journeys' own modules — so this holds that what it keeps never grows to cover
+    another test project's directory, a nested project's included, or a module directly
+    under `tests/` other than through a unit carrying one a journey imports.
+    """
+    globs = _effective_inputs(E2E_ROOT, CODE_SCOPED)
+    tracked = _tracked()
+    own = f"{E2E_ROOT}/"
+    for root in project_declarations():
+        if not root.startswith("tests/") or root == E2E_ROOT:
+            continue
+        held = sorted(
+            path
+            for path in tracked
+            if path.startswith(f"{root}/") and covers(globs, path) and not path.startswith(own)
+        )
+        assert not held, f"{E2E_PROJECT}:{CODE_SCOPED} is keyed on {root}'s files: {held[:5]}"
+        if root.startswith(own):
+            assert not any(covers(globs, path) for path in tracked if path.startswith(f"{root}/"))
+    # The unit modules a journey imports are the one exception, and each reaches the key
+    # as a test-support unit, through an edge — the only way a diff of one selects the
+    # journeys.
+    owners = _unit_owners()
+    unit_modules = [path for path in tracked if re.fullmatch(r"tests/test_[^/]+\.py", path)]
+    keyed = sorted(path for path in unit_modules if covers(globs, path))
+    assert unit_modules and all(path in owners for path in keyed), keyed
+    assert not any(covers(list(globs.filesets[0]), path) for path in unit_modules)
 
 
 def test_the_coverage_tier_is_unmemoized_and_waits_for_the_tier_that_measures() -> None:
@@ -1061,7 +1178,10 @@ def test_the_coverage_tier_is_unmemoized_and_waits_for_the_tier_that_measures() 
     project = json.loads((REPO_ROOT / "orchestrator/project.json").read_text(encoding="utf-8"))
     coverage = project["targets"][COVERAGE_SCOPED]
 
-    assert sorted(coverage["dependsOn"]) == sorted(CODE_KEYED), (
+    assert coverage["dependsOn"] == [
+        CODE_SCOPED,
+        {"projects": [E2E_PROJECT], "target": CODE_SCOPED},
+    ], (
         "the coverage tier must wait on every tier that measures, or the floor is "
         f"evaluated against part of the suite: {coverage['dependsOn']}"
     )
@@ -1069,10 +1189,15 @@ def test_the_coverage_tier_is_unmemoized_and_waits_for_the_tier_that_measures() 
         "a memoized floor could be replayed for a tree it never measured; this tier "
         "is seconds of work and is deliberately re-run every time"
     )
-    # And the measuring tier has to actually write the data this one reads, or the
+    # And each measuring tier has to actually write the data this one reads, or the
     # floor is judged against whatever an earlier run happened to leave behind.
-    for target in CODE_KEYED:
-        data_file = project["targets"][target]["outputs"][0].removeprefix("{workspaceRoot}/")
+    for root, data_file in (
+        ("orchestrator", UNIT_COVERAGE_DATA),
+        (E2E_ROOT, E2E_COVERAGE_DATA),
+    ):
+        measuring = project_declarations()[root]["targets"][CODE_SCOPED]
+        assert measuring["outputs"] == [f"{{workspaceRoot}}/{data_file}"], measuring
+        assert f"COVERAGE_FILE={data_file} " in measuring["command"], measuring["command"]
         assert data_file in coverage["command"], (
             f"{data_file} is measured but never read, so its lines do not count "
             f"towards the enforced floor: {coverage['command']}"
@@ -1119,8 +1244,15 @@ def test_the_tiers_writing_the_configured_authoring_root_never_run_together() ->
 
 
 def test_every_repository_path_the_suite_reads_is_part_of_a_test_key() -> None:
-    """A new test that reads a new path must not be able to replay a stale verdict."""
-    globs = _effective_inputs("orchestrator", CODE_SCOPED)
+    """A new test that reads a new path must not be able to replay a stale verdict.
+
+    Read across both code tiers' keys, because a module names paths for whichever
+    tier collects it; `conftest.py` holds each test's own reads to its own tier's key.
+    """
+    keys = (
+        _effective_inputs("orchestrator", CODE_SCOPED),
+        _effective_inputs(E2E_ROOT, CODE_SCOPED),
+    )
     tracked = _tracked()
     read: set[str] = set()
     for source in sorted(REPO_ROOT.joinpath("tests").rglob("*.py")):
@@ -1128,9 +1260,9 @@ def test_every_repository_path_the_suite_reads_is_part_of_a_test_key() -> None:
 
     # A guard that found nothing would pass silently forever.
     assert {"AGENTS.md", "justfile", "scripts/session-setup.sh"} <= read, read
-    uncovered = sorted(path for path in read if not covers(globs, path))
+    uncovered = sorted(path for path in read if not any(covers(key, path) for key in keys))
     assert all(_is_documentation(path) for path in uncovered), (
-        "orchestrator:test reads these repository paths but is not keyed on them, "
+        "the code tiers read these repository paths but neither is keyed on them, "
         f"so a change to one replays a stale verdict: {uncovered}"
     )
     # What the suite reads outside this key is not exempt, only keyed elsewhere:
@@ -1221,11 +1353,18 @@ def _unit_declarations() -> dict[str, dict]:
 
 def _tier_project_roots() -> list[str]:
     """Every project under `tests/` whose targets collect tests, which is every one there
-    that is not a unit; a module under one of these is that project's alone."""
+    that is not a unit; a module under one of these is that project's alone.
+
+    Except the journeys' root: `tests/e2e/` is also where pytest's `pythonpath` imports
+    the shared helpers from, so a module there that is not a test is a unit's, exactly
+    as one directly under `tests/` is.
+    """
     return [
         root
         for root in project_declarations()
-        if root.startswith("tests/") and not root.startswith(f"{SUPPORT_ROOT}/")
+        if root.startswith("tests/")
+        and not root.startswith(f"{SUPPORT_ROOT}/")
+        and root != E2E_ROOT
     ]
 
 
@@ -1291,7 +1430,9 @@ def _reached_units(declaring: list[str]) -> set[str]:
     sources = {"tests/conftest.py", *declaring}
     for module in list(sources):
         sources |= _imported_suite_modules(module, modules)
-    own = {source for source in sources if source not in owners}
+    # A tier's own test modules are its own even where a unit also carries one for the
+    # journeys that import it, so what they reach counts for the tier that collects them.
+    own = {source for source in sources if source not in owners} | set(declaring)
     direct: set[str] = set()
     for source in own | {"tests/conftest.py"}:
         direct |= _direct_units(source, owners)
@@ -1542,12 +1683,19 @@ def test_no_configuration_names_a_path_that_does_not_exist() -> None:
     names = {declared["name"] for declared in project_declarations().values()}
     for root, declared in project_declarations().items():
         named = set(declared.get("implicitDependencies", []))
+        # A project with a target keyed on the whole workspace is selected by every
+        # change, so a key it takes from a project it does not depend on still reaches
+        # it: that is how `orchestrator:test` takes back the journeys its gates read,
+        # with no edge from the package to its own journeys.
+        always_selected = any(
+            spec.get("inputs") == [WHOLE_WORKSPACE] for spec in declared.get("targets", {}).values()
+        )
         for spec in declared.get("targets", {}).values():
             for entry in spec.get("inputs", []):
                 if isinstance(entry, dict) and "projects" in entry:
                     listed = entry["projects"]
                     named |= {listed} if isinstance(listed, str) else set(listed)
-                    assert named <= _dependency_names(root), (
+                    assert always_selected or named <= _dependency_names(root), (
                         f"{root or '.'}/project.json keys a target on {sorted(named)} that "
                         "its project does not depend on, so no edge carries that key"
                     )
@@ -1650,13 +1798,19 @@ def test_the_pypi_journeys_are_a_project_the_check_never_selects() -> None:
 
 def test_the_recipe_key_stays_inside_the_code_key() -> None:
     """A recipe test could otherwise read something the code-key guard permits and
-    this tier does not carry."""
-    code_globs = _effective_inputs("orchestrator", CODE_SCOPED)
-    recipe_globs = _effective_inputs("orchestrator", RECIPE_SCOPED)
-    outside = sorted(
-        path for path in _tracked() if covers(recipe_globs, path) and not covers(code_globs, path)
-    )
-    assert not outside, f"the recipe key reaches outside the code key: {outside}"
+    this tier does not carry. Held per project: each marker project's recipe key
+    inside its own code key."""
+    for root in MARKER_TIER_ROOTS:
+        code_globs = _effective_inputs(root, CODE_SCOPED)
+        # The recipe tier's own files; the units it takes are held to what its modules
+        # reach by `test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach`.
+        recipe_globs = list(_effective_inputs(root, RECIPE_SCOPED).filesets[0])
+        outside = sorted(
+            path
+            for path in _tracked()
+            if covers(recipe_globs, path) and not covers(code_globs, path)
+        )
+        assert not outside, f"{root}'s recipe key reaches outside its code key: {outside}"
 
 
 #: How a journey names one of the suite's shared stand-ins: `project_fixtures.helper`

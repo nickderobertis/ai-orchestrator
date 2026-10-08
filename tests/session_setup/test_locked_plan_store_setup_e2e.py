@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import signal
 import subprocess
 from dataclasses import dataclass
@@ -348,4 +349,183 @@ def test_session_setup_keeps_the_locked_plan_store_and_plan_root_in_force(
         release.write_text("", encoding="utf-8")
         for memo_dir in (state.parent for state in cache.rglob("state")):
             _await_stopped(memo_dir)
+        _await_host_sweeps(sweeps)
+
+
+def _path_lacking(shims: Path, *missing: str) -> str:
+    """This process's PATH with no ``missing`` tool on it and every other tool kept.
+
+    A directory holding one of them is dropped, and every other executable it held is
+    linked into ``shims``, searched last, so the session keeps it: on this host `uv`
+    shares a directory with `codex`, whose absence setup would answer with a real npm
+    install.
+    """
+    shims.mkdir()
+    kept: list[str] = []
+    for directory in filter(None, os.environ["PATH"].split(os.pathsep)):
+        held = Path(directory)
+        if not any((held / tool).exists() for tool in missing):
+            kept.append(directory)
+            continue
+        for entry in sorted(held.iterdir()) if held.is_dir() else ():
+            if entry.name not in missing and not (shims / entry.name).exists():
+                (shims / entry.name).symlink_to(entry)
+    # Last, so a tool a kept directory provides is still found there first, as it was.
+    return os.pathsep.join([*kept, str(shims)])
+
+
+@dataclass(frozen=True)
+class Session:
+    """A session start's environment, its persisted environment file, and its home."""
+
+    env: dict[str, str]
+    env_file: Path
+    home: Path
+
+    def start(self, sweeps: list[int]) -> subprocess.CompletedProcess[str]:
+        started = subprocess.run(
+            ["bash", str(REPO_ROOT / "scripts" / "session-setup.sh")],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+            env=self.env,
+        )
+        sweeps.extend(_host_sweep_jobs(started.stderr))
+        return started
+
+    def resolve_just(self) -> subprocess.CompletedProcess[str]:
+        """What a later command of the session finds, reading what setup persisted."""
+        return subprocess.run(
+            ["bash", "-c", f'source "{self.env_file}" && command -v just && just --version'],
+            env=self.env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+
+def _session(tmp_path: Path, *missing: str, **overrides: str) -> Session:
+    """A session with none of ``missing`` on its PATH, a home of its own, and this host's
+    uv cache and interpreters unless ``overrides`` names others."""
+    home = tmp_path / "home"
+    home.mkdir()
+    listing = tmp_path / "checkouts"
+    listing.write_text("", encoding="utf-8")
+    for directory in ("oneagentgraph-state", "tmp"):
+        (tmp_path / directory).mkdir()
+    uv = shutil.which("uv")
+    assert uv is not None
+    uv_dirs = {
+        variable: subprocess.run(
+            [uv, *command], check=True, text=True, capture_output=True
+        ).stdout.strip()
+        for variable, command in (
+            ("UV_CACHE_DIR", ["cache", "dir"]),
+            ("UV_PYTHON_INSTALL_DIR", ["python", "dir"]),
+        )
+    }
+    env = {
+        **os.environ,
+        **uv_dirs,
+        "HOME": str(home),
+        "PATH": _path_lacking(tmp_path / "shims", *missing),
+        "CLAUDE_ENV_FILE": str(tmp_path / "session.env"),
+        REGISTERED_CHECKOUTS_OVERRIDE: str(listing),
+        "XDG_CACHE_HOME": str(tmp_path / "cache"),
+        "XDG_DATA_HOME": str(home / ".local" / "share"),
+        "XDG_CONFIG_HOME": str(home / ".config"),
+        "ONEVCS_HOME": str(tmp_path / "onevcs-home"),
+        "ONEAGENTGRAPH_STATE_DIR": str(tmp_path / "oneagentgraph-state"),
+        "TMPDIR": str(tmp_path / "tmp"),
+    }
+    for variable in ("UV_TOOL_DIR", "UV_TOOL_BIN_DIR", "UV_OFFLINE"):
+        env.pop(variable, None)
+    env.update(overrides)
+    for tool in missing:
+        assert (
+            subprocess.run(["bash", "-c", f"command -v {tool}"], env=env, check=False).returncode
+            != 0
+        ), f"the session under test must start without {tool}"
+    return Session(env=env, env_file=tmp_path / "session.env", home=home)
+
+
+@shares_workspace_install
+def test_session_setup_provisions_just_into_a_session_that_lacks_it(tmp_path: Path) -> None:
+    """A session with no `just` anywhere ends the real setup with one on its persisted PATH.
+
+    The session's home is the journey's own, so neither the `~/.cargo/bin` nor the
+    `~/.local/bin` setup prepends holds this host's `just`; uv keeps this host's cache
+    and interpreters so the install reads the index rather than rebuilding them. The
+    second start, with `just` now present, stays quiet about it.
+    """
+    session = _session(tmp_path, "just")
+    sweeps: list[int] = []
+    try:
+        first = session.start(sweeps)
+
+        assert first.returncode == 0, first.stdout + first.stderr
+        assert "session-setup: installing rust-just >= " in first.stderr, first.stderr
+        resolved = session.resolve_just()
+        assert resolved.returncode == 0, resolved.stdout + resolved.stderr
+        located, version = resolved.stdout.splitlines()
+        assert Path(located) == session.home / ".local" / "bin" / "just", resolved.stdout
+        assert version.startswith("just "), resolved.stdout
+
+        second = session.start(sweeps)
+
+        assert second.returncode == 0, second.stdout + second.stderr
+        assert "rust-just" not in second.stderr, second.stderr
+    finally:
+        _await_host_sweeps(sweeps)
+
+
+@shares_workspace_install
+def test_session_setup_puts_a_moved_uv_tool_bin_on_the_persisted_path(tmp_path: Path) -> None:
+    """With `UV_TOOL_BIN_DIR` pointing elsewhere, the `just` installed there is the one found."""
+    tool_bin = tmp_path / "tool-bin"
+    session = _session(tmp_path, "just", UV_TOOL_BIN_DIR=str(tool_bin))
+    sweeps: list[int] = []
+    try:
+        started = session.start(sweeps)
+
+        assert started.returncode == 0, started.stdout + started.stderr
+        resolved = session.resolve_just()
+        assert resolved.returncode == 0, resolved.stdout + resolved.stderr
+        assert Path(resolved.stdout.splitlines()[0]) == tool_bin / "just", resolved.stdout
+    finally:
+        _await_host_sweeps(sweeps)
+
+
+@shares_workspace_install
+def test_session_setup_continues_when_just_cannot_be_installed(tmp_path: Path) -> None:
+    """An install uv cannot complete — offline, over an empty cache — is logged, and the rest
+    of setup still runs to the exit status its required tools earn."""
+    cache = tmp_path / "uv-cache"
+    cache.mkdir()
+    session = _session(tmp_path, "just", UV_CACHE_DIR=str(cache), UV_OFFLINE="1")
+    sweeps: list[int] = []
+    try:
+        started = session.start(sweeps)
+
+        assert started.returncode == 0, started.stdout + started.stderr
+        assert "session-setup: rust-just install failed (continuing)" in started.stderr
+        assert "session-setup: host sweep unavailable; continuing session setup" in started.stderr
+        assert session.resolve_just().returncode != 0
+    finally:
+        _await_host_sweeps(sweeps)
+
+
+@shares_workspace_install
+def test_session_setup_names_uv_when_it_cannot_install_just(tmp_path: Path) -> None:
+    """With neither `just` nor `uv` on PATH, setup says which is missing and goes on."""
+    session = _session(tmp_path, "just", "uv")
+    sweeps: list[int] = []
+    try:
+        started = session.start(sweeps)
+
+        assert started.returncode == 0, started.stdout + started.stderr
+        assert "session-setup: cannot install just: uv is not installed" in started.stderr
+        assert session.resolve_just().returncode != 0
+    finally:
         _await_host_sweeps(sweeps)

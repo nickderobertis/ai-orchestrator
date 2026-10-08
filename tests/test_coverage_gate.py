@@ -36,7 +36,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
-from nx_inputs import CODE_SCOPED, COVERAGE_SCOPED
+from nx_inputs import CODE_SCOPED, COVERAGE_SCOPED, E2E_ROOT
 
 from orchestrator.root import REPO_ROOT
 
@@ -101,6 +101,17 @@ def targets() -> dict[str, dict]:
     return {
         name: {**defaults.get(name, {}), **target} for name, target in project["targets"].items()
     }
+
+
+@pytest.fixture(scope="module")
+def measuring() -> dict[str, dict]:
+    """Every tier that measures into the data the floor is judged on, by `project:target`:
+    the unit and drift-gate tier, and the journeys' code tier."""
+    found = {}
+    for root in ("orchestrator", E2E_ROOT):
+        project = json.loads((REPO_ROOT / root / "project.json").read_text(encoding="utf-8"))
+        found[f"{project['name']}:{CODE_SCOPED}"] = project["targets"][CODE_SCOPED]
+    return found
 
 
 def _uncalled_for_band(floor: float) -> int:
@@ -361,7 +372,7 @@ def test_the_floor_is_enforced_on_data_measured_in_a_directory_that_is_gone(
 
 
 def test_the_enforcing_command_keeps_the_data_the_measuring_tier_declared(
-    targets: dict[str, dict],
+    targets: dict[str, dict], measuring: dict[str, dict]
 ) -> None:
     """Combining must not consume the file the measuring tier declares as its output.
 
@@ -372,16 +383,18 @@ def test_the_enforcing_command_keeps_the_data_the_measuring_tier_declared(
     `Couldn't combine from non-existent path`, on a tree whose suite had passed.
     """
     judging = targets[COVERAGE_SCOPED]["command"]
-    measured = targets[CODE_SCOPED]["outputs"][0].removeprefix("{workspaceRoot}/")
+    measured = [
+        target["outputs"][0].removeprefix("{workspaceRoot}/") for target in measuring.values()
+    ]
 
-    assert f"coverage combine --keep {measured}" in judging, (
-        "the combine has to keep what it read, or the tier that measured it can be "
-        f"cached with its output already deleted: {judging}"
+    assert f"coverage combine --keep {' '.join(measured)} " in judging, (
+        "the combine has to keep what it read, from every tier that measured, or a tier "
+        f"can be cached with its output already deleted: {judging}"
     )
 
 
 def test_the_measuring_tier_writes_data_only_the_coverage_tier_judges(
-    targets: dict[str, dict], floor: float
+    targets: dict[str, dict], measuring: dict[str, dict], floor: float
 ) -> None:
     """The real targets must keep measuring and judging in different commands.
 
@@ -390,7 +403,14 @@ def test_the_measuring_tier_writes_data_only_the_coverage_tier_judges(
     ``pyproject.toml`` and give the repository two floors, which is the drift this
     whole module exists to catch.
     """
-    assert "--cov=orchestrator" in targets[CODE_SCOPED]["command"], targets[CODE_SCOPED]["command"]
+    for name, target in measuring.items():
+        assert "--cov=orchestrator" in target["command"], (name, target["command"])
+        assert "coverage report" not in target["command"], (name, target["command"])
+        overrides = re.findall(r"--cov-fail-under[= ]([0-9.]+)", target["command"])
+        assert overrides and all(float(value) == 0 for value in overrides), (
+            f"{name} must leave the floor to pyproject.toml (fail_under = {floor:g}): "
+            f"{target['command']}"
+        )
 
     judging = targets[COVERAGE_SCOPED]["command"]
     assert "coverage combine" in judging and "coverage report" in judging, judging

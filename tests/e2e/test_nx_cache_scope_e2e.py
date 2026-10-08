@@ -86,6 +86,8 @@ from nx_inputs import (
     DAG_UI_PROJECT,
     DAG_UI_SCOPED,
     DOCS_SCOPED,
+    E2E_COVERAGE_DATA,
+    E2E_PROJECT,
     GRACEFUL_CANCEL_PROJECT,
     GRACEFUL_CANCEL_SCOPED,
     HOST_SWEEP_PROJECT,
@@ -108,6 +110,7 @@ from nx_inputs import (
     SESSION_SETUP_SCOPED,
     UNFINISHED_PROJECT,
     UNFINISHED_SCOPED,
+    UNIT_COVERAGE_DATA,
     UNPUBLISHED_VIEW_PROJECT,
     UNPUBLISHED_VIEW_SCOPED,
     UNWATCHED_PROJECT,
@@ -155,8 +158,12 @@ FIXTURE_WITNESS = "tests/fixtures/nx-cache/src/index.ts"
 #: The project every Python tier belongs to, and the tier the code suite runs in.
 PROJECT = "orchestrator"
 CODE_TIER = f"{PROJECT}:{CODE_SCOPED}"
-#: The uncached tier that reads what that one measured and judges the floor.
+#: The tier the journeys under `tests/e2e/` run in, beside it.
+E2E_TIER = f"{E2E_PROJECT}:{CODE_SCOPED}"
+#: The uncached tier that reads what those two measured and judges the floor.
 COVERAGE_TIER = f"{PROJECT}:{COVERAGE_SCOPED}"
+#: What each measuring tier writes for the floor to combine.
+MEASURED = {CODE_TIER: UNIT_COVERAGE_DATA, E2E_TIER: E2E_COVERAGE_DATA}
 #: What every journey below shortens the Python suite to. The claim under test is
 #: the *key*, computed from the declared inputs before the command runs.
 COLLECT_ONLY = "--collect-only --no-cov -q"
@@ -177,7 +184,11 @@ class Checkout:
     cache: Path
 
     def run(
-        self, target: str, *nx_args: str, addopts: str = COLLECT_ONLY
+        self,
+        target: str,
+        *nx_args: str,
+        addopts: str = COLLECT_ONLY,
+        environment: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         """Run ``target`` through the real wrapper and hand back what Nx reported."""
         # Cache replay is this journey's whole claim, so an ambient global cache skip
@@ -198,6 +209,7 @@ class Checkout:
                 "UV_NO_SYNC": "1",
                 "UV_PROJECT_ENVIRONMENT": str(REPO_ROOT / ".venv"),
                 "PYTEST_ADDOPTS": addopts,
+                **(environment or {}),
             },
             check=False,
             text=True,
@@ -370,14 +382,19 @@ def test_the_coverage_tier_resolves_as_an_unmemoized_step_after_the_tier_that_me
     resolved = checkout.resolved_target(COVERAGE_SCOPED)
 
     assert resolved.get("cache") is False, resolved
-    assert sorted(resolved["dependsOn"]) == [CODE_SCOPED], resolved
-    for tier in (CODE_SCOPED,):
-        measuring = checkout.resolved_target(tier)
+    assert resolved["dependsOn"] == [
+        CODE_SCOPED,
+        {"projects": [E2E_PROJECT], "target": CODE_SCOPED},
+    ], resolved
+    for tier in MEASURED:
+        project, target = tier.split(":")
+        measuring = checkout.resolved_project(project)["targets"][target]
         assert measuring.get("cache") is True, (
             f"{tier} measures into a file the coverage tier needs restored on a cache "
             f"hit, so it has to be cached with that file as its output: {measuring}"
         )
         data_file = measuring["outputs"][0].removeprefix("{workspaceRoot}/")
+        assert data_file == MEASURED[tier], measuring
         assert data_file in resolved["options"]["command"], (
             f"{tier} writes {data_file} and the coverage tier never reads it: {resolved}"
         )
@@ -459,7 +476,7 @@ def test_a_replayed_test_verdict_restores_the_coverage_data_the_floor_needs(
     floor's own value is proven at the real boundary.
     """
     checkout.edit("pyproject.toml", "fail_under = 100", "fail_under = 0")
-    measured = {CODE_TIER: ".coverage.parallel"}
+    measured = MEASURED
     for tier in measured:
         assert checkout.ran_the_command(tier, addopts=COLLECT_ONLY_MEASURED)
     for tier, data_file in measured.items():
@@ -482,6 +499,143 @@ def test_a_replayed_test_verdict_restores_the_coverage_data_the_floor_needs(
         f"{COVERAGE_TIER} re-ran a measuring tier, so the combine never saw a replay"
     )
     assert "TOTAL" in combined.stdout, combined.stdout + combined.stderr
+
+
+#: A unit module no journey imports or reads: an edit to it is the unit tier's alone.
+UNIT_WITNESS = "tests/test_labels.py"
+#: A journey no unit or drift-gate test reads by path: an edit to it is the journeys' alone.
+JOURNEY_WITNESS = "tests/e2e/test_sweep_e2e.py"
+#: A journey a drift gate of the unit tier opens by path, which that tier's key takes back.
+GATE_READ_JOURNEY_WITNESS = "tests/e2e/test_budget_target_e2e.py"
+#: A unit module a journey imports, which reaches the journeys' key as a test-support unit.
+JOURNEY_IMPORTED_UNIT_WITNESS = "tests/test_dispatch_appendix.py"
+
+
+def test_the_unit_and_journey_tiers_are_each_charged_only_for_what_they_read(
+    selector: Selector,
+) -> None:
+    """The split this project boundary is for, asked of the real selector and the cache.
+
+    `orchestrator:test` holds the unit and drift-gate modules and `orchestrator-e2e:test`
+    the journeys. An edit to a unit module leaves the journeys out of the selection `just
+    check` makes and replays their verdict; an edit to a journey re-runs the journeys and
+    replays the unit verdict; an edit to the package selects and re-runs both. The two
+    exceptions each tier's key states are asked too: a journey a unit gate reads re-runs
+    that tier, and a unit module a journey imports selects and re-runs the journeys.
+    """
+    for tier in (CODE_TIER, E2E_TIER):
+        assert selector.ran_the_command(tier)
+    assert {PROJECT, E2E_PROJECT} <= selector.owners(CODE_SCOPED), (
+        "`just test` runs every owner of the code tier and `just check` the selected ones; "
+        f"{E2E_PROJECT} has to be one of them"
+    )
+
+    with selector.planted(UNIT_WITNESS) as reported_by_git:
+        assert reported_by_git
+        assert E2E_PROJECT not in selector.selected(CODE_SCOPED), (
+            f"a diff of {UNIT_WITNESS} alone selected {E2E_PROJECT}, whose journeys never read it"
+        )
+        assert not selector.ran_the_command(E2E_TIER), (
+            f"{E2E_TIER} re-ran for an edit to {UNIT_WITNESS}, which its key leaves out"
+        )
+        assert selector.ran_the_command(CODE_TIER), (
+            f"{CODE_TIER} replayed a verdict for an edit to {UNIT_WITNESS}, a module it runs"
+        )
+
+    with selector.planted(JOURNEY_WITNESS) as reported_by_git:
+        assert reported_by_git
+        assert E2E_PROJECT in selector.selected(CODE_SCOPED), (
+            f"a diff of {JOURNEY_WITNESS} must select the tier that runs it"
+        )
+        assert selector.ran_the_command(E2E_TIER), (
+            f"{E2E_TIER} replayed a verdict for an edit to {JOURNEY_WITNESS}, a journey it runs"
+        )
+        assert not selector.ran_the_command(CODE_TIER), (
+            f"{CODE_TIER} re-ran for an edit to {JOURNEY_WITNESS}, which its key leaves out"
+        )
+
+    with selector.planted(GATE_READ_JOURNEY_WITNESS) as reported_by_git:
+        assert reported_by_git
+        assert selector.ran_the_command(CODE_TIER), (
+            f"{CODE_TIER} replayed a verdict for an edit to {GATE_READ_JOURNEY_WITNESS}, "
+            "which a gate of that tier reads"
+        )
+        assert selector.ran_the_command(E2E_TIER)
+
+    with selector.planted(JOURNEY_IMPORTED_UNIT_WITNESS) as reported_by_git:
+        assert reported_by_git
+        assert E2E_PROJECT in selector.selected(CODE_SCOPED), (
+            f"a diff of {JOURNEY_IMPORTED_UNIT_WITNESS} must select the journeys importing it"
+        )
+        assert selector.ran_the_command(E2E_TIER)
+        assert selector.ran_the_command(CODE_TIER)
+
+    with selector.planted(PYTHON_WITNESS) as reported_by_git:
+        assert reported_by_git
+        assert {PROJECT, E2E_PROJECT} <= selector.selected(CODE_SCOPED), (
+            f"a diff of {PYTHON_WITNESS} must select both tiers that run over the package"
+        )
+        assert selector.ran_the_command(CODE_TIER)
+        assert selector.ran_the_command(E2E_TIER)
+
+
+#: A small real run of each measuring tier, one fast module apiece, so the floor below is
+#: judged on lines that ran: a collection-only run measures nothing a probe could lower.
+SMALL_MEASURED = "-q -k 'test_labels.py or test_waits.py'"
+#: How many uncovered functions the probe module adds: enough statements that the total
+#: falls below a floor stated at two decimals.
+PROBE_FUNCTIONS = 400
+#: What `coverage combine` reports reading: the files it combined, and those it skipped
+#: because another already carried the same data.
+COMBINED = re.compile(r"^Combined (\d+) files?(?:, skipped (\d+))?", re.MULTILINE)
+#: The last figure on `coverage report`'s total row, at the declared precision.
+REPORTED_TOTAL = re.compile(r"^TOTAL\s.*?(\d+\.\d+)%\s*$", re.MULTILINE)
+
+
+def test_the_floor_is_judged_on_what_both_tiers_measured(checkout: Checkout) -> None:
+    """`orchestrator:coverage` combines both measuring tiers' data and fails below the floor.
+
+    Measured with each tier shortened to one fast module, so the total is what those ran;
+    the floor is then set to exactly that total, which passes, and an untested module added
+    to the package — which both tiers' keys carry, so both re-measure — takes the total under
+    it, which fails. `tests/test_coverage_gate.py` holds the real
+    floor's value and rounding at the boundary; this is the combine across the two tiers.
+    """
+    checkout.edit("pyproject.toml", "fail_under = 100", "fail_under = 0")
+    # The copy runs this checkout's environment, whose editable install of the package
+    # points here; the copy's own package has to come first for its lines to be the ones
+    # that run and are measured.
+    own_package = {"PYTHONPATH": str(checkout.root)}
+
+    measured = checkout.run(COVERAGE_TIER, addopts=SMALL_MEASURED, environment=own_package)
+
+    assert measured.returncode == 0, measured.stdout + measured.stderr
+    # Both files are named on the combine's command line, which refuses a path that is
+    # not there; what it read is what it reports combining, a file whose data another
+    # already carried counted as skipped rather than combined.
+    read = COMBINED.search(measured.stdout)
+    assert read is not None, measured.stdout
+    assert int(read.group(1)) + int(read.group(2) or 0) == len(MEASURED), (
+        f"the floor was not judged on what {sorted(MEASURED)} measured: {measured.stdout}"
+    )
+    total = REPORTED_TOTAL.search(measured.stdout)
+    assert total is not None, measured.stdout
+
+    checkout.edit("pyproject.toml", "fail_under = 0", f"fail_under = {total.group(1)}")
+    assert float(total.group(1)) > 0, measured.stdout
+    at_floor = checkout.run(COVERAGE_TIER, addopts=SMALL_MEASURED, environment=own_package)
+    assert at_floor.returncode == 0, at_floor.stdout + at_floor.stderr
+
+    (checkout.root / "orchestrator" / "uncovered_probe.py").write_text(
+        "".join(f"def probe_{n}() -> int:\n    return {n}\n\n\n" for n in range(PROBE_FUNCTIONS)),
+        encoding="utf-8",
+    )
+    below = checkout.run(COVERAGE_TIER, addopts=SMALL_MEASURED, environment=own_package)
+
+    reported = below.stdout + below.stderr
+    assert below.returncode != 0, reported
+    assert "orchestrator/uncovered_probe.py" in reported, reported
+    assert f"is less than fail-under={total.group(1)}" in reported, reported
 
 
 def test_the_cross_worktree_cache_check_replays_until_its_own_fixture_moves(
@@ -726,6 +880,12 @@ SKIPPABLE_TIERS = frozenset(
         # tiers a documentation push may skip, derived again from the graph by this journey, so
         # every project's entry sits here; the session-open-conflict entry is one row of it.
         (SESSION_OPEN_CONFLICT_PROJECT, SESSION_OPEN_CONFLICT_SCOPED),
+        # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+        # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This set is the catalog of
+        # tiers a documentation push may skip, derived again from the graph by this journey, so
+        # every project's entry sits here; the journey project's two diff-selected tiers are rows.
+        (E2E_PROJECT, CODE_SCOPED),
+        (E2E_PROJECT, RECIPE_SCOPED),
         # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     }
 )
@@ -1203,6 +1363,11 @@ def test_a_path_a_tier_excludes_from_its_key_is_one_that_tier_replays_for(
     tracked = selector.tracked()
     for (project, target), globs in sorted(excluding.items()):
         tier = f"{project}:{target}"
+        # The whole key, filesets apart: a path one of the tier's own exclusions names can
+        # still be one another of its inputs takes back, as `orchestrator:test` does the
+        # journeys its gates read, and planting that one would prove nothing about the
+        # exclusion.
+        key = target_input_globs(project_root(project), target)
         included = next((path for path in tracked if covers(globs, path)), None)
         assert included, f"{tier} is keyed on nothing this tree contains: {globs}"
 
@@ -1214,7 +1379,10 @@ def test_a_path_a_tier_excludes_from_its_key_is_one_that_tier_replays_for(
             )
 
         for negated in sorted(glob for glob in globs if glob.startswith("!")):
-            excluded = next((path for path in tracked if matches(negated[1:], path)), None)
+            excluded = next(
+                (path for path in tracked if matches(negated[1:], path) and not covers(key, path)),
+                None,
+            )
             assert excluded, (
                 f"{tier} excludes {negated} from its key, and this tree holds no path "
                 "that fileset names, so the exclusion cannot be measured — and buys "
@@ -1248,9 +1416,9 @@ def test_a_diff_of_the_workspace_configuration_selects_every_project(
 
 
 #: A test-support module several graph-keyed tiers reach — through `dependencies` edges
-#: and through `orchestrator:test-recipes`' `projects` list alike — and one only a single
-#: tier reaches: the pair the project graph has to tell apart, where a hand-kept list
-#: per tier could only be right by being kept right.
+#: and through `orchestrator-e2e:test-recipes`' `projects` list alike — and one only a
+#: single tier reaches: the pair the project graph has to tell apart, where a hand-kept
+#: list per tier could only be right by being kept right.
 SHARED_HELPER = "tests/e2e/probe_run_root.py"
 SINGLE_TIER_HELPER = "tests/llmlint_install.py"
 #: The ask-seam journey among them, by the row `tests/nx_inputs.py` keeps for it.
@@ -1261,13 +1429,13 @@ BUS_RESOLUTION = next(
 #: reach `SINGLE_TIER_HELPER`.
 REACHES_SHARED = frozenset(
     {
-        f"{PROJECT}:{RECIPE_SCOPED}",
+        f"{E2E_PROJECT}:{RECIPE_SCOPED}",
         f"{BUS_RESOLUTION.project}:{ASK_SEAM_SCOPED}",
         f"{HOST_VIEWS_PROJECT}:{HOST_VIEWS_SCOPED}",
         f"{UNWATCHED_PROJECT}:{UNWATCHED_SCOPED}",
     }
 )
-REACHES_SINGLE = frozenset({f"{PROJECT}:{RECIPE_SCOPED}"})
+REACHES_SINGLE = frozenset({f"{E2E_PROJECT}:{RECIPE_SCOPED}"})
 #: Graph-keyed tiers that reach neither helper: the controls, without which a tier that
 #: re-ran for everything would pass the half above.
 REACHES_NEITHER = frozenset(
@@ -1288,9 +1456,10 @@ def test_a_test_support_edit_selects_and_re_runs_exactly_the_tiers_whose_modules
     Both halves are asked of real Nx for each helper: the selection `just check` narrows
     to, which reaches a tier through the reverse edge from the helper's unit, and the
     cache, which re-runs a tier only when its key moved. Every tier here is keyed through
-    the graph rather than on a whole tree — the orchestrator project's `test` and
-    `test-docs` read every tracked path by design, so the orchestrator project is selected
-    and those tiers re-run for any edit and are not what this is about. The expected sets
+    the graph rather than on a whole tree, and each is its project's one tier the helpers
+    reach differently — the orchestrator project is selected by every edit through its
+    whole-workspace targets, and `orchestrator-e2e:test` reaches the shared helper but not
+    the single-tier one, so neither project's other tiers are what this is about. The expected sets
     are reconciled against the declared keys first, so what real Nx is asked is the claim
     `tests/test_nx_cache_scope.py` holds statically.
     """

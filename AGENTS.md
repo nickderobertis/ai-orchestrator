@@ -1774,6 +1774,13 @@ ruff, mypy, pytest) for the small `orchestrator/` package — the label contract
 redaction rule, and the suite that proves this layer; YAML, JSON, and TOML for
 configs. The engine, the lifecycle, and the browser view are not built here.
 
+[//]: # (llmlint: ignore-block[agents_md_durable_and_terse] The create-repo baseline checker's `--buildout` tier reads which reference fragments apply from the composition bullet below and from nowhere else, so the line restates `llmlint.yml`'s plugin list on purpose, and `tests/test_composition_record.py` holds the two to one composition; the exclusion beside it is the recorded decision that check also asks for.)
+- **References composed:** `base.md`, `shapes/skills-repo.md`, `project-graph.md`,
+  `languages/python.md`, `languages/bash.md`, `ci.md` — the fragments `llmlint.yml` loads.
+- **Excluded:** `releasing.md`, because nothing versioned is published.
+
+[//]: # (llmlint: ignore-end[agents_md_durable_and_terse])
+
 **CI and branch protection are deliberately deferred**: this is a local
 proof-of-concept, and `just gate` at pre-push is the enforcement point — add
 `.github/workflows/` mirroring it when this graduates. Nothing versioned is published,
@@ -1792,7 +1799,8 @@ pre-push because there is no CI.
 - **Coverage is enforced at 100% line coverage on `orchestrator/`**, because what is
   left of the package is all trust boundary. `[tool.coverage.report]` in
   `pyproject.toml` is the floor's one source, and the uncached `orchestrator:coverage`
-  read compares what `orchestrator:test` measured to it, so nothing else may name one.
+  read compares what `orchestrator:test` and `orchestrator-e2e:test` measured to it, so
+  nothing else may name one.
 - **The suite runs across four xdist workers**, from measurement rather than `auto`:
   it is latency-bound and the curve is flat past four on a host also running
   dispatches. A test whose subject is a process- or machine-wide resource declares
@@ -1837,7 +1845,9 @@ release did, cited to something a reader can open.
 
 ## Commits and merging
 
-Squash-merge via PR; PRs follow `.github/pull_request_template.md`. With no CI, the
+Every landing is one squash commit on the base, published `local-direct` through
+`onevcs` behind the pre-push gate; a pull request, where one is opened, follows
+`.github/pull_request_template.md`. With no CI, the
 **pre-push hook** (`.githooks/pre-push`, activated by `just bootstrap`) runs `just
 gate`, so nothing reaches the remote unproven, and every dispatched agent clears its
 own findings before committing. The push is then held to the root `budgets.yaml`, whose

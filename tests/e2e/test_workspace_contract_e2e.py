@@ -2354,6 +2354,118 @@ def test_gate_recipe_leaves_the_failing_llmlint_run_readable(tmp_path: Path) -> 
     assert "nx.sh: captured failure detail" in log.read_text()
 
 
+# llmlint: ignore-block[shell_test_tiers_stay_split] These two drive the gate recipe through the
+# installed llmlint's `validate`, the published CLI whose refusal is the behaviour under test, and
+# sit in the recipe tier beside this module's other gate journeys, as the installer's own journeys
+# in `test_setup_llmlint_e2e.py` do; a project of the installed-tool recipe journeys is the
+# further split `tests/e2e/project.json` names.
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] The reason just above: the
+# marker routes them to the recipe key they read, beside the other gate journeys.
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] They run in about a second
+# against a copied justfile and scripts, in the recipe tier keyed on what they drive rather than
+# in the journeys' code tier; a project of their own is the split `tests/e2e/project.json` names.
+#: The ignore-directive marker, spelled so this file never holds one itself.
+DIRECTIVE = "llmlint" + ": ignore"
+
+
+def _validating_gate_checkout(tmp_path: Path, directive_rule: str) -> tuple[Path, Path]:
+    """A gate checkout whose `llmlint validate` is the real one, over a real config.
+
+    Every other `llmlint` call stays the traced double, so a judged turn the gate reached
+    would be counted rather than paid for; `validate` is traced and then handed to the
+    installed llmlint, which reads this repository's own config over the copied
+    `justfile`'s directives and the one planted in its scripts, naming ``directive_rule``.
+    """
+    checkout, trace = _gate_checkout(tmp_path)
+    llmlint = checkout / "bin/llmlint"
+    traced = llmlint.read_text(encoding="utf-8")
+    llmlint.write_text(
+        traced.replace(
+            'invocation="$(basename "$0") $*"\n',
+            'invocation="$(basename "$0") $*"\n'
+            'if [[ ${1:-} == validate ]]; then exec "$REAL_LLMLINT" "$@"; fi\n',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    shutil.copy2(ROOT / "llmlint.yml", checkout / "llmlint.yml")
+    (checkout / "scripts" / "planted.sh").write_text(
+        # Composed, so this module's own source carries no directive for `validate` to read.
+        f"#!/bin/sh\n# {DIRECTIVE}[{directive_rule}] planted by the journey\necho planted\n",
+        encoding="utf-8",
+    )
+    # Committed and made the base, so the planted directive is part of the tree the
+    # gate compares rather than an uncommitted edit.
+    for args in (("add", "-A"), ("-c", "commit.gpgsign=false", "commit", "-qm", "planted")):
+        subprocess.run(["git", *args], cwd=checkout, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "update-ref", "refs/remotes/origin/main", "HEAD"],
+        cwd=checkout,
+        check=True,
+        capture_output=True,
+    )
+    return checkout, trace
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.skipif(
+    shutil.which("llmlint") is None, reason="the gate's first stage is the installed llmlint"
+)
+def test_gate_recipe_refuses_an_invalid_ignore_directive_before_any_judged_turn(
+    tmp_path: Path,
+) -> None:
+    """A directive naming no configured rule stops the gate at `validate`, judging nothing.
+
+    `validate` runs against the gate's own comparison base, and its refusal names the
+    fix; neither the deterministic tier nor the judged diff — both reached through the
+    traced Nx double — is started.
+    """
+    checkout, trace = _validating_gate_checkout(tmp_path, "no_such_rule")
+
+    result = _recipe_run(
+        checkout, trace, "gate", "origin", "main", REAL_LLMLINT=str(shutil.which("llmlint"))
+    )
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    log = checkout / ".logs/gate-llmlint-validate.log"
+    assert 'unknown rule "no_such_rule"' in log.read_text(encoding="utf-8")
+    assert (
+        "gate: llmlint validate failed; fix the llmlint config or ignore directive it names"
+        in result.stderr
+    ), result.stderr
+    assert "'just lint-llm-validate --diff-base origin/main' alone" in result.stderr
+    assert f"full output: {log}" in result.stderr
+    ran = trace.read_text(encoding="utf-8").splitlines()
+    assert ran == ["llmlint validate --diff-base origin/main"], ran
+
+
+@pytest.mark.reads_recipes
+@pytest.mark.skipif(
+    shutil.which("llmlint") is None, reason="the gate's first stage is the installed llmlint"
+)
+def test_gate_recipe_validates_first_then_checks_then_judges(tmp_path: Path) -> None:
+    """A tree `validate` accepts goes on to the deterministic tier and then the judge."""
+    checkout, trace = _validating_gate_checkout(tmp_path, "robust_shell")
+    (checkout / ".coverage").write_text("")
+
+    result = _recipe_run(
+        checkout, trace, "gate", "origin", "main", REAL_LLMLINT=str(shutil.which("llmlint"))
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    ran = trace.read_text(encoding="utf-8").splitlines()
+    assert ran[0] == "llmlint validate --diff-base origin/main", ran
+    judged = ran.index("nx.sh run workspace:lint-llm-diff")
+    assert any(line.startswith("nx.sh ") and "-t format-check" in line for line in ran[:judged]), (
+        ran
+    )
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+# llmlint: ignore-end[shell_test_tiers_stay_split]
+
+
 UPGRADE_MANIFEST = ("package.json", "bun.lock")
 
 

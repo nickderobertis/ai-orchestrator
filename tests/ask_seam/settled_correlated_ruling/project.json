@@ -17,6 +17,7 @@
     "support-planner-channel",
     "support-project-fixtures",
     "support-short-state",
+    "support-test-observer-judge-ops",
     "support-waits"
   ],
   "namedInputs": {
@@ -68,7 +69,6 @@
       "{workspaceRoot}/uv.lock",
       "{workspaceRoot}/tests/ask_seam/settled_correlated_ruling/test_settled_correlated_ruling_e2e.py",
       "{workspaceRoot}/graphs/dag-scope.yaml",
-      "{workspaceRoot}/tests/test_observer_judge_ops.py",
       "{workspaceRoot}/scripts/unfinished.sh",
       "{workspaceRoot}/graphs/design-doc.yaml",
       "{workspaceRoot}/graphs/follow-up.yaml",

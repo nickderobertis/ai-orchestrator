@@ -838,6 +838,13 @@ for an invisible one.
 
 ### One judged diff, one verdict
 
+Before any judged turn, `just gate` runs llmlint's model-free `validate` against its
+comparison base — through `just lint-llm-validate --diff-base <comparison>`, ahead of
+`just check` — so a config that does not parse, an ignore directive naming no configured
+rule, or a fragment edited without its version bump refuses the push in seconds, with
+nothing judged and no suite run. The refusal names the command to iterate with, and its
+output is kept at `.logs/gate-llmlint-validate.log`.
+
 A gate tier can end in a judge that is not reproducible — this repository's
 llmlint tier does — so the judge *run* is cached: `just lint-llm-diff` drives the
 cached Nx `workspace:lint-llm-diff` target, keyed on the whole workspace content,
@@ -1088,23 +1095,33 @@ not the same requirement, and the suite answers at more than one scope, so it is
 split at those seams rather than at convenient ones:
 
 - **`orchestrator:test-docs`** runs the tests marked `@pytest.mark.reads_docs` and
-  keeps the `wholeWorkspace` key. Seconds, not minutes.
-- **`orchestrator:test-recipes`** runs the tests marked `@pytest.mark.reads_recipes`
+  keeps the `wholeWorkspace` key — the journeys' prose readers included, because a
+  target keyed on the whole workspace selects its project for every diff and the
+  orchestrator project already is.
+- **`orchestrator:test-recipes`** and **`orchestrator-e2e:test-recipes`** run the tests
+  marked `@pytest.mark.reads_recipes`
   — the journeys that build real worktrees and run real package installs to drive
-  `just` recipes and shell scripts — keyed on `recipeWorkspace`, which
-  `orchestrator/project.json` declares: the `justfile`, `scripts/**`, the root
+  `just` recipes and shell scripts — each keyed on its own project's recipe key
+  (`recipeWorkspace`, `e2eRecipeWorkspace`): the `justfile`, `scripts/**`, the root
   manifests, the fixtures, and the modules that define those tests, plus the
   test-support units their modules import. They read no prose and no `orchestrator/`
   at all, and most commits here touch nothing else, so most commits replay them.
-- **`orchestrator:test-checkouts`** runs the tests marked
+- **`orchestrator:test-checkouts`** and **`orchestrator-e2e:test-checkouts`** run the tests marked
   `@pytest.mark.reads_checkouts` and is **uncached**, because there is no key that
   would be right. Its subject is the *other* repositories this host routes — their
   registered checkouts, and the required checks each merge path really declares,
   which `just repos --audit-gate-coverage` reads off GitHub — and those live outside
   the workspace, so no `nx.json` glob could name one and a memo would describe
   whatever they required when it was recorded.
-- **`orchestrator:test`** runs everything else, keyed on `codeWorkspace` — the
-  whole workspace with `docs/**` and `**/*.md` removed.
+- **`orchestrator:test`** runs the rest of the unit and drift-gate modules, keyed on
+  `unitWorkspace` — `codeWorkspace`, the whole workspace with `docs/**` and `**/*.md`
+  removed, less the journeys under `tests/e2e/`, taking back by a `projects` input the
+  few its own gates open by path.
+- **`orchestrator-e2e:test`** runs the rest of the journeys directly under `tests/e2e/`,
+  keyed on `e2eWorkspace` — every tracked path outside `tests/` but prose, the fixtures,
+  and its own modules — plus the units its modules import, so an edit to a unit test
+  neither selects nor re-runs the journeys. It is a project of its own because Nx keys
+  and `nx affected` are per project.
 
 `just check` runs these in three phases, because Nx takes one selection per invocation,
 with budgets labelled `host` running on every check and the others running when a
@@ -1178,7 +1195,7 @@ edit inside it must miss and an edit outside it must replay.
 
 One more thing has to hold for a replayed test verdict to be usable, and it is
 proved in the same place: the measuring tiers declare their coverage data files as
-Nx `outputs`, so a cache hit **restores** `.coverage.parallel` and `.coverage.serial`
+Nx `outputs`, so a cache hit **restores** `.coverage.parallel` and `.coverage.e2e`
 rather than leaving the uncached combine with nothing. Delete both, replay both
 tiers, and `orchestrator:coverage` still combines and reports — a dropped `outputs`
 declaration turns every replayed commit's gate into a failure instead of a saving.
@@ -1191,7 +1208,8 @@ replays as a failure, and a tree the suite would fail can no longer replay a pas
 The suite waits on subprocesses rather than on compute — a serial run holds one
 core at about 3.5% for a quarter of an hour — so its wall clock is latency and
 workers are nearly free. `orchestrator:test`, `orchestrator:test-docs`,
-`orchestrator:test-recipes`, `orchestrator:test-checkouts`, `plan-tooling:test`,
+`orchestrator:test-recipes`, `orchestrator:test-checkouts`, the three tiers of
+`orchestrator-e2e`, `plan-tooling:test`,
 `plan-tooling:test-docs`, `session-setup-pypi:test-pypi`, each ask-seam journey's `test`
 target, and `just test-e2e` all run `-n 4 --dist loadgroup`.
 
@@ -1221,9 +1239,10 @@ merely slow, or that races something it does not own, is a test to fix.
 
 #### One tier measures, another judges
 
-`orchestrator:test` measures under pytest-cov — which is what carries coverage into
-the xdist workers — into `.coverage.parallel`, and **judges nothing**. The uncached
-`orchestrator:coverage` waits on it, reads that file, and reports.
+`orchestrator:test` and `orchestrator-e2e:test` measure under pytest-cov — which is what
+carries coverage into the xdist workers — into `.coverage.parallel` and `.coverage.e2e`,
+and **judge nothing**. The uncached `orchestrator:coverage` waits on both, combines both
+files, and reports.
 
 `coverage report` is what compares the total to the declared floor, so the floor
 has exactly one source and is evaluated exactly once. The measuring tier carries a

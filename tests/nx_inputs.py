@@ -34,8 +34,36 @@ from typing import NamedTuple
 
 from orchestrator.root import REPO_ROOT
 
-#: The key `orchestrator:test` is memoized on: the workspace minus its prose.
+#: The workspace minus its prose, which both code tiers narrow from.
 CODE_WORKSPACE = "codeWorkspace"
+#: The key `orchestrator:test` is memoized on: `codeWorkspace` without the journeys the
+#: `orchestrator-e2e` project owns, so editing one of them replays the unit and drift-gate
+#: verdict. The journeys that tier's own gates read by path come back through
+#: `JOURNEYS_THE_UNIT_GATES_READ`, taken from that project rather than restated here.
+UNIT_WORKSPACE = "unitWorkspace"
+#: The named input of `orchestrator-e2e` listing the journey modules `orchestrator:test`'s
+#: drift gates open by path — the ones holding a value to the journey that exercises it —
+#: which that tier takes with `{"input": ..., "projects": "orchestrator-e2e"}`. Taken from
+#: the project that owns the files because Nx applies a target's own negations to every
+#: file its own inputs name, so the journeys excluded above could not be named back in
+#: beside them. No dependency edge carries it: `orchestrator` holds whole-workspace
+#: targets, so every change already selects it, and the key is what this input moves.
+JOURNEYS_THE_UNIT_GATES_READ = "journeysTheUnitGatesRead"
+#: The key `orchestrator-e2e:test` is memoized on: every tracked path outside `tests/` but
+#: prose, the fixtures under `tests/fixtures/`, and the journeys' own modules and data.
+#: Written as what to keep rather than as `codeWorkspace` less what to drop, because Nx
+#: selects a project by the positive `{workspaceRoot}` filesets its targets declare and
+#: never subtracts an exclusion: a key starting from the whole tree would select the
+#: journeys for every edit to a unit test, which is the cost this project exists to keep
+#: off them. `tests/test_nx_cache_scope.py` fails when a tracked path outside `tests/` that
+#: is not prose falls out of it, so a directory added at the root is added here. The shared
+#: helpers, and the four unit and drift-gate modules a journey imports, reach it as
+#: test-support units — through an edge, because that is what selects the journeys when one
+#: of them changes.
+E2E_WORKSPACE = "e2eWorkspace"
+#: The key `orchestrator-e2e:test-recipes` is memoized on: what its recipe journeys drive,
+#: as `recipeWorkspace` is the orchestrator project's.
+E2E_RECIPE_WORKSPACE = "e2eRecipeWorkspace"
 #: The orchestrator project's own named input `orchestrator:test-recipes` is keyed on:
 #: what the recipe journeys drive, plus the modules that define them. The helpers those
 #: modules import reach the key as the project's test-support dependencies.
@@ -571,7 +599,56 @@ MANAGER_ALLOWLIST_SCOPED = "test"
 MANAGER_ALLOWLIST_ROOT = "tests/manager_allowlist"
 # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
-#: The uncached tier that reads the measuring tier's coverage data and enforces the
+# llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This module holds one row per
+# test project, as the block over the ask-seam journeys says: the read guard,
+# `tests/test_nx_cache_scope.py` and the real-Nx selection journeys resolve every project's
+# name, directory and key from here, so the journey project's rows sit beside its siblings'
+# rather than in `tests/e2e/`.
+#: The project whose three marker-routed targets own the journeys directly under
+#: `tests/e2e/` — every module there but the two subdirectories that are projects of their
+#: own — beside the orchestrator project's four over the unit and drift-gate modules. A
+#: project rather than the orchestrator project's tiers, because Nx keys and `nx affected`
+#: are per project: while the journeys shared `orchestrator:test` with the unit suite, every
+#: edit to a unit test re-ran about a hundred journeys and every journey edit re-ran the
+#: unit suite. The `reads_recipes` and `reads_checkouts` markers route a journey between
+#: this project's targets as they route a unit test between the orchestrator project's, so
+#: a tier keeps the same name across the two. `reads_docs` is the exception: a journey that
+#: reads prose or copies this checkout is keyed on the whole workspace, a target keyed on
+#: it makes its project selected by every diff, and `orchestrator:test-docs` already is —
+#: so that tier collects the journeys' prose readers too, and this project is never selected
+#: by an edit it cannot read. Like every test project here, it declares no Python
+#: distribution.
+E2E_PROJECT = "orchestrator-e2e"
+#: The directory it owns. The shared helpers that also live there are test-support units'
+#: and stay where pytest's `pythonpath` imports them from; this project's own files are its
+#: `test_*.py` modules and the data they read.
+E2E_ROOT = "tests/e2e"
+#: The data file `orchestrator-e2e:test` measures into, beside `orchestrator:test`'s, and
+#: declares as its output so a replayed verdict restores it for the floor.
+E2E_COVERAGE_DATA = ".coverage.e2e"
+#: The data file `orchestrator:test` measures into.
+UNIT_COVERAGE_DATA = ".coverage.parallel"
+#: The two projects whose targets a marker routes a test between, by root: a test module
+#: under `tests/e2e/` that no directory-owned project claims is the journey project's, and
+#: every other one outside those projects is the orchestrator project's — `reads_docs` aside,
+#: which is the orchestrator project's wherever the test lives.
+MARKER_TIER_ROOTS = ("orchestrator", E2E_ROOT)
+
+
+def marker_tier_root(module: str) -> str:
+    """The root of the marker-routed project a test module belongs to.
+
+    Called only for a module no directory-owned project claims, which is every caller in
+    this suite: those are asked first, and the two nested projects under `tests/e2e/` are
+    among them.
+    """
+    return E2E_ROOT if module.startswith(f"{E2E_ROOT}/") else "orchestrator"
+
+
+# llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+
+
+#: The uncached tier that reads the measuring tiers' coverage data and enforces the
 #: declared floor against it. Deliberately unmemoized:
 #: it is seconds of work, and a floor that always runs is one no replay can skip.
 COVERAGE_SCOPED = "coverage"
@@ -698,6 +775,23 @@ def named_inputs(root: str = "") -> dict[str, list]:
     return {**nx_config()["namedInputs"], **declared}
 
 
+class Key(list[str]):
+    """A target's key: every glob it hashes, and the separate filesets Nx hashes them as.
+
+    Nx applies a `!` glob to the files of the context that declares it — the target's own
+    inputs, or one dependency's — and never across them: a `{"input": ..., "projects":
+    ...}` entry is hashed in that project's context, so the target's own negations do not
+    reach it. That is measured on the pinned Nx with `nx show target inputs --check`, and
+    it is how `orchestrator:test` drops the journeys yet keeps the few its gates read. So
+    a key is the flat list every reader iterates, with :func:`covers` asking each fileset
+    on its own.
+    """
+
+    def __init__(self, filesets: list[list[str]]) -> None:
+        super().__init__(glob for fileset in filesets for glob in fileset)
+        self.filesets = tuple(tuple(fileset) for fileset in filesets)
+
+
 def project_input_globs(entries: list, root: str = "") -> list[str]:
     """Expand one project's declared inputs into the repository-relative globs Nx hashes.
 
@@ -706,41 +800,53 @@ def project_input_globs(entries: list, root: str = "") -> list[str]:
     no further, which is what Nx does with each; every other non-file entry contributes no
     file coverage, as in :func:`resolve_input_globs`.
     """
+    return [glob for fileset in project_input_filesets(entries, root) for glob in fileset]
+
+
+def project_input_filesets(entries: list, root: str = "") -> list[list[str]]:
+    """The same expansion as :func:`project_input_globs`, one fileset per context.
+
+    The first fileset is the project's own inputs; each dependency or named project a
+    `dependencies` or `projects` entry reaches adds the filesets of its own context.
+    """
     named = named_inputs(root)
-    globs: list[str] = []
+    own: list[str] = []
+    others: list[list[str]] = []
     for entry in entries:
         match entry:
             case {"input": str() as name, "dependencies": True}:
                 for dependency in dependency_roots(root):
-                    globs.extend(project_input_globs([name], dependency))
+                    others.extend(project_input_filesets([name], dependency))
             case {"input": str() as name, "projects": str() | list() as named_projects}:
                 # Each project named, and only those: Nx does not walk their edges.
                 listed = [named_projects] if isinstance(named_projects, str) else named_projects
                 for project in listed:
-                    globs.extend(project_input_globs([name], project_root(project)))
+                    others.extend(project_input_filesets([name], project_root(project)))
             case dict():
                 pass  # an env or runtime input contributes no file coverage
             case str() if entry in named:
-                globs.extend(project_input_globs(named[entry], root))
+                nested = project_input_filesets(named[entry], root)
+                own.extend(nested[0])
+                others.extend(nested[1:])
             case _:
-                globs.extend(repository_relative_globs([entry], project_root=root))
-    return globs
+                own.extend(repository_relative_globs([entry], project_root=root))
+    return [own, *others]
 
 
-def target_input_globs(root: str, target: str) -> list[str]:
+def target_input_globs(root: str, target: str) -> Key:
     """Every repository-relative glob the target ``target`` of the project at ``root``
-    hashes, `targetDefaults` and the project graph included."""
-    return list(_target_input_globs(root, target))
+    hashes, `targetDefaults` and the project graph included, as a :class:`Key`."""
+    return _target_input_globs(root, target)
 
 
 @functools.cache
-def _target_input_globs(root: str, target: str) -> tuple[str, ...]:
+def _target_input_globs(root: str, target: str) -> Key:
     # Cached because every test's read guard asks for one, and the answer is a property
     # of the declarations this process started with.
     declared = project_declarations()[root]["targets"][target].get("inputs") or nx_config()[
         "targetDefaults"
     ].get(target, {}).get("inputs", ["default"])
-    return tuple(project_input_globs(declared, root))
+    return Key(project_input_filesets(declared, root))
 
 
 def resolve_input_globs(entries: list, named: dict[str, list]) -> list[str]:
@@ -782,7 +888,10 @@ def matches(glob: str, relative: str) -> bool:
 
 
 def covers(globs: list[str], relative: str) -> bool:
-    """Apply Nx's file-set semantics: a later `!` glob removes what an earlier one added."""
+    """Apply Nx's file-set semantics: a `!` glob removes what the others of its fileset
+    added, and a :class:`Key` covers what any one of its filesets does."""
+    if isinstance(globs, Key):
+        return any(covers(list(fileset), relative) for fileset in globs.filesets)
     included = any(matches(glob, relative) for glob in globs if not glob.startswith("!"))
     excluded = any(matches(glob[1:], relative) for glob in globs if glob.startswith("!"))
     return included and not excluded

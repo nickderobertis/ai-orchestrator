@@ -75,7 +75,11 @@ bootstrap:
 check:
     @source ./scripts/preserved-log.sh; preserved_log_open "{{repo_root}}" check; log=$PRESERVED_LOG; selection=$(./scripts/nx-selection.sh) || { echo "check: could not decide which projects to run over; repair the failure scripts/nx-selection.sh reported and retry" >&2; exit 1; }; read -ra selected <<<"$selection"; failed=(); ./scripts/nx.sh "${selected[@]}" -t format-check,lint,typecheck,test,test-docs,test-recipes,budgets 2>&1 | redact_secrets >>"$log" || failed+=("the diff selection"); ./scripts/nx.sh run-many -t test-checkouts,coverage,validate-budgets,budgets-host 2>&1 | redact_secrets >>"$log" || failed+=("test-checkouts,coverage,validate-budgets,budgets-host"); ./scripts/nx.sh run workspace:check-nx-cache 2>&1 | redact_secrets >>"$log" || failed+=("workspace:check-nx-cache"); if (( ${#failed[@]} )); then cat "$log" >&2; phases=$(printf '%s; ' "${failed[@]}"); echo "check: deterministic checks failed in ${#failed[@]} of 3 phases (${phases%; }); fix every reported finding and retry (full output: $log)" >&2; exit 1; fi; total=$(./scripts/coverage-total.sh "{{repo_root}}"); echo "check: all deterministic checks passed${total:+ (line coverage ${total}%)}; project selection: $selection"
 
-# Complete pre-push gate: deterministic checks followed by llmlint on this branch.
+# Complete pre-push gate: llmlint's model-free `validate` against the comparison base,
+# then the deterministic checks, then llmlint's judged diff on this branch. `validate`
+# runs first because it is seconds of static checks — the config, every ignore
+# directive naming a real rule, a fragment edited without its version bump — and a
+# failure there is one no judged turn or suite run should be paid for first.
 #
 # A passing run says everything it has to say on one line: the line coverage it
 # measured, which base commit the llmlint verdict covers, and whether that verdict
@@ -93,6 +97,7 @@ check:
 # silently keep resolving through the stale one.
 gate remote="" base="":
     @comparison=$(scripts/comparison-base.sh "$1" "$2")
+    @source ./scripts/preserved-log.sh; comparison=$(scripts/comparison-base.sh "$1" "$2"); preserved_log_open "{{repo_root}}" gate-llmlint-validate; log=$PRESERVED_LOG; just lint-llm-validate --diff-base "$comparison" 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "gate: llmlint validate failed; fix the llmlint config or ignore directive it names (a rule that does not exist, or a fragment edited without its version bump) against 'just lint-llm-validate --diff-base $comparison' alone, then rerun 'just gate ${comparison%%/*} ${comparison#*/}' (full output: $log)" >&2; exit 1; }
     @source ./scripts/preserved-log.sh; preserved_log_open "{{repo_root}}" gate-check; log=$PRESERVED_LOG; just check 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "gate: deterministic checks failed; fix the reported findings and rerun 'just gate' (full output: $log)" >&2; exit 1; }
     @source ./scripts/preserved-log.sh; comparison=$(scripts/comparison-base.sh "$1" "$2"); preserved_log_open "{{repo_root}}" gate-llmlint; log=$PRESERVED_LOG; just lint-llm-diff "$comparison" 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "gate: llmlint failed; clear the reported findings against 'just lint-llm-diff $comparison' alone, then rerun 'just gate ${comparison%%/*} ${comparison#*/}' once to confirm (full output: $log)" >&2; exit 1; }; provenance=$(grep -m1 -E '^lint-llm-diff: (judged|replayed) ' "$log" || echo "lint-llm-diff: verdict provenance unavailable"); note=$(grep -q '^lint-llm-diff: ignoring ' "$log" && echo " [ignored an ambient global Nx cache skip]" || true); total=$(./scripts/coverage-total.sh "{{repo_root}}"); echo "gate: complete gate passed${total:+ (line coverage ${total}%)}; ${provenance#lint-llm-diff: }${note}"
 

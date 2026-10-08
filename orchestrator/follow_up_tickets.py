@@ -1421,6 +1421,7 @@ def _record_problems(
 
 def _is_number(value: object) -> bool:
     """Whether ``value`` is a finite JSON number, which a `bool` is not."""
+    # `type(value) in (int, float)` proved a number, which mypy does not narrow on.
     return type(value) in (int, float) and math.isfinite(cast(float, value))
 
 
@@ -1464,6 +1465,7 @@ def overrun_budget(value: Mapping[str, object]) -> OverrunBudget:
         repository=Origin(str(value["repository"])),
         file=str(value["file"]),
         id=str(value["id"]),
+        # `budget_problems` proved `threshold` a finite number before this is called.
         threshold=float(cast(float, value["threshold"])),
         direction=Direction(str(value["direction"])),
     )
@@ -2047,6 +2049,7 @@ def from_store_item(  # noqa: PLR0913 - each reading of an item is its own keywo
             )
         ),
         budget=(
+            # `problems` proved `held`'s budget a mapping `budget_problems` accepts.
             overrun_budget(cast(Mapping[str, object], held[BUDGET_FIELD]))
             if BUDGET_FIELD in held
             else None
@@ -4063,9 +4066,11 @@ def change_telemetry(run: str, runs_root: Path, installs: Installs) -> list[Mapp
             f"the engine's per-change telemetry of {run} is not a schema-{TELEMETRY_SCHEMA} "
             "document of that run's changes"
         )
+    # The `all(isinstance(change, Mapping) ...)` above proved every change a mapping.
     for at, change in enumerate(cast(list[Mapping[str, object]], changes)):
         if found := _telemetry_problems(change):
             raise OSError(f"the engine's change {at} in {run}: " + "; ".join(found))
+    # Every change was proved a mapping above and its fields by `_telemetry_problems`.
     return cast(list[Mapping[str, object]], changes)
 
 
@@ -4082,6 +4087,7 @@ def _telemetry_problems(change: Mapping[str, object]) -> list[str]:
             found.append(f"holds no valid `{field}`")
     cycle = change.get("cycle_seconds")
     if "cycle_seconds" not in change or (
+        # `_is_number(cycle)` proved a number, the left operand short-circuiting otherwise.
         cycle is not None and (not _is_number(cycle) or cast(float, cycle) < 0)
     ):
         found.append("holds no valid `cycle_seconds`")
@@ -4151,6 +4157,7 @@ def budget_report(
     found = [problem for result in results for problem in _library_result_problems(result)]
     if found:
         raise OSError(f"onebudgetspec's report for {checkout / BUDGETS_FILE} " + "; ".join(found))
+    # Every result passed `_library_result_problems`, which refuses a non-mapping.
     return cast(list[Mapping[str, object]], results)
 
 
@@ -4178,7 +4185,9 @@ def _library_result_problems(result: object) -> list[str]:
         if result.get(key) is not None and not isinstance(result[key], str):
             return [f"{named} states no valid optional {key} string"]
     return _budget_file_problems(result["file"], named) + _host_problems(
-        cast(Mapping[str, object], result["host"]), named
+        # `isinstance(result.get("host"), Mapping)` above proved the host a mapping.
+        cast(Mapping[str, object], result["host"]),
+        named,
     )
 
 
@@ -4294,6 +4303,7 @@ def _plain(value: object) -> str:
     """
     if not _is_number(value):
         return "unknown"
+    # `_is_number(value)` above proved a finite number.
     text = repr(float(cast(float, value)))
     if "e" in text:
         text = format(Decimal(text), "f")
@@ -4402,10 +4412,12 @@ def _measurement_problems(document: Mapping[str, object], run: str) -> list[str]
     found = _envelope_problems(document, run, BUDGET_KEYS, "entries", BUDGETS_SCHEMA)
     if found:
         return found
+    # `_envelope_problems` refused a document whose `entries` is not a list.
     for at, entry in enumerate(cast(list[object], document["entries"])):
         if problems := _entry_problems(entry, BUDGET_ENTRY_KEYS, at):
             found.extend(problems)
         else:
+            # `_entry_problems` found nothing, which it does only for a mapping.
             held = cast(Mapping[str, object], entry)
             found.extend(_budget_entry_problems(held, _entry_name(held, at)))
     return found
@@ -4434,11 +4446,13 @@ def _disposition_item_problems(item: object, named: str) -> list[str]:
 
 def _standing(entry: Mapping[str, object]) -> OverrunBudget:
     """The budget an `over` entry was measured against, as a record's `budget` holds one."""
+    # Only an `over` entry reaches here, and `_budget_entry_problems` proved its budget a mapping.
     budget = cast(Mapping[str, object], entry["budget"])
     return OverrunBudget(
         repository=Origin(str(entry.get("repository"))),
         file=str(budget["file"]),
         id=str(budget["id"]),
+        # `_budget_entry_problems` proved `threshold` a finite number through `budget_problems`.
         threshold=float(cast(float, budget["threshold"])),
         direction=Direction(str(budget["direction"])),
     )
@@ -4474,6 +4488,7 @@ def _question_problems(
             f"{named} names {item}, whose record states no budget, so nothing says the budget "
             "it was closed under still stands"
         )
+    # `budget_problems(recorded, ...)` found nothing, which it does only for a mapping.
     elif (closed := overrun_budget(cast(Mapping[str, object], recorded))) != standing:
         found.append(
             f"{named} names {item}, whose recorded budget {closed.record()} "
@@ -4543,6 +4558,7 @@ def budget_account_problems(  # noqa: C901, PLR0912 - one pass over every entry'
     found = _envelope_problems(document, run, BUDGET_KEYS, "entries", BUDGETS_SCHEMA)
     if found:
         return found
+    # `_envelope_problems` refused a document whose `entries` is not a list.
     entries = cast(list[object], document["entries"])
     if measured is not None:
         if problems := _measurement_problems(measured, run):
@@ -4564,11 +4580,13 @@ def budget_account_problems(  # noqa: C901, PLR0912 - one pass over every entry'
         if problems := _entry_problems(entry, BUDGET_ENTRY_KEYS, at):
             found.extend(problems)
             continue
+        # `_entry_problems` found nothing, which it does only for a mapping.
         entry = cast(Mapping[str, object], entry)
         named = _entry_name(entry, at)
         if problems := _budget_entry_problems(entry, named):
             found.extend(problems)
             continue
+        # `_budget_entry_problems` refused an entry whose `disposition` is not a list.
         items = cast(list[object], entry["disposition"])
         if entry["result"] != BudgetResult.OVER:
             if items:
@@ -4587,6 +4605,7 @@ def budget_account_problems(  # noqa: C901, PLR0912 - one pass over every entry'
         if problems := _disposition_item_problems(item, named):
             found.extend(problems)
             continue
+        # `_disposition_item_problems` found nothing, which it does only for a mapping.
         item = cast(Mapping[str, object], item)
         disposed = DisposedBudget(
             BudgetDisposition(str(item["disposition"])),
@@ -5264,9 +5283,11 @@ def ticket_example(run: str, board: str) -> str:
         # Placeholders where the record holds a word of a vocabulary: `record` and `render`
         # write each through `str`, which is the word for a member and the text for these.
         priority_estimate=cast(Priority, "<written by `board-status`, never by you>"),
+        # A placeholder naming the two `Frequency` words, written through `str` alike.
         frequency=cast(
             Frequency, f"<`{Frequency.CONSISTENT}` or `{Frequency.INTERMITTENT}`: your judgment>"
         ),
+        # The same placeholder as `priority_estimate`, written through `str` alike.
         priority=cast(Priority, "<written by `board-status`, never by you>"),
     )
     return render(example)
@@ -5609,6 +5630,7 @@ def answers(
             "budget_example": budget_example(run, board),
         }
     else:
+        # `_mode_problems` refused feedback mode without `--feedback`, so the file is a `Path`.
         named = cast(Path, feedback_file).name
         answered |= {
             "withdrawal": WITHDRAWAL_EXCEPTION,
@@ -5986,6 +6008,7 @@ def _accounted(arguments: argparse.Namespace) -> int:
                     cause: [
                         str(entry["detail"])
                         for entry in entries
+                        # The same proof: every root-causes list is a list of strings.
                         if cause in cast(list[str], entry["root_causes"])
                     ]
                     for cause in filed
@@ -6050,6 +6073,7 @@ def _budgets_reported(arguments: argparse.Namespace, *, count: bool = False) -> 
         return UNRUNNABLE
     if found := _measurement_problems(document, arguments.run):
         return _refused(str(path), found)
+    # `_measurement_problems` proved `entries` a list and every entry a mapping.
     entries = cast(list[Mapping[str, object]], document["entries"])
     if count:
         print(sum(entry.get("result") == BudgetResult.OVER for entry in entries))

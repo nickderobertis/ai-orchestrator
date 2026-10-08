@@ -1,5 +1,4 @@
 {
-  "//": "llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] The suite's tier keying (tests/test_nx_cache_scope.py::test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach) requires each support project a tier of this project reads to be an implicit dependency of it, so every support-* edge below is required rather than chosen; splitting the suite into projects behind their own edges is a separate change. JSON has no comment to scope this to the one list.",
   "name": "orchestrator",
   "$schema": "../node_modules/nx/schemas/project-schema.json",
   "projectType": "library",
@@ -13,18 +12,15 @@
     "support-conftest",
     "support-credential-dialect",
     "support-criteria-examples",
-    "support-delegation-checkout",
     "support-example-records",
     "support-fake-backend",
-    "support-fake-codex-untrusted-directory",
+    "support-fake-codex",
     "support-follow-up-ticket-shape",
     "support-follow-up-variables",
     "support-github-board",
     "support-harness-configs",
     "support-harness-indirections",
-    "support-judge-protocol-double",
     "support-llmlint-install",
-    "support-lost-turn-producer",
     "support-manager-invocations",
     "support-mock-oneharness",
     "support-monitor-conversation",
@@ -37,9 +33,9 @@
     "support-onevcs-stand-in",
     "support-onevcs-state-snapshot",
     "support-persona-identifiers",
-    "support-persona-probe",
     "support-persona-recipes",
     "support-persona-stand-in",
+    "support-plan-fixture-source",
     "support-plan-root-variable",
     "support-plan-sources",
     "support-plan-store-pin",
@@ -52,10 +48,12 @@
     "support-registered-checkouts",
     "support-run-snapshot",
     "support-scratch-identity",
-    "support-served-recipe",
     "support-shared-dispatch-bar",
     "support-short-state",
     "support-sibling-facts",
+    "support-test-dispatch-appendix",
+    "support-test-observer-judge-ops",
+    "support-test-short-state-budget",
     "support-unpublished-registry",
     "support-waits",
     "support-watch-rule"
@@ -74,15 +72,13 @@
       "{workspaceRoot}/tests/test_launcher_session.py",
       "{workspaceRoot}/tests/fixtures/planner-channel.json",
       "{workspaceRoot}/config/onemessagebus.yaml",
-      "{workspaceRoot}/tests/e2e/test_ask_manager_shim_e2e.py",
-      "{workspaceRoot}/tests/e2e/test_base_freshness_e2e.py",
-      "{workspaceRoot}/tests/e2e/test_delegated_recipes_e2e.py",
-      "{workspaceRoot}/tests/e2e/test_just_tempdir_e2e.py",
-      "{workspaceRoot}/tests/e2e/test_repos_bootstrap_e2e.py",
-      "{workspaceRoot}/tests/e2e/test_watch_recipe_e2e.py",
-      "{workspaceRoot}/tests/e2e/test_workspace_contract_e2e.py",
-      "{workspaceRoot}/tests/e2e/test_setup_llmlint_e2e.py",
-      "{workspaceRoot}/config/oneharness.version"
+      "{workspaceRoot}/config/oneharness.version",
+      "{workspaceRoot}/llmlint.yml"
+    ],
+    "unitWorkspace": [
+      "codeWorkspace",
+      "!{workspaceRoot}/tests/e2e/test_*.py",
+      "!{workspaceRoot}/tests/e2e/oneharness_resolved/**/*"
     ]
   },
   "targets": {
@@ -105,7 +101,7 @@
       ]
     },
     "test": {
-      "command": "env -u FORCE_COLOR NO_COLOR=1 COVERAGE_FILE=.coverage.parallel uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/host_sweep --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval --ignore=tests/unfinished --ignore=tests/graceful_cancel --ignore=tests/session_open_conflict --ignore=tests/manager_allowlist -m 'not reads_docs and not reads_recipes and not reads_checkouts' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0",
+      "command": "env -u FORCE_COLOR NO_COLOR=1 COVERAGE_FILE=.coverage.parallel uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/host_sweep --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/e2e --ignore=tests/unfinished --ignore=tests/graceful_cancel --ignore=tests/session_open_conflict --ignore=tests/manager_allowlist -m 'not reads_docs and not reads_recipes and not reads_checkouts' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0",
       "options": {
         "cwd": "."
       },
@@ -113,16 +109,28 @@
         "{workspaceRoot}/.coverage.parallel"
       ],
       "inputs": [
-        "codeWorkspace"
+        "unitWorkspace",
+        {
+          "input": "journeysTheUnitGatesRead",
+          "projects": [
+            "orchestrator-e2e"
+          ]
+        }
       ]
     },
     "coverage": {
-      "command": "rm -f .coverage && env -u FORCE_COLOR NO_COLOR=1 uv run coverage combine --keep .coverage.parallel && env -u FORCE_COLOR NO_COLOR=1 uv run coverage report",
+      "command": "rm -f .coverage && env -u FORCE_COLOR NO_COLOR=1 uv run coverage combine --keep .coverage.parallel .coverage.e2e && env -u FORCE_COLOR NO_COLOR=1 uv run coverage report",
       "options": {
         "cwd": "."
       },
       "dependsOn": [
-        "test"
+        "test",
+        {
+          "projects": [
+            "orchestrator-e2e"
+          ],
+          "target": "test"
+        }
       ]
     },
     "test-docs": {
@@ -135,7 +143,7 @@
       ]
     },
     "test-recipes": {
-      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/host_sweep --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval --ignore=tests/unfinished --ignore=tests/graceful_cancel --ignore=tests/session_open_conflict --ignore=tests/manager_allowlist -m reads_recipes --no-cov -n 4 --dist loadgroup",
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/host_sweep --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/e2e --ignore=tests/unfinished --ignore=tests/graceful_cancel --ignore=tests/session_open_conflict --ignore=tests/manager_allowlist -m reads_recipes --no-cov -n 4 --dist loadgroup",
       "options": {
         "cwd": "."
       },
@@ -145,21 +153,13 @@
           "input": "testSupport",
           "projects": [
             "support-conftest",
-            "support-delegation-checkout",
-            "support-fake-codex",
             "support-follow-up-variables",
-            "support-llmlint-install",
-            "support-no-paid-provider",
             "support-nx-inputs",
-            "support-nx-workspace",
             "support-onejudge-bundle",
             "support-onevcs-state-snapshot",
             "support-plan-fixture-source",
             "support-plan-root-variable",
             "support-plan-sources",
-            "support-probe-run-root",
-            "support-project-fixtures",
-            "support-published-tools",
             "support-registered-checkouts",
             "support-short-state",
             "support-waits"
@@ -168,7 +168,7 @@
       ]
     },
     "test-checkouts": {
-      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/host_sweep --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval --ignore=tests/unfinished --ignore=tests/graceful_cancel --ignore=tests/session_open_conflict --ignore=tests/manager_allowlist -m reads_checkouts --no-cov -n 4 --dist loadgroup",
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/host_sweep --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/e2e --ignore=tests/unfinished --ignore=tests/graceful_cancel --ignore=tests/session_open_conflict --ignore=tests/manager_allowlist -m reads_checkouts --no-cov -n 4 --dist loadgroup",
       "options": {
         "cwd": "."
       }
