@@ -204,6 +204,18 @@ system_prompt: |
   set of general problem classes, never a closed list: it grows a new class each time a
   real miss shows a kind of problem no budget covered.
 
+  **A budget is a product-owner-level outcome**: a quota's headroom on a realistic run, a
+  latency someone waits through, the size of what reaches a reader, each with the
+  threshold the user approves. Answer a concern of the checklist and the 10× question with
+  a budget at that level, so the plan's budgets read as a short list the user can audit and
+  adjust. **Detailed figures are telemetry, not budgets**: per-step, per-phase and
+  per-operation figures, and a second unit of the same concern (requests beside points),
+  are still recorded on every run, and the budget's analysis reports them as the breakdown
+  of its figure in the onebudgetspec SDK reporter's `detail`, so a failed budget says which
+  part grew. A budget's `measure` names that breakdown. dero-skills' create-repo reference
+  for onebudgetspec, in its section "When is a requirement a budget", is the one statement
+  of this rule.
+
   **Use the measure of record**: measure as close as you can to where the product owner
   feels the impact — what a user sees over what an API returns, an API's timing over one
   method's, a change's whole cycle time over a count of gate runs, spend and quota
@@ -217,8 +229,14 @@ system_prompt: |
   is scoped like the rest of the gate and checked only when a change touches what it
   measures. Only a budget that must always be checked goes in the root file.
 
-  **A budget's command performs the measurement.** The node that implements a budget owns
-  that command and the budget's registration in the right file, and its acceptance
+  **A budget's command analyses telemetry the gate's tests already record** and reports
+  its figure, with that breakdown, through the onebudgetspec SDK. It never runs a scenario
+  of its own just to measure, except under the standalone-measurement exception the
+  onebudgetspec fragment's `budgets_reuse_gate_telemetry` rule states: a behaviour no
+  existing gate exercises, or one whose recording there would cost more than measuring it
+  alone. Such a command is `telemetry`; `direct` is left for that exception. The node that
+  implements a budget owns that command, the recording in the tests it reads, and the
+  budget's registration in the right file, and its acceptance
   criteria name the budget and the realistic workload it holds at. **Repo-wide budgets are
   enforced on the merge path** and never written into a task's criteria, for the reason
   the repository's whole gate never is.
@@ -295,8 +313,11 @@ system_prompt: |
   once the plan's main run succeeds.
 
   **A spike's criteria are two deliverables.** First, the harness committed on its session
-  branch, written as a command that performs one measurement, so the node that implements
-  the budget can register it, or grow it into, the budget's command. Second, the report
+  branch, written as a command that performs one measurement, because the figure has to be
+  taken before the work that will record it exists. The node that implements the budget
+  turns it into telemetry the gate's tests record and an analysis of it as the budget's
+  command, or registers it as that command only where the standalone-measurement
+  exception above holds. Second, the report
   document `<spike id>-report`, written into the **plan's** project — not the spikes
   project — rendered from the `spike-report` template the same way a task is rendered from
   `plan-task`. For each candidate budget it reports what is achievable,
@@ -720,8 +741,12 @@ user:
        dismissed, a budget no command checks, a basis the evidence does not
        support, a measure taken inward with no reason given, a repo-wide budget
        written into a task's criteria, a budgets-file change the budgets imply
-       and no budget states, and a requested target quietly loosened rather than
-       escalated. A node
+       and no budget states, a budget whose figure is a part of another budget's
+       figure — a step, phase or operation of it — or the same concern in a
+       second unit, which is that budget's breakdown rather than a budget, a
+       budget's command that runs a scenario of its own only to measure outside
+       the standalone-measurement exception, and a requested target quietly
+       loosened rather than escalated. A node
        that owns a budget names that budget and its workload in its criteria.
 
     Exceptions are allowed. A planner that could not meet a constraint, reached

@@ -2365,6 +2365,43 @@ def test_a_real_review_hands_the_reviewer_the_compact_view_of_a_stored_plan(
     assert Path(design).is_file(), design
 
 
+def test_a_real_review_asks_the_budget_question_at_the_product_owners_level(
+    tmp_path: Path,
+) -> None:
+    """The level rule, in what the reviewer is handed for a plan that owns a budget.
+
+    Through the real recipe and the real store, with only the paid model scripted: the
+    node's own turn is told a budget's command analyses the telemetry the gate's tests
+    record, and the plan-level turn is told to refuse a budget that is a part or a second
+    unit of another and a command that re-runs a scenario only to measure — judged by
+    meaning, so nothing deterministic refuses either shape before the turn.
+    """
+    project = _compact_view_project()
+    log = tmp_path / "prompts.jsonl"
+    environment = _reviewing(tmp_path, PASSES)
+    environment["FAKE_CODEX_PROMPT_LOG"] = str(log)
+
+    review = _just("review-plan", project, environment=environment)
+
+    assert review.returncode == 0, review.stdout + review.stderr
+    task_turn, *_ = _prompts(log)
+    assert "the command that analyses the telemetry the gate's tests record" in task_turn
+    assert "the command that performs the measurement" not in task_turn
+    plan_turn = _plan_prompt_given(tmp_path)
+    for asked in (
+        "A budget is a product-owner-level outcome",
+        "are telemetry its analysis reports as its breakdown",
+        "judged by meaning rather than by a budget's name",
+        "a budget whose figure is a part of another of the plan's budgets' figures or that "
+        "budget's concern in a second unit",
+        "a budget's command that runs a scenario of its own only to measure, rather than "
+        "analysing telemetry the gate's tests already record, outside the "
+        "standalone-measurement exception",
+    ):
+        assert asked in plan_turn, asked
+    assert '"route-latency"' in plan_turn
+
+
 def _move_the_compact_view(checkout: Path) -> None:
     """Show the reviewer one character less of every summary, in the copy's own source."""
     module = checkout / "orchestrator" / "plan_review.py"

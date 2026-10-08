@@ -21,6 +21,19 @@ for the file's shape. This page restates none of it beyond the keys a plan's bud
   UI timing over API timing, API timing over the timing of one method, full cycle time over
   a count of gate runs. Use an inner measure only when the outer one cannot be checked, and
   say why.
+- **A budget is a product-owner-level outcome.** It is what the product owner tracks: a
+  quota's headroom on a realistic run, a latency someone waits through, the size of what
+  reaches a reader. Each budget carries the threshold the user approves, so a plan's
+  budgets read as a short list somebody can audit and adjust.
+- **Detailed figures are telemetry, not budgets.** Per-step, per-phase and per-operation
+  figures, and a second unit of the same concern (requests beside points), are still
+  recorded on every run. The budget's analysis reports them as the breakdown of its figure,
+  in the onebudgetspec SDK reporter's `detail`, so a failed budget says which part grew.
+- **A budget's command analyses telemetry the gate's tests already record**, and reports its
+  figure through the onebudgetspec SDK. It never runs a scenario of its own just to measure,
+  except under the standalone-measurement exception the onebudgetspec fragment's
+  `budgets_reuse_gate_telemetry` rule states: a behaviour no existing gate exercises, or one
+  whose recording there would cost more than measuring it on its own.
 - **Measure once.** A check runs its measurement once. It never re-samples until a result
   passes, and never runs the base and the branch side by side.
 - **Every result shows actual, budget and headroom**, so a passing result still says how
@@ -39,14 +52,22 @@ for the file's shape. This page restates none of it beyond the keys a plan's bud
 - **There are no baselines.** The approved budget is the line to stay within, so nothing
   stores a previous measurement to compare against.
 
+The rule of the three principles on a budget's level, its telemetry and its command is
+stated once, with worked examples, in dero-skills' create-repo reference: [When is a
+requirement a budget][budget-rule]. This page restates what a planner of this host needs
+from it.
+
+[budget-rule]: https://github.com/nickderobertis/dero-skills/blob/main/skills/bootstrap/create-repo/references/tools/onebudgetspec.md#when-is-a-requirement-a-budget
+
 ## The budgets files
 
 <!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] this restates the onebudgetspec keys a plan's budgets name, which the task that added it requires; their reconciliation with the installed library is held by `tests/test_budgets_files.py`, and the vocabularies in it are held to `orchestrator/plan_budgets.py` by `tests/test_plan_budgets_template.py`. -->
 A budgets file is named `budgets.yaml`. Of each budget in it, a plan's budget names the
 `id`, the `command`, the `unit`, the `direction` (`max` or `min`) and the
 `threshold`, and the convention below uses its `description`; onebudgetspec's documentation
-states the rest. **The command performs the measurement**, so there is no workload field:
-anyone who needs the workload reads the command.
+states the rest. **The command analyses the telemetry the gate's tests record**, so there
+is no workload field: the workload is the one those tests run at, and anyone who needs it
+reads the command and the tests whose records it reads.
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 Files nest. A repository's **root** `budgets.yaml` holds the budgets that must always be
@@ -80,16 +101,20 @@ of both once.
   English on one line of at most 60 characters; its `basis`, how solid the number is, one of
   `measured`, `arithmetic`, `design`, `published docs` or `estimate`; the `repository` and
   the `file` it is registered in, with its `file_change`, one of `add`, `change` or `none`;
-  the `measure`, and the `inner_measure_reason` when the measure is taken further inward;
+  the `measure`, what is measured and the breakdown its analysis reports, and the
+  `inner_measure_reason` when the measure is taken further inward;
   the `unit`, the `direction` (`max` or `min`) and the `threshold`; the `workload` it holds
-  at; the `evidence` the number rests on; and the `command`. Modern records also state
+  at; the `evidence` the number rests on; and the `command`, which analyses the recorded
+  telemetry, as it will be registered. Modern records also state
   `schema_version` (integer literal 2), `source` (`direct` or `telemetry`) and
   `check_runtime_seconds` (finite number >= 0, excluding booleans). Direct executes the
   work/check whose result it measures; a command executing work and recording results is
   direct. Telemetry reads existing timing/history records without executing measured work.
   Runtime estimates elapsed seconds of the entire command at the stated workload, including
   setup/reads, distinct from the target, unit and basis; evidence states its source.
-  Never infer mode or runtime from basis or command text.
+  Never infer mode or runtime from basis or command text. A command analysing recorded
+  telemetry is `telemetry`; `direct` is left for a standalone measurement under the
+  exception above.
 - **The plan-level answers live in the plan's own description.** The project's
   `orchestrator.plan-budgets` metadata holds them, and the project's description is rendered
   from the `plan-description` template with the same answers: the plan's overview; what it
@@ -136,8 +161,8 @@ of both once.
   to each budgets file on the tasks that own them, the design document puts them to the
   user, and approving the design document approves them.
 - **Workload belongs to planning.** The plan and each budget state it, and it is never
-  written into a budgets file, where it would drift from the command that actually
-  measures.
+  written into a budgets file, where it would drift from the tests whose telemetry the
+  command analyses.
 - **The reason for an inner measure** goes in the budget's `description` and in the
   budget's `inner_measure_reason`.
 - **A feature budget lives in the budgets file of the project that owns what it

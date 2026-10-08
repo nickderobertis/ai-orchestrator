@@ -24,6 +24,7 @@ import re
 import subprocess
 from pathlib import Path
 
+import plan_fixture_source
 import pytest
 import yaml
 from published_tools import ONETASKGRAPH_BIN
@@ -301,6 +302,90 @@ def test_a_command_already_using_backticks_keeps_its_delimiters(
     assert f"- **Command:** `{command}`" not in body
 
 
+#: A budget written to the guidance the `budgets` description gives: one product-owner-level
+#: figure whose `measure` names the breakdown its analysis reports, and whose `command`
+#: analyses what the gate's tests recorded rather than running a scenario of its own.
+ANALYSED: dict[str, object] = {
+    **BUDGET,
+    "id": "sync-quota-points",
+    "name": "Quota spent by one sync",
+    "measure": (
+        "API points one full sync spends against the hourly quota, broken down in the "
+        "reporter's detail by phase, with each phase's requests beside its points"
+    ),
+    "inner_measure_reason": "",
+    "unit": "points",
+    "command": "uv run python budgets/analyse_sync.py",
+    "schema_version": 2,
+    "source": "telemetry",
+    "check_runtime_seconds": 2,
+}
+
+
+def test_the_budget_level_guidance_reaches_a_planner_rendering_a_task_through_the_real_pipe(
+    tmp_path: Path,
+) -> None:
+    """What a planner reads and what it renders, both through the pipe the persona names.
+
+    A planner learns what `measure` and `command` hold from the `budgets` variable of the
+    loader the pinned engine resolves for `plan-task`, read by the pinned plan store, and
+    regenerates a task by piping that same loader into `onetaskgraph task render`. So the
+    guidance is read off that loader rather than off the partial's source, and the task is
+    created and regenerated in this process's own `test-fixtures` store.
+    """
+    loader = _resolved("plan-task")
+    described = " ".join(str(_declared(loader)["budgets"]["description"]).split())
+    assert "the breakdown its analysis reports in the onebudgetspec reporter's `detail`" in (
+        described
+    )
+    assert "which are telemetry rather than budgets of their own" in described
+    assert (
+        "the command that analyses the telemetry the gate's tests record and reports through "
+        "the onebudgetspec SDK"
+    ) in described
+    assert "it runs no scenario of its own only to measure" in described
+    assert "the command that performs the measurement" not in described
+
+    answers = tmp_path / "answers.json"
+    answers.write_text(
+        json.dumps(
+            {
+                "what": "Sync every issue from the tracker.",
+                "why": "An operator's board misses issues past the first page.",
+                "acceptance_criteria": ["Every issue arrives."],
+            }
+        ),
+        encoding="utf-8",
+    )
+    created = _run(
+        [str(ONETASKGRAPH_BIN), "task", "create", plan_fixture_source.SOURCE]
+        + ["--project", f"budget-level-{tmp_path.name}", "--template-loader", "-"]
+        + ["--title", f"sync every issue {tmp_path.name}", "--answers", str(answers)]
+        + ["--no-interactive"],
+        loader,
+    )
+    assert created.returncode == 0, created.stderr
+    qualified = created.stdout.strip()
+    budgets = tmp_path / "budgets.json"
+    budgets.write_text(json.dumps({"budgets": [ANALYSED]}), encoding="utf-8")
+    regenerated = _run(
+        [str(ONETASKGRAPH_BIN), "task", "render", qualified, "--template-loader", "-"]
+        + ["--answers", str(budgets), "--no-interactive", "--json"],
+        loader,
+    )
+    assert regenerated.returncode == 0, regenerated.stderr
+    shown = _run([str(ONETASKGRAPH_BIN), "task", "show", qualified, "--json"])
+    assert shown.returncode == 0, shown.stderr
+    (item,) = json.loads(shown.stdout)["items"]
+    content = item["item"]["content"]
+    section = content[content.index("## Budgets\n") : content.index("## Acceptance criteria")]
+    assert f"- **Measure:** {ANALYSED['measure']}\n" in section
+    assert "- **Command:** `uv run python budgets/analyse_sync.py`" in section
+    assert "- **Measurement source:** telemetry" in section
+    provenance = item["item"]["metadata"]["onetaskgraph.template"]
+    assert provenance["digest"] == json.loads(loader)["digest"], provenance
+
+
 def test_the_partials_description_states_the_models_keys_and_vocabularies() -> None:
     """Each copy of a key, a vocabulary or a cap a description states is held to the model's.
 
@@ -427,3 +512,28 @@ def test_modern_budget_contract_guidance_is_held_to_the_authority() -> None:
     assert "`in_scope` (boolean)" in declared["checklist"]
     for rule in ("Each repository/budget pair occurs once", "never `none`", "changed repositories"):
         assert rule in declared["repo_wide_effects"], rule
+
+
+#: The installed onebudgetspec CLI, the authority for the result a budget's analysis writes.
+CHECKER = REPO_ROOT / ".venv" / "bin" / "onebudgetspec"
+
+
+@pytest.mark.reads_docs
+def test_the_breakdown_field_the_guidance_names_is_the_installed_libraries_own() -> None:
+    """The reporter's `detail` the budget-level rule names is a field onebudgetspec reports.
+
+    `docs/budgets.md`, the planner's persona and the `budgets` description each send a
+    budget's breakdown to that field, so a release that renamed or dropped it fails here
+    rather than leaving every planner pointed at a field the check no longer carries.
+    """
+    ran = _run([str(CHECKER), "schema"])
+    assert ran.returncode == 0, ran.stderr
+    result = json.loads(ran.stdout)["roots"]["check-report"]["$defs"]["CheckResult"]
+    assert "detail" in result["properties"], sorted(result["properties"])
+    assert "reported" in result["properties"]["detail"]["description"]
+    for text in (
+        (REPO_ROOT / "docs" / "budgets.md").read_text(encoding="utf-8"),
+        (REPO_ROOT / "personas" / "planner.yaml").read_text(encoding="utf-8"),
+        _descriptions(PARTIAL)["budgets"],
+    ):
+        assert "reporter's `detail`" in " ".join(text.split())

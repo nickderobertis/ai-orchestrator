@@ -17,14 +17,20 @@ variables:
       it goes in: `budgets.yaml` for a repo-wide budget, or a project's own file for a
       scoped one). `file_change` (string, `add`, `change` or `none`: what the task does
       to that file's entry). `measure` (string, what is measured, in words, as near as
-      possible to where the product owner feels it). `inner_measure_reason` (string, why
-      the measure is taken further inward than that, or `""` when it is not). `unit`
+      possible to where the product owner feels it, at the level the product owner
+      tracks, and the breakdown its analysis reports in the onebudgetspec reporter's
+      `detail`: the per-step, per-phase or per-operation figures and any second unit of
+      the same concern, which are telemetry rather than budgets of their own).
+      `inner_measure_reason` (string, why the measure is taken further inward than that,
+      or `""` when it is not). `unit`
       (string), `direction` (string, `max` or `min`) and `threshold` (a finite number),
       each meaning what it means in onebudgetspec. `workload` (string, the realistic
       workload the threshold holds at, which is never written into the budgets file).
       `evidence` (string, where the number came from: a spike report's id and figures, or
-      the measurement it rests on). `command` (string, the command that performs the
-      measurement, as it will be registered). The same list is the task's
+      the measurement it rests on). `command` (string, the command that analyses the
+      telemetry the gate's tests record and reports through the onebudgetspec SDK, as it
+      will be registered; it runs no scenario of its own only to measure, save under the
+      standalone-measurement exception, which is `direct`). The same list is the task's
       `orchestrator.budgets` metadata. Newly authored records also have `schema_version`
       (integer literal 2), `source` (string, `direct` or `telemetry`) and
       `check_runtime_seconds` (finite number >= 0, excluding booleans). Direct executes

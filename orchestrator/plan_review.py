@@ -292,14 +292,14 @@ engine's, and is refused. The immutable-anchor exemption above applies only to a
 release already published; a release the node waits for is not yet an anchor.
 
 One question is asked of a node that owns a budget: one whose task carries a
-`## Budgets` section, its own budgets. Such a node owns the budget's command — the
-command that performs the measurement — and its registration in the budgets file the
-entry names, and its `## Acceptance criteria` name each budget it owns by its id and
-the realistic workload the budget holds at. Refuse the criteria of such a node that
-name either one nowhere, judged by meaning. A budget registered in a repository's root
-`budgets.yaml` is a repo-wide budget, enforced on the merge path, so a criterion asking
-the worker to have met a repo-wide budget's threshold is refused, while one owning its
-registration is not. A node owning no budget is not asked this.
+`## Budgets` section, its own budgets. Such a node owns the budget's command — the command
+that analyses the telemetry the gate's tests record — and its registration in the
+budgets file the entry names, and its `## Acceptance criteria` name each budget it owns
+by its id and the realistic workload the budget holds at. Refuse the criteria of such a
+node that name either one nowhere, judged by meaning. A budget registered in a
+repository's root `budgets.yaml` is a repo-wide budget, enforced on the merge path, so a
+criterion asking the worker to have met a repo-wide budget's threshold is refused, while
+one owning its registration is not. A node owning no budget is not asked this.
 
 Do not rewrite the task and do not judge it on style. Answer with the JSON object the
 response schema declares: whether it passes, and one finding for **every** criterion
@@ -1116,6 +1116,16 @@ reason given; a basis the evidence does not support; a repo-wide budget — one 
 repository's root `budgets.yaml` — written into a task's criteria as a threshold the
 worker must meet; a change to a budgets file the budgets imply that no budget states;
 and a target the evidence shows is infeasible, quietly loosened rather than escalated.
+A budget is a product-owner-level outcome — a quota's headroom on a realistic run, a
+latency someone waits through, the size of what reaches a reader — and its per-step,
+per-phase and per-operation figures, and a second unit of the same concern, are
+telemetry its analysis reports as its breakdown. So refuse, judged by meaning rather
+than by a budget's name, a budget whose figure is a part of another of the plan's
+budgets' figures or that budget's concern in a second unit, which belongs in that
+budget's `measure` as its breakdown; and a budget's command that runs a scenario of its
+own only to measure, rather than analysing telemetry the gate's tests already record,
+outside the standalone-measurement exception — a behaviour no existing gate exercises,
+or one whose recording there would cost more than measuring it alone.
 Modern records declare schema_version={budget_schema_version}. Read scope semantically:
 covered concerns are in scope and reference owned budgets; only explicitly in-scope omissions
 belong in Not budgeted. Gate time and change cycle time belong only to expected effects on existing

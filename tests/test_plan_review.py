@@ -2571,8 +2571,11 @@ def test_the_planner_is_told_how_to_state_its_budgets_in_general_terms() -> None
         "Take a measure further inward only when the outer one cannot be checked, and say why",
         "the one at its root and every project's own",
         "Propose a change to any of them only through a budget of the task that owns it",
-        "**A budget's command performs the measurement.**",
-        "The node that implements a budget owns that command and the budget's registration",
+        "**A budget's command analyses telemetry the gate's tests already record**",
+        "**A budget is a product-owner-level outcome**",
+        "**Detailed figures are telemetry, not budgets**",
+        "The node that implements a budget owns that command, the recording in the tests it "
+        "reads, and the budget's registration",
         "its acceptance criteria name the budget and the realistic workload it holds at",
         "A feature budget goes in the budgets file of the project that owns what it measures",
         "Only a budget that must always be checked goes in the root file",

@@ -34,15 +34,18 @@ variables:
     description: >-
       The full answer to "at 10x realistic usage, what does the product owner notice
       getting worse first?", naming the `id` of the budget that covers it or saying why
-      none does.
+      none does. That budget is an outcome at the level the product owner tracks, such as
+      a whole run's quota headroom or a latency someone waits through, never one step's
+      share of it, which is telemetry its budget reports as its breakdown.
     type: text
     required: true
   checklist:
     description: >-
       One object per feature concern with `in_scope` (boolean) and four string keys: `concern`
       (the concern, such as latency), `budget` (the `id` of the budget, on one
-      of the plan's tasks, that covers it), `not_applicable` (a full "n/a because ...") and
-      `summary` (that reason on one line of at most 160 characters). Exactly one of `budget`
+      of the plan's tasks, that covers it at the level the product owner tracks; its
+      per-step figures and second units are that budget's breakdown, not budgets),
+      `not_applicable` (a full "n/a because ...") and `summary` (that reason on one line of at most 160 characters). Exactly one of `budget`
       and `not_applicable` is non-empty, the other `""`, and `summary` is non-empty exactly
       when `not_applicable` is. Covered concerns have in_scope=true and reference an owned
       budget. in_scope=false means outside these changes; true with n/a is deliberately
