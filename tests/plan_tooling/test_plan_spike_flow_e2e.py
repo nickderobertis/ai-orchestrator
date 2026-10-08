@@ -178,7 +178,8 @@ def _flow(
     run = RunId(f"spike-flow-{key}-{os.getpid()}")
     qualified = plan or PlanProject(f"{FIXTURE_SOURCE}:test-{os.getpid()}-{key}-plan")
     named = tuple(SpikeId(f"spike-{key}-{topic}") for topic in topics if spikes)
-    identity = seeded(tmp_path / "identity", origin=PLANNING_FLOW_ORIGIN)
+    repository = str(scenario.get("repository", PLANNING_FLOW_ORIGIN))
+    identity = seeded(tmp_path / "identity", origin=repository)
     environment = dict(os.environ)
     for name in INHERITED_ENVIRONMENT:
         environment.pop(name, None)
@@ -224,7 +225,7 @@ def _flow(
                     "acceptance_criteria": CRITERIA,
                 },
                 "spikes": list(named),
-                "budgets": no_budgets([PLANNING_FLOW_ORIGIN]) if budgets else None,
+                "budgets": no_budgets([repository]) if budgets else None,
                 "design": DESIGN,
                 **scenario,
             }
@@ -406,6 +407,51 @@ def test_a_draft_that_wrote_no_spikes_goes_straight_to_the_tail(
     assert done.returncode == 0, done.stdout + done.stderr
     assert _runs_started(flow) == [flow.run, f"{flow.run}-design"]
     assert not (flow.runs / f"{flow.run}-spikes").exists()
+
+
+def test_resume_spikes_finds_kept_branches_in_another_registered_repository(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    flow = _flow(
+        workspace,
+        tmp_path,
+        "cross-repo",
+        topics=("listing",),
+        repository="github.com/nickderobertis/onevcs",
+    )
+    onevcs = str(flow.checkout / ".venv" / "bin" / "onevcs")
+    registered = subprocess.run(
+        [onevcs, "register", str(flow.checkout)],
+        cwd=flow.checkout,
+        env=flow.environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert registered.returncode == 0, registered.stderr
+    drafted = _plan(flow, "--detach")
+    assert drafted.returncode == 0, drafted.stdout + drafted.stderr
+    spiked = _resumed(flow, drafted)
+    assert spiked.returncode == 0, spiked.stdout + spiked.stderr
+    assert _runs_started(flow) == [flow.run, f"{flow.run}-spikes"]
+    command = [onevcs, "recoverable", "--label", f"run={flow.run}-spikes", "--json"]
+    scoped = subprocess.run(
+        command, cwd=flow.checkout, env=flow.environment, capture_output=True, text=True, check=True
+    )
+    assert json.loads(scoped.stdout) == []
+    all_identities = subprocess.run(
+        command, cwd=Path("/"), env=flow.environment, capture_output=True, text=True, check=True
+    )
+    (kept,) = json.loads(all_identities.stdout)
+    spike = flow.spikes[0]
+    assert kept["labels"]["node"] == spike
+    resumed = _plan(flow, "--resume", "spikes")
+    assert resumed.returncode == 0, resumed.stdout + resumed.stderr
+    assert _runs_started(flow) == _stage_runs(flow), "the resume relaunched completed spikes"
+    assert (
+        f"- `{spike}`: report `{spike}-report`; branch `{kept['branch']['branch']}`"
+        in _finalize_note(flow)
+    )
 
 
 def test_a_spikes_run_with_a_node_not_done_stops_before_finalize_and_resumes_without_relaunching(

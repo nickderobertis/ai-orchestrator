@@ -375,7 +375,8 @@ def branches(run: RunId) -> dict[NodeId, Branch]:
     listed = json.loads(
         spike_branches.answer(
             [spike_branches.installed_onevcs(), "recoverable"]
-            + ["--label", f"run={_run_id(run)}", "--json"]
+            + ["--label", f"run={_run_id(run)}", "--json"],
+            cwd=Path("/"),
         )
     )
     if not isinstance(listed, list):

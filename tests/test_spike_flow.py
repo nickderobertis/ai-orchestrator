@@ -242,6 +242,50 @@ def test_each_spike_is_answered_with_the_branch_onevcs_recorded_for_its_run(
     ]
 
 
+# llmlint: ignore-block[shell_test_tiers_stay_split] This task explicitly requires extending
+# this module's real-store boundary coverage: branches and note are its public API, and Git
+# and pinned onevcs provide their actual data boundary. The recipe journey stays separately
+# in plan-tooling; moving this test would remove the module's coverage of the cwd regression.
+def test_branches_and_note_find_another_identity_from_a_registered_flow_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _kept(tmp_path, monkeypatch, "flow-spikes", "spike-a", "spike-b-2")
+    flow = tmp_path / "flow"
+    git("clone", "-q", str(tmp_path / "origin.git"), str(flow))
+    git("clone", "-q", "--bare", str(tmp_path / "origin.git"), str(tmp_path / "flow-origin.git"))
+    git("remote", "set-url", "origin", str(tmp_path / "flow-origin.git"), cwd=flow)
+    registered = subprocess.run(
+        [str(ONEVCS), "register", str(flow)], capture_output=True, text=True, check=False
+    )
+    assert registered.returncode == 0, registered.stderr
+    _ledger(
+        tmp_path,
+        monkeypatch,
+        "flow-spikes",
+        [
+            *_preserved("spike-a"),
+            {"id": "spike-b", "status": "cancelled", "superseded_by": "spike-b-2"},
+            *_preserved("spike-b-2"),
+        ],
+    )
+    monkeypatch.chdir(flow)
+    command = [str(ONEVCS), "recoverable", "--label", "run=flow-spikes", "--json"]
+    assert json.loads(spike_branches.answer(command)) == []
+    assert len(json.loads(spike_branches.answer(command, cwd=Path("/")))) == 2
+    assert spike_flow.main(["branches", "flow-spikes"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "spike-a\tplan/spike-a",
+        "spike-b\tplan/spike-b-2",
+    ]
+    assert spike_flow.main(["note", "authoring:a-new-plan", "flow-spikes"]) == 0
+    note = capsys.readouterr().out
+    for spike, branch in (("spike-a", "spike-a"), ("spike-b", "spike-b-2")):
+        assert f"- `{spike}`: report `{spike}-report`; branch `plan/{branch}`" in note
+
+
+# llmlint: ignore-end[shell_test_tiers_stay_split]
+
+
 def test_a_spike_onevcs_recorded_no_branch_for_stops_naming_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
