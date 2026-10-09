@@ -53,9 +53,6 @@ STAGING_LINGER = 0.002
 #: load-scaled hang guard sized for a stalled host, and a test whose whole point is to
 #: spend it would spend most of a minute proving what a fraction of a second proves.
 REFUSAL_GRACE = 0.2
-#: The grace the withdrawn-marker test offers, which a copy that waited on the marker
-#: would spend whole: long beside the moment the copy takes, short beside the test bound.
-WITHDRAWAL_GRACE = 20.0
 
 
 @contextmanager
@@ -407,9 +404,9 @@ def test_a_marker_taken_back_after_its_listing_is_withdrawn_without_a_wait(
 
     `maintenance.json` is written when a pool-maintenance sweep starts and removed when it
     ends, so one listed and gone by its turn is a sweep that finished, and nothing puts it
-    back until the next. The copy is given a grace far longer than the test is allowed to
-    take and still finishes well inside it, reporting the marker as withdrawn — neither
-    re-read nor refused — with every other record copied, so a marker is shown to cost the
+    back until the next. The copy reports the marker as withdrawn — neither re-read nor
+    refused — with every other record copied, and looked for it exactly once: the only
+    wait a copy has is looking for a vanished name again, so a marker is shown to cost the
     snapshot no wait while a stable file that vanishes still does.
     """
     record = run / "maintenance.json"
@@ -418,14 +415,11 @@ def test_a_marker_taken_back_after_its_listing_is_withdrawn_without_a_wait(
     expected = stable_names(run) - {"maintenance.json"}
 
     with vanishing_at_its_open(record) as (vanished, opens):
-        started = time.monotonic()
-        snapshot = snapshot_run(run, copy, vanish_grace=WITHDRAWAL_GRACE)
-        waited = time.monotonic() - started
+        snapshot = snapshot_run(run, copy)
 
     assert vanished.is_set(), "the copy never opened the marker, so nothing vanished"
     assert snapshot.withdrawn == ("maintenance.json",), snapshot
     assert snapshot.re_read == (), snapshot
-    assert waited < WITHDRAWAL_GRACE, f"the copy waited {waited:.1f}s on a withdrawn marker"
     assert not (copy / "maintenance.json").exists()
     copied = {str(path.relative_to(copy)) for path in copy.rglob("*") if path.is_file()}
     assert copied == expected

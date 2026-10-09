@@ -29,6 +29,11 @@ tell one outcome from another deterministically:
   *in flight*: signalling a caller and hoping the turn had started is a race whose
   failure mode is a green test, and the attempt log is the only moment a journey can
   prove the provider was reached. Absent, a launch answers immediately.
+  ``FAKE_CODEX_HOLD_RELEASE`` beside it names a file whose existence ends the hold
+  early, so a journey holds the turn until it says so and the seconds are only a bound
+  for a journey that died; ``FAKE_CODEX_HOLDING`` names a file the held launch writes
+  its pid to before it holds, which is how a journey reads that the turn is still in
+  flight — its process alive — at a moment of its choosing.
 * ``FAKE_CODEX_FAIL_AFTER_TURN`` — the launch emits its whole billed turn and
   *then* exits non-zero saying something no classifier recognizes. It is the
   counterpart of ``FAKE_CODEX_UNAVAILABLE_ATTEMPTS``: both leave a failure nothing
@@ -326,10 +331,24 @@ def turn(launches: int | None, findings: list[Finding]) -> tuple[TurnEvent, ...]
 
 
 def hold() -> None:
-    """Keep this turn in flight for as long as a journey asked, after recording it."""
+    """Keep this turn in flight for as long as a journey asked, after recording it.
+
+    Until the release file a journey names exists, when it names one, and for the hold's
+    seconds at most either way.
+    """
     seconds = float(os.environ.get("FAKE_CODEX_HOLD_SECONDS") or "0")
-    if seconds > 0:
+    if seconds <= 0:
+        return
+    holding = os.environ.get("FAKE_CODEX_HOLDING")
+    if holding:
+        Path(holding).write_text(f"{os.getpid()}\n", encoding="utf-8")
+    release = os.environ.get("FAKE_CODEX_HOLD_RELEASE")
+    if not release:
         time.sleep(seconds)
+        return
+    ends = time.monotonic() + seconds
+    while not Path(release).exists() and time.monotonic() < ends:
+        time.sleep(0.1)
 
 
 def main() -> int:

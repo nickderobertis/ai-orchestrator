@@ -165,8 +165,9 @@ def _adopting(run: str, environment: dict[str, str], sink: IO[str]) -> subproces
     """Attach a fresh driver once the stopped one has let go, and keep it attached.
 
     `--adopt` refuses a run something still drives, and a stop takes a moment to end its
-    driver, so only that refusal is retried — told apart by its own status rather than by
-    how quickly the process ended.
+    driver, so only that refusal is retried — told apart by its own status. An adoption
+    that took is told by the run's own `driver-adopted` record, never by how long the
+    process has gone on running.
     """
     limit = deadline(PATIENCE_SECONDS)
     refusal = ""
@@ -180,10 +181,14 @@ def _adopting(run: str, environment: dict[str, str], sink: IO[str]) -> subproces
             stdout=sink,
             stderr=subprocess.STDOUT,
         )
-        try:
-            adopting.wait(timeout=e2e_timeout(20))
-        except subprocess.TimeoutExpired:
-            return adopting
+        while adopting.poll() is None and time.monotonic() < limit:
+            if _recorded(run, environment, "driver-adopted") >= 1:
+                return adopting
+            time.sleep(1.0)
+        if adopting.poll() is None:
+            adopting.kill()
+            adopting.wait(timeout=e2e_timeout(120))
+            raise AssertionError(f"run {run} was never recorded adopted while --adopt ran")
         if adopting.returncode != REFUSED:
             return adopting
         refusal = f"exit {adopting.returncode}"

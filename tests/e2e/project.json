@@ -57,6 +57,7 @@
     "support-test-observer-judge-ops",
     "support-test-shared-dispatch-bar",
     "support-test-short-state-budget",
+    "support-unpublished-registry",
     "support-waits",
     "support-watch-rule"
   ],
@@ -184,6 +185,7 @@
             "support-test-observer-judge-ops",
             "support-test-shared-dispatch-bar",
             "support-test-short-state-budget",
+            "support-unpublished-registry",
             "support-waits",
             "support-watch-rule"
           ]

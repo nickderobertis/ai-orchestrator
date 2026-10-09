@@ -259,6 +259,79 @@ def _push(
     return Pushed(ran.returncode, ran.stdout, ran.stderr)
 
 
+@dataclass(frozen=True)
+class Drained:
+    """What a pipe held when it was read without waiting, and whether that was all."""
+
+    text: str
+    #: No process held the pipe's write end any longer when it was read.
+    at_its_end: bool
+
+
+@dataclass(frozen=True)
+class PushedToItsEnd:
+    """One run of the step, and whether its output had ended by the time it exited."""
+
+    pushed: Pushed
+    output_ended: bool
+
+
+def _drained(descriptor: int) -> Drained:
+    """Everything already written to a pipe, and whether it is at its end.
+
+    Read without blocking, so what is answered is the pipe's state now: at its end means
+    no process holds its write end any longer, and a read that would block means one
+    still does.
+    """
+    os.set_blocking(descriptor, False)
+    chunks: list[bytes] = []
+    while True:
+        try:
+            chunk = os.read(descriptor, 65536)
+        except BlockingIOError:
+            return Drained(b"".join(chunks).decode(), at_its_end=False)
+        if not chunk:
+            return Drained(b"".join(chunks).decode(), at_its_end=True)
+        chunks.append(chunk)
+
+
+def _push_to_its_end(
+    host: Host, budgets: Path, gate: Path, environment: dict[str, str] | None = None
+) -> PushedToItsEnd:
+    """Run the step as `_push` does, and read whether its output ended when it did.
+
+    The step's own exit is waited on, never its output, and the output is then read at
+    once: a sampler left holding it — a reading still waiting on its source, a nap still
+    running — is a process still holding the write end at that moment, and nothing about
+    how long the step took enters into it. Its output fits a pipe's buffer, so the step
+    never waits on this reader to finish writing it.
+    """
+    process = subprocess.Popen(
+        ["bash", "-c", f'. "{STEP}"\ngate_within_budgets "$1" "$2"', "step", budgets, gate],
+        cwd=REPO_ROOT,
+        env={**host.environment(), **(environment or {})},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert process.stdout is not None and process.stderr is not None
+    try:
+        try:
+            process.wait(timeout=e2e_timeout(180))
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            raise
+        stdout = _drained(process.stdout.fileno())
+        stderr = _drained(process.stderr.fileno())
+    finally:
+        process.stdout.close()
+        process.stderr.close()
+    return PushedToItsEnd(
+        Pushed(process.returncode, stdout.text, stderr.text),
+        output_ended=stdout.at_its_end and stderr.at_its_end,
+    )
+
+
 def _ran_once(host: Host, pushed: Pushed) -> None:
     """The gate ran once and `gate-time` was measured once."""
     assert host.gate_runs.read_text(encoding="utf-8").splitlines() == ["ran"], pushed.stderr
@@ -590,10 +663,9 @@ def test_a_sampler_stopped_mid_read_leaves_nothing_reading_or_holding_the_output
     """
     host.loadavg.unlink()
     os.mkfifo(host.loadavg)
-    started = time.monotonic()
 
     try:
-        pushed = _push(host, host.budgets(), host.gate("sleep 1.5"))
+        ran = _push_to_its_end(host, host.budgets(), host.gate("sleep 1.5"))
         left_reading = _readers_of(host.loadavg)
     finally:
         # Each look releases a reader left waiting; the deadline keeps a sampler that
@@ -604,7 +676,8 @@ def test_a_sampler_stopped_mid_read_leaves_nothing_reading_or_holding_the_output
             time.sleep(0.1)
         host.loadavg.unlink()
 
-    assert time.monotonic() - started < 60, "the step's output was held open after the gate"
+    pushed = ran.pushed
+    assert ran.output_ended, "the step's output was held open after the step exited"
     assert not left_reading, "a load-average reading was left waiting after the gate ended"
     assert pushed.returncode == 0, pushed.stdout + pushed.stderr
     _ran_once(host, pushed)
@@ -660,17 +733,18 @@ def test_a_sampling_cadence_that_is_no_number_of_seconds_falls_back_and_still_sa
     """And a sampler stopped mid-nap leaves nothing holding the step's output open.
 
     The fallback naps a minute between samples; a nap left holding the hook's stdout or
-    stderr would keep whoever reads them to their end waiting it out, so the step returning
-    in well under that is what shows the stop released them.
+    stderr would keep whoever reads them to their end waiting it out, so the output being
+    at its end the moment the step exits — the gate having ended mid-nap — is what shows
+    the stop released them.
     """
     host.loadavg.write_text("3.75 1.00 1.00 1/100 1\n", encoding="utf-8")
-    started = time.monotonic()
 
-    pushed = _push(
+    ran = _push_to_its_end(
         host, host.budgets(), host.gate("sleep 2"), {"ORCHESTRATOR_GATE_SAMPLE_SECONDS": "0"}
     )
+    pushed = ran.pushed
 
-    assert time.monotonic() - started < 30, "the step's output was held open after the gate"
+    assert ran.output_ended, "the step's output was held open after the step exited"
     assert pushed.returncode == 0, pushed.stdout + pushed.stderr
     _ran_once(host, pushed)
     assert "ORCHESTRATOR_GATE_SAMPLE_SECONDS=0 is not a positive number" in pushed.stderr

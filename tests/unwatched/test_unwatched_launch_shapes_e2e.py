@@ -447,6 +447,15 @@ def _until_the_driver_lets_go(launch: Launch, *, seconds: float = 300) -> None:
     )
 
 
+def _adoption_recorded(launch: Launch) -> bool:
+    """Whether the run's merged stream carries the `driver-adopted` an adoption journals."""
+    streamed = _just("monitor", launch.run, "--all", environment=launch.environment, seconds=120)
+    return any(
+        line.rstrip().endswith("  driver-adopted") or "  driver-adopted  " in line
+        for line in (streamed.stdout + streamed.stderr).splitlines()
+    )
+
+
 def _adopting(launch: Launch, sink: IO[str], *, seconds: float = 300) -> subprocess.Popen[str]:
     """Attach a fresh driver, once the outgoing one has let go of the run.
 
@@ -470,12 +479,23 @@ def _adopting(launch: Launch, sink: IO[str], *, seconds: float = 300) -> subproc
         # Only the *refusal* is retried, and it is told apart by its own status rather
         # than by how quickly the process ended: an adoption that took the run and then
         # handed back because the run settled is not a refusal, and re-adopting it would
-        # be this journey driving the run in circles rather than reading it.
-        try:
-            adopting.wait(timeout=e2e_timeout(20))
-        except subprocess.TimeoutExpired:
-            return adopting
+        # be this journey driving the run in circles rather than reading it. One still
+        # running is an adoption once the run records it, never for having run a while.
+        while adopting.poll() is None and time.monotonic() < limit:
+            if _adoption_recorded(launch):
+                return adopting
+            time.sleep(1)
+        if adopting.poll() is None:
+            adopting.kill()
+            adopting.wait(timeout=e2e_timeout(120))
+            raise AssertionError(f"run {launch.run} was never recorded adopted while --adopt ran")
         if adopting.returncode != REFUSED:
+            # One that ended unrefused took the run only if the run recorded it: an adopt
+            # that exits without adopting leaves a run that reads owned all the same.
+            assert _adoption_recorded(launch), (
+                f"`--adopt` exited {adopting.returncode} without the run {launch.run} "
+                "recording an adoption"
+            )
             return adopting
         refusal = f"exit {adopting.returncode}"
         time.sleep(2)

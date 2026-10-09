@@ -48,6 +48,7 @@ from fake_backend import (
 from project_fixtures import project_from_plan
 from test_orchestrate_launch_e2e import _environment as _launched_environment
 from test_orchestrate_launch_e2e import _node
+from unpublished_registry import process_started
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
@@ -584,6 +585,37 @@ def _a_surface_raised_and_consumed(environment: dict[str, str]) -> bool:
     return True
 
 
+#: The file `oneagentgraph` takes as a request to stop the whole graph, under the graph's
+#: own `signals/`: what its `cancel` verb writes, and what the driver's closeout asks the
+#: observer through.
+STOP_SIGNAL = "signals/stop"
+
+
+class ObserverEnd(NamedTuple):
+    """The observer graph's own record of how it ended, read once the launch returned."""
+
+    #: Whether the graph's stop request is on its record.
+    stop_requested: bool
+    #: Whether the process `owner.lock` names — pid and creation identity — still runs.
+    owner_alive: bool
+
+
+def _observer_end(state: Path) -> ObserverEnd:
+    """Read the dag-scope graph's stop request and its owner off the graph's own state.
+
+    `owner.lock` holds the owning pid and the creation identity Linux gave it, so a pid
+    reused since is not read as the graph still running.
+    """
+    graphs = sorted(state.glob("dag-scope-*"))
+    assert len(graphs) == 1, f"expected one observer graph under {state}: {graphs}"
+    pid, started = (graphs[0] / "owner.lock").read_text("utf-8").split()
+    try:
+        alive = process_started(int(pid)) == int(started)
+    except FileNotFoundError:
+        alive = False
+    return ObserverEnd(stop_requested=(graphs[0] / STOP_SIGNAL).exists(), owner_alive=alive)
+
+
 class Paced(NamedTuple):
     """One real launch under the shipped document, paced small, and what it recorded."""
 
@@ -597,9 +629,10 @@ class Paced(NamedTuple):
     #: the settlement and before the hook's command runs. `None` when the stream renders
     #: no such firing.
     let_go: datetime | None
-    #: When the launch process returned, by this journey's own clock, and how. Later than
-    #: `let_go` by however long the hook's recipe took, which is said beside a failure.
-    returned: datetime
+    #: How the observer graph stood once the launch had returned: whether the driver
+    #: asked it to stop, and whether its owning process outlived the launch.
+    observer: ObserverEnd
+    #: How the launch process exited.
     status: int
     printed: str
 
@@ -668,7 +701,7 @@ def _paced_launch(tmp_path: Path, oneharness_bin: str) -> Paced:
         try:
             _status_readings(launch, environment, readings)
             status = launch.wait(timeout=e2e_timeout(300))
-            returned = datetime.now(UTC)
+            observer = _observer_end(state)
         finally:
             stop.set()
             releaser.join()
@@ -689,7 +722,7 @@ def _paced_launch(tmp_path: Path, oneharness_bin: str) -> Paced:
         readings=readings,
         settled=ending.settled,
         let_go=ending.let_go,
-        returned=returned,
+        observer=observer,
         status=status,
         printed=printed.read_text("utf-8"),
     )
@@ -726,8 +759,10 @@ def test_a_paced_monitor_keeps_the_run_watched_between_its_turns(
       because the pacemaker is the one member the launched document declares
       `resettable`;
     * the observer ends when the run settles rather than when the hold would have: the
-      driver lets go of the run before the next turn was due, and a turn its own closeout
-      cancelled after the settlement is the observer being ended, never a death.
+      driver asks the graph to stop and its process is gone by the time the launch
+      returns, with the monitor's schedule never firing after a hold that opened once
+      the run had settled; and a turn its own closeout cancelled after the settlement is
+      the observer being ended, never a death.
 
     Reverting the document's `schedule` fails before any of it: `--set
     members.monitor.schedule.every` on a member with no schedule is refused by the reader
@@ -771,11 +806,14 @@ def test_a_paced_monitor_keeps_the_run_watched_between_its_turns(
         f"it is not being paced through the run — or not held open between its turns at "
         f"all:\n{paced.printed}"
     )
-    opened_with_the_wave = (turns[0].at - started[0].at).total_seconds()
-    assert opened_with_the_wave < PACED_HOLD_SECONDS, (
-        f"the monitor's first turn opened {opened_with_the_wave:.1f}s after the graph "
-        "started, which is a deferred first turn: `start_after: 0` is what opens the "
-        f"conversation with the wave, and the document no longer says it:\n{paced.printed}"
+    # A turn the schedule defers opens on the member's `cron-fired`, as every later turn
+    # does; the first one opening on none is the conversation opening with the wave.
+    monitor_fired = _of(events, "cron-fired", MONITOR_MEMBER)
+    fired_first = [firing.at.isoformat() for firing in monitor_fired if firing.at <= turns[0].at]
+    assert not fired_first, (
+        f"the monitor's first turn opened on its schedule firing at {fired_first}, which is "
+        "a deferred first turn: `start_after: 0` is what opens the conversation with the "
+        f"wave, and the document no longer says it:\n{paced.printed}"
     )
     gaps = [
         (later.at - earlier.at).total_seconds()
@@ -862,22 +900,38 @@ def test_a_paced_monitor_keeps_the_run_watched_between_its_turns(
         f"which the launched document declares resettable beside the pacemaker"
     )
 
-    # Read at the driver's own stamp for letting go of the run rather than at the
-    # launch's return: the run-end hook fires between the two, and its recipe's runtime
-    # on a loaded host is not the hold's — see `_ending`.
+    # The driver's closeout is on the run's record: it fired the run-end hook, which it
+    # does only after cancelling the observer and announcing the settlement.
     assert paced.let_go is not None, (
-        f"the run's detailed stream renders no `run-hook-fired`, so when the driver let go "
-        f"of the run cannot be read off it:\n{paced.printed}"
+        f"the run's detailed stream renders no `run-hook-fired`, so the driver's closeout "
+        f"is not on the run's record:\n{paced.printed}"
     )
-    # A hold running as the driver let go must have been cut: the driver let go before
-    # the next turn was due. A turn in flight instead must be the schedule's: its hold
-    # opened before the run settled, and the turn opened at that hold's own deadline, not
-    # later. That turn may open after settlement, when the hold ran out during the
-    # closeout's teardown before the cancel landed; the journal stamps no moment for the
-    # cancel request, so that is permitted, and a driver that let the conversation go on
-    # is still caught by the hold that would follow the turn.
-    last_close = _judge_closes(events, MONITOR_MEMBER)[-1].at
+    # A turn in flight when the driver let go must be the schedule's: its hold opened
+    # before the run settled, and the turn opened at that hold's own deadline, not later.
+    # That turn may open after settlement, when the hold ran out during the closeout's
+    # teardown before the cancel landed; the journal stamps no moment for the cancel
+    # request, so that is permitted, and a driver that let the conversation go on is still
+    # caught by the hold that would follow the turn.
+    closes = _judge_closes(events, MONITOR_MEMBER)
+    last_close = closes[-1].at
     assert paced.settled is not None
+    # A hold the monitor opened once the run had settled is one the cancel had to end:
+    # the schedule firing after such a hold opened is the conversation going on past the
+    # settlement, a turn the cancel should have prevented. A hold opened before the
+    # settlement may still run out in the closeout's teardown, which is the turn in flight
+    # read below, and is not counted here.
+    held_after = [close.at for close in closes if close.at > paced.settled]
+    went_on = [
+        firing.at.isoformat()
+        for firing in monitor_fired
+        if held_after and firing.at > held_after[0]
+    ]
+    assert not went_on, (
+        f"the monitor's hold that opened at {held_after[0].isoformat() if held_after else ''}, "
+        f"after the run settled at {paced.settled.isoformat()}, ran out and fired its "
+        f"schedule at {went_on}: the driver's cancel at settlement is not ending the "
+        f"monitor's hold, so the conversation goes on past a run that settled:\n{paced.printed}"
+    )
     in_flight = [turn.at for turn in turns if turn.at > last_close]
     if in_flight:
         assert last_close < paced.settled, (
@@ -893,13 +947,16 @@ def test_a_paced_monitor_keeps_the_run_watched_between_its_turns(
             f"allows, so something other than the schedule held it back:\n{paced.printed}"
         )
         return
-    next_turn_was_due = last_close.timestamp() + PACED_HOLD_SECONDS
-    assert paced.let_go.timestamp() < next_turn_was_due, (
-        f"the driver let go of the run at {paced.let_go.isoformat()}, after the next "
-        f"monitor turn was due at {datetime.fromtimestamp(next_turn_was_due, UTC).isoformat()}: "
-        "the driver's cancel at settlement is not ending the monitor's last hold, so a run "
-        f"that settles in seconds waits the hold out (the launch itself returned at "
-        f"{paced.returned.isoformat()}, once the run-end hook had):\n{paced.printed}"
+    # Otherwise the last hold was the one the cancel had to end, and the graph's own
+    # record says the cancel ended it: a stop on the record, and the graph's process gone
+    # once the launch returned.
+    assert paced.observer.stop_requested, (
+        f"the observer graph carries no `{STOP_SIGNAL}` once the launch returned, so the "
+        f"driver never asked it to stop:\n{paced.printed}"
+    )
+    assert not paced.observer.owner_alive, (
+        "the observer graph's process outlived the launch, so the driver let go of the "
+        f"run with the monitor still holding:\n{paced.printed}"
     )
 
 

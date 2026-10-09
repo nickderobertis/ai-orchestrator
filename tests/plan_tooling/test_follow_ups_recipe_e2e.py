@@ -69,6 +69,7 @@ from nx_workspace import SHARED_TOOLCHAIN_GROUP
 from project_fixtures import helper, project_from_plan
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
+from waits import until
 
 from orchestrator import follow_up_tickets as tickets
 from orchestrator import plan_check
@@ -135,6 +136,8 @@ INHERITED = (
     "CODEX_THREAD_ID",
     "CODEX_SESSION_ID",
     "FAKE_CODEX_HOLD_SECONDS",
+    "FAKE_CODEX_HOLD_RELEASE",
+    "FAKE_CODEX_HOLDING",
     *follow_up_variables.all_names(),
     plan_root_variable.name(),
     # The suite's session-wide opt-out for hand-written fixture plans, which the follow-up
@@ -254,8 +257,8 @@ LEGACY_FEEDBACK = "Bring the export ticket to the current shape.\n"
 #: template fills, a replacement backreference, and a `&`.
 FEEDBACK = "Tighten the cursor ticket's examples & keep @RUN@ and @TICKET_CONTRACT@ as `\\1`.\n"
 
-#: How long a detached run's one turn is held in flight, so the run is still being driven
-#: when the next command asks. Far longer than the launch may take to return.
+#: The bound on a detached run's held turn, which the journey releases itself: only a
+#: journey that died before releasing it is ended by this, so the turn cannot outlive it.
 HOLD_SECONDS = 300
 #: The priority a person sets the earlier run's issue to, which no estimate may rewrite.
 HELD_PRIORITY = tickets.Priority.URGENT.value
@@ -341,6 +344,26 @@ def _run(
         timeout=e2e_timeout(600),
         check=False,
     )
+
+
+def _turn_in_flight(holding: Path) -> bool:
+    """Whether a held turn, once reached, is still running now.
+
+    Read after its launch returned: a turn still running then is one that launch did not
+    wait for, whatever either took. The turn is held until the journey releases it, so
+    only a launch that waited for it could see it end first.
+    """
+    until(
+        "the held turn to be reached",
+        holding.exists,
+        seconds=300,
+        state=lambda: f"no pid at {holding}",
+    )
+    try:
+        stat = Path(f"/proc/{int(holding.read_text(encoding='utf-8'))}/stat").read_text("utf-8")
+    except OSError:
+        return False
+    return stat.rpartition(")")[2].split()[0] != "Z"
 
 
 def _store(bench: Bench, *arguments: str) -> dict[str, object]:
@@ -1073,7 +1096,7 @@ class Followed(NamedTuple):
     rewritten_ticket: Path
     left_ticket: Path
     detached: subprocess.CompletedProcess[str]
-    detached_seconds: float
+    detached_turn_in_flight: bool
     detached_run: str
     mine: subprocess.CompletedProcess[str]
     driving: subprocess.CompletedProcess[str]
@@ -1166,6 +1189,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
     python = str(REPO_ROOT / ".venv" / "bin" / "python3")
     store = str(ONETASKGRAPH_BIN)
     started: list[str] = []
+    released = tmp / "detached-turn-released"
     try:
         # An earlier run's verified ticket, already an open issue on the board.
         earlier = _ticket(
@@ -1782,16 +1806,21 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
         legacy_local = _item(bench, tickets.qualified_id(legacy_run, REWRITTEN_CAUSE))
         legacy_after = _item(bench, legacy_issue)
 
-        # A detached launch whose one turn is held, so its run is still being driven.
+        # A detached launch whose one turn is held until this journey releases it, so its
+        # run is still being driven; the turn's process is read once the launch returned.
         detach_run = f"fu-detach-{pid}"
         _draft(bench, detach_run, "A draft verified by a detached run")
         _script(bench, "nothing-matches-this-marker", [])
-        held = bench.environment | {"FAKE_CODEX_HOLD_SECONDS": str(HOLD_SECONDS)}
-        clock = time.monotonic()
+        holding = tmp / "detached-turn-holding"
+        held = bench.environment | {
+            "FAKE_CODEX_HOLD_SECONDS": str(HOLD_SECONDS),
+            "FAKE_CODEX_HOLD_RELEASE": str(released),
+            "FAKE_CODEX_HOLDING": str(holding),
+        }
         detached = _run(
             ["just", "follow-ups", detach_run, "--detach", "--to", BOARD], bench, environment=held
         )
-        detached_seconds = time.monotonic() - clock
+        detached_turn_in_flight = detached.returncode == OK and _turn_in_flight(holding)
         detached_run = f"{detach_run}{SUFFIX}"
         started.append(detached_run)
         mine = _run(["just", "runs", "--mine"], bench)
@@ -1901,7 +1930,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             rewritten_ticket=rewritten_ticket,
             left_ticket=left_ticket,
             detached=detached,
-            detached_seconds=detached_seconds,
+            detached_turn_in_flight=detached_turn_in_flight,
             detached_run=detached_run,
             mine=mine,
             driving=driving,
@@ -1909,6 +1938,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             tampered_gate=tampered_gate,
         )
     finally:
+        released.touch()
         for run in started:
             if run and (bench.runs / run).exists():
                 _run(["just", "stop", run], bench)
@@ -3046,6 +3076,11 @@ def test_a_feedback_re_dispatch_brings_a_schema_4_ticket_to_one_fix_updating_its
     assert f"{followed.rewritten_ticket} is not a sound ticket" not in legacy.result.stderr
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This recipe journey
+# runs in plan_tooling's dedicated installed-engine Nx tier, and launches nothing itself: it
+# reads the detached launch the module-scoped `followed` fixture already made, and whether
+# that launch's held turn was still in flight once it returned. That tier's workspace input
+# covers the recipe and the engine pin this assertion depends on.
 def test_a_detached_launch_returns_at_once_with_two_lines_and_a_run_its_session_owns(
     followed: Followed,
 ) -> None:
@@ -3056,7 +3091,7 @@ def test_a_detached_launch_returns_at_once_with_two_lines_and_a_run_its_session_
         f"follow-up run: {run}",
         f"watch it with: just watch {run}",
     ]
-    assert followed.detached_seconds < HOLD_SECONDS, "the detached launch waited for its turn"
+    assert followed.detached_turn_in_flight, "the detached launch waited for its turn"
     launch = json.loads((followed.bench.runs / run / "launch.json").read_text("utf-8"))
     assert launch["session"] == LAUNCHING_SESSION
     # Named by `scripts/onepipeline.sh` on the recipe's behalf, which names none itself.
@@ -3065,6 +3100,9 @@ def test_a_detached_launch_returns_at_once_with_two_lines_and_a_run_its_session_
     assert re.search(rf"^\*?\s*{re.escape(run)}\s+\[mine\]", followed.mine.stdout, re.MULTILINE), (
         followed.mine.stdout
     )
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This recipe journey

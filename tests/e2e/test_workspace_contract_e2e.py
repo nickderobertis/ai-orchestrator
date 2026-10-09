@@ -14,6 +14,7 @@ boundary run separately.
 from __future__ import annotations
 
 import fcntl
+import functools
 import hashlib
 import json
 import os
@@ -23,6 +24,7 @@ import subprocess
 import sys
 import time
 import tomllib
+from collections.abc import Callable
 from pathlib import Path
 from typing import NamedTuple
 
@@ -30,6 +32,7 @@ import pytest
 from nx_inputs import SELECTED_TARGETS, UNCONDITIONAL_TARGETS
 from nx_workspace import copy_checkout, copy_working_tree, shares_workspace_install
 from waits import timeout as e2e_timeout
+from waits import until
 
 # Deliberately no module-level tier mark. Most of this file drives `just` recipes
 # and shell scripts that never open this repository's prose, and a blanket
@@ -293,9 +296,18 @@ if [[ "${FAIL_COMMAND:-}" == "bun" ]]; then
   echo "bun: captured failure detail" >&2
   exit 9
 fi
-# An install that takes long enough to overlap a concurrent caller, where a journey asks
-# for one: a racing journey with an instant install would serialize by luck.
-sleep "${BUN_INSTALL_SECONDS:-0}"
+# An install held until the journey releases it, where a journey asks for one, so the
+# callers it races provably arrive while this one holds the lock. Each held install records
+# itself first, which is how a journey reads that one is in Bun and that no second joined
+# it; the bound only ends a hold whose journey died.
+if [[ -n "${BUN_HOLD_RELEASE:-}" ]]; then
+  printf 'held\n' >>"$BUN_HOLD_RELEASE.holding"
+  waited=0
+  until [[ -e "$BUN_HOLD_RELEASE" ]] || ((waited >= 6000)); do
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+fi
 mkdir -p node_modules/.bin
 cat >node_modules/.bin/nx <<'NX'
 #!/usr/bin/env bash
@@ -917,12 +929,120 @@ def test_workspace_install_names_every_piece_of_its_own_state_that_refuses(
     assert not trace.exists(), "an installer that never took its lock must not have run Bun"
 
 
+def _parent_of(pid: int) -> int | None:
+    """The parent `pid` has now, read from the process table; None once it is gone."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    # The command name is parenthesized and may hold spaces, so the fields after it are
+    # read from its closing parenthesis: state, then the parent.
+    return int(stat.rpartition(")")[2].split()[1])
+
+
+def _descends_from(pid: int, ancestor: int) -> bool:
+    current: int | None = pid
+    while current is not None and current > 1:
+        if current == ancestor:
+            return True
+        current = _parent_of(current)
+    return False
+
+
+def _waits_on_flock(lock: Path, installer: int) -> bool:
+    """Whether a process of `installer`'s tree is asleep in the kernel waiting on `lock`.
+
+    The waiter's own evidence: its wait channel is the kernel's file-lock wait, and it holds
+    a descriptor open on `lock`, so this is the wait itself rather than an inference from
+    how long the installer has been running. `/proc/locks` would say it more directly, but
+    the kernel leaves out a lock whose taker has exited — as `flock(1)` always has once
+    it took one — and every waiter queued behind it with it.
+    """
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit() or not _descends_from(int(entry.name), installer):
+            continue
+        try:
+            asleep_on_a_lock = "lock" in (entry / "wchan").read_text(encoding="utf-8")
+            if asleep_on_a_lock and any(
+                os.readlink(descriptor) == os.path.realpath(lock)
+                for descriptor in (entry / "fd").iterdir()
+            ):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _naps_between_polls(installer: int) -> bool:
+    """Whether the `flock`-less installer is napping between two tries at a held mutex.
+
+    The fallback's wait is a loop of a failed `mkdir` and a `sleep`, and that nap is the
+    only child it starts there, so a `sleep` child of the installer is the loop waiting.
+    """
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            stat = (entry / "stat").read_text(encoding="utf-8")
+        except OSError:
+            continue
+        name = stat.partition("(")[2].rpartition(")")[0]
+        if name == "sleep" and _parent_of(int(entry.name)) == installer:
+            return True
+    return False
+
+
+def _holding_installs(release: Path) -> int:
+    """How many installs reached the Bun double held on `release`."""
+    holding = release.with_name(f"{release.name}.holding")
+    return len(holding.read_text(encoding="utf-8").splitlines()) if holding.exists() else 0
+
+
+def _first_install_held(install: subprocess.Popen[str], release: Path, trace: Path) -> None:
+    """Until the first caller holds the lock from inside the held Bun double."""
+    until(
+        "the first install to reach Bun",
+        lambda: _holding_installs(release) >= 1,
+        seconds=60,
+        state=lambda: f"exit {install.poll()}, Bun ran {trace.exists()}",
+    )
+
+
+def _await_installer_waiting(
+    process: subprocess.Popen[str], held: str, trace: Path, waiting: Callable[[], bool]
+) -> None:
+    """Until the installer is seen waiting on what this journey holds.
+
+    An installer that does not wait on it runs the doubled Bun and exits, which fails
+    this at once rather than at the hang guard.
+    """
+
+    def ready() -> bool:
+        assert process.poll() is None, (
+            f"the installer exited {process.returncode} while the {held} was held, so it "
+            "never waited on it"
+        )
+        return waiting()
+
+    until(
+        f"the installer to wait on the {held}",
+        ready,
+        seconds=60,
+        state=lambda: f"exit {process.poll()}, Bun ran {trace.exists()}",
+    )
+
+
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_recipes`
 # deselects nothing and hides no cost: `orchestrator:test-recipes` runs `-m reads_recipes`
 # as a target of this same project and `just check` runs it, so the marker chooses the
 # `recipeWorkspace` key the verdict is memoized on — and `tests/conftest.py` fails a recipe
 # journey that omits it. The installer under test is the doubled one every sibling here
 # drives, and the journey takes seconds.
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Same site, same
+# reason: what it spends is two doubled installer processes and the lock it holds them on,
+# and `recipeWorkspace`, which covers `scripts/**/*`, is the narrowest key that reads the
+# installer it exercises. Moving this module's recipe journeys into a project of their own
+# is a change to the tier layout, not to this journey.
 @pytest.mark.reads_recipes
 def test_a_copy_sharing_an_install_takes_the_owning_checkouts_lock(tmp_path: Path) -> None:
     """Two callers over one tree serialize on one lock, wherever each runs from.
@@ -937,8 +1057,8 @@ def test_a_copy_sharing_an_install_takes_the_owning_checkouts_lock(tmp_path: Pat
     two pytest processes is where the gate met it, past the reach of any xdist group.
 
     Proven by holding the owner's lock rather than by racing: a copy that takes the
-    owner's lock waits, and one that takes its own would have run Bun long before the
-    lock is released.
+    owner's lock is recorded by the kernel as waiting on it, and one that takes its own
+    would run Bun and exit while the owner's is still held.
     """
     owner = _nx_wrapper_checkout(tmp_path, "owner")
     _add_nx_wrapper_doubles(owner)
@@ -962,10 +1082,12 @@ def test_a_copy_sharing_an_install_takes_the_owning_checkouts_lock(tmp_path: Pat
             stderr=subprocess.PIPE,
         )
         try:
-            # The window an installer taking its own lock would run Bun inside many
-            # times over: the doubled install returns in milliseconds.
-            with pytest.raises(subprocess.TimeoutExpired):
-                process.wait(timeout=e2e_timeout(2))
+            _await_installer_waiting(
+                process,
+                "owning checkout's lock",
+                trace,
+                lambda: _waits_on_flock(owner_lock, process.pid),
+            )
             assert not trace.exists(), (
                 "the copy's installer ran Bun while the owning checkout's lock was held"
             )
@@ -988,6 +1110,7 @@ def test_a_copy_sharing_an_install_takes_the_owning_checkouts_lock(tmp_path: Pat
     assert not (owner / ".logs" / "workspace-install.log").exists()
 
 
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 
@@ -1071,6 +1194,15 @@ def test_a_forced_install_discards_a_tree_it_cannot_enter(tmp_path: Path) -> Non
     assert (checkout / ".logs" / "workspace-install.lock").is_file()
 
 
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_recipes` is the
+# marker `tests/conftest.py` requires of any test that opens a script, and the tier it
+# selects, `orchestrator:test-recipes`, is keyed on `recipeWorkspace` — which covers
+# `scripts/**/*`, so an edit to the installer or the lock helper this drives selects it
+# already. Moving this module's recipe journeys into a project of their own is a change to
+# the tier layout, not to this journey.
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Same site, same
+# reason: what it spends is the doubled installer's own processes held on the lock, and
+# the key that selects it is the narrowest one that reads the scripts it exercises.
 @pytest.mark.reads_recipes
 def test_a_forced_install_in_a_copy_sharing_an_install_holds_both_trees_locks(
     tmp_path: Path,
@@ -1086,8 +1218,9 @@ def test_a_forced_install_in_a_copy_sharing_an_install_holds_both_trees_locks(
     through the link finish, then its own, so later arrivals wait — and only then
     discards the link. The owner's tree itself is never written or removed.
 
-    Proven the way the shared-lock journey above is: by holding each lock in turn and
-    reading that the run neither ran Bun nor discarded the link while either was held.
+    Proven the way the shared-lock journey above is: by holding each lock in turn,
+    reading that the kernel records the run waiting on it, and that the run neither ran
+    Bun nor discarded the link while either was held.
     """
     owner = _nx_wrapper_checkout(tmp_path, "owner")
     _add_nx_wrapper_doubles(owner)
@@ -1105,6 +1238,7 @@ def test_a_forced_install_in_a_copy_sharing_an_install_holds_both_trees_locks(
         locks.append(lock.open())
     owner_held, copy_held = locks
     owner_lock = owner / ".logs" / "workspace-install.lock"
+    lock_of = {owner_held: owner_lock, copy_held: copy / ".logs" / "workspace-install.lock"}
 
     try:
         for held in (owner_held, copy_held):
@@ -1119,10 +1253,12 @@ def test_a_forced_install_in_a_copy_sharing_an_install_holds_both_trees_locks(
         )
         try:
             for held, whose in ((owner_held, "owner's"), (copy_held, "copy's own")):
-                # The window a run not waiting on this lock would have run Bun inside
-                # many times over: the doubled install returns in milliseconds.
-                with pytest.raises(subprocess.TimeoutExpired):
-                    process.wait(timeout=e2e_timeout(2))
+                _await_installer_waiting(
+                    process,
+                    f"{whose} lock",
+                    trace,
+                    functools.partial(_waits_on_flock, lock_of[held], process.pid),
+                )
                 assert not trace.exists(), f"the forced run ran Bun while the {whose} lock was held"
                 assert modules.is_symlink(), (
                     f"the forced run discarded the link while the {whose} lock was held"
@@ -1162,13 +1298,13 @@ def test_a_forced_install_in_a_copy_sharing_an_install_holds_both_trees_locks(
     )
 
 
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+
+
 #: How many callers race one flock-less install below: enough that an unserialized
 #: fallback would show as more than one install, and no more, because each is a process.
 FLOCKLESS_RACERS = 3
-
-#: How long the raced install takes, so the callers overlap rather than serialize by
-#: luck: with an instant install the first could finish before the second started.
-BUN_INSTALL_SECONDS = "2"
 
 
 def _path_without(root: Path, tool: str) -> Path:
@@ -1217,10 +1353,9 @@ def _flockless_env(checkout: Path, tmp_path: Path, trace: Path, **overrides: str
 # already. That is the edge a project of its own would add, and moving the fifty-odd
 # recipe journeys of this module into one is a change to the tier layout, not to these.
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Same site, same
-# reason: the seconds each spends are the raced install's, so three callers overlap
-# rather than serialize by luck, and the two windows a forced run is watched not
-# running Bun in; the key that selects them is the narrowest one that reads the scripts
-# they exercise.
+# reason: what each spends is the installer's own processes — three callers held behind
+# one install, and a forced run held behind each of two mutexes — and the key that
+# selects them is the narrowest one that reads the scripts they exercise.
 @pytest.mark.reads_recipes
 def test_the_workspace_installer_serializes_without_flock_through_the_shared_fallback(
     tmp_path: Path,
@@ -1232,14 +1367,17 @@ def test_the_workspace_installer_serializes_without_flock_through_the_shared_fal
     driven through that path, while this one reached the fallback through the same
     helper unproved. Every caller succeeds and exactly one installs: the rest arrive
     at a tree the first already provisioned, and answer it as Bun does, `(no changes)`.
+    The first is held in Bun until each of the rest is seen polling for the mutex it
+    holds, so the callers overlap by construction rather than by how long Bun takes.
     """
     checkout = _nx_wrapper_checkout(tmp_path, "flockless")
     _add_nx_wrapper_doubles(checkout)
     trace = tmp_path / "trace"
-    environment = _flockless_env(checkout, tmp_path, trace, BUN_INSTALL_SECONDS=BUN_INSTALL_SECONDS)
+    release = tmp_path / "release-bun"
+    environment = _flockless_env(checkout, tmp_path, trace, BUN_HOLD_RELEASE=str(release))
 
-    racing = [
-        subprocess.Popen(
+    def start_caller() -> subprocess.Popen[str]:
+        return subprocess.Popen(
             [str(checkout / "scripts" / "workspace-install.sh")],
             cwd=checkout,
             env=environment,
@@ -1247,8 +1385,20 @@ def test_the_workspace_installer_serializes_without_flock_through_the_shared_fal
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        for _ in range(FLOCKLESS_RACERS)
-    ]
+
+    racing = [start_caller()]
+    try:
+        _first_install_held(racing[0], release, trace)
+        racing.extend(start_caller() for _ in range(FLOCKLESS_RACERS - 1))
+        for waiter in racing[1:]:
+
+            def polls(waiter: subprocess.Popen[str] = waiter) -> bool:
+                assert _holding_installs(release) == 1, "a second install ran Bun beside the first"
+                return _naps_between_polls(waiter.pid)
+
+            _await_installer_waiting(waiter, "first install's mutex", trace, polls)
+    finally:
+        release.touch()
     outcomes = [caller.communicate(timeout=e2e_timeout(180)) for caller in racing]
 
     assert [caller.returncode for caller in racing] == [0] * FLOCKLESS_RACERS, (
@@ -1282,8 +1432,8 @@ def test_a_forced_install_in_a_copy_holds_both_trees_locks_without_flock_and_rel
     re-armed for the second would have dropped the first, leaving a mutex behind that
     every later install of the owner waits the whole budget out on. So this holds each
     mutex in turn, the way the `flock` journey above holds each lock, reads that the run
-    neither ran Bun nor discarded the link while either was held, and then reads that
-    neither mutex outlived it.
+    is polling for it and neither ran Bun nor discarded the link while either was held,
+    and then reads that neither mutex outlived it.
     """
     owner = _nx_wrapper_checkout(tmp_path, "owner")
     _add_nx_wrapper_doubles(owner)
@@ -1311,10 +1461,15 @@ def test_a_forced_install_in_a_copy_holds_both_trees_locks_without_flock_and_rel
     )
     try:
         for held, whose in ((owner_held, "owner's"), (copy_held, "copy's own")):
-            # The window a run not waiting on this mutex would have run Bun inside
-            # many times over: the doubled install returns in milliseconds.
-            with pytest.raises(subprocess.TimeoutExpired):
-                process.wait(timeout=e2e_timeout(2))
+            if held is copy_held:
+                # The run re-makes the owner's mutex once this journey removes it, and
+                # only after its last nap on it has ended, so a nap seen from here on is
+                # one it took waiting on its own. One that exits here took the owner's
+                # and never waited on its own.
+                _await_installer_waiting(process, "copy's own mutex", trace, owner_held.is_dir)
+            _await_installer_waiting(
+                process, f"{whose} mutex", trace, lambda: _naps_between_polls(process.pid)
+            )
             assert not trace.exists(), f"the forced run ran Bun while the {whose} mutex was held"
             assert modules.is_symlink(), (
                 f"the forced run discarded the link while the {whose} mutex was held"
@@ -1474,6 +1629,15 @@ def test_a_forced_install_that_cannot_discard_the_tree_stops_before_bun(tmp_path
     assert not trace.exists(), "a forced install that kept the tree must not have run Bun"
 
 
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_recipes` is the
+# marker `tests/conftest.py` requires of any test that opens a script, and the tier it
+# selects, `orchestrator:test-recipes`, is keyed on `recipeWorkspace` — which covers
+# `scripts/**/*`, so an edit to the installer or the lock helper this drives selects it
+# already. Moving this module's recipe journeys into a project of their own is a change to
+# the tier layout, not to this journey.
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Same site, same
+# reason: what it spends is the doubled installer's own processes held on the lock, and
+# the key that selects it is the narrowest one that reads the scripts it exercises.
 @pytest.mark.reads_recipes
 def test_concurrent_workspace_installs_install_once_and_both_succeed(tmp_path: Path) -> None:
     """Two Nx invocations in one fresh worktree must not install over each other.
@@ -1482,20 +1646,20 @@ def test_concurrent_workspace_installs_install_once_and_both_succeed(tmp_path: P
     invocation: `just check` and the suite's own nested `just lint-llm-diff` reach
     it from the same checkout at once. The loser must wait, see the workspace the
     winner provisioned, and go on rather than reinstalling on top of it.
+
+    The interleaving is held rather than hoped for: the first caller's Bun is held until
+    this journey releases it, and the second is read off the kernel's lock table as
+    waiting on the lock — with no second caller in Bun — before it is.
     """
     checkout = _nx_wrapper_checkout(tmp_path, "concurrent")
     _add_nx_wrapper_doubles(checkout)
-    # Slow enough that the second caller certainly arrives while the first holds
-    # the lock, which is the interleaving under test.
-    bun = checkout / "bin" / "bun"
-    bun.write_text(
-        bun.read_text().replace("mkdir -p node_modules/.bin", "sleep 2\nmkdir -p node_modules/.bin")
-    )
     trace = tmp_path / "trace"
-    environment = _nx_wrapper_env(checkout, tmp_path, trace)
+    release = tmp_path / "release-bun"
+    environment = _nx_wrapper_env(checkout, tmp_path, trace, BUN_HOLD_RELEASE=str(release))
+    lock = checkout / ".logs" / "workspace-install.lock"
 
-    installs = [
-        subprocess.Popen(
+    def start_install() -> subprocess.Popen[str]:
+        return subprocess.Popen(
             [str(checkout / "scripts" / "workspace-install.sh")],
             cwd=checkout,
             env=environment,
@@ -1503,8 +1667,20 @@ def test_concurrent_workspace_installs_install_once_and_both_succeed(tmp_path: P
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        for _ in range(2)
-    ]
+
+    installs = [start_install()]
+    try:
+        _first_install_held(installs[0], release, trace)
+        installs.append(start_install())
+        second = installs[1]
+
+        def second_waits() -> bool:
+            assert _holding_installs(release) == 1, "a second install ran Bun beside the first"
+            return _waits_on_flock(lock, second.pid)
+
+        _await_installer_waiting(second, "first install's lock", trace, second_waits)
+    finally:
+        release.touch()
     outcomes = [install.communicate(timeout=e2e_timeout(60)) for install in installs]
 
     assert [install.returncode for install in installs] == [0, 0], outcomes
@@ -1517,6 +1693,10 @@ def test_concurrent_workspace_installs_install_once_and_both_succeed(tmp_path: P
         "bun install --frozen-lockfile (no changes)",
     ]
     assert (checkout / "node_modules/.bin/nx").is_file()
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 
 #: One real journey carrying `shares_workspace_install`, run inside the fresh

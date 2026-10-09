@@ -111,8 +111,10 @@ def host_sweep_clock_step() -> int:
     return int(found.group(1))
 
 
-#: How long a session start with a sweep still running may take. Bounded in seconds,
-#: against a doubled sweep that would run for ten minutes.
+#: The hang guard on one session start: its expiry fails the journey, and nothing asserts
+#: a start finishes inside it. It is far short of the ten minutes a doubled sweep holds
+#: for, so a start that waited on its sweep is one this guard fails rather than one the
+#: sweep's own bound lets through.
 SESSION_START_SECONDS = 60
 
 #: A doubled sweep verb: it records what it was asked, holds until the journey releases
@@ -411,20 +413,24 @@ def test_session_setup_returns_while_the_sweep_it_started_still_runs(
 ) -> None:
     """The hook's foreground never waits on the sweep, and every later step still runs.
 
-    The doubled `onevcs sweep` holds for up to ten minutes; session setup returns in
-    seconds with it still running, and exits exactly as the start after it does — one
-    that starts no sweep at all, because this one completed inside the hour.
+    The doubled `onevcs sweep` holds until this journey releases it, so session setup
+    having returned at all, with that sweep then reached, still held, its job alive and
+    no ending recorded, is what shows the hook did not wait on it. A start that waited
+    could only return once released, which nothing here does before these reads. It
+    exits exactly as the start after it does — one that starts no sweep at all, because
+    this one completed inside the hour.
     """
     session_start.hold_sweeps()
-    began = time.monotonic()
 
     first = session_start.start()
 
-    elapsed = time.monotonic() - began
-    assert elapsed < SESSION_START_SECONDS, first.stderr
     session_start.await_calls(1)
     job = session_start.holder_pid()
     assert job is not None and _pid_alive(job), first.stderr
+    assert not session_start.release_file.exists(), "the sweep was released before the start"
+    assert session_start.field("completed", "status") is None, (
+        "the sweep recorded an ending, so the start may have waited it out"
+    )
     assert session_start.verb_calls() == [ONEVCS_SWEEP]
     assert f"started job {job} (log: {session_start.state / 'sweep.log'})" in first.stderr
     for tool in PUBLISHED_TOOLS:
