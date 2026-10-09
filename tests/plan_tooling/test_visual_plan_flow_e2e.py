@@ -32,6 +32,7 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -75,13 +76,14 @@ BASE = "main"
 PLANNER_MARKER = "Show each node's owner in the listing and name the run on the status line."
 SPIKE_MARKER = "Capture each expected visual change before and after, mocked, unverified."
 
-#: The plan store's environment layer for a source, which this journey states for its own.
+#: The plan store's environment layer for a source, and the setting naming its plugin.
 INHERITED_SOURCE_SETTINGS = "ONETASKGRAPH_SOURCES__"
+PLUGIN_SETTING = "__PLUGIN"
 
 #: What each turn records of the environment it was handed, so a failure says what it saw.
 RECORDED_ENVIRONMENT = (
     "ONEPIPELINE_TEMPLATE_ROOT",
-    "ONETASKGRAPH_SOURCES__AUTHORING__PLUGIN",
+    plan_root_variable.plugin_name(),
     plan_root_variable.name(),
     "ONETASKGRAPH_DEFAULT_SOURCES",
 )
@@ -351,6 +353,31 @@ def _documents(environment: dict[str, str], project: str) -> dict[str, Any]:
     return held
 
 
+def _partial_overlays(environment: Mapping[str, str]) -> set[str]:
+    """Each inherited setting of a source the environment names no plugin for.
+
+    Such an overlay completes a source this checkout's `onetaskgraph.yaml` declares, as the
+    host's `.env` overlays `hellopatient`'s team, and the spike's turn runs in the target's
+    worktree, where nothing declares it, so the plan store refuses every command with it
+    present, naming that source — `test_plan_root_env.py` shows that refusal standing. The
+    launch completes only `authoring`, so this is removed here only until the plan store
+    stops refusing an overlay of a source the command never names; every source setting
+    that names its plugin is inherited as a launch hands it on.
+    """
+    settings = [name for name in environment if name.startswith(INHERITED_SOURCE_SETTINGS)]
+    plugged = {_source(name) for name in settings if name == _plugin_setting(_source(name))}
+    return {name for name in settings if _source(name) not in plugged}
+
+
+def _source(setting: str) -> str:
+    """The source an environment-layer setting belongs to, as the store spells it there."""
+    return setting.removeprefix(INHERITED_SOURCE_SETTINGS).split("__", 1)[0]
+
+
+def _plugin_setting(source: str) -> str:
+    return f"{INHERITED_SOURCE_SETTINGS}{source}{PLUGIN_SETTING}"
+
+
 @pytest.fixture(scope="module")
 def flow(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Flow:
     if shutil.which("just") is None:
@@ -371,13 +398,10 @@ def flow(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Flow:
     evidence = tmp_path / "evidence"
     scenario = json.dumps(_scenario(project, evidence, chromium))
 
-    # The host's own source settings are left behind: they complete a source this checkout's
-    # `onetaskgraph.yaml` declares, and the spike's turn runs in the target's worktree, where
-    # nothing declares it, so the store refuses the half it is handed.
     environment = {
         name: value
         for name, value in os.environ.items()
-        if not name.startswith(INHERITED_SOURCE_SETTINGS) and name not in INHERITED_ENVIRONMENT
+        if name not in _partial_overlays(os.environ) and name not in INHERITED_ENVIRONMENT
     }
     environment.update(identity.environment)
     environment |= {
@@ -393,7 +417,6 @@ def flow(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Flow:
         # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
         "PATH": f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}",
         "FAKE_CODEX_ANSWERS": json.dumps([PASSING_VERDICT]),
-        "ONETASKGRAPH_SOURCES__AUTHORING__PLUGIN": "local-md",
         plan_root_variable.name(): str(authoring),
         "ONETASKGRAPH_SOURCES__DESTINATION__PLUGIN": "local-md",
         "ONETASKGRAPH_SOURCES__DESTINATION__CONFIG__ROOT": str(destination),

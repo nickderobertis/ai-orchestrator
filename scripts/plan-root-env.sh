@@ -22,6 +22,15 @@
 # reads the store's own layered configuration, so a root moved in `onetaskgraph.yaml`
 # or overridden per launch moves this with it.
 #
+# `sources.authoring.plugin` is exported beside the root, as scripts/follow-up-env.sh
+# exports the drafts plugin beside its root, because a dispatch may run in a worktree of
+# another repository: its configuration declares no `authoring` source, and the store
+# refuses a source the environment names without a plugin, so a spike there could not
+# write its report into the plan's own project. The plugin is the one the resolution
+# below already holds the source to — it refuses any other — and only `authoring`'s is
+# exported: another source an environment overlays without its plugin stays the store's
+# to refuse, never completed here from a second copy of `onetaskgraph.yaml`.
+#
 # It is a helper rather than a line in the launcher for the reason its two siblings are:
 # what the name is, what the value is, and what happens when the root cannot be resolved
 # are one decision, and a second copy of any of them is a launch path that can drift
@@ -44,6 +53,11 @@ PLAN_AUTHORING_SOURCE="authoring"
 #: `tests/test_plan_root_composition.py` is what refuses a second one anywhere in this
 #: repository's tracked code.
 PLAN_AUTHORING_ROOT_ENV="ONETASKGRAPH_SOURCES__AUTHORING__CONFIG__ROOT"
+
+#: The same source's plugin at the same layer, and the one plugin the resolution below
+#: admits for it, which is the one a plan record is a file of.
+PLAN_AUTHORING_PLUGIN_ENV="ONETASKGRAPH_SOURCES__AUTHORING__PLUGIN"
+PLAN_AUTHORING_PLUGIN="local-md"
 
 #: The resolution itself, deferred to the module that already performs it. Held to
 #: `OSError` so a source this checkout cannot plan into is one line naming the source
@@ -106,7 +120,10 @@ export_plan_authoring_root() {
     # already in the environment. It is still resolved and validated above, because
     # that resolution reads the environment layer too: what was checked is the value
     # the dispatch will actually read.
-    if [[ ! -v $PLAN_AUTHORING_ROOT_ENV ]]; then
+    if [[ ! -v "$PLAN_AUTHORING_ROOT_ENV" ]]; then
         export "$PLAN_AUTHORING_ROOT_ENV=$root"
+    fi
+    if [[ ! -v "$PLAN_AUTHORING_PLUGIN_ENV" ]]; then
+        export "$PLAN_AUTHORING_PLUGIN_ENV=$PLAN_AUTHORING_PLUGIN"
     fi
 }

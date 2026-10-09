@@ -28,6 +28,7 @@ HELPER = REPO_ROOT / "scripts" / "plan-root-env.sh"
 #: source this checkout does not plan into.
 NAME_HOLDER = "PLAN_AUTHORING_ROOT_ENV"
 SOURCE_HOLDER = "PLAN_AUTHORING_SOURCE"
+PLUGIN_NAME_HOLDER = "PLAN_AUTHORING_PLUGIN_ENV"
 
 
 @functools.cache
@@ -58,3 +59,8 @@ def name() -> str:
 def source() -> str:
     """The plan source that root belongs to, as this checkout's store configures it."""
     return _held(SOURCE_HOLDER)
+
+
+def plugin_name() -> str:
+    """The environment variable the launch exports that source's plugin under, beside its root."""
+    return _held(PLUGIN_NAME_HOLDER)

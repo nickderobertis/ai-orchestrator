@@ -28,11 +28,14 @@ composition added outside it.
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
+import follow_up_variables
 import plan_root_variable
 import pytest
 from published_tools import ONETASKGRAPH_BIN
@@ -312,3 +315,193 @@ def test_a_checkout_with_no_interpreter_at_all_is_refused_rather_than_left_silen
     # The checkout it resolved is still that checkout's, so what failed is the
     # interpreter and not the search for the tree the helper is in.
     assert str(checkout / "onetaskgraph.yaml") in driven.stderr, driven.stderr
+
+
+def test_the_helper_exports_the_authoring_plugin_beside_the_root(tmp_path: Path) -> None:
+    """A launch names the source whole, and keeps a plugin its caller already set."""
+    plugin = plan_root_variable.plugin_name()
+    program = (
+        f'source "{plan_root_variable.HELPER}"; export_plan_authoring_root test'
+        f'; printf "%s" "${{{plugin}-}}"'
+    )
+    root = {plan_root_variable.name(): str(tmp_path / "plans")}
+    for inherited in ({}, {plugin: plan_store.WRITABLE_PLUGIN}):
+        driven = subprocess.run(  # noqa: S603 - this repository's own helper, as a launcher runs it
+            ["bash", "-c", program],  # noqa: S607 - bash from the search path, as every caller
+            cwd=REPO_ROOT,
+            env={
+                "PATH": f"{REPO_ROOT / '.venv' / 'bin'}:/usr/bin:/bin",
+                "HOME": str(Path.home()),
+                **root,
+                **inherited,
+            },
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert driven.returncode == 0, driven.stdout + driven.stderr
+        assert driven.stdout == plan_store.WRITABLE_PLUGIN, (inherited, driven.stdout)
+
+
+def test_an_inherited_authoring_plugin_no_plan_could_be_stored_in_is_refused(
+    tmp_path: Path,
+) -> None:
+    """The helper keeps a caller's plugin, so one naming a board is refused before the launch."""
+    driven = _drive(
+        **{
+            plan_root_variable.name(): str(tmp_path / "plans"),
+            plan_root_variable.plugin_name(): "github-projects",
+        }
+    )
+
+    assert driven.returncode == 2, driven.stdout + driven.stderr
+    assert "github-projects" in driven.stderr, driven.stderr
+
+
+#: A source a host's `.env` overlays with one setting and no plugin, as this host's does:
+#: this checkout's `onetaskgraph.yaml` completes it, and a configuration that declares no
+#: such source leaves it half a source.
+PARTIAL_OVERLAY = "ONETASKGRAPH_SOURCES__HELLOPATIENT__CONFIG__TEAM"
+
+#: The report a spike writes: the `spike-report` template's required answers, nothing more.
+REPORT_ANSWERS = {
+    "spike": "spike-cache",
+    "branch": "spike-cache",
+    "harness": "`sh bench.sh`.",
+    "method": "Timed both reads over the same fixture.",
+    "candidates": [],
+    "findings": [],
+}
+
+
+class ReportWrite(NamedTuple):
+    """A report write from another repository: the process, and where it should land."""
+
+    written: subprocess.CompletedProcess[str]
+    root: Path
+    project: str
+
+
+def _report_from_another_repository(tmp_path: Path, **environment: str) -> ReportWrite:
+    """Launch as a planning launch does, then write a spike's report from another repository.
+
+    The plan store's settings are the ones a planning launch exports — the authoring source
+    (`scripts/plan.sh`), the drafts source (`scripts/onepipeline.sh`), the template root
+    and the non-interactive setting (`scripts/dispatch-env.sh`) — each by its own helper,
+    with both roots pointed at this journey's temporary directory.
+    The project is made from this checkout, where the planner makes it; the report is
+    written from a checkout of another repository, where a spike dispatched into that
+    repository runs, by the template resolve piped into `document create` its turn runs.
+    That checkout declares sources of its own and no `authoring`, so the source is whatever
+    the launch's environment says it is and nothing else.
+    """
+    foreign = tmp_path / "another-repository"
+    foreign.mkdir()
+    # noqa: S607 - git from the search path, the one every checkout here is made with.
+    subprocess.run(  # noqa: S603 - a fixed git verb over this journey's own temporary directory
+        ["git", "init", "-q", str(foreign)],  # noqa: S607
+        check=True,
+    )
+    (foreign / "onetaskgraph.yaml").write_text(
+        "sources:\n  tickets:\n    plugin: local-md\n    config:\n      root: .tickets\n",
+        encoding="utf-8",
+    )
+    answers = tmp_path / "report.json"
+    answers.write_text(json.dumps(REPORT_ANSWERS), encoding="utf-8")
+    project = f"test-{tmp_path.name}"
+    scripts = plan_root_variable.HELPER.parent
+    program = (
+        f'set -euo pipefail; source "{plan_root_variable.HELPER}"; export_plan_authoring_root test'
+        f'; source "{scripts / "follow-up-env.sh"}"; export_follow_up_drafts test'
+        f'; source "{scripts / "template-env.sh"}"; export_template_root test'
+        "; export_noninteractive_plan_store test"
+        '; "$1" project create authoring --id "$3" --title "$3" --json >/dev/null'
+        '; template=$("$2" template resolve spike-report --json)'
+        '; cd "$4"'
+        '; printf "%s" "$template" | "$1" document create authoring --project "$3"'
+        ' --title "Cache spike" --id spike-cache-report --answers "$5"'
+        " --template-loader - --no-interactive --json"
+    )
+    written = subprocess.run(  # noqa: S603 - this repository's own helper and the pinned CLIs
+        [
+            "bash",
+            "-c",
+            program,
+            "report",
+            str(ONETASKGRAPH_BIN),
+            str(REPO_ROOT / ".venv" / "bin" / "onepipeline"),
+            project,
+            str(foreign),
+            str(answers),
+        ],
+        cwd=REPO_ROOT,
+        env={
+            "PATH": f"{REPO_ROOT / '.venv' / 'bin'}:/usr/bin:/bin",
+            "HOME": str(Path.home()),
+            plan_root_variable.name(): str(tmp_path / "plans"),
+            follow_up_variables.root_name(): str(tmp_path / "drafts"),
+            **environment,
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return ReportWrite(written=written, root=tmp_path / "plans", project=project)
+
+
+def test_a_spike_in_another_repository_writes_its_report_into_the_plans_own_project(
+    tmp_path: Path,
+) -> None:
+    """The launch names the `authoring` source whole, so a foreign worktree can write to it.
+
+    Exporting the root alone handed such a dispatch half a source, which the store refuses
+    as `sources.authoring: missing field plugin` before writing anything.
+    """
+    report = _report_from_another_repository(tmp_path)
+    written, root, project = report.written, report.root, report.project
+
+    assert written.returncode == 0, written.stdout + written.stderr
+    listed = subprocess.run(  # noqa: S603 - the pinned plan-store CLI, read as the manager reads
+        [
+            str(ONETASKGRAPH_BIN),
+            "document",
+            "list",
+            "--source",
+            "authoring",
+            "--project",
+            project,
+            "--json",
+        ],
+        cwd=REPO_ROOT,
+        env={
+            "PATH": f"{REPO_ROOT / '.venv' / 'bin'}:/usr/bin:/bin",
+            "HOME": str(Path.home()),
+            plan_root_variable.name(): str(root),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert listed.returncode == 0, listed.stdout + listed.stderr
+    held = [str(item["id"]) for item in json.loads(listed.stdout)["items"]]
+    assert held == ["authoring:spike-cache-report"], (
+        f"the plan's own project holds {held}, not the report the spike wrote from another "
+        "repository's worktree"
+    )
+
+
+def test_a_source_overlaid_without_its_plugin_is_left_for_the_store_to_refuse(
+    tmp_path: Path,
+) -> None:
+    """Only `authoring` is completed: a half-overlaid source stays the plan store's refusal.
+
+    Completing it here would mean a second copy of that source's definition, so the
+    launch leaves the overlay as it found it, exports no plugin for it, and the write is
+    refused naming that source. The refusal stands until the store stops rejecting an
+    overlay of a source the command never names.
+    """
+    written = _report_from_another_repository(tmp_path, **{PARTIAL_OVERLAY: "ENG"}).written
+
+    assert written.returncode != 0, written.stdout + written.stderr
+    assert "sources.hellopatient: missing field `plugin`" in written.stderr, written.stderr
+    assert "sources.authoring" not in written.stderr, written.stderr

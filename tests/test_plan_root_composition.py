@@ -1,6 +1,7 @@
-"""One tracked file composes the name a planning launch exports its plan-authoring root under.
+"""One tracked file composes the names a planning launch exports its plan-authoring source under.
 
-`scripts/plan-root-env.sh` owns that name and the value beside it, and everything else
+`scripts/plan-root-env.sh` owns those names — the source's root and its plugin — and the
+values beside them, and everything else
 reads it from there. A second composition is invisible from outside — two launch paths
 exporting two spellings both look like a configured host, and the plan a dispatch authors
 lands where nobody looks — so the one place is a gate rather than a convention.
@@ -21,10 +22,10 @@ import plan_root_variable
 
 from orchestrator.root import REPO_ROOT
 
-#: The shape of a plan-store source-root variable at the store's environment layer,
+#: The shape of a plan-store source-root or plugin variable at the store's environment layer,
 #: matched rather than spelled: this is looking for a *second* composition of this
 #: repository's own, and a second one would be spelled differently by definition.
-ROOT_VARIABLE = re.compile(r"ONETASKGRAPH_SOURCES__[A-Z0-9_]+?__CONFIG__ROOT")
+SOURCE_SETTING = re.compile(r"ONETASKGRAPH_SOURCES__[A-Z0-9_]+?__(CONFIG__ROOT|PLUGIN)")
 
 #: What this reads. Deliberately not this repository's prose: a document may name the
 #: variable, and this tier is memoized on a key that drops markdown, so a gate that could
@@ -34,7 +35,7 @@ CODE = (":!*.md", ":!docs/")
 
 
 def test_the_launch_composes_that_variable_in_exactly_one_place() -> None:
-    """One tracked file holds the name and the value; every other reader reads it from there.
+    """One tracked file holds the names and the values; every other reader reads them from there.
 
     A second composition is invisible from outside: two launch paths exporting two
     spellings both look like a configured host, and the plan a dispatch authors lands
@@ -42,7 +43,7 @@ def test_the_launch_composes_that_variable_in_exactly_one_place() -> None:
     that a journey measuring this seam is a reader rather than a stale copy of it.
     """
     listed = subprocess.run(  # noqa: S603 - git over this checkout's own tracked files
-        ["git", "grep", "-l", "-E", ROOT_VARIABLE.pattern, "--", ".", *CODE],
+        ["git", "grep", "-l", "-E", SOURCE_SETTING.pattern, "--", ".", *CODE],
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,
@@ -50,14 +51,15 @@ def test_the_launch_composes_that_variable_in_exactly_one_place() -> None:
     )
     assert listed.returncode == 0, listed.stdout + listed.stderr
 
-    name = plan_root_variable.name()
+    names = (plan_root_variable.name(), plan_root_variable.plugin_name())
+    name = " or ".join(names)
     composing = sorted(
         path
         for path in listed.stdout.split()
-        if name in (REPO_ROOT / path).read_text(encoding="utf-8")
+        if any(one in (REPO_ROOT / path).read_text(encoding="utf-8") for one in names)
     )
     expected = [str(plan_root_variable.HELPER.relative_to(REPO_ROOT))]
     assert composing == expected, (
-        f"{', '.join(composing)} spell {name}, where only {expected[0]} composes it; read "
-        "it through tests/plan_root_variable.py instead"
+        f"{', '.join(composing)} spell {name}, where only {expected[0]} composes them; "
+        "read them through tests/plan_root_variable.py instead"
     )
