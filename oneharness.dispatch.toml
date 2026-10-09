@@ -63,10 +63,13 @@ unset_env = [
 
 [harness.claude-code.variant.primary]
 env_from = { XDG_RUNTIME_DIR = "ONEPIPELINE_NODE_SCRATCH_DIR" }
+# Verbatim with `oneharness.identities.toml`'s own primary variant, per this file's
+# header comment: that parent deliberately does NOT unset CLAUDE_CODE_OAUTH_TOKEN here,
+# so this restatement must not either, or the two drift and the reported isolation
+# becomes false the way this file's header warns against.
 unset_env = [
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
-    "CLAUDE_CODE_OAUTH_TOKEN",
     "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
     "GH_PROJECTS_TOKEN",
     "HELLOPATIENT_LINEAR_API_KEY",
