@@ -176,6 +176,12 @@ ANTHROPIC_SELECTORS = [
     "CLAUDE_CODE_OAUTH_TOKEN",
     "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
 ]
+#: `claude-code:primary`'s own carve-out from `ANTHROPIC_SELECTORS`: it is the last
+#: resort in every chain, and on a host provisioned by `claude setup-token` (no
+#: browser), `CLAUDE_CODE_OAUTH_TOKEN` loaded from this checkout's own `.env` is the
+#: only thing that can authenticate it — `oneharness.identities.toml`'s own primary
+#: variant states why.
+PRIMARY_EXEMPT_SELECTOR = "CLAUDE_CODE_OAUTH_TOKEN"
 PLAN_STORE_SIDES = {"design-doc writer", "design-doc reviewer", "follow-up"}
 
 #: The follow-up agent's graph and its one single-sided member, whose config is the judge's
@@ -515,7 +521,8 @@ def test_every_side_resolves_its_intended_effective_deadline(
         assert primary["env_from"]["CLAUDE_CONFIG_DIR"] == {"value": PRIMARY_INDIRECTION}, (
             f"{config.name}'s primary does not read its directory from {PRIMARY_INDIRECTION}"
         )
-        masked = ANTHROPIC_SELECTORS + ([] if side in PLAN_STORE_SIDES else PLAN_STORE_CREDENTIALS)
+        masked = [s for s in ANTHROPIC_SELECTORS if s != PRIMARY_EXEMPT_SELECTOR]
+        masked += [] if side in PLAN_STORE_SIDES else PLAN_STORE_CREDENTIALS
         assert primary["unset_env"]["value"] == masked, (
             f"{config.name}'s primary masks {primary['unset_env']['value']}, not {masked}"
         )

@@ -633,9 +633,12 @@ the audit out of it, and a test at the end of the gate compared it with GitHub �
 whenever a sibling renamed a check, every branch here failed a whole gate to learn it,
 after the suite had run, on a defect no retry could fix; two siblings drifted in one
 evening and two publications paid a full gate each within the hour. With the tool
-reporting the checks itself there is nothing to go stale, and
-`tests/e2e/test_merge_path_audit_e2e.py` drives the recipe against the real
-repositories' branch protection instead.
+reporting the checks itself there is nothing to go stale, and whether it reads a real
+repository's branch protection correctly is `onevcs`'s own test suite's claim to prove,
+not a second proof this repository owes it: `tests/e2e/test_merge_path_audit_e2e.py`
+drives only the one thing this repository adds — that the recipe accepts both the
+published flag spelling and the planner doctrine's own and reaches the same place —
+against an empty local registry, asking nothing of a real repository.
 `test_the_resolved_policy_is_publication_and_approvals_and_nothing_else` reads the
 policy back off `onevcs` so a gate reintroduced into the rules file fails here; it lives
 in `tests/e2e/test_repo_registry_apply_e2e.py`.
