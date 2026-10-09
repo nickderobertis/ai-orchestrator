@@ -69,6 +69,31 @@ def _write_executable(path: Path, body: str) -> None:
     path.chmod(0o755)
 
 
+def _real_bin_dir_without_npm(tmp_path: Path) -> Path:
+    """A directory of every real `/usr/bin` and `/bin` executable except npm/npx.
+
+    A fixture simulating "npm is not installed" cannot simply point `PATH` at
+    `/usr/bin:/bin`: this host's base image ships a system npm there (installed
+    outside asdf, as a dependency of the system's own nodejs package), so that PATH
+    reaches a real npm that then fails on a permissions error against its
+    root-owned global prefix — not the clean "npm is not installed" this fixture
+    means to simulate. Symlinking everything else through keeps every other real
+    tool (git, uv, …) reachable.
+    """
+    bin_dir = tmp_path / "real-bin-no-npm"
+    bin_dir.mkdir(exist_ok=True)
+    for source_dir in (Path("/usr/bin"), Path("/bin")):
+        if not source_dir.is_dir():
+            continue
+        for entry in source_dir.iterdir():
+            if entry.name in ("npm", "npx"):
+                continue
+            target = bin_dir / entry.name
+            if not target.exists():
+                target.symlink_to(entry)
+    return bin_dir
+
+
 def _write_adopted_version_files(config_dir: Path) -> None:
     """Give a copied session-setup the same adopted-release declarations the real one reads.
 
@@ -167,9 +192,12 @@ cp "$TEST_BUN_BINARY" "$HOME/.local/node/bin/bun"
 chmod +x "$HOME/.local/node/bin/bun"
 """,
         )
+    path = (
+        f"{tools}:/usr/bin:/bin" if with_npm else f"{tools}:{_real_bin_dir_without_npm(tmp_path)}"
+    )
     env = {
         "HOME": str(tmp_path),
-        "PATH": f"{tools}:/usr/bin:/bin",
+        "PATH": path,
         "TEST_NPM_ARGS": str(tmp_path / "npm.args"),
         **extra_env,
     }
@@ -358,12 +386,19 @@ def test_full_setup_continues_past_an_absent_cargo_and_reports_cargo_sweep_unava
 
 
 def _run_full_setup_without_bun(
-    tmp_path: Path, *, declared: Mapping[str, str | None] | None = None, **extra_env: str
+    tmp_path: Path,
+    *,
+    declared: Mapping[str, str | None] | None = None,
+    exclude_npm: bool = False,
+    **extra_env: str,
 ) -> subprocess.CompletedProcess[str]:
     """Run the whole script against a fixture host that has every tool but bun.
 
     `declared` restates one `config/<tool>.version` after the real ones are copied in:
-    a string replaces its contents, and `None` removes the file outright.
+    a string replaces its contents, and `None` removes the file outright. `exclude_npm`
+    is for the one caller that also needs npm absent — see
+    `_real_bin_dir_without_npm` for why `/usr/bin:/bin` alone cannot simulate that on
+    this host.
     """
     test_repo = tmp_path / "repo"
     scripts = test_repo / "scripts"
@@ -386,11 +421,12 @@ def _run_full_setup_without_bun(
     _write_sdk_python(test_repo / ".venv" / "bin" / "python", ADOPTED_ONEJUDGE_VERSION)
     _write_oneharness(test_repo / ".venv" / "bin" / "oneharness", ADOPTED_ONEHARNESS_VERSION)
     _write_published_tool_clis(test_repo / ".venv" / "bin")
+    path = str(_real_bin_dir_without_npm(tmp_path)) if exclude_npm else "/usr/bin:/bin"
     return subprocess.run(
         ["bash", str(session_setup)],
         text=True,
         capture_output=True,
-        env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin", **extra_env},
+        env={"HOME": str(tmp_path), "PATH": path, **extra_env},
     )
 
 
@@ -664,7 +700,7 @@ def test_install_bun_rejects_unusable_binary_after_npm_succeeds(tmp_path: Path) 
 
 
 def test_full_setup_reports_missing_bun_and_returns_failure(tmp_path: Path) -> None:
-    proc = _run_full_setup_without_bun(tmp_path)
+    proc = _run_full_setup_without_bun(tmp_path, exclude_npm=True)
 
     assert proc.returncode == 1
     assert "cannot install required bun: npm is not installed" in proc.stderr
