@@ -1510,12 +1510,13 @@ class Counted(NamedTuple):
     reason: str | None = None
 
 
-def accepted(counted: Counted, path: str) -> str:
+def accepted(counted: Counted, path: str, *, review_exempt: bool = False) -> str:
     """What an accepted plan reports, in one wording both paths print.
 
     The count is what stops a plan whose nodes were all skipped for the wrong reason
     reading like a clean one — so where it is unknown the line says so, and why, rather
-    than printing a zero that means something else entirely.
+    than printing a zero that means something else entirely. A ``review_exempt`` plan was
+    never asked for a review record, so its line says that instead of claiming one.
     """
     read = (
         f"{counted.nodes} dispatched node(s) state the bar they are judged against"
@@ -1523,10 +1524,12 @@ def accepted(counted: Counted, path: str) -> str:
         else f"every dispatched node states the bar it is judged against, though how "
         f"many there are is unknown here: {counted.reason}"
     )
-    return (
-        f"check-plan: {read}, and every task carries a review record for its current "
-        f"authored content ({path})"
+    reviewed = (
+        "and as a shipped example it is held to no review record"
+        if review_exempt
+        else "and every task carries a review record for its current authored content"
     )
+    return f"check-plan: {read}, {reviewed} ({path})"
 
 
 def plan_record_refusal(
@@ -1567,9 +1570,13 @@ def plan_record_refusal(
     )
 
 
-def check_directly(project: str) -> int:
+def check_directly(project: str, *, review_exempt: bool = False) -> int:
     """Check ``project`` with this repository's checks alone, against an engine with no
     `plan check`.
+
+    ``review_exempt`` lifts the per-task and the plan-level review refusals and nothing
+    else, for a project :func:`orchestrator.plan_check.review_exempt` answers for: that is
+    where the exemption and its reason are stated, and the caller asks it.
 
     The path this command took before the engine had a verb to register a check with,
     kept rather than deleted because it is the answer for a host whose engine predates
@@ -1616,8 +1623,12 @@ def check_directly(project: str) -> int:
         where = f"{refused.node}: " if refused.node is not None else ""
         print(f"check-plan: {where}{refused.field}: {refused.reason}", file=sys.stderr)
     try:
-        unreviewed = plan_review.unreviewed(records)
-        whole = plan_record_refusal(project, plan, plan_review.owned_by_node(records))
+        unreviewed = [] if review_exempt else plan_review.unreviewed(records)
+        whole = (
+            None
+            if review_exempt
+            else plan_record_refusal(project, plan, plan_review.owned_by_node(records))
+        )
     # tests/test_criteria_guard.py covers this: the review bar is composed from this
     # checkout's own tracked files, so a recipe journey run from here cannot remove one.
     # llmlint: ignore[changed_behavior_has_e2e] see the note above this line
@@ -1653,5 +1664,5 @@ def check_directly(project: str) -> int:
     # after the verb accepts: the two paths then measure one body from one map.
     for warned in task_body.warnings(records):
         print(warned, file=sys.stderr)
-    print(accepted(Counted(checked), DIRECTLY))
+    print(accepted(Counted(checked), DIRECTLY, review_exempt=review_exempt))
     return 0

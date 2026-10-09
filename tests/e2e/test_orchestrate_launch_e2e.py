@@ -987,7 +987,11 @@ def test_the_shared_bar_reaches_a_dispatched_workers_judge_beside_its_task(
     shared_bar = shared_completion_bar()
     task_record = REPO_ROOT / "examples/tasks/scheduler-research/research.md"
     task = task_record.read_text(encoding="utf-8").split("---", 2)[2]
-    criteria = task.split("## Acceptance criteria", 1)[1].strip()
+    # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker] This journey's placement and its `reads_docs` marker predate this edit, which only bounds its slice of the shipped task now that the task is a `plan-task` rendering.  # noqa: E501
+    # The section alone: the shipped task is a `plan-task` rendering, so the operational
+    # notes follow it under their own heading, and the record ends with its stored answers.
+    criteria = task.split("## Acceptance criteria", 1)[1].split("\n## ", 1)[0].strip()
+    # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker]  # noqa: E501
     assert criteria, "the shipped plan's node states no acceptance criteria to be judged by"
 
     # The criterion a judge was handed appears on no read-only view — `results`,

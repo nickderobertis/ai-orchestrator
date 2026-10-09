@@ -3,12 +3,8 @@ title: 'Design: repo-plan-example'
 project: repo-plan-example
 metadata:
   onetaskgraph.origin: orchestrator-record-staging:102de0e7ec9d17f43c286db96673ed970aa1e0b2d444f9ee5085351344f8eee5
-  onetaskgraph.template:
-    answers_digest: sha256:eeb247a0bc3a0806ab94342d0fb563357b1e026c498c4e4a053e22701743c0b6
-    body_digest: sha256:c63ddbcd802a695af855645767f670afaa8e671348e65d08f9ec2c1f39b0b5a8
-    digest: sha256:40ceac966dad3e35698a79077e2f0faaa59d9373ca5bb912dfde7ffa0469686d
-    template: onepipeline:design-doc
-  "orchestrator.design-approval": {"approved_at":"2026-10-01T13:24:54.007902+00:00","key":"ba78575ae5099549e01a4c4d93facff322e73696ab5fbd616ad5feea484bfbdb"}
+  "onetaskgraph.template": {"answers_digest":"sha256:7fa0efd8f1550e7f4ebb7fe510dfb94f094db89ddacab9c8509fb1619e79560c","body_digest":"sha256:87242bed5f58680ad5ced6d53f9cfaa6a4bb9bf4c602870516076dc985e2eccb","digest":"sha256:b3081e2663074adf631864ea2a51e4148e6a82407f8fc9b893f85a2c6aef6634","template":"onepipeline:design-doc"}
+  "orchestrator.design-approval": {"approved_at":"2026-10-09T00:49:56.727632+00:00","key":"57a16b09431de7254340f0092b375c52f8ac484eb7f4172d3cf2957ac339f010"}
 ---
 ## What
 
@@ -66,6 +62,18 @@ A new public method returning the parsed health response.
 
 The published documentation describes the endpoint that actually exists.
 
+## Budgets
+
+**Sizing.** Three monitoring probes polling every 10 seconds, a load balancer checking every 5 seconds, and a handful of on-call engineers opening the dashboard during an incident, against a service serving about 200 requests a second.
+
+**At 10×.** Probes see slower health answers once 40 pollers compete with ordinary traffic, covered by health-endpoint-p95-latency.
+
+| Budget | Target | Basis | How it is measured | Check runtime |
+| --- | --- | --- | --- | --- |
+| [Health endpoint p95 latency][1] | ≤50 ms | estimate | telemetry | ≈3 s |
+
+[1]: examples/tasks/repo-plan-example/api.md
+
 ## Acceptance criteria
 
 - Polling the service says whether it is up.
@@ -97,6 +105,62 @@ architecture: |-
   else reads it; the client method and the dashboard are then built at the same time, and the
   documentation lands beside them. The dashboard carries a person's approval inside its own
   work, so the approval happens on the branch the work is on.
+budgets:
+- basis: estimate
+  check_runtime_seconds: 3
+  command: python scripts/budgets/health_latency.py .budgets/health-requests.jsonl
+  direction: max
+  evidence: 'Estimate: the handler returns build metadata fixed at startup and reads no store, so its time is routing and serialization, a few milliseconds; 50 ms leaves headroom for a loaded test host.'
+  file: budgets.yaml
+  file_change: add
+  id: health-endpoint-p95-latency
+  inner_measure_reason: ''
+  location: examples/tasks/repo-plan-example/api.md
+  measure: The 95th-percentile time a poller waits for `GET /health`, from the request sent to the response read through the service's real HTTP stack, over the requests the endpoint's request tests record; its analysis reports the median and the slowest request as its breakdown.
+  name: Health endpoint p95 latency
+  node: api
+  repository: github.com/nickderobertis/some-service
+  schema_version: 2
+  source: telemetry
+  threshold: 50
+  unit: ms
+  workload: 200 sequential `GET /health` requests against one service instance, the requests three monitoring probes polling every 10 s and a load balancer checking every 5 s make over about five minutes.
+plan_budgets:
+  checklist:
+  - budget: health-endpoint-p95-latency
+    concern: latency
+    in_scope: true
+    not_applicable: ''
+    summary: ''
+  - budget: ''
+    concern: quota and rate-limit headroom
+    in_scope: false
+    not_applicable: 'n/a because the endpoint calls no rate-limited service: it answers from metadata held in memory since startup.'
+    summary: The endpoint calls no rate-limited service.
+  - budget: ''
+    concern: scaling with data
+    in_scope: false
+    not_applicable: n/a because the response is the same build metadata whatever the service stores, under 1 KB, so nothing it returns grows with data.
+    summary: The response is fixed build metadata, under 1 KB, whatever the service stores.
+  - budget: ''
+    concern: spend
+    in_scope: false
+    not_applicable: n/a because the endpoint calls no paid service and adds about one request a second to instances already provisioned for 200.
+    summary: No paid service is called, and about one request a second is negligible load.
+  - budget: ''
+    concern: resource use
+    in_scope: false
+    not_applicable: n/a because the metadata is read once at startup and each answer allocates under 1 KB, far below what the instance's ordinary traffic uses.
+    summary: The metadata is read once at startup and each answer is under 1 KB.
+  overview: Add a `GET /health` endpoint to the service, a typed `health()` method to its client, an admin dashboard that shows the health metadata, and the endpoint's documentation, across the service, client and docs repositories.
+  realistic_data: []
+  repo_wide_effects: []
+  schema_version: 2
+  sizing: Three monitoring probes polling every 10 seconds, a load balancer checking every 5 seconds, and a handful of on-call engineers opening the dashboard during an incident, against a service serving about 200 requests a second.
+  spike_findings: []
+  ten_x: At 10x, about 11 health requests a second, the first thing an operator notices is a health answer that arrives late enough to look like an unhealthy instance, which `health-endpoint-p95-latency` covers. The response stays under 1 KB and reads nothing that grows, so no other cost moves.
+  ten_x_summary: Probes see slower health answers once 40 pollers compete with ordinary traffic, covered by health-endpoint-p95-latency.
+  workload: 'Three monitoring probes poll `GET /health` every 10 seconds and the load balancer checks it every 5 seconds per instance, across 4 instances: about 1.1 health requests a second, beside about 200 requests a second of ordinary traffic. Up to 5 on-call engineers open the dashboard during an incident, each view one health request. Each response carries the same build metadata, under 1 KB.'
 planned_tasks:
 - delivers: the endpoint
   depends_on: none
@@ -118,6 +182,7 @@ planned_tasks:
   location: examples/tasks/repo-plan-example/docs.md
   task: 'docs(api): document /health'
   unit: Documentation
+predates_budgets: ''
 units:
 - decisions:
   - artifact: |-

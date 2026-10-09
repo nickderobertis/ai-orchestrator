@@ -47,6 +47,11 @@ just integrate claude/api claude/docs --push
 just repo-recover ai-orchestrator/engineer/abc123 --repo /path/to/checkout
 ```
 
+`just check-plan examples:<project>` validates any example before you launch it; an example
+whose tasks name repositories (`health-endpoint`, `repo-plan-example`, `tracked-release`) is
+checked and launched once each repository it names has a checkout registered with `onevcs
+register <checkout>`, as every lifecycle plan needs.
+
 ## How it fits together
 
 | Piece | What it is |

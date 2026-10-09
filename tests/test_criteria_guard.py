@@ -737,6 +737,30 @@ def test_the_command_accepts_a_plan_that_states_its_bar(
     assert "1 dispatched node(s)" in capsys.readouterr().out
 
 
+def test_the_direct_path_lifts_only_the_review_refusals_for_an_exempt_project(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    project_record: dict[str, object],
+) -> None:
+    """An exempt project passes without a review record, and is still refused for a criterion.
+
+    The plan carries no plan-level review record: refused for that alone when not exempt,
+    accepted when exempt, and the exemption still refuses a task whose criteria break a rule.
+    """
+    plan = _plan(persona="engineer", task=_task(COMPLETE))
+    monkeypatch.setattr(plan_store, "read_project", lambda _: (plan, []))
+
+    assert check_directly("authoring:unreviewed") == 1
+    assert "plan-level review record" in capsys.readouterr().err
+    assert check_directly("examples:unreviewed", review_exempt=True) == 0
+    assert "as a shipped example it is held to no review record" in capsys.readouterr().out
+
+    refused = _plan(persona="engineer", task=_task(f"{RELEASED_ELSEWHERE[0]}\n{COMPLETE}"))
+    monkeypatch.setattr(plan_store, "read_project", lambda _: (refused, []))
+    assert check_directly("examples:broken", review_exempt=True) == 1
+    assert "check-plan:" in capsys.readouterr().err
+
+
 def test_the_command_refuses_a_plan_that_does_not(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

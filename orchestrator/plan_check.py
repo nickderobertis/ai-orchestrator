@@ -52,6 +52,7 @@ from orchestrator import (
     task_body,
 )
 from orchestrator.criteria_guard import CriteriaError
+from orchestrator.project_store import qualified_id
 from orchestrator.root import REPO_ROOT
 
 #: What the verb sets in this process's environment, and the only thing a check may
@@ -68,6 +69,21 @@ PROJECT_ENV = "ORCHESTRATOR_PLAN_CHECK_PROJECT"
 
 #: What a refusal about a missing review record says when nothing named the project.
 UNNAMED_PROJECT = "<source>:<project>"
+
+#: The plan source this repository ships its worked examples in, as `onetaskgraph.yaml`
+#: names it, and the one exemption from the review-record refusals. Its projects are
+#: documentation a reader copies, and a review record is keyed on the review bar's
+#: fingerprint, so a pass recorded on an example would go stale at every edit to that bar
+#: and cost a judged turn per example to restore. Only the per-task and the plan-level
+#: review refusals are lifted; every other refusal applies to an example unchanged.
+REVIEW_EXEMPT_SOURCE = "examples"
+
+
+def review_exempt(project: str) -> bool:
+    """Whether ``project`` is one of the shipped examples :data:`REVIEW_EXEMPT_SOURCE` holds."""
+    named = qualified_id(project)
+    return named is not None and named.source == REVIEW_EXEMPT_SOURCE
+
 
 #: The interpreter :data:`~orchestrator.criteria_guard.PLAN_CHECK_SCRIPT` runs this
 #: module on. The wrapper sets it to its own, so a command that resolved this package
@@ -223,7 +239,8 @@ def refusals(document: object, project: str) -> list[Refusal]:
     ``project`` is the qualified id the wrapper named, or :data:`UNNAMED_PROJECT` when
     nothing did. Every refusal names it as the command that records a review; the
     plan-level record is read from the store by it, and the placeholder reads as no
-    project to read one from.
+    project to read one from. A project :func:`review_exempt` answers for is refused
+    everything but the two review refusals.
     """
     named = None if project == UNNAMED_PROJECT else project
     found: list[Refusal] = []
@@ -255,6 +272,8 @@ def refusals(document: object, project: str) -> list[Refusal]:
             Refusal(node=refused.node, field=refused.field, reason=refused.reason)
             for refused in spike_plan.refusals(named, document)
         )
+    if review_exempt(project):
+        return found
     found.extend(_review_refusals(document, project))
     whole = _plan_review_refusal(document, named)
     if whole is not None:
@@ -486,7 +505,11 @@ def check_through_engine(project: str, engine: str) -> int:
     counted, records = dispatched_in_with_records(project)
     for warned in task_body.warnings(records):
         print(warned, file=sys.stderr)
-    print(criteria_guard.accepted(counted, criteria_guard.THROUGH_ENGINE))
+    print(
+        criteria_guard.accepted(
+            counted, criteria_guard.THROUGH_ENGINE, review_exempt=review_exempt(project)
+        )
+    )
     return 0
 
 
@@ -531,7 +554,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     # llmlint: ignore[boundary_inputs_validated, changed_behavior_has_e2e] A probe that fails for any reason takes the direct path, as an engine that could not be found always has, and that path says on its accepted line that the engine's loader did not read the plan and a launch may still refuse it — so the narrower answer is never read as the whole one. The direct path after a failed probe is driven through the real recipe by `tests/plan_tooling/test_check_plan_recipe_e2e.py`'s narrower-path journeys; a failing probe of this checkout's own wrapper is a checkout whose pinned engine is not installed, which no journey can produce without breaking the `.venv` every concurrent test shares.  # noqa: E501
     if carries_plan_check(engine):
         return check_through_engine(args.project, engine)
-    return criteria_guard.check_directly(args.project)
+    return criteria_guard.check_directly(args.project, review_exempt=review_exempt(args.project))
 
 
 def answer_on_stdin() -> int:

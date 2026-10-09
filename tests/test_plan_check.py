@@ -23,6 +23,7 @@ from project_fixtures import described, no_budgets
 
 from orchestrator import (
     criteria_guard,
+    plan_budgets,
     plan_check,
     plan_review,
     plan_store,
@@ -261,6 +262,42 @@ def test_a_task_nothing_has_reviewed_is_refused_and_names_the_command(
     assert refusal["field"] == "metadata"
     assert "no review record" in refusal["reason"]
     assert "just review-plan authoring:probe" in refusal["reason"]
+
+
+def test_a_shipped_example_is_spared_both_review_refusals_and_no_other_source_is() -> None:
+    """The examples source alone is exempt, and only from the two review-record refusals.
+
+    The same unreviewed plan is refused for its task's record and the plan-level record
+    under another local source, and under the examples source earns neither.
+    """
+    document = _document(_node())
+
+    refused = plan_check.refusals(document, "authoring:probe")
+    assert [(one["node"], one["field"]) for one in refused] == [
+        ("route", "metadata"),
+        (None, "metadata"),
+    ]
+    assert plan_check.refusals(document, f"{plan_check.REVIEW_EXEMPT_SOURCE}:probe") == []
+    assert not plan_check.review_exempt(plan_check.UNNAMED_PROJECT)
+
+
+def test_a_shipped_example_breaking_any_other_rule_is_still_refused(
+    project_record: dict[str, object],
+) -> None:
+    """The exemption lifts the review refusals and leaves every other one standing."""
+    project = f"{plan_check.REVIEW_EXEMPT_SOURCE}:probe"
+    outside = f"{COMPLETE}\n{RELEASED_ELSEWHERE[0]}"
+    (criteria,) = plan_check.refusals(_document(_node(task=_task(outside))), project)
+    assert (criteria["node"], criteria["field"]) == ("route", "task")
+
+    metadata = project_record["metadata"]
+    assert isinstance(metadata, dict)
+    project_record["metadata"] = {
+        key: value for key, value in metadata.items() if key != plan_budgets.PLAN_RECORD
+    }
+    (budgets,) = plan_check.refusals(_document(_node()), project)
+    assert (budgets["node"], budgets["field"]) == (None, "budgets")
+    assert f"carries no `{plan_budgets.PLAN_RECORD}` metadata" in budgets["reason"]
 
 
 def test_a_plan_shape_this_check_cannot_walk_is_one_refusal_about_the_plan() -> None:
@@ -772,7 +809,9 @@ def test_the_command_takes_the_engines_verb_where_there_is_one(
     monkeypatch.setattr(plan_check, "carries_plan_check", lambda _: True)
     monkeypatch.setattr(plan_check, "check_through_engine", lambda project, engine: 0)
     monkeypatch.setattr(
-        criteria_guard, "check_directly", lambda _: pytest.fail("the direct path was taken")
+        criteria_guard,
+        "check_directly",
+        lambda *_, **__: pytest.fail("the direct path was taken"),
     )
 
     assert plan_check.main(["s:p"]) == 0
@@ -789,9 +828,16 @@ def test_the_command_falls_back_to_this_repositorys_checks_alone(
         "check_through_engine",
         lambda *_: pytest.fail("the engine path was taken"),
     )
-    monkeypatch.setattr(criteria_guard, "check_directly", lambda project: 5)
+    asked: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        criteria_guard,
+        "check_directly",
+        lambda project, *, review_exempt: asked.append((project, review_exempt)) or 5,
+    )
 
     assert plan_check.main(["s:p"]) == 5
+    assert plan_check.main(["examples:p"]) == 5
+    assert asked == [("s:p", False), ("examples:p", True)]
 
 
 def test_a_require_rendered_answer_that_is_neither_true_nor_false_is_refused_before_the_engine(
