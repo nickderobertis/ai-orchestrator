@@ -8,7 +8,7 @@ metadata:
   "onepipeline.id": "client"
   "onepipeline.repo_type": "team"
   "onepipeline.persona": "engineer"
-  "onetaskgraph.template": {"answers_digest":"sha256:a91c77cba36a397a8cc5f71c9590aa435e0832e6f3237d27d6674f94c813115b","body_digest":"sha256:bd6cfd3406a0c8f84f5a475d9de203dea09fd304091e62261006e84b03d38450","digest":"sha256:ffdea433a9a5ef8e32c5c0d93ff980b893c7e9d12a0bfd949900264a82ad2b9d","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:a91c77cba36a397a8cc5f71c9590aa435e0832e6f3237d27d6674f94c813115b","body_digest":"sha256:bd6cfd3406a0c8f84f5a475d9de203dea09fd304091e62261006e84b03d38450","digest":"sha256:094afa20a55d0b9740923d270cdb02667b834b6b43c1b2c59f9e38b68c8e7325","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What

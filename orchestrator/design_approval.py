@@ -23,10 +23,18 @@ defends for the plan-review gate beside this one:
 * **There is no escape hatch** — no flag, no option, no environment variable. An escape
   here is reached under exactly the time pressure that makes skipping this a mistake.
 * **The key covers the bar as well as the content, and nothing else.** It is a digest of
-  the document's title, the design-doc template's chain digest as it resolves *now*, and the
-  body digest the store recorded when it rendered the document — see :func:`approval_key`
-  for why those three. Editing the document loses its approval, and so does changing the
-  template, while nothing the store the document sits in owns is in it at all.
+  the document's title, the design-doc template's chain digest as it resolves *now*, the
+  body digest the store recorded when it rendered the document, and — for a document that
+  shows images — the SHA-256 of every image's bytes, by name: see :func:`approval_key` for
+  why those. Editing the document loses its approval, and so do changing the template and
+  replacing an image's bytes under the same name, while nothing the store the document
+  sits in owns is in it at all. A document that references an image the store does not
+  hold is refused at approval, naming the image.
+
+**Any edit to the design-doc template moves the chain digest**, so every approval recorded
+before it, on a plan not yet launched, reads as stale until the plan's document is
+regenerated and its approval recorded again with `just approve-design` — which is what the
+template's image guidance did to every such approval.
 
 **The record goes onto the document itself**, in the open metadata map every store carries,
 rather than into a file beside the plan. That is what makes it readable from whichever
@@ -168,6 +176,21 @@ DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 #: where an id does not.
 SPIKE_REPORT_REFERENCE = "onepipeline:spike-report"
 
+
+#: Where image syntax starts in a document's content: Markdown's `![` and HTML's `<img`.
+#: Every occurrence must be one :data:`ASSET_IMAGE` reads, or approval refuses it.
+IMAGE_SYNTAX = re.compile(r"!\[|<img\b", re.IGNORECASE)
+
+#: The one image form approval reads, `![<alt>](<target>)` with no title: the form the
+#: design-doc template prescribes, whose target is `./<name>` for an asset of the document,
+#: or the URL a store serving assets rewrote that reference to.
+ASSET_IMAGE = re.compile(r"!\[[^\]\n]*\]\(([^)\s]+)\)")
+
+#: The prefix of a target naming an asset of the document: the asset's name is the rest.
+ASSET_PREFIX = "./"
+
+#: The one shape an asset's digest has, as the store states it: lowercase hex SHA-256.
+SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 
 #: The heading the design-doc template renders a plan's visual changes under, which a document
 #: of a plan holding its visual spike's report has to carry before it can be approved.
@@ -509,18 +532,134 @@ def approval_key(
     for the same reason one step further: both are metadata the copy writes. The labels are
     out for the weaker reason that nobody approves a label.
 
+    **Every image the document shows is in it too**, as :func:`asset_digests` reads them:
+    a map of each asset's name to the SHA-256 of its bytes. The body names an image only
+    by its name, so on a store that keeps the bytes beside the document a swapped image
+    left the body — and with it the approval — exactly as it was, and what was approved
+    was no longer what a person would see. A document holding no asset hashes exactly as
+    it did before images existed, so the key's shape changes only where they do.
+
     One thing that costs is worth knowing rather than discovering, and it is the same one
     `orchestrator/plan_review.py`'s `review_key` names: a document **moved to another
     plan** after its approval keeps that approval. What a person approved is the document,
     and it is unchanged.
     """
-    authored = {
+    authored: dict[str, object] = {
         "body_digest": body_digest(document, digest, repository),
         "digest": digest,
         "title": document.title,
     }
+    assets = asset_digests(document)
+    if assets:
+        authored["assets"] = assets
     rendered = json.dumps(authored, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return ApprovalKey(hashlib.sha256(rendered.encode("utf-8")).hexdigest())
+
+
+def asset_digests(document: StoreDocument) -> dict[str, str]:
+    """Each image ``document`` holds, by asset name, as the lowercase hex SHA-256 of its bytes.
+
+    Read the same whichever way the store holds an image, so a copy that keeps the bytes
+    keeps the key. A store serving them at URLs has rewritten the content's references to
+    those URLs and records what it served as :data:`~orchestrator.plan_store.ASSETS_KEY`,
+    whose `sha256` is read here. A store keeping them as files beside the document —
+    `local-md` — leaves the content's `./<name>` references in place, and each file the
+    store names for one is hashed here, rather than the store's own answer being trusted,
+    because the file is what a reader opens.
+
+    It fails closed. Which images a document shows is the plan store's grammar, which no
+    store verb reports, so approval reads one form — `![<alt>](./<name>)`, the one the
+    template writes, or the URL a serving store rewrote it to — and refuses a document
+    showing an image in any other form, naming it: a titled or reference-style image, an
+    HTML `<img>`, or a URL nothing recorded serving, each of which could show bytes the
+    key does not cover. Every `./<name>` it reads must be held by the store, or the
+    document is refused naming it: a person approving it would approve a picture they never
+    saw. A document showing no image holds none, and the store is not asked.
+    """
+    recorded = served_digests(document)
+    served = served_urls(document)
+    referenced: set[str] = set()
+    unread: list[str] = []
+    for start in IMAGE_SYNTAX.finditer(document.content):
+        image = ASSET_IMAGE.match(document.content, start.start())
+        target = image.group(1) if image else None
+        if target is not None and target.startswith(ASSET_PREFIX):
+            referenced.add(target.removeprefix(ASSET_PREFIX))
+        elif target is None or target not in served:
+            line = document.content[start.start() :].split("\n", 1)[0]
+            unread.append(line[:80])
+    if unread:
+        raise OSError(
+            f"{document.qualified_id} shows {'; '.join(unread)}, an image approval cannot "
+            f"read: only the `![alt](./name)` form is accepted, so the bytes a person "
+            f"approving it would see cannot be keyed; regenerate it writing each image in that "
+            f"form and giving it with `--asset <path>`, then record the approval again"
+        )
+    if not referenced:
+        return recorded
+    held = {
+        asset.name: hashlib.sha256(Path(asset.path).read_bytes()).hexdigest()
+        for asset in plan_store.read_document_assets(str(document.qualified_id))
+        if asset.path is not None
+    }
+    missing = sorted(name for name in referenced if name not in held)
+    if missing:
+        raise OSError(
+            f"{document.qualified_id} references {', '.join(missing)}, which the store does "
+            f"not hold as an asset of it, so a person approving it would not see what it "
+            f"shows; regenerate it giving each image it references with `--asset <path>`, "
+            f"then record the approval again"
+        )
+    return recorded | held
+
+
+# llmlint: ignore[changed_behavior_has_e2e] A URL-serving source is a hosted board,
+# which no dispatch here holds a credential for; onetaskgraph's own suite proves its plugins
+# write this record against loopback endpoints, `tests/test_design_approval.py` holds this
+# reader to the record's schema as the locked plan-store CLI prints it, and the local-file
+# half is driven end to end through `just approve-design`.
+def served_digests(document: StoreDocument) -> dict[str, str]:
+    """The SHA-256 of each image a URL-serving store recorded serving for ``document``.
+
+    Empty for a document carrying no such record. A record this cannot read is refused
+    rather than read as no images, because that reading would approve a document whose
+    pictures could then be replaced unseen.
+    """
+    held = document.metadata.get(plan_store.ASSETS_KEY)
+    if held is None:
+        return {}
+    digests: dict[str, str] = {}
+    entries = held.items() if isinstance(held, dict) else [(None, held)]
+    for name, entry in entries:
+        match entry:
+            case {"sha256": str() as digest, "url": str()} if isinstance(
+                name, str
+            ) and SHA256_HEX.fullmatch(digest):
+                digests[name] = digest
+            case _:
+                raise OSError(
+                    f"{document.qualified_id}'s {plan_store.ASSETS_KEY} record is not an "
+                    f"object of asset names to {{sha256, url}}, so which images it shows "
+                    f"cannot be read; copy it again from where it was drafted"
+                )
+    return digests
+
+
+def served_urls(document: StoreDocument) -> set[str]:
+    """The URL each image a URL-serving store recorded serving for ``document`` is shown at.
+
+    The store rewrites each `./<name>` reference to the URL it records serving that asset
+    at, so such a URL is an image whose bytes :func:`served_digests` reads. Empty for a
+    document carrying no such record; a record of another shape is refused there.
+    """
+    held = document.metadata.get(plan_store.ASSETS_KEY)
+    if not isinstance(held, dict):
+        return set()
+    return {
+        entry["url"]
+        for entry in held.values()
+        if isinstance(entry, dict) and isinstance(entry.get("url"), str)
+    }
 
 
 def recorded(document: StoreDocument) -> ApprovalKey | None:

@@ -172,6 +172,12 @@ RULES = {
     "reversibility levels": "defined by who would have to act to undo the decision",
     "the stricter level": "When in doubt, the stricter level",
     "store locations": "never one composed by hand",
+    "why states impact": "It never narrates who asked for what",
+    "the record's one home": "The record of what was requested and what was decided has one home",
+    "plain terms": "in plain terms a non-specialist reads",
+    "images are assets": "which a Linear board does not render",
+    "when a diagram earns its place": "A diagram earns its place when the architecture has three",
+    "a few diagrams at most": "a document holds a few diagrams at most",
 }
 
 #: Sample answers, each distinct so the rendering can be read back against them. The first
@@ -845,3 +851,139 @@ def test_a_plan_with_no_visual_change_renders_as_if_the_answer_were_absent(
         loader, budgeted, tmp_path
     )
     assert "## Visual changes" not in empty and "![" not in empty, empty
+
+
+def _guidance(block: str) -> str:
+    """The comment of one `*_guidance` block, whitespace folded to one space."""
+    source = TEMPLATE.read_text(encoding="utf-8")
+    (body,) = re.findall(
+        rf"{{%-?\s*block\s+{block}\s*-?%}}(.*?){{%-?\s*endblock", source, re.DOTALL
+    )
+    return " ".join(" ".join(re.findall(r"{#-?(.*?)-?#}", body, re.DOTALL)).split())
+
+
+def _description(variable: str) -> str:
+    return " ".join(_front_matter()["variables"][variable]["description"].split())
+
+
+def test_the_why_states_the_works_impact_and_never_who_asked() -> None:
+    """The Why is what an approver weighs, so it is impact; who asked lives in the plan."""
+    why = _guidance("why_guidance")
+    for phrase in (
+        "Why the work is worth doing, from the product owner's point of view",
+        "its impact on the product, its users, development and resources",
+        "It never narrates who asked for what",
+        'no "the user asked", "the user said" or "the brief says", and no quoted request',
+        "has one home, the plan's own description, and is not in this document",
+        "a task's own Why states impact too, never that record",
+    ):
+        assert phrase in why, (phrase, why)
+    assert "in their own words" not in why, why
+    described = _description("why")
+    assert "its impact on the product, its users, development and resources" in described
+    assert "never an account of who asked for it" in described, described
+
+
+def test_the_what_is_written_in_plain_terms_rather_than_the_users() -> None:
+    what = _guidance("what_guidance")
+    assert "in plain terms a non-specialist reads" in what, what
+    assert "user's terms" not in what, what
+
+
+def test_the_guidance_says_when_a_diagram_earns_its_place_and_how_it_is_shown() -> None:
+    """A diagram is a rendered image asset, shown only where prose would run long."""
+    architecture = _guidance("architecture_guidance")
+    for phrase in (
+        "three or more units, or a flow or a boundary between units",
+        "more than a short paragraph to convey",
+        "A single unit, or anything one sentence says, gets no diagram",
+        "render it with `just render-diagram <source.mmd> <name>.png`",
+        "from the `architecture` overview, a unit's `summary`, or the prose part of a decision",
+        "`![<alt text saying what it shows>](./<name>.png)`",
+        "give the file to the store with `--asset`",
+    ):
+        assert phrase in architecture, (phrase, architecture)
+    images = _guidance("document_guidance")
+    for phrase in (
+        "IMAGES. A picture is an image asset of this document, never a Mermaid code block",
+        "the ARCHITECTURE guidance says when and how one is drawn, shown and stored",
+        "any other section may show one the same way",
+    ):
+        assert phrase in images, (phrase, images)
+
+
+def test_the_architecture_and_units_answers_admit_an_image_reference() -> None:
+    reference = "`![<alt text>](./<name>.png)` to an asset of this document"
+    assert reference in _description("architecture"), _description("architecture")
+    units = _description("units")
+    assert units.count(reference) == 2, units
+    assert "(text, the unit's one paragraph, which may show a diagram" in units, units
+    assert "inline code and an image reference" in units, units
+
+
+def test_an_architecture_image_renders_where_the_answer_puts_it(
+    tmp_path: Path, loader: str
+) -> None:
+    """An overview or a unit summary showing a diagram renders the reference as written."""
+    image = "![How the listing route and the view hand a page over](./architecture.png)"
+    answers = json.loads(json.dumps(ANSWERS))
+    answers["architecture"] = f"The engine pages, the view follows.\n\n{image}"
+    answers["units"][1]["summary"] = f"The view follows the cursor.\n\n{image}"
+    body = _render(loader, answers, tmp_path)
+    architecture = body.split("## Architecture\n", 1)[1].split("\n## ", 1)[0]
+    assert architecture.count(f"\n{image}\n") == 2, architecture
+    assert "```mermaid" not in body, body
+
+
+def test_the_role_states_the_why_rule_on_both_sides_and_how_a_diagram_is_given() -> None:
+    """The writer restates motivation as impact; the judge sends back an attributed Why."""
+    loaded = yaml.safe_load(PERSONA.read_text(encoding="utf-8"))
+    writer = " ".join(loaded["system_prompt"].split())
+    judge = " ".join(loaded["user"]["persona"].split())
+    for phrase in (
+        "The document's Why says why the work is worth doing from the product owner's point"
+        " of view",
+        "its impact on the product, its users, development and resources",
+        "source material to restate as that impact",
+        "never quote or attribute a request",
+        "`just render-diagram <source.mmd> <name>.png`",
+        "`--asset <path>`",
+        "never a Mermaid code block",
+    ):
+        assert phrase in writer, (phrase, writer)
+    for phrase in (
+        "its Why states the work's impact on the product, its users, development and resources",
+        "Send back a Why that attributes or quotes a request",
+        "instead of stating impact",
+        "Read it by meaning, not by phrase",
+        "speaks of the product's users as the people the work affects is stating impact",
+    ):
+        assert phrase in judge, (phrase, judge)
+
+
+#: Two design documents written before the Why stated impact, each preserved with its plan's
+#: project record, tasks and brief, byte for byte as `SHA256SUMS` beside them lists. They are
+#: the real prose the regenerated Why is read against.
+WHY_FIXTURES = REPO_ROOT / "tests" / "fixtures" / "design-doc-why"
+WHY_FIXTURE_PLANS = ("follow-up-root-cause-granularity", "sweep-fast-again")
+
+
+@pytest.mark.reads_docs
+def test_the_why_fixtures_are_the_preserved_snapshots_and_narrate_who_asked() -> None:
+    """Each file is the preserved one, and each document's Why is the attributed kind."""
+    listed = (WHY_FIXTURES / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
+    sums = dict(reversed(line.split("  ./", 1)) for line in listed if line.strip())
+    on_disk = sorted(
+        str(path.relative_to(WHY_FIXTURES))
+        for path in WHY_FIXTURES.rglob("*")
+        if path.is_file() and path.name != "SHA256SUMS"
+    )
+    assert on_disk == sorted(sums), on_disk
+    for name, digest in sums.items():
+        held = hashlib.sha256((WHY_FIXTURES / name).read_bytes()).hexdigest()
+        assert held == digest, name
+    for plan in WHY_FIXTURE_PLANS:
+        document = (WHY_FIXTURES / plan / "documents" / f"{plan}-design.md").read_text("utf-8")
+        why = document.split("\n## Why\n", 1)[1].split("\n## ", 1)[0]
+        assert re.search(r"The user (reports|said)", why), why
+        assert "“" in why, why

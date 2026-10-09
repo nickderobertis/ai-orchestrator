@@ -1587,8 +1587,9 @@ criteria are the one block its `## Acceptance criteria` heading opens.
 `personas/planner.yaml`'s bar, and `just approve-design` records the user's approval of
 the document a plan is read as — a rendering of this host's `design-doc` template
 (`templates/design-doc.md.j2`), changed only by regenerating it, and keyed on its title,
-the template's chain digest resolved now and the body digest its provenance records. Both
-keep the same four properties: only a pass is
+the template's chain digest resolved now, the body digest its provenance records and every
+image's bytes; any change to that template moves the chain, which leaves every unlaunched
+plan's approval to be recorded again. Both keep the same four properties: only a pass is
 recorded, a record is authoritative, there is no escape hatch, and the key covers the
 bar and every step's content as well as the prose, so moving any of those invalidates
 the record while a settlement write-back does not. Three questions are the review's

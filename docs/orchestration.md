@@ -268,6 +268,19 @@ records the rendering's provenance on the document — the template reference
 produced — and keeps the answers beside the document where it was drafted, never copying
 them onto the board.
 
+*Its pictures are image assets.* A diagram, or any other picture, is a PNG the document
+holds as an asset — never a Mermaid code block, which a Linear board does not render. A
+writer draws one with `just render-diagram <source.mmd> <output.png>`, references it as
+`![<alt text>](./<name>.png)`, and gives the file to the store with `--asset` when the
+document is stored. The recipe runs the locked mermaid-cli on the Chromium the locked
+Playwright names, which `just bootstrap` provisions, at an 880-px page in the locked Noto
+Sans that fontconfig makes the only font it can see, so one source renders to the same bytes
+on every provisioned host; its script's header lists every file a render reads. It writes
+nothing but a whole PNG over the output: exit 2 refuses an argument, 3 names an absent
+mermaid-cli or browser and the command that provisions it, and 1 is a source mermaid-cli
+could not render or a PNG that could not be placed. The template's guidance says when a
+diagram earns its place.
+
 *Changing one is regenerating it.* Change an answer and regenerate the document in place,
 through the plan's resolve command: `onepipeline template resolve design-doc
 [--repository <origin>] --json | onetaskgraph document render <id>
@@ -308,9 +321,17 @@ repository cares about.
 *What invalidates one.* A document is approvable only while it is a rendering of the
 template in force: it records `onepipeline:design-doc` provenance, the chain digest it
 records is the one the pinned engine resolves through this host's template root *now*, and
-its content hashes to the body digest the store recorded. The key is a digest of three
-things — the document's title, that resolved chain digest, and that recorded body digest —
-and it reads no answers, which is what lets it hold for the board copy a person approves,
+its content hashes to the body digest the store recorded. The key is a digest of the
+document's title, that resolved chain digest, that recorded body digest, and — for a
+document that shows images — a map of each image asset's name to the SHA-256 of its bytes,
+read from the file beside a document in a local Markdown source or from the `onetaskgraph.assets` record a
+board copy carries. A document holding no image is keyed exactly as before images existed.
+The body names an image only by its name, so without the map an image replaced under that
+name kept an approval of a picture nobody saw; with it, the replacement unapproves the
+document, and a document that references an image the store does not hold is refused at
+approval, naming it. The template edits that brought images in moved the chain digest, so
+every approval recorded for a plan not yet launched before them is recorded again with
+`just approve-design` once its document is regenerated. The key reads no answers, which is what lets it hold for the board copy a person approves,
 where no answers are stored. So regenerating the document from changed answers leaves it
 unapproved, changing `templates/design-doc.md.j2` leaves every previously approved
 document unapproved, exactly as moving the plan-review bar invalidates every review record

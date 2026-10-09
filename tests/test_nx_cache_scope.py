@@ -89,6 +89,8 @@ from nx_inputs import (
     PROJECT_STORE_RACE_ROOT,
     PROJECT_STORE_RACE_SCOPED,
     RECIPE_SCOPED,
+    RENDER_DIAGRAM_ROOT,
+    RENDER_DIAGRAM_SCOPED,
     RUN_END_HOOKS_ROOT,
     RUN_END_HOOKS_SCOPED,
     SELECTED_TARGETS,
@@ -983,7 +985,8 @@ def _collected_once(selection: tuple[str, ...]) -> frozenset[str]:
 #: journey that fires the run-end hooks through a real launch in one, the
 #: `project-store-race` project owns the clock-bounded replacement race over the record
 #: store in one, the `plan-store-assets` project owns the journey over a document's image
-#: assets in one, the `unpublished-view` project owns the
+#: assets in one, the `render-diagram` project owns the journeys over `just render-diagram`
+#: in one, the `unpublished-view` project owns the
 #: journey over `just unpublished` in one, the `unfinished` project owns the journeys over
 #: `just unfinished` in one, the `graceful-cancel` project owns the journey over a cancel
 #: whose dispatch ends inside its grace period in one, the `manager-allowlist` project owns the
@@ -1015,9 +1018,10 @@ SUITE_TIERS = (
     # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
     # catalog of test projects, where every project has its entry, and
     # `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
-    # describes; the plan-store-assets entry sits beside the others' rather than in a domain of
-    # its own because the catalog is the domain.
+    # describes; the plan-store-assets and render-diagram entries sit beside the others' rather
+    # than in a domain of their own because the catalog is the domain.
     (f"{PLAN_STORE_ASSETS_ROOT}/project.json", PLAN_STORE_ASSETS_SCOPED),
+    (f"{RENDER_DIAGRAM_ROOT}/project.json", RENDER_DIAGRAM_SCOPED),
     # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     (f"{UNPUBLISHED_VIEW_ROOT}/project.json", UNPUBLISHED_VIEW_SCOPED),
     (f"{UNFINISHED_ROOT}/project.json", UNFINISHED_SCOPED),

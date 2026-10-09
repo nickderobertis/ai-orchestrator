@@ -50,8 +50,20 @@ GATED_TOOLS = ("onevcs", "onepipeline")
 #: `runs/*/writeback/` is a copy of a plan for whatever repository the run targeted.
 #: Reading either here failed every push made while such a record existed, and what it
 #: reported was correct prose held against the wrong tree. Neither is tracked, so neither
-#: is prose this repository ships.
-NOT_OURS = ("node_modules", ".venv", ".nx", "dist", "scratch", ".git", ".plans", "runs")
+#: is prose this repository ships. `design-doc-why` is tracked but is the same kind of
+#: prose: plan records preserved byte for byte from `.plans` as the fixtures a regenerated
+#: design document's Why is read against, naming the recipes of the repositories they plan.
+NOT_OURS = (
+    "node_modules",
+    ".venv",
+    ".nx",
+    "dist",
+    "scratch",
+    ".git",
+    ".plans",
+    "runs",
+    "design-doc-why",
+)
 
 #: A fenced code block, whose every line is a candidate invocation. The leading
 #: whitespace is load-bearing: `docs/host-setup.md` fences blocks inside list items,

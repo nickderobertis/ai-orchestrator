@@ -2038,11 +2038,154 @@ def test_a_visual_plans_document_is_approved_only_once_it_shows_the_reported_cha
     held = {asset["name"]: Path(asset["path"]).read_bytes() for asset in shown["assets"]}
     assert held == generated, sorted(held)
 
+    # llmlint: ignore-block[shell_test_tiers_stay_split] `plan-tooling` keys this on the recipes,
+    # scripts and templates `just approve-design` and `just orchestrate` reach, which this
+    # node's task names this module to drive; the Chromium render alone has its own project.
+    # The before and after pictures are what was approved, so replacing one under its own
+    # name on the board copy unapproves the plan until somebody has looked at the new one.
+    # llmlint: ignore[e2e_not_mocked] `reviewed` substitutes the paid provider process alone:
+    # a launch refuses a plan no review record covers, and the review is not this journey's.
+    reviewed(landed)
+    on_disk = {asset["name"]: Path(asset["path"]) for asset in shown["assets"]}
+    launched = _launch(landed, runs)
+    assert launched.returncode == 0, launched.stdout + launched.stderr
+    on_disk[VISUAL_CHANGES[0]["after"]].write_bytes(generated[VISUAL_CHANGES[1]["after"]])
+    swapped = _launch(landed, runs)
+    assert swapped.returncode == 1, swapped.stdout + swapped.stderr
+    assert "carries no approval for what it currently says" in swapped.stderr, swapped.stderr
+    reapproved = _just("approve-design", landed, runs=runs)
+    assert reapproved.returncode == 0, reapproved.stdout + reapproved.stderr
+    assert "recorded the approval" in reapproved.stdout, reapproved.stdout
+    relaunched = _launch(landed, runs)
+    assert relaunched.returncode == 0, relaunched.stdout + relaunched.stderr
+    # llmlint: ignore-end[shell_test_tiers_stay_split]
+
     plain = store.plan("approve-design-plain")
     store.document("approve-design-plain")
     recorded = _just("approve-design", plain, runs=runs)
     assert recorded.returncode == 0, recorded.stdout + recorded.stderr
     assert "recorded the approval" in recorded.stdout, recorded.stdout
+
+
+# llmlint: ignore-block[shell_test_tiers_stay_split] `plan-tooling` keys this on the recipes,
+# scripts and templates `just approve-design` and `just orchestrate` reach, which this
+# node's task names this module to drive; the Chromium render alone has its own project.
+#: The diagram a design document's Architecture shows, and the different one put in its place.
+DIAGRAM = "flowchart LR\n  plan[Plan] --> document[Design document] --> launch[Launch]\n"
+REDRAWN = "flowchart LR\n  plan[Plan] --> launch[Launch]\n"
+
+
+def _drawn(source: str, output: Path, runs: Path) -> bytes:
+    """Render ``source`` to ``output`` with the real `just render-diagram`, as a writer does."""
+    mermaid = output.with_suffix(".mmd")
+    mermaid.write_text(source, encoding="utf-8")
+    drawn = _just("render-diagram", str(mermaid), str(output), runs=runs)
+    assert drawn.returncode == 0, drawn.stdout + drawn.stderr
+    return output.read_bytes()
+
+
+@pytest.mark.xdist_group("approve-design")
+def test_an_approval_covers_the_bytes_of_every_image_the_document_shows(
+    store: Store, runs: Path, tmp_path: Path
+) -> None:
+    """A diagram replaced under its own name is a picture nobody approved.
+
+    The document's Architecture shows a diagram the real `just render-diagram` drew, given
+    to the store with `--asset` as the writer gives it. It is approved and launched; once
+    the image's bytes are replaced by another drawing under the same name, the launch is
+    refused as unapproved until the recipe records the approval again. A document whose
+    image has gone from the store is refused at approval, naming the image.
+    """
+    native = "approve-design-diagram"
+    project = store.plan(native)
+    drawing = tmp_path / "architecture.png"
+    first = _drawn(DIAGRAM, drawing, runs)
+    shown = "![The plan, its design document, and the launch it gates](./architecture.png)"
+    answers = tmp_path / "diagram.answers.json"
+    answers.write_text(
+        json.dumps({**DESIGN, "architecture": f"One node, settled without a dispatch.\n\n{shown}"}),
+        encoding="utf-8",
+    )
+    created = store._piped(
+        *("document", "create", SOURCE, "--project", native, "--title", f"Design: {native}"),
+        *("--id", f"{native}-design", "--answers", str(answers), "--asset", str(drawing)),
+        resolving=design_chain.resolve_arguments(None),
+    )
+    (item,) = created["items"]
+    assert shown in item["item"]["content"], item["item"]["content"]
+    # llmlint: ignore[e2e_not_mocked] `reviewed` substitutes the paid provider process alone:
+    # a launch refuses a plan no review record covers, and the review is not this journey's.
+    reviewed(project)
+    (asset,) = store._stored("document", "show", f"{project}-design")["assets"]
+    stored = Path(asset["path"])
+    assert stored.read_bytes() == first
+
+    approved = _just("approve-design", project, runs=runs)
+    assert approved.returncode == 0, approved.stdout + approved.stderr
+    assert "recorded the approval" in approved.stdout, approved.stdout
+    launched = _launch(project, runs)
+    assert launched.returncode == 0, launched.stdout + launched.stderr
+
+    redrawn = _drawn(REDRAWN, tmp_path / "redrawn.png", runs)
+    assert redrawn != first
+    stored.write_bytes(redrawn)
+    swapped = _launch(project, runs)
+    assert swapped.returncode == 1, swapped.stdout + swapped.stderr
+    assert "carries no approval for what it currently says" in swapped.stderr, swapped.stderr
+    reapproved = _just("approve-design", project, runs=runs)
+    assert reapproved.returncode == 0, reapproved.stdout + reapproved.stderr
+    assert "recorded the approval" in reapproved.stdout, reapproved.stdout
+    relaunched = _launch(project, runs)
+    assert relaunched.returncode == 0, relaunched.stdout + relaunched.stderr
+
+    stored.unlink()
+    missing = _just("approve-design", project, runs=runs)
+    assert missing.returncode == 1, missing.stdout + missing.stderr
+    assert "references architecture.png, which the store does not hold" in missing.stderr, (
+        missing.stderr
+    )
+    gone = _launch(project, runs)
+    assert gone.returncode == 1, gone.stdout + gone.stderr
+    assert "references architecture.png" in gone.stderr, gone.stderr
+
+
+@pytest.mark.xdist_group("approve-design")
+def test_an_image_in_a_form_approval_cannot_read_is_refused_naming_it(
+    store: Store, runs: Path, tmp_path: Path
+) -> None:
+    """Approval fails closed on an image form it does not read, even one the store holds.
+
+    A titled reference is an asset reference to the store, which holds its bytes, but not
+    the `![alt](./name)` form the template writes and approval reads, so `just
+    approve-design` refuses it by name rather than approving bytes it has not keyed.
+    """
+    native = "approve-design-titled"
+    project = store.plan(native)
+    drawing = tmp_path / "architecture.png"
+    _drawn(DIAGRAM, drawing, runs)
+    shown = '![The plan and its launch](./architecture.png "Architecture")'
+    answers = tmp_path / "titled.answers.json"
+    answers.write_text(
+        json.dumps({**DESIGN, "architecture": f"One node, settled without a dispatch.\n\n{shown}"}),
+        encoding="utf-8",
+    )
+    created = store._piped(
+        *("document", "create", SOURCE, "--project", native, "--title", f"Design: {native}"),
+        *("--id", f"{native}-design", "--answers", str(answers), "--asset", str(drawing)),
+        resolving=design_chain.resolve_arguments(None),
+    )
+    (item,) = created["items"]
+    assert shown in item["item"]["content"], item["item"]["content"]
+    (asset,) = store._stored("document", "show", f"{project}-design")["assets"]
+    assert asset["name"] == "architecture.png", asset
+    refused = _just("approve-design", project, runs=runs)
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "only the `![alt](./name)` form is accepted" in refused.stderr, refused.stderr
+    assert shown in refused.stderr, refused.stderr
+    assert "recorded the approval" not in refused.stdout, refused.stdout
+
+
+# llmlint: ignore-end[shell_test_tiers_stay_split]
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

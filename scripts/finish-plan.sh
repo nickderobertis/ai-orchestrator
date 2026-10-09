@@ -166,10 +166,12 @@ DAG_GRAPH_FLAG="--dag-graph"
 #: copy, `python -m orchestrator.plan_budgets <plan>` — named rather than quoted, because
 #: a plan of many budgets makes a task too large for the engine to hand its dispatch as one
 #: argument — which the flow holds the written document to before anything is copied.
-#: The brief's `## What` and `## Why` are quoted into the task's
-#: own What and Why rather than the brief being embedded whole, because the brief's
-#: acceptance criteria are the *plan's* and a judge holds a dispatch to every criterion it
-#: finds in its task; the criteria below are this dispatch's. The resolve command is named
+#: The brief's `## What` and `## Why` are quoted into the task's own What rather than the
+#: brief being embedded whole, because the brief's acceptance criteria are the *plan's* and
+#: a judge holds a dispatch to every criterion it finds in its task; the criteria below are
+#: this dispatch's. The brief's Why is handed over as source material the document's Why
+#: restates as impact, never as what somebody wants relayed, because a document that
+#: narrates who asked hides what its approver weighs. The resolve command is named
 #: wherever the task reaches the template, so the writer and its judge read and render
 #: through the chain the approval is keyed on. The note on where a direct node works is the
 #: task's additional info.
@@ -264,12 +266,16 @@ answers = {
         f"{budget_task}\n\n"
         f"{visual_task}"
         f"What the planner was asked to plan, in the brief\u2019s words, for the document\u2019s What:"
-        f"\n\n{brief_what}"
+        f"\n\n{brief_what}\n\n"
+        f"The brief\u2019s own account of why the plan is worth doing, as source material for "
+        f"the document\u2019s Why. Restate it as the work\u2019s impact on the product, its "
+        f"users, development and resources, under the template\u2019s guidance; never quote it "
+        f"and never attribute it to anyone:\n\n{brief_why}"
     ),
     "why": (
         "A person decides whether this plan launches by reading this document instead of the "
-        "plan, so it has to let them accept or reject what the plan commits to. What the user "
-        f"wants from the plan itself, in the brief\u2019s words:\n\n{brief_why}"
+        "plan, so it has to let them accept or reject what the plan commits to, and to weigh "
+        "what the plan does for the product, its users, development and resources."
     ),
     "acceptance_criteria": [
         f"The document answers every variable `{variables}` lists, in the shape each "
@@ -288,6 +294,7 @@ answers = {
         "store and never composed by hand.",
         budget_criterion,
         visual_criterion,
+        "Every image the document references is held as an asset of the document.",
         "This dispatch reports where the store put the document, in the form the store reports "
         "it: a link where it is on a website, a path where it is a file on this machine.",
         "Every claim this dispatch makes about the finished work is true of the tree as it "

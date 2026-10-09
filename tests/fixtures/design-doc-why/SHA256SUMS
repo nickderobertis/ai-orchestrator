@@ -1,0 +1,13 @@
+57c2d7921e2f1eb28c144c13a04da688ddd3622782fcb6175bfc7e3c78bb0ac0  ./follow-up-root-cause-granularity/brief.md
+d47366e212701157fc9853894aa09c1f69e60d12a2ce2c8613a05964e43b6fb5  ./follow-up-root-cause-granularity/documents/follow-up-root-cause-granularity-design.md
+7bda2577731517311683445194f74fe6c15ae3c2503e9650ac828e65c09f2f10  ./follow-up-root-cause-granularity/projects/follow-up-root-cause-granularity.md
+8bef24f83697a72e1f8e2d2ddff84c75092c78729839b558b0ddd5bb5dbdfdfb  ./follow-up-root-cause-granularity/tasks/feat-follow-ups-file-one-ticket-per-broken-invariant-not-per-file.md
+d808673fa659db2af1217d68d88a0492224e3d4e8b4782039a3ca1f4cbafea75  ./sweep-fast-again/brief.md
+7d268bc018362db4a5a9509c2a219e99a933e2c1fa782a1bfbcae27e59151d86  ./sweep-fast-again/documents/sweep-fast-again-design.md
+0552b724286e939c1f4aeade5b8226ce8b654e6927b56378f845faebbb6e0981  ./sweep-fast-again/projects/sweep-fast-again.md
+d45969e4652ce513470084800a27e8f1b74b800ea078ba67576ccd4bb13b7d38  ./sweep-fast-again/tasks/feat-deps-adopt-the-releases-whose-branch-sweep-reuses-its-verdicts.md
+34e1fa9b725c733b35b8456210e2a04f45fe31adaefdd783b8919ba22d9b4f3f  ./sweep-fast-again/tasks/feat-retire-record-branch-verdicts-and-reuse-them-while-inputs-hold.md
+3853f9b7cda7b0e515e6831835712c50c842b9af4cd58da9486e0b8cff2c7ab2  ./sweep-fast-again/tasks/fix-deps-link-the-engine-whose-retirement-pass-reuses-verdicts.md
+97265f3910ce3d7194808727f7ff2ff6c174f40acc5d6f9f4e8642a29d641ed9  ./sweep-fast-again/tasks/fix-deps-link-the-onevcs-release-whose-retirement-reuses-verdicts.md
+9557c80ef1d7137e250b54823dc97e0765bfdd9edbc2610ba5a1b982a41e6b4c  ./sweep-fast-again/tasks/fix-maintenance-stop-a-closing-driver-s-sweep-at-the-next-identity.md
+93473f3af250b19d74324cd100f2b79a94efede26868904054778a33240ce448  ./sweep-fast-again/tasks/fix-session-start-the-host-sweep-detached-hourly-and-never-stacked.md

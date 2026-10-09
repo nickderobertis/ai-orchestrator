@@ -5,7 +5,7 @@ status: "todo"
 metadata:
   "onepipeline.id": "research"
   "onepipeline.persona": "engineer"
-  "onetaskgraph.template": {"answers_digest":"sha256:634e56d899a1fb173e401f6900c75cf9e5fef3763b10b252419e7bf1db89028b","body_digest":"sha256:e41850b019324271c4fb65ffd9e6a1c272ccaabaff513cf36c54421212dd36ed","digest":"sha256:ffdea433a9a5ef8e32c5c0d93ff980b893c7e9d12a0bfd949900264a82ad2b9d","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:634e56d899a1fb173e401f6900c75cf9e5fef3763b10b252419e7bf1db89028b","body_digest":"sha256:e41850b019324271c4fb65ffd9e6a1c272ccaabaff513cf36c54421212dd36ed","digest":"sha256:094afa20a55d0b9740923d270cdb02667b834b6b43c1b2c59f9e38b68c8e7325","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What

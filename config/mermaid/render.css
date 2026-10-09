@@ -1,0 +1,8 @@
+/* The page CSS `scripts/render-diagram.sh` hands mermaid-cli. Every label is drawn in the
+   locked Noto Sans that `fonts.conf` beside this file makes the only font Chromium can see,
+   so a label is measured and painted in the same font on every provisioned host. */
+svg,
+svg foreignObject div,
+svg foreignObject span {
+  font-family: "Noto Sans", sans-serif;
+}

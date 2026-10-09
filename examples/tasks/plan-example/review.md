@@ -6,7 +6,7 @@ depends_on: ["plan-example/api", "plan-example/ui"]
 metadata:
   "onepipeline.id": "review"
   "onepipeline.persona": "reviewer"
-  "onetaskgraph.template": {"answers_digest":"sha256:193ecbc5505194a5ccc2317cad08d5fd393a164dbbbb4db2d7bf1cef3af6b4eb","body_digest":"sha256:b791144ec6373a051d42af7b91628e22d90e0b785d4ced2e18dad5247a704d8a","digest":"sha256:ffdea433a9a5ef8e32c5c0d93ff980b893c7e9d12a0bfd949900264a82ad2b9d","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:193ecbc5505194a5ccc2317cad08d5fd393a164dbbbb4db2d7bf1cef3af6b4eb","body_digest":"sha256:b791144ec6373a051d42af7b91628e22d90e0b785d4ced2e18dad5247a704d8a","digest":"sha256:094afa20a55d0b9740923d270cdb02667b834b6b43c1b2c59f9e38b68c8e7325","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What

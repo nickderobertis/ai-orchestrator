@@ -1,0 +1,15 @@
+{
+  "fontFamily": "Noto Sans",
+  "themeVariables": {
+    "fontFamily": "Noto Sans"
+  },
+  "flowchart": {
+    "wrappingWidth": 150,
+    "nodeSpacing": 20,
+    "rankSpacing": 30,
+    "subGraphTitleMargin": {
+      "top": 4,
+      "bottom": 8
+    }
+  }
+}

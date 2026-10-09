@@ -16,6 +16,12 @@ files:
     # checkout. JSON carries no inline directive, so this one path is the narrowest
     # suppression the tool offers.
     - "tests/fixtures/planner-channel.json"
+    # Two design documents and their plans preserved byte for byte as the real prose a
+    # regenerated Why is read against, which tests/test_design_doc_template.py holds to
+    # the SHA256SUMS beside them. They quote this host's dispatch appendix, so an
+    # `llmlint: ignore` inside one is quoted text rather than a suppression, and closing
+    # it inline would break the bytes the test holds. Excluded on the manager's ruling.
+    - "tests/fixtures/design-doc-why/**"
 rationales: true
 # Findings and broken judge runs are not cached by the `lint-llm-diff` tier — Nx
 # caches successful tasks only — so a branch working through a red re-rolls the

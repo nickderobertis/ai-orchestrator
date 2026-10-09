@@ -314,6 +314,11 @@ cat >node_modules/.bin/nx <<'NX'
 printf 'nx %s\n' "$*" >>"$TRACE_FILE"
 NX
 chmod +x node_modules/.bin/nx
+cat >node_modules/.bin/playwright <<'PLAYWRIGHT'
+#!/usr/bin/env bash
+printf 'playwright %s\n' "$*" >>"$TRACE_FILE"
+PLAYWRIGHT
+chmod +x node_modules/.bin/playwright
 """
     )
     bun.chmod(0o755)
@@ -355,6 +360,7 @@ def test_bootstrap_recipe_reinstalls_the_locked_workspace_from_a_clean_clone(
     assert trace.read_text().splitlines() == [
         "session-setup.sh ",
         "bun install --frozen-lockfile",
+        "playwright install chromium",
         "nx.sh run-many -t bootstrap",
     ]
 
@@ -2733,6 +2739,7 @@ def test_gate_recipe_validates_first_then_judges_then_checks(tmp_path: Path) -> 
 
 
 UPGRADE_MANIFEST = ("package.json", "bun.lock")
+UPGRADE_INSTALL_CONFIG = ".puppeteerrc.json"
 
 
 def _upgrade_manifest_cache() -> Path:
@@ -2762,6 +2769,9 @@ def _seed_upgrade_manifest(checkout: Path, cache: Path) -> None:
     for name in UPGRADE_MANIFEST:
         source = cache / name if (cache / name).is_file() else ROOT / name
         shutil.copy2(source, checkout / name)
+    # What a clone carries beside the manifest that Bun's install reads: mermaid-cli's
+    # Puppeteer downloads a browser in its postinstall unless this tells it not to.
+    shutil.copy2(ROOT / UPGRADE_INSTALL_CONFIG, checkout / UPGRADE_INSTALL_CONFIG)
 
 
 def _publish_upgrade_manifest(checkout: Path, cache: Path) -> None:

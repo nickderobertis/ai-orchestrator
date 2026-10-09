@@ -27,6 +27,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 from orchestrator import criteria_guard, plan_store, spike_plan
 from orchestrator.root import REPO_ROOT
@@ -53,7 +54,7 @@ BASE = "onepipeline/plan-task.md.j2"
 #: answer, a criterion that runs to a second line, and notes of the task's own.
 ANSWERS: dict[str, object] = {
     "what": "Build the thing.\n\nIt lives beside the other thing.",
-    "why": "The user asked for the thing in their own words.",
+    "why": "Nothing that depends on the thing can be used until it is built.",
     "acceptance_criteria": [
         "The thing is built.",
         "The thing is proven end to end\nby a journey that drives it.",
@@ -260,6 +261,99 @@ def test_the_variables_are_the_five_this_host_declares_and_the_inherited_criteri
     assert variables["acceptance_criteria"]["declared_in"] == BASE
     for variable in variables.values():
         assert variable["description"].strip(), variable
+
+
+#: The planner's role, whose `system_prompt` is what a dispatched planner reads.
+PLANNER = REPO_ROOT / "personas" / "planner.yaml"
+#: The plan's own description, whose overview is the one home of what was requested and
+#: what was decided.
+PLAN_DESCRIPTION = ROOT / "plan-description.md.j2"
+
+
+def _variables(
+    environment: dict[str, str], name: str = "plan-task"
+) -> dict[str, dict[str, object]]:
+    """Each variable ``name`` declares, as the pinned store lists it off the resolved loader."""
+    resolved = _run([str(ENGINE), "template", "resolve", name, "--json"], environment)
+    assert resolved.returncode == 0, resolved.stderr
+    listed = _run(
+        [str(PLAN_STORE), "template", "variables", "--template-loader", "-", "--json"],
+        environment,
+        stdin=resolved.stdout,
+    )
+    assert listed.returncode == 0, listed.stderr
+    return {one["name"]: one for one in json.loads(listed.stdout)["variables"]}
+
+
+def _planner() -> str:
+    """The planner's `system_prompt`, whitespace folded to one space."""
+    return " ".join(yaml.safe_load(PLANNER.read_text(encoding="utf-8"))["system_prompt"].split())
+
+
+def test_a_tasks_why_asks_for_impact_and_forbids_attributing_the_request(
+    launch_environment: dict[str, str],
+) -> None:
+    """The template a planner answers and the planner's own guidance say one thing.
+
+    A task's Why is what its worker and judge weigh a trade-off against, so it is the
+    change's impact; who asked for it is recorded once, in the plan description.
+    """
+    described = " ".join(str(_variables(launch_environment)["why"]["description"]).split())
+    planner = _planner()
+    for stated in (described, planner):
+        for phrase in (
+            "The impact that motivates the change, in product-owner terms"
+            if stated is described
+            else "The `why` answer is the impact that motivates the change, in product-owner terms",
+            "the product, its users, development and resources",
+            'no "the user asked", no "the user said"',
+            "the `**Requested**` part of the plan description",
+        ):
+            assert phrase in stated, (phrase, stated)
+    assert "the user's own terms" not in described, described
+    assert "the user's motivation" not in planner, planner
+
+
+def test_the_plan_descriptions_overview_carries_what_was_requested_and_what_was_decided(
+    launch_environment: dict[str, str],
+) -> None:
+    """Requested against decided has one home, the overview, in two labelled parts."""
+    variables = _variables(launch_environment, "plan-description")
+    described = " ".join(str(variables["overview"]["description"]).split())
+    planner = _planner()
+    for stated in (described, planner):
+        for phrase in (
+            "`**Requested**`",
+            "attributed as the brief records it",
+            "the manager on the user's behalf",
+            "`**Decided**`",
+            "on whose ruling",
+            "the manager's answers to",
+            "escalated exceptions",
+        ):
+            assert phrase in stated, (phrase, stated)
+    assert "two labelled parts" in described, described
+    assert "The overview carries two labelled parts" in planner, planner
+
+
+def test_the_planner_records_each_tasks_unit_once_as_task_metadata() -> None:
+    """`orchestrator.unit` is the one record the design document's picture, table and
+    Architecture all read a task's unit from, so its shape is stated where tasks are made."""
+    planner = _planner()
+    for phrase in (
+        "Give every task you create the task metadata key `orchestrator.unit`",
+        "a repository, or a part of one",
+        "the design document's Architecture gives one subsection to",
+        "on `onetaskgraph task create` as `--metadata orchestrator.unit=<JSON string>`",
+        "a JSON string, non-empty and on one line, at most 60 characters",
+        "Every task that changes the same unit holds the byte-identical string",
+        "they cannot disagree only when the plan records it once",
+    ):
+        assert phrase in planner, (phrase, planner)
+    example = re.search(r"--metadata '(orchestrator\.unit)=(.*?)'", planner)
+    assert example is not None, planner
+    value = json.loads(example.group(2))
+    assert isinstance(value, str) and value and "\n" not in value and len(value) <= 60, value
 
 
 @pytest.mark.parametrize("missing", ("what", "why"))

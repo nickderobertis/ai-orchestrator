@@ -42,6 +42,12 @@ MEMBERS_KEY = "onetaskgraph.members"
 #: source: an object mapping a source name to a qualified id there (onetaskgraph's
 #: `docs/metadata.md`).
 COPIES_KEY = "onetaskgraph.copies"
+#: Where a source that serves a record's images at URLs records what it served, on the
+#: record it wrote: an object keyed by asset name, each value `{"sha256": <lowercase hex of
+#: the bytes>, "url": <string>}`, as onetaskgraph's plugin protocol states it. A `local-md`
+#: record keeps its images as files beside it instead, which :func:`read_document_assets`
+#: answers.
+ASSETS_KEY = "onetaskgraph.assets"
 RECORD_COMPONENT = re.compile(r"(?!\.+$)[\w.@+-]+")
 QualifiedTaskId = NewType("QualifiedTaskId", str)
 QualifiedDocumentId = NewType("QualifiedDocumentId", str)
@@ -231,6 +237,19 @@ class StoreDocument:
     repositories: list[str]
     metadata: Mapping[str, object]
     location: Mapping[str, object] | None
+
+
+@dataclass(frozen=True)
+class StoreAsset:
+    """One image a document holds, as the store's `document show` answers it."""
+
+    #: The bare file name the document's content references as `./<name>`.
+    name: str
+    #: The absolute path holding its bytes on this machine, or `None` for a source that
+    #: serves them at a URL instead.
+    path: str | None
+    #: The lowercase hex SHA-256 the store states for its bytes.
+    sha256: str
 
 
 @dataclass(frozen=True)
@@ -459,6 +478,20 @@ def read_documents(project: str) -> list[StoreDocument]:
             )
         )
     return result
+
+
+def read_document_assets(document: str) -> list[StoreAsset]:
+    """Every image asset the store holds for ``document``, in the order its content references them.
+
+    A reference whose image the store does not hold is simply absent here — a `local-md`
+    file deleted from beside its record is not an error to the store — so a reader that must
+    see every image a document shows compares this against the content's own references.
+    """
+    shown = complete(sdk(client().document_show(document)))
+    # `assets` is absent only beside a source failure, which `complete` has refused, or for
+    # a document not found, which the SDK has raised for; reading it as none is the safe
+    # direction even so, since a reader comparing against the content then refuses.
+    return [StoreAsset(asset.name.root, asset.path, asset.sha256) for asset in shown.assets or []]
 
 
 def read_projects(source: str) -> list[StoreProject]:

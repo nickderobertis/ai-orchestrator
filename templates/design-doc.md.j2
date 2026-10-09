@@ -12,13 +12,15 @@ variables:
     required: true
   why:
     description: >-
-      The Why section's prose.
+      The Why section's prose: why the work is worth doing, as its impact on the product,
+      its users, development and resources, never an account of who asked for it.
     type: text
     required: true
   architecture:
     description: >-
-      The Architecture section's overview only. Each unit's subsection is rendered from
-      `units`.
+      The Architecture section's overview only, which may show a diagram as an image
+      reference `![<alt text>](./<name>.png)` to an asset of this document. Each unit's
+      subsection is rendered from `units`.
     type: text
     required: true
   units:
@@ -27,14 +29,16 @@ variables:
       the unit's label, which a planned task's `unit` names); `repository` (string, the
       repository's short name, such as `onepipeline`); `part` (string, the package or path
       within that repository, or `""` when the unit is the whole repository); `summary`
-      (text, the unit's one paragraph); `reversible` (a list of objects, the unit's trivial and
+      (text, the unit's one paragraph, which may show a diagram as an image reference
+      `![<alt text>](./<name>.png)` to an asset of this document); `reversible` (a list of objects, the unit's trivial and
       low-cost decisions in reading order, or `[]` when it has none), each with the string
       keys `title` (its short bold title) and `text` (its one sentence); and `decisions` (a
       list of objects, the unit's high-cost decisions, or `[]` when it has none). Each decision has the keys `name`
       (string, its heading), `justification` (string, naming who would have to act to undo
       it) and `content` (a nonempty ordered list). Each part is exactly either
       {type: "prose", text: string} or {type: "code", language: string, text: string}.
-      Prose is nonblank Markdown explanation without fenced-code blocks; inline code is
+      Prose is nonblank Markdown explanation without fenced-code blocks; inline code and
+      an image reference `![<alt text>](./<name>.png)` to an asset of this document are
       allowed. Code is nonblank literal text, never a pre-fenced block. Language is a
       nonempty single-line fence info token: letters, digits, underscore, plus or hyphen;
       use `text` for untyped output. No extra keys, mixed shapes or unknown tags.
@@ -123,6 +127,11 @@ variables:
   plan the migration list names renders one line in place of the Budgets summary.
   There is no separate Contracts section, and no answer adds a heading of its own.
 
+  IMAGES. A picture is an image asset of this document, never a Mermaid code block, which a
+  Linear board does not render. Architecture is where a diagram is most often worth it, and
+  the ARCHITECTURE guidance says when and how one is drawn, shown and stored; any other
+  section may show one the same way where a picture explains better than prose.
+
   HIGHLIGHTING. No GitHub alert blocks (`> [!CAUTION]` and the like) anywhere. The bold
   reversibility line is the whole of the highlighting.
 
@@ -140,8 +149,8 @@ variables:
 {% endblock %}
 {% block what_guidance %}
 {#
-  WHAT. What is being built. What and Why are each a few plain sentences in the user's
-  terms, and carry no interface detail and no implementation detail.
+  WHAT. What is being built. What and Why are each a few plain sentences in plain terms a
+  non-specialist reads, and carry no interface detail and no implementation detail.
 #}
 {% endblock %}
 {% block what %}
@@ -152,7 +161,13 @@ variables:
 {% endblock %}
 {% block why_guidance %}
 {#
-  WHY. Why the user wants it, in their own words where the plan records them.
+  WHY. Why the work is worth doing, from the product owner's point of view: its impact on
+  the product, its users, development and resources. It never narrates who asked for what:
+  no "the user asked", "the user said" or "the brief says", and no quoted request. The
+  record of what was requested and what was decided has one home, the plan's own
+  description, and is not in this document; a task's own Why states impact too, never that
+  record. Speaking of the product's users as the people the work affects is impact, not
+  attribution.
 #}
 {% endblock %}
 {% block why %}
@@ -221,6 +236,15 @@ variables:
       cost read the same here. A unit with no such decision has no `**Reversible:**` line.
     - Nothing else: no Kind, Owner or Status line, no Owes or May-assume bullets, and no
       links between sections.
+
+  DIAGRAMS. A diagram earns its place when the architecture has three or more units, or a
+  flow or a boundary between units, whose relations prose would need more than a short
+  paragraph to convey. A single unit, or anything one sentence says, gets no diagram, and a
+  document holds a few diagrams at most. Write it as a Mermaid source, render it with `just
+  render-diagram <source.mmd> <name>.png`, show it from the `architecture` overview, a
+  unit's `summary`, or the prose part of a decision as `![<alt text saying what it
+  shows>](./<name>.png)`, and give the file to the store with `--asset` when the document is
+  stored.
 
   REVERSIBILITY. Three levels, defined by who would have to act to undo the decision:
     - trivial: only the unit that owns it, in one ordinary change.

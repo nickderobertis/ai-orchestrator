@@ -116,13 +116,19 @@ HOST_SWEEP_WORKSPACE = "hostSweepWorkspace"
 PROJECT_STORE_RACE_WORKSPACE = "projectStoreRaceWorkspace"
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one catalog
 # of test projects, where every project has its entry, and `tests/test_nx_cache_scope.py` fails when
-# a project's tests fall outside the tiers it describes; the plan-store-assets entry sits beside the
-# others' rather than in a domain of its own because the catalog is the domain.
+# a project's tests fall outside the tiers it describes; the plan-store-assets and render-diagram
+# entries sit beside the others' rather than in a domain of their own because the catalog is the
+# domain.
 #: The key `plan-store-assets:test` is memoized on: the lock that decides which plan-store
 #: CLI answers, the store configuration it loads from this checkout, the project's own
 #: files, and the suite modules `tests/conftest.py` imports — nothing else, because the
 #: journey writes only temporary roots.
 PLAN_STORE_ASSETS_WORKSPACE = "planStoreAssetsWorkspace"
+#: The key `render-diagram:test` is memoized on: what a render reads — the recipe and its
+#: script, the committed `config/mermaid/` files, `.puppeteerrc.json`, and the lockfile that
+#: names mermaid-cli, Playwright and so the Chromium revision, and the font — the project's
+#: own files, and the suite modules `tests/conftest.py` imports.
+RENDER_DIAGRAM_WORKSPACE = "renderDiagramWorkspace"
 # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 #: The key `unpublished-view:test` is memoized on. Files rather than trees, for the reason
 #: `unwatchedWorkspace` names, and measured the same way: the tier traced under `strace -f
@@ -528,8 +534,9 @@ PROJECT_STORE_RACE_ROOT = "tests/project_store_race"
 
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one catalog
 # of test projects, where every project has its entry, and `tests/test_nx_cache_scope.py` fails when
-# a project's tests fall outside the tiers it describes; the plan-store-assets entry sits beside the
-# others' rather than in a domain of its own because the catalog is the domain.
+# a project's tests fall outside the tiers it describes; the plan-store-assets and render-diagram
+# entries sit beside the others' rather than in a domain of their own because the catalog is the
+# domain.
 #: The project whose test target owns the journey over a document's image assets: the
 #: locked plan-store CLI creating one with `--asset`, copying it into a second `local-md`
 #: source and reading both back. A project of its own because it drives a real host tool,
@@ -539,6 +546,14 @@ PLAN_STORE_ASSETS_PROJECT = "plan-store-assets"
 PLAN_STORE_ASSETS_SCOPED = "test"
 #: The directory it owns, which every other project's tiers ignore.
 PLAN_STORE_ASSETS_ROOT = "tests/plan_store_assets"
+#: The project whose test target owns the journeys over `just render-diagram`: a real
+#: Chromium drawing a Mermaid source in the locked font, and every refusal. A project of its
+#: own for the reason the one above is.
+RENDER_DIAGRAM_PROJECT = "render-diagram"
+#: That project's one test target: nothing here reads this repository's prose.
+RENDER_DIAGRAM_SCOPED = "test"
+#: The directory it owns, which every other project's tiers ignore.
+RENDER_DIAGRAM_ROOT = "tests/render_diagram"
 # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
 #: The project whose test target owns the journey over `just unpublished`: the real

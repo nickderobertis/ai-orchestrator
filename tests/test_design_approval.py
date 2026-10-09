@@ -8,12 +8,13 @@ composed, what a record that cannot be read means, and how the launch gate reads
 line it deliberately does not parse.
 
 The key is the half worth stating. It covers the document's title, the design-doc
-template's chain digest as it resolves now, and the body digest the store recorded when it
-rendered the document — and a document is keyable only while it *is* that rendering: one
-recording no design-doc provenance, rendered from a chain that is not the one in force, or
-edited after it was rendered is refused, naming the regenerate that repairs it. So a
-passing test here is a claim about both halves: editing the document loses its approval,
-and changing the template invalidates every approval granted under the previous one. The
+template's chain digest as it resolves now, the body digest the store recorded when it
+rendered the document, and the SHA-256 of every image the document shows — and a document
+is keyable only while it *is* that rendering: one recording no design-doc provenance,
+rendered from a chain that is not the one in force, or edited after it was rendered is
+refused, naming the regenerate that repairs it. So a passing test here is a claim about
+both halves: editing the document or replacing an image's bytes loses its approval, and
+changing the template invalidates every approval granted under the previous one. The
 other direction is the one a copied plan pays for: nothing the store the document sits in
 owns is in the key, so a record that travels arrives matching what the destination
 computes.
@@ -25,12 +26,15 @@ import dataclasses
 import hashlib
 import json
 import shutil
+import struct
 import subprocess
+import zlib
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import pytest
 from project_fixtures import ONEVCS_HOME, register_stand_in
+from registered_checkouts import discover_checkouts, sibling_git
 
 from orchestrator import design_approval, design_chain, plan_store
 from orchestrator.plan_store import (
@@ -1664,3 +1668,239 @@ def test_a_document_showing_its_visual_changes_or_a_plan_with_none_passes_the_vi
     design_approval.unshown("authoring:demo", _document(), [_document()])
     with pytest.raises(OSError, match="board:I_minted"):
         design_approval.unshown("board:demo", _document(), [copied, _document()])
+
+
+# llmlint: ignore-block[shell_test_tiers_stay_split] Not a shell suite and not a host tool:
+# the plan-store CLI these spawn is the workspace's own locked install, in this tier's key, the
+# store is each test's own temporary one, and they cover `asset_digests`, `served_digests` and
+# `read_document_assets` under the tier's 100% coverage floor, as the `_designed` tests above
+# do; the one reading the plan store's checkout is routed to the uncached tier by its marker.
+def _png(seed: int) -> bytes:
+    """A small PNG distinct per ``seed``, which the store accepts as an image asset."""
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+        )
+
+    raw = b"".join(b"\x00" + bytes([seed % 256, row, 255 - row] * 8) for row in range(8))
+    header = struct.pack(">IIBBBBB", 8, 8, 8, 2, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", header)
+        + chunk(b"IDAT", zlib.compress(raw))
+        + chunk(b"IEND", b"")
+    )
+
+
+#: A document's content that shows one diagram, as a `local-md` source holds it.
+SHOWN = "## Architecture\n\n![How the two units hand a page over](./architecture.png)\n"
+
+
+def _shown_locally(root: Path, monkeypatch: pytest.MonkeyPatch, image: bytes) -> Path:
+    """Store a document showing ``image`` in a real `local-md` source, and answer its path.
+
+    The store holds the image as a file beside the record, which is the path answered.
+    """
+    monkeypatch.setenv("ONETASKGRAPH_SOURCES__SHOWN__PLUGIN", "local-md")
+    monkeypatch.setenv("ONETASKGRAPH_SOURCES__SHOWN__CONFIG__ROOT", str(root / "store"))
+    (root / "store").mkdir(parents=True)
+    (root / "architecture.png").write_bytes(image)
+    (root / "body.md").write_text(SHOWN, encoding="utf-8")
+    created = subprocess.run(
+        [str(plan_store.locked_binary()), "document", "create", "shown", "--project", "demo"]
+        + ["--title", APPROVED_TITLE, "--id", "demo-design", "--body-file", str(root / "body.md")]
+        + ["--asset", str(root / "architecture.png")],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert created.returncode == 0, created.stderr
+    (held,) = plan_store.read_document_assets("shown:demo-design")
+    assert held.path is not None, held
+    return Path(held.path)
+
+
+def _served(digests: Mapping[str, str]) -> StoreDocument:
+    """A design document as a store serving its images at URLs holds it."""
+    content = "## Architecture\n\n" + "".join(
+        f"![How the two units hand a page over](https://img.invalid/{name})\n" for name in digests
+    )
+    served = {
+        name: {"sha256": digest, "url": f"https://img.invalid/{name}"}
+        for name, digest in digests.items()
+    }
+    return _document(content=content, metadata={plan_store.ASSETS_KEY: served})
+
+
+def test_a_document_holding_no_asset_is_keyed_exactly_as_before_images() -> None:
+    """The key's shape changes only where a document shows an image."""
+    document = _document()
+    before = json.dumps(
+        {
+            "body_digest": "sha256:" + hashlib.sha256(APPROVED_PROSE.encode("utf-8")).hexdigest(),
+            "digest": STATED,
+            "title": APPROVED_TITLE,
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    assert design_approval.asset_digests(document) == {}
+    assert design_approval.approval_key(document, STATED) == (
+        hashlib.sha256(before.encode("utf-8")).hexdigest()
+    )
+
+
+def test_an_image_is_read_the_same_from_a_local_file_and_a_served_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One picture's bytes give one digest whichever way its store holds it."""
+    image = _png(1)
+    _shown_locally(tmp_path, monkeypatch, image)
+    (local,) = plan_store.read_documents("shown:demo")
+    expected = {"architecture.png": hashlib.sha256(image).hexdigest()}
+    assert design_approval.asset_digests(local) == expected
+    assert design_approval.asset_digests(_served(expected)) == expected
+
+
+def test_replacing_an_images_bytes_under_its_name_unapproves_the_document(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The body names an image only by name, so the key has to cover the bytes."""
+    path = _shown_locally(tmp_path, monkeypatch, _png(1))
+    document = _document(qualified_id="shown:demo-design", content=SHOWN)
+    approved = design_approval.approval_key(document, STATED)
+    unshown = design_approval.approval_key(_document(), STATED)
+    assert approved != unshown
+    path.write_bytes(_png(2))
+    assert design_approval.approval_key(document, STATED) != approved
+    path.write_bytes(_png(1))
+    assert design_approval.approval_key(document, STATED) == approved
+
+
+@pytest.mark.parametrize(
+    ("shown", "named"),
+    [
+        ('![The two units](./architecture.png "A")', '![The two units](./architecture.png "A")'),
+        (
+            "![The two units][figure]\n\n[figure]: ./architecture.png",
+            "![The two units][figure]",
+        ),
+        ('<img src="./architecture.png" alt="The two units">', "<img src="),
+        ("![The two units](https://img.invalid/elsewhere)", "https://img.invalid/elsewhere"),
+    ],
+    ids=["titled", "reference-style", "html", "unserved-url"],
+)
+def test_an_image_in_a_form_approval_cannot_read_is_refused_naming_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shown: str, named: str
+) -> None:
+    """Approval fails closed: an image it cannot read could show bytes the key misses.
+
+    The store holds the asset each refused form points at, so what refuses is the form alone.
+    """
+    _shown_locally(tmp_path, monkeypatch, _png(1))
+    document = _document(qualified_id="shown:demo-design", content=f"{SHOWN}\n{shown}\n")
+    with pytest.raises(
+        OSError, match=r"only the `!\[alt\]\(\./name\)` form is accepted"
+    ) as refused:
+        design_approval.approval_key(document, STATED)
+    assert named in str(refused.value), refused.value
+
+
+def test_a_served_images_recorded_digest_is_in_the_key() -> None:
+    """On a board copy the record the store wrote is what says which bytes were served."""
+    first = _served({"architecture.png": "1" * 64})
+    second = _served({"architecture.png": "2" * 64})
+    assert design_approval.approval_key(first, STATED) != design_approval.approval_key(
+        second, STATED
+    )
+
+
+def test_a_document_referencing_an_image_its_store_does_not_hold_is_refused_naming_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A person approving it would approve a picture they never saw."""
+    path = _shown_locally(tmp_path, monkeypatch, _png(1))
+    path.unlink()
+    document = _document(qualified_id="shown:demo-design", content=SHOWN)
+    with pytest.raises(OSError, match=r"references architecture\.png, which the store does not"):
+        design_approval.approval_key(document, STATED)
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        ["architecture.png"],
+        {"architecture.png": {"url": "https://img.invalid/a"}},
+        {"architecture.png": {"sha256": "NOT-HEX", "url": "https://img.invalid/a"}},
+        {"architecture.png": {"sha256": "1" * 64}},
+    ],
+    ids=["not-an-object", "no-digest", "not-a-digest", "no-url"],
+)
+def test_a_served_record_this_cannot_read_is_refused_rather_than_read_as_no_image(
+    record: object,
+) -> None:
+    document = _document(metadata={plan_store.ASSETS_KEY: record})
+    with pytest.raises(OSError, match=r"onetaskgraph\.assets record is not an object"):
+        design_approval.approval_key(document, STATED)
+
+
+def test_the_served_record_read_is_the_shape_the_locked_plan_store_declares() -> None:
+    """The `onetaskgraph.assets` record is the store's contract, so its schema is read here.
+
+    The locked plan-store CLI prints the schema bundle its contract types generate, and
+    `AssetUploads` there is the record a URL-serving source writes: an object of asset names,
+    each an `AssetUpload` requiring the `sha256` string :func:`served_digests` reads. A
+    release that renamed or dropped either fails here rather than reading as no image.
+    """
+    printed = subprocess.run(
+        [str(plan_store.locked_binary()), "schema"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    roots = json.loads(printed.stdout)["roots"]
+    uploads, upload = roots["AssetUploads"], roots["AssetUpload"]
+    assert uploads["type"] == "object", uploads
+    assert uploads["additionalProperties"] == {"$ref": "#/$defs/AssetUpload"}, uploads
+    assert upload["type"] == "object", upload
+    assert "sha256" in upload["required"], upload
+    assert "url" in upload["required"], upload
+    assert upload["properties"]["url"]["type"] == "string", upload
+    assert upload["properties"]["sha256"]["type"] == "string", upload
+    assert "lowercase hex SHA-256" in upload["properties"]["sha256"]["description"], upload
+
+
+#: The plan store's repository, whose plugin API declares the key a URL-serving source writes.
+PLAN_STORE_REPOSITORY = "github.com/nickderobertis/onetaskgraph"
+
+
+# llmlint: ignore[test_tiers_split_by_project_not_by_marker] `reads_checkouts` moves this test
+# out of every memoized tier into the uncached `orchestrator:test-checkouts`, because its
+# subject — the plan store's registered checkout at the pinned tag — is outside this workspace
+# and no cache key hashes it; a project of its own would give it a key, and a memoized green
+# would replay across the very pin bump it exists to catch, as every `reads_checkouts` test is
+# tiered for `tests/conftest.py`'s checkout guard.
+@pytest.mark.reads_checkouts
+def test_the_served_records_key_is_the_one_the_pinned_plan_store_declares() -> None:
+    """`onetaskgraph.assets` is spelled once upstream, read here at the release this host pins.
+
+    The schema the locked CLI prints carries the record's shape but not the metadata key it
+    sits under, so the key is read from the plugin API's own declaration at the tag
+    `config/onetaskgraph.version` names, in the checkout `config/onevcs.checkouts` registers.
+    """
+    checkouts = discover_checkouts().held.get(PLAN_STORE_REPOSITORY, [])
+    assert checkouts, f"no checkout of {PLAN_STORE_REPOSITORY} is registered on this host"
+    pin = (REPO_ROOT / "config" / "onetaskgraph.version").read_text(encoding="utf-8").strip()
+    shown = sibling_git(
+        checkouts[0], "show", f"v{pin}:crates/onetaskgraph-plugin-api/src/metadata.rs"
+    )
+    assert shown.returncode == 0, shown.stderr.decode("utf-8", "replace")
+    declared = shown.stdout.decode("utf-8")
+    assert f'pub const ASSETS_KEY: &\'static str = "{plan_store.ASSETS_KEY}";' in declared
+
+
+# llmlint: ignore-end[shell_test_tiers_stay_split]

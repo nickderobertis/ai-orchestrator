@@ -9,7 +9,14 @@ variables:
   # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] These descriptions restate the shape `orchestrator/plan_budgets.py` states once, and `tests/test_plan_budgets_template.py` fails the moment the two part: the variables, each list's keys, the vocabularies and every cap are compared with that module's own.
   overview:
     description: >-
-      The plan's own prose: what it sets out to do, as a project body says it.
+      The plan's own prose: what it sets out to do, as a project body says it. It carries
+      two labelled parts, the one home of the plan's record of what was requested and what
+      was decided. `**Requested**`: what the brief asked for, attributed as the brief
+      records it (the user, or the manager on the user's behalf), its constraints
+      included. `**Decided**`: what the planner decided and on whose ruling, including the
+      decompositions, owners and contracts it chose, the manager's answers to its
+      questions, and its escalated exceptions. A task's Why and the design document's Why
+      state impact and leave this record here.
     type: text
     required: true
   sizing:

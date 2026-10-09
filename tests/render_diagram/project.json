@@ -1,0 +1,44 @@
+{
+  "name": "render-diagram",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/render_diagram",
+  "tags": [
+    "scope:render-diagram",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-waits"
+  ],
+  "namedInputs": {
+    "renderDiagramWorkspace": [
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/package.json",
+      "{workspaceRoot}/bun.lock",
+      "{workspaceRoot}/.puppeteerrc.json",
+      "{workspaceRoot}/config/mermaid/**/*",
+      "{workspaceRoot}/scripts/render-diagram.sh",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/tests/render_diagram/**/*"
+    ]
+  },
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/render_diagram --no-cov",
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "renderDiagramWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ]
+    }
+  }
+}

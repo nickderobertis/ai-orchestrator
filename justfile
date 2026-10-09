@@ -31,8 +31,10 @@ repo_root := justfile_directory()
 default:
     @just --list
 
-# Set up from a clean clone: install the toolchain, sync the Python env, and
-# activate the committed git hooks (the pre-push llmlint gate).
+# Set up from a clean clone: install the toolchain, sync the Python env, provision the
+# Chromium the locked Playwright names (which `just render-diagram` draws in; Playwright
+# skips a revision already installed), and activate the committed git hooks (the pre-push
+# llmlint gate).
 #
 # `--force` is what distinguishes this from the self-heal every `scripts/nx.sh`
 # already performs: that one reconciles the installed tree against the lockfile,
@@ -43,6 +45,7 @@ default:
 bootstrap:
     ./scripts/session-setup.sh
     ./scripts/workspace-install.sh --force
+    ./node_modules/.bin/playwright install chromium
     ./scripts/nx.sh run-many -t bootstrap
     git config core.hooksPath .githooks
     # Allow local-mode lifecycle pushes into this non-bare checkout.
@@ -354,10 +357,12 @@ review-plan *args:
 # The record goes onto the document in the plan store, so it travels with the plan
 # through `just copy-plan` exactly as a review record travels with a task: approve where
 # you draft, then copy up. It is keyed on the document's title, the template's chain digest
-# as the pinned engine resolves it now, and the body digest the store recorded when it
-# rendered the document, so editing or regenerating the document leaves it unapproved and
+# as the pinned engine resolves it now, the body digest the store recorded when it
+# rendered the document, and the SHA-256 of every image it shows, so editing or
+# regenerating the document or replacing an image's bytes leaves it unapproved and
 # changing the template leaves every approved document unapproved; a document that is not
-# the rendering its provenance records is refused, naming the regenerate that repairs it.
+# the rendering its provenance records is refused, naming the regenerate that repairs it,
+# and so is one referencing an image the store does not hold, naming the image.
 #
 # There is no flag that skips this and none is coming; running it on an unchanged
 # document a second time writes nothing and says so. Exit 1 is a refusal — no design
@@ -372,6 +377,17 @@ review-plan *args:
 [doc("Record the user's approval of one plan project's design document.")]
 approve-design *args:
     @./scripts/plan-store.sh uv run orchestrator-approve-design "$@"
+
+# Render one Mermaid source to the PNG a design document references: `just render-diagram
+# <source.mmd> <output.png>`. The locked mermaid-cli draws it in the locked font, on the
+# Chromium the locked Playwright names, at an 880-px page; the committed
+# `config/mermaid/` files and the script's header say what else it reads. It attaches the
+# image to nothing: the plan store's own `--asset` gives a document its images. Exit 2 is
+# an argument refused, 3 an absent browser or mermaid-cli, and 1 a source mermaid-cli could
+# not render or a PNG that could not be placed; none touches the output path.
+[doc("Render a Mermaid source to the PNG a design document references.")]
+render-diagram *args:
+    @./scripts/render-diagram.sh "$@"
 
 # Copy a cleared plan onto the board this repository plans against: `just copy-plan
 # <source>:<project> [--to SOURCE] [<onetaskgraph project copy flags>]`.

@@ -6,7 +6,7 @@ depends_on: ["tracked-release/release-approval"]
 metadata:
   "onepipeline.id": "announce"
   "onepipeline.persona": "docs-writer"
-  "onetaskgraph.template": {"answers_digest":"sha256:ac7a459cc2f6352b3040846715d12ea86b0da0330c735a12017338b3e66504bc","body_digest":"sha256:4aa5fa1648b8dd7d63363781b37c2c44cd691af9ca1fb500a4be717f5914369c","digest":"sha256:ffdea433a9a5ef8e32c5c0d93ff980b893c7e9d12a0bfd949900264a82ad2b9d","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:ac7a459cc2f6352b3040846715d12ea86b0da0330c735a12017338b3e66504bc","body_digest":"sha256:4aa5fa1648b8dd7d63363781b37c2c44cd691af9ca1fb500a4be717f5914369c","digest":"sha256:094afa20a55d0b9740923d270cdb02667b834b6b43c1b2c59f9e38b68c8e7325","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What

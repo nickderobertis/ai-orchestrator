@@ -6,7 +6,7 @@ depends_on: ["plan-example/design"]
 metadata:
   "onepipeline.id": "api"
   "onepipeline.persona": "engineer"
-  "onetaskgraph.template": {"answers_digest":"sha256:d820b56e02f9bb834defc82e9a0366e61acba92305fe81cecb4aa4da733d0fed","body_digest":"sha256:92439b3624ae5efa93ac997302f5bd7349e01db693958ec0942a77a736fcedf3","digest":"sha256:ffdea433a9a5ef8e32c5c0d93ff980b893c7e9d12a0bfd949900264a82ad2b9d","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:d820b56e02f9bb834defc82e9a0366e61acba92305fe81cecb4aa4da733d0fed","body_digest":"sha256:92439b3624ae5efa93ac997302f5bd7349e01db693958ec0942a77a736fcedf3","digest":"sha256:094afa20a55d0b9740923d270cdb02667b834b6b43c1b2c59f9e38b68c8e7325","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What
