@@ -10,16 +10,7 @@ is the one thing this file tests.
 Whether `onevcs` correctly reads a real repository's branch protection — or reports an
 identity with none as requiring none, or refuses a bad argument, or handles an empty
 registry — is `onevcs`'s own claim to prove in its own suite, not a second proof this
-repository owes it. Earlier versions of this file asserted on specific required-check
-names and reports read live off real GitHub repositories this host does not own
-(`nickderobertis/nick-derobertis-site`, `nickderobertis/llmlint`), and separately on
-behaviors — an empty registry's wording, a refused argument's silence, a plain
-listing's omissions — that are `onevcs`'s own CLI contract rather than anything this
-wrapper adds. Both depended on another repository's live, unpinned state or another
-tool's own behavior for this repository's own gate to pass, and both drifted: the
-first when `nickderobertis/llmlint`'s branch protection changed, the second would drift
-identically the day `onevcs` reworded a message this repository never asserts anyone
-reads. Both are gone. Nothing here registers a checkout with a real remote, or asks
+repository owes it. Nothing here registers a checkout with a real remote, or asks
 anything of a repository this project does not own.
 """
 

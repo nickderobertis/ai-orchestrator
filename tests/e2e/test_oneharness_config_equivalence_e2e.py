@@ -84,12 +84,7 @@ ANTHROPIC_CREDENTIALS = (
     "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
 )
 #: `claude-code:primary`'s own carve-out, the same shape as `codex:primary`'s above:
-#: it is the last resort in every chain, and on a host with no file-based `/login`
-#: session anywhere (one provisioned by `claude setup-token`), `CLAUDE_CODE_OAUTH_TOKEN`
-#: loaded from this checkout's `.env` is the only thing that can authenticate it —
-#: `oneharness.identities.toml`'s own primary variant states why. A host with a real
-#: file-based session there uses it regardless, so the carve-out costs such a host
-#: nothing.
+#: `oneharness.identities.toml`'s own primary variant states why.
 CLAUDE_PRIMARY_EXEMPT_CREDENTIAL = "CLAUDE_CODE_OAUTH_TOKEN"
 CODEX_ALTERNATE_CREDENTIAL = "OPENAI_API_KEY"
 
