@@ -132,6 +132,10 @@ MASKED_CONFIGS = tuple(name for name in ROLE_CONFIGS if name not in PLAN_STORE_C
 PLANTED_CREDENTIALS = {
     name: f"not-a-real-{name.lower()}-planted-by-this-journey" for name in CREDENTIALS
 }
+#: A value `claude-code:primary`'s turn would report if it reached
+#: `CLAUDE_CODE_OAUTH_TOKEN`, planted so the assertion is about this journey's own value
+#: rather than about whatever this host's `.env` happens to export.
+PLANTED_CLAUDE_TOKEN = "not-a-real-claude-code-oauth-token-planted-by-this-journey"
 PLANTED_NOMINATION = {
     "GH_PROJECTS_OWNER": "nickderobertis",
     "GH_PROJECTS_NUMBER": "1",
@@ -179,6 +183,20 @@ DISPATCH_CANDIDATES = _candidates(DISPATCH_CONFIGS)
 
 #: Every candidate of every role, which is the model journey's subject.
 ALL_CANDIDATES = _candidates(ROLE_CONFIGS)
+
+#: Every chain's `claude-code:primary` candidate — the identity `oneharness.identities.toml`
+#: deliberately stops masking `CLAUDE_CODE_OAUTH_TOKEN` for, so a host with no other
+#: file-based Claude session can still reach it as the last resort.
+PRIMARY_CLAUDE_CANDIDATES = tuple(
+    candidate for candidate in ALL_CANDIDATES if candidate.identity == "claude-code:primary"
+)
+#: Every other `claude-code` candidate, which must still mask it: the carve-out is
+#: `claude-code:primary`'s alone, not every Claude identity's.
+OTHER_CLAUDE_CANDIDATES = tuple(
+    candidate
+    for candidate in ALL_CANDIDATES
+    if candidate.identity.startswith("claude-code:") and candidate.identity != "claude-code:primary"
+)
 
 #: The follow-up agent's candidates, whose turn works in a directory that is no repository
 #: and so must be handed each identity's own bypass argument.
@@ -264,12 +282,16 @@ def _indirections(tmp_path: Path) -> dict[str, str]:
     return indirections
 
 
-def _turn(tmp_path: Path, oneharness_bin: str, candidate: Candidate) -> dict[str, str]:
+def _turn(
+    tmp_path: Path, oneharness_bin: str, candidate: Candidate, **extra_env: str
+) -> dict[str, str]:
     """Spend one real turn as `candidate`; answer what its provider got.
 
     Only the provider process is a stand-in. The config is the committed one, the chain
     resolution is `oneharness`'s own, and the environment below is the one a dispatch
     arrives with: the launching session's names, the plan store's credentials among them.
+    `extra_env` is layered on top of all of it, for a caller planting a value this host's
+    own ambient environment must not decide the answer about.
     """
     record = tmp_path / "environment.json"
     scratch = tmp_path / "node-scratch"
@@ -298,6 +320,7 @@ def _turn(tmp_path: Path, oneharness_bin: str, candidate: Candidate) -> dict[str
         # Keeps this journey's harness history out of the host's.
         "XDG_STATE_HOME": str(short_state.state_home(tmp_path)),
         "PATH": f"{front}{os.pathsep}{os.environ['PATH']}",
+        **extra_env,
     }
     ran = subprocess.run(
         [
@@ -388,6 +411,54 @@ def test_a_role_that_reads_the_plan_store_keeps_its_credentials(
     assert not withheld, (
         f"{candidate.config} no longer hands {candidate.identity} {withheld}, and this "
         f"role's task is to read the plan out of the store"
+    )
+
+
+@pytest.mark.parametrize(
+    "candidate", PRIMARY_CLAUDE_CANDIDATES, ids=_identifiers(PRIMARY_CLAUDE_CANDIDATES)
+)
+def test_the_primary_claude_identity_is_handed_its_oauth_token(
+    tmp_path: Path, oneharness_bin: str, candidate: Candidate
+) -> None:
+    """The one behavior change this session made: proven against a real turn, not a report.
+
+    A resolved-config comparison would pass whether or not `oneharness` actually carries
+    the value through to the provider it starts — the equivalence suite's own docstring
+    says a pass there is not evidence about a turn. This drives one for real, for every
+    role whose chain reaches `claude-code:primary`, which is the last resort everywhere
+    and so the one a setup-token host with no file-based session anywhere else falls
+    through to.
+    """
+    recorded = _turn(
+        tmp_path, oneharness_bin, candidate, CLAUDE_CODE_OAUTH_TOKEN=PLANTED_CLAUDE_TOKEN
+    )
+
+    assert recorded.get("CLAUDE_CODE_OAUTH_TOKEN") == PLANTED_CLAUDE_TOKEN, (
+        f"{candidate.config} no longer hands {candidate.identity} its "
+        f"CLAUDE_CODE_OAUTH_TOKEN, which is the only thing that can authenticate it on a "
+        f"host with no file-based Claude session anywhere"
+    )
+
+
+@pytest.mark.parametrize(
+    "candidate", OTHER_CLAUDE_CANDIDATES, ids=_identifiers(OTHER_CLAUDE_CANDIDATES)
+)
+def test_every_other_claude_identity_still_masks_the_oauth_token(
+    tmp_path: Path, oneharness_bin: str, candidate: Candidate
+) -> None:
+    """The carve-out is `claude-code:primary`'s alone, proven the same way as its presence.
+
+    A mask removed from the wrong variant, or from the shared parent outright, would
+    leave every Claude identity honouring an ambient token instead of the file-based
+    session each one but primary is meant to run as.
+    """
+    recorded = _turn(
+        tmp_path, oneharness_bin, candidate, CLAUDE_CODE_OAUTH_TOKEN=PLANTED_CLAUDE_TOKEN
+    )
+
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in recorded, (
+        f"{candidate.config} hands {candidate.identity} its CLAUDE_CODE_OAUTH_TOKEN, "
+        f"which only claude-code:primary may be handed"
     )
 
 
