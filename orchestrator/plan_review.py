@@ -282,6 +282,19 @@ telling the worker to go and find one — is a second answer the worker follows 
 engine's, and is refused. The immutable-anchor exemption above applies only to a
 release already published; a release the node waits for is not yet an anchor.
 
+One question is asked of a lifecycle node's `title`, shown in the header above: **does
+it announce every break its task's change requires under the target repository's release
+policy?** That title becomes the landed commit subject, because publication squashes the
+branch under it and discards every commit subject the worker wrote, so it is what
+decides how the repository classifies the release carrying the change. Read the task for
+what its change crosses — the repository's public API, or a dependency its public surface
+exposes moving across a version class — and for what the task says that repository's
+release policy treats as breaking. Where the task describes a change crossing a boundary
+that policy treats as breaking and the title does not announce a break in the form the
+policy requires, refuse the title — the finding's criterion is the title itself — naming
+the boundary the task says is crossed. Neither a node whose change crosses no such
+boundary nor a node of `kind` "human" is asked this.
+
 One question is asked of a node that owns a budget: one whose task carries a
 `## Budgets` section, its own budgets. Such a node owns the budget's command — the command
 that analyses the telemetry the gate's tests record — and its registration in the

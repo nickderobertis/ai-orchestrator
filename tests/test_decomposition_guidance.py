@@ -89,6 +89,10 @@ OWNED_STATEMENTS = (
     # what is the planner's alone is when to reach for it.
     Owned(PLANNER.document, "never to hold a run"),
     Owned(MANAGER.document, "A lifecycle worker may do exactly two things to a remote on its own"),
+    # A lifecycle node's title is the subject its change lands under, so whether it
+    # announces a break the target repository's release policy requires is decided when
+    # the planner writes it — in whatever repository that is, so it travels.
+    Owned(PLANNER.document, "A lifecycle node's title becomes its landed commit subject"),
     Owned(PLANNER.document, "$ORCHESTRATOR_ASK_MANAGER"),
     Owned(PLANNER.document, "PLANNER EXCEPTIONS"),
     # The manager's judgment: what to dispatch, what to brief, what to decide, what

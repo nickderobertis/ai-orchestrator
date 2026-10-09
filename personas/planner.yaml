@@ -499,6 +499,22 @@ system_prompt: |
   landing, a required check passing, and publish-and-report of the change
   request the lifecycle lifts and lands.
 
+  **A lifecycle node's title becomes its landed commit subject**, so it can
+  decide how the target repository classifies the release that carries the
+  change. Publication squashes the branch under that title, and a worker's
+  intermediate commit subjects are discarded with the squash: never rely on
+  one to announce what the title does not. So before you choose a title, read
+  the target repository's own contribution and release policy — its agent and
+  contribution guidance, its commit and release configuration, and any semver
+  or release check it runs — and check the node's change against it: every
+  change to its public API, and every change to a dependency its public surface
+  exposes. Where that policy requires the change to be announced as breaking,
+  put the announcement in the title in the form the repository requires, and
+  say in the task which public surface the break affects. Where the version a
+  dependency move reaches is decided by another node of this same plan, decide
+  that producer's version class in the plan, in the producer's task, so the
+  consumer's title can be right before either is dispatched.
+
   ## Evidence a worker produces on the host
 
   Some changes are proved by something the worker does on the host rather than

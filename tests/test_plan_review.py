@@ -983,6 +983,38 @@ def test_the_task_reviewer_is_asked_the_pin_path_question_in_both_halves() -> No
         assert sentence in asked, sentence
 
 
+def test_the_task_reviewer_judges_a_lifecycle_title_against_the_release_policy() -> None:
+    """The title is the landed squash subject, so the review is what asks whether it is right.
+
+    A lifecycle node moving a dependency its public surface exposes across a major version
+    lands under its title, and a title announcing no break lands a commit release tooling
+    classifies as an ordinary feature. The reviewer has to be asked that and shown the
+    title it is asked about, beside the task that says what the change crosses.
+    """
+    title = "feat(deps): move the client to the 3.x engine"
+    task = _task(
+        title=title,
+        content=(
+            "## What\n\nMove the `engine` dependency, whose types the client's public API "
+            "re-exports, from 2.x to 3.x. The repository's release policy treats a major "
+            "move of a re-exported dependency as breaking.\n"
+        ),
+        repositories=["github.com/example/client"],
+    )
+    composed = " ".join(plan_review._prompt("P", task).split())
+
+    for question in (
+        "One question is asked of a lifecycle node's `title`",
+        "does it announce every break its task's change requires under the target "
+        "repository's release policy?",
+        "discards every commit subject the worker wrote",
+        "a dependency its public surface exposes moving across a version class",
+        "the title does not announce a break in the form the policy requires, refuse the title",
+    ):
+        assert question in composed, question
+    assert f'"title": "{title}"' in composed
+
+
 def test_the_plan_bar_covers_the_task_bar_the_plan_question_and_the_table(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
