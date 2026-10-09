@@ -1,0 +1,10 @@
+{
+  "name": "spike-visual",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@mermaid-js/mermaid-cli": "11.12.0",
+    "marked": "16.4.1",
+    "playwright": "1.62.0"
+  }
+}

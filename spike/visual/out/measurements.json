@@ -1,0 +1,107 @@
+[
+  {
+    "plan": "plan-10",
+    "tasks": 10,
+    "direction": "TD",
+    "png": {
+      "width": 864,
+      "height": 521,
+      "bytes": 47155
+    },
+    "render_ms": 1366,
+    "svg_natural_width": 1206,
+    "label_font_px": 16,
+    "smallest_label_px": 11.5,
+    "other_direction": {
+      "direction": "LR",
+      "svg_natural_width": 1516,
+      "png": {
+        "width": 864,
+        "height": 328
+      },
+      "smallest_label_px": 9.1
+    },
+    "before_screenshot": {
+      "width": 880,
+      "height": 871,
+      "section_height": 968,
+      "table_starts_at": 72
+    },
+    "after_screenshot": {
+      "width": 880,
+      "height": 1402,
+      "section_height": 1499,
+      "table_starts_at": 603
+    }
+  },
+  {
+    "plan": "plan-48",
+    "tasks": 48,
+    "direction": "LR",
+    "png": {
+      "width": 864,
+      "height": 3120,
+      "bytes": 372415
+    },
+    "render_ms": 1144,
+    "svg_natural_width": 1206,
+    "label_font_px": 16,
+    "smallest_label_px": 11.5,
+    "other_direction": {
+      "direction": "TD",
+      "svg_natural_width": 8851,
+      "png": {
+        "width": 864,
+        "height": 59
+      },
+      "smallest_label_px": 1.6
+    },
+    "before_screenshot": {
+      "width": 880,
+      "height": 871,
+      "section_height": 4990,
+      "table_starts_at": 72
+    },
+    "after_screenshot": {
+      "width": 880,
+      "height": 3947,
+      "section_height": 8066,
+      "table_starts_at": 3148
+    }
+  },
+  {
+    "plan": "plan-100",
+    "tasks": 100,
+    "direction": "LR",
+    "png": {
+      "width": 864,
+      "height": 6781,
+      "bytes": 947846
+    },
+    "render_ms": 1755,
+    "svg_natural_width": 1206,
+    "label_font_px": 16,
+    "smallest_label_px": 11.5,
+    "other_direction": {
+      "direction": "TD",
+      "svg_natural_width": 19236,
+      "png": {
+        "width": 864,
+        "height": 29
+      },
+      "smallest_label_px": 0.7
+    },
+    "before_screenshot": {
+      "width": 880,
+      "height": 871,
+      "section_height": 10370,
+      "table_starts_at": 72
+    },
+    "after_screenshot": {
+      "width": 880,
+      "height": 7532,
+      "section_height": 17031,
+      "table_starts_at": 6733
+    }
+  }
+]

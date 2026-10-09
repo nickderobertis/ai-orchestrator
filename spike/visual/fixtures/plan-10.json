@@ -1,0 +1,73 @@
+{
+  "project": "authoring:plan-10",
+  "tasks": [
+    {
+      "id": "plan-10-t001",
+      "title": "Expose the publication closeout so a reader sees what changed (#1)",
+      "depends_on": []
+    },
+    {
+      "id": "plan-10-t002",
+      "title": "Carry the publication closeout on every dispatch this host makes (#2)",
+      "depends_on": [
+        "plan-10-t001"
+      ]
+    },
+    {
+      "id": "plan-10-t003",
+      "title": "Record the publication closeout with one source for its contract (#3)",
+      "depends_on": [
+        "plan-10-t001"
+      ]
+    },
+    {
+      "id": "plan-10-t004",
+      "title": "Add the publication closeout without a second copy of the rule (#4)",
+      "depends_on": [
+        "plan-10-t001"
+      ]
+    },
+    {
+      "id": "plan-10-t005",
+      "title": "Render the engine's channel without a second copy of the rule (#5)",
+      "depends_on": [
+        "plan-10-t001"
+      ]
+    },
+    {
+      "id": "plan-10-t006",
+      "title": "Add the publication closeout against the pinned engine release (#6)",
+      "depends_on": [
+        "plan-10-t002"
+      ]
+    },
+    {
+      "id": "plan-10-t007",
+      "title": "Measure the engine's channel without a second copy of the rule (#7)",
+      "depends_on": [
+        "plan-10-t003"
+      ]
+    },
+    {
+      "id": "plan-10-t008",
+      "title": "Measure the design document without a second copy of the rule (#8)",
+      "depends_on": [
+        "plan-10-t006"
+      ]
+    },
+    {
+      "id": "plan-10-t009",
+      "title": "Refuse the manager's allowlist so a failed node names its cause (#9)",
+      "depends_on": [
+        "plan-10-t008"
+      ]
+    },
+    {
+      "id": "plan-10-t010",
+      "title": "Render the follow-up board against the pinned engine release (#10)",
+      "depends_on": [
+        "plan-10-t008"
+      ]
+    }
+  ]
+}

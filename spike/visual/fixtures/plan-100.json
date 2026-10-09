@@ -1,0 +1,729 @@
+{
+  "project": "authoring:plan-100",
+  "tasks": [
+    {
+      "id": "plan-100-t001",
+      "title": "Route the manager's allowlist against the pinned engine release (#1)",
+      "depends_on": []
+    },
+    {
+      "id": "plan-100-t002",
+      "title": "Expose the engine's channel against the pinned engine release (#2)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t003",
+      "title": "Settle the manager's allowlist against the pinned engine release (#3)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t004",
+      "title": "Carry the manager's allowlist so a failed node names its cause (#4)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t005",
+      "title": "Measure the manager's allowlist with one source for its contract (#5)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t006",
+      "title": "Render the publication closeout without a second copy of the rule (#6)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t007",
+      "title": "Carry the manager's allowlist on every dispatch this host makes (#7)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t008",
+      "title": "Refuse the publication closeout so a failed node names its cause (#8)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t009",
+      "title": "Expose the publication closeout on every dispatch this host makes (#9)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t010",
+      "title": "Settle the engine's channel on every dispatch this host makes (#10)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t011",
+      "title": "Teach the manager's allowlist against the pinned engine release (#11)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t012",
+      "title": "Settle the manager's allowlist without a second copy of the rule (#12)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t013",
+      "title": "Settle the publication closeout on every dispatch this host makes (#13)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t014",
+      "title": "Settle the design document on every dispatch this host makes (#14)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t015",
+      "title": "Measure the observer graph against the pinned engine release (#15)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t016",
+      "title": "Route the engine's channel without a second copy of the rule (#16)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t017",
+      "title": "Measure the engine's channel against the pinned engine release (#17)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t018",
+      "title": "Measure the publication closeout on every dispatch this host makes (#18)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t019",
+      "title": "Add the manager's allowlist without a second copy of the rule (#19)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t020",
+      "title": "Carry the publication closeout without a second copy of the rule (#20)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t021",
+      "title": "Record the manager's allowlist without a second copy of the rule (#21)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t022",
+      "title": "Record the manager's allowlist without a second copy of the rule (#22)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t023",
+      "title": "Expose the publication closeout on every dispatch this host makes (#23)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t024",
+      "title": "Expose a dispatched worker against the pinned engine release (#24)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t025",
+      "title": "Settle the publication closeout so a failed node names its cause (#25)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t026",
+      "title": "Measure the manager's allowlist against the pinned engine release (#26)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t027",
+      "title": "Route the manager's allowlist against the pinned engine release (#27)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t028",
+      "title": "Route the publication closeout on every dispatch this host makes (#28)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t029",
+      "title": "Carry the manager's allowlist on every dispatch this host makes (#29)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t030",
+      "title": "Bound the publication closeout with one source for its contract (#30)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t031",
+      "title": "Measure the manager's allowlist with one source for its contract (#31)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t032",
+      "title": "Settle the publication closeout so a failed node names its cause (#32)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t033",
+      "title": "Refuse the design document without a second copy of the rule (#33)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t034",
+      "title": "Expose the publication closeout without a second copy of the rule (#34)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t035",
+      "title": "Route the publication closeout on every dispatch this host makes (#35)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t036",
+      "title": "Render the publication closeout with one source for its contract (#36)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t037",
+      "title": "Carry the publication closeout so a reader sees what changed (#37)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t038",
+      "title": "Render the manager's allowlist with one source for its contract (#38)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t039",
+      "title": "Add the manager's allowlist so a failed node names its cause (#39)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t040",
+      "title": "Record the publication closeout behind the onevcs merge path (#40)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t041",
+      "title": "Settle the manager's allowlist on every dispatch this host makes (#41)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t042",
+      "title": "Render the manager's allowlist without a second copy of the rule (#42)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t043",
+      "title": "Expose a dispatched worker on every dispatch this host makes (#43)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t044",
+      "title": "Expose the design document on every dispatch this host makes (#44)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t045",
+      "title": "Route the manager's allowlist on every dispatch this host makes (#45)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t046",
+      "title": "Settle the manager's allowlist against the pinned engine release (#46)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t047",
+      "title": "Expose the follow-up board against the pinned engine release (#47)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t048",
+      "title": "Refuse the publication closeout against the pinned engine release (#48)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t049",
+      "title": "Teach the publication closeout so a failed node names its cause (#49)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t050",
+      "title": "Refuse a dispatched worker against the pinned engine release (#50)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t051",
+      "title": "Refuse the manager's allowlist without a second copy of the rule (#51)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t052",
+      "title": "Settle the manager's allowlist against the pinned engine release (#52)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t053",
+      "title": "Measure the engine's channel without a second copy of the rule (#53)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t054",
+      "title": "Render the manager's allowlist so a reader sees what changed (#54)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t055",
+      "title": "Render a dispatched worker against the pinned engine release (#55)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t056",
+      "title": "Settle the follow-up board on every dispatch this host makes (#56)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t057",
+      "title": "Route the manager's allowlist with one source for its contract (#57)",
+      "depends_on": [
+        "plan-100-t001"
+      ]
+    },
+    {
+      "id": "plan-100-t058",
+      "title": "Expose the manager's allowlist on every dispatch this host makes (#58)",
+      "depends_on": [
+        "plan-100-t028",
+        "plan-100-t043"
+      ]
+    },
+    {
+      "id": "plan-100-t059",
+      "title": "Measure the publication closeout and prove it with a journey (#59)",
+      "depends_on": [
+        "plan-100-t055",
+        "plan-100-t013"
+      ]
+    },
+    {
+      "id": "plan-100-t060",
+      "title": "Bound the publication closeout with one source for its contract (#60)",
+      "depends_on": [
+        "plan-100-t022",
+        "plan-100-t006"
+      ]
+    },
+    {
+      "id": "plan-100-t061",
+      "title": "Record the follow-up board on every dispatch this host makes (#61)",
+      "depends_on": [
+        "plan-100-t019",
+        "plan-100-t025"
+      ]
+    },
+    {
+      "id": "plan-100-t062",
+      "title": "Render the publication closeout against the pinned engine release (#62)",
+      "depends_on": [
+        "plan-100-t032",
+        "plan-100-t045"
+      ]
+    },
+    {
+      "id": "plan-100-t063",
+      "title": "Record the manager's allowlist so a failed node names its cause (#63)",
+      "depends_on": [
+        "plan-100-t032",
+        "plan-100-t044"
+      ]
+    },
+    {
+      "id": "plan-100-t064",
+      "title": "Carry the manager's allowlist with one source for its contract (#64)",
+      "depends_on": [
+        "plan-100-t057"
+      ]
+    },
+    {
+      "id": "plan-100-t065",
+      "title": "Expose the manager's allowlist against the pinned engine release (#65)",
+      "depends_on": [
+        "plan-100-t050"
+      ]
+    },
+    {
+      "id": "plan-100-t066",
+      "title": "Expose the design document against the pinned engine release (#66)",
+      "depends_on": [
+        "plan-100-t024",
+        "plan-100-t025"
+      ]
+    },
+    {
+      "id": "plan-100-t067",
+      "title": "Route the publication closeout so a failed node names its cause (#67)",
+      "depends_on": [
+        "plan-100-t051",
+        "plan-100-t042"
+      ]
+    },
+    {
+      "id": "plan-100-t068",
+      "title": "Measure the manager's allowlist behind the onevcs merge path (#68)",
+      "depends_on": [
+        "plan-100-t029"
+      ]
+    },
+    {
+      "id": "plan-100-t069",
+      "title": "Route the manager's allowlist with one source for its contract (#69)",
+      "depends_on": [
+        "plan-100-t007"
+      ]
+    },
+    {
+      "id": "plan-100-t070",
+      "title": "Expose the publication closeout without a second copy of the rule (#70)",
+      "depends_on": [
+        "plan-100-t015",
+        "plan-100-t054"
+      ]
+    },
+    {
+      "id": "plan-100-t071",
+      "title": "Record the engine's channel against the pinned engine release (#71)",
+      "depends_on": [
+        "plan-100-t012",
+        "plan-100-t041"
+      ]
+    },
+    {
+      "id": "plan-100-t072",
+      "title": "Refuse the engine's channel with one source for its contract (#72)",
+      "depends_on": [
+        "plan-100-t035",
+        "plan-100-t004"
+      ]
+    },
+    {
+      "id": "plan-100-t073",
+      "title": "Record the publication closeout with one source for its contract (#73)",
+      "depends_on": [
+        "plan-100-t028",
+        "plan-100-t053"
+      ]
+    },
+    {
+      "id": "plan-100-t074",
+      "title": "Expose the engine's channel with one source for its contract (#74)",
+      "depends_on": [
+        "plan-100-t022"
+      ]
+    },
+    {
+      "id": "plan-100-t075",
+      "title": "Measure the engine's channel against the pinned engine release (#75)",
+      "depends_on": [
+        "plan-100-t051",
+        "plan-100-t021"
+      ]
+    },
+    {
+      "id": "plan-100-t076",
+      "title": "Record the design document against the pinned engine release (#76)",
+      "depends_on": [
+        "plan-100-t044"
+      ]
+    },
+    {
+      "id": "plan-100-t077",
+      "title": "Render the engine's channel with one source for its contract (#77)",
+      "depends_on": [
+        "plan-100-t006",
+        "plan-100-t023"
+      ]
+    },
+    {
+      "id": "plan-100-t078",
+      "title": "Record the engine's channel on every dispatch this host makes (#78)",
+      "depends_on": [
+        "plan-100-t017"
+      ]
+    },
+    {
+      "id": "plan-100-t079",
+      "title": "Hold the publication closeout with one source for its contract (#79)",
+      "depends_on": [
+        "plan-100-t035",
+        "plan-100-t040"
+      ]
+    },
+    {
+      "id": "plan-100-t080",
+      "title": "Carry the manager's allowlist with one source for its contract (#80)",
+      "depends_on": [
+        "plan-100-t036"
+      ]
+    },
+    {
+      "id": "plan-100-t081",
+      "title": "Expose a dispatched worker without a second copy of the rule (#81)",
+      "depends_on": [
+        "plan-100-t011"
+      ]
+    },
+    {
+      "id": "plan-100-t082",
+      "title": "Measure the design document on every dispatch this host makes (#82)",
+      "depends_on": [
+        "plan-100-t040",
+        "plan-100-t039"
+      ]
+    },
+    {
+      "id": "plan-100-t083",
+      "title": "Record the engine's channel without a second copy of the rule (#83)",
+      "depends_on": [
+        "plan-100-t016",
+        "plan-100-t008"
+      ]
+    },
+    {
+      "id": "plan-100-t084",
+      "title": "Expose the publication closeout so a failed node names its cause (#84)",
+      "depends_on": [
+        "plan-100-t053"
+      ]
+    },
+    {
+      "id": "plan-100-t085",
+      "title": "Expose the publication closeout so a reader sees what changed (#85)",
+      "depends_on": [
+        "plan-100-t019"
+      ]
+    },
+    {
+      "id": "plan-100-t086",
+      "title": "Render the manager's allowlist without a second copy of the rule (#86)",
+      "depends_on": [
+        "plan-100-t050",
+        "plan-100-t024"
+      ]
+    },
+    {
+      "id": "plan-100-t087",
+      "title": "Render a dispatched worker on every dispatch this host makes (#87)",
+      "depends_on": [
+        "plan-100-t021"
+      ]
+    },
+    {
+      "id": "plan-100-t088",
+      "title": "Add the publication closeout on every dispatch this host makes (#88)",
+      "depends_on": [
+        "plan-100-t024",
+        "plan-100-t050"
+      ]
+    },
+    {
+      "id": "plan-100-t089",
+      "title": "Record the manager's allowlist with one source for its contract (#89)",
+      "depends_on": [
+        "plan-100-t018",
+        "plan-100-t034"
+      ]
+    },
+    {
+      "id": "plan-100-t090",
+      "title": "Record the follow-up board without a second copy of the rule (#90)",
+      "depends_on": [
+        "plan-100-t045",
+        "plan-100-t023"
+      ]
+    },
+    {
+      "id": "plan-100-t091",
+      "title": "Bound the publication closeout with one source for its contract (#91)",
+      "depends_on": [
+        "plan-100-t089",
+        "plan-100-t070"
+      ]
+    },
+    {
+      "id": "plan-100-t092",
+      "title": "Measure the follow-up board against the pinned engine release (#92)",
+      "depends_on": [
+        "plan-100-t089"
+      ]
+    },
+    {
+      "id": "plan-100-t093",
+      "title": "Measure the design document against the pinned engine release (#93)",
+      "depends_on": [
+        "plan-100-t067",
+        "plan-100-t081"
+      ]
+    },
+    {
+      "id": "plan-100-t094",
+      "title": "Record the design document on every dispatch this host makes (#94)",
+      "depends_on": [
+        "plan-100-t080",
+        "plan-100-t073"
+      ]
+    },
+    {
+      "id": "plan-100-t095",
+      "title": "Bound the manager's allowlist against the pinned engine release (#95)",
+      "depends_on": [
+        "plan-100-t083",
+        "plan-100-t090"
+      ]
+    },
+    {
+      "id": "plan-100-t096",
+      "title": "Hold the publication closeout so a failed node names its cause (#96)",
+      "depends_on": [
+        "plan-100-t082"
+      ]
+    },
+    {
+      "id": "plan-100-t097",
+      "title": "Settle a dispatched worker on every dispatch this host makes (#97)",
+      "depends_on": [
+        "plan-100-t082"
+      ]
+    },
+    {
+      "id": "plan-100-t098",
+      "title": "Teach the publication closeout so a failed node names its cause (#98)",
+      "depends_on": [
+        "plan-100-t090"
+      ]
+    },
+    {
+      "id": "plan-100-t099",
+      "title": "Expose the publication closeout against the pinned engine release (#99)",
+      "depends_on": [
+        "plan-100-t061"
+      ]
+    },
+    {
+      "id": "plan-100-t100",
+      "title": "Bound the design document without a second copy of the rule (#100)",
+      "depends_on": [
+        "plan-100-t072",
+        "plan-100-t069"
+      ]
+    }
+  ]
+}
