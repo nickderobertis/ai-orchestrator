@@ -376,7 +376,9 @@ measured=$(mktemp) || fail "a scratch file for the measured budget account could
 hook_snapshot=''
 budget_hook=''
 hook_handed_off=0
-# shellcheck disable=SC2329 # Invoked by the EXIT trap, not by a direct shell command.
+# shellcheck disable=SC2329,SC2317 # Invoked by the EXIT trap, not by a direct shell
+# command, which also leaves shellcheck 0.9.0 reading every statement inside it as
+# unreachable.
 cleanup_launch() {
     local -a files=("$scratch" "$measured")
     if [ "$hook_handed_off" -eq 0 ]; then
