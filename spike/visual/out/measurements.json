@@ -8,7 +8,7 @@
       "height": 521,
       "bytes": 47155
     },
-    "render_ms": 1366,
+    "render_ms": 1168,
     "svg_natural_width": 1206,
     "label_font_px": 16,
     "smallest_label_px": 11.5,
@@ -22,16 +22,19 @@
       "smallest_label_px": 9.1
     },
     "before_screenshot": {
-      "width": 880,
+      "width": 914,
       "height": 871,
-      "section_height": 968,
-      "table_starts_at": 72
+      "section_height": 884,
+      "table_starts_at": 72,
+      "content_column_px": 880
     },
     "after_screenshot": {
-      "width": 880,
-      "height": 1402,
-      "section_height": 1499,
-      "table_starts_at": 603
+      "width": 914,
+      "height": 1413,
+      "section_height": 1426,
+      "table_starts_at": 614,
+      "content_column_px": 880,
+      "graph_displayed_px": 864
     }
   },
   {
@@ -43,7 +46,7 @@
       "height": 3120,
       "bytes": 372415
     },
-    "render_ms": 1144,
+    "render_ms": 1291,
     "svg_natural_width": 1206,
     "label_font_px": 16,
     "smallest_label_px": 11.5,
@@ -57,16 +60,19 @@
       "smallest_label_px": 1.6
     },
     "before_screenshot": {
-      "width": 880,
+      "width": 914,
       "height": 871,
-      "section_height": 4990,
-      "table_starts_at": 72
+      "section_height": 4927,
+      "table_starts_at": 72,
+      "content_column_px": 880
     },
     "after_screenshot": {
-      "width": 880,
-      "height": 3947,
-      "section_height": 8066,
-      "table_starts_at": 3148
+      "width": 914,
+      "height": 4012,
+      "section_height": 8068,
+      "table_starts_at": 3213,
+      "content_column_px": 880,
+      "graph_displayed_px": 864
     }
   },
   {
@@ -78,7 +84,7 @@
       "height": 6781,
       "bytes": 947846
     },
-    "render_ms": 1755,
+    "render_ms": 1531,
     "svg_natural_width": 1206,
     "label_font_px": 16,
     "smallest_label_px": 11.5,
@@ -92,16 +98,19 @@
       "smallest_label_px": 0.7
     },
     "before_screenshot": {
-      "width": 880,
+      "width": 914,
       "height": 871,
-      "section_height": 10370,
-      "table_starts_at": 72
+      "section_height": 9992,
+      "table_starts_at": 72,
+      "content_column_px": 880
     },
     "after_screenshot": {
-      "width": 880,
-      "height": 7532,
-      "section_height": 17031,
-      "table_starts_at": 6733
+      "width": 914,
+      "height": 7673,
+      "section_height": 16794,
+      "table_starts_at": 6874,
+      "content_column_px": 880,
+      "graph_displayed_px": 864
     }
   }
 ]

@@ -32,14 +32,15 @@ function section(plan, withGraph, name) {
 }
 
 const css = `body{margin:0;background:#fff;font-family:-apple-system,"Segoe UI","Noto Sans",Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5;color:#1f2328}
-.markdown-body{box-sizing:border-box;width:${PAGE}px;padding:16px;border:1px solid #d1d9e0;border-radius:6px;margin:16px}
+.markdown-body{box-sizing:content-box;width:${PAGE}px;padding:16px;border:1px solid #d1d9e0;border-radius:6px;margin:16px}
 h2{font-size:1.5em;font-weight:600;padding-bottom:.3em;border-bottom:1px solid #d1d9e0;margin:0 0 16px}
 img{max-width:100%;box-sizing:content-box}
 table{display:block;width:max-content;max-width:100%;overflow:auto;border-collapse:collapse;margin-top:16px}
 th,td{padding:6px 13px;border:1px solid #d1d9e0}th{font-weight:600}tr:nth-child(2n){background:#f6f8fa}`;
 
 const browser = await chromium.launch({ args: ["--no-sandbox"] });
-const page = await browser.newPage({ viewport: { width: PAGE + 32, height: VIEWPORT_H } });
+// Viewport: 880-px content + 2 x (16-px padding + 1-px border) + 2 x 16-px margin.
+const page = await browser.newPage({ viewport: { width: PAGE + 2 * (16 + 1) + 2 * 16, height: VIEWPORT_H } });
 const results = [];
 for (const name of ["plan-10", "plan-48", "plan-100"]) {
   const plan = JSON.parse(readFileSync(join(here, "fixtures", `${name}.json`), "utf8"));
@@ -77,9 +78,11 @@ for (const name of ["plan-10", "plan-48", "plan-100"]) {
     await page.waitForLoadState("load");
     const box = await page.locator("article").boundingBox();
     const table = await page.locator("table").boundingBox();
+    const content = await page.locator("article").evaluate((a) => parseFloat(getComputedStyle(a).width));
+    const img = withGraph ? await page.locator("article img").evaluate((i) => i.getBoundingClientRect().width) : null;
     await page.screenshot({ path: join(out, `${name}-${kind}.png`), fullPage: true,
       clip: { x: box.x, y: box.y, width: box.width, height: Math.min(box.height, table.y - box.y + TABLE_SHOWN) } });
-    r[`${kind}_screenshot`] = { ...pngSize(join(out, `${name}-${kind}.png`)), section_height: Math.round(box.height), table_starts_at: Math.round(table.y - box.y) };
+    r[`${kind}_screenshot`] = { ...pngSize(join(out, `${name}-${kind}.png`)), section_height: Math.round(box.height), table_starts_at: Math.round(table.y - box.y), content_column_px: content, ...(img ? { graph_displayed_px: img } : {}) };
   }
   console.log(JSON.stringify(r));
 }
