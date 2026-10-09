@@ -43,9 +43,11 @@ prescribed pinning an immutable version and the deterministic rule refused it, a
 another refused a criterion for pinning a spelling while the deterministic rule refused
 the same task for lacking a literal phrase its criteria stated in three sentences of
 their own. One verdict can hold both considerations at once; two tiers compound rather
-than add. The third is whether a node whose criteria describe work that changes no file
-declares `expects_no_diff`, which is a reading of prose and so belongs here for the same
-reason.
+than add. The third is whether a **lifecycle** node — one naming a repository or stating
+steps — whose criteria describe work that changes no file declares `expects_no_diff`, which
+is a reading of prose and so belongs here for the same reason. It is asked of no **direct**
+node, one naming neither, which commits nothing and so can never settle `empty-branch`;
+which kind a node is is read off those fields by :func:`is_lifecycle`, never off prose.
 
 **One question spans nodes, so it is asked once per plan and recorded on the project.**
 Whether a plan puts the change its goal needs *in force on this host* — a producer's fix
@@ -238,17 +240,6 @@ green work. So refuse criteria that leave a demand their own task or their own b
 unanswered. Judge that by **meaning rather than by wording**: criteria stating the
 demand in their own words answer it in full, and no criterion is ever refused for
 failing to use a particular phrase.
-
-Ask one further thing of a task whose criteria describe work that changes no file in the
-repository — an external side effect, a read, a measurement reported back and nothing
-else. Such a node produces an empty branch, and the engine settles an empty branch
-`failed` as `empty-branch` unless the node declares `expects_no_diff`, which settles it
-`done` as `no-changes` without a dispatch. So where the criteria describe work with no
-repository change in it and that field is not declared above, refuse the criterion that
-describes the no-change work and say which field is missing; where it *is* declared,
-that is the right shape for such a node and is not a defect. Read this off the criteria
-rather than the prose around them, and leave alone a task whose criteria do require a
-file to change.
 
 For each acceptance criterion, name to yourself the fixture, input, or repository state
 that would make it fail. A criterion with no such state is decorative: it reads as
@@ -458,6 +449,52 @@ def host_repository() -> str:
     return origin
 
 
+#: The question asked of a **lifecycle** node alone — one naming a repository or stating
+#: steps, which :func:`is_lifecycle` decides from those fields and never from prose — and
+#: rendered by :func:`_prompt` right after :data:`REVIEW_PROMPT` for such a node. Kept
+#: out of that prompt because its premise is false of a **direct** node: one naming no
+#: repository runs in the launching checkout, commits nothing and has no branch, so it can
+#: never settle `empty-branch`, and the engine's loader refuses `expects_no_diff` beside
+#: the `persona` it is dispatched under. Hashed by :func:`bar_fingerprint` beside the
+#: prompt, because rewording it is as much a change of review as rewording that is.
+LIFECYCLE_NO_DIFF_QUESTION = """\
+This task is a **lifecycle** node: it names a repository or states steps, so its worker
+runs on a branch of that repository and the engine compares that branch with its base
+when it settles. Ask one further thing of it, reading its acceptance criteria rather than
+the prose around them.
+
+Where its criteria describe only work that changes no file in that repository — an
+external side effect, a read, a measurement reported back — and the header above does not
+declare `expects_no_diff`, refuse the criterion that describes that work. Such a node
+leaves its branch level with its base, and the engine settles it `failed` as
+`empty-branch`. Say that work a worker must perform outside every repository belongs on a
+**direct** node, one naming no repository and stating no steps, which is dispatched into
+the checkout the run was launched from and commits nothing; and that `expects_no_diff`
+fits only a node nobody needs to dispatch, since it settles the node `done` as
+`no-changes` without dispatching anything.
+
+Where the header *does* declare `expects_no_diff` but the criteria describe work a worker
+must perform, refuse that too: nothing is dispatched to do it, so the work never happens.
+
+Leave alone a node whose criteria do require a file of its repository to change.
+"""
+
+
+def is_lifecycle(task: StoreTask) -> bool:
+    """Whether ``task`` is a lifecycle node: it names a repository or states steps.
+
+    Read off the same two fields the engine reads a node's shape from — the record's
+    `repositories` or the reserved `onepipeline.repo`, and `onepipeline.steps` — and
+    never off prose. A node naming neither is a **direct** node, dispatched into the
+    launching checkout with no branch of its own. Held to the engine rather than
+    trusted: `tests/plan_tooling/test_plan_review_e2e.py` reconciles this answer, node by
+    node, with whether the installed loader hands a check a `repo` or `steps` for it, and
+    drives the two shapes that loader refuses — steps naming no repository, and a human
+    node naming one — through the review, which reads the store before any loader has.
+    """
+    return repository_of(task) is not None or bool(authored_steps(task))
+
+
 def bar_fingerprint(root: Path = REPO_ROOT) -> BarFingerprint:
     """A digest of the review bar in force, over ``root``'s copy of the files it is.
 
@@ -469,6 +506,9 @@ def bar_fingerprint(root: Path = REPO_ROOT) -> BarFingerprint:
     """
     digest = hashlib.sha256()
     digest.update(REVIEW_PROMPT.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(LIFECYCLE_NO_DIFF_QUESTION.encode("utf-8"))
+    digest.update(b"\0")
     for relative in BAR_FILES:
         digest.update(relative.as_posix().encode("utf-8"))
         digest.update(b"\0")
@@ -500,11 +540,13 @@ HUMAN = "human"
 
 #: Where a node declares that it expects to change no file of the repository. Authored,
 #: and keyed for the reason :data:`KIND` is: it decides which question the reviewer was
-#: asked. A node whose work is an external side effect produces an empty branch, and the
-#: engine settles an empty branch `failed` as `empty-branch` unless this says not to
-#: (https://github.com/nickderobertis/onepipeline/pull/229) — so criteria describing
-#: no-change work are sound beside this field and a defect without it, and a record
-#: granted while it was absent says nothing about the node once it is there.
+#: asked. A lifecycle node that commits nothing leaves an empty branch, which the engine
+#: settles `failed` as `empty-branch` unless this says not to
+#: (https://github.com/nickderobertis/onepipeline/pull/229) — but saying so settles the
+#: node `done` as `no-changes` without dispatching it, so this fits only a node nobody
+#: needs to dispatch, and dispatched work outside every repository is a direct node
+#: instead (:data:`LIFECYCLE_NO_DIFF_QUESTION`). A record granted while it was absent says
+#: nothing about the node once it is there.
 EXPECTS_NO_DIFF = "onepipeline.expects_no_diff"
 
 #: Where a lifecycle node states its steps. A node that runs several agent steps on one
@@ -785,7 +827,9 @@ def edit_prompt(text: str, persona: object, where: str) -> str:
     ``where`` is how the refusal names the text — *the replacement task for node
     'x'* — and it is shown to the reviewer as well, so that a finding's wording and the
     refusal that carries it are about the same thing. The persona shown is the one whose
-    bar the task's judge is given; `null` is the base config's generic contract.
+    bar the task's judge is given; `null` is the base config's generic contract. A live
+    edit shows no repository and no steps, so :data:`LIFECYCLE_NO_DIFF_QUESTION` is not
+    asked of it.
     """
     bar = (REPO_ROOT / BAR_FILES[0]).read_text(encoding="utf-8")
     stated = json.dumps({"stated_as": where, "persona": persona}, indent=2, ensure_ascii=False)
@@ -1010,8 +1054,16 @@ def _prompt(plan_name: str, task: StoreTask) -> str:
         "kind": task.metadata.get(KIND),
         "persona": task.metadata.get(PERSONA),
     }
+    # Asked of a lifecycle node alone, and never of a human one, which is dispatched
+    # nowhere: see :data:`LIFECYCLE_NO_DIFF_QUESTION`.
+    lifecycle = (
+        f"{LIFECYCLE_NO_DIFF_QUESTION}\n"
+        if is_lifecycle(task) and task.metadata.get(KIND) != HUMAN
+        else ""
+    )
     return (
         f"{REVIEW_PROMPT}\n"
+        f"{lifecycle}"
         f"## The review bar\n\n{bar}\n\n"
         f"{_host_sections()}"
         f"## The plan\n\n{plan_name}\n\n"

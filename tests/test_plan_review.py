@@ -449,13 +449,16 @@ def test_the_reviewer_is_asked_the_three_questions_that_moved_here() -> None:
     Each of the three needs judgment, and each was a deterministic proxy until the two
     tiers were found refusing each other's required wording: whether a number is the
     right number, whether the criteria answer a demand their own bar makes — judged by
-    meaning, never by phrase — and whether a node whose criteria describe work that
-    changes no file declares `expects_no_diff`. `bar_fingerprint` covers the prompt, so
+    meaning, never by phrase — and whether a lifecycle node whose criteria describe work
+    that changes no file declares `expects_no_diff`. The first two are every task's and
+    sit in `REVIEW_PROMPT`; the third is a lifecycle node's alone and sits in its own
+    constant, which `REVIEW_PROMPT` no longer restates. `bar_fingerprint` covers both, so
     this is about what the wording *says* rather than about it having moved.
     """
     # Flattened, because the prompt is hard-wrapped prose: a phrase longer than one of
     # its lines would otherwise be absent from a prompt that says it.
     asked = " ".join(plan_review.REVIEW_PROMPT.split())
+    lifecycle = " ".join(plan_review.LIFECYCLE_NO_DIFF_QUESTION.split())
     field = plan_review.EXPECTS_NO_DIFF.removeprefix("onepipeline.")
 
     for question in (
@@ -463,10 +466,93 @@ def test_the_reviewer_is_asked_the_three_questions_that_moved_here() -> None:
         "No deterministic check refuses one any more",
         "refuse criteria that leave a demand their own task or their own bar makes unanswered",
         "by **meaning rather than by wording**",
-        "criteria describe work that changes no file in the repository",
-        f"unless the node declares `{field}`",
     ):
         assert question in asked, question
+    assert field not in asked, "every task is asked the lifecycle question again"
+    for question in (
+        "This task is a **lifecycle** node",
+        "changes no file in that repository",
+        f"does not declare `{field}`, refuse the criterion that describes that work",
+        "`failed` as `empty-branch`",
+        "belongs on a **direct** node, one naming no repository",
+        f"`{field}` fits only a node nobody needs to dispatch",
+        f"*does* declare `{field}` but the criteria describe work a worker must perform, "
+        "refuse that too",
+        "Leave alone a node whose criteria do require a file of its repository to change",
+    ):
+        assert question in lifecycle, question
+
+
+@pytest.mark.parametrize(
+    ("task", "asked"),
+    [
+        pytest.param(_task(), False, id="direct"),
+        pytest.param(
+            _task(content="## What\n\nProvision the host; it changes no repository file.\n"),
+            False,
+            id="direct, describing work outside every repository",
+        ),
+        pytest.param(
+            _task(repositories=["github.com/nickderobertis/elsewhere"]), True, id="hosted repo"
+        ),
+        pytest.param(
+            _task(metadata=_metadata(repo="/home/nick/projects/org-apps")),
+            True,
+            id="local checkout",
+        ),
+        pytest.param(
+            _task(metadata=_metadata(steps=[{"id": "a", "persona": "engineer", "task": "x"}])),
+            True,
+            id="steps",
+        ),
+        pytest.param(
+            _task(
+                metadata={"onepipeline.id": "route", "onepipeline.kind": "human"},
+                repositories=["github.com/nickderobertis/elsewhere"],
+            ),
+            False,
+            id="human, naming a repository",
+        ),
+        pytest.param(
+            _task(content="## What\n\nWork on a branch of github.com/nickderobertis/x.\n"),
+            False,
+            id="direct, whose prose names a repository",
+        ),
+    ],
+)
+def test_only_a_lifecycle_node_is_asked_the_expects_no_diff_question(
+    task: StoreTask, asked: bool
+) -> None:
+    """The question is asked by a node's fields, never by its prose.
+
+    A direct node — no repository, no steps — runs in the launching checkout and commits
+    nothing, so it can never settle `empty-branch`, and the engine refuses
+    `expects_no_diff` beside the persona it is dispatched under: asking it the question
+    refuses a shape no declaration can repair. A human node is dispatched nowhere.
+    """
+    composed = plan_review._prompt("P", task)
+    assert (plan_review.LIFECYCLE_NO_DIFF_QUESTION in composed) is asked, composed
+    assert plan_review.is_lifecycle(task) is (
+        asked or task.metadata.get("onepipeline.kind") == "human"
+    )
+
+
+def test_the_lifecycle_question_is_hashed_into_both_bars(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Rewording the lifecycle question moves every task record and every plan record.
+
+    It reaches the prompt by a route of its own rather than inside `REVIEW_PROMPT`, so a
+    regression dropping it from the digest would leave every pass standing under a
+    question nobody was asked.
+    """
+    task_bar = plan_review.bar_fingerprint()
+    plan_bar = plan_review.plan_bar_fingerprint()
+    monkeypatch.setattr(
+        plan_review,
+        "LIFECYCLE_NO_DIFF_QUESTION",
+        f"{plan_review.LIFECYCLE_NO_DIFF_QUESTION}\nOne sentence on.\n",
+    )
+    assert plan_review.bar_fingerprint() != task_bar
+    assert plan_review.plan_bar_fingerprint() != plan_bar
 
 
 def test_the_reviewer_is_told_what_to_hold_a_human_node_to() -> None:
@@ -1257,6 +1343,8 @@ def test_a_live_edits_prompt_frames_the_task_as_a_live_edits_and_shows_its_perso
     assert host_installs.rendered() in whole
     assert plan_review.host_repository() in whole
     assert "no repository and no adoption fields to show you" in whole
+    # A live edit shows no repository and no steps, so no lifecycle question reaches it.
+    assert plan_review.LIFECYCLE_NO_DIFF_QUESTION not in whole
     assert '"stated_as": "the task added as node \'x\'"' in whole, whole
     assert '"persona": "engineer"' in whole, whole
     assert whole.rstrip().endswith("## What\n\nDo it."), whole

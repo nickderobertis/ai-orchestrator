@@ -152,8 +152,11 @@ truth turns on an event outside the dispatch* does not, and stays deterministic.
 a number is the right number*, and *whether the criteria answer a demand by meaning
 rather than by phrase*, do, and one verdict can hold both considerations at once where two
 tiers could only compound. A third question joined them for the same reason: whether a
-node whose criteria describe work that changes no repository file declares
-`expects_no_diff`, which is a reading of prose.
+**lifecycle** node — one naming a repository or stating steps — whose criteria describe
+work that changes no repository file declares `expects_no_diff`, which is a reading of
+prose. It is never asked of a **direct** node, one naming neither, which commits nothing
+and so cannot settle `empty-branch`; dispatched work outside every repository belongs on
+one, and `expects_no_diff` only on a node nobody needs to dispatch.
 
 **One shape moved the other way**, out of `outside-dispatch`'s left-to-the-judge pile and
 into the deterministic list: a criterion asserting that somebody else's **released

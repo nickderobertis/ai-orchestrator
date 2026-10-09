@@ -733,6 +733,227 @@ def test_declaring_that_a_node_expects_no_diff_invalidates_its_record(tmp_path: 
     assert "route" in refused.stderr, refused.stderr
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] These journeys are
+# already behind their own edge: the `plan-tooling` project, whose inputs are what `just
+# review-plan` and `just check-plan` really read — the scripts, configs, templates,
+# personas and `orchestrator/` package those recipes run — so narrowing them would replay a
+# verdict over a recipe nobody ran.
+#: A direct node's work: everything it produces lives outside every repository, so its
+#: criteria change no file, and it names no repository and states no steps.
+OUTSIDE_EVERY_REPOSITORY = (
+    "- The rewritten mirror is prepared under the host-local directory the task names, "
+    "and its history carries none of the paths the task lists.\n"
+    "- The dispatch reports the mirror's path and the command that verified each path "
+    "is absent, and every claim in that report is true of the mirror as it stands."
+)
+
+
+def _direct_node() -> dict[str, str]:
+    """A direct node: no repository, no steps, and work that lies outside every one."""
+    return {
+        "id": "prepare",
+        "persona": "engineer",
+        "title": TITLES["prepare"],
+        "task": (
+            "## What\n\nPrepare the rewritten mirror in a host-local directory.\n\n"
+            "## Why\n\nThe purge cannot run until the mirror is ready.\n\n"
+            f"## Acceptance criteria\n\n{OUTSIDE_EVERY_REPOSITORY}\n\n"
+            f"{(REPO_ROOT / APPENDIX).read_text(encoding='utf-8').strip()}\n"
+        ),
+    }
+
+
+def _stepped_node(node_id: str, *, repo: bool = True) -> dict[str, object]:
+    """A node whose prose lives in its steps, with or without the repository they need."""
+    node: dict[str, object] = {
+        "id": node_id,
+        "title": TITLES[node_id],
+        "steps": [{"id": "implement", "persona": "engineer", "task": _task()}],
+    }
+    if repo:
+        node["repo"] = "https://github.com/nickderobertis/some-service"
+    return node
+
+
+def _plan_of(name: str, *tasks: dict[str, object]) -> str:
+    return local_project(
+        json.dumps({"schema_version": 3, "goal": {"text": "Prepare the purge"}, "tasks": tasks}),
+        name,
+    )
+
+
+#: The title each node of these journeys carries, by its id: how a per-task prompt,
+#: which shows the title in its header, is told apart from the others.
+TITLES = {
+    "prepare": "feat: prepare the rewritten mirror",
+    "route": "feat: add the route",
+    "stepped": "feat: stepped",
+    "merge": "chore: merge",
+    "local": "feat: add the local reader",
+}
+
+#: A repository named by an alias rather than an origin, as a local checkout `onevcs`
+#: knows by its path is named: the record's `repositories` cannot hold it, so the
+#: renderer writes it on the reserved `onepipeline.repo` key instead.
+LOCAL_ALIAS = "some-local-checkout"
+
+
+def _local_node() -> dict[str, str]:
+    """A lifecycle node of a local checkout: its repository is on the reserved key alone."""
+    return {
+        "id": "local",
+        "persona": "engineer",
+        "repo": LOCAL_ALIAS,
+        "title": TITLES["local"],
+        "task": _task(STATES_ITS_BAR),
+    }
+
+
+def _task_prompts(log: Path) -> dict[str, str]:
+    """Each per-task prompt the provider was sent, by the id of the node it reviewed.
+
+    The plan-level turn is left out: it renders every node, so it says nothing about
+    which question one node was asked.
+    """
+    by_node: dict[str, str] = {}
+    for prompt in _prompts(log):
+        if _flat_plan_prompt() in prompt:
+            continue
+        (node_id,) = [one for one, title in TITLES.items() if f'"title": "{title}"' in prompt]
+        by_node[node_id] = prompt
+    return by_node
+
+
+def _loaded_by_the_engine(tmp_path: Path, project: str) -> dict[str, dict[str, object]]:
+    """``project``'s nodes as the installed engine's own loader hands them to a check."""
+    recorder = tmp_path / "record-loaded.sh"
+    captured = tmp_path / "loaded.json"
+    recorder.write_text(
+        f'#!/usr/bin/env sh\ncat > "{captured}"\necho \'{{"refusals": []}}\'\n',
+        encoding="utf-8",
+    )
+    recorder.chmod(0o755)
+    read = subprocess.run(
+        ["uv", "run", "onepipeline", "plan", "check", project, "--check", str(recorder)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+    assert captured.is_file(), read.stdout + read.stderr
+    loaded = json.loads(captured.read_text(encoding="utf-8"))
+    plan = loaded.get("plan", loaded)
+    return {str(node["id"]): node for node in plan["tasks"]}
+
+
+def test_only_a_lifecycle_node_is_asked_whether_it_expects_no_diff(tmp_path: Path) -> None:
+    """A direct node whose work lies outside every repository is never asked the question.
+
+    A direct node names no repository, runs in the launching checkout and commits
+    nothing, so it can never settle `empty-branch`; and the engine's loader refuses
+    `expects_no_diff` beside the persona it is dispatched under. A reviewer asking it the
+    question refuses a shape no declaration can repair. So the question is rendered by
+    the node's fields: the prompt the real `oneharness` sent for the direct node, read
+    back from the provider's own log, carries none of it, while the lifecycle nodes in
+    the same run — one naming a hosted repository, one naming a local checkout on the
+    reserved `onepipeline.repo` key, one stating steps — still are asked.
+    The plan then records and passes `just check-plan` with no `expects_no_diff`
+    anywhere. The judge is scripted, so its verdict proves nothing; what is proven is
+    what each node was asked.
+
+    Which kind a node is, is read here off the same fields the engine reads, and the
+    journey reconciles the two: each node the installed loader hands a check carries a
+    `repo` or `steps` exactly when `plan_review.is_lifecycle` calls its record a
+    lifecycle node, so an engine that moved the line would fail here.
+    """
+    project = _plan_of(
+        "review-direct-no-diff",
+        _direct_node(),
+        _node("route"),
+        _local_node(),
+        _stepped_node("stepped"),
+    )
+    log = tmp_path / "prompts.jsonl"
+    environment = _reviewing(tmp_path, PASSES, PASSES, PASSES, PASSES, PASSES)
+    environment["FAKE_CODEX_PROMPT_LOG"] = str(log)
+
+    review = _just("review-plan", project, environment=environment)
+    assert review.returncode == 0, review.stdout + review.stderr
+    assert "recorded a review of 4 task(s)" in review.stdout, review.stdout
+
+    question = " ".join(plan_review.LIFECYCLE_NO_DIFF_QUESTION.split())
+    asked = _task_prompts(log)
+    assert set(asked) == {"prepare", "route", "local", "stepped"}, sorted(asked)
+    assert question not in asked["prepare"], asked["prepare"]
+    assert "refuse the criterion that describes that work" not in asked["prepare"]
+    assert '"repo": null' in asked["prepare"], asked["prepare"]
+    assert question in asked["route"], asked["route"]
+    assert question in asked["local"], asked["local"]
+    assert f'"repo": "{LOCAL_ALIAS}"' in asked["local"], asked["local"]
+    assert question in asked["stepped"], asked["stepped"]
+
+    accepted = _just("check-plan", project)
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    records = plan_store.read_tasks(project)
+    for task in records:
+        assert plan_review.EXPECTS_NO_DIFF not in task.metadata, task.metadata
+    (local,) = [task for task in records if task.node_id == "local"]
+    assert not local.repositories, local.repositories
+    assert local.metadata.get("onepipeline.repo") == LOCAL_ALIAS, local.metadata
+
+    loaded = _loaded_by_the_engine(tmp_path, project)
+    for task in records:
+        node = loaded[task.node_id]
+        assert plan_review.is_lifecycle(task) is bool(node.get("repo") or node.get("steps")), (
+            task.node_id,
+            node,
+        )
+
+
+def test_a_shape_the_loader_refuses_is_still_asked_by_its_fields(tmp_path: Path) -> None:
+    """Steps naming no repository, and a human node naming one, decided by their fields.
+
+    The engine's loader refuses both — steps run on one branch and so need a repository,
+    and a human node carries no execution fields — so neither reaches a launch. But `just
+    review-plan` reads the store before any loader has, and meets whatever an author
+    wrote: so the stepped node is still asked the lifecycle question, because stating
+    steps is what makes a node a lifecycle node, and the human node is not, because
+    nothing is dispatched from it whatever it names. `just check-plan` then refuses the
+    plan in the engine's own words, which is what keeps the refusal on the loader's side
+    rather than the review's.
+    """
+    human = {
+        "id": "merge",
+        "kind": "human",
+        "repo": "https://github.com/nickderobertis/some-service",
+        "title": TITLES["merge"],
+        "task": HUMAN_ACTION,
+    }
+    project = _plan_of("review-refused-shapes", _stepped_node("stepped", repo=False), human)
+    log = tmp_path / "prompts.jsonl"
+    environment = _reviewing(tmp_path, PASSES, PASSES, PASSES)
+    environment["FAKE_CODEX_PROMPT_LOG"] = str(log)
+
+    review = _just("review-plan", project, environment=environment)
+    assert review.returncode == 0, review.stdout + review.stderr
+
+    question = " ".join(plan_review.LIFECYCLE_NO_DIFF_QUESTION.split())
+    asked = _task_prompts(log)
+    assert set(asked) == {"stepped", "merge"}, sorted(asked)
+    assert question in asked["stepped"], asked["stepped"]
+    assert '"repo": null' in asked["stepped"], asked["stepped"]
+    assert question not in asked["merge"], asked["merge"]
+    assert '"kind": "human"' in asked["merge"], asked["merge"]
+
+    refused = _just("check-plan", project)
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "the plan loader refused the project" in refused.stderr, refused.stderr
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
 #: Two edits to one criterion's line: one that re-spaces it and one that rewords it. The
 #: pair is what the key is held to — a record that survived the rewording would be the
 #: whole of what this gate exists to prevent, and one that died on the re-spacing charges
@@ -867,14 +1088,37 @@ def _move_the_bars_prompt(checkout: Path) -> None:
     module.write_text(source.replace(PROMPT_SENTENCE, PROMPT_REWORDED, 1), encoding="utf-8")
 
 
-#: Both inputs `plan_review.bar_fingerprint` digests, and how each is moved in a copy of
-#: this checkout. Both are driven because they reach the key by different routes — the
-#: files are read from the checkout root, the prompt is a constant of the package — so a
-#: regression dropping either from the digest leaves a stale pass standing while the
-#: journey that moves only the other one goes on passing.
+#: A sentence of `LIFECYCLE_NO_DIFF_QUESTION`, and what the third half rewords it to.
+LIFECYCLE_SENTENCE = (
+    "Leave alone a node whose criteria do require a file of its repository to change."
+)
+LIFECYCLE_REWORDED = "Leave alone a node whose criteria change a file of its repository."
+
+
+def _move_the_lifecycle_question(checkout: Path) -> None:
+    """Move the question asked of a lifecycle node alone, reworded in the copy's source.
+
+    It reaches the digest by a route of its own rather than inside `REVIEW_PROMPT`, so a
+    regression dropping it would leave both other halves passing.
+    """
+    assert LIFECYCLE_SENTENCE in plan_review.LIFECYCLE_NO_DIFF_QUESTION, (
+        f"{LIFECYCLE_SENTENCE!r} is no longer a sentence of LIFECYCLE_NO_DIFF_QUESTION, so "
+        "this journey would move the question in no way at all; reword it to match"
+    )
+    module = checkout / "orchestrator" / "plan_review.py"
+    source = module.read_text(encoding="utf-8")
+    module.write_text(source.replace(LIFECYCLE_SENTENCE, LIFECYCLE_REWORDED, 1), encoding="utf-8")
+
+
+#: The inputs `plan_review.bar_fingerprint` digests, and how each is moved in a copy of
+#: this checkout. Each is driven because they reach the key by different routes — the
+#: files are read from the checkout root, the two questions are constants of the
+#: package — so a regression dropping any one from the digest leaves a stale pass
+#: standing while the journeys that move only the others go on passing.
 BAR_HALVES = (
     ("the-files-it-is", _move_the_bars_files),
     ("the-question-it-asks", _move_the_bars_prompt),
+    ("the-lifecycle-question", _move_the_lifecycle_question),
 )
 
 

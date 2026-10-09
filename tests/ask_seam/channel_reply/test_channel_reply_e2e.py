@@ -77,6 +77,7 @@ from project_fixtures import helper, project_from_plan
 from waits import deadline
 from waits import timeout as e2e_timeout
 
+from orchestrator import plan_review
 from orchestrator.root import REPO_ROOT
 
 #: The wrapper a dispatched agent asks through, which is what raises the real question.
@@ -1074,6 +1075,43 @@ def test_a_novel_task_whose_judged_turn_answers_nothing_is_never_applied(
     assert _judged_turns(replying) == reached + 1, (
         "the unjudged envelope was passed without being judged once the reviewer answered"
     )
+
+
+def test_a_live_edit_is_never_asked_the_lifecycle_question(
+    replying: Replying, tmp_path: Path
+) -> None:
+    """A live edit's judged turn is held to the plan bar without the lifecycle question.
+
+    A live edit shows its reviewer no repository and no steps, so whether it is a
+    lifecycle node cannot be read off its fields, and the question asked of one alone —
+    whether its criteria change a file of its repository — is not rendered into its
+    prompt. What is proven is the prompt the real `oneharness` sent for the one judged
+    turn the reply spent, read back from the provider's own log: it carries the plan
+    bar's question and the live-edit frame, and none of the lifecycle question. The
+    criteria here describe only work outside every repository, the very shape that
+    question refuses, and the reply is applied.
+    """
+    log = tmp_path / "edit-prompts.jsonl"
+    environment = {**replying.environment, "FAKE_CODEX_PROMPT_LOG": str(log)}
+    task = "\n\n".join(
+        (
+            f"## What\n\nPrepare the mirror run {replying.run} purges, in a host-local directory.",
+            "## Why\n\nThe purge cannot run until the mirror is ready.",
+            "## Acceptance criteria\n\n- The mirror's history under the host-local "
+            "directory carries none of the paths the task lists.",
+        )
+    )
+
+    sent = _receipt(_send(replying, _adding("mirror", task, GATE_NODE), environment=environment))
+
+    assert sent["state"] == "applied", sent
+    assert _judged_turns(replying) == 1, "the novel task was not put to one judged turn"
+    (prompt,) = [
+        " ".join(json.loads(line)["prompt"].split())
+        for line in log.read_text(encoding="utf-8").splitlines()
+    ]
+    assert " ".join(plan_review.LIVE_EDIT_FRAME.split()) in prompt, prompt
+    assert " ".join(plan_review.LIFECYCLE_NO_DIFF_QUESTION.split()) not in prompt, prompt
 
 
 def test_an_identical_envelope_under_an_unchanged_bar_passes_from_the_cache(
