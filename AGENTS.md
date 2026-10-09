@@ -1056,17 +1056,26 @@ narrows is written to what remains, and one it displaces states the fix that rem
 with the displaced one under its rejected fixes. Such a ticket depends on the accepted one
 as the store's own `depends_on` edge — outside the ticket's record, which the board
 carries natively and `onetaskgraph task deps` walks it from either end — and its text says
-at each changed place which accepted ticket changed it, by URL. A `Proposal` or `Deferred` item's
-fix is never assumed. The same-root-cause path is unchanged: an accepted item for a
-ticket's own root cause takes the run's evidence as a comment, never a dependency.
+at each changed place which accepted ticket changed it, by URL, listing it as a `dependency`
+entry of its `## Related tickets`. A `Proposal` or `Deferred` item's fix is never assumed;
+it is at most a `related` entry there. **A root cause is the invariant that is missing or
+broken**, in words independent of the file a run saw, with every location contributing to
+it listed under it: one root cause when a single change to the rule removes every instance,
+even across several places, and two when each needs a fix that stands alone. So a run
+groups its drafts by invariant. The same-root-cause path is unchanged: an accepted item for
+a ticket's own root cause takes the run's evidence as a comment, never a dependency — and an
+open item at any status whose stated root cause meets that bar is the ticket's own root
+cause whatever its location and slug, whose slug the run's ticket then takes.
 
 **The board is searched, never listed: every query of it is `python -m
 orchestrator.follow_up_tickets board-items`.** Reading every item of the board spends a share
 of GitHub's hourly allowance that grows with the board and that every session here shares,
 so an open bound ticket carrying its origin makes no duplicate or origin search, including
 on re-dispatch. An
-unbound ticket's `board-status` asks once by origin; the agent asks once by root cause and
-once per distinct text question, reusing answers already obtained in the dispatch. Each
+unbound ticket's `board-status` asks once by origin; the agent asks first by text in the
+invariant's words, then once per further distinct text question, the failing file last, and
+by root-cause slug only for a budget overrun, whose slug is derived — reusing answers already
+obtained in the dispatch. Each
 query names one of the store's native narrowing questions — by root cause, by origin,
 or GitHub's own token-matched issue search, which may not yet list an item written seconds
 ago — and one naming none is refused; nothing in the task lists the board. A bare `task

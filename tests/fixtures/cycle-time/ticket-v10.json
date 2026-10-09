@@ -1,5 +1,5 @@
 {
-  "schema": 9,
+  "schema": 10,
   "root_cause": "cursor-skips-last-page",
   "repository": "github.com/nickderobertis/some-service",
   "created_by_run": "listing-run",

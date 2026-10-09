@@ -33,7 +33,16 @@ from types import SimpleNamespace
 
 import follow_up_variables
 import pytest
-from follow_up_ticket_shape import FIX, impact_prose
+from follow_up_ticket_shape import DUPLICATE_SEARCH as SHARED_DUPLICATE_SEARCH
+from follow_up_ticket_shape import (
+    FIX,
+    OLDER_ROOT_CAUSE,
+    before_schema_10,
+    brought_to_schema_10,
+    impact_prose,
+    schema_10_section,
+)
+from follow_up_ticket_shape import ROOT_CAUSE as SHARED_ROOT_CAUSE
 from onetaskgraph_sdk import CopyReport, QueryResponseOfQualifiedTask
 from published_tools import ONETASKGRAPH_BIN
 
@@ -85,10 +94,18 @@ def _impact(
 IMPACT_TEXT = _impact()
 
 
-def _body(host: str = HOST, impact: str = IMPACT_TEXT, rejected: str | None = None) -> str:
-    """A body of every heading, with ``rejected`` as a `## Rejected fixes` after the fix."""
+def _body(
+    host: str = HOST,
+    impact: str = IMPACT_TEXT,
+    rejected: str | None = None,
+    related: str | None = None,
+) -> str:
+    """A body of every heading, with ``rejected`` as a `## Rejected fixes` after the fix and
+    ``related`` as a `## Related tickets` before `## Duplicate search`."""
     sections = []
     for heading in tickets.HEADINGS:
+        if heading == tickets.DUPLICATE_SEARCH and related is not None:
+            sections.append(f"## {tickets.RELATED_TICKETS}\n\n{related}")
         sections.append(
             f"## {heading}\n\n"
             + (
@@ -96,7 +113,7 @@ def _body(host: str = HOST, impact: str = IMPACT_TEXT, rejected: str | None = No
                 if heading == tickets.IMPACT
                 else FIX
                 if heading == tickets.SUGGESTED_FIX
-                else f"What this ticket says under {heading}."
+                else schema_10_section(heading, f"What this ticket says under {heading}.")
             )
             + (f" Verified on `{host}`." if heading == tickets.EVIDENCE else "")
         )
@@ -377,7 +394,7 @@ def test_a_sound_item_reads_back_as_the_ticket_it_was_rendered_from() -> None:
 def test_the_record_is_the_current_schema_and_carries_the_host_after_verified_at() -> None:
     held = tickets.record(_ticket())
 
-    assert held["schema"] == tickets.SCHEMA == 9
+    assert held["schema"] == tickets.SCHEMA == 10
     keys = list(held)
     assert keys == [*tickets.RECORD_KEYS, tickets.FREQUENCY_FIELD]
     assert held[tickets.ESTIMATE_FIELD] == "medium"
@@ -453,11 +470,11 @@ def _status(word: str) -> Callable[[dict[str, object]], None]:
         (_drop_record("basis"), "record is missing basis"),
         (_drop_record("host"), "record is missing host"),
         (_set_record("extra", 1), "carries keys this does not write: extra"),
-        (_set_record("schema", 1), "is schema 1, and this reads schema 7, 8 or 9"),
-        (_set_record("schema", 2), "is schema 2, and this reads schema 7, 8 or 9"),
-        (_set_record("schema", 3), "is schema 3, and this reads schema 7, 8 or 9"),
-        (_set_record("schema", 4), "is schema 4, and this reads schema 7, 8 or 9"),
-        (_set_record("schema", 6), "is schema 6, and this reads schema 7, 8 or 9"),
+        (_set_record("schema", 1), "is schema 1, and this reads schema 7, 8, 9 or 10"),
+        (_set_record("schema", 2), "is schema 2, and this reads schema 7, 8, 9 or 10"),
+        (_set_record("schema", 3), "is schema 3, and this reads schema 7, 8, 9 or 10"),
+        (_set_record("schema", 4), "is schema 4, and this reads schema 7, 8, 9 or 10"),
+        (_set_record("schema", 6), "is schema 6, and this reads schema 7, 8, 9 or 10"),
         (_drop_record("priority_estimate"), "record is missing priority_estimate; `priority"),
         (_set_record("priority_estimate", "critical"), "`priority_estimate` 'critical' is not"),
         (_set_record("priority_estimate", "none"), "`priority_estimate` 'none' is not one of"),
@@ -532,7 +549,7 @@ def _status(word: str) -> Callable[[dict[str, object]], None]:
         (_set_record("verified_at", "2026-02-30T00:00:00Z"), "is not an RFC 3339 UTC time"),
         (_set("title", ""), "the title is empty"),
         (_set("title", "some-service: " + "x" * 120), "over the 120 a ticket's title may hold"),
-        (_set("title", "other: the listing cursor"), "does not read `some-service: <the root"),
+        (_set("title", "other: the listing cursor"), "does not read `some-service: <the invariant"),
         (_set("title", "some-service: \n"), "surrounding whitespace, a line break"),
         (_set("content", None), "the ticket has no body"),
         (_set("content", BODY.replace("## Examples", "## Samples")), "no `## Examples` heading"),
@@ -588,7 +605,7 @@ def test_a_schema_4_ticket_is_refused_naming_its_schema_first() -> None:
 
     found = tickets.problems(item, run=RUN, root_cause=CAUSE)
 
-    assert found[0].startswith("the record is schema 4, and this reads schema 7, 8 or 9"), found
+    assert found[0].startswith("the record is schema 4, and this reads schema 7, 8, 9 or 10"), found
     assert any(
         "carries `## Repository` and `## Suggested fixes`, which schema 5 retired; bring the "
         "ticket to the current shape" in problem
@@ -1176,7 +1193,13 @@ INITIAL_SECTIONS = (
     "The verified ticket",
     *tickets.HEADINGS[: tickets.HEADINGS.index(tickets.SUGGESTED_FIX) + 1],
     tickets.REJECTED_FIXES,
-    *tickets.HEADINGS[tickets.HEADINGS.index(tickets.SUGGESTED_FIX) + 1 :],
+    *tickets.HEADINGS[
+        tickets.HEADINGS.index(tickets.SUGGESTED_FIX) + 1 : tickets.HEADINGS.index(
+            tickets.DUPLICATE_SEARCH
+        )
+    ],
+    tickets.RELATED_TICKETS,
+    tickets.DUPLICATE_SEARCH,
     # The approved example's two sections, shown after the example's placeholders.
     tickets.IMPACT,
     tickets.SUGGESTED_FIX,
@@ -1299,11 +1322,11 @@ def test_the_initial_task_fills_every_value_and_carries_both_contracts() -> None
         f"## What\n\nVerify the follow-up drafts run `{RUN}` left behind, group what stands"
     ), task
     assert f"{COPY} --board followups <path of the ticket>" in task
-    assert (
-        f"`{BOARD_ITEMS} --board followups {ON_ITS_BOARD} --metadata "
-        "orchestrator.follow-up/root_cause=<root-cause>`"
-    ) in flat
     assert f"`{BOARD_ITEMS} --board followups {ON_ITS_BOARD} --search <text>`" in flat
+    slug_query = f"--metadata {tickets.root_cause_query('<root-cause>')}"
+    # The one slug query the task spells is the budget overrun's, whose slug is derived.
+    assert flat.count(slug_query) == 1, flat
+    assert slug_query in _flat(_section(task, "Every landed change against its budgets"))
     asked = re.findall(rf"`{re.escape(BOARD_ITEMS)} --board followups([^`]*)`(.{{0,32}})", flat)
     assert asked, "the task never asks the board"
     for flags, after in asked:
@@ -1475,8 +1498,8 @@ def test_the_tracked_template_carries_the_ticket_sequence_in_order() -> None:
         "a ticket the board holds at `Deferred` (Linear's `Backlog`) is copied carrying `draft`",
         "this run never withdraws a deferred item",
         "an item at `Deferred` receives this run's one comment like any other open item",
-        "An item at `Deferred` is open: no agent picks it up to work on, but it is searched "
-        "like any other open item",
+        "An item at `Proposal` or `Deferred` is open: no agent picks it up to work on, but it is "
+        "searched like any other open item",
     ):
         assert rule in flat, rule
 
@@ -1492,8 +1515,7 @@ def test_the_task_asks_for_one_concrete_fix_and_optional_rejected_fixes() -> Non
         "to choose between.",
         "`## Rejected fixes` is optional: when another fix was considered, it comes directly "
         "after `## Suggested fix` and gives each rejected fix with why it was rejected",
-        "<a simple explanation of the root cause, naming the paths inside the repository where "
-        "it lives>",
+        f"<the two labelled parts below, in this order. {_flat(tickets.ROOT_CAUSE_BAR)}>",
         "<one paragraph: what changes overall, and why that removes the root cause. The one "
         "fix this ticket recommends, concrete enough that whoever picks it up has nothing left "
         "to choose; never a list of options or alternatives to choose between>",
@@ -1517,6 +1539,8 @@ def test_the_task_asks_for_one_concrete_fix_and_optional_rejected_fixes() -> Non
         "Suggested fix",
         "Rejected fixes",
         "Owning runs",
+        "Related tickets",
+        "Duplicate search",
     ], headings
     assert "## Repository" not in task and "## Suggested fixes" not in example
     rejected = example.split("## Rejected fixes\n\n", 1)[1].split("\n\n## ", 1)[0]
@@ -1794,6 +1818,7 @@ def test_every_key_a_contract_names_is_one_its_validator_reads() -> None:
             tickets.Frequency,
             tickets.Verdict,
             tickets.Disposition,
+            tickets.Relation,
         )
         for word in vocabulary
     }
@@ -3223,11 +3248,24 @@ NARROWING = tickets.QualifiedBoardId(f"{BOARD}:{OTHER_RUN}/tickets/export-drops-
 REFIXING = tickets.QualifiedBoardId(f"{BOARD}:{OTHER_RUN}/tickets/retry-loop-never-backs-off")
 NARROWING_URL = "https://github.com/nickderobertis/some-service/issues/41"
 REFIXING_URL = "https://github.com/nickderobertis/some-service/issues/42"
+
+
+def _dependency(title: str, url: str) -> str:
+    """One `dependency` entry of a `## Related tickets` section, linking ``url``."""
+    return f"- [{title}]({url}) — dependency: This ticket assumes its fix is in."
+
+
 DEPENDENT_BODY = _body(
     impact=_impact(
         prose=f"{IMPACT_PROSE} Assuming the fix in {NARROWING_URL} lands, the export is unaffected."
     ),
     rejected=f"Retrying the page: rejected because {REFIXING_URL} already backs the loop off.",
+    related="\n".join(
+        (
+            _dependency("some-service: an export keeps every column", NARROWING_URL),
+            _dependency("some-service: a retry loop backs off", REFIXING_URL),
+        )
+    ),
 )
 DEPENDENT_TICKET = _ticket(depends_on=(NARROWING, REFIXING), body=DEPENDENT_BODY)
 
@@ -3485,8 +3523,8 @@ def test_board_status_resolves_dependencies_the_board_holds_accepted_with_their_
             (tickets.Status.ACCEPTED.value, REFIXING_URL),
             [
                 f"entry {NARROWING!r} names an item whose URL "
-                "https://github.com/nickderobertis/some-service/issues/9 the ticket's body never "
-                "names; say where and how that fix changed this ticket, with that URL"
+                "https://github.com/nickderobertis/some-service/issues/9 is on no `dependency` "
+                "entry of the ticket's `## Related tickets` section"
             ],
         ),
     ],
@@ -3707,9 +3745,10 @@ def test_board_status_that_cannot_show_a_dependency_is_unrunnable(
 def test_the_task_writes_each_ticket_against_the_accepted_fixes_its_searches_returned() -> None:
     """The one board read of a ticket's filing, and the accepted-fix reasoning over it, whole.
 
-    Step 7 asks the board by root cause and by text, and nothing else in the task asks it
-    for a list: the accepted fixes a ticket is written against are the accepted items those
-    searches returned for other root causes, never a separate listing of the board.
+    Step 7 asks the board by text, the invariant's words first and the failing file last, and
+    nothing else in the task asks it for a list: the accepted fixes a ticket is written
+    against are the accepted items those searches returned for other root causes, never a
+    separate listing of the board.
     """
     task = _task(redispatch=True)
     flat = " ".join(task.split())
@@ -3720,9 +3759,16 @@ def test_the_task_writes_each_ticket_against_the_accepted_fixes_its_searches_ret
     flat_step = " ".join(step.split())
 
     for said in (
-        f"`{BOARD_ITEMS} --board followups {ON_ITS_BOARD} --metadata "
-        "orchestrator.follow-up/root_cause=<root-cause>`, then by text, "
-        f"`{BOARD_ITEMS} --board followups {ON_ITS_BOARD} --search <text>`",
+        "Every question is a text search, "
+        f"`{BOARD_ITEMS} --board followups {ON_ITS_BOARD} --search <text>`, asked in this "
+        "order: - **first, in the words of the invariant and its symptom** — what a report of "
+        "this problem would carry whichever file it was found in; - then once per distinct "
+        "further question about the symptom, the command or the message; - **last, the failing "
+        "file or function**, because the file is exactly what differs between two reports of "
+        "one root cause.",
+        "Its slug is no question to ask: each run names its own, so another run's item for the "
+        "same root cause almost never carries this ticket's slug. A budget overrun's slug is "
+        'derived, and is asked as "Every landed change against its budgets" states.',
         "On a GitHub board the text search is GitHub's own search of the board's issues: it "
         "matches whole words before it confirms the text, so search for words an issue would "
         "carry rather than a fragment of one, and it may not yet list an item another run "
@@ -3730,11 +3776,21 @@ def test_the_task_writes_each_ticket_against_the_accepted_fixes_its_searches_ret
         "On Linear it is Linear's own search of the project's issue titles and descriptions, "
         "matched regardless of case.",
         "`--repository`, given once for each repository the ticket lists, asks the board the "
-        "ticket is filed on, and neither search is narrowed further",
+        "ticket is filed on, and no search is narrowed further",
         "Only an unbound ticket needs these duplicate searches; nothing in this task lists "
         "the board.",
-        "An item at `Deferred` is open: no agent picks it up to work on, but it is searched "
-        "like any other open item and still takes this run's evidence.",
+        "An open item, at any open status, whose stated root cause meets the bar of step 5 — "
+        "one change to the rule would remove this ticket's instances and its own — is the same "
+        "root cause **even when its location and its slug differ**, and is where this run's "
+        "evidence goes, as a comment, at step 9, rather than a new ticket. This run's ticket "
+        "for it then **takes that item's `root_cause` slug**: its file is renamed to "
+        "`<that slug>.md` and its record's `root_cause` is that slug, so the evidence comment's "
+        "marker, the account and the item's occurrence recount all name the one root cause.",
+        "An item at `Proposal` or `Deferred` is open: no agent picks it up to work on, but it "
+        "is searched like any other open item and still takes this run's evidence.",
+        "Where this run's evidence shows the cause broader than that item states, the "
+        'comment\'s `Bears on the ticket:` paragraph is required, as "Ownership on the board" '
+        "states; no run edits another run's item.",
         "Write each ticket as if the accepted fixes those searches returned were already in. "
         "They are the items the searches returned for *other* root causes at an accepted "
         "status — `Todo` (`todo`), `Queued` (`queued`), `In Progress` (`in-progress`) and "
@@ -3756,9 +3812,12 @@ def test_the_task_writes_each_ticket_against_the_accepted_fixes_its_searches_ret
         "proposed goes under `## Rejected fixes` with the accepted item as the reason.",
         "A `Done` item's fix is assumed only where it has not reached the basis recorded in "
         "step 1 — read the tree; where it has, the verification at the basis already accounts "
-        "for it and nothing changes. A `Proposal` or `Deferred` item's fix is never assumed",
-        "For every fate but unchanged, add the item's `depends_on` entry, and say in the text "
-        "where and how its fix changed the ticket with the item's URL; step 8 checks the entry.",
+        "for it and nothing changes. A `Proposal` or `Deferred` item's fix is never assumed; "
+        "one that contributes to the same broader problem but needs a fix of its own is a "
+        "`related` entry of the ticket's `## Related tickets`",
+        "For every fate but unchanged, add the item's `depends_on` entry, list it as a "
+        "`dependency` entry of `## Related tickets`, and say in the text where and how its fix "
+        "changed the ticket with the item's URL; step 8 checks the entry.",
         "For an unbound ticket, ask each distinct question once, and never by origin: step 8's "
         f"`{BOARD_STATUS}` asks by origin, and nothing else does.",
         "On a re-dispatch of an unbound ticket, ask each distinct question once and re-derive "
@@ -3773,6 +3832,7 @@ def test_the_task_writes_each_ticket_against_the_accepted_fixes_its_searches_ret
     )
     assert "Write each ticket as if the board's accepted fixes" not in flat, "a separate step"
     assert "--status" not in _flat(steps), "the task lists the board by status"
+    assert "--metadata" not in flat_step, "an ordinary ticket is asked by its slug"
     redispatch = _flat(_section(task, REDISPATCH_SECTION))
     assert (
         "a ticket's dependencies on accepted tickets, and the claims written against their "
@@ -3803,11 +3863,13 @@ def test_the_contract_states_the_dependency_rule_and_renders_the_example_entry()
         "the edge is the one record of it: nothing in the `orchestrator.follow-up` record "
         "repeats it",
         "**Where the accepted fix changed the ticket, the text says so with the item's URL**",
-        "In `## Impact` or `## Root cause` for a ticket the fix narrowed, in `## Suggested fix` "
-        "for one it re-fixed, and in `## Rejected fixes` beside the fix it displaced",
+        "on its `dependency` entry of `## Related tickets`, and beside it in `## Impact` or "
+        "`## Root cause` for a ticket the fix narrowed, in `## Suggested fix` for one it "
+        "re-fixed, and in `## Rejected fixes` beside the fix it displaced",
         '("assuming the fix in <URL> lands, …"; "chosen because <URL> already …")',
-        "A `Proposal` or `Deferred` item for a clearly related root cause may be named as "
-        "related, by URL, with **no** `depends_on` entry and no change to the ticket's claims.",
+        "A `Proposal` or `Deferred` item for a clearly related root cause is a `related` entry "
+        "of `## Related tickets` and nowhere else, with **no** `depends_on` entry and no change "
+        "to the ticket's claims.",
         f"**`{VALIDATE}` holds the entries' shape and reads no board**: it refuses a ticket any "
         "of whose entries is not a `task`, is not of the `blocks` kind, is not "
         "`<source>:<native id>` with both parts non-empty, names the `drafts` source, names "
@@ -3818,8 +3880,9 @@ def test_the_contract_states_the_dependency_rule_and_renders_the_example_entry()
         "`in-progress`, `done`); names an item whose record carries this ticket's own "
         "`root_cause` — an accepted item for the *same* root cause is the same-root-cause "
         "path's, which takes this run's evidence as a comment, and never this rule's; names "
-        "an item the board reports no `url` for; or names an item whose URL the ticket's body "
-        "does not carry.",
+        "an item the board reports no `url` for; or names an item whose URL is not on a "
+        "`dependency` entry of the ticket's `## Related tickets` — on a ticket recorded before "
+        f"schema {tickets.INVARIANT_AT}, anywhere in its body.",
         f"{tickets.NOT_ACCEPTED} when a `depends_on` entry does not resolve on the board as the "
         "dependency rule below states, naming every such entry and what the board holds; and "
         f"{tickets.MISBOUND} when the ticket's board item cannot be established as its "
@@ -4098,6 +4161,7 @@ def test_ticket_section_headings_are_derived_from_every_heading_a_ticket_carries
     assert tickets.ticket_section_headings() == (
         *tickets.HEADINGS,
         tickets.REJECTED_FIXES,
+        tickets.RELATED_TICKETS,
         *tickets.RETIRED_HEADINGS,
     )
     body = (
@@ -4991,9 +5055,13 @@ def test_both_modes_state_an_evidence_comments_body_as_only_the_new_occurrence(
         "2. this run's occurrence: the host it was verified on, read with `hostname`; the basis "
         "commit of each repository; what was observed; and the drafts or the budget entry it "
         "rests on;",
-        "3. optionally, one short paragraph headed in plain text — `Bears on the ticket:`, say — "
-        "naming the section of the issue the new evidence contradicts or extends (its root "
-        "cause, impact or suggested fix) and stating only the delta",
+        "3. one short paragraph headed in plain text `Bears on the ticket:`, naming the section "
+        "of the issue the new evidence contradicts or extends (its root cause, impact or "
+        "suggested fix) and stating only the delta, since this run cannot edit another run's "
+        "ticket. It is optional, but **required where this run's evidence shows the root cause "
+        "broader than the issue states**, and then states only the widened invariant and each "
+        "contributing location it adds. A run widens its own issue by rewriting its ticket and "
+        "copying it again instead;",
         "4. the marker above, as the last line.",
         "It never repeats what the issue already says — its root cause, impact, examples, "
         "suggested fix, rejected fixes or owning runs — and never carries a ticket's level-2 "
@@ -5044,7 +5112,7 @@ def test_the_older_schema_rule_is_one_source_rendered_into_both_tasks() -> None:
         _flat(bullet).split(",", 1)[0].lower()
         for bullet in re.split(r"(?m)^- ", written.split("-#}", 1)[1])[1:]
     ]
-    assert len(openings) == 2, openings
+    assert len(openings) == 3, openings
     sources = {
         path: _flat(path.read_text(encoding="utf-8")).lower()
         for pattern in ("orchestrator/*.py", "templates/**/*.j2")
@@ -5060,14 +5128,27 @@ def test_the_older_schema_rule_is_one_source_rendered_into_both_tasks() -> None:
 
 
 def test_the_older_schema_rule_names_the_schemas_and_headings_the_module_reads() -> None:
-    """The rule's clauses name the schemas the module reads: the structure :data:`SCHEMA`
-    added, the estimate :data:`ESTIMATE_AT` added, and the headings :data:`RETIRED_HEADINGS`
-    names."""
+    """The rule's clauses name the schemas the module reads: the structures
+    :data:`STRUCTURE_AT` and :data:`INVARIANT_AT` added, the estimate :data:`ESTIMATE_AT`
+    added, and the headings :data:`RETIRED_HEADINGS` names."""
     rule = _older_schema_rule(_task(redispatch=True))
 
     assert (
-        f"a ticket of this run older than schema {tickets.SCHEMA} is brought to it by writing "
-        f"its `## {tickets.IMPACT}` prose as its labelled parts, "
+        f"a ticket of this run older than schema {tickets.INVARIANT_AT} is brought to it when "
+        f"this run rewrites it: its `## {tickets.ROOT_CAUSE}` is written as its labelled parts, "
+        + ", ".join(f"`**{part}.**`" for part in tickets.ROOT_CAUSE_PARTS)
+        + ", from the evidence it already carries"
+    ) in rule, rule
+    assert (
+        "its dependency entries and the related items it mentions become the entries of a "
+        f"`## {tickets.RELATED_TICKETS}` section, {tickets.RELATED_SHAPE}, left out when there "
+        f"are none; and it closes with `## {tickets.DUPLICATE_SEARCH}`, which says that no "
+        "search was recorded when it was filed where this dispatch ran none for it — a bound "
+        f"ticket runs none. Then `{BOARD_STATUS}` records it at schema {tickets.SCHEMA}"
+    ) in rule, rule
+    assert (
+        f"a ticket of this run older than schema {tickets.STRUCTURE_AT} is brought to it by "
+        f"writing its `## {tickets.IMPACT}` prose as its labelled parts, "
         + ", ".join(f"`**{part}.**`" for part in tickets.IMPACT_PARTS)
     ) in rule, rule
     assert (
@@ -5840,6 +5921,475 @@ def test_named_evidence_carriers_are_held_to_the_cause_and_run_marker(
         assert "no bound item or evidence comment" in capsys.readouterr().err
 
 
+#: **One root cause, two reports.** Two runs met one invariant at two different files: the
+#: earlier filed it under a slug naming its file, and this run, finding the earlier item by
+#: the invariant's words, takes that item's slug for its own ticket so its evidence lands.
+SHARED_INVARIANT = "a listing returns every page"
+EARLIER_CAUSE = "listing-cursor-stops-early"
+INVENTED_CAUSE = "export-drops-the-last-page"
+CURSOR_LOCATION = "- some-service `src/cursor.py`: stops one page early when the count changes."
+EXPORT_LOCATION = "- some-service `src/export.py`: reads the listing it exports one page short."
+
+
+def _located_at(location: str) -> str:
+    """A sound body whose `## Root cause` lists ``location`` as its contributing location."""
+    body = _body()
+    assert body.count(CURSOR_LOCATION) == 1, body
+    return body.replace(CURSOR_LOCATION, location)
+
+
+def _earlier_item(drafts_root: Path) -> str:
+    """The earlier run's ticket, filed at `Proposal` under a slug naming its own file: its id."""
+    return _filed(drafts_root, OTHER_RUN, EARLIER_CAUSE, "a listing returns every page")
+
+
+@pytest.mark.parametrize(
+    ("cause", "sound"), [(EARLIER_CAUSE, True), (INVENTED_CAUSE, False)], ids=["adopted", "kept"]
+)
+def test_evidence_lands_on_another_runs_item_for_one_invariant_only_under_its_slug(
+    board: Path,
+    drafts_root: Path,
+    capsys: pytest.CaptureFixture[str],
+    cause: str,
+    sound: bool,  # noqa: FBT001 - a parametrized case, not a caller's flag
+) -> None:
+    """The same root cause is the one invariant, whatever file and slug each report named.
+
+    This run's ticket names `src/export.py`; the earlier item, found by the invariant's words,
+    names `src/cursor.py` under its own slug. Taking that slug is what lets the evidence comment,
+    the account and the item's recount agree; a ticket that kept its invented slug leaves an
+    evidence comment no check reads as this item's, and the account is refused naming it.
+    """
+    _drafted(drafts_root, RUN, "a-cursor-draft")
+    issue = _earlier_item(drafts_root)
+    assert _board_category(issue) == tickets.Status.PROPOSED.value
+    found = _listed(capsys, "--search", SHARED_INVARIANT)
+    assert found[0] == tickets.SOUND and issue in found[1], found
+    local = _ticket(
+        root_cause=tickets.RootCause(cause),
+        drafts=(tickets.QualifiedDraftId(DRAFT),),
+        body=_located_at(EXPORT_LOCATION),
+    )
+    _write(drafts_root, local)
+    assert CURSOR_LOCATION in str(_board_item(issue)["content"])
+    comment = tickets.render_comment(RUN, cause, OCCURRENCE)
+    plan_store.sdk(plan_store.client().task_comment_add(issue, body=comment))
+
+    assert tickets.re_estimate(BOARD, issue).occurrences == (2 if sound else 1)
+    account = tickets.open_dispositions(drafts_root, RUN)
+    disposed = _disposed(causes=[cause], detail=f"Evidence on `{issue}`.")
+    account.write_text(json.dumps(_account(disposed)), encoding="utf-8")
+    capsys.readouterr()
+    arguments = ["check-dispositions", "--root", str(drafts_root), "--board", BOARD, RUN]
+
+    if sound:
+        assert tickets.main(arguments) == tickets.SOUND, capsys.readouterr().err
+        return
+    assert tickets.main(arguments) == tickets.UNSOUND
+    refused = _flat(capsys.readouterr().err)
+    assert (
+        f"the filed root cause {INVENTED_CAUSE} has a local ticket but no bound item or evidence "
+        f"comment of run {RUN}"
+    ) in refused, refused
+
+
+@pytest.mark.parametrize("schema", [tickets.PRIOR_SCHEMA, tickets.ESTIMATE_AT])
+def test_another_runs_older_item_takes_evidence_found_by_the_invariant_and_keeps_its_schema(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str], schema: int
+) -> None:
+    """A schema-9 or schema-7 item filed before the invariant's structure keeps working.
+
+    Its plain `## Root cause` still carries the invariant's words, so the search finds it; it
+    takes this run's evidence, passes the board check, and is re-estimated at its own schema.
+    """
+    _drafted(drafts_root, RUN, "a-cursor-draft")
+    older = _ticket(
+        title="some-service: a listing returns every page",
+        root_cause=tickets.RootCause(EARLIER_CAUSE),
+        created_by_run=tickets.RunId(OTHER_RUN),
+        owning_runs=(tickets.RunId(OTHER_RUN),),
+        drafts=(tickets.QualifiedDraftId(f"drafts:{OTHER_RUN}/drafts/a-draft"),),
+        body=before_schema_10(BODY),
+    )
+    if schema < tickets.STRUCTURE_AT:
+        older = dataclasses.replace(older, body=before_schema_10(SCHEMA_7_BODY))
+    issue = _on_board(_write(drafts_root, older, _at_schema(older, schema)))
+    assert _listed(capsys, "--search", "listing returns every page")[1] == [issue]
+    _write(
+        drafts_root,
+        _ticket(
+            root_cause=tickets.RootCause(EARLIER_CAUSE),
+            drafts=(tickets.QualifiedDraftId(DRAFT),),
+            body=_located_at(EXPORT_LOCATION),
+        ),
+    )
+    comment = tickets.render_comment(RUN, EARLIER_CAUSE, OCCURRENCE)
+    plan_store.sdk(plan_store.client().task_comment_add(issue, body=comment))
+
+    status = tickets.main(["re-estimate", "--board", BOARD, issue])
+    assert status == tickets.SOUND, capsys.readouterr().err
+    assert json.loads(capsys.readouterr().out)["occurrences"] == 2
+    held = _board_item(issue)["metadata"]
+    assert isinstance(held, dict) and held[tickets.KEY]["schema"] == schema
+    account = tickets.open_dispositions(drafts_root, RUN)
+    disposed = _disposed(causes=[EARLIER_CAUSE], detail=f"Evidence on `{issue}`.")
+    account.write_text(json.dumps(_account(disposed)), encoding="utf-8")
+    arguments = ["check-dispositions", "--root", str(drafts_root), "--board", BOARD, RUN]
+    assert tickets.main(arguments) == tickets.SOUND, capsys.readouterr().err
+
+
+def test_a_schema_9_ticket_of_this_run_brought_forward_validates_at_schema_10(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`board-status` records a rewritten ticket at schema 10, whose body `validate` then holds.
+
+    Left as schema 9 wrote it, the ticket is refused there for its plain `## Root cause`; once
+    its run writes the invariant and its locations and closes it with `## Duplicate search`, as
+    the older-schema rule says, it is sound.
+    """
+    older = _ticket(body=before_schema_10(BODY))
+    path = _write(drafts_root, older, _at_schema(older, tickets.PRIOR_SCHEMA))
+    assert tickets.main(["validate", str(path)]) == tickets.SOUND, capsys.readouterr().err
+    capsys.readouterr()
+    assert _decided(path, capsys) == (tickets.SOUND, "backlog\n", "")
+    assert f'"schema": {tickets.SCHEMA},' in path.read_text(encoding="utf-8")
+
+    assert tickets.main(["validate", str(path)]) == tickets.UNSOUND
+    assert "`## Root cause` section does not open with its labelled parts" in _flat(
+        capsys.readouterr().err
+    )
+    path.write_text(brought_to_schema_10(path.read_text(encoding="utf-8")), encoding="utf-8")
+    assert tickets.main(["validate", str(path)]) == tickets.SOUND, capsys.readouterr().err
+    assert tickets.read_ticket(path).body == BODY
+
+
+#: Every way a schema-10 body's `## Root cause` and closing sections are refused, and what the
+#: refusal names; schemas 7 to 9 carry neither and are not held to them.
+ROOT_CAUSE_ORDER = "`## Root cause` section does not open with its labelled parts, each once"
+SHAPE_REFUSALS = [
+    (BODY.replace(SHARED_ROOT_CAUSE, OLDER_ROOT_CAUSE), ROOT_CAUSE_ORDER),
+    (
+        BODY.replace(SHARED_ROOT_CAUSE, f"Some context.\n\n{SHARED_ROOT_CAUSE}"),
+        ROOT_CAUSE_ORDER,
+    ),
+    (
+        BODY.replace(
+            SHARED_ROOT_CAUSE,
+            f"**Contributing locations.**\n{CURSOR_LOCATION}\n\n**Invariant.** A listing returns "
+            "every page.",
+        ),
+        ROOT_CAUSE_ORDER,
+    ),
+    (
+        BODY.replace(
+            "**Invariant.** A listing returns every page, however its count changes while it "
+            "is read.",
+            "**Invariant.**",
+        ),
+        "part `**Invariant.**` carries no content",
+    ),
+    (
+        BODY.replace(f"\n{CURSOR_LOCATION}", "\nThe cursor, and the export."),
+        "part `**Contributing locations.**` carries no bullet",
+    ),
+    (
+        before_schema_10(BODY).replace(OLDER_ROOT_CAUSE, SHARED_ROOT_CAUSE),
+        "no `## Duplicate search` heading in its place",
+    ),
+    (
+        BODY.replace(SHARED_DUPLICATE_SEARCH, "\n"),
+        "the body's `## Duplicate search` section is empty",
+    ),
+    (
+        BODY + "\n\n## Owning runs\n\nA second list of runs.",
+        "the body's `## Duplicate search` section is not its last",
+    ),
+    (
+        BODY + f"\n\n## {tickets.DUPLICATE_SEARCH}\n\nnone",
+        "the body carries `## Duplicate search` 2 times",
+    ),
+]
+
+
+def _validated(drafts_root: Path, capsys: pytest.CaptureFixture[str], text: str) -> str:
+    """`validate` over a ticket stored as ``text``, as the agent runs it: what it refused."""
+    path = tickets.ticket_path(drafts_root, RUN, CAUSE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    capsys.readouterr()
+    status = tickets.main(["validate", str(path)])
+    refused = _flat(capsys.readouterr().err)
+    assert status == tickets.UNSOUND, refused
+    return refused
+
+
+@pytest.mark.parametrize(("body", "reason"), SHAPE_REFUSALS)
+def test_a_schema_10_body_is_held_to_its_invariant_and_its_closing_duplicate_search(
+    drafts_root: Path, capsys: pytest.CaptureFixture[str], body: str, reason: str
+) -> None:
+    refused = _validated(drafts_root, capsys, tickets.render(_ticket(body=body)))
+
+    assert reason in refused, refused
+
+
+@pytest.mark.parametrize(
+    "schema", [tickets.PRIOR_SCHEMA, tickets.STRUCTURE_AT, tickets.ESTIMATE_AT]
+)
+def test_a_ticket_recorded_before_schema_10_validates_without_its_invariant_or_search(
+    drafts_root: Path, capsys: pytest.CaptureFixture[str], schema: int
+) -> None:
+    older = _ticket(body=before_schema_10(BODY))
+    if schema == tickets.ESTIMATE_AT:
+        older = _ticket(
+            body=before_schema_10(SCHEMA_7_BODY), priority_estimate=tickets.Priority.HIGH
+        )
+    path = _write(drafts_root, older, _at_schema(older, schema))
+
+    assert tickets.main(["validate", str(path)]) == tickets.SOUND, capsys.readouterr().err
+    assert _record(_item(_ticket()))["schema"] == tickets.INVARIANT_AT == tickets.SCHEMA
+
+
+#: Two well-formed `## Related tickets` entries, one of each relation.
+RELATED = (
+    "- [some-service: a retry loop backs off](https://github.com/o/some-service/issues/42) — "
+    "dependency: This ticket needs its backoff before the last page is retried.\n"
+    "- [some-service: an export keeps every column](https://github.com/o/some-service/issues/43) "
+    "— related: It loses columns rather than pages, so its fix stands alone."
+)
+RELATED_REFUSALS = [
+    ("\n", "the body's `## Related tickets` section is empty; it is optional"),
+    ("none", "the body's `## Related tickets` section says 'none'; it is optional"),
+    (
+        "- https://github.com/o/some-service/issues/42 — dependency: Needs its backoff.",
+        "which is not one entry `- [<that ticket's title>](<its URL>) — <dependency or related>",
+    ),
+    (
+        "- some-service: a retry loop backs off — related: It stands alone.",
+        "which is not one entry",
+    ),
+    (
+        "- [https://github.com/o/some-service/issues/42](https://github.com/o/some-service/issues/"
+        "42) — related: It stands alone.",
+        "is a bare URL; the link's text is the ticket's title",
+    ),
+    (
+        "- [a retry loop backs off](issues/42) — related: It stands alone.",
+        "links 'issues/42', which is no web URL",
+    ),
+    (
+        "- [a retry loop backs off](https://github.com/o/s/issues/42) — blocker: It stands alone.",
+        "is marked 'blocker', not `dependency` or `related`",
+    ),
+    (
+        "- [a retry loop backs off](https://github.com/o/s/issues/42) — related: It is "
+        "https://github.com/o/s/issues/44 too.",
+        "carries a URL or a link beside its own",
+    ),
+    (
+        "- [a retry loop backs off](https://github.com/o/s/issues/42) — related: It stands "
+        "alone. Its fix changes the retry loop.",
+        "does not carry exactly one sentence after its relation",
+    ),
+    (
+        "- [a retry loop backs off](https://github.com/o/s/issues/42) — related: It stands alone.\n"
+        "  Its fix changes the retry loop.",
+        "'Its fix changes the retry loop.', which is not one entry",
+    ),
+    (
+        "- [a retry loop backs off](https://github.com/o/s/issues/42) — related:",
+        "carries no sentence saying why it is listed",
+    ),
+]
+
+
+def _related_body(related: str) -> str:
+    return _body(related=related)
+
+
+@pytest.mark.parametrize(("related", "reason"), RELATED_REFUSALS)
+def test_a_present_related_tickets_section_is_its_entries_and_nothing_more(
+    drafts_root: Path, capsys: pytest.CaptureFixture[str], related: str, reason: str
+) -> None:
+    refused = _validated(drafts_root, capsys, tickets.render(_ticket(body=_related_body(related))))
+
+    assert _flat(reason) in refused, refused
+
+
+def test_related_tickets_is_optional_and_sits_directly_before_duplicate_search_once(
+    drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sound = _related_body(RELATED)
+    for body in (sound, BODY):
+        path = _write(drafts_root, _ticket(body=body))
+        assert tickets.main(["validate", str(path)]) == tickets.SOUND, capsys.readouterr().err
+    assert tickets.related_urls(sound, tickets.Relation.DEPENDENCY) == (
+        "https://github.com/o/some-service/issues/42",
+    )
+    misplaced = BODY.replace(
+        "## Owning runs", f"## {tickets.RELATED_TICKETS}\n\n{RELATED}\n\n## Owning runs"
+    )
+    twice = sound.replace(
+        f"## {tickets.DUPLICATE_SEARCH}",
+        f"## {tickets.RELATED_TICKETS}\n\n{RELATED}\n\n## {tickets.DUPLICATE_SEARCH}",
+    )
+    for body, reason in (
+        (misplaced, "`## Related tickets` section is not directly before `## Duplicate search`"),
+        (twice, "the body carries `## Related tickets` 2 times; it is optional"),
+    ):
+        refused = _validated(drafts_root, capsys, tickets.render(_ticket(body=body)))
+        assert reason in refused, refused
+
+
+@pytest.mark.parametrize("schema", [tickets.SCHEMA, tickets.PRIOR_SCHEMA])
+def test_board_status_holds_a_schema_10_dependency_to_its_related_tickets_entry(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str], schema: int
+) -> None:
+    """From schema 10 a dependency's URL is named on a `dependency` entry; before, anywhere.
+
+    The ticket names the accepted item's URL in its `## Impact` alone: a schema-9 ticket is
+    held as it always was and accepted, a schema-10 one is refused until the URL is on a
+    `dependency` bullet of `## Related tickets`.
+    """
+    _accepted_item(board, NARROWING, tickets.Status.ACCEPTED.value, NARROWING_URL)
+    impact = _impact(prose=f"{IMPACT_PROSE} Assuming the fix in {NARROWING_URL} lands, …")
+    named = _body(impact=impact)
+    if schema < tickets.INVARIANT_AT:
+        named = before_schema_10(named)
+    ticket = _ticket(depends_on=(NARROWING,), body=named)
+    path = _write(drafts_root, ticket, _at_schema(ticket, schema))
+
+    status, printed, reported = _decided(path, capsys)
+
+    if schema < tickets.INVARIANT_AT:
+        assert (status, printed, reported) == (tickets.SOUND, "backlog\n", "")
+        # Named nowhere in an older body, the URL is refused as it always was.
+        unnamed = dataclasses.replace(ticket, body=before_schema_10(BODY))
+        _write(drafts_root, unnamed, _at_schema(unnamed, schema))
+        status, printed, reported = _decided(path, capsys)
+        assert (status, printed) == (tickets.NOT_ACCEPTED, ""), reported
+        assert f"whose URL {NARROWING_URL} the ticket's body never names" in _flat(reported)
+        return
+    assert (status, printed) == (tickets.NOT_ACCEPTED, ""), reported
+    assert (
+        f"names an item whose URL {NARROWING_URL} is on no `dependency` entry of the ticket's "
+        "`## Related tickets` section"
+    ) in _flat(reported)
+    entry = _dependency("some-service: an export keeps every column", NARROWING_URL)
+    _write(drafts_root, dataclasses.replace(ticket, body=_body(impact=impact, related=entry)))
+    assert _decided(path, capsys) == (tickets.SOUND, "backlog\n", "")
+    related = f"- [an export keeps every column]({NARROWING_URL}) — related: Its fix stands alone."
+    _write(drafts_root, dataclasses.replace(ticket, body=_body(impact=impact, related=related)))
+    status, _printed, reported = _decided(path, capsys)
+    assert status == tickets.NOT_ACCEPTED, reported
+
+
+@pytest.mark.parametrize("heading", [tickets.DUPLICATE_SEARCH, tickets.RELATED_TICKETS])
+def test_an_evidence_comment_carrying_a_schema_10_heading_is_refused_on_the_board(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str], heading: str
+) -> None:
+    _drafted(drafts_root, RUN, "a-cursor-draft")
+    issue = _filed(drafts_root, OTHER_RUN, CAUSE, "the cursor skips the last page")
+    _write(drafts_root, _carrying())
+    account = tickets.open_dispositions(drafts_root, RUN)
+    account.write_text(json.dumps(_account(_disposed())), encoding="utf-8")
+    evidence = f"{OCCURRENCE}\n\n## {heading}\n\nWhat the ticket already says."
+    comment = tickets.render_comment(RUN, CAUSE, evidence)
+    plan_store.sdk(plan_store.client().task_comment_add(issue, body=comment))
+    assert tickets.main(["re-estimate", "--board", BOARD, issue]) == tickets.SOUND
+    capsys.readouterr()
+
+    arguments = ["check-dispositions", "--root", str(drafts_root), "--board", BOARD, RUN]
+    assert tickets.main(arguments) == tickets.UNSOUND
+    assert (
+        f"{issue} holds an evidence comment of run {RUN} carrying the ticket heading `## {heading}`"
+    ) in _flat(capsys.readouterr().err)
+
+
+def test_the_root_cause_definition_reaches_the_task_and_names_none_of_its_examples() -> None:
+    """The bar is stated beside the example's `## Root cause` and in the grouping step, in
+    general terms: no issue, repository or file the duplicates it was written from named."""
+    task = _task()
+    flat = _flat(task)
+    steps = _flat(_section(task, "What to do, in order"))
+    contract = _flat(_verified_ticket())
+    bar = _flat(tickets.ROOT_CAUSE_BAR)
+
+    assert bar in steps and bar in contract, bar
+    for said in (
+        "**invariant or guarantee that is missing or broken**",
+        "**one root cause when a single change to the rule removes every instance, even if that "
+        "change touches several places; two when they need independent fixes that each stand "
+        "alone.**",
+        "one concrete suggested fix removes it, so no catch-all ticket stands",
+        "possibly several, possibly in several repositories",
+    ):
+        assert said in bar, said
+    assert (
+        "So drafts whose evidence points at different files but shares one invariant become one "
+        "ticket, its `**Contributing locations.**` listing each location they name"
+    ) in steps
+    assert "Its title is `<repository name>: <the invariant in one line>`" in contract
+    assert "its `<root-cause>` slug names the invariant rather than a file" in contract
+    assert "the repository its root cause lives in" not in flat
+    assert "the record's `repository` — the repository its issue is filed in — names it" in flat
+    example = task.split("````markdown\n", 1)[1].split("````", 1)[0]
+    root_cause = example.split("## Root cause\n\n", 1)[1].split("\n\n## ", 1)[0]
+    assert "**Invariant.** <" in root_cause and "**Contributing locations.**\n- <" in root_cause
+    searched = example.split(f"## {tickets.DUPLICATE_SEARCH}\n\n", 1)[1]
+    assert "Never restate a matched item's content" in _flat(searched), searched
+    assert "never a bare URL" in _flat(searched), searched
+    stated = _flat(
+        " ".join(
+            (
+                tickets.ROOT_CAUSE_BAR,
+                *tickets._HEADING_GUIDANCE,
+                tickets._RELATED_TICKETS_GUIDANCE,
+                _section(task, "What to do, in order"),
+                # The contract and the example ticket; the approved worked example after them
+                # is a real ticket's sections, shown verbatim.
+                _verified_ticket().split("A ticket's `## Impact` and `## Suggested fix` at", 1)[0],
+            )
+        )
+    )
+    for example_name in (
+        "#1634",
+        "#1332",
+        "#1637",
+        "#1638",
+        "publication_guard",
+        "publication-title",
+        "planner-omits",
+        "follow-ups.sh",
+        "follow_up_comments",
+        "title policy",
+        "one named item",
+    ):
+        assert example_name not in stated, example_name
+
+
+def test_the_related_tickets_and_duplicate_search_rules_reach_the_task() -> None:
+    contract = _flat(_verified_ticket())
+
+    for said in (
+        "**`## Duplicate search` is its last section, and terse**, because the user reads every "
+        "ticket: one line naming the text queries step 7 ran, then one line per open item those "
+        "searches returned that was judged a different root cause — a link to it whose text is "
+        "its title, never a bare URL, and why one change would not remove both — or `none` in "
+        "place of those lines. It never restates a matched item's content.",
+        "**`## Related tickets` is optional, directly before `## Duplicate search`**, and left "
+        "out — no heading, no `none` — when it has no entries.",
+        "It lists every ticket this one's `depends_on` names, marked `dependency`, and each "
+        "issue that contributes to the same broader problem but needs an independent fix",
+        f"Each entry is one bullet and nothing more, {tickets.RELATED_SHAPE}",
+        "exactly **one sentence** saying why it is related to or different from this ticket — "
+        "for a `dependency`, what this ticket needs from it — never a longer description or a "
+        "restatement of the other ticket.",
+        "so an item may appear in both",
+    ):
+        assert said in contract, said
+    assert "may be named as related, by URL" not in _flat(_task())
+
+
 def test_an_unreadable_filed_ticket_cannot_be_made_sound_by_board_evidence(
     board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -6214,7 +6764,8 @@ def test_a_dependency_on_any_board_of_the_family_is_held_and_one_outside_it_is_r
         impact=_impact(
             prose=f"{IMPACT_PROSE} Assuming the fix in {ROUTED_ACCEPTED_URL} lands, the export "
             "is unaffected."
-        )
+        ),
+        related=_dependency("intake: a schema keeps its names", ROUTED_ACCEPTED_URL),
     )
     ticket = _write(drafts_root, _ticket(depends_on=(far,), body=body))
 
@@ -6959,11 +7510,11 @@ def test_cycle_script_through_installed_budgetspec_reports_verdicts_and_failure_
         assert tickets._host_line(result["host"]).startswith("load=")
 
 
-def test_budget_record_schema_nine_matches_the_checked_in_golden() -> None:
+def test_budget_record_schema_ten_matches_the_checked_in_golden() -> None:
     budget = tickets.OverrunBudget(
         tickets.Origin(REPOSITORY), "budgets.yaml", "cycle-time", 123, "max"
     )
-    golden = json.loads((CYCLE_DOCUMENT.parent / "ticket-v9.json").read_text())
+    golden = json.loads((CYCLE_DOCUMENT.parent / "ticket-v10.json").read_text())
     assert tickets.record(_ticket(budget=budget)) == golden
 
 

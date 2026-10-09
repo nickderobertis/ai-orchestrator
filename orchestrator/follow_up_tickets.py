@@ -112,14 +112,20 @@ BOARD = "followups"
 #: Schema 8 added the structure the severity rubric is judged through: the `## Impact`
 #: section's labelled parts (:data:`IMPACT_PARTS`, :data:`WORKAROUND_COSTS`), the
 #: `## Suggested fix` section's opening paragraph and unit subsections, and the rule that an
-#: acceptable workaround lowers a severity above `low`. Schema 9 adds the optional
-#: `budget` record for an overrun; older records without it remain readable.
-SCHEMA = 9
+#: acceptable workaround lowers a severity above `low`. Schema 9 added the optional
+#: `budget` record for an overrun; older records without it remain readable. Schema 10 added
+#: the structure that lets two reports of one problem be read as one root cause: the
+#: `## Root cause` section's labelled parts (:data:`ROOT_CAUSE_PARTS`) — the invariant that is
+#: missing or broken, then every location that contributes to it — the required last
+#: `## Duplicate search` section recording what the board search asked and what it judged a
+#: different root cause, and the optional `## Related tickets` section before it, on whose
+#: `dependency` bullets a dependency's URL is named. Schemas 7, 8 and 9 stay sound without them.
+SCHEMA = 10
 #: Every earlier schema a re-dispatch brings a ticket forward from, enumerated rather than
 #: admitted by range, so a record declaring any other schema — zero, negative, a later one or
 #: no integer — is refused by name rather than read as an older ticket. `board-status` reads a
 #: board item's record of one before :data:`ESTIMATE_AT` as storing no estimate.
-PRIOR_SCHEMAS = (1, 2, 3, 4, 5, 6, 7, 8)
+PRIOR_SCHEMAS = (1, 2, 3, 4, 5, 6, 7, 8, 9)
 #: The schema just before, which every reader still accepts as sound: its body predates
 #: :data:`SCHEMA`'s structure, and a run that rewrites it brings it forward.
 PRIOR_SCHEMA = PRIOR_SCHEMAS[-1]
@@ -131,9 +137,12 @@ HOST_AT, REPOSITORIES_AT, IMPACT_AT = 2, 3, 4
 #: The schema whose `## Impact` and `## Suggested fix` carry the structure the rubric is judged
 #: through, and whose acceptable workaround always lowers a severity above `low`.
 STRUCTURE_AT = 8
+#: The schema whose `## Root cause` is its labelled parts, whose body ends with
+#: `## Duplicate search`, and whose dependencies are named on `## Related tickets` bullets.
+INVARIANT_AT = 10
 #: Every schema a reader accepts as sound: from :data:`ESTIMATE_AT` on, because schema 7's body
-#: predates the structure :data:`STRUCTURE_AT` added, which a run that rewrites it brings it to,
-#: and :data:`SCHEMA` added only an optional field.
+#: predates the structure :data:`STRUCTURE_AT` added, and schemas 7 to 9 the structure
+#: :data:`INVARIANT_AT` added, which a run that rewrites its own ticket brings it to.
 SOUND_SCHEMAS = tuple(range(ESTIMATE_AT, SCHEMA + 1))
 
 #: The metadata key a ticket's record sits under, which travels onto the board item.
@@ -504,14 +513,28 @@ QUALIFIED_ID = re.compile(r"(?P<source>[^:\s]+):(?P<native>\S+)")
 #: The `url` the board reports for an accepted item, as a ticket's text links it: a web URL.
 ITEM_URL = re.compile(r"https?://\S+")
 
-#: The level-2 headings a ticket's body carries, in this order, each with content.
+#: The heading whose section states the root cause: from :data:`INVARIANT_AT`, its labelled
+#: parts :data:`ROOT_CAUSE_PARTS`, in this order — the invariant or guarantee that is missing or
+#: broken, in words that do not depend on which file a run saw, then one bullet per location
+#: that contributes to it, each naming its repository and path.
+ROOT_CAUSE = "Root cause"
+ROOT_CAUSE_PARTS = ("Invariant", "Contributing locations")
+
+#: The last section from :data:`INVARIANT_AT` on: the text queries the board search ran, then
+#: one line per open item it returned that was judged a different root cause, or `none`. It is
+#: on the board because the disposition account stays on the host that verified the ticket.
+DUPLICATE_SEARCH = "Duplicate search"
+
+#: The level-2 headings a ticket's body carries, in this order, each with content;
+#: :data:`DUPLICATE_SEARCH` from :data:`INVARIANT_AT` on.
 HEADINGS = (
-    "Root cause",
+    ROOT_CAUSE,
     "Impact",
     "Examples",
     "Evidence",
     "Suggested fix",
     "Owning runs",
+    DUPLICATE_SEARCH,
 )
 
 #: The heading whose section states the one fix a ticket recommends.
@@ -519,6 +542,34 @@ SUGGESTED_FIX = "Suggested fix"
 
 #: The one optional heading: at most once, directly after :data:`SUGGESTED_FIX`, with content.
 REJECTED_FIXES = "Rejected fixes"
+
+#: The optional section from :data:`INVARIANT_AT` on, directly before :data:`DUPLICATE_SEARCH`
+#: and left out when it has no entries: one bullet per other ticket a reader should know about,
+#: each exactly a link to it whose text is its title, its :class:`Relation`, and one sentence.
+RELATED_TICKETS = "Related tickets"
+
+
+class Relation(StrEnum):
+    """Why a `## Related tickets` entry is listed.
+
+    A `dependency` is an accepted ticket the ticket's :data:`DEPENDENCY_FIELD` names; a
+    `related` one contributes to the same broader problem but needs a fix of its own, at
+    whatever status, and is no dependency.
+    """
+
+    DEPENDENCY = "dependency"
+    RELATED = "related"
+
+
+#: One `## Related tickets` entry: the link, its relation, then the one sentence.
+RELATED_ENTRY = re.compile(
+    r"- \[(?P<title>[^\]\n]+)\]\((?P<url>[^)\s]+)\)"
+    r" — (?P<relation>[^:\n]+):[ \t]*(?P<sentence>[^\n]*)"
+)
+#: How a `## Related tickets` entry reads, as every refusal and the example name it.
+RELATED_SHAPE = (
+    "`- [<that ticket's title>](<its URL>) — <" + " or ".join(Relation) + ">: <one sentence>`"
+)
 
 #: Headings an older schema carried, which a current body is refused for carrying.
 RETIRED_HEADINGS = ("Repository", "Suggested fixes")
@@ -689,7 +740,7 @@ IMPACT_PARTS = (
 WORKAROUND_COST = IMPACT_PARTS[-1]
 WORKAROUND_COSTS = ("Applying it", "Side effects on the outcome", "Discovery")
 NO_ACCEPTABLE_WORKAROUND = "no acceptable workaround"
-_IMPACT_PART = re.compile(r"^\*\*(?P<part>[^*\n]+)\.\*\*", re.MULTILINE)
+_LABELLED_PART = re.compile(r"^\*\*(?P<part>[^*\n]+)\.\*\*", re.MULTILINE)
 
 
 def impact_section(prose: str, severity: str, workaround: str, with_workaround: str) -> str:
@@ -1233,7 +1284,7 @@ def _title_problems(title: object, repository: object) -> list[str]:
     if not isinstance(title, str) or not title.strip():
         return [
             "the title is empty; a ticket's title is "
-            "`<repository name>: <the root cause in one line>`"
+            "`<repository name>: <the invariant in one line>`"
         ]
     found = []
     if title != title.strip() or drafts.CONTROL.search(title):
@@ -1248,9 +1299,7 @@ def _title_problems(title: object, repository: object) -> list[str]:
     if isinstance(repository, str) and _is_origin(repository):
         prefix = f"{repository_name(repository)}: "
         if not title.startswith(prefix) or not title.removeprefix(prefix).strip():
-            found.append(
-                f"the title {title!r} does not read `{prefix}<the root cause in one line>`"
-            )
+            found.append(f"the title {title!r} does not read `{prefix}<the invariant in one line>`")
     return found
 
 
@@ -1674,7 +1723,7 @@ def _impact_parts_problems(prose: str, workaround: str | None) -> list[str]:
     :data:`NO_ACCEPTABLE_WORKAROUND`, and why, in their place.
     """
     where = f"the body's `## {IMPACT}` section"
-    labelled = list(_IMPACT_PART.finditer(prose))
+    labelled = list(_LABELLED_PART.finditer(prose))
     named = [part["part"].strip() for part in labelled]
     if named != list(IMPACT_PARTS) or prose[: labelled[0].start()].strip():
         return [
@@ -1758,10 +1807,17 @@ def _estimate_problems(
 
 
 def _body_problems(
-    body: object, host: object, held: Mapping[str, object] | None, *, structured: bool = True
+    body: object,
+    host: object,
+    held: Mapping[str, object] | None,
+    *,
+    structured: bool = True,
+    invariant: bool = True,
 ) -> list[str]:
     """Every way a body is not a ticket's; ``structured`` is :func:`_impact_problems`'s, and
-    also holds `## Suggested fix` to its opening paragraph and unit subsections."""
+    also holds `## Suggested fix` to its opening paragraph and unit subsections. ``invariant``
+    holds an :data:`INVARIANT_AT` ticket to its `## Root cause` parts, its last
+    `## Duplicate search` and its optional `## Related tickets`; an older body carries none."""
     if not isinstance(body, str):
         return ["the ticket has no body"]
     found = drafts.sections(body)
@@ -1772,19 +1828,22 @@ def _body_problems(
             + " and ".join(f"`## {heading}`" for heading in retired)
             + f", which schema {RETIRED_AT} retired; bring the ticket to the current shape"
         ]
+    headings = HEADINGS if invariant else tuple(one for one in HEADINGS if one != DUPLICATE_SEARCH)
     after = 0
-    for required in HEADINGS:
+    for required in headings:
         try:
             at = names.index(required, after)
         except ValueError:
             return [
                 f"the body carries no `## {required}` heading in its place; a ticket's "
                 "body carries "
-                + ", ".join(f"`## {heading}`" for heading in HEADINGS)
+                + ", ".join(f"`## {heading}`" for heading in headings)
                 + ", in that order, each with content"
             ]
         if not found[at][1].strip():
             return [f"the body's `## {required}` section is empty"]
+        if required == ROOT_CAUSE and invariant and (cause := _root_cause_problems(found[at][1])):
+            return cause
         if required == IMPACT and (
             impact := _impact_problems(found[at][1], held, structured=structured)
         ):
@@ -1797,7 +1856,135 @@ def _body_problems(
                 "record's `host` states; state there the host the verification ran on"
             ]
         after = at + 1
-    return _rejected_fixes_problems(found)
+    return _rejected_fixes_problems(found) + (_tail_problems(found) if invariant else [])
+
+
+def _root_cause_problems(text: str) -> list[str]:
+    """How an :data:`INVARIANT_AT` `## Root cause` is not its :data:`ROOT_CAUSE_PARTS`, in order.
+
+    Each part opens a line as `**<part>.**`: the invariant has content, and the contributing
+    locations carry one or more bullets.
+    """
+    where = f"the body's `## {ROOT_CAUSE}` section"
+    labelled = list(_LABELLED_PART.finditer(text))
+    named = [part["part"].strip() for part in labelled]
+    if named != list(ROOT_CAUSE_PARTS) or text[: labelled[0].start()].strip():
+        return [
+            f"{where} does not open with its labelled parts, each once, in this order: "
+            f"`**{ROOT_CAUSE_PARTS[0]}.**`, the guarantee that is missing or broken, in words "
+            "that do not depend on which file a run saw; then "
+            f"`**{ROOT_CAUSE_PARTS[1]}.**`, one bullet per location that contributes to it, "
+            "each naming its repository and path"
+        ]
+    if not text[labelled[0].end() : labelled[1].start()].strip():
+        return [f"{where}'s part `**{ROOT_CAUSE_PARTS[0]}.**` carries no content"]
+    if not re.search(r"^- \S", text[labelled[1].end() :], re.MULTILINE):
+        return [
+            f"{where}'s part `**{ROOT_CAUSE_PARTS[1]}.**` carries no bullet; list every "
+            "location that contributes to the invariant, one bullet each naming its repository "
+            "and path"
+        ]
+    return []
+
+
+def _tail_problems(found: Sequence[tuple[str, str]]) -> list[str]:
+    """How an :data:`INVARIANT_AT` body does not end with its optional `## Related tickets`
+    and then `## Duplicate search`, each at most once."""
+    names = [name for name, _ in found]
+    problems = []
+    if names.count(DUPLICATE_SEARCH) > 1:
+        problems.append(
+            f"the body carries `## {DUPLICATE_SEARCH}` {names.count(DUPLICATE_SEARCH)} times"
+        )
+    elif names[-1] != DUPLICATE_SEARCH:
+        problems.append(
+            f"the body's `## {DUPLICATE_SEARCH}` section is not its last; it closes the ticket"
+        )
+    held = [at for at, name in enumerate(names) if name == RELATED_TICKETS]
+    match held:
+        case []:
+            pass
+        case [at] if at + 1 == len(names) or names[at + 1] != DUPLICATE_SEARCH:
+            problems.append(
+                f"the body's `## {RELATED_TICKETS}` section is not directly before "
+                f"`## {DUPLICATE_SEARCH}`; when present, it comes right before it"
+            )
+        case [at]:
+            problems.extend(related_problems(found[at][1]))
+        case repeated:
+            problems.append(
+                f"the body carries `## {RELATED_TICKETS}` {len(repeated)} times; it is optional "
+                "and appears at most once"
+            )
+    return problems
+
+
+#: Where one sentence ends and another begins, inside a `## Related tickets` entry.
+_SENTENCE_BREAK = re.compile(r"[.!?][)\"'”’]*\s+[A-Z]")
+
+
+def related_problems(text: str) -> list[str]:
+    """Every way a present `## Related tickets` section's content is not its entries alone.
+
+    Each non-blank line is one entry, :data:`RELATED_SHAPE`: a link whose text is the other
+    ticket's title and whose target is its web URL, its :class:`Relation`, and exactly one
+    sentence carrying no other URL — never a second line, a second sentence, or `none`.
+    """
+    where = f"the body's `## {RELATED_TICKETS}` section"
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return [f"{where} is empty; it is optional, so leave it out when it has no entries"]
+    if len(lines) == 1 and lines[0].strip("`*_.").casefold() == "none":
+        return [
+            f"{where} says {lines[0]!r}; it is optional, so leave it out when it has no entries"
+        ]
+    problems = []
+    for line in lines:
+        entry = RELATED_ENTRY.fullmatch(line)
+        if entry is None:
+            problems.append(
+                f"{where} carries {line!r}, which is not one entry {RELATED_SHAPE}: each entry "
+                "is one bullet and nothing more, a link to the ticket whose text is its title"
+            )
+            continue
+        relation, sentence = entry["relation"].strip("`* "), entry["sentence"].strip()
+        if not ITEM_URL.fullmatch(entry["url"]):
+            problems.append(f"{where}'s entry {line!r} links {entry['url']!r}, which is no web URL")
+        if ITEM_URL.match(entry["title"].strip("<> ")):
+            problems.append(
+                f"{where}'s entry {line!r} is a bare URL; the link's text is the ticket's title"
+            )
+        if relation not in tuple(Relation):
+            problems.append(
+                f"{where}'s entry {line!r} is marked {relation!r}, not "
+                + " or ".join(f"`{one}`" for one in Relation)
+            )
+        if not sentence:
+            problems.append(f"{where}'s entry {line!r} carries no sentence saying why it is listed")
+        elif re.search(r"https?://|\]\(", sentence):
+            problems.append(
+                f"{where}'s entry {line!r} carries a URL or a link beside its own; name the "
+                "other ticket only in its link"
+            )
+        elif _SENTENCE_BREAK.search(sentence) or sentence[-1] not in ".!?":
+            problems.append(
+                f"{where}'s entry {line!r} does not carry exactly one sentence after its "
+                "relation; say in one sentence why it is related to or different from this "
+                "ticket, and for a dependency what this ticket needs from it"
+            )
+    return problems
+
+
+def related_urls(body: str, relation: Relation) -> tuple[str, ...]:
+    """The URLs ``body``'s `## Related tickets` entries of ``relation`` link, in order."""
+    return tuple(
+        entry["url"]
+        for name, text in drafts.sections(body)
+        if name == RELATED_TICKETS
+        for line in text.splitlines()
+        if (entry := RELATED_ENTRY.fullmatch(line.strip())) is not None
+        and entry["relation"].strip("`* ") == relation
+    )
 
 
 #: A level-3 heading inside a section, and the form a unit subsection of `## Suggested fix`
@@ -1977,7 +2164,12 @@ def problems(  # noqa: PLR0913 - each reading of an item is its own keyword
     found.extend(_title_problems(item.get("title"), repository))
     checked = None if pending or not isinstance(held, Mapping) else held
     structured = isinstance(held, Mapping) and _structured(held)
-    found.extend(_body_problems(item.get("content"), host, checked, structured=structured))
+    invariant = isinstance(held, Mapping) and _invariant(held)
+    found.extend(
+        _body_problems(
+            item.get("content"), host, checked, structured=structured, invariant=invariant
+        )
+    )
     found.extend(edge_problems(edges))
     return found
 
@@ -1986,6 +2178,12 @@ def _structured(held: Mapping[str, object]) -> bool:
     """Whether ``held`` is a record whose body carries :data:`STRUCTURE_AT`'s structure."""
     schema = held.get("schema")
     return type(schema) is int and schema >= STRUCTURE_AT
+
+
+def _invariant(held: Mapping[str, object]) -> bool:
+    """Whether ``held`` is a record whose body carries :data:`INVARIANT_AT`'s structure."""
+    schema = held.get("schema")
+    return type(schema) is int and schema >= INVARIANT_AT
 
 
 def _category(status: object) -> object:
@@ -2386,6 +2584,9 @@ def dependency_problems(
     """
     body = item.get("content")
     text = body if isinstance(body, str) else ""
+    # From :data:`INVARIANT_AT` a dependency's URL is named on a `dependency` bullet of the
+    # ticket's `## Related tickets`; an older ticket names it anywhere in its body.
+    listed = related_urls(text, Relation.DEPENDENCY) if _invariant(_held_record(item)) else None
     own_cause = _held_record(item).get("root_cause")
     accepted = ", ".join(f"`{status}`" for status in Status if status.accepted)
     edges = ticket_edges(ticket) if edges is None else list(edges)
@@ -2435,6 +2636,12 @@ def dependency_problems(
             found.append(
                 f"{entry} names an item the board reports no `url` for that is a web URL "
                 f"({url!r}), so the ticket's text cannot link it"
+            )
+        elif listed is not None and url not in listed:
+            found.append(
+                f"{entry} names an item whose URL {url} is on no `{Relation.DEPENDENCY}` entry of "
+                f"the ticket's `## {RELATED_TICKETS}` section; list it there as {RELATED_SHAPE}, "
+                "saying what this ticket needs from it"
             )
         elif url not in text:
             found.append(
@@ -3012,7 +3219,9 @@ def re_estimate(board: str, issue: str) -> ReEstimated:
     # section in its place with content, and the `## Impact` section to its lines: prose, the
     # three severity lines once each and in order, and at most one estimate line after them —
     # and a malformed one is refused rather than written back.
-    if unsound := _body_problems(text, held.get("host"), None, structured=_structured(held)):
+    if unsound := _body_problems(
+        text, held.get("host"), None, structured=_structured(held), invariant=_invariant(held)
+    ):
         raise Refused([f"{issue}'s content is not sound: {problem}" for problem in unsound])
     frequency = _record_frequency(held, issue)
     count = occurrences(issue, str(creator), str(held["root_cause"]), reads)
@@ -3813,7 +4022,7 @@ def ticket_section_headings() -> tuple[str, ...]:
     has re-rendered the ticket into the comment; deriving them here means a heading added to
     a ticket is refused in a comment with no further edit.
     """
-    return (*HEADINGS, REJECTED_FIXES, *RETIRED_HEADINGS)
+    return (*HEADINGS, REJECTED_FIXES, RELATED_TICKETS, *RETIRED_HEADINGS)
 
 
 #: A Markdown ATX level-2 heading line, its text without the optional closing hashes.
@@ -5167,9 +5376,31 @@ _CONCISION = (
     "implementation walkthroughs: those are for whoever picks the ticket up to work out"
 )
 
+#: **What one root cause is**, stated once: beside the example ticket's `## Root cause` and,
+#: through :func:`shape`, in the step of the task that groups a run's drafts into tickets.
+# llmlint: ignore-block[changed_behavior_has_e2e] Whether two reports share an invariant is the
+# agent's judgment, which no journey scripts a verdict for. What the tooling decides is driven:
+# `tests/test_follow_up_tickets.py` holds the rendered task and the example ticket to this text
+# and `validate` to the `## Root cause` parts, and drives `check-dispositions --board` accepting
+# evidence under an adopted slug and refusing it under a different one over a real board.
+ROOT_CAUSE_BAR = (
+    "A root cause is the **invariant or guarantee that is missing or broken** — the rule the "
+    "system should hold and does not — stated in words that do not depend on which file a run "
+    "happened to see, with every location that contributes to it listed under it: possibly "
+    "several, possibly in several repositories. It is **one root cause when a single change to "
+    "the rule removes every instance, even if that change touches several places; two when "
+    "they need independent fixes that each stand alone.** The invariant is specific enough that "
+    "one concrete suggested fix removes it, so no catch-all ticket stands"
+)
+# llmlint: ignore-end[changed_behavior_has_e2e]
+
 _HEADING_GUIDANCE = (
-    "<a simple explanation of the root cause, naming the paths inside the repository where it "
-    "lives>",
+    f"<the two labelled parts below, in this order. {ROOT_CAUSE_BAR}>\n\n"
+    f"**{ROOT_CAUSE_PARTS[0]}.** <the guarantee that is missing or broken, in words that do not "
+    "depend on which file a run saw>\n\n"
+    f"**{ROOT_CAUSE_PARTS[1]}.**\n"
+    "- <repository name> `<path>`: <what this location does that breaks the invariant>\n"
+    "- <one bullet per location that contributes, in whichever repository it is>",
     "<the four labelled parts below, each in one or two sentences, in this order; then the "
     "three lines below, each exactly once, in this order, with nothing between or after them. "
     "Both severities are judged by this rubric:\n\n"
@@ -5212,6 +5443,13 @@ _HEADING_GUIDANCE = (
     "shapes and documented behaviour — each as a diff or the full shape. A fix that changes "
     f"behaviour with no interface change says so in one sentence. {_CONCISION}>",
     "<every run whose evidence this ticket carries>",
+    "<terse, because the user reads every ticket: one line naming the text queries the board "
+    "search ran; then one line per open item those searches returned that was judged a "
+    "different root cause — a link to it whose text is its title, never a bare URL, and why one "
+    "change would not remove both — or `none` in place of those lines. Never restate a matched "
+    "item's content>\n\n"
+    "Queries: <each text query, in the order it was asked>\n"
+    "- [<that item's title>](<its URL>): <why one change would not remove both>",
 )
 
 #: **A ticket at the level the user approved**: onepipeline#625's `## Impact` and
@@ -5281,10 +5519,30 @@ _REJECTED_FIXES_GUIDANCE = (
 )
 
 
+#: What the optional `## Related tickets` section of the example ticket says to write.
+_RELATED_TICKETS_GUIDANCE = (
+    "<optional: leave this section out, heading and all, when it has no entries; never write "
+    "`none`. Each entry is one bullet and nothing more: every ticket this one's "
+    f"`{DEPENDENCY_FIELD}` names, marked `{Relation.DEPENDENCY}`, and each ticket that "
+    "contributes to the same broader problem but needs a fix of its own, at whatever status, "
+    f"marked `{Relation.RELATED}`. An item at `{board_option(Status.PROPOSED)}` or "
+    f"`{board_option(Status.DEFERRED)}` is only ever `{Relation.RELATED}`. An entry is a link "
+    "whose text is that ticket's title, never a bare URL, its mark, and exactly one sentence "
+    "saying why it is related to or different from this ticket — for a dependency, what this "
+    "ticket needs from it — never a restatement of the other ticket>\n\n"
+    f"- [<that ticket's title>](<its URL>) — {Relation.DEPENDENCY}: <one sentence: what this "
+    "ticket needs from it>\n"
+    f"- [<that ticket's title>](<its URL>) — {Relation.RELATED}: <one sentence: why it is "
+    "related to or different from this ticket>"
+)
+
+
 def _example_body() -> str:
-    """The body of the example ticket: every heading with its guidance, the optional one too."""
+    """The body of the example ticket: every heading with its guidance, the optional ones too."""
     sections = []
     for heading, guidance in zip(HEADINGS, _HEADING_GUIDANCE, strict=True):
+        if heading == DUPLICATE_SEARCH:
+            sections.append(f"## {RELATED_TICKETS}\n\n{_RELATED_TICKETS_GUIDANCE}")
         sections.append(f"## {heading}\n\n{guidance}")
         if heading == SUGGESTED_FIX:
             sections.append(f"## {REJECTED_FIXES}\n\n{_REJECTED_FIXES_GUIDANCE}")
@@ -5299,7 +5557,7 @@ def ticket_example(run: str, board: str) -> str:
     one shape: a key added to the record reaches the example with it.
     """
     example = Ticket(
-        title="<repository name>: <the root cause in one line>",
+        title="<repository name>: <the invariant in one line>",
         status=Status.PROPOSED,
         root_cause=RootCause("<root-cause>"),
         repository=Origin(
@@ -5444,6 +5702,15 @@ def shape(run: str) -> dict[str, object]:
         "origin_key": ORIGIN_KEY,
         "copies_key": COPIES_KEY,
         "headings": ", ".join(f"`## {heading}`" for heading in HEADINGS),
+        "root_cause_bar": ROOT_CAUSE_BAR,
+        "root_cause_parts": ", ".join(f"`**{part}.**`" for part in ROOT_CAUSE_PARTS),
+        "duplicate_search": DUPLICATE_SEARCH,
+        "related_tickets": RELATED_TICKETS,
+        "related_shape": RELATED_SHAPE,
+        "dependency_relation": Relation.DEPENDENCY.value,
+        "related_relation": Relation.RELATED.value,
+        "invariant_at": INVARIANT_AT,
+        "structure_at": STRUCTURE_AT,
         "impact": IMPACT,
         "evidence": EVIDENCE,
         "suggested_fix": SUGGESTED_FIX,
@@ -5791,9 +6058,11 @@ def _parser() -> _Parser:
     listing = commands.add_parser(
         "board-items",
         description=(
-            "For an unbound ticket, ask once by root cause and once per distinct text question; "
-            "reuse answers already obtained by tooling or the agent. Never duplicate-search "
-            "a bound ticket. board-status owns its origin query."
+            "For an unbound ticket, ask first by text in the words of its invariant and symptom, "
+            "then once per further distinct text question, the failing file or function last; "
+            "ask by root-cause slug only for a budget overrun, whose slug is derived; reuse "
+            "answers already obtained by tooling or the agent. Never duplicate-search a bound "
+            "ticket. board-status owns its origin query."
         ),
         help=(
             "print every item of a board one narrowing query selects, every page, as one JSON "

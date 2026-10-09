@@ -33,10 +33,13 @@
   2. this run's occurrence: the host it was verified on, read with `hostname`; the basis
      commit of each repository; what was observed; and the drafts or the budget entry it
      rests on;
-  3. optionally, one short paragraph headed in plain text — `Bears on the ticket:`, say —
-     naming the section of the issue the new evidence contradicts or extends (its root
-     cause, impact or suggested fix) and stating only the delta, since this run cannot edit
-     another run's ticket;
+  3. one short paragraph headed in plain text `Bears on the ticket:`, naming the section of
+     the issue the new evidence contradicts or extends (its root cause, impact or suggested
+     fix) and stating only the delta, since this run cannot edit another run's ticket. It is
+     optional, but **required where this run's evidence shows the root cause broader than
+     the issue states**, and then states only the widened invariant and each contributing
+     location it adds. A run widens its own issue by rewriting its ticket and copying it
+     again instead;
   4. the marker above, as the last line.
 
   It never repeats what the issue already says — its root cause, impact, examples,

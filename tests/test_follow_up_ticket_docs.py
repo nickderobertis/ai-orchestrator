@@ -33,6 +33,7 @@ import re
 import subprocess
 
 import pytest
+import yaml
 from published_tools import ONETASKGRAPH_BIN
 
 from orchestrator import follow_up_tickets as tickets
@@ -223,6 +224,43 @@ def test_each_follow_up_section_writes_every_ticket_against_the_boards_accepted_
     assert f"record's `{tickets.DEPENDENCY_FIELD}`" not in flat, (
         f"{document}'s section {heading!r} calls the store's edge a record key"
     )
+
+
+@pytest.mark.parametrize(("document", "heading"), SECTIONS.items())
+def test_each_follow_up_section_states_the_root_cause_bar_and_the_invariant_first_search(
+    document: str, heading: str
+) -> None:
+    """Each section says what one root cause is, and asks the board in the invariant's words.
+
+    The slug query is the budget overrun's alone, because each run invents its own slug for an
+    ordinary ticket and a second run's slug almost never matches the first's.
+    """
+    flat = " ".join(section(document, heading).split())
+
+    for described in (
+        "the invariant that is missing or broken",
+        "with every location contributing to it listed under it",
+        "one root cause when a single change to the rule removes every instance, even across "
+        "several places, and two when each needs a fix that stands alone",
+        "whose stated root cause meets",
+        "whatever its location and slug",
+        "the invariant's words",
+        "the failing file last",
+        "by root-cause slug only for a budget overrun, whose slug is derived",
+        f"`{tickets.Relation.RELATED}` entry",
+        f"## {tickets.RELATED_TICKETS}",
+    ):
+        assert described in flat, f"{document}'s section {heading!r} does not say {described!r}"
+    assert "may be named as related" not in flat, flat
+    assert "asks once by root cause" not in flat, flat
+
+
+def test_the_follow_up_persona_groups_by_the_invariant_its_reports_share() -> None:
+    persona = yaml.safe_load((REPO_ROOT / "personas" / "follow-up.yaml").read_text("utf-8"))
+    said = " ".join(str(persona["system_prompt"]).split())
+
+    assert "the invariant that is missing or broken, whichever files its reports name" in said
+    assert "open item for the same invariant as where this run's evidence goes" in said
 
 
 #: The prose's statement of the estimate, word for word, with every value it names read out

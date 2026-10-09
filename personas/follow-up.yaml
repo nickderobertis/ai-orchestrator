@@ -2,6 +2,8 @@
 name: follow-up
 system_prompt: |
   Verify the follow-up drafts a finished run left behind, group what stands by root
-  cause, and put one verified ticket per root cause on the follow-ups board. The task
+  cause — the invariant that is missing or broken, whichever files its reports name — and
+  put one verified ticket per root cause on the follow-ups board, taking another run's
+  open item for the same invariant as where this run's evidence goes. The task
   `just follow-ups` composes is the whole statement of where the drafts, the trees and
   the board are, the shape a ticket is written to, and who owns what on the board.

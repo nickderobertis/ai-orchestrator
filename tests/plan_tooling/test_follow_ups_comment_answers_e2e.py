@@ -22,6 +22,7 @@ board credential.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import shlex
@@ -31,6 +32,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
+from follow_up_ticket_shape import before_schema_10
 from nx_workspace import SHARED_TOOLCHAIN_GROUP
 from published_tools import ONETASKGRAPH_BIN
 from test_follow_ups_answer_comments_recipe_e2e import (
@@ -88,8 +90,10 @@ pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
 #: 1, with no `host`, no `repositories` and no `## Impact`; 2, with a `host` but neither of the
 #: others; 3, with `repositories` but no `## Impact`; 4, the last with the headings schema 5
 #: retired; 5, which the onepipeline#438 ticket carried; 6, the last with no stored estimate; 7,
-#: the last before the rubric's structure; and 8, the one before the current — both of which
-#: still validate, and are brought forward when they are rewritten.
+#: the last before the rubric's structure; 8, the first with it; and 9, the one before the
+#: current, the last whose `## Root cause` is plain prose and which closes with no
+#: `## Duplicate search` — 7, 8 and 9 all still validate, and are brought forward when they
+#: are rewritten.
 PROPOSED_CAUSE = "listing-cursor-skips-last-page"
 UNSURE_CAUSE = "lock-file-left-after-crash"
 DEFERRED_CAUSE = "sweep-trailer-omits-a-family"
@@ -107,6 +111,7 @@ OLDER_CAUSES = dict(
             "retry-loop-never-backs-off",
             "cache-never-expires",
             "badge-counts-stale-items",
+            "feed-skips-a-retried-entry",
         ),
         strict=True,
     )
@@ -180,6 +185,19 @@ else:
         text, count=1, flags=re.DOTALL,
     )
 text = re.sub(r"## Repository\\n\\n.*?\\n\\n(?=## )", "", text, count=1, flags=re.DOTALL)
+invariant, located = (f"**{part}.**" for part in tickets.ROOT_CAUSE_PARTS)
+if invariant not in text:
+    text = re.sub(
+        rf"(## {tickets.ROOT_CAUSE}\\n\\n)(.*?)(\\n\\n## )",
+        lambda held: f"{held[1]}{invariant} {held[2]}\\n\\n{located}\\n"
+        f"- some-service `src/cursor.py`: where it is seen.{held[3]}",
+        text, count=1, flags=re.DOTALL,
+    )
+if f"## {tickets.DUPLICATE_SEARCH}\\n" not in text:
+    text = text.rstrip("\\n") + (
+        f"\\n\\n## {tickets.DUPLICATE_SEARCH}\\n\\n"
+        "No search was recorded when this ticket was filed, and this dispatch ran none for it.\\n"
+    )
 text = text.replace("## Suggested fixes\\n", f"## {tickets.SUGGESTED_FIX}\\n", 1)
 record[tickets.FREQUENCY_FIELD] = str(tickets.Frequency.INTERMITTENT)
 text = text.replace(line, prefix + json.dumps(record), 1)
@@ -448,10 +466,12 @@ def _older(ticket: tickets.Ticket, schema: int) -> str:
     :data:`tickets.HOST_AT` its record names no `host` and its `## Evidence` no machine. From
     schema 5 (:data:`tickets.RETIRED_AT`) its body keeps today's headings; before it, the body
     carries the two that schema retired — `## Repository`, after `## Root cause`, and
-    `## Suggested fixes` in place of `## Suggested fix`.
+    `## Suggested fixes` in place of `## Suggested fix`. Before :data:`tickets.INVARIANT_AT` its
+    `## Root cause` is plain prose and it carries no `## Duplicate search`.
     """
     assert tickets.PRIOR_SCHEMAS[0] <= schema < tickets.SCHEMA, schema
     assert f"- {tickets.ESTIMATE_LINE}:" not in ticket.body, ticket.body
+    ticket = dataclasses.replace(ticket, body=before_schema_10(ticket.body))
     intermittent = tickets.Frequency.INTERMITTENT
     if schema >= tickets.STRUCTURE_AT:
         # The rubric's structure as it stands: what came after it is an optional field alone.

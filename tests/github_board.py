@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import ClassVar, NamedTuple, NewType
 
 import follow_up_variables
-from follow_up_ticket_shape import FIX, impact_prose
+from follow_up_ticket_shape import FIX, impact_prose, schema_10_section
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
@@ -1614,7 +1614,7 @@ def _follow_up_ticket(
                 if heading == follow_up_tickets.IMPACT
                 else FIX
                 if heading == follow_up_tickets.SUGGESTED_FIX
-                else f"Verified on `{host}` ({heading})."
+                else schema_10_section(heading, f"Verified on `{host}` ({heading}).")
             )
             + (f" {evidence}" if evidence and heading == follow_up_tickets.EVIDENCE else "")
             for heading in follow_up_tickets.HEADINGS

@@ -290,7 +290,13 @@ Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Review
    Report it, naming the draft, its author and why it was blocking, rather than filing it
    quietly as a ticket.
 5. **Group what stands by root cause**, and write one ticket per root cause, to the shape
-   under "The verified ticket" below. For each, **judge both severities by the rubric** in
+   under "The verified ticket" below. {{ shape.root_cause_bar }}. So drafts whose evidence
+   points at different files but shares one invariant become one ticket, its
+   `**Contributing locations.**` listing each location they name; drafts whose fixes would
+   each stand alone stay separate tickets, each listing the other under
+   `## {{ shape.related_tickets }}` where it contributes to the same broader problem. One
+   ticket states one concrete suggested fix, which may change several units in several
+   repositories. For each, **judge both severities by the rubric** in
    the example's `## {{ shape.impact }}` guidance, from the product owner's perspective across
    users, development and resources, and write the parts that judgment rests on — {{ shape.impact_parts }}
    — before the severity lines: the severity with the workaround follows from the
@@ -310,23 +316,44 @@ Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Review
    re-dispatch. If that item is closed, missing or no longer carries the ticket,
    `{{ board_status }}` alone runs recovery discovery and applies the duplicate rule. Read its bound item through `{{ board_status }}` and copy onto that item.
    For an unbound ticket, ask each distinct question once, and never by origin: step 8's
-   `{{ board_status }}` asks by origin, and nothing else does. Ask once by its root cause,
-   `{{ board_items }} --board {{ board }} --repository <each repository the ticket lists> --metadata {{ shape.record_key }}/root_cause=<root-cause>`,
-   then by text, `{{ board_items }} --board {{ board }} --repository <each repository the ticket lists> --search <text>`, once per distinct question about
-   its failing function, file, command or message. Reuse every answer tooling or an earlier
-   step already obtained in this dispatch; never repeat the same search. `--repository`,
-   given once for each repository the ticket lists, asks the board the ticket is filed on, and neither search is narrowed further: both answer
-   whichever repository on that board an item lives in. On a GitHub board the
+   `{{ board_status }}` asks by origin, and nothing else does. Every question is a text search,
+   `{{ board_items }} --board {{ board }} --repository <each repository the ticket lists> --search <text>`,
+   asked in this order:
+   - **first, in the words of the invariant and its symptom** — what a report of this
+     problem would carry whichever file it was found in;
+   - then once per distinct further question about the symptom, the command or the message;
+   - **last, the failing file or function**, because the file is exactly what differs
+     between two reports of one root cause.
+
+   Its slug is no question to ask: each run names its own, so another run's item for the same
+   root cause almost never carries this ticket's slug. A budget overrun's slug is derived,
+   and is asked as "Every landed change against its budgets" states. Reuse every answer
+   tooling or an earlier step already obtained in this dispatch; never repeat the same
+   search. `--repository`, given once for each repository the ticket lists, asks the board
+   the ticket is filed on, and no search is narrowed further: each answers whichever
+   repository on that board an item lives in. On a GitHub board the
    text search is GitHub's own search of the board's issues: it matches whole words before
    it confirms the text, so search for words an issue would carry rather than a fragment of
    one, and it may not yet list an item another run wrote a few seconds ago. On Linear it is
    Linear's own search of the project's issue titles and descriptions, matched regardless of
    case.
    Only an unbound ticket needs these duplicate searches; nothing in this task lists the board.
-   - **The same root cause.** An open item carrying this ticket's root cause is where this
-     run's evidence goes, at step 9. An item at `Deferred` is open: no agent picks it up to
-     work on, but it is searched like any other open item and still takes this run's
-     evidence.
+   Record what they asked and what they returned in the ticket's `## {{ shape.duplicate_search }}`, as
+   "The verified ticket" states.
+   <!-- llmlint: ignore-block[changed_behavior_has_e2e] Whether an item's stated root cause meets the bar is the agent's judgment of two reports, which the suite never scripts a verdict for: it doubles the agent's turn, so a journey could only assert what its own script chose. What the tooling decides is driven: `tests/test_follow_up_tickets.py` holds the rendered task to this rule and drives `check-dispositions --board` and `re-estimate` accepting this run's evidence on another run's item under the slug this ticket adopted, and refusing it under a slug it kept, over a real `local-md` board; `tests/plan_tooling/test_follow_ups_recipe_e2e.py` holds that the invariant-phrased search a real dispatch is handed answers an earlier run's item filed under a different slug. -->
+   - **The same root cause.** An open item, at any open status, whose stated root cause meets
+     the bar of step 5 — one change to the rule would remove this ticket's instances and its
+     own — is the same root cause **even when its location and its slug differ**, and is where
+     this run's evidence goes, as a comment, at step 9, rather than a new ticket. This run's
+     ticket for it then **takes that item's `root_cause` slug**: its file is renamed to
+     `<that slug>{{ shape.ticket_suffix }}` and its record's `root_cause` is that slug, so the evidence
+     comment's marker, the account and the item's occurrence recount all name the one root
+     cause. An item at `Proposal` or `Deferred` is open: no agent picks it up to work on, but
+     it is searched like any other open item and still takes this run's evidence. Where this
+     run's evidence shows the cause broader than that item states, the comment's
+     `Bears on the ticket:` paragraph is required, as "Ownership on the board" states; no run
+     edits another run's item.
+   <!-- llmlint: ignore-end[changed_behavior_has_e2e] -->
    - **The accepted fixes.** Write each ticket as if the accepted fixes those searches
      returned were already in. They are the items the searches returned for *other* root
      causes at an accepted status — {{ accepted_statuses }} — whichever repository their issue
@@ -352,12 +379,14 @@ Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Review
    <!-- llmlint: ignore-block[changed_behavior_has_e2e] Whether a `Done` fix has reached the basis is the agent's reading of a tree, which the suite never scripts a verdict for: it doubles the agent's turn, so a journey could only assert what its own script chose. What the tooling holds for a `Done` item — that `board-items` keeps it at an accepted status among what a search selects, and `board-status` admits it as a far end — is driven in `tests/test_follow_up_tickets.py` over every accepted status. -->
    A `Done` item's fix is assumed only where it has not reached the basis recorded in
    step 1 — read the tree; where it has, the verification at the basis already accounts
-   for it and nothing changes. A `Proposal` or `Deferred` item's fix is never assumed; a
-   clearly related one may be mentioned as related, as "The verified ticket" states.
+   for it and nothing changes. A `Proposal` or `Deferred` item's fix is never assumed; one
+   that contributes to the same broader problem but needs a fix of its own is a
+   `{{ shape.related_relation }}` entry of the ticket's `## {{ shape.related_tickets }}`, as "The verified ticket" states.
    <!-- llmlint: ignore-end[changed_behavior_has_e2e] -->
 
-   For every fate but unchanged, add the item's `{{ shape.dependency_field }}` entry, and say in the text where
-   and how its fix changed the ticket with the item's URL; step 8 checks the entry. On a
+   For every fate but unchanged, add the item's `{{ shape.dependency_field }}` entry, list it as a
+   `{{ shape.dependency_relation }}` entry of `## {{ shape.related_tickets }}`, and say in the text where and how its fix
+   changed the ticket with the item's URL; step 8 checks the entry. On a
    re-dispatch of an unbound ticket, ask each distinct question once and re-derive this from
    those answers: an accepted ticket may have appeared, moved or been
    un-accepted since the last pass, so entries are added and removed and the ticket's claims
@@ -377,9 +406,11 @@ Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Review
    `{{ copy }} --board {{ board }} <path of the ticket>`, as "The verified ticket" states. When
    that copy refuses, copy nothing more for that ticket and keep what it printed for your
    report. Where an
-   open item for it was created by another run, copy nothing: add this run's one comment
-   to that item, or edit the comment this run already left there, under "Ownership on the
-   board" below, and **after every such comment, re-estimate that item** with
+   open item for it was created by another run — found under this ticket's slug, or by the
+   searches of step 7 under the slug this ticket then took from it — copy nothing: add this
+   run's one comment to that item, or edit the comment this run already left there, under
+   "Ownership on the board" below, its marker naming that item's `root_cause`, and **after
+   every such comment, re-estimate that item** with
    `{{ re_estimate }} --board {{ board }} <that item's id>`, which recounts its occurrences, stores
    its estimate and rewrites its estimate line. Keep what it printed for your report.
 10. **Account for every draft this dispatch was given.** Write one disposition per draft
@@ -414,7 +445,7 @@ written before you were dispatched, and it is not yours to change. Yours is
   run wrote, or as this run's evidence comment on another run's open issue for the same
   root cause. `root_causes` names every root cause it supports, each the root cause of a
   ticket this run holds under its `{{ shape.tickets_directory }}/` whose `drafts` names this draft — which it
-  keeps in both cases. For new evidence-only dispositions, `detail` names the carrier as
+  keeps in both cases, under the issue's own slug where it took it. For new evidence-only dispositions, `detail` names the carrier as
   `{{ board }}:<native id>` so validation reads that item directly. Older accounts naming
   no carrier retain metadata discovery; do not omit the carrier in a new account.
 - **`{{ shape.not_reproducible }}`** — its claim does not hold at the basis commit, or nothing in
@@ -455,8 +486,8 @@ A ticket is a local Markdown task in the `{{ shape.drafts_source }}` source, wri
 - It carries **no `project`**, so it lands on the board as a standalone item.
 - **Its `repositories` lists every repository its fix changes, each once, as a normalized
   origin**, and those repositories decide the board it is filed on. A fix that changes one
-  repository lists that one, the repository its root cause lives in, and the record's
-  `repository` names it too: on a GitHub board its issue is created in that one repository
+  repository lists that one, and the record's `repository` — the repository its issue is
+  filed in — names it too: on a GitHub board its issue is created in that one repository
   and added to the board as an item, and that repository must belong to the board's owner, as
   `github.com/<owner>/<name>`. A repository one of the board's routes names —
   `github.com/petsinc/*`, which goes to Hello Patient's Linear — is filed as an issue of the
@@ -469,8 +500,9 @@ A ticket is a local Markdown task in the `{{ shape.drafts_source }}` source, wri
   ticket listing a `github.com/petsinc/*` repository beside one elsewhere stays on
   `{{ board }}`; one a route takes to a board filing no issue in a repository, such as Hello
   Patient's Linear, names one of the repositories it lists as its record's `repository`.
-- Its title is `<repository name>: <the root cause in one line>`, at most
-  {{ shape.title_limit }} characters, where the repository name is the last segment of `repository`.
+- Its title is `<repository name>: <the invariant in one line>`, at most
+  {{ shape.title_limit }} characters, where the repository name is the last segment of `repository`,
+  and its `<root-cause>` slug names the invariant rather than a file.
 - **Its status is the board's to decide.** A new ticket is `{{ shape.proposed }}`, a proposal
   awaiting the user's decision, which the board shows as `Proposal` and Linear as `Proposed`; a
   person moving it to `Todo` is what accepts it. A ticket the board already holds carries the
@@ -500,6 +532,29 @@ A ticket is a local Markdown task in the `{{ shape.drafts_source }}` source, wri
 - Its front matter carries the `{{ shape.record_key }}` record with every key present, and its body
   the headings {{ shape.headings }}, in that order, each with content. `created_by_run` is this
   run, and `owning_runs` includes it.
+- **`## Root cause` is its labelled parts**, {{ shape.root_cause_parts }}, in that order: the
+  invariant or guarantee that is missing or broken, in words that do not depend on which file
+  a run saw, then one bullet per location that contributes to it, each naming its repository
+  and path. {{ shape.root_cause_bar }}. `{{ validate }}` refuses a schema-{{ shape.schema }} ticket without them.
+- **`## {{ shape.duplicate_search }}` is its last section, and terse**, because the user reads every
+  ticket: one line naming the text queries step 7 ran, then one line per open item those
+  searches returned that was judged a different root cause — a link to it whose text is its
+  title, never a bare URL, and why one change would not remove both — or `none` in place of
+  those lines. It never restates a matched item's content. A ticket that ran no search, being
+  bound, says that no search was recorded when it was filed.
+- **`## {{ shape.related_tickets }}` is optional, directly before `## {{ shape.duplicate_search }}`**, and
+  left out — no heading, no `none` — when it has no entries. It lists every ticket this one's
+  `{{ shape.dependency_field }}` names, marked `{{ shape.dependency_relation }}`, and each issue that contributes to the
+  same broader problem but needs an independent fix — it did not meet the bar of step 5 —
+  marked `{{ shape.related_relation }}`, at whatever status. Each entry is one bullet and nothing more,
+  {{ shape.related_shape }}: a markdown link whose text is that ticket's title, never a bare or
+  plain-text URL, its mark, and exactly **one sentence** saying why it is related to or
+  different from this ticket — for a `{{ shape.dependency_relation }}`, what this ticket needs from it —
+  never a longer description or a restatement of the other ticket. It differs from
+  `## {{ shape.duplicate_search }}`, which records near-matches judged a different root cause: this one
+  is related work a reader should know about, so an item may appear in both. `{{ validate }}`
+  refuses a present section that is empty, says `none`, or carries an entry of any other
+  shape.
 - **Its priority is estimated from facts, never chosen.** Judge from the original evidence
   whether the root cause fires consistently, and record it as the `{{ shape.record_key }}` record's
   `{{ shape.frequency_field }}`: `{{ shape.consistent }}` when it fires every time its conditions hold,
@@ -544,12 +599,13 @@ A ticket is a local Markdown task in the `{{ shape.drafts_source }}` source, wri
   dependency, which `{{ plan_store }} task deps` walks from either end, and the edge is the one
   record of it: nothing in the `{{ shape.record_key }}` record repeats it.
 - **Where the accepted fix changed the ticket, the text says so with the item's URL** — the
-  `url` the board reports for the accepted item. In `## {{ shape.impact }}` or `## Root cause` for a
+  `url` the board reports for the accepted item — on its `{{ shape.dependency_relation }}` entry of
+  `## {{ shape.related_tickets }}`, and beside it in `## {{ shape.impact }}` or `## Root cause` for a
   ticket the fix narrowed, in `## {{ shape.suggested_fix }}` for one it re-fixed, and in
   `## {{ shape.rejected_fixes }}` beside the fix it displaced, stating what is assumed ("assuming the fix
   in <URL> lands, …"; "chosen because <URL> already …"). A `Proposal` or `Deferred` item
-  for a clearly related root cause may be named as related, by URL, with **no**
-  `{{ shape.dependency_field }}` entry and no change to the ticket's claims.
+  for a clearly related root cause is a `{{ shape.related_relation }}` entry of `## {{ shape.related_tickets }}` and
+  nowhere else, with **no** `{{ shape.dependency_field }}` entry and no change to the ticket's claims.
 - **`{{ validate }}` holds the entries' shape and reads no board**: it refuses a ticket any
   of whose entries is not a `{{ shape.dependency_item }}`, is not of the `{{ shape.dependency_kind }}` kind, is not
   `<source>:<native id>` with both parts non-empty, names the `{{ shape.drafts_source }}` source, names a
@@ -559,8 +615,9 @@ A ticket is a local Markdown task in the `{{ shape.drafts_source }}` source, wri
   outside the accepted statuses ({{ shape.accepted }}); names an item whose record carries this
   ticket's own `root_cause` — an accepted item for the *same* root cause is the
   same-root-cause path's, which takes this run's evidence as a comment, and never this
-  rule's; names an item the board reports no `url` for; or names an item whose URL the
-  ticket's body does not carry. On that refusal copy nothing for the ticket, re-derive it
+  rule's; names an item the board reports no `url` for; or names an item whose URL is not on
+  a `{{ shape.dependency_relation }}` entry of the ticket's `## {{ shape.related_tickets }}` — on a ticket recorded
+  before schema {{ shape.invariant_at }}, anywhere in its body. On that refusal copy nothing for the ticket, re-derive it
   against the dependency item that the refusal names, using its read by id — removing the entry and the assumption from the text
   where the item is no longer accepted — run `{{ board_status }}` on it again, validate it, and
   report what was printed.
@@ -627,7 +684,10 @@ budget account at `{{ budgets }}`, with the change's telemetry copied unchanged 
 - **Dispose of each overrun by its cause, through the machinery above, never as a
   duplicate.** Its root cause is `<repository name>-<budget id>-over-<cause>`, such as
   `ai-orchestrator-cycle-time-over-repeated-gate-runs`, so a later overrun of the same cause
-  meets the same item. Search the board for it as step 7 searches for any root cause:
+  meets the same item. Because that slug is derived rather than chosen, an overrun is the
+  one ticket asked by its slug: ask
+  `{{ board_items }} --board {{ board }} --repository <its repository> --metadata {{ shape.record_key }}/root_cause=<root-cause>`
+  once, before step 7's text searches, which it then runs as for any unbound ticket:
   - an open item carrying it, one at `Deferred` included, takes this run's evidence as a
     comment, followed by `{{ re_estimate }}`, which is how three or more occurrences raise its
     priority estimate;

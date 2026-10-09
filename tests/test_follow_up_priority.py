@@ -29,7 +29,13 @@ from pathlib import Path
 import follow_up_variables
 import onetaskgraph_sdk
 import pytest
-from follow_up_ticket_shape import FIX, impact_prose
+from follow_up_ticket_shape import (
+    FIX,
+    before_schema_10,
+    brought_to_schema_10,
+    impact_prose,
+    schema_10_section,
+)
 
 from orchestrator import follow_up_comments as comments
 from orchestrator import follow_up_tickets as tickets
@@ -82,6 +88,10 @@ def _body(with_workaround: Severity, line: str | None, *, structured: bool = Tru
                 text = FIX
             case tickets.EVIDENCE:
                 text = f"What this ticket says under {heading}. Verified on `{HOST}`."
+            case tickets.ROOT_CAUSE | tickets.DUPLICATE_SEARCH if structured:
+                text = schema_10_section(heading, "")
+            case tickets.DUPLICATE_SEARCH:
+                continue
             case _:
                 text = f"What this ticket says under {heading}."
         sections.append(f"## {heading}\n\n{text}")
@@ -123,7 +133,7 @@ def _older(ticket: tickets.Ticket, schema: int) -> str:
     """
     record = tickets.record(ticket)
     record["schema"] = schema
-    body = ticket.body
+    body = ticket.body if schema >= tickets.INVARIANT_AT else before_schema_10(ticket.body)
     fields: dict[str, object] = {"priority": str(ticket.priority_estimate)}
     if schema < tickets.ESTIMATE_AT:
         fields = {}
@@ -603,6 +613,7 @@ def test_a_schema_6_item_follows_only_while_its_priority_is_none(
     assert _decided(path, capsys) == "backlog\n", "a schema-6 ticket was not read"
     assert tickets.main(["validate", str(path)]) == tickets.UNSOUND
     assert "carries no `frequency`" in capsys.readouterr().err
+    path.write_text(brought_to_schema_10(path.read_text(encoding="utf-8")), encoding="utf-8")
     _refacted(path, frequency=Frequency.INTERMITTENT)
     _copied(path, capsys)
 
@@ -807,9 +818,10 @@ RE_ESTIMATED_SCHEMAS = pytest.mark.parametrize(
     [
         (tickets.SCHEMA, tickets.SCHEMA),
         (tickets.PRIOR_SCHEMA, tickets.PRIOR_SCHEMA),
+        (tickets.ESTIMATE_AT, tickets.ESTIMATE_AT),
         (tickets.UNESTIMATED_SCHEMA, tickets.ESTIMATE_AT),
     ],
-    ids=["schema-8", "schema-7", "schema-6"],
+    ids=["schema-10", "schema-9", "schema-7", "schema-6"],
 )
 
 
@@ -955,7 +967,7 @@ def test_re_estimate_refuses_an_item_it_cannot_estimate(
     plan_store.sdk(plan_store.client().task_metadata_set(issue, tickets.KEY, '{"schema": 5}'))
     assert tickets.main(["re-estimate", "--board", BOARD, issue]) == tickets.UNSOUND
     refused = " ".join(capsys.readouterr().err.split())
-    assert "record of schema 5, and this reads schema 6, 7, 8 or 9" in refused
+    assert "record of schema 5, and this reads schema 6, 7, 8, 9 or 10" in refused
     plan_store.sdk(plan_store.client().task_metadata_set(issue, tickets.KEY, '{"schema": 7}'))
     assert tickets.main(["re-estimate", "--board", BOARD, issue]) == tickets.UNSOUND
     assert "no follow-up ticket this can estimate" in capsys.readouterr().err
@@ -1059,7 +1071,7 @@ def test_board_status_refuses_a_bound_items_record_of_no_schema_it_reads(
     assert f"record of schema {schema!r}, which no follow-up tool reads" in refused
     assert tickets.main(["re-estimate", "--board", BOARD, issue]) == tickets.UNSOUND
     refused = " ".join(capsys.readouterr().err.split())
-    assert f"record of schema {schema!r}, and this reads schema 6, 7, 8 or 9" in refused
+    assert f"record of schema {schema!r}, and this reads schema 6, 7, 8, 9 or 10" in refused
     assert _shown(issue)["priority"] == "low"
 
 

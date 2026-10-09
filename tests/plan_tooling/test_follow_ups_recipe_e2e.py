@@ -64,7 +64,7 @@ import plan_root_variable
 import pytest
 import short_state
 import yaml
-from follow_up_ticket_shape import impact_prose
+from follow_up_ticket_shape import DUPLICATE_SEARCH, impact_prose
 from nx_workspace import SHARED_TOOLCHAIN_GROUP
 from project_fixtures import helper, project_from_plan
 from published_tools import ONETASKGRAPH_BIN
@@ -112,11 +112,12 @@ STORE_INSTRUCTION_WITNESS = "store-instruction.witness"
 VALIDATE_WITNESS = "validate-older-first.witness"
 #: The older plan store's own log of what it served during that validate, under the bench.
 VALIDATE_SERVED = "validate-older-first.served"
-#: What the task's own duplicate search by root cause answered for the shared root cause, run
-#: as the task spells it; what its search by text answered for it, run the same way; what the
-#: validators printed for the three refused shapes; and what `board-status` printed on the
-#: re-dispatch for the ticket whose accepted item a person had un-accepted.
-ROOT_CAUSE_WITNESS = "root-cause-search.witness"
+#: What the task's first duplicate search, in the invariant's words, answered for the shared
+#: root cause, run as the task spells it; what its search for the symptom's words answered,
+#: run the same way; what the validators printed for the three refused shapes; and what
+#: `board-status` printed on the re-dispatch for the ticket whose accepted item a person had
+#: un-accepted.
+INVARIANT_WITNESS = "invariant-search.witness"
 SEARCH_WITNESS = "duplicate-search.witness"
 REFUSED_WITNESS = "refused-shapes.witness"
 REDERIVE_WITNESS = "rederive.witness"
@@ -193,6 +194,12 @@ READ_FROM_HOSTNAME = "host-read-from-hostname"
 #: one a proposed ticket's fix would remove — which is never assumed.
 NEW_CAUSE = "listing-cursor-skips-last-page"
 SHARED_CAUSE = "sweep-trailer-omits-a-family"
+#: The invariant the shared root cause breaks, which both runs' tickets state; the words the
+#: first search asks for it; and the slug this run would have named its ticket from the file
+#: its draft points at, before that search answered the earlier run's item under its own.
+SHARED_INVARIANT = "Every family a sweep examined appears in its trailer."
+INVARIANT_SEARCH = "every family a sweep examined"
+INVENTED_SHARED_CAUSE = "reclaim-report-drops-a-family"
 EVAPORATED_CAUSE = "retry-storm-on-a-flaky-listing"
 RELATED_CAUSE = "sweep-follows-a-symlink"
 
@@ -232,7 +239,10 @@ NARROWED_SEVERITY = (tickets.Severity.MEDIUM, tickets.Severity.LOW)
 WORKAROUND = "readers request the last page by its number"
 UNIT = "### Listing — `some-service` (`src/cursor.py`)\n\n`list` returns every page."
 FULL_SEVERITY = (tickets.Severity.HIGH, tickets.Severity.MEDIUM)
-RELATED = f"Related: {PROPOSED_URL} proposes the sweep fix, and is not assumed."
+RELATED = (
+    f"- [some-service: the sweep stays inside its root]({PROPOSED_URL}) — related: It proposes "
+    "the sweep fix, which this ticket does not assume."
+)
 WITHDRAWN = f"Withdrawn: the accepted fix in {PROPOSED_URL} removes this root cause too."
 #: The first pass's report, naming the draft dropped under the accepted item's URL.
 DROPPED_REPORT = (
@@ -241,7 +251,8 @@ DROPPED_REPORT = (
 )
 
 #: The three ticket shapes the first pass's turn writes and has refused: an edge of the
-#: related kind, edges naming two sources, and a far end whose URL the body never names.
+#: related kind, edges naming two sources, and a far end whose URL no `dependency` entry of
+#: the ticket's `## Related tickets` names.
 REFUSED_RELATED_KIND = "refused-related-kind"
 REFUSED_TWO_SOURCES = "refused-two-sources"
 REFUSED_URL_ABSENT = "refused-url-absent"
@@ -456,6 +467,7 @@ def _ticket(
     repository: str = REPOSITORY,
     frequency: tickets.Frequency | None = tickets.Frequency.INTERMITTENT,
     estimated: bool = False,
+    related: str | None = None,
 ) -> tickets.Ticket:
     """A `backlog` ticket, naming ``host`` in its record and in its `## Evidence` section.
 
@@ -469,10 +481,40 @@ def _ticket(
     judgment of whether the root cause fires consistently. The estimate, its line and the
     priority are `board-status`'s to write, so a ticket an agent writes carries none;
     ``estimated`` writes them as `board-status` would for one occurrence, which is what an
-    item an earlier run copied onto the board carries.
+    item an earlier run copied onto the board carries. ``related`` is its `## Related tickets`
+    section, directly before `## Duplicate search`; its `## Root cause` is ``body``'s invariant
+    and one contributing location.
     """
     line = tickets.estimate_line(severity[1], frequency, 1) + "\n" if estimated else ""
     level = tickets.estimate(severity[1], frequency, 1) if estimated else None
+    sections = []
+    for heading in tickets.HEADINGS:
+        match heading:
+            case tickets.IMPACT:
+                prose = f"{body}: some-service's readers lose the last page of every listing. "
+                text = tickets.impact_section(
+                    impact_prose(f"{prose}{impact_note}".rstrip(), workaround=WORKAROUND),
+                    severity[0],
+                    WORKAROUND,
+                    severity[1],
+                )
+                text += line
+            case tickets.SUGGESTED_FIX:
+                fix = suggested_fix if suggested_fix is not None else f"{body} ({heading})."
+                text = f"{fix}\n\n{UNIT}"
+                if rejected is not None:
+                    text += f"\n\n## {tickets.REJECTED_FIXES}\n\n{rejected}"
+            case tickets.ROOT_CAUSE:
+                text = _root_cause(f"{body} ({heading}). {root_cause_note}".rstrip())
+            case tickets.DUPLICATE_SEARCH:
+                if related is not None:
+                    sections.append(f"## {tickets.RELATED_TICKETS}\n\n{related}")
+                text = DUPLICATE_SEARCH
+            case tickets.EVIDENCE:
+                text = f"{body} ({heading}). Verified on `{host}`."
+            case _:
+                text = f"{body} ({heading})."
+        sections.append(f"## {heading}\n\n{text}")
     return tickets.Ticket(
         title=title,
         status=tickets.Status.PROPOSED,
@@ -484,42 +526,25 @@ def _ticket(
         basis=(tickets.Basis(tickets.Origin(repository), tickets.Commit(COMMIT)),),
         verified_at=tickets.Timestamp(VERIFIED_AT),
         host=tickets.Host(host),
-        body="\n\n".join(
-            f"## {heading}\n\n"
-            + (
-                tickets.impact_section(
-                    impact_prose(
-                        f"{body}: some-service's readers lose the last page of every listing. "
-                        f"{impact_note}".rstrip(),
-                        workaround=WORKAROUND,
-                    ),
-                    severity[0],
-                    WORKAROUND,
-                    severity[1],
-                )
-                + line
-                if heading == tickets.IMPACT
-                else (
-                    (suggested_fix if suggested_fix is not None else f"{body} ({heading}).")
-                    + f"\n\n{UNIT}"
-                    if heading == tickets.SUGGESTED_FIX
-                    else f"{body} ({heading})."
-                )
-                + (f" {root_cause_note}" if root_cause_note and heading == "Root cause" else "")
-            )
-            + (f" Verified on `{host}`." if heading == tickets.EVIDENCE else "")
-            + (
-                f"\n\n## {tickets.REJECTED_FIXES}\n\n{rejected}"
-                if rejected is not None and heading == tickets.SUGGESTED_FIX
-                else ""
-            )
-            for heading in tickets.HEADINGS
-        ),
+        body="\n\n".join(sections),
         depends_on=tuple(tickets.QualifiedBoardId(held) for held in depends_on),
         priority_estimate=level,
         frequency=frequency,
         priority=tickets.Priority.NONE if level is None else level,
     )
+
+
+def _root_cause(invariant: str) -> str:
+    """A `## Root cause` stating ``invariant`` and the one location that contributes to it."""
+    return (
+        f"**{tickets.ROOT_CAUSE_PARTS[0]}.** {invariant}\n\n"
+        f"**{tickets.ROOT_CAUSE_PARTS[1]}.**\n- some-service `src/cursor.py`: where it is seen."
+    )
+
+
+def _dependency(title: str, url: str) -> str:
+    """One `dependency` entry of a `## Related tickets` section, linking ``url``."""
+    return f"- [{title}]({url}) — dependency: This ticket is written as if its fix were in."
 
 
 def _board_item(
@@ -1200,6 +1225,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             "Filed by the earlier run",
             HOST,
             estimated=True,
+            root_cause_note=SHARED_INVARIANT,
         )
         earlier_path = tickets.ticket_path(bench.drafts_root, other, SHARED_CAUSE)
         earlier_path.parent.mkdir(parents=True)
@@ -1264,6 +1290,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
         related_draft = _draft(bench, main, "The sweep follows a symlink")
         new_ticket = tickets.ticket_path(bench.drafts_root, main, NEW_CAUSE)
         shared_ticket = tickets.ticket_path(bench.drafts_root, main, SHARED_CAUSE)
+        invented_ticket = tickets.ticket_path(bench.drafts_root, main, INVENTED_SHARED_CAUSE)
         related_ticket = tickets.ticket_path(bench.drafts_root, main, RELATED_CAUSE)
         title = "some-service: the listing cursor skips the last page"
         # Written against the accepted narrowing fix: it depends on that item, and its
@@ -1280,15 +1307,16 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             root_cause_note=NARROWED_CAUSE,
             suggested_fix=REPLACEMENT_FIX,
             rejected=REFIXED,
+            related=_dependency("another-service: the export pages by cursor", NARROWING_URL),
         )
-        # Related to a proposal, which is named as related and never assumed: no entry.
+        # Related to a proposal, which is a `related` entry and never assumed: no edge.
         related = _ticket(
             main,
             RELATED_CAUSE,
             (_draft_id(main, related_draft),),
             "some-service: the sweep follows a symlink",
             "Verified beside a proposal",
-            impact_note=RELATED,
+            related=RELATED,
         )
         # The three shapes the tooling refuses, each under a root cause of its own.
         shaped = {
@@ -1339,7 +1367,10 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             (_draft_id(main, shared_draft),),
             "some-service: the sweep trailer omits a family",
             "Verified again",
+            root_cause_note=SHARED_INVARIANT,
         )
+        # The same ticket under the slug its draft's file suggested, before the search.
+        invented = dataclasses.replace(shared, root_cause=tickets.RootCause(INVENTED_SHARED_CAUSE))
         comment = tickets.render_comment(
             main, SHARED_CAUSE, "This run hit it at `scripts/sweep.sh:12`."
         )
@@ -1364,8 +1395,12 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                     "--witness",
                     STORE_INSTRUCTION_WITNESS,
                 ],
-                # The duplicate search by root cause for the shared root cause, as the task
-                # spells it.
+                # The shared ticket, written under the slug its draft's file suggested.
+                ["mkdir", "-p", str(new_ticket.parent)],
+                _placed(_staged(bench, "invented.md", tickets.render(invented)), invented_ticket),
+                # The first duplicate search for it, in the invariant's words, as the task
+                # spells it: it answers the earlier run's item under that item's own slug,
+                # which the ticket then takes in place of the one it was written under.
                 [
                     python,
                     str(RUN_TASK_STORE_INSTRUCTION),
@@ -1373,16 +1408,18 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                     str(_prompt_log(bench, "first")),
                     "--board",
                     BOARD,
-                    "--root-cause",
-                    SHARED_CAUSE,
+                    "--search",
+                    INVARIANT_SEARCH,
                     "--repository",
                     REPOSITORY,
                     "--checkout",
                     str(REPO_ROOT),
                     "--witness",
-                    ROOT_CAUSE_WITNESS,
+                    INVARIANT_WITNESS,
                 ],
-                # The duplicate search for the shared root cause, as the task spells it.
+                ["rm", str(invented_ticket)],
+                # A further search for the shared root cause, in its symptom's words, as the
+                # task spells it.
                 [
                     python,
                     str(RUN_TASK_STORE_INSTRUCTION),
@@ -1399,7 +1436,6 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                     "--witness",
                     SEARCH_WITNESS,
                 ],
-                ["mkdir", "-p", str(new_ticket.parent)],
                 _placed(_staged(bench, "new.md", tickets.render(first_ticket)), new_ticket),
                 _placed(_staged(bench, "shared.md", tickets.render(shared)), shared_ticket),
                 _placed(_staged(bench, "related.md", tickets.render(related)), related_ticket),
@@ -1537,6 +1573,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             "Verified beside a proposal",
             depends_on=(proposed_item,),
             impact_note=WITHDRAWN,
+            related=_dependency("some-service: the sweep stays inside its root", PROPOSED_URL),
         )
 
         # A timed-out copy left a second item carrying the new ticket's origin, which the
@@ -2751,6 +2788,10 @@ def test_the_member_is_given_the_created_task_whole(followed: Followed) -> None:
     )
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This test launches
+# nothing: it reads what the module-scoped `followed` fixture's passes recorded, and that
+# fixture is the one expensive part, already behind plan_tooling's installed-engine edge,
+# whose `planToolingWorkspace` input covers the recipe, template and module it asserts on.
 def test_the_task_carries_every_instruction_and_both_contracts(
     followed: Followed,
 ) -> None:
@@ -2780,9 +2821,10 @@ def test_the_task_carries_every_instruction_and_both_contracts(
         "-m orchestrator.follow_up_tickets validate <path of the ticket>",
         "Then delete the draft files that ticket consumed",
         f"-m orchestrator.follow_up_tickets board-items --board {BOARD} {ON_ITS_BOARD} "
-        "--metadata orchestrator.follow-up/root_cause=<root-cause>`, then by text",
-        f"-m orchestrator.follow_up_tickets board-items --board {BOARD} {ON_ITS_BOARD} "
-        "--search <text>`",
+        "--search <text>`, asked in this order: - **first, in the words of the invariant and "
+        "its symptom**",
+        "**last, the failing file or function**, because the file is exactly what differs "
+        "between two reports of one root cause",
         "every issue you created or updated with its URL",
         "every dropped draft with its reason",
         "every finding that should have been surfaced live",
@@ -2828,6 +2870,9 @@ def test_the_task_carries_every_instruction_and_both_contracts(
     )
     assert "## This is a re-dispatch" not in task
     assert "## Feedback on the previous follow-up run" not in task
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 def test_a_verified_ticket_lands_on_the_board_with_its_shape_its_one_repository_and_no_project(
@@ -2997,6 +3042,10 @@ def test_an_attached_run_names_every_ticket_that_fails_the_shape(followed: Follo
     assert "carries a `project`" in unsound.stderr
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This test launches
+# nothing: it reads what the module-scoped `followed` fixture's passes recorded, and that
+# fixture is the one expensive part, already behind plan_tooling's installed-engine edge,
+# whose `planToolingWorkspace` input covers the recipe, template and module it asserts on.
 def test_a_feedback_re_dispatch_brings_a_schema_4_ticket_to_one_fix_updating_its_item(
     followed: Followed,
 ) -> None:
@@ -3047,6 +3096,7 @@ def test_a_feedback_re_dispatch_brings_a_schema_4_ticket_to_one_fix_updating_its
             "Suggested fix",
             "Rejected fixes",
             "Owning runs",
+            "Duplicate search",
         ], headings
         fix = ticket.body.split(f"## {tickets.SUGGESTED_FIX}\n\n", 1)[1].split("\n\n## ", 1)[0]
         assert fix == f"{ONE_FIX}\n\n{UNIT}"
@@ -3055,7 +3105,7 @@ def test_a_feedback_re_dispatch_brings_a_schema_4_ticket_to_one_fix_updating_its
         assert shown["repositories"] == [REPOSITORY] == [ticket.repository]
         metadata = shown["metadata"]
         assert isinstance(metadata, dict)
-        assert metadata[tickets.KEY]["schema"] == tickets.SCHEMA == 9
+        assert metadata[tickets.KEY]["schema"] == tickets.SCHEMA == 10
         assert _category(shown) == accepted, "bringing a ticket to the current shape undid it"
     metadata_after = after["metadata"]
     assert isinstance(metadata_after, dict)
@@ -3074,6 +3124,9 @@ def test_a_feedback_re_dispatch_brings_a_schema_4_ticket_to_one_fix_updating_its
         legacy.result.stderr.split()
     )
     assert f"{followed.rewritten_ticket} is not a sound ticket" not in legacy.result.stderr
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This recipe journey
@@ -3419,33 +3472,39 @@ def test_the_exemption_holds_only_while_the_stamp_names_exactly_the_one_node(
 # nothing: it reads the witness the module-scoped `followed` fixture's first pass wrote, and
 # that fixture is the one expensive part, already behind plan_tooling's installed-engine
 # edge. It replaces the accepted-listing test here one for one, adding no launch.
-def test_the_task_searches_the_board_by_root_cause_and_that_query_selects_exactly_its_items(
+def test_the_task_searches_the_board_by_the_invariant_first_and_finds_an_item_of_another_slug(
     followed: Followed,
 ) -> None:
-    """The step's search by root cause, run as the task spells it, answers that cause alone.
+    """The step's first search, in the invariant's words, run as spelled, finds the earlier item.
 
     Read off the witness the turn wrote: the argv is the one the composed task fixes — the
-    module's own every-page query on this checkout's interpreter, the store's native
-    `--metadata` question for the record's `root_cause` — and what it answered is the earlier
-    run's deferred item for the shared root cause, never an item of another root cause. And
-    the task gives the agent no way to list the board whole: every `board-items` it spells
-    names a narrowing flag, and none a status filter alone.
+    module's own every-page query on this checkout's interpreter, a `--search` in the words of
+    the invariant — and what it answered is the earlier run's open item for the shared root
+    cause, filed under a slug other than the one this run's ticket was first written under,
+    which the ticket then took. The task spells a slug query for a budget overrun alone, and
+    gives the agent no way to list the board whole: every `board-items` it spells names a
+    narrowing flag, and none a status filter alone.
     """
     (task,) = followed.first.prompts
     flat = " ".join(task.split())
     python = RECIPE_PYTHON
     assert (
         f'`"{python}" -m orchestrator.follow_up_tickets board-items --board {BOARD} '
-        f"{ON_ITS_BOARD} --metadata orchestrator.follow-up/root_cause=<root-cause>`"
+        f"{ON_ITS_BOARD} --search <text>`, asked in this order: - **first, in the words of the "
+        "invariant and its symptom**"
     ) in flat
+    slug_query = f"--metadata {tickets.root_cause_query('<root-cause>')}"
+    assert flat.count(slug_query) == 1, "the task asks an ordinary ticket by its slug"
+    overruns = flat.split("## Every landed change against its budgets", 1)[1]
+    assert slug_query in overruns.split("## Ownership on the board", 1)[0]
     spelled = re.findall(r"board-items --board [^`\s]+([^`]*)`(.{0,32})", flat)
     assert spelled, flat
     for flags, after in spelled:
         narrowed = any(flag in flags for flag in tickets.NARROWING)
         assert narrowed or after.startswith(", naming at least one of"), (flags, after)
-    witness = followed.first_turn.directory.resolve() / ROOT_CAUSE_WITNESS
+    witness = followed.first_turn.directory.resolve() / INVARIANT_WITNESS
     assert witness.is_file(), (
-        f"no command the turn ran wrote {ROOT_CAUSE_WITNESS} into "
+        f"no command the turn ran wrote {INVARIANT_WITNESS} into "
         f"{followed.first_turn.directory}; {_ran(followed.bench)}"
     )
     # llmlint: ignore[boundary_inputs_validated] The witness this journey's own helper wrote,
@@ -3461,12 +3520,19 @@ def test_the_task_searches_the_board_by_root_cause_and_that_query_selects_exactl
         BOARD,
         "--repository",
         REPOSITORY,
-        "--metadata",
-        tickets.root_cause_query(SHARED_CAUSE),
+        "--search",
+        INVARIANT_SEARCH,
     ], probe["command"]
     assert probe["returncode"] == 0, probe
-    listed = [str(one["id"]) for one in json.loads(probe["stdout"])["items"]]
-    assert listed == [f"{BOARD}:{followed.other}/tickets/{SHARED_CAUSE}"], probe
+    found = json.loads(probe["stdout"])["items"]
+    assert [str(one["id"]) for one in found] == [
+        f"{BOARD}:{followed.other}/tickets/{SHARED_CAUSE}"
+    ], probe
+    (held,) = found
+    assert held["item"]["metadata"][tickets.KEY]["root_cause"] == SHARED_CAUSE
+    assert SHARED_CAUSE != INVENTED_SHARED_CAUSE
+    main_tickets = followed.bench.drafts_root / "tasks" / followed.main / "tickets"
+    assert not (main_tickets / f"{INVENTED_SHARED_CAUSE}.md").exists(), "the slug was not taken"
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
@@ -3585,6 +3651,10 @@ def _severity_lines(impact: str) -> tuple[tickets.Severity, tickets.Severity]:
     )
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This test launches
+# nothing: it reads what the module-scoped `followed` fixture's passes recorded, and that
+# fixture is the one expensive part, already behind plan_tooling's installed-engine edge,
+# whose `planToolingWorkspace` input covers the recipe, template and module it asserts on.
 def test_a_ticket_related_to_a_proposal_lands_unchanged_with_no_edge_naming_it_as_related(
     followed: Followed,
 ) -> None:
@@ -3600,9 +3670,14 @@ def test_a_ticket_related_to_a_proposal_lands_unchanged_with_no_edge_naming_it_a
         "the accepted fix that bears on nothing, or the proposal, was depended on"
     )
     assert _category(followed.related_after_first) == tickets.Status.PROPOSED
-    assert RELATED in landed.body and PROPOSED_URL in landed.body
+    related = landed.body.split(f"## {tickets.RELATED_TICKETS}\n\n", 1)[1].split("\n\n## ", 1)[0]
+    assert related == RELATED, "the proposal is not the ticket's one `related` entry"
+    assert landed.body.count(PROPOSED_URL) == 1, "the proposal is named outside its entry"
     impact = landed.body.split(f"## {tickets.IMPACT}\n\n", 1)[1].split("\n\n## ", 1)[0]
     assert _severity_lines(impact) == FULL_SEVERITY
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 def test_a_re_dispatch_withdraws_its_own_item_a_newly_accepted_fix_evaporates_depending_on_it(
@@ -3627,10 +3702,14 @@ def test_a_re_dispatch_withdraws_its_own_item_a_newly_accepted_fix_evaporates_de
     assert followed.board_after_second == followed.board_before_second, "a withdrawal added an item"
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This test launches
+# nothing: it reads what the module-scoped `followed` fixture's passes recorded, and that
+# fixture is the one expensive part, already behind plan_tooling's installed-engine edge,
+# whose `planToolingWorkspace` input covers the recipe, template and module it asserts on.
 def test_the_three_forbidden_shapes_are_refused_naming_each_problem_and_reach_no_board(
     followed: Followed,
 ) -> None:
-    """`validate` refuses the two edge shapes and `board-status` the URL the body never names."""
+    """`validate` refuses the two edge shapes and `board-status` the URL no entry names."""
     witness = followed.refused_witness
     flat = " ".join(witness.split())
     sections = re.split(r"== ", witness)[1:]
@@ -3650,13 +3729,16 @@ def test_the_three_forbidden_shapes_are_refused_naming_each_problem_and_reach_no
     assert "is a sound ticket" in absent
     assert decided.endswith(f"exit {tickets.NOT_ACCEPTED}"), decided
     assert (
-        f"entry {followed.narrowing_item!r} names an item whose URL {NARROWING_URL} the ticket's "
-        "body never names"
+        f"entry {followed.narrowing_item!r} names an item whose URL {NARROWING_URL} is on no "
+        "`dependency` entry of the ticket's `## Related tickets` section"
     ) in decided
     assert "copy nothing for this ticket" in flat
     for name in (REFUSED_RELATED_KIND, REFUSED_TWO_SOURCES, REFUSED_URL_ABSENT):
         assert not any(name in held for held in followed.board_after_first), name
         assert not tickets.ticket_path(followed.bench.drafts_root, followed.main, name).exists()
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 def test_a_re_copy_past_a_withdrawn_duplicate_reaches_the_live_item_and_binds_the_ticket_to_it(

@@ -74,7 +74,6 @@ def instruction(
     run: str | None = None,
     board: str | None = None,
     search: str | None = None,
-    root_cause: str | None = None,
     repository: str | None = None,
 ) -> str | None:
     """A query the task spells, as it spells it: ``run``'s drafts, or one of the board's searches.
@@ -83,13 +82,12 @@ def instruction(
     task hands the agent and the only one whose whole argv the task fixes: everything
     after it takes an id the agent works out. The program word is what differs between a
     pinned task and an unpinned one, and it is the first word of every store instruction
-    alike. The two board searches are the task's other spelled argvs, both through the
-    module's own `board-items` command, which reads every page the store answers: with
-    ``root_cause``, the duplicate search by the record's root cause, whose `<root-cause>` the
-    task leaves to the agent, and with ``search``, the duplicate search by text, whose
-    `<text>` it leaves the same way; this fills either in, and the ticket's ``repository`` that
-    names the board the search asks. Running each as spelled is how a journey reads what that
-    step selects.
+    alike. The board search is the task's other spelled argv, through the module's own
+    `board-items` command, which reads every page the store answers: with ``search``, the
+    duplicate search by text, whose `<text>` the task leaves to the agent — the invariant's
+    words first, the failing file last — this fills it in, and the ticket's ``repository``
+    that names the board the search asks. Running it as spelled is how a journey reads what
+    that step selects.
     """
     named = re.escape(board or "")
     routed = re.escape(" --repository <each repository the ticket lists>")
@@ -97,18 +95,11 @@ def instruction(
         found = re.search(
             rf"`([^`\n]*?task list --source drafts --project {re.escape(run)} --json)`", task
         )
-    elif search is not None:
+    else:
         found = re.search(
             rf"`([^`\n]*?board-items --board {named}){routed}( --search) <text>`", task
         )
-        return f"{_routed(found, repository)} {shlex.quote(search)}" if found else None
-    else:
-        found = re.search(
-            rf"`([^`\n]*?board-items --board {named}){routed}( --metadata [^`\s=]+/root_cause=)"
-            r"<root-cause>`",
-            task,
-        )
-        return f"{_routed(found, repository)}{shlex.quote(str(root_cause))}" if found else None
+        return f"{_routed(found, repository)} {shlex.quote(str(search))}" if found else None
     return found[1] if found else None
 
 
@@ -163,18 +154,16 @@ def main() -> int:
     parsed.add_argument("--prompt-log", type=Path, required=True)
     which = parsed.add_mutually_exclusive_group(required=True)
     which.add_argument("--run", help="run the listing of this run's drafts")
-    which.add_argument("--board", help="run one of this board's duplicate searches")
-    how = parsed.add_mutually_exclusive_group()
-    how.add_argument("--search", help="with --board: run the board's search for this text")
-    how.add_argument(
-        "--root-cause", help="with --board: run the board's search for this root cause"
-    )
+    which.add_argument("--board", help="run this board's duplicate search")
+    parsed.add_argument("--search", help="with --board: run the board's search for this text")
     parsed.add_argument(
         "--repository", help="with --board: the ticket's repository, naming the board asked"
     )
     parsed.add_argument("--checkout", type=Path, required=True)
     parsed.add_argument("--witness", type=Path, required=True)
     arguments = parsed.parse_args()
+    if arguments.board is not None and arguments.search is None:
+        parsed.error("--board needs --search: the text the board's duplicate search asks")
 
     # Absolute from here on: the witness is named relative to the turn's own directory,
     # and the older program below is handed this path while running somewhere else, so a
@@ -193,7 +182,6 @@ def main() -> int:
             run=arguments.run,
             board=arguments.board,
             search=arguments.search,
-            root_cause=arguments.root_cause,
             repository=arguments.repository,
         )
         if prompts
@@ -204,17 +192,11 @@ def main() -> int:
     elif spelled is None:
         if arguments.run is not None:
             wanted = f"<store> task list --source drafts --project {arguments.run} --json"
-        elif arguments.search is not None:
-            wanted = (
-                f"<board-items> --board {arguments.board} "
-                "--repository <each repository the ticket lists> "
-                "--search <text>"
-            )
         else:
             wanted = (
                 f"<board-items> --board {arguments.board} "
                 "--repository <each repository the ticket lists> "
-                "--metadata <record>/root_cause=<root-cause>"
+                "--search <text>"
             )
         record = _unanswered(f"the task names no `{wanted}` instruction")
     else:

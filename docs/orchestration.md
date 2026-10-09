@@ -2058,6 +2058,19 @@ its own harness config. It verifies each draft against the registered checkouts'
 ticket per root cause beside the drafts (`tasks/<run-id>/tickets/`), and copies each onto
 the `followups` GitHub Projects board, where every session's tickets accumulate —
 commenting on another run's open issue for the same root cause instead of filing a second.
+A root cause is the invariant that is missing or broken, in words independent of the file a
+run saw, with every location contributing to it listed under it: one root cause when a
+single change to the rule removes every instance, even across several places, and two when
+each needs a fix that stands alone. So drafts pointing at different files under one
+invariant are one ticket, and the board search asks first in the invariant's words, then
+once per further text question with the failing file last, and by root-cause slug only for
+a budget overrun, whose slug is derived. An open item at any status whose stated root cause
+meets the bar is the same root cause whatever its location and slug: it takes the run's
+evidence as a comment, whose `Bears on the ticket:` paragraph states only the widened
+invariant and its added locations where the evidence shows the cause broader, and the run's
+ticket takes its slug, so the comment's marker, the account and the recount agree. A ticket
+records the search it ran in its last section, `## Duplicate search`, on the board rather
+than only in the verifying host's account.
 A ticket's `repositories` lists every repository its fix changes. A ticket listing one has
 its issue created in that repository, as an item of the one board; it must be under the
 board's owner, and `board-status` refuses a ticket naming a repository outside that owner
@@ -2177,7 +2190,7 @@ Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Review
 `Ready To Merge`, `Blocked`, `Duplicate` or `Cannot Reproduce`: those belong to people.
 
 **Every proposal is written against the board's accepted fixes.** Before it copies
-anything, the agent lists the board's accepted items — `Todo`, `Queued`, `In Progress`,
+anything, the agent reads the accepted items its searches returned — `Todo`, `Queued`, `In Progress`,
 and `Done` where the fix has not reached the basis the ticket was verified at — and reads
 each one's suggested fix as if it were already in: a ticket that fix removes is not filed
 (its drafts are reported as dropped, naming the accepted ticket), one it narrows has its
@@ -2187,12 +2200,13 @@ changes a ticket that way, the ticket depends on it as the store's own `depends_
 outside the `orchestrator.follow-up` record — the board carries it natively as the
 issue's dependency, and `onetaskgraph task deps` walks it from either end — and the
 ticket's text says, at each place the fix changed something, which accepted ticket
-changed it and how, by the item's URL. `validate` holds the edge's shape and reads no
+changed it and how, by the item's URL, which from ticket schema 10 is also on a
+`dependency` entry of the ticket's optional `## Related tickets`. `validate` holds the edge's shape and reads no
 board; `board-status` resolves every edge against the board before the copy, refusing an
 entry the board no longer holds as an accepted ticket of another root cause whose URL the
 body names, which on a re-dispatch is the signal to re-derive the ticket from the board
-as it now is. A `Proposal` or `Deferred` item's fix is never assumed, though a clearly
-related one may be named as related by URL with no edge. The same-root-cause path is
+as it now is. A `Proposal` or `Deferred` item's fix is never assumed; a clearly related one
+is a `related` entry of `## Related tickets`, with no edge. The same-root-cause path is
 unchanged: an accepted item for a ticket's own root cause takes the run's evidence as a
 comment and is never depended on.
 

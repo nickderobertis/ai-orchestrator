@@ -9,7 +9,7 @@
     at one point: the store records a rendering's template digest in the order its templates
     load, and `onepipeline template check` recomputes it in one fixed order.
 -#}
-<!-- llmlint: ignore-block[changed_behavior_has_e2e] Each clause is the agent's instruction for an edit the suite never scripts a verdict for — which fields a ticket already carries and what its evidence supports are its reading of the tree — so a journey can only drive the tooling around it, and does: `tests/plan_tooling/test_follow_ups_recipe_e2e.py`'s `test_a_feedback_re_dispatch_brings_a_schema_4_ticket_to_one_fix_updating_its_item` brings schema-4 tickets forward with the `## Repository` section removed, the options moved under `## Rejected fixes`, and `host` and `repositories` recorded, and `tests/plan_tooling/test_follow_ups_comment_answers_e2e.py` drives the rule in the feedback mode over schemas 4, 5 and 6 and another run's schema-6 item. Schemas 1 to 3 meet the same `validate` refusal those do, which `tests/test_follow_up_tickets.py` holds for schemas 1, 2, 3, 4 and 6. -->
+<!-- llmlint: ignore-block[changed_behavior_has_e2e] Each clause is the agent's instruction for an edit the suite never scripts a verdict for — which fields a ticket already carries and what its evidence supports are its reading of the tree — so a journey can only drive the tooling around it, and does: `tests/plan_tooling/test_follow_ups_recipe_e2e.py`'s `test_a_feedback_re_dispatch_brings_a_schema_4_ticket_to_one_fix_updating_its_item` brings schema-4 tickets forward with the `## Repository` section removed, the options moved under `## Rejected fixes`, and `host` and `repositories` recorded, and `tests/plan_tooling/test_follow_ups_comment_answers_e2e.py` drives the rule in the feedback mode over schemas 4, 5 and 6 and another run's schema-6 item. Schemas 1 to 3 meet the same `validate` refusal those do, which `tests/test_follow_up_tickets.py` holds for schemas 1, 2, 3, 4 and 6; its `test_a_schema_9_ticket_of_this_run_brought_forward_validates_at_schema_10` drives a schema-9 ticket through `board-status` to schema 10, refused until its `## Root cause` and `## Duplicate search` are written, and the comment-answers journey brings a schema-9 ticket forward beside the others. -->
 {% macro rule(shape, board, board_status, re_estimate) -%}
 - a ticket of an older schema is brought to the current shape before it is copied, its
   `repositories` listing every repository its fix changes, its `host` read from this machine
@@ -20,7 +20,7 @@
   evidence supports; and every other option it offered moved into `## {{ shape.rejected_fixes }}`,
   with why each was not chosen; then it is validated once `{{ board_status }}` has written its
   estimate, as the rule below states.
-- a ticket of this run older than schema {{ shape.schema }} is brought to it by writing its
+- a ticket of this run older than schema {{ shape.structure_at }} is brought to it by writing its
   `## {{ shape.impact }}` prose as its labelled parts, {{ shape.impact_parts }}, from the evidence it already
   carries, with both severities judged again by the rubric — an acceptable workaround
   lowers a severity above `low`, and one too costly to lower it is `{{ shape.no_workaround }}` — and its
@@ -33,5 +33,13 @@
   id>` alone, and only when this run adds or edits its evidence comment there, or posts a
   reply there marked `verdict="{{ shape.confirms }}"`; another run's item of schema {{ shape.estimate_at }} or later keeps its
   schema, and its body is that run's to restructure.
+- a ticket of this run older than schema {{ shape.invariant_at }} is brought to it when this run rewrites it:
+  its `## Root cause` is written as its labelled parts, {{ shape.root_cause_parts }}, from the
+  evidence it already carries; its dependency entries and the related items it mentions become
+  the entries of a `## {{ shape.related_tickets }}` section, {{ shape.related_shape }}, left out when there are
+  none; and it closes with `## {{ shape.duplicate_search }}`, which says that no search was recorded when it
+  was filed where this dispatch ran none for it — a bound ticket runs none. Then
+  `{{ board_status }}` records it at schema {{ shape.schema }}; validate it and copy it. Another run's item
+  keeps its schema and its body.
 {%- endmacro %}
 <!-- llmlint: ignore-end[changed_behavior_has_e2e] -->
