@@ -1625,3 +1625,42 @@ def test_prose_fence_rule_leaves_a_list_container_on_dedent() -> None:
     """A fence after the list ends is an ordinary top-level fence."""
     assert design_approval.has_prose_fence("- item\n\nback out\n```text\nx\n```") is True
     assert design_approval.has_prose_fence("- item\n\nback out\n  ~~ not a fence") is False
+
+
+def _visual_report(qualified_id: str = "authoring:spike-visual-report") -> StoreDocument:
+    """The visual spike's report, as the plan's project holds it beside the design document."""
+    return _document(
+        qualified_id=qualified_id,
+        content="# Spike `spike-visual`\n\n## Visual changes\n",
+        metadata=_provenance("", template=design_approval.SPIKE_REPORT_REFERENCE),
+    )
+
+
+def test_a_visual_plans_document_showing_no_visual_change_is_not_approved(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The report names the pictures; a document without its section is refused, naming it."""
+    _holds(monkeypatch, _visual_report(), _document())
+
+    assert design_approval.main(["authoring:demo"]) == 1
+    refused = capsys.readouterr().err
+    assert "holds its visual spike's report authoring:spike-visual-report" in refused, refused
+    assert "authoring:demo-design renders no `## Visual changes` section" in refused, refused
+    assert "regenerate the document with its `visual_changes` answer" in refused, refused
+
+
+def test_a_document_showing_its_visual_changes_or_a_plan_with_none_passes_the_visual_check() -> (
+    None
+):
+    shown = _document(content=f"{APPROVED_PROSE}\n## Visual changes\n\n### Settings page\n")
+    copied = _visual_report("board:I_minted")
+    copied = dataclasses.replace(
+        copied,
+        metadata=dict(copied.metadata) | {"onetaskgraph.origin": "authoring:spike-visual-report"},
+    )
+
+    design_approval.unshown("authoring:demo", shown, [_visual_report(), shown])
+    design_approval.unshown("board:demo", shown, [copied, shown])
+    design_approval.unshown("authoring:demo", _document(), [_document()])
+    with pytest.raises(OSError, match="board:I_minted"):
+        design_approval.unshown("board:demo", _document(), [copied, _document()])

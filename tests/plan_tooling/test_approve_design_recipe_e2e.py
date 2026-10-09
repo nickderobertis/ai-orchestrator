@@ -34,9 +34,10 @@ import pytest
 import yaml
 from project_fixtures import ONEVCS_HOME, helper, register_stand_in, reviewed
 from published_tools import ONETASKGRAPH_BIN
+from visual_images import LARGE, TYPICAL, sized_like_screenshots, write_noise_png
 from waits import timeout as e2e_timeout
 
-from orchestrator import design_chain
+from orchestrator import design_chain, spike_plan
 from orchestrator.design_approval import (
     PLAN_KIND,
     PLANNING,
@@ -1923,3 +1924,125 @@ def test_nested_decision_shapes_are_checked_at_approval_despite_rendering_overri
     store.document(native)
     approved = _just("approve-design", project, runs=runs)
     assert approved.returncode == 0, approved.stdout + approved.stderr
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] `plan-tooling` is the leaf
+# project keyed on `planToolingWorkspace`, the edge this rule asks for, and every other journey
+# of this module already runs behind it. That key names the recipes, scripts, templates and
+# package this journey drives, so narrowing it would memoize a verdict over a tree never run.
+#: The two changes a visual plan's spike reported, each a pair of images held as assets.
+VISUAL_CHANGES = [
+    {
+        "name": "Handoff page",
+        "description": "The handoff page names who receives each node.",
+        "before": "handoff-before.png",
+        "after": "handoff-after.png",
+    },
+    {
+        "name": "Settled line",
+        "description": "The CLI's settled line says nothing changed.",
+        "before": "settled-before.png",
+        "after": "settled-after.png",
+    },
+]
+
+
+@pytest.mark.xdist_group("approve-design")
+def test_a_visual_plans_document_is_approved_only_once_it_shows_the_reported_changes(
+    store: Store, board: Store, runs: Path, tmp_path: Path
+) -> None:
+    """Approval is when the pictures matter, so a visual plan's document without them is refused.
+
+    The plan's project holds its visual spike's report, rendered from the `spike-report`
+    template with its four screenshots as assets. Its design document, rendered without
+    `visual_changes`, is refused naming the report; regenerated restating the report with
+    the images as its own assets, it is approved; copied onto a second store, it arrives
+    approved with its section and its images. A plan with no visual spike is approved as it
+    always was.
+    """
+    images = tmp_path / "screenshots"
+    images.mkdir()
+    names = [change[side] for change in VISUAL_CHANGES for side in ("before", "after")]
+    generated = {
+        name: write_noise_png(images / name, seed, LARGE if seed == 0 else TYPICAL)
+        for seed, name in enumerate(names)
+    }
+    # llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] The bounds are this journey's
+    # acceptance criteria for its own inputs, which must be screenshot-sized for an asset to prove
+    # anything; they limit no product behavior.
+    sized_like_screenshots(generated)
+    # llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
+    assets = [flag for name in names for flag in ("--asset", str(images / name))]
+
+    native = "approve-design-visual"
+    project = store.plan(native)
+    report_answers = tmp_path / "report.answers.json"
+    report_answers.write_text(
+        json.dumps(
+            {
+                "spike": spike_plan.VISUAL_SPIKE,
+                "branch": f"nick/{native}/{spike_plan.VISUAL_SPIKE}",
+                "harness": "`shots/capture.sh`; run `./shots/capture.sh`.",
+                "method": "The handoff page and the settled line, mocked.",
+                "candidates": [],
+                "findings": [],
+                "visual_changes": VISUAL_CHANGES,
+            }
+        ),
+        encoding="utf-8",
+    )
+    store._piped(
+        *("document", "create", SOURCE, "--project", native, "--title", "Visual spike"),
+        *("--id", spike_plan.VISUAL_REPORT, "--answers", str(report_answers), *assets),
+        template="spike-report",
+    )
+    report = f"{SOURCE}:{spike_plan.VISUAL_REPORT}"
+    store.document(native)
+    reviewed(project)
+
+    refused = _just("approve-design", project, runs=runs)
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert f"holds its visual spike's report {report}" in refused.stderr, refused.stderr
+    assert "renders no `## Visual changes` section" in refused.stderr, refused.stderr
+    assert "regenerate the document with its `visual_changes` answer" in refused.stderr
+    assert all(RECORD_KEY not in one["item"]["metadata"] for one in store.listed())
+
+    answers = tmp_path / "design.answers.json"
+    answers.write_text(json.dumps({**DESIGN, "visual_changes": VISUAL_CHANGES}), encoding="utf-8")
+    store._piped(
+        *(
+            "document",
+            "create",
+            SOURCE,
+            "--project",
+            native,
+            "--title",
+            f"Design: {native} (design)",
+        ),
+        *("--id", f"{native}-design", "--answers", str(answers), *assets),
+        resolving=design_chain.resolve_arguments(None),
+    )
+    approved = _just("approve-design", project, runs=runs)
+    assert approved.returncode == 0, approved.stdout + approved.stderr
+    assert "recorded the approval" in approved.stdout, approved.stdout
+
+    copied = _just("copy-plan", project, "--to", BOARD, runs=runs)
+    assert copied.returncode == 0, copied.stdout + copied.stderr
+    landed = f"{BOARD}:{native}"
+    on_board = _just("approve-design", landed, runs=runs)
+    assert on_board.returncode == 0, on_board.stdout + on_board.stderr
+    assert "already carries an approval" in on_board.stdout, on_board.stdout
+    shown = board._stored("document", "show", f"{landed}-design")
+    (item,) = shown["items"]
+    assert "\n## Visual changes\n" in item["item"]["content"], item["item"]["content"]
+    held = {asset["name"]: Path(asset["path"]).read_bytes() for asset in shown["assets"]}
+    assert held == generated, sorted(held)
+
+    plain = store.plan("approve-design-plain")
+    store.document("approve-design-plain")
+    recorded = _just("approve-design", plain, runs=runs)
+    assert recorded.returncode == 0, recorded.stdout + recorded.stderr
+    assert "recorded the approval" in recorded.stdout, recorded.stdout
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

@@ -74,7 +74,14 @@ from published_tools import ONETASKGRAPH_BIN
 from scratch_identity import PLANNING_FLOW_ORIGIN, seeded
 from waits import timeout as e2e_timeout
 
-from orchestrator import design_approval, plan_budgets, plan_copy, plan_review, plan_store
+from orchestrator import (
+    design_approval,
+    plan_budgets,
+    plan_copy,
+    plan_review,
+    plan_store,
+    spike_plan,
+)
 from orchestrator.criteria_guard import APPENDIX
 from orchestrator.project_store import render_plan_project
 from orchestrator.root import REPO_ROOT
@@ -369,9 +376,11 @@ def _answers(stored: Stored) -> dict[str, object]:
     a document *of the plan's project* in the plan store, is the pinned engine's resolve
     piped into the store's own `document create`, which the dispatch runs. Its budget
     answers are copied in by the dispatch itself, from what the budget command its task
-    names prints.
+    names prints. Its `visual_changes` is `[]`, as its task's criterion says for a plan
+    whose draft authored no visual spike.
     """
     return {
+        "visual_changes": [],
         "what": "A paginated node listing.",
         "why": "An operator cannot see past the first screen.",
         "architecture": "One route, one view.",
@@ -989,6 +998,43 @@ def test_the_flow_reports_where_the_destination_holds_the_project_and_the_docume
         f"the flow never reported where the destination holds the document a person "
         f"reviews this plan as:\n{reported}"
     )
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] `plan-tooling` is the leaf
+# project keyed on `planToolingWorkspace`, the edge this rule asks for, and every other journey
+# of this module already runs behind it. That key names the recipes, scripts, templates and
+# package this journey drives, so narrowing it would memoize a verdict over a tree never run.
+@pytest.mark.xdist_group("plan-flow")
+def test_a_plan_with_no_visual_spike_launches_none_and_its_document_shows_no_visual_change(
+    planned: Planned,
+) -> None:
+    """A draft that authored no `spike-visual` costs nothing: no spike, and no section."""
+    runs = Path(planned.environment["ONEPIPELINE_RUNS_DIR"])
+    assert not (runs / f"{RUN}-spikes").exists(), "a draft with no spikes launched a spikes run"
+    dispatched = {
+        (event.get("labels") or {}).get(NODE_LABEL)
+        for event in planned.journal + planned.design_journal
+        if event["kind"] == NODE_DISPATCHED
+    }
+    assert dispatched and spike_plan.VISUAL_SPIKE not in dispatched, dispatched
+    answered = subprocess.run(
+        [str(ONETASKGRAPH_BIN), "document", "answers", planned.stored.document_qualified]
+        + ["--json"],
+        cwd=REPO_ROOT,
+        env=planned.environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert answered.returncode == 0, answered.stderr
+    assert json.loads(answered.stdout)["visual_changes"] == []
+    (document,) = planned.destination.glob(f"documents/{planned.stored.document}.md")
+    body = document.read_text(encoding="utf-8")
+    assert "## Visual changes" not in body, body
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 #: The source `scripts/finish-plan.sh` copies into when the caller names none, taken from

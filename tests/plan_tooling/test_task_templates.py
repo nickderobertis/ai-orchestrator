@@ -28,7 +28,7 @@ from pathlib import Path
 
 import pytest
 
-from orchestrator import criteria_guard, plan_store
+from orchestrator import criteria_guard, plan_store, spike_plan
 from orchestrator.root import REPO_ROOT
 
 ROOT = REPO_ROOT / "templates"
@@ -400,7 +400,8 @@ def test_the_sections_a_brief_must_have_are_the_ones_a_task_renders_with(
     assert required == tuple(headings[: headings.index("## Additional info")]), headings
 
 
-#: The template a spike's report is rendered from, and the six answers it takes.
+#: The template a spike's report is rendered from, and the answers it takes: six every spike
+#: gives, and the visual changes only the reserved `spike-visual` answers.
 SPIKE_REPORT = ROOT / "spike-report.md.j2"
 SPIKE_REPORT_VARIABLES = {
     "spike": ("string", True),
@@ -409,6 +410,7 @@ SPIKE_REPORT_VARIABLES = {
     "method": ("text", True),
     "candidates": ("list", True),
     "findings": ("list", True),
+    "visual_changes": ("list", False),
 }
 
 #: The `spikes` answer of a task building on two spikes, as a finalize planner gives it.
@@ -442,7 +444,7 @@ def _render_from(
     return rendered.body
 
 
-def test_the_spike_report_is_a_document_template_taking_the_six_answers_a_spike_reports(
+def test_the_spike_report_is_a_document_template_taking_the_answers_a_spike_reports(
     launch_environment: dict[str, str],
 ) -> None:
     resolved = _run(
@@ -623,3 +625,60 @@ def test_a_spike_report_with_candidates_renders_the_body_it_rendered_before_harn
         now = _render_from(launch_environment, ROOT, "spike-report", answers, tmp_path)
         assert now == _render_from(launch_environment, root, "spike-report", answers, tmp_path)
         assert "| listing-latency | time to the first page |" in now, now
+
+
+#: The visual spike's answer: two expected changes, each a pair of the report's own assets.
+VISUAL_CHANGES = [
+    {
+        "name": "Settings page",
+        "description": "The settings page gains a column for each node's owner.",
+        "before": "settings-before.png",
+        "after": "settings-after.png",
+    },
+    {
+        "name": "Status line",
+        "description": "The CLI's status line names the run instead of its id.",
+        "before": "status-before.png",
+        "after": "status-after.png",
+    },
+]
+
+
+def test_a_visual_spikes_report_shows_each_change_as_a_before_and_after_pair(
+    launch_environment: dict[str, str], tmp_path: Path
+) -> None:
+    """`## Visual changes`, one `###` per change in order, its description and two images."""
+    answers = {
+        **MEASURED_REPORT,
+        "spike": spike_plan.VISUAL_SPIKE,
+        "candidates": [],
+        "visual_changes": VISUAL_CHANGES,
+    }
+    body = _render_from(launch_environment, ROOT, "spike-report", answers, tmp_path)
+
+    headings = re.findall(r"^## .+$", body, re.MULTILINE)
+    assert headings[-1] == "## Visual changes", headings
+    section = body.split("## Visual changes\n", 1)[1]
+    assert re.findall(r"^### (.+)$", section, re.MULTILINE) == [
+        change["name"] for change in VISUAL_CHANGES
+    ], section
+    assert section == "".join(
+        f"\n### {change['name']}\n\n{change['description']}\n\n**Before**\n\n"
+        f"![Before: {change['name']}](./{change['before']})\n\n**After**\n\n"
+        f"![After: {change['name']}](./{change['after']})\n"
+        for change in VISUAL_CHANGES
+    ), section
+
+
+def test_a_report_with_no_visual_change_renders_as_if_the_answer_were_absent(
+    launch_environment: dict[str, str], tmp_path: Path
+) -> None:
+    """`visual_changes: []` is byte-identical to leaving the answer out, with no section."""
+    for findings in ([], ["The listing API ignores its page size."]):
+        answers = {**MEASURED_REPORT, "findings": findings}
+        absent = _render_from(launch_environment, ROOT, "spike-report", answers, tmp_path)
+        empty = _render_from(
+            launch_environment, ROOT, "spike-report", {**answers, "visual_changes": []}, tmp_path
+        )
+        assert empty == absent
+        assert "## Visual changes" not in empty and "![" not in empty, empty

@@ -303,3 +303,52 @@ def test_an_evidence_entry_not_in_the_templates_words_is_refused(
 
     assert (refused.node, refused.field) == ("listing", "task")
     assert "'- `spike-quota`: see the quota report'" in refused.reason
+
+
+def test_the_visual_spike_and_its_report_are_reserved_spike_names() -> None:
+    """One visual spike per plan, named as a spike, its report named as every report is."""
+    assert spike_plan.VISUAL_SPIKE == "spike-visual"
+    assert spike_plan.is_spike(spike_plan.VISUAL_SPIKE)
+    assert spike_plan.VISUAL_REPORT == "spike-visual-report"
+    assert spike_plan.report_id(spike_plan.VISUAL_SPIKE) == spike_plan.VISUAL_REPORT
+
+
+def test_a_plans_visual_report_is_found_by_its_id_or_the_origin_its_copy_records() -> None:
+    """Drafted, the report is `spike-visual-report`; on a board copy, its origin names it."""
+    drafted = _copied_report("authoring:spike-visual-report", None, True)
+    copied = _copied_report("plans:I_created_4", "authoring:spike-visual-report", True)
+    other = _copied_report("authoring:spike-listing-report", None, True)
+    unrendered = _copied_report("authoring:spike-visual-report", None, False)
+    native = _copied_report("destination:spike-visual-report", "elsewhere:x", True)
+
+    assert spike_plan.visual_report([other, drafted]) == drafted
+    assert spike_plan.visual_report([other, copied]) == copied
+    assert spike_plan.visual_report([native]) == native
+    # A document of that name not rendered from the spike-report template is no report.
+    assert spike_plan.visual_report([other, unrendered]) is None
+    assert spike_plan.visual_report([]) is None
+
+
+def test_the_command_names_a_plans_visual_report_or_prints_nothing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _store(monkeypatch, {}, "authoring:spike-visual-report", "authoring:spike-listing-report")
+    assert spike_plan.main(["visual-report", PROJECT]) == 0
+    assert capsys.readouterr().out == "authoring:spike-visual-report\n"
+
+    _store(monkeypatch, {}, "authoring:spike-listing-report")
+    assert spike_plan.main(["visual-report", PROJECT]) == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_the_command_refuses_a_plan_whose_documents_cannot_be_read(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def unreadable(project: str) -> list[StoreDocument]:
+        raise OSError(f"no project {project}")
+
+    monkeypatch.setattr(plan_store, "read_documents", unreadable)
+    assert spike_plan.main(["visual-report", PROJECT]) == 2
+    said = capsys.readouterr()
+    assert said.out == ""
+    assert f"the documents of {PROJECT} could not be read: no project {PROJECT}" in said.err

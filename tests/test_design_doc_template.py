@@ -74,6 +74,10 @@ SECTIONS = (
 #: its budget answers, so a document whose plan carries none reads as it always did.
 BUDGET_SECTIONS = (("budgets", "Budgets"),)
 
+#: The visual section, between Why and Architecture, which renders only for a plan whose
+#: `spike-visual-report` showed a change, so a plan with none reads as it always did.
+VISUAL_SECTIONS = (("visual_changes", "Visual changes"),)
+
 #: The block holding what applies to the whole document, ahead of every section.
 DOCUMENT_GUIDANCE = "document_guidance"
 
@@ -81,7 +85,7 @@ DOCUMENT_GUIDANCE = "document_guidance"
 #: guidance block directly ahead of the block that renders it.
 BLOCKS = (DOCUMENT_GUIDANCE,) + tuple(
     name
-    for block, _ in (*SECTIONS[:3], *BUDGET_SECTIONS, *SECTIONS[3:])
+    for block, _ in (*SECTIONS[:2], *VISUAL_SECTIONS, SECTIONS[2], *BUDGET_SECTIONS, *SECTIONS[3:])
     for name in (f"{block}_guidance", block)
 )
 
@@ -127,6 +131,19 @@ BUDGET_VARIABLES: dict[str, tuple[str, str | None, Keys | None]] = {
     ),
 }
 
+#: The visual answer, which restates the plan's `spike-visual-report` and is optional so a
+#: document written for a plan with no visual change renders as it did.
+VISUAL_VARIABLES: dict[str, tuple[str, str | None, Keys | None]] = {
+    "visual_changes": (
+        "list",
+        "object",
+        {"name": None, "description": None, "before": None, "after": None},
+    ),
+}
+
+#: Every optional answer: the budgets and the visual changes.
+OPTIONAL_VARIABLES = {**BUDGET_VARIABLES, **VISUAL_VARIABLES}
+
 #: One phrase per format rule, which only that rule's statement carries. The guidance
 #: comments state each exactly once: none would leave a writer and its judge without it,
 #: and two is a second answer to drift from the first. No variable description carries
@@ -135,7 +152,11 @@ RULES = {
     "reader": "technical product manager with no depth in this domain",
     "prose": "no more technical than the plan's own goal statement",
     "length": "Exactness is spent on what is hard to undo",
-    "sections": "In this order: What, Why, Architecture, Budgets, Acceptance criteria",
+    "sections": "In this order: What, Why, Visual changes, Architecture, Budgets, Acceptance",
+    "one subsection per visual change": "One `### <name>` subsection per change the plan",
+    "illustrative images": "illustrative captures from a throwaway, mocked spike",
+    "visual changes restate the report": "restates the plan's `spike-visual-report`, answer",
+    "no visual section without a visual change": "has no Visual changes section",
     "budgets copy the writer's answers": "orchestrator.plan_budgets <project>` prints for the",
     "predates budgets": "This plan predates budgets: <reason>",
     "no budget detail": "So this section carries none of that detail",
@@ -343,7 +364,7 @@ def test_the_template_declares_each_variable_with_its_type(loader: str) -> None:
     }
     assert declared == {
         **{name: (kind, items, True) for name, (kind, items, _) in VARIABLES.items()},
-        **{name: (kind, items, False) for name, (kind, items, _) in BUDGET_VARIABLES.items()},
+        **{name: (kind, items, False) for name, (kind, items, _) in OPTIONAL_VARIABLES.items()},
     }, declared
 
 
@@ -354,13 +375,13 @@ def _keys(shape: Keys) -> list[str]:
 
 @pytest.mark.parametrize(
     "variable",
-    [name for name, (_, _, keys) in {**VARIABLES, **BUDGET_VARIABLES}.items() if keys],
+    [name for name, (_, _, keys) in {**VARIABLES, **OPTIONAL_VARIABLES}.items() if keys],
     ids=str,
 )
 def test_an_object_variables_description_names_each_of_its_keys(variable: str) -> None:
     """The description is where a writer learns an object's keys, so it names every one."""
     description = _front_matter()["variables"][variable]["description"]
-    keys = {**VARIABLES, **BUDGET_VARIABLES}[variable][2]
+    keys = {**VARIABLES, **OPTIONAL_VARIABLES}[variable][2]
     assert keys is not None
     missing = [key for key in _keys(keys) if f"`{key}`" not in description]
     assert not missing, f"{variable}'s description never names {missing}:\n{description}"
@@ -768,3 +789,59 @@ def test_modern_architecture_description_restates_the_reader_models() -> None:
         assert f'"{tag}"' in description
     assert "letters, digits, underscore, plus or hyphen" in description
     assert "nonempty ordered list" in description
+
+
+#: Two expected visual changes, as a plan's `spike-visual-report` answers them.
+VISUAL_CHANGES = [
+    {
+        "name": "Settings page",
+        "description": "The settings page gains a column for each node's owner.",
+        "before": "settings-before.png",
+        "after": "settings-after.png",
+    },
+    {
+        "name": "Status line",
+        "description": "The CLI's status line names the run instead of its id.",
+        "before": "status-before.png",
+        "after": "status-after.png",
+    },
+]
+
+
+def test_a_plans_visual_changes_render_after_why_and_before_architecture(
+    tmp_path: Path, loader: str
+) -> None:
+    """One `###` per change, in order: its description, then its before and after images."""
+    body = _render(loader, {**ANSWERS, "visual_changes": VISUAL_CHANGES}, tmp_path)
+
+    sections = re.findall(r"^## (.+)$", body, re.MULTILINE)
+    assert sections == ["What", "Why", "Visual changes", "Architecture"] + [
+        "Acceptance criteria",
+        "Planned tasks",
+    ], sections
+    section = body.split("## Visual changes\n", 1)[1].split("\n## ", 1)[0]
+    assert re.findall(r"^### (.+)$", section, re.MULTILINE) == [
+        change["name"] for change in VISUAL_CHANGES
+    ], section
+    expected = "".join(
+        f"### {change['name']}\n\n{change['description']}\n\n**Before**\n\n"
+        f"![Before: {change['name']}](./{change['before']})\n\n**After**\n\n"
+        f"![After: {change['name']}](./{change['after']})\n\n"
+        for change in VISUAL_CHANGES
+    )
+    assert section == "\n" + expected.removesuffix("\n"), section
+
+
+def test_a_plan_with_no_visual_change_renders_as_if_the_answer_were_absent(
+    tmp_path: Path, loader: str
+) -> None:
+    """`visual_changes: []` is byte-identical to leaving the answer out, with no section."""
+    absent = _render(loader, ANSWERS, tmp_path)
+    empty = _render(loader, {**ANSWERS, "visual_changes": []}, tmp_path)
+    budgeted = {**ANSWERS, **_budget_answers()}
+
+    assert empty == absent
+    assert _render(loader, {**budgeted, "visual_changes": []}, tmp_path) == _render(
+        loader, budgeted, tmp_path
+    )
+    assert "## Visual changes" not in empty and "![" not in empty, empty

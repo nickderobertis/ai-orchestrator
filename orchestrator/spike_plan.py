@@ -34,6 +34,13 @@ plan's main run succeeds:
   answer — ``{spike, report, branch}`` — which renders as a ``## Spike evidence`` section:
   each spike it builds on and every spike above it in that spike's stacking chain, never a
   dependency edge on a spike.
+* a plan is **visual** — it changes what a user sees — exactly when its spikes project holds
+  the reserved node :data:`VISUAL_SPIKE`, one per plan, whose report :data:`VISUAL_REPORT`
+  answers ``visual_changes`` with each expected change's before-and-after screenshots as
+  assets of the report; the design document restates that answer, `scripts/finish-plan.sh`
+  quotes it to the document's writer, and :mod:`orchestrator.design_approval` refuses to
+  approve a document of a visual plan that shows none of it. It is otherwise an ordinary
+  spike.
 
 That section is what the check reads, rather than the store's stored answers: a store keeps
 a task's answers only where it was drafted and never copies them, while the rendered body
@@ -45,7 +52,9 @@ checking bodies the pinned store rendered from that template.
 
 from __future__ import annotations
 
+import argparse
 import re
+import sys
 from collections.abc import Iterator, Mapping, Sequence
 from typing import NamedTuple, NewType
 
@@ -65,6 +74,11 @@ SPIKES_SUFFIX = "-spikes"
 
 #: What a spike's report document is called: the spike's node id with this appended.
 REPORT_SUFFIX = "-report"
+
+#: The reserved spike a plan that changes what a user sees authors, and its report's id:
+#: the one statement of both, which every reader of a visual plan takes from here.
+VISUAL_SPIKE = NodeId(f"{SPIKE_PREFIX}visual")
+VISUAL_REPORT = ReportId(f"{VISUAL_SPIKE}{REPORT_SUFFIX}")
 
 #: The one `publish` value a spike node declares, and the metadata key it is stored under.
 PRESERVE = "preserve"
@@ -309,6 +323,49 @@ def report_for(
     )
 
 
+def visual_report(
+    documents: Sequence[plan_store.StoreDocument],
+) -> plan_store.StoreDocument | None:
+    """The plan's :data:`VISUAL_REPORT` among ``documents``, or ``None`` for a plan with none.
+
+    Found as a task's evidence finds a report: a spike-report document named by that id, its
+    own or — on a copy — the one the store's `onetaskgraph.origin` records it was copied from.
+    """
+    return next(
+        (
+            held
+            for held in documents
+            if design_approval.is_spike_report(held) and VISUAL_REPORT in names(held)
+        ),
+        None,
+    )
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Print the qualified id of a plan project's visual report, or nothing when it has none.
+
+    `scripts/finish-plan.sh` asks this before it composes the design document's writer task,
+    so the reserved ids are read from here rather than spelled in the script.
+    """
+    parser = argparse.ArgumentParser(
+        prog="python -m orchestrator.spike_plan",
+        description="Name the visual spike's report a plan project holds, if any.",
+    )
+    parser.add_argument("command", choices=["visual-report"])
+    parser.add_argument("project", metavar="SOURCE:PROJECT")
+    args = parser.parse_args(argv)
+    try:
+        held = visual_report(plan_store.read_documents(args.project))
+    except OSError as exc:
+        print(
+            f"spike_plan: the documents of {args.project} could not be read: {exc}", file=sys.stderr
+        )
+        return 2
+    if held is not None:
+        print(held.qualified_id)
+    return 0
+
+
 def refusals(project: str, document: object) -> list[Refused]:
     """Everything `just check-plan` refuses about ``project``'s spike convention.
 
@@ -329,3 +386,7 @@ def refusals(project: str, document: object) -> list[Refused]:
         found.extend(_spike_node_refusals(task, is_spikes))
         found.extend(_evidence_refusals(task, documents, spikes))
     return found
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

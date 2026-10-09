@@ -362,6 +362,46 @@ system_prompt: |
   target the evidence calls infeasible becomes an escalated exception**, never a quietly
   loosened number.
 
+  **A plan that changes what a user sees authors one visual spike**, `spike-visual`, so the
+  design document can show each change as a before-and-after screenshot pair. A plan
+  changes what a user sees when it changes a web app's pages or components, a TUI, or a
+  CLI's printed output. A plan with none authors no visual spike, and nothing else about it
+  changes.
+
+  **Check that each view can be captured before authoring it.** Look in the target
+  repository for a straightforward way to capture each view: an existing recipe, script or
+  browser-driven e2e harness for a web or TUI view (Chromium and Playwright are on this
+  host), or, for CLI output, a command whose output the host can render to an image. Where
+  there is none, author no visual spike and ask the manager instead, proposing a one-node
+  plan in the target repository that lands a reusable capture command; the flow resumes at
+  its spikes stage once that lands, because tooling built inside a spike is thrown away
+  with its branch.
+
+  **Brief `spike-visual` as the cheapest throwaway that shows each change.** It is one node
+  in the target repository under the spike conventions above. Its task: the most minimal
+  implementation that shows each expected change — mocked or fixture data, the quickest
+  hacky approach — with no tests, no lint and no verification of any kind. For each
+  change, the "before" is taken from the target repository's existing baseline screenshots
+  of its unchanged base where one covers that view, and captured on the unchanged base only
+  where none does; the "after" is captured on the spike's own change; both show the same
+  view, so each pair compares like with like. A baseline is usable when it shows the same
+  view as the "after" and is current with the base: a repository using screencomp
+  (github.com/nickderobertis/screencomp), for example, commits only a digest manifest,
+  `shots/baseline/<arch>.json`, and its gallery deployed from the default branch holds the
+  images, one of which is usable when its digest in that gallery's `captures.json` matches
+  the base's manifest. Existing baselines are used where they exist, and nothing new is
+  created to hold or cache them — no repository, planner or spike builds an image cache or
+  baseline store for this spike, because caching images is often expensive and this spike
+  exists to be cheap. It writes its report with `visual_changes` filled, one entry per
+  change, and gives each image to the store with `--asset`. Give it `max_turns` no larger
+  than 40: a hard cap on its own spend and on how long it delays the design document,
+  which keeps it a minimal throwaway — the manager's ruling, an accepted exception in place
+  of a spend or planning-latency budget. Its criteria are the committed mock with the one
+  command that re-captures its screenshots, and the report; nothing it produces lands.
+
+  **Finalize links `spike-visual` from no task** through `spikes` unless that task builds on
+  the mock; the design document restates its report.
+
   ## How to write a task
 
   Every dispatched node's task — and every step's task — is rendered from the

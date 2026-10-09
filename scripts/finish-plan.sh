@@ -177,7 +177,7 @@ DAG_GRAPH_FLAG="--dag-graph"
 WRITER_ANSWERS_PROGRAM='
 import json, pathlib, re, sys
 
-(brief, plan, document, template, note, resolve) = sys.argv[1:7]
+(brief, plan, document, template, note, resolve, visual_report, visual_answers, visual_shown) = sys.argv[1:10]
 # Line endings and trailing blanks are read the way `scripts/plan-brief.sh` reads a heading
 # when it validates the brief, so a brief it accepted is one this composes from.
 text = pathlib.Path(brief).read_text(encoding="utf-8").replace("\r\n", "\n")
@@ -210,6 +210,45 @@ budget_criterion = (
     f"The document\u2019s {budget_answers} answers are exactly the values `{budget_command}` "
     f"prints for them."
 )
+# The visual answer is quoted rather than composed, like the budget answers: a plan whose
+# project holds its visual spike\u2019s report has that report\u2019s `visual_changes` and the path of
+# each image it holds quoted here, and every other plan has the one criterion that it is `[]`.
+visual_task = ""
+if visual_report:
+    keys = ("name", "description", "before", "after")
+    answered, shown = json.loads(visual_answers), json.loads(visual_shown)
+    changes = answered.get("visual_changes") if isinstance(answered, dict) else None
+    if not isinstance(changes, list) or not changes:
+        sys.exit(f"{visual_report} answers no visual_changes, so the design document has none to restate; regenerate the report with one entry per visual change the plan expects")
+    assets = shown.get("assets") if isinstance(shown, dict) else None
+    held = {
+        asset.get("name"): asset.get("path")
+        for asset in (assets if isinstance(assets, list) else [])
+        if isinstance(asset, dict) and isinstance(asset.get("name"), str) and isinstance(asset.get("path"), str)
+    }
+    named = [change.get(side) for change in changes if isinstance(change, dict) for side in ("before", "after")]
+    # llmlint: ignore[changed_behavior_has_e2e] Unreachable through the store as it stands: rendering the spike-report template refuses an entry missing one of the four keys (`a value there is undefined`) and a document referencing an image it is not given, so a stored report always passes this; it guards the quotation against a store that ever accepts one.
+    if any(not isinstance(change, dict) or not all(isinstance(change.get(key), str) and change[key] for key in keys) for change in changes) or any(name not in held for name in named):
+        sys.exit(f"{visual_report} answers visual_changes that are not each a name, description, before and after naming images it holds; regenerate the report from the spike-report template")
+    images = "\n".join(f"- `{name}`: `{held[name]}`" for name in named)
+    # In the order the templates declare the four keys, rather than the sorted order the store answers in.
+    quoted = json.dumps([{key: change.get(key) for key in keys} for change in changes], ensure_ascii=False, indent=2)
+    visual_task = (
+        f"The plan\u2019s visual spike reported what the plan changes that a user sees in "
+        f"`{visual_report}`. Answer `visual_changes` with exactly its entries, in its order:"
+        f"\n\n```json\n{quoted}\n```\n\n"
+        f"Each `before` and `after` there names an image that report holds; the store keeps "
+        f"each at the path beside its name below. Give every one of them to the command that "
+        f"stores the document as `--asset <path>`, so each image is an asset of the design "
+        f"document itself:\n\n{images}\n\n"
+    )
+    visual_criterion = (
+        f"The document\u2019s `visual_changes` answer restates the `visual_changes` answer of "
+        f"`{visual_report}`, entry for entry and in its order, and every image it references "
+        f"is held as an asset of the document."
+    )
+else:
+    visual_criterion = "The document\u2019s `visual_changes` answer is `[]`."
 answers = {
     "what": (
         f"Write the design document a person reviews the plan `{plan}` as \u2014 terse prose, "
@@ -223,6 +262,7 @@ answers = {
         f"guidance comments in that chain say how to write it, and `{variables}` lists the "
         f"answers it takes.\n\n"
         f"{budget_task}\n\n"
+        f"{visual_task}"
         f"What the planner was asked to plan, in the brief\u2019s words, for the document\u2019s What:"
         f"\n\n{brief_what}"
     ),
@@ -247,6 +287,7 @@ answers = {
         "location is the location the plan store reports for that task, read back out of the "
         "store and never composed by hand.",
         budget_criterion,
+        visual_criterion,
         "This dispatch reports where the store put the document, in the form the store reports "
         "it: a link where it is on a website, a path where it is a file on this machine.",
         "Every claim this dispatch makes about the finished work is true of the tree as it "
@@ -557,6 +598,24 @@ document_resolve=$("$python" -m orchestrator.design_chain "$plan_project") ||
     fail "which repository's layer the design document of $plan_project resolves through could not be read out of the plan store; the diagnostic above names why" \
         "repair what it names, then run this command again"
 
+# The plan's visual spike report, when its project holds one: the reserved id is
+# `orchestrator/spike_plan.py`'s, so it is asked rather than spelled here, and its
+# `visual_changes` answer and the store's path for each of its images are read now so the
+# writer's task can quote them and a report the store cannot answer for is refused before
+# anything is launched.
+visual_report=$("$python" -m orchestrator.spike_plan visual-report "$plan_project") ||
+    fail "whether $plan_project holds its visual spike's report could not be read; the diagnostic above names why" \
+        "repair what it names, then run this command again"
+visual_answers=""
+visual_shown=""
+if [ -n "$visual_report" ]; then
+    # llmlint: ignore[tool_output_is_signal] Read, not shown: the report's answers and its assets' paths are quoted into the writer's task.
+    { visual_answers=$(uv run onetaskgraph document answers "$visual_report" --json) &&
+        visual_shown=$(uv run onetaskgraph document show "$visual_report" --json); } ||
+        fail "the visual changes $visual_report reports could not be read out of the plan store; the diagnostic above names why" \
+            "repair what it names, then run this command again"
+fi
+
 # What the document's budget answers copy, read once now so a plan whose budgets cannot be
 # read is refused before anything is launched. The check above has already refused a plan
 # with neither plan-level answers nor a migration entry, so a failure here is a store that
@@ -644,7 +703,7 @@ answers_file=$(mktemp "${TMPDIR:-/tmp}/finish-plan-answers.XXXXXX") || {
 }
 "$python" -c "$WRITER_ANSWERS_PROGRAM" "$brief" "$plan_project" \
     "$design_document_id" "$DOCUMENT_TEMPLATE" "$PLAN_DIRECT_PLACEMENT_NOTE" "$document_resolve" \
-    >"$answers_file" || {
+    "$visual_report" "$visual_answers" "$visual_shown" >"$answers_file" || {
     discard_answers
     take_back
     fail "the design-document task's answers could not be composed from '$brief' by $python; the diagnostic above names why" \

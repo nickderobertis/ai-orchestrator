@@ -1797,3 +1797,23 @@ def test_a_writer_task_that_lists_no_criterion_is_refused_before_anything_is_lau
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]  # noqa: E501
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] `plan-tooling` is the leaf
+# project keyed on `planToolingWorkspace`, the edge this rule asks for, and every other journey
+# of this module already runs behind it. That key names the recipes, scripts, templates and
+# package this journey drives, so narrowing it would memoize a verdict over a tree never run.
+@pytest.mark.xdist_group("finish-plan")
+def test_a_plan_with_no_visual_spike_has_its_writer_answer_no_visual_change(
+    finished: Finished,
+) -> None:
+    """No report to quote, so the task quotes none, and holds the answer to `[]`."""
+    content = finished.design_task["content"]
+    assert "visual spike" not in content, content
+    assert "--asset" not in content, content
+    criteria = content.split("## Acceptance criteria", 1)[1].split("\n## ", 1)[0]
+    assert "The document\u2019s `visual_changes` answer is `[]`." in criteria, criteria
+    assert criteria.count("visual_changes") == 1, criteria
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

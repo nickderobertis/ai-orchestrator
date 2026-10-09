@@ -50,6 +50,17 @@ variables:
     type: list
     items: string
     required: true
+  visual_changes:
+    description: >-
+      One object per visual change the plan expects, for the reserved `spike-visual` spike,
+      with four string keys: `name` (the change's short heading), `description` (what is
+      changing, in plain words), `before` and `after` (each the bare file name of an image
+      asset of this report, as its content references it with `./<name>`). `[]` for every
+      other spike.
+    type: list
+    items: object
+    required: false
+    default: []
 ---
 {#- A table cell is one line holding no bare column delimiter, whatever an answer says. -#}
 {% macro cell(value) %}{{ value | string | replace("|", "\\|") | replace("\r\n", " ") | replace("\n", " ") | replace("\r", " ") }}{% endmacro %}
@@ -63,6 +74,11 @@ variables:
   candidate budget itself, so an empty `candidates` renders as a sentence saying so rather
   than a table with a header and no rows. Its dependencies are not recorded here: they are
   the spikes project's own edges, and a report copying them would be a second graph.
+
+  A VISUAL SPIKE. The reserved `spike-visual` answers `visual_changes`, one entry per
+  expected change, and gives each image named there to the store with `--asset`; it answers
+  `candidates: []` unless it also measured something. Every other spike leaves the answer
+  out, and its report renders no `## Visual changes` section.
 
   THIS TEMPLATE. Guidance is always a Jinja comment, never an HTML comment, so a rendered
   document carries none of it.
@@ -99,3 +115,21 @@ This spike measured no candidate budget itself.
 {% else %}
 This spike found no problem with the plan's design beyond its budgets.
 {% endfor %}
+{% if visual_changes %}
+
+## Visual changes
+{% for change in visual_changes %}
+
+### {{ change.name }}
+
+{{ change.description }}
+
+**Before**
+
+![Before: {{ change.name }}](./{{ change.before }})
+
+**After**
+
+![After: {{ change.name }}](./{{ change.after }})
+{% endfor %}
+{% endif %}

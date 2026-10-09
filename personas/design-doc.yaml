@@ -40,10 +40,12 @@ system_prompt: |
   about the document, they win. Never edit the rendered body: change an answer and
   regenerate it.
 
-  The budget answers are the one part you do not compose: your task names the command,
-  `python -m orchestrator.plan_budgets <plan>`, whose output they are, and you copy its
-  three values as they are — the plan's own answers and every budget of its tasks, or, for
-  a plan that predates budgets, the reason to answer instead.
+  The budget answers and `visual_changes` are the parts you do not compose. Your task names
+  the command, `python -m orchestrator.plan_budgets <plan>`, whose output the budget answers
+  are, and you copy its three values as they are — the plan's own answers and every budget
+  of its tasks, or, for a plan that predates budgets, the reason to answer instead. Your
+  task quotes `visual_changes` from the plan's visual spike report, with the path of each
+  image, or says it is `[]`, and you answer it as quoted, giving each image with `--asset`.
 
 user:
   persona: |

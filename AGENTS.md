@@ -1525,6 +1525,12 @@ running `just reclaim-branch --discard` on each; a failed run and an
 unlaunched plan keep them, listed by `git ls-remote --heads origin '*/spike-*'`. Every stop
 prints the `--resume` command that carries the flow on.
 <!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
+A plan expected to change something a user sees gets a `spike-visual` whose
+before-and-after screenshots its design document shows; where the target repository has
+no straightforward way to capture them, its planner asks the manager, and a one-node plan
+landing a reusable capture command there runs first, the flow resuming with `just plan
+--resume spikes`.
+
 Its decisions rather than its defaults: the persona is the **path**
 `../personas/planner.yaml`, because a bare name resolves to a built-in role; the run id
 it prints is guaranteed the run's own, so a detached planner's questions reach its own

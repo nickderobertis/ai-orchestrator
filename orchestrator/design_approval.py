@@ -86,7 +86,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal, NamedTuple, NewType, TypedDict
 
-from orchestrator import design_chain, plan_store
+from orchestrator import design_chain, plan_store, spike_plan
 from orchestrator.plan_store import NodeId, StoreDocument
 from orchestrator.root import REPO_ROOT
 
@@ -167,6 +167,11 @@ DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 #: convention). Known by the template its rendering records, which travels with every copy
 #: where an id does not.
 SPIKE_REPORT_REFERENCE = "onepipeline:spike-report"
+
+
+#: The heading the design-doc template renders a plan's visual changes under, which a document
+#: of a plan holding its visual spike's report has to carry before it can be approved.
+VISUAL_HEADING = re.compile(r"^## Visual changes$", re.MULTILINE)
 
 
 class Unrendered(OSError):
@@ -721,7 +726,9 @@ def approve(project: str) -> Approved:
     edited prose, a moved template — is content nobody has approved, and this is what
     approves it.
     """
-    document = design_document(project)
+    documents = plan_store.read_documents(project)
+    document = one_document(project, documents)
+    unshown(project, document, documents)
     repository = design_chain.plan_repository(project)
     key = approval_key(document, resolved_digest(TEMPLATE_ROOT, repository), repository)
     if recorded(document) == key:
@@ -737,6 +744,25 @@ def approve(project: str) -> Approved:
         written.id.model_dump(),
     )
     return Approved(document.qualified_id, location, held=False)
+
+
+def unshown(project: str, document: StoreDocument, documents: Sequence[StoreDocument]) -> None:
+    """Refuse a visual plan's design document that shows none of its visual changes.
+
+    A plan whose project holds its visual spike's report changes what a user sees, and
+    approval is the moment its before-and-after pictures are for; a document that lost them
+    is one a person would approve without seeing what it changes. Every other plan passes.
+    """
+    report = spike_plan.visual_report(documents)
+    if report is None or VISUAL_HEADING.search(document.content):
+        return
+    raise OSError(
+        f"{project} holds its visual spike's report {report.qualified_id}, and its design "
+        f"document {document.qualified_id} renders no `## Visual changes` section, so a "
+        f"person would approve it without seeing what the plan changes; regenerate the "
+        f"document with its `visual_changes` answer restating that report's, each image "
+        f"given with `--asset`, then record the approval again"
+    )
 
 
 def assess(project: str) -> Assessment:
