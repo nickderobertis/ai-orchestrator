@@ -48,6 +48,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, NamedTuple
 
+import budget_telemetry
 import probe_run_root
 import pytest
 from nx_workspace import SHARED_TOOLCHAIN_GROUP
@@ -91,9 +92,9 @@ IDENTITY_NAMES = frozenset(
     if name
 )
 
-#: The bound the own-sessions read is held to at scale: the stop guard's verb bound, which
-#: a turn-ending read of this view would have to fit inside.
-OWN_READ_BOUND_SECONDS = 10.0
+#: The budget the own-sessions read's wall clock at scale is recorded under: the read the
+#: Stop hook and a manager wait through before a turn may end.
+OWN_READ_BUDGET = "own-sessions-read-seconds"
 
 
 class World(NamedTuple):
@@ -410,7 +411,10 @@ def _onevcs(registry: Registry, *arguments: str) -> str:
     return done.stdout
 
 
-def test_the_own_sessions_read_fits_its_bound_at_this_hosts_scale(tmp_path: Path) -> None:
+def test_the_own_sessions_read_lists_only_its_own_branches_at_this_hosts_scale(
+    tmp_path: Path,
+) -> None:
+    """The read over the scale registry, timed as budget `own-sessions-read-seconds`."""
     if not ONEVCS.is_file() or shutil.which("just") is None:
         pytest.skip("this checkout has no installed onevcs, or no just, to drive")
     root = tmp_path / "scale"
@@ -467,10 +471,13 @@ def test_the_own_sessions_read_fits_its_bound_at_this_hosts_scale(tmp_path: Path
     print(f"own-sessions read over the scale registry: {elapsed:.2f}s")
     assert done.returncode == UNPUBLISHED, f"{done.stdout}\n{done.stderr}"
     assert sorted(row["branch"] for row in json.loads(done.stdout)) == sorted(own)
-    assert elapsed < OWN_READ_BOUND_SECONDS, (
-        f"`just unpublished --own --no-disk` took {elapsed:.1f}s over {IDENTITIES} identities, "
-        f"{IDENTITIES * CLOSED_PER_IDENTITY} closed sessions and {PRESERVED} preserved "
-        f"branches; its bound is {OWN_READ_BOUND_SECONDS:.0f}s"
+    budget_telemetry.record(
+        OWN_READ_BUDGET,
+        f"{IDENTITIES} identities, {IDENTITIES * CLOSED_PER_IDENTITY} closed sessions, "
+        f"{PRESERVED} preserved branches",
+        elapsed,
+        unit="seconds",
+        combine="max",
     )
 
 

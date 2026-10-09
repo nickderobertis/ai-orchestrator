@@ -10,6 +10,7 @@
     "lang:python"
   ],
   "implicitDependencies": [
+    "support-budget-telemetry",
     "support-command-ceiling",
     "support-conftest",
     "support-delegation-checkout",
@@ -131,18 +132,20 @@
   },
   "targets": {
     "test": {
-      "command": "env -u FORCE_COLOR NO_COLOR=1 COVERAGE_FILE=.coverage.e2e uv run pytest tests/e2e --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval -m 'not reads_docs and not reads_recipes and not reads_checkouts' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0",
+      "command": "rm -rf .telemetry/orchestrator-e2e/test && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/orchestrator-e2e/test NO_COLOR=1 COVERAGE_FILE=.coverage.e2e uv run pytest tests/e2e --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval -m 'not reads_docs and not reads_recipes and not reads_checkouts' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0",
       "options": {
         "cwd": "."
       },
       "outputs": [
-        "{workspaceRoot}/.coverage.e2e"
+        "{workspaceRoot}/.coverage.e2e",
+        "{workspaceRoot}/.telemetry/orchestrator-e2e/test"
       ],
       "inputs": [
         "e2eWorkspace",
         {
           "input": "testSupport",
           "projects": [
+            "support-budget-telemetry",
             "support-command-ceiling",
             "support-conftest",
             "support-delegation-checkout",
@@ -228,10 +231,13 @@
       ]
     },
     "test-checkouts": {
-      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/e2e --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval -m reads_checkouts --no-cov -n 4 --dist loadgroup",
+      "command": "rm -rf .telemetry/orchestrator-e2e/test-checkouts && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/orchestrator-e2e/test-checkouts NO_COLOR=1 uv run pytest tests/e2e --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval -m reads_checkouts --no-cov -n 4 --dist loadgroup",
       "options": {
         "cwd": "."
-      }
+      },
+      "outputs": [
+        "{workspaceRoot}/.telemetry/orchestrator-e2e/test-checkouts"
+      ]
     }
   }
 }

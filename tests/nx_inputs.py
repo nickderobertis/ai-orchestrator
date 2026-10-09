@@ -573,8 +573,18 @@ UNPUBLISHED_VIEW_ROOT = "tests/e2e/unpublished_view"
 #: sessions, real `git`, the installed engine and a real `just` per assertion are a cost
 #: `nx affected` can only keep off an unrelated edit where it is a separate project.
 UNFINISHED_PROJECT = "unfinished"
-#: That project's one test target: nothing here reads this repository's prose.
+#: That project's test target: nothing here reads this repository's prose.
 UNFINISHED_SCOPED = "test"
+# llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
+# catalog of test projects, where every project has its entry, and
+# `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
+# describes; the unfinished project's timed tier sits beside its other because the catalog
+# is the domain.
+#: Its uncached target timing the own-sessions read at scale, the one journey its `test`
+#: deselects: the figure budget `own-sessions-read-seconds` reports, which a memo would
+#: replay from another moment.
+UNFINISHED_HOST_SCOPED = "test-host"
+# llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 #: The directory it owns, which every other project's tiers ignore.
 UNFINISHED_ROOT = "tests/unfinished"
 

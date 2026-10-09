@@ -6,6 +6,7 @@ conditions:
   - name: dispatches
     command: ["scripts/budget-dispatches.sh"]
 budgets:
+  # llmlint: ignore-block[budgets_track_product_owner_outcomes] The one budget held at the push, where it can refuse a publication; cycle-time is a delivery budget reported only once a change has landed, so this is not a phase checked at cycle-time's moment but the bar every push waits on.
   - id: gate-time
     description: >-
       Wall clock of this repository's complete pre-push gate on a publishing push, with
@@ -17,6 +18,7 @@ budgets:
     unit: seconds
     direction: max
     threshold: 1800
+  # llmlint: ignore-end[budgets_track_product_owner_outcomes]
   - id: cycle-time
     description: >-
       A landed change's time from its first dispatch to its landing on the base. It

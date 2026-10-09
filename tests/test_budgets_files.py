@@ -44,6 +44,9 @@ TEMPLATE = REPO_ROOT / "templates" / "plan-task-budgets.md.j2"
 
 #: The budget holding a design document's budget summary short enough to approve from.
 SUMMARY_BUDGET = "design-doc-budget-summary-length"
+#: `onebudgetspec check`'s exits for a budget it measured: within, and over its threshold.
+MEASURED_WITHIN = 0
+MEASURED_OVER = 1
 
 #: The installed onebudgetspec, beside the interpreter: the locked install the hook and the
 #: Nx targets run.
@@ -107,17 +110,18 @@ def test_the_root_file_holds_gate_time_cycle_time_and_the_dispatches_condition()
 
 
 def test_the_root_file_registers_the_design_documents_budget_summary_length() -> None:
-    """The summary a person approves a plan from is held to 3,000 characters for #1568."""
+    """The summary a person approves a plan from is a budget measured for #1568."""
     (summary,) = [one for one in _root()["budgets"] if one["id"] == SUMMARY_BUDGET]
     description = summary.pop("description")
+    threshold = summary.pop("threshold")
 
+    assert isinstance(threshold, int | float) and threshold > 0, threshold
     assert summary == {
         "id": SUMMARY_BUDGET,
         "measure": "reported",
         "command": ["scripts/budget-design-doc-summary.sh"],
         "unit": "characters",
         "direction": "max",
-        "threshold": 3000,
     }
     assert "#1568" in description and "`## Budgets` section" in description
 
@@ -126,7 +130,7 @@ def test_the_root_file_registers_the_design_documents_budget_summary_length() ->
 def test_the_library_measures_the_summary_of_the_committed_fixture(
     where: str, tmp_path: Path
 ) -> None:
-    """`onebudgetspec check` reads the entry, runs its command once and reports it within.
+    """`onebudgetspec check` reads the entry, runs its command once and reports its length.
 
     Also from a copy of the entry outside the checkout, its command made absolute, as the
     gate-time journeys check the root file: the library runs a command from its file's
@@ -149,12 +153,12 @@ def test_the_library_measures_the_summary_of_the_committed_fixture(
         check=False,
         timeout=120,
     )
-    assert ran.returncode == 0, ran.stdout + ran.stderr
+    # Measured, within or over: whether the figure is over its threshold is the budget's
+    # verdict, never this test's.
+    assert ran.returncode in (MEASURED_WITHIN, MEASURED_OVER), ran.stdout + ran.stderr
     (result,) = json.loads(ran.stdout[ran.stdout.index("{") :])["results"]
     rendered = REPO_ROOT / "tests" / "fixtures" / "budgets" / "issue-1568-summary.txt"
-    assert result["verdict"] == "within", result
     assert result["actual"] == len(rendered.read_text(encoding="utf-8")), result
-    assert result["threshold"] == 3000, result
 
 
 @pytest.mark.parametrize(

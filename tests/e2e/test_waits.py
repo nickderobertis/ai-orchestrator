@@ -20,7 +20,6 @@ import re
 import subprocess
 import sys
 import threading
-import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -260,18 +259,16 @@ def test_a_command_this_suite_runs_with_no_bound_of_its_own_is_given_one(
 
     Two halves, proved in different ways because they are provable in different ways —
     and one of them was proved by a race for as long as they were one assertion. That the
-    bound *fires* is arithmetic against a real child: the command sleeps for half a minute
-    against a twentieth of a second, so no load lets it finish first and none makes the
-    bound expire late. That the expiry *carries what the killed command had written* is
+    bound *fires* is the expiry it raises against a real child: the command sleeps for half
+    a minute against a twentieth of a second and would return without one had it been
+    waited out, so the clock is never consulted. That the expiry *carries what the killed
+    command had written* is
     not, so it is driven at the boundary the bound wraps instead; `killed_having_written`
     says why. Both halves hold on a loaded host as well as an idle one.
     """
-    started = time.monotonic()
-
     with pytest.raises(AssertionError) as expired:
         subprocess.run(SAYS_THEN_SLEEPS, capture_output=True, text=True, check=False)
 
-    took = time.monotonic() - started
     said = str(expired.value)
     assert "this suite ran" in said, (
         f"this is not the bound `subprocess.run` was given — the wording belongs to "
@@ -280,10 +277,6 @@ def test_a_command_this_suite_runs_with_no_bound_of_its_own_is_given_one(
     assert "time.sleep(30)" in said, (
         f"the expiry does not name the command that was run, so a reader cannot tell "
         f"which of a journey's calls stopped:\n{said}"
-    )
-    assert took < 30, (
-        f"the call ran for {took:.1f}s against a {bounded}s bound, so it was waited out "
-        f"rather than bounded — the command it ran sleeps for 30s"
     )
 
     # llmlint: ignore-block[e2e_not_mocked, tests_mirror_real_usage] The call is the

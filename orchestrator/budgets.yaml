@@ -1,38 +1,58 @@
 # The orchestrator project's own budgets, checked by its `budgets` Nx target whenever a
-# change touches the project. Each command runs from this directory with no shell, and
-# writes the value it measured to the file `ONEBUDGETSPEC_RESULT` names. This file is the
-# one statement of each threshold: the tests that measure them read it from here.
+# change touches the project. Each command runs from this directory with no shell and
+# analyses what the test targets that `budgets` depends on recorded during their normal
+# run (`tests/budget_telemetry.py`), reporting the figure and its breakdown. This file is
+# the one statement of each threshold.
 schema_version: 1
 budgets:
+  - id: follow-up-run-points
+    description: >-
+      Modelled GitHub GraphQL points one realistic follow-up run spends on the followups
+      board, priced on the loopback stand-in. It protects the board token's hourly
+      allowance, which every session on this host shares.
+    measure: reported
+    command: ["uv", "run", "--directory", "..", "python", "-m", "tests.budget_telemetry"]
+    unit: points
+    direction: max
+    threshold: 160
+  - id: ticket-lifecycle-points
+    description: >-
+      Modelled GitHub GraphQL points one follow-up ticket's whole life spends on the
+      followups board: filed, re-copied, answered once and withdrawn. It protects the same
+      shared allowance per ticket, including the steps a run does not drive.
+    measure: reported
+    command: ["uv", "run", "--directory", "..", "python", "-m", "tests.budget_telemetry"]
+    unit: points
+    direction: max
+    threshold: 23
+  - id: lost-turn-surface-chars
+    description: >-
+      Characters of the planner surface a lost monitor turn raises, the largest the journeys
+      raise. It protects how much a manager reads on the channel in place of the lost turn.
+    measure: reported
+    command: ["uv", "run", "--directory", "..", "python", "-m", "tests.budget_telemetry"]
+    unit: characters
+    direction: max
+    threshold: 400
   - id: plan-level-prompt-chars
     description: >-
       Characters of the plan-level prompt `just review-plan` composes for a realistic
-      44-node, 52-budget plan — the larger of the baseline-shaped and host-shaped fixtures
-      in tests/test_plan_review.py — which must stay well inside the smallest context
-      window a candidate of the plan-level role answers in.
+      44-node, 52-budget plan. It protects the room that prompt needs inside the smallest
+      context window a candidate of the plan-level role answers in.
     measure: reported
-    command: ["uv", "run", "--directory", "..", "pytest", "tests/test_plan_review.py", "-k", "plan_level_prompt_size"]
+    command: ["uv", "run", "--directory", "..", "python", "-m", "tests.budget_telemetry"]
     unit: characters
     direction: max
     threshold: 200000
+  # llmlint: ignore-block[budgets_track_product_owner_outcomes] The only budget bounding how the plan-level prompt grows with a plan's size: the total is measured on one 44-node fixture, whose ceiling would not catch a per-node regression of more than twice, so this is the scaling outcome a plan author relies on rather than a part the total already guards.
   - id: plan-level-prompt-chars-per-node
     description: >-
-      Characters the costliest node of either realistic fixture adds to the plan-level
-      prompt, so a plan's prompt grows with how many nodes it has and never with how
-      long their task bodies are.
+      Characters one node costs the plan-level prompt, at the costliest node of a realistic
+      plan. It protects how fast that prompt grows with a plan's node count, which keeps a
+      plan of any size reviewable however long its task bodies are.
     measure: reported
-    command: ["uv", "run", "--directory", "..", "pytest", "tests/test_plan_review.py", "-k", "plan_level_prompt_per_node"]
+    command: ["uv", "run", "--directory", "..", "python", "-m", "tests.budget_telemetry"]
     unit: characters
     direction: max
     threshold: 1600
-  - id: follow-up-scoped-comment-reads
-    description: >-
-      Board requests a comment-answering pass scoped to one issue spends, on a board crowded
-      with unrelated commented items, out of the GitHub allowance every session on this host
-      shares.
-    measure: reported
-    # llmlint: ignore[budgets_reuse_gate_telemetry, budgets_scoped_to_minimal_tree] The plan that registered this budget states its measurement source as direct and this exact command; a store-request count is recorded by no gate's telemetry, and the crowded-board test it runs lives with the module's other tests under tests/, as the two budgets above do.
-    command: ["uv", "run", "--directory", "..", "pytest", "tests/test_follow_up_comments.py", "-k", "scoped_comment_reads"]
-    unit: requests
-    direction: max
-    threshold: 2
+  # llmlint: ignore-end[budgets_track_product_owner_outcomes]

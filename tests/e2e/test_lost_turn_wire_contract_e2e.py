@@ -30,6 +30,7 @@ import shutil
 from collections.abc import Iterator
 from pathlib import Path
 
+import budget_telemetry
 import lost_turn_producer
 import monitor_conversation
 import pytest
@@ -40,8 +41,8 @@ from test_monitor_quiet_turn_e2e import (
     ASKER,
     ASKER_ENV,
     MEMBER_FAILED,
-    NAMED_FAILURE_LIMIT,
     SURFACE_KIND_OF_A_LOST_TURN,
+    SURFACE_LENGTH_BUDGET,
     _raised_since,
     _records,
 )
@@ -150,7 +151,15 @@ def test_a_turn_the_real_producer_lost_raises_one_named_surface_and_ends_the_mem
     assert surface["message"].startswith(f"monitor turn failed: {cause} on {PRODUCER}."), surface[
         "message"
     ]
-    assert len(surface["message"]) <= NAMED_FAILURE_LIMIT, surface["message"]
+    # Telemetry no budget's breakdown reads: this tier is uncached, and reading it would make
+    # the cached `orchestrator:budgets` run it a second time on every check selecting it.
+    budget_telemetry.record(
+        SURFACE_LENGTH_BUDGET,
+        f"run {RUN}: {cause} on {PRODUCER}",
+        len(surface["message"]),
+        unit="characters",
+        combine="max",
+    )
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

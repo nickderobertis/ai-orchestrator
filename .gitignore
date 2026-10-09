@@ -24,6 +24,8 @@ __pycache__/
 .pytest_cache/
 .coverage
 .coverage.*
+# Budget telemetry the test targets record as their output (tests/budget_telemetry.py)
+/.telemetry/
 htmlcov/
 test-results/
 playwright-report/

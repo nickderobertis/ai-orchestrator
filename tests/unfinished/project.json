@@ -8,6 +8,7 @@
     "type:tests"
   ],
   "implicitDependencies": [
+    "support-budget-telemetry",
     "support-conftest",
     "support-nx-workspace",
     "support-probe-run-root",
@@ -39,7 +40,7 @@
   },
   "targets": {
     "test": {
-      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/unfinished --no-cov -n 4 --dist loadgroup",
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/unfinished --deselect tests/unfinished/test_unfinished_e2e.py::test_the_own_sessions_read_lists_only_its_own_branches_at_this_hosts_scale --no-cov -n 4 --dist loadgroup",
       "options": {
         "cwd": "."
       },
@@ -50,6 +51,34 @@
           "dependencies": true
         }
       ]
+    },
+    "test-host": {
+      "command": "rm -rf .telemetry/unfinished/test-host && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/unfinished/test-host NO_COLOR=1 uv run pytest tests/unfinished/test_unfinished_e2e.py::test_the_own_sessions_read_lists_only_its_own_branches_at_this_hosts_scale --no-cov -n 4 --dist loadgroup",
+      "options": {
+        "cwd": "."
+      },
+      "cache": false,
+      "outputs": [
+        "{workspaceRoot}/.telemetry/unfinished/test-host"
+      ]
+    },
+    "budgets": {
+      "inputs": [
+        "{projectRoot}/budgets.yaml",
+        "{workspaceRoot}/config/onebudgetspec.version"
+      ]
+    },
+    "budgets-host": {
+      "//": "llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The task labels own-sessions-read-seconds host and forbids a cache-restored wall clock, and just check runs every host budget whatever the diff, so the fresh measurement this edge pulls in (the test-host scale journey, about 30 seconds) runs on every check. A drafted follow-up decides whether host budgets join the diff selection, which would put this journey behind the project's own edge and delete this directive.",
+      "dependsOn": [
+        "test-host"
+      ],
+      "options": {
+        "cwd": ".",
+        "env": {
+          "BUDGET_TELEMETRY_SOURCES": ".telemetry/unfinished/test-host"
+        }
+      }
     }
   }
 }

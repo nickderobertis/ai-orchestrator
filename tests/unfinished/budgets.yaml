@@ -1,0 +1,17 @@
+# The unfinished project's budgets. Labelled `host`, so the uncached `budgets-host` target
+# checks them on every check, reading what its uncached `test-host` target measured in the
+# same run: a wall clock a cache replayed would be another moment's. The command is the one
+# analysis every budget runs (`tests/budget_telemetry.py`).
+schema_version: 1
+budgets:
+  - id: own-sessions-read-seconds
+    description: >-
+      Wall clock of `just unpublished --own --no-disk --json` over a registry at this host's
+      scale. It protects the read the Stop hook and a manager wait through before a turn may
+      end.
+    labels: [host]
+    measure: reported
+    command: ["uv", "run", "--directory", "../..", "python", "-m", "tests.budget_telemetry"]
+    unit: seconds
+    direction: max
+    threshold: 10

@@ -41,6 +41,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, NamedTuple, TypedDict, cast
 
+import budget_telemetry
 import monitor_conversation
 import onejudge_bundle
 import pytest
@@ -97,9 +98,10 @@ NEXT_TURN_OPENS_AFTER_THE_HOLD = "next turn opens after the graph's hold"
 SURFACE_KIND_OF_A_LOST_TURN = "monitor-failed"
 SURFACE_KIND_OF_A_COMPLETION_SCORE = "monitor-completion"
 
-#: The ceiling a lost turn's surface may not exceed, for any cause, identity, and run id
-#: these journeys drive through it. The raw transcript it replaced was 21,531 characters.
-NAMED_FAILURE_LIMIT = 400
+#: The budget a lost turn's surface length is recorded under, for each surface these
+#: journeys raise: what reaches a manager in place of the 21,531-character transcript it
+#: replaced.
+SURFACE_LENGTH_BUDGET = "lost-turn-surface-chars"
 
 #: The judge command's verdict on a turn the agent side lost: the member failed. onejudge
 #: reads any exit but 0 as its judge side failing, and `oneagentgraph` then ends the member.
@@ -1085,12 +1087,19 @@ def test_a_monitor_whose_turns_are_lost_dies_saying_so_once_each_time(
         f"{SURFACE_KIND_OF_A_LOST_TURN}` surface(s) reached the planner, where each death "
         f"is owed exactly one: {announced}"
     )
-    for surface in announced:
+    for life, surface in enumerate(announced, start=1):
         assert surface["blocking"] is False, surface
-        assert re.match(r"monitor turn failed: \S+ on codex\b", surface["message"]), (
+        named = re.match(r"monitor turn failed: (\S+) on (codex)\b", surface["message"])
+        assert named, (
             f"the surface does not name the cause and harness onejudge reported: {surface}"
         )
-        assert len(surface["message"]) <= NAMED_FAILURE_LIMIT, surface["message"]
+        budget_telemetry.record(
+            SURFACE_LENGTH_BUDGET,
+            f"run {LOST_RUN}, life {life}: {named.group(1)} on {named.group(2)}",
+            len(surface["message"]),
+            unit="characters",
+            combine="max",
+        )
 
 
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]

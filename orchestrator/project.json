@@ -8,6 +8,7 @@
     "lang:python"
   ],
   "implicitDependencies": [
+    "support-budget-telemetry",
     "support-command-ceiling",
     "support-conftest",
     "support-credential-dialect",
@@ -136,12 +137,15 @@
       ]
     },
     "test-docs": {
-      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/host_sweep --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/plan_store_assets --ignore=tests/render_diagram --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval --ignore=tests/unfinished --ignore=tests/graceful_cancel --ignore=tests/session_open_conflict --ignore=tests/manager_allowlist -m reads_docs --no-cov -n 4 --dist loadgroup",
+      "command": "rm -rf .telemetry/orchestrator/test-docs && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/orchestrator/test-docs NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/host_sweep --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/plan_store_assets --ignore=tests/render_diagram --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval --ignore=tests/unfinished --ignore=tests/graceful_cancel --ignore=tests/session_open_conflict --ignore=tests/manager_allowlist -m reads_docs --no-cov -n 4 --dist loadgroup",
       "options": {
         "cwd": "."
       },
       "inputs": [
         "wholeWorkspace"
+      ],
+      "outputs": [
+        "{workspaceRoot}/.telemetry/orchestrator/test-docs"
       ]
     },
     "test-recipes": {
@@ -206,17 +210,25 @@
       }
     },
     "budgets": {
+      "//": "llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The edge below is forced by the approved home of the board and lost-turn budgets, orchestrator/budgets.yaml, whose telemetry the orchestrator-e2e journeys record. It pulls that whole journeys tier into every check selecting this project: a cache replay when its key is unchanged, about thirteen minutes on a host with no cache entry for it. A drafted follow-up moves the measuring journeys into a test project of their own that this target depends on instead, and deletes this directive.",
+      "dependsOn": ["test-docs", {"projects": ["orchestrator-e2e"], "target": "test"}],
+      "options": {
+        "cwd": ".",
+        "env": {
+          "BUDGET_TELEMETRY_SOURCES": ".telemetry/orchestrator-e2e/test .telemetry/orchestrator/test-docs"
+        }
+      },
       "inputs": [
         "default",
-        "{workspaceRoot}/tests/test_plan_review.py",
-        "{workspaceRoot}/tests/test_host_installs.py",
-        "{workspaceRoot}/tests/test_follow_up_comments.py",
-        "{workspaceRoot}/templates/**/*",
-        "{workspaceRoot}/personas/planner.yaml",
-        "{workspaceRoot}/config/**/*",
+        "{workspaceRoot}/config/onebudgetspec.version",
         {
           "input": "testSupport",
-          "dependencies": true
+          "projects": [
+            "support-budget-telemetry"
+          ]
+        },
+        {
+          "dependentTasksOutputFiles": "**/*.json"
         }
       ]
     },

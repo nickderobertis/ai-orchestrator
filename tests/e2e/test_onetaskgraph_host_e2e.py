@@ -15,32 +15,23 @@ from enum import StrEnum
 from pathlib import Path
 from typing import ClassVar, Literal, NamedTuple, NewType, TypedDict
 
+import budget_telemetry
 import jsonschema
 import plan_root_variable
 import pytest
 from fake_backend import PROMPT_LOG_ENV, TURN_GATE_ENV, TURN_GATE_REACHED, TURN_GATE_RELEASED
 from github_board import (
-    ANSWER_POINTS,
-    ANSWER_REQUESTS,
     AUTHORING_ROOT_ENV,
     AUTHORING_SOURCE,
     BOARD,
-    BOARD_CHECK_BUDGET,
     BOARD_ENUMERATIONS,
     BOARD_PROJECT_TITLE,
     BOARD_TASK_TITLE,
-    BOUND_COPY_BUDGET,
-    BOUND_STATUS_BUDGET,
-    BUDGET_MEASURED_ON,
     CANCELLED,
     CONFIGURED_PROJECT_NUMBER,
     CONFIGURED_REPOSITORY,
-    CREATE_COPY_BUDGET,
     DEFERRED,
     DONE,
-    EVIDENCE_POST_BUDGET,
-    FILING_POINTS,
-    FILING_REQUESTS,
     FOLLOWUPS_ENV_PREFIX,
     FOLLOWUPS_OPTIONS,
     FOLLOWUPS_PROJECT_NUMBER,
@@ -53,28 +44,16 @@ from github_board import (
     PROPOSED_CAUSE,
     PROPOSED_RUN,
     QUEUED,
-    RE_ESTIMATE_BUDGET,
-    REALISTIC_BOARD_CHECK_POINTS,
-    REALISTIC_MEASURED_BOARD_CHECK_POINTS,
-    REALISTIC_MEASURED_RUN_POINTS,
-    REALISTIC_MEASURED_SEARCH_POINTS,
-    REALISTIC_MEASURED_WRITE_POINTS,
     REALISTIC_OTHER_ITEMS,
-    REALISTIC_RUN_POINTS,
-    REALISTIC_SEARCH_POINTS,
-    REALISTIC_WRITE_POINTS,
-    RECOPY_POINTS,
-    RECOPY_REQUESTS,
     REPOSITORY_NODE_IDS,
     REQUEST_PRICES,
+    RUN_POINTS_BUDGET,
     SIBLING_REPOSITORY,
     STATUS_OPTIONS,
     STORE_FIRST_SEARCH_PAGE,
-    UNBOUND_STATUS_BUDGET,
+    TICKET_LIFECYCLE_BUDGET,
     UNSERVED_LINEAR,
-    WITHDRAWAL_POINTS,
-    WITHDRAWAL_REQUESTS,
-    RequestBudget,
+    RequestCost,
     _audit_follow_up_calls,
     _Board,
     _board_cost,
@@ -897,19 +876,19 @@ def test_a_secondary_rate_limit_is_told_apart_from_a_credential_this_token_lacks
     )
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This journey's placement in
+# orchestrator-e2e predates this change, which replaced its elapsed-time control with a copy
+# configured at twice the shipped interval, about twelve seconds more; re-homing the measuring
+# journeys into a project of their own is the drafted follow-up.
 def test_a_copy_paces_its_content_creating_mutations(tmp_path: Path) -> None:
     """How fast a copy writes, measured at the far end of the wire.
 
     A gap between two mutations is only observable where they land, so the fixture is
-    what times them; the source's own scheduling is invisible from outside it.
-
-    On a pin below :data:`PACING_FLOOR` what is asserted is the burst — every mutation
-    of a copy inside a few milliseconds — and that the pacing setting which would answer
-    for it is not a field such a release has. At or past the floor, which is where this
-    host is, the shipped interval is asserted instead, read as GitHub's own published
-    ceiling on content-generating requests rather than as a number chosen here, with an
-    unpaced run as the control: without one a loaded test host would satisfy the paced
-    assertion on its own.
+    what times them; the source's own scheduling is invisible from outside it. The shipped
+    interval is asserted, read as GitHub's own published ceiling on content-generating
+    requests rather than as a number chosen here, and so is an interval twice as long
+    configured through the pacing setting: gaps that follow the configured value are the
+    pacing, each asserted near the interval it was configured to keep.
     """
     _write_local_project(tmp_path)
     with _serving_board() as remote:
@@ -921,47 +900,34 @@ def test_a_copy_paces_its_content_creating_mutations(tmp_path: Path) -> None:
         "a copy of one project and one task sends several content-creating mutations; "
         f"this sent {len(as_shipped) + 1}"
     )
-
-    if held_below_the_pacing_floor():
-        assert max(as_shipped) < SHIPPED_MUTATION_INTERVAL / 2, (
-            f"onetaskgraph {adopted_release()} sends a copy's mutations as one burst, "
-            f"and this one left gaps of up to {max(as_shipped):.3f}s — if it is pacing "
-            f"them, the {PACING_FLOOR} behaviour has arrived and the branch below is "
-            "the measurement to keep"
-        )
-        with _serving_board() as remote:
-            configured = _copy_to_the_board(tmp_path, remote, min_mutation_interval_ms="0")
-        assert configured.returncode != 0, configured.stdout
-        assert "'pacing' was unexpected" in configured.stderr, (
-            "a release below the floor has no pacing settings at all, so asking for one "
-            f"is refused as an unknown property; this said: {configured.stderr}"
-        )
-        return
-
-    # The control copies a project of its own onto its fresh board: the first copy recorded
-    # a link to the item it made on the first board, and a re-copy follows that link to a
-    # board that no longer holds it, which the store refuses rather than creating anew.
-    # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The control's own
-    # project is the same one `_write_local_project` writes for every journey in this file,
-    # which `nx affected` selects together; the pacing it measures is unchanged.
-    control = tmp_path / "control"
-    control.mkdir()
-    _write_local_project(control)
-    # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
-    with _serving_board() as remote:
-        unpaced = _copy_to_the_board(control, remote, min_mutation_interval_ms="0")
-        burst = _mutation_gaps(_GitHubFixture.requests)
-
-    assert unpaced.returncode == 0, unpaced.stdout + unpaced.stderr
-    assert min(burst) < SHIPPED_MUTATION_INTERVAL / 2, (
-        "the control has to burst, or the paced assertion below would pass on a slow "
-        f"host alone; its shortest gap was {min(burst):.3f}s"
-    )
     assert min(as_shipped) >= SHIPPED_MUTATION_INTERVAL * 0.9, (
         "every content-creating mutation has to be spaced by the shipped interval; the "
         f"shortest gap this copy left was {min(as_shipped):.3f}s of "
         f"{SHIPPED_MUTATION_INTERVAL}s"
     )
+
+    # The configured copy copies a project of its own onto its fresh board: the first copy
+    # recorded a link to the item it made on the first board, and a re-copy follows that
+    # link to a board that no longer holds it, which the store refuses rather than
+    # creating anew.
+    configured_root = tmp_path / "configured"
+    configured_root.mkdir()
+    _write_local_project(configured_root)
+    longer = 2 * SHIPPED_MUTATION_INTERVAL
+    with _serving_board() as remote:
+        configured = _copy_to_the_board(
+            configured_root, remote, min_mutation_interval_ms=str(round(longer * 1000))
+        )
+        spaced = _mutation_gaps(_GitHubFixture.requests)
+
+    assert configured.returncode == 0, configured.stdout + configured.stderr
+    assert min(spaced) >= longer * 0.9, (
+        "a copy configured to space its mutations further apart has to keep that interval; "
+        f"the shortest gap it left was {min(spaced):.3f}s of {longer}s"
+    )
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 # llmlint: ignore-end[shell_test_tiers_stay_split]
@@ -2601,8 +2567,28 @@ def test_follow_up_request_prices_match_the_adopted_stores_table() -> None:
     assert _search_points(LARGEST_PAGE) == upstream["SEARCH_ISSUES"], upstream["SEARCH_ISSUES"]
 
 
+def _per_step(step: str, cost: RequestCost) -> None:
+    """Record one step of the per-step journey in the realistic run's breakdown.
+
+    Measured on a board of :data:`OTHER_ITEMS` other items rather than the realistic run's,
+    so it explains which step grew and never adds into that run's figure.
+    """
+    budget_telemetry.record(
+        RUN_POINTS_BUDGET,
+        f"{OTHER_ITEMS}-item per-step journey, not in the total: {step}",
+        cost.points,
+        unit="points",
+        counted=False,
+        requests=cost.requests,
+    )
+
+
 def test_follow_up_commands_and_account_check_read_only_their_items_once(tmp_path: Path) -> None:
-    """Real commands over many unrelated items, including another run's evidence carrier."""
+    """Real commands over many unrelated items, including another run's evidence carrier.
+
+    Each step's requests and points are recorded as the per-step breakdown of budget
+    `follow-up-run-points`.
+    """
     environment, root = _followups_environment(tmp_path)
     trace = _audit_follow_up_calls(tmp_path, environment)
     ticket = _follow_up_ticket(SIBLING_REPOSITORY)
@@ -2620,20 +2606,22 @@ def test_follow_up_commands_and_account_check_read_only_their_items_once(tmp_pat
             )
         _GitHubFixture.requests.clear()
         assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
-        _bounded_step("unbound board-status", UNBOUND_STATUS_BUDGET, trace=trace)
+        _per_step("unbound board-status", _bounded_step("unbound board-status", trace=trace))
         copied = _follow_up_step(environment, "copy", "--board", board, str(path))
         assert copied.returncode == 0, copied.stderr
         issue = json.loads(copied.stdout)["destination"]
-        _bounded_step("creating copy", CREATE_COPY_BUDGET)
+        _per_step("create copy", _bounded_step("creating copy"))
         trace.write_text("", encoding="utf-8")
         assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
-        _bounded_step("bound board-status", BOUND_STATUS_BUDGET, bound=True, trace=trace)
+        _per_step("bound status", _bounded_step("bound board-status", bound=True, trace=trace))
         copied = _follow_up_step(environment, "copy", "--board", board, str(path))
         assert copied.returncode == 0, copied.stderr
-        _bounded_step("bound re-copy", BOUND_COPY_BUDGET, bound=True, trace=trace, writes=True)
+        _per_step(
+            "bound re-copy", _bounded_step("bound re-copy", bound=True, trace=trace, writes=True)
+        )
         estimated = _follow_up_step(environment, "re-estimate", "--board", board, issue)
         assert estimated.returncode == 0, estimated.stderr
-        _bounded_step("re-estimate", RE_ESTIMATE_BUDGET, bound=True, trace=trace, writes=True)
+        _per_step("re-estimate", _bounded_step("re-estimate", bound=True, trace=trace, writes=True))
 
         other = _seeded_item(
             OTHER_ITEMS,
@@ -2667,12 +2655,9 @@ def test_follow_up_commands_and_account_check_read_only_their_items_once(tmp_pat
         assert posted.returncode == 0, posted.stderr
         estimated = _follow_up_step(environment, "re-estimate", "--board", board, carrier)
         assert estimated.returncode == 0, estimated.stderr
-        _bounded_step(
-            "evidence comment and re-estimate",
-            EVIDENCE_POST_BUDGET,
-            bound=True,
-            trace=trace,
-            writes=True,
+        _per_step(
+            "evidence post",
+            _bounded_step("evidence comment and re-estimate", bound=True, trace=trace, writes=True),
         )
         paths = [path]
         for cause in ("second-cause", "third-cause"):
@@ -2719,12 +2704,9 @@ def test_follow_up_commands_and_account_check_read_only_their_items_once(tmp_pat
             for one in BOARD.issues
             if one.origin and one.origin.startswith(f"drafts:{PROPOSED_RUN}/")
         )
-        _bounded_step(
+        _per_step(
             "account board check",
-            BOARD_CHECK_BUDGET,
-            bound=True,
-            allowed_comments=allowed,
-            trace=trace,
+            _bounded_step("account board check", bound=True, allowed_comments=allowed, trace=trace),
         )
 
 
@@ -2733,8 +2715,8 @@ def test_follow_up_commands_and_account_check_read_only_their_items_once(tmp_pat
 SEARCHED_WORDS = "proposal"
 
 
-def _step_cost(label: str, *, bound: bool = False) -> int:
-    """How many requests the step just taken sent, holding none of them to a whole-board read.
+def _step_cost(label: str, *, bound: bool = False) -> RequestCost:
+    """What the step just taken spent, holding none of it to a whole-board read.
 
     With ``bound``, the step is a ticket already bound to its item, which reads that item
     directly: any board search or origin lookup it sends fails the step.
@@ -2747,19 +2729,19 @@ def _step_cost(label: str, *, bound: bool = False) -> int:
     assert (walked, unnarrowed) == ([], []), (
         f"{label} read the whole board: walked {walked}, searched {unnarrowed}"
     )
-    points = sum(_request_points(request) for request in requests)
-    budget = {
-        "filing the ticket": FILING_POINTS,
-        "re-copying the ticket": RECOPY_POINTS,
-        "withdrawing the ticket": WITHDRAWAL_POINTS,
-    }[label]
-    assert points <= budget, (label, points, budget)
     assert _wide_pages(requests) == [], f"{label} asked for a page wider than its answer"
     _GitHubFixture.requests.clear()
-    return len(requests)
+    return RequestCost(len(requests), sum(_request_points(request) for request in requests))
 
 
-def test_one_tickets_filing_re_copy_withdrawal_and_comment_answer_stay_within_their_budget(
+def _lifecycle_step(step: str, cost: RequestCost) -> None:
+    """Record one step of a ticket's life as a part of budget `ticket-lifecycle-points`."""
+    budget_telemetry.record(
+        TICKET_LIFECYCLE_BUDGET, step, cost.points, unit="points", requests=cost.requests
+    )
+
+
+def test_one_tickets_filing_re_copy_withdrawal_and_comment_answer_read_only_their_own_item(
     tmp_path: Path,
 ) -> None:
     """Every step of one ticket's life costs what its own item costs, never what the board does.
@@ -2772,18 +2754,12 @@ def test_one_tickets_filing_re_copy_withdrawal_and_comment_answer_stay_within_th
     `board-status`, `validate`, `copy`), re-copied after an edit,
     answered once in feedback mode after a person comments on it (the gathering's
     `commented_since` read, the reply, `re-estimate`), and withdrawn (`board-status
-    --withdraw`, `validate`, `copy`). No step sends a request walking the board's items, the
-    filing, re-copy and withdrawal send no board search without a field qualifier to narrow
-    it — the gathering's read is narrowed by the time comments last changed instead — and
-    each step stays within the request count recorded for it.
+    --withdraw`, `validate`, `copy`). No step sends a request walking the board's items, and
+    the filing, re-copy and withdrawal send no board search without a field qualifier to
+    narrow it — the gathering's read is narrowed by the time comments last changed instead.
+    Each step's points and requests are recorded as a part of budget
+    `ticket-lifecycle-points`.
     """
-    installed = subprocess.run(
-        [str(ONETASKGRAPH_BIN), "--version"], text=True, capture_output=True, check=True
-    ).stdout.strip()
-    assert installed == BUDGET_MEASURED_ON, (
-        f"the request bounds were measured on {BUDGET_MEASURED_ON}, and {installed} is "
-        "installed: re-measure them on it and record them with its version"
-    )
     environment, drafts_root = _followups_environment(tmp_path)
     # Verified on this machine, because a gathering's query is narrowed to the items whose
     # ticket was verified on the host running it.
@@ -2824,7 +2800,7 @@ def test_one_tickets_filing_re_copy_withdrawal_and_comment_answer_stay_within_th
         assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
         filed = _validated_and_copied(environment, path)
         assert filed["action"] == "created", filed
-        filing = _step_cost("filing the ticket")
+        _lifecycle_step("filing", _step_cost("filing the ticket"))
         issue = str(filed["destination"])
 
         # A re-copy after an edit: decided, validated and copied onto its bound item.
@@ -2833,7 +2809,7 @@ def test_one_tickets_filing_re_copy_withdrawal_and_comment_answer_stay_within_th
         assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
         recopied = _validated_and_copied(environment, path)
         assert recopied == {"action": "updated", "destination": issue}, recopied
-        recopy = _step_cost("re-copying the ticket", bound=True)
+        _lifecycle_step("re-copy", _step_cost("re-copying the ticket", bound=True))
 
         # A person comments on it, and feedback mode answers: the gathering's read, the reply
         # posted under the run's marker, and the item re-estimated.
@@ -2894,10 +2870,12 @@ def test_one_tickets_filing_re_copy_withdrawal_and_comment_answer_stay_within_th
         answering = list(_GitHubFixture.requests)
         walked, _searched = _board_cost(answering)
         assert walked == [], f"answering a comment walked the board's items: {walked}"
-        answer = len(answering)
-        assert sum(map(_request_points, answering)) <= ANSWER_POINTS, answering
         assert _wide_pages(answering) == [], "answering asked for a page wider than its answer"
         _GitHubFixture.requests.clear()
+        _lifecycle_step(
+            "answering a comment",
+            RequestCost(len(answering), sum(map(_request_points, answering))),
+        )
 
         # A withdrawal: decided with `--withdraw`, validated and copied, which closes it.
         assert _decided_status(environment, path, "--withdraw") == (
@@ -2905,13 +2883,8 @@ def test_one_tickets_filing_re_copy_withdrawal_and_comment_answer_stay_within_th
         )
         withdrawn = _validated_and_copied(environment, path)
         assert withdrawn == {"action": "updated", "destination": issue}, withdrawn
-        withdrawal = _step_cost("withdrawing the ticket", bound=True)
+        _lifecycle_step("withdrawal", _step_cost("withdrawing the ticket", bound=True))
         assert (item.status, item.state) == (CANCELLED.name, "CLOSED")
-
-    assert filing <= FILING_REQUESTS, f"filing one ticket sent {filing} requests"
-    assert recopy <= RECOPY_REQUESTS, f"re-copying one ticket sent {recopy} requests"
-    assert answer <= ANSWER_REQUESTS, f"answering one comment sent {answer} requests"
-    assert withdrawal <= WITHDRAWAL_REQUESTS, f"withdrawing one ticket sent {withdrawal} requests"
 
 
 #: Words only the accepted items of one area carry, one per new ticket of the realistic run,
@@ -2998,7 +2971,7 @@ def _draft(name: str) -> tuple[follow_up_tickets.QualifiedDraftId]:
 
 
 def _breakdown(requests: list[_GraphQLRequest]) -> dict[str, _DocumentCost]:
-    """Requests and points per document, for a failure message a person can act on."""
+    """Requests and points per document, the breakdown a person acts on when the run grows."""
     priced: dict[str, _DocumentCost] = {}
     for request in requests:
         held = priced.get(request.operation.value, _DocumentCost(0, 0))
@@ -3011,10 +2984,10 @@ def _breakdown(requests: list[_GraphQLRequest]) -> dict[str, _DocumentCost]:
 # llmlint: ignore-block[shell_test_tiers_stay_split] Not a shell test: a Python journey
 # spawning the installed plan-store CLI beside every other journey in this module, as the
 # block around the rate-limit journeys above says, so there is no shell suite to split.
-def test_a_realistic_follow_up_run_stays_within_its_point_budget(  # noqa: PLR0915 - one run, in the order the task prescribes it
+def test_a_realistic_follow_up_run_reads_and_writes_only_the_items_it_is_about(  # noqa: PLR0915 - one run, in the order the task prescribes it
     tmp_path: Path,
 ) -> None:
-    """A whole follow-up run, shaped like the one that spent about 500 points, held to its budget.
+    """A whole follow-up run, shaped like the one that spent about 500 points, priced.
 
     The shelved run `onepipeline-link-onetaskgraph-plan-follow-ups-5` handled 16 tickets and 4
     evidence comments and spent roughly 500 of the 5,000 GraphQL points an hour every session
@@ -3025,16 +2998,9 @@ def test_a_realistic_follow_up_run_stays_within_its_point_budget(  # noqa: PLR09
     validated and copied to `Proposal`; 4 tickets an earlier dispatch bound to their
     items, edited and re-copied; 4 evidence comments on other runs' items, each followed by
     its `re-estimate`; and the launch's one `check-dispositions --board`. Every request is
-    priced with the drift-checked prices, and each phase is held to its ceiling and to what
-    it measured on the adopted store.
+    priced with the drift-checked prices, and each phase's points and requests, and each
+    document's, are recorded as budget `follow-up-run-points` and its breakdown.
     """
-    installed = subprocess.run(
-        [str(ONETASKGRAPH_BIN), "--version"], text=True, capture_output=True, check=True
-    ).stdout.strip()
-    assert installed == BUDGET_MEASURED_ON, (
-        f"the realistic run was measured on {BUDGET_MEASURED_ON}, and {installed} is "
-        "installed: re-measure it on it and record it with its version"
-    )
     environment, root = _followups_environment(tmp_path)
     trace = _audit_follow_up_calls(tmp_path, environment)
     board = follow_up_tickets.BOARD
@@ -3166,36 +3132,26 @@ def test_a_realistic_follow_up_run_stays_within_its_point_budget(  # noqa: PLR09
             if one.origin and one.origin.startswith(f"drafts:{PROPOSED_RUN}/")
         )
         # One read per item and per comment connection, no search for a bound item: the
-        # phase's points are held below with the whole run's breakdown.
-        _bounded_step(
-            "realistic board check",
-            RequestBudget(REALISTIC_BOARD_CHECK_POINTS, REALISTIC_BOARD_CHECK_POINTS),
-            bound=True,
-            allowed_comments=allowed,
-            trace=trace,
-        )
+        # phase's cost is recorded below with the whole run's breakdown.
+        _bounded_step("realistic board check", bound=True, allowed_comments=allowed, trace=trace)
 
-    measured = {phase: sum(map(_request_points, spent[phase])) for phase in _RunPhase}
-    total = sum(measured.values())
-    report = {phase.value: (measured[phase], _breakdown(spent[phase])) for phase in _RunPhase}
-    bounds = {
-        _RunPhase.SEARCHES: (REALISTIC_SEARCH_POINTS, REALISTIC_MEASURED_SEARCH_POINTS),
-        _RunPhase.WRITES: (REALISTIC_WRITE_POINTS, REALISTIC_MEASURED_WRITE_POINTS),
-        _RunPhase.BOARD_CHECK: (
-            REALISTIC_BOARD_CHECK_POINTS,
-            REALISTIC_MEASURED_BOARD_CHECK_POINTS,
-        ),
-    }
-    for phase, (ceiling, recorded) in bounds.items():
-        assert measured[phase] <= min(ceiling, recorded), (
-            f"the realistic run's {phase.value} spent {measured[phase]} modelled points, over "
-            f"its ceiling of {ceiling} or the {recorded} it measured on {BUDGET_MEASURED_ON}: "
-            f"{report[phase.value]}"
+    for phase in _RunPhase:
+        budget_telemetry.record(
+            RUN_POINTS_BUDGET,
+            f"phase {phase.value}",
+            sum(map(_request_points, spent[phase])),
+            unit="points",
+            requests=len(spent[phase]),
         )
-    assert total <= min(REALISTIC_RUN_POINTS, REALISTIC_MEASURED_RUN_POINTS), (
-        f"the realistic run spent {total} modelled points, over its ceiling of "
-        f"{REALISTIC_RUN_POINTS} or the {REALISTIC_MEASURED_RUN_POINTS} it measured: {report}"
-    )
+    for document, cost in _breakdown([one for phase in _RunPhase for one in spent[phase]]).items():
+        budget_telemetry.record(
+            RUN_POINTS_BUDGET,
+            f"document {document}",
+            cost.points,
+            unit="points",
+            counted=False,
+            requests=cost.requests,
+        )
 
 
 # llmlint: ignore-end[shell_test_tiers_stay_split]

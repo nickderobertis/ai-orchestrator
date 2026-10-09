@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import dataclasses
 import json
-import os
 import re
 import shlex
 import socket
@@ -1387,7 +1386,6 @@ def test_a_boards_configured_plugin_decides_whether_an_unattributed_comment_is_a
     assert _id_line(report, own, person).endswith(f"would go to run {RUN}")
 
 
-# llmlint: ignore-block[budgets_reuse_gate_telemetry, budgets_scoped_to_minimal_tree] The plan that registered `follow-up-scoped-comment-reads` states its measurement source as direct and its command as this test; a store-request count is recorded by no gate's telemetry, and this test, its constants and its crowded board live with the module's other tests, as `orchestrator/budgets.yaml`'s other budgets' do.  # noqa: E501 - llmlint reads a directive's rule list off one line
 #: How many unrelated items the crowded board holds, each commented since the watermark.
 CROWD = 200
 OTHER_HOST = "another-host"
@@ -1556,34 +1554,6 @@ def test_a_pass_about_one_issue_reads_that_item_alone_however_crowded_the_board(
         )
     assert reads["unscoped"].comment_lists == 1, str(reads["unscoped"])
     assert reads["unscoped"].pages == 1, str(reads["unscoped"])
-
-
-def test_scoped_comment_reads_cost_one_issues_reads_however_crowded_the_board(
-    drafts_root: Path,
-    board: Path,
-    capsys: pytest.CaptureFixture[str],
-    counted: list[Request],
-) -> None:
-    """Reports budget `follow-up-scoped-comment-reads`: what a pass about one issue reads.
-
-    The figure is the larger of the `--issue` and `--run` passes' board requests over the
-    crowded board, with each pass's breakdown and the unscoped pass's beside it; comparing it
-    with the budget's threshold is onebudgetspec's alone.
-    """
-    reads = _crowded_passes(drafts_root, board, capsys, counted)
-    scoped = max(reads["--issue"].total, reads["--run"].total)
-    detail = (
-        f"--issue: {reads['--issue']}; --run: {reads['--run']}; the unscoped pass over the "
-        f"same board of {CROWD + 1} commented items: {reads['unscoped']}"
-    )
-    print(f"{scoped} board request(s); {detail}")
-    if destination := os.environ.get("ONEBUDGETSPEC_RESULT"):
-        Path(destination).write_text(
-            json.dumps({"value": scoped, "detail": detail}), encoding="utf-8"
-        )
-
-
-# llmlint: ignore-end[budgets_reuse_gate_telemetry, budgets_scoped_to_minimal_tree]
 
 
 def _bound(root: Path, run: str, cause: str, native: str | None) -> None:

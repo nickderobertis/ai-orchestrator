@@ -57,6 +57,7 @@ import time
 from pathlib import Path
 from typing import NamedTuple
 
+import budget_telemetry
 import delegation_checkout
 import follow_up_variables
 import github_board as host_board
@@ -4642,12 +4643,19 @@ def _launch_follow_up_validation(
     assert len(checks) == 2 and sum("--board" in argv for argv in checks) == (
         host_board.LAUNCH_VALIDATION_BOARD_CHECKS
     ), checks
-    # Only one board check, plus the explicit corruption write in the refusal journey.
-    host_board._bounded_step(
-        "launch validation",
-        host_board.LAUNCH_REFUSAL_BUDGET if corrupt else host_board.BOARD_CHECK_BUDGET,
-        bound=True,
-        writes=corrupt,
+    # Only one board check, plus the explicit corruption write in the refusal journey. What
+    # it spent is telemetry no budget's breakdown reads: reading it would couple the
+    # orchestrator project's budgets to this project's test target.
+    cost = host_board._bounded_step(
+        "launch validation", bound=True, writes=corrupt, invocations=trace
+    )
+    budget_telemetry.record(
+        host_board.RUN_POINTS_BUDGET,
+        "refused launch's board check" if corrupt else "launch validation board check",
+        cost.points,
+        unit="points",
+        counted=False,
+        requests=cost.requests,
     )
 
 
@@ -4661,7 +4669,7 @@ def _launch_follow_up_validation(
 def test_follow_up_launch_validation_checks_the_board_once_and_refuses_a_late_change(
     tmp_path: Path,
 ) -> None:
-    """Last dispatch check and attached closeout share one board budget, including refusal."""
+    """Last dispatch check and attached closeout check the board once, including refusal."""
     environment, root = host_board._followups_environment(tmp_path)
     trace = host_board._audit_follow_up_calls(tmp_path, environment)
     ticket = host_board._follow_up_ticket(host_board.SIBLING_REPOSITORY)

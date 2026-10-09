@@ -80,6 +80,7 @@ from nx_inputs import (
     ASK_SEAM_SCOPED,
     BOARD_COPY_APPROVAL_PROJECT,
     BOARD_COPY_APPROVAL_SCOPED,
+    BUDGET_SCOPED,
     CHECKOUT_SCOPED,
     CODE_SCOPED,
     COVERAGE_SCOPED,
@@ -867,6 +868,13 @@ SKIPPABLE_TIERS = frozenset(
         # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
         (UNPUBLISHED_VIEW_PROJECT, UNPUBLISHED_VIEW_SCOPED),
         (UNFINISHED_PROJECT, UNFINISHED_SCOPED),
+        # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's
+        # one catalog of test projects, where every project has its entry, and
+        # `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
+        # describes; the unfinished project's budgets entry sits beside its test tier's
+        # because the catalog is the domain.
+        (UNFINISHED_PROJECT, BUDGET_SCOPED),
+        # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
         # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
         # catalog of test projects, where every project has its entry, and
         # `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it

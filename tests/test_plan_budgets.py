@@ -1057,7 +1057,6 @@ def test_a_task_owning_six_realistic_budgets_fits_the_issue_body_limit() -> None
 
     size = task_body.measure(content, metadata)
 
-    assert len(json.dumps(six)) > 10_000, "the six budgets are not realistic in size"
     assert size <= task_body.BODY_LIMIT, size
     assert task_body.refusals(plan) == []
     # And the record is what is measured beside the body: without it the body is smaller.

@@ -1863,7 +1863,10 @@ pre-push because there is no CI.
 This repo runs on agents, so the suite is the only QA loop. `tests/e2e/` proves the
 real journeys against the real boundaries; `tests/` covers what this layer decides on
 its own and the drift gates that reconcile this document's claims against something
-real. A recipe is not done until a journey drives it end to end.
+real. A recipe is not done until a journey drives it end to end. A cost figure a test
+measures is a budget at the level the product owner tracks, recorded with finer figures as
+its breakdown (`tests/budget_telemetry.py`) and never asserted, and a wall-clock bound
+never tells two behaviours apart.
 
 **A date in this document names the test that re-takes it, or says it is history.** A
 dated measurement of somebody else's software reads as current for as long as it

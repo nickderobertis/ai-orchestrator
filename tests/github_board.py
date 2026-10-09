@@ -6,6 +6,7 @@ remain real. Keeping this fixture outside test modules avoids unrelated test cac
 
 from __future__ import annotations
 
+import bisect
 import json
 import os
 import re
@@ -1794,8 +1795,8 @@ def _decided_status(environment: dict[str, str], ticket: Path, *extra: str) -> s
     return word
 
 
-class RequestBudget(NamedTuple):
-    """The requests and modelled GitHub points one journey step may spend."""
+class RequestCost(NamedTuple):
+    """The requests and modelled GitHub points one journey step spent."""
 
     requests: int
     points: int
@@ -1808,68 +1809,19 @@ class DocumentPrice(NamedTuple):
     points: int
 
 
-#: The plan-store CLI release every request bound below was measured on, held to
-#: `onetaskgraph --version`. Each bound is one named constant so a later release is
-#: re-measured one step at a time.
-BUDGET_MEASURED_ON = "onetaskgraph 0.3.9"
 #: How many other items the `followups` stand-in holds when one ticket is filed on it: enough
 #: that a request walking the board, or a search it answers unnarrowed, is a cost that grows
 #: with the board rather than one a single item hides.
 OTHER_ITEMS = 60
-#: What one ticket's life on the `followups` board may send it, in requests and modelled
-#: points, per phase the follow-up task prescribes — filing a new ticket, re-copying it after
-#: an edit, answering a person's comment on it in feedback mode, and withdrawing it — on a
-#: board already holding :data:`OTHER_ITEMS` other items. None of these requests walked the
-#: board; a phase that sends more fails the journey. Before this path moved onto the store's
-#: native queries every one of these phases read the whole board at least once, a count that
-#: grows with the board.
-FILING_REQUESTS = 10
-RECOPY_REQUESTS = 7
-ANSWER_REQUESTS = 9
-WITHDRAWAL_REQUESTS = 8
-FILING_POINTS = 10
-RECOPY_POINTS = 7
-ANSWER_POINTS = 9
-WITHDRAWAL_POINTS = 8
-#: Per-command requests and modelled points: one `check-dispositions --board`, then each
-#: write-path step for one ticket.
-BOARD_CHECK_BUDGET = RequestBudget(8, 8)
-UNBOUND_STATUS_BUDGET = RequestBudget(1, 1)
-BOUND_STATUS_BUDGET = RequestBudget(2, 2)
-CREATE_COPY_BUDGET = RequestBudget(6, 6)
-BOUND_COPY_BUDGET = RequestBudget(5, 5)
-RE_ESTIMATE_BUDGET = RequestBudget(3, 3)
-EVIDENCE_POST_BUDGET = RequestBudget(7, 7)
 #: Board checks one follow-up launch's whole validation runs, dispatch through post-settle.
 LAUNCH_VALIDATION_BOARD_CHECKS = 1
-#: The one board check of a launch whose account the post-settle validator refuses.
-LAUNCH_REFUSAL_BUDGET = RequestBudget(4, 4)
-
-
-#: A realistic follow-up run's ceilings, in modelled points, shaped like the shelved run
-#: `onepipeline-link-onetaskgraph-plan-follow-ups-5`: 16 tickets — 12 new, each searched for
-#: by root cause and by text and filed to `Proposal`, and 4 already bound and re-copied after
-#: an edit — 4 evidence comments on other runs' items each with its `re-estimate`, and the
-#: launch's one board check, on a board holding :data:`REALISTIC_OTHER_ITEMS` other items.
-#: The write path (`board-status`, `copy`, `re-estimate` and the evidence comments) has its
-#: own ceiling so cutting reads and searches cannot leave it free to spend what the original
-#: run spent. Each ceiling is the figure measured on :data:`BUDGET_MEASURED_ON`, held as a
-#: regression guard: no run on this store may spend more than it does today. The write path
-#: and the total were 156 and 220 while the task asked each unbound ticket's `board-status`
-#: twice, once before its searches and once before its copy; asking it once, before the
-#: copy, spends one origin lookup fewer per new ticket.
-REALISTIC_RUN_POINTS = 208
-REALISTIC_SEARCH_POINTS = 30
-REALISTIC_BOARD_CHECK_POINTS = 40
-REALISTIC_WRITE_POINTS = 144
 #: How many other items the realistic run's board holds before the run starts.
 REALISTIC_OTHER_ITEMS = 400
-#: What the realistic run measured on :data:`BUDGET_MEASURED_ON`, per phase and in total. On
-#: onetaskgraph 0.2.57 the write path, the board check and the total were 144, 40 and 208.
-REALISTIC_MEASURED_SEARCH_POINTS = 24
-REALISTIC_MEASURED_WRITE_POINTS = 116
-REALISTIC_MEASURED_BOARD_CHECK_POINTS = 20
-REALISTIC_MEASURED_RUN_POINTS = 160
+#: The budget a realistic follow-up run's board points are, and the one a ticket's whole
+#: life is: each journey records its parts under one of them, and `tests/budget_telemetry.py`
+#: reports the figure and its breakdown.
+RUN_POINTS_BUDGET = "follow-up-run-points"
+TICKET_LIFECYCLE_BUDGET = "ticket-lifecycle-points"
 
 
 #: The source's PRICES entries used by the fixture's operations, each priced upstream at
@@ -1962,11 +1914,13 @@ def _request_points(request: _GraphQLRequest) -> int:
 #: Python's audit hook records the real CLI subprocesses without replacing any command.
 #: sys.orig_argv also records validators started by the real attached recipe's shell.
 STORE_CALL_AUDIT = """\
-import json, os, pathlib, sys
+import json, os, pathlib, sys, time
 trace = pathlib.Path(os.environ["FOLLOW_UP_BUDGET_TRACE"])
 def record(kind, argv):
+    # The system-wide monotonic clock the board stand-in stamps each request with.
+    entry = {"kind": kind, "argv": argv, "at": time.monotonic()}
     with trace.open("a", encoding="utf-8") as stream:
-        stream.write(json.dumps({"kind": kind, "argv": argv}) + "\\n")
+        stream.write(json.dumps(entry) + "\\n")
 if "orchestrator.follow_up_tickets" in sys.orig_argv:
     record("module", sys.orig_argv)
 def audit(event, args):
@@ -2001,34 +1955,74 @@ def _once_per_store_call(trace: Path) -> list[list[str]]:
     return store
 
 
+def _store_launches(trace: Path) -> list[float]:
+    """When each real store process the audited Python launched started, in launch order."""
+    calls = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
+    return [float(call["at"]) for call in calls if call["kind"] == "store"]
+
+
+def _per_invocation(
+    requests: list[_GraphQLRequest], launches: list[float]
+) -> list[list[_GraphQLRequest]]:
+    """The step's requests grouped by the store invocation that sent each one.
+
+    The store is invoked one process at a time, so a request belongs to the last launch
+    before the stand-in received it. Requests received before the first audited launch came
+    from the one store command the journey ran itself, outside the audited Python.
+    """
+    groups: list[list[_GraphQLRequest]] = [[] for _ in range(len(launches) + 1)]
+    for request in requests:
+        groups[bisect.bisect_right(launches, request.received)].append(request)
+    return [group for group in groups if group]
+
+
 def _bounded_step(
     label: str,
-    budget: RequestBudget,
     *,
     bound: bool = False,
     allowed_comments: set[str] | None = None,
     trace: Path | None = None,
     writes: bool = False,
-) -> None:
-    """Hold command requests to their measured budget and to one read per item/connection."""
+    invocations: Path | None = None,
+) -> RequestCost:
+    """What the step just taken spent, holding it to one read per item and connection.
+
+    Each comment connection is read once, and so is each item a read-only step resolves. A
+    write step runs several store processes (a read, then each write), each resolving the
+    item it writes again, so it is held to one resolution per item within each invocation,
+    which its ``trace`` of store launches tells apart; ``invocations`` names a launch trace
+    to group by alone, when the step's trace also holds launches earlier steps made. With
+    ``bound`` the step sends no board search or origin lookup, and no step walks the board
+    or asks for a page wider than its answer. What it spent is returned for the journey to
+    record, never held to a ceiling here.
+    """
+    launch_trace = invocations or trace
+    launches = _store_launches(launch_trace) if launch_trace is not None else None
+    if writes and launches is None:
+        raise ValueError(f"{label}: a write step needs the trace of its store invocations")
     if trace is not None:
         _once_per_store_call(trace)
     requests = list(_GitHubFixture.requests)
-    cost = RequestBudget(len(requests), sum(_request_points(request) for request in requests))
+    cost = RequestCost(len(requests), sum(_request_points(request) for request in requests))
     print(f"{label}: requests={cost.requests}, points={cost.points}")
-    assert cost.requests <= budget.requests and cost.points <= budget.points, (label, cost, budget)
     for operation in (_Operation.ISSUE, _Operation.COMMENTS):
+        scopes = (
+            _per_invocation(requests, launches)
+            if writes and launches is not None and operation is _Operation.ISSUE
+            else [requests]
+        )
+        for scope in scopes:
+            identifiers = [
+                request.string("id") for request in scope if request.operation is operation
+            ]
+            assert all(identifiers.count(one) == 1 for one in identifiers), (
+                label,
+                operation,
+                identifiers,
+            )
         identifiers = [
             request.string("id") for request in requests if request.operation is operation
         ]
-        # A write step runs several store processes (a read, then each write), and each
-        # process resolves the item it writes once; a read-only step resolves it once.
-        ceiling = budget.requests if writes and operation is _Operation.ISSUE else 1
-        assert all(identifiers.count(one) <= ceiling for one in identifiers), (
-            label,
-            operation,
-            identifiers,
-        )
         if operation is _Operation.COMMENTS and allowed_comments is not None:
             assert set(identifiers) <= allowed_comments, (label, identifiers, allowed_comments)
     if bound:
@@ -2037,3 +2031,4 @@ def _bounded_step(
     assert _board_cost(requests) == ([], []), label
     assert _wide_pages(requests) == [], (label, "a search asked for a page wider than its answer")
     _GitHubFixture.requests.clear()
+    return cost

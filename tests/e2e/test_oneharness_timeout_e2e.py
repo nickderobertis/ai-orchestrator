@@ -49,6 +49,9 @@ from waits import timeout as e2e_timeout
 from orchestrator.root import REPO_ROOT
 
 TIMEOUT_HARNESS = REPO_ROOT / "tests" / "e2e" / "timeout_harness.py"
+#: The ticks that fixture's descendant writes, one each twentieth of a second, before it
+#: reaches its natural end: its loop's own count.
+NATURAL_END_TICKS = 100
 DAG_SCOPE_GRAPH = REPO_ROOT / "graphs" / "dag-scope.yaml"
 NODE_SCOPE_GRAPH = REPO_ROOT / "graphs" / "node-scope.yaml"
 
@@ -783,9 +786,9 @@ def test_a_config_timeout_of_zero_really_removes_the_deadline(
     zero = tmp_path / "no-deadline.toml"
     zero.write_text("timeout = 0\n", encoding="utf-8")
     env = {key: value for key, value in os.environ.items() if not key.startswith("ONEHARNESS_")}
-    env["TIMEOUT_HARNESS_TICK_FILE"] = str(tmp_path / "descendant.ticks")
+    ticks = tmp_path / "descendant.ticks"
+    env["TIMEOUT_HARNESS_TICK_FILE"] = str(ticks)
 
-    started = time.monotonic()
     proc = subprocess.run(
         [
             oneharness_bin,
@@ -806,12 +809,14 @@ def test_a_config_timeout_of_zero_really_removes_the_deadline(
         capture_output=True,
         timeout=e2e_timeout(60),
     )
-    elapsed = time.monotonic() - started
 
     assert proc.returncode == 0, proc.stderr
     result = json.loads(proc.stdout)["results"][0]
     assert result["status"] == "ok", result
     # The fixture ticks for about five seconds; the sibling test above shows a
-    # 1-second deadline kills it inside one. Surviving well past that is what says
-    # the zero disabled the kill rather than merely being accepted.
-    assert elapsed >= 3, f"the fixture did not outlive a short deadline: {elapsed:.3f}s"
+    # 1-second deadline kills it inside one. Every tick written is what says the zero
+    # disabled the kill rather than merely being accepted.
+    written = ticks.read_text(encoding="utf-8")
+    assert written == "x" * NATURAL_END_TICKS, (
+        f"the fixture was stopped after {len(written)} of its {NATURAL_END_TICKS} ticks"
+    )

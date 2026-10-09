@@ -21,7 +21,6 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
-import os
 import re
 import subprocess
 import tomllib
@@ -30,6 +29,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, NamedTuple, TypedDict, get_type_hints
 
+import budget_telemetry
 import jsonschema
 import pytest
 import yaml
@@ -2722,10 +2722,11 @@ def test_the_planner_is_told_how_to_state_its_budgets_in_general_terms() -> None
 # notes; `kind: human` nodes of a few hundred; each budget's `measure` near 120
 # characters, its `workload` near 1,040, its `evidence` from 260 to 780 and its
 # `inner_measure_reason` near 360; and the document's own `workload` near 4,500. The
-# budgets these two tests measure are registered in `orchestrator/budgets.yaml`, which is
+# budgets these two tests record are registered in `orchestrator/budgets.yaml`, which is
 # the one place their thresholds are stated.
 
-#: The budgets file the two prompt-size budgets are registered in, and read from.
+#: The budgets file the two prompt-size budgets are registered in, whose threshold the
+#: prompt guard is held to admit.
 ORCHESTRATOR_BUDGETS = REPO_ROOT / "orchestrator" / "budgets.yaml"
 #: Where a store of this shape keeps its task files, as the baseline plan's store does.
 FIXTURE_STORE = "/home/operator/ai-orchestrator/.plans/tasks"
@@ -3006,12 +3007,6 @@ def _threshold(identifier: str) -> float:
     return threshold
 
 
-def _report(value: int) -> None:
-    """Hand onebudgetspec the measured value, when this test is a budget's command."""
-    if destination := os.environ.get("ONEBUDGETSPEC_RESULT"):
-        Path(destination).write_text(json.dumps({"value": value}), encoding="utf-8")
-
-
 @pytest.mark.reads_docs
 def test_the_plan_level_prompt_is_the_compact_view_of_a_realistic_plan() -> None:
     """Contract 2 over the baseline-shaped plan: every node alike, nothing past a summary."""
@@ -3068,49 +3063,54 @@ def test_the_plan_level_prompt_is_the_compact_view_of_a_realistic_plan() -> None
 
 
 @pytest.mark.reads_docs
-def test_plan_level_prompt_size_holds_both_realistic_plans_under_its_budget() -> None:
-    """Budget `plan-level-prompt-chars`: the larger realistic prompt, against its threshold.
+def test_plan_level_prompt_size_is_recorded_for_both_realistic_plans() -> None:
+    """Budget `plan-level-prompt-chars`: each realistic plan's prompt length is recorded.
 
     And the property that makes the budget hold for any plan this size: growing every
     task body of the host-shaped plan fourfold leaves its prompt exactly as long.
     """
     sizes = {name: len(_prompt_of(build())) for name, build in REALISTIC.items()}
     grown = len(_prompt_of(host_shaped(grown=4)))
-    tasks = host_shaped(grown=4).plan["tasks"]
-    assert isinstance(tasks, list)
-    authored = min(len(node["task"]) for node in tasks)
+    tasks, ordinary = host_shaped(grown=4).plan["tasks"], host_shaped().plan["tasks"]
+    assert isinstance(tasks, list) and isinstance(ordinary, list)
     print(f"plan-level prompt characters: {sizes}; host-shaped grown fourfold: {grown}")
-    assert authored > 4 * AUTHORED_CHARACTERS, authored
+    unchanged = [
+        node["id"]
+        for node, before in zip(tasks, ordinary, strict=True)
+        if len(node["task"]) <= len(before["task"])
+    ]
+    assert unchanged == [], f"these bodies did not grow: {unchanged}"
     assert grown == sizes["host-shaped"], f"a longer body changed the prompt: {grown} vs {sizes}"
-    largest = max(sizes.values())
-    _report(largest)
-    threshold = _threshold("plan-level-prompt-chars")
-    assert largest <= threshold, f"the plan-level prompt sizes {sizes} exceed {threshold}"
+    for name, size in sizes.items():
+        budget_telemetry.record(
+            "plan-level-prompt-chars", f"{name} fixture", size, unit="characters", combine="max"
+        )
 
 
 @pytest.mark.reads_docs
-def test_plan_level_prompt_per_node_holds_every_realistic_node_under_its_budget() -> None:
-    """Budget `plan-level-prompt-chars-per-node`: the costliest node of both plans.
+def test_plan_level_prompt_per_node_is_recorded_at_each_plans_costliest_node() -> None:
+    """Budget `plan-level-prompt-chars-per-node`: each plan's costliest node is recorded.
 
     Including a node whose `## What` lead is past the summary's bound and a stepped node
     of three steps, which are the two shapes that cost the most.
     """
-    costs = {
-        f"{name}:{node}": cost
-        for name, build in REALISTIC.items()
-        for node, cost in _node_costs(_prompt_of(build())).items()
-    }
-    assert len(costs) == 88, len(costs)
-    for heavy in ("baseline-shaped:repository-03-baseline", "host-shaped:adopt-07"):
-        assert costs[heavy] > plan_review.SUMMARY_LIMIT, heavy
+    costs = {name: _node_costs(_prompt_of(build())) for name, build in REALISTIC.items()}
+    assert sum(map(len, costs.values())) == 88, costs
+    for name, heavy in (("baseline-shaped", "repository-03-baseline"), ("host-shaped", "adopt-07")):
+        assert costs[name][heavy] > plan_review.SUMMARY_LIMIT, heavy
     stepped = host_shaped().plan["tasks"]
     assert isinstance(stepped, list) and len(stepped[40]["steps"]) == 3
     assert '"id":"step-2"' in _prompt_of(host_shaped())
-    costliest = max(costs, key=costs.__getitem__)
-    print(f"costliest node: {costliest} at {costs[costliest]} characters")
-    _report(costs[costliest])
-    threshold = _threshold("plan-level-prompt-chars-per-node")
-    assert costs[costliest] <= threshold, f"{costliest} costs {costs[costliest]} > {threshold}"
+    for name, nodes in costs.items():
+        costliest = max(nodes, key=nodes.__getitem__)
+        print(f"{name}: costliest node {costliest} at {nodes[costliest]} characters")
+        budget_telemetry.record(
+            "plan-level-prompt-chars-per-node",
+            f"{name} fixture, node `{costliest}`",
+            nodes[costliest],
+            unit="characters",
+            combine="max",
+        )
 
 
 #: The review keys the dispatch base's own `plan_review.py` (bab2b6ae, which carries the

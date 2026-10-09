@@ -7491,14 +7491,16 @@ def test_cycle_script_through_installed_budgetspec_reports_verdicts_and_failure_
         assert result["actual"] == change["cycle_seconds"]
         assert f"run {document['run_id']}, node {node}" in result["detail"]
         assert change["landing"] in result["detail"]
-        line = subprocess.run(
+        # The text output is the result line, then every line of its detail indented by two.
+        line, *detail = subprocess.run(
             [*command, "text"],
             env=environment,
             cwd=checkout,
             text=True,
             capture_output=True,
             check=False,
-        ).stdout.strip()
+        ).stdout.splitlines()
+        assert detail == [f"  {part}" for part in result["detail"].splitlines()]
         entry = tickets._measured_entry(change, result)
 
         # Sampling the host is the only moving portion of the second library invocation.

@@ -8,7 +8,7 @@ requires-python = ">=3.13"
 classifiers = ["Private :: Do Not Upload"]
 dependencies = [
     "onetaskgraph-sdk==0.3.9",
-    "onebudgetspec-cli==0.1.1",
+    "onebudgetspec-cli==0.1.4",
     "oneagentgraph-cli==0.5.5",
     "oneharness-cli==0.21.2",
     "onejudge==0.17.2",
@@ -80,6 +80,9 @@ dev = [
     # against `config/oneharness.version` (`tests/llmlint_install.py`).
     "packaging>=24",
     "types-pyyaml>=6.0.12.20260906",
+    # Reports each budget's figure and breakdown from `tests/budget_telemetry.py`, at the
+    # release `config/onebudgetspec.version` pins for the CLI that reads the report.
+    "onebudgetspec-sdk==0.1.4",
 ]
 
 [build-system]

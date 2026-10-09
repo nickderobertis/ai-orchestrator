@@ -126,8 +126,9 @@ WORKSPACE_INSTALL = REPO_ROOT / "scripts" / "workspace-install.sh"
 #: will accept as covered at all. Measured rather than anticipated: a session-scoped
 #: fixture asking `importlib.metadata` for an installed distribution's version opens that
 #: distribution's `METADATA` under `.venv`, and every journey of one project failed for
-#: reading a path no key names and none could.
-UNHASHED_DIRECTORIES = frozenset({".venv", "node_modules", ".git", ".nx"})
+#: reading a path no key names and none could. `.telemetry` is where a test target records
+#: what its journeys measured (`tests/budget_telemetry.py`): that target's own output.
+UNHASHED_DIRECTORIES = frozenset({".venv", "node_modules", ".git", ".nx", ".telemetry"})
 #: The marker that moves a test from its project's narrow key to that project's
 #: whole-workspace one. Its one source is `pyproject.toml`'s marker registration, and
 #: the `test` / `test-docs` targets of both `orchestrator` and `plan-tooling` select on
