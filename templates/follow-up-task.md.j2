@@ -139,8 +139,9 @@ variables:
     default: ""
   withdrawal:
     description: >-
-      The one status change a comment dispatch makes — withdrawing this run's own proposal a
-      quoted comment clearly retires — in the words the gathering's preamble also carries.
+      The one status change a comment dispatch makes — withdrawing this run's own proposal
+      whose ticket a quoted comment, or investigating it, shows is no longer relevant, and
+      never a deferred one — in the words the gathering's preamble also carries.
       `feedback` mode only.
     type: text
     default: ""
@@ -646,8 +647,9 @@ budget account at `{{ budgets }}`, with the change's telemetry copied unchanged 
   measured against — the same repository, file, id, threshold and direction — the budget
   still stands only if the registered repository's budgets file still holds that id with
   the same threshold and direction; read it with onebudgetspec `list`. Re-file nothing. Add this run's one evidence comment to that closed item,
-  under "Ownership on the board", carrying the entry's result line and the diagnosed cause,
-  and asking whether the budget should change instead; it is the one evidence comment that
+  under "Ownership on the board", in the shape stated there, its occurrence being the
+  entry's result line and the diagnosed cause, and asking whether the budget should change
+  instead; it is the one evidence comment that
   goes on a closed item. The disposition is `{{ shape.budget_question }}`, its `item` the closed item.
   When the recorded budget differs, the budget changed since the item was closed, and the
   overrun is filed as usual, as a new ticket.
@@ -727,10 +729,11 @@ two tickets' reading rather than a re-verification of the run.
   `{{ plan_store }} task comment list <id>`, and add, edit or delete a comment with
   `{{ plan_store }} task comment add|edit|delete`. Read only the issues the comments below
   name, one at a time, and never list the board.
-- **A ticket a comment asks you to change.** The ticket behind an issue is at
+- **The ticket behind a commented issue.** The ticket behind an issue is at
   `{{ drafts_root }}/{{ shape.tasks_directory }}/<its run>/{{ shape.tickets_directory }}/<its root cause>{{ shape.ticket_suffix }}`, which the issue's
-  `{{ shape.record_key }}` record names. Only a ticket of an issue a comment below sits on
-  is yours to change here, and only in what that comment asks for.
+  `{{ shape.record_key }}` record names. Only the ticket of an issue a comment below sits on,
+  and that run `{{ run }}` created, is yours to change here, and you keep it right in light of
+  that comment, as "What to do, in order" says.
 
 ## Investigating what a comment asks
 
@@ -775,12 +778,22 @@ what the comment disputes.
 
 For each comment quoted below, in the order it is quoted:
 
-1. **Act on it** under "Ownership on the board" below: perform whatever the comment calls
-   for, within what this run owns, or nothing where nothing is called for, investigating
-   first where "Investigating what a comment asks" above permits. Where it asks for a
-   change to the ticket behind the issue it sits on, and that issue is this run's, edit
-   that ticket's file — changing what the comment asks for and leaving the rest of it
-   exactly as it stands, but for bringing it to the current record schema. A ticket whose
+   <!-- llmlint: ignore-block[changed_behavior_has_e2e] Whether a comment, or what investigating it found, makes a change to its ticket right, and which change, is the agent's judgment of a ticket against a comment, which the suite never scripts a verdict for: it doubles the agent's turn, so a journey could only assert what its own script chose. What the tooling decides is driven: `tests/test_follow_up_tickets.py` holds that the rendered feedback task carries this rule and no explicit-request trigger, `tests/plan_tooling/test_follow_ups_comment_answers_e2e.py` that a real dispatch is handed it and that `board-status --withdraw` withdraws its own `Proposal` and refuses at `Deferred`. -->
+1. **Keep the ticket right in light of it** under "Ownership on the board" below,
+   investigating first where "Investigating what a comment asks" above permits, and perform
+   whatever else the comment calls for within what this run owns. Where the
+   issue it sits on is this run's, decide whether that issue's ticket should change in
+   light of the comment and of anything investigating it found, whether or not the comment
+   asks for an edit: a question, a doubt or a correction is enough when the answer shows
+   the ticket is wrong or incomplete. A person steers a ticket by commenting on it, so an
+   answer that shows the ticket wrong and leaves it unchanged leaves the next reader with
+   the stale ticket. Where it should, make that change in the ticket's file — refine the
+   suggested fix, narrow or widen the root cause, add an unknown or a precondition, correct
+   the impact under "A comment disputing a severity or a priority" above, or withdraw it
+   under the withdrawal rule below — leaving the rest of it exactly as it stands, but for
+   bringing it to the current record schema.
+   <!-- llmlint: ignore-end[changed_behavior_has_e2e] -->
+   A ticket whose
    record carries an older `schema` — which `{{ validate }}` refuses, naming it — is brought
    forward first, by the rule the re-dispatch states for it:
 
@@ -795,7 +808,8 @@ For each comment quoted below, in the order it is quoted:
    When any of those refuses, copy nothing for that ticket, keep what it printed for your
    report and for the account, and go on to the next comment.
 2. **Judge whether it confirms the root cause, and post its one reply**, naming the
-   comment's id and carrying that verdict in its marker, as those rules state: `{{ shape.confirms }}`
+   comment's id and carrying that verdict in its marker, as those rules state. The reply
+   states what changed in the ticket and why, or why the ticket stands as it is: `{{ shape.confirms }}`
    when the comment is a new sighting of the issue's root cause or evidence that it is more
    prevalent, `{{ shape.does_not_confirm }}` otherwise. Keep the id the store prints for it.
 3. **After every `{{ shape.confirms }}` reply, re-estimate the issue it sits on** with
@@ -876,8 +890,12 @@ that issue. This dispatch is not finished while it refuses.
   closed by this dispatch, and no ticket or board item a quoted comment does not sit on
   was read.
 - No board item's status was changed but by withdrawing this run's own item at `Proposal`
-  where a quoted comment clearly says its ticket is not needed, and that comment's account
-  entry says the item was withdrawn.
+  whose ticket a quoted comment, or investigating it, showed is no longer relevant, and that
+  comment's reply and account entry say the item was withdrawn and why; no item at
+  `Deferred` or at an accepted status changed status.
+- Every quoted comment on an issue run `{{ run }}` created was weighed against that issue's
+  ticket, whether or not it asked for an edit, and its reply states what changed in the
+  ticket and why, or why the ticket stands as it is.
 - Every reply to a comment asking something only an investigation answers states what the
   investigation found, or what exactly would settle the question.
 - Every claim the report makes is true of the board as it finally stands.

@@ -264,6 +264,12 @@ def test_each_persons_comment_goes_to_the_run_owning_its_issue_and_to_no_other(
     assert "````text\nThe examples still miss page 9 — see ```listing.py```.\n````" in own_file
     assert "- URL: file://" in own_file and "#comment-" in own_file
     assert tickets.WITHDRAWAL_EXCEPTION in own_file
+    # The preamble withdraws a proposal that is no longer relevant, never on an explicit
+    # request alone, and never withdraws a deferred one.
+    flat_own = " ".join(own_file.split())
+    assert "is no longer relevant" in flat_own and "whether or not the comment says so" in flat_own
+    assert "is never withdrawn" in flat_own and "clearly says" not in flat_own
+    assert "perform whatever action it calls for, or none" not in flat_own
     others_file = files[tickets.RunId(OTHER_RUN)].read_text(encoding="utf-8")
     assert "Does this also hit the nightly sweep?" in others_file
     assert "page 9" not in others_file
@@ -318,7 +324,7 @@ def test_a_comment_any_runs_marker_owns_is_never_selected_whatever_its_kind(
 
     assert written.count("### Comment ") == 1, written
     assert f"- Comment id: {person}\n" in written
-    for absent in ("evidence", "Ours."):
+    for absent in ("Another run's evidence.", "Ours."):
         assert absent not in written, written
 
 
@@ -631,9 +637,12 @@ def test_the_feedback_file_asks_for_an_action_a_reply_and_a_report_per_comment(
     for said in (
         "Gathered by `just follow-ups-answer-comments`",
         "each is quoted verbatim below with its id, its URL, its author and when it last changed",
-        '1. **Act on it** under "Ownership on the board" above: perform whatever action it calls '
-        "for, or none.",
-        "2. **Post its one reply**, naming the comment's id, as those rules state.",
+        '1. **Act on it** under "Ownership on the board" above: decide whether the ticket of '
+        "the issue it sits on should change in light of it and of anything investigating it "
+        "found, whether or not it asks for an edit, make that change, and perform whatever else "
+        "it calls for.",
+        "2. **Post its one reply**, naming the comment's id, as those rules state, and saying "
+        "what changed in the ticket and why, or why the ticket stands as it is.",
         "3. **Report** the comment's URL beside what you did about it, or why you did nothing.",
         " ".join(tickets.WITHDRAWAL_EXCEPTION.split())
         + " Never touch a ticket or an issue no comment above names",

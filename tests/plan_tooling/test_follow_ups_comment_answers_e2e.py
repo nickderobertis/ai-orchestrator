@@ -10,12 +10,14 @@ checkout are `tests/plan_tooling/test_follow_ups_recipe_e2e.py`'s and
 restated. **`tests/e2e/fake_codex.py` stands in for the paid model alone**, running the
 commands the answering agent would choose through the real programs.
 
-The module fixture answers eleven comments in one dispatch: one clearly retiring the run's own
-`Proposal`, one only asking about another, the retiring one again on an item a person
-deferred, one asking for a corrected fix on a ticket of each older schema — schema 5 being the
-shape onepipeline#438 met, and schema 7 the one `validate` still reads as sound — and one on
-another run's older item. The credential journeys drive
-the recipe in both modes from a mirror checkout whose `.env` alone holds the board credential.
+The module fixture answers eleven comments in one dispatch: one asking a question whose answer
+shows the run's own `Proposal` is no longer relevant, which the dispatch withdraws though the
+comment asks for no withdrawal; one whose answer leaves another proposal relevant; the first
+again on an item a person deferred, which is never withdrawn; one asking for a corrected fix on
+a ticket of each older schema — schema 5 being the shape onepipeline#438 met, and schema 7 the
+one `validate` still reads as sound — and one on another run's older item. The credential
+journeys drive the recipe in both modes from a mirror checkout whose `.env` alone holds the
+board credential.
 """
 
 from __future__ import annotations
@@ -80,14 +82,14 @@ from orchestrator.root import REPO_ROOT
 #: A real launch holds this checkout's toolchain for as long as it runs.
 pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
 
-#: The run's items: a proposal a comment retires, a proposal a comment only asks about, a
-#: deferred item the retiring comment sits on, and a ticket at each older record schema the
-#: feedback task brings forward, keyed by that schema — 1, with no `host`, no `repositories`
-#: and no `## Impact`; 2, with a `host` but neither of the others; 3, with `repositories` but no
-#: `## Impact`; 4, the last with the headings schema 5 retired; 5, which the onepipeline#438
-#: ticket carried; 6, the last with no stored estimate; 7, the last before the rubric's
-#: structure; and 8, the one before the current — both of which still validate, and are brought
-#: forward when they are rewritten.
+#: The run's items: a proposal a comment shows is no longer relevant, a proposal that stays
+#: relevant after a comment asks about it, a deferred item the superseding comment sits on, and
+#: a ticket at each older record schema the feedback task brings forward, keyed by that schema —
+#: 1, with no `host`, no `repositories` and no `## Impact`; 2, with a `host` but neither of the
+#: others; 3, with `repositories` but no `## Impact`; 4, the last with the headings schema 5
+#: retired; 5, which the onepipeline#438 ticket carried; 6, the last with no stored estimate; 7,
+#: the last before the rubric's structure; and 8, the one before the current — both of which
+#: still validate, and are brought forward when they are rewritten.
 PROPOSED_CAUSE = "listing-cursor-skips-last-page"
 UNSURE_CAUSE = "lock-file-left-after-crash"
 DEFERRED_CAUSE = "sweep-trailer-omits-a-family"
@@ -114,7 +116,8 @@ OLDER_CAUSES = dict(
 OTHER_RUN_CAUSE = "watcher-misses-a-rename"
 
 REVIEWER = "a-reviewer"
-RETIRING = "Handled elsewhere: the listing rewrite removes this, so this ticket won't be needed.\n"
+#: A question, not a request: its answer is what shows the ticket is no longer relevant.
+SUPERSEDING = "Doesn't the listing rewrite that landed last week already remove this cursor?\n"
 CORRECTING = (
     "The suggested fix is wrong: page the export by cursor in `src/export.py` instead, "
     "as the listing already does.\n"
@@ -125,13 +128,17 @@ REQUESTED_FIX = "Page the export by cursor in `src/export.py`, as the listing al
 #: The whole `## Suggested fix` the agent writes from that request: its paragraph and its unit.
 REQUESTED_SECTION = f"{REQUESTED_FIX}\n\n{UNIT}"
 
-WITHDREW = "Withdrew this run's proposal: the comment says the listing rewrite handles it."
+WITHDREW = (
+    "Withdrew this run's proposal: the listing rewrite the comment names removed the cursor, so "
+    "the ticket is no longer relevant."
+)
 KEPT_UNSURE = (
-    "Replied and left the item as it is: the comment asks whether it is still needed rather "
-    "than saying it is not."
+    "Investigated and left the ticket as it stands: the listing rewrite does not touch the lock "
+    "file, so the ticket is still relevant and still right."
 )
 KEPT_DEFERRED = (
-    "Left the item as it is: a person deferred it, and `board-status --withdraw` refused."
+    "Left the item's status as it is: a person deferred it, so the reply recommends they close "
+    "it, and `board-status --withdraw` refused."
 )
 RE_ESTIMATED = "Counted this sighting as one more occurrence and re-estimated the item."
 CORRECTED = "Brought the ticket to the current schema with the corrected fix, and copied it."
@@ -611,9 +618,9 @@ def answered(tmp_path_factory: pytest.TempPathFactory) -> Answered:
 
         # After the run last responded, so the gathering quotes each of these.
         _next_second()
-        _commented(bench, proposed_issue, RETIRING, REVIEWER)
+        _commented(bench, proposed_issue, SUPERSEDING, REVIEWER)
         _commented(bench, unsure_issue, ASKING, REVIEWER)
-        _commented(bench, deferred_issue, RETIRING, REVIEWER)
+        _commented(bench, deferred_issue, SUPERSEDING, REVIEWER)
         for held in older.values():
             _commented(bench, held.issue, CORRECTING, REVIEWER)
         _commented(bench, other_run.issue, SEEN_AGAIN, REVIEWER)
@@ -747,14 +754,20 @@ def _reply_to(answered: Answered, issue: str, text: str) -> tickets.CommentOwner
 # journeys that drive the installed engine, whose planToolingWorkspace input covers the
 # recipe, the task modules and the store configuration they run, and whose turns are the
 # provider's stand-in.
-def test_a_comment_clearly_retiring_the_runs_own_proposal_withdraws_it_and_is_answered(
+def test_a_comment_showing_the_runs_own_proposal_no_longer_relevant_withdraws_it(
     answered: Answered,
 ) -> None:
-    """The one status change a comment dispatch makes: closed as not planned, and replied to."""
+    """The one status change a comment dispatch makes: closed as not planned, and replied to.
+
+    The comment asks a question rather than for a withdrawal; its answer is what shows the
+    ticket is no longer relevant.
+    """
     _settled(answered)
 
     assert _category(answered.proposed_after) == tickets.Status.WITHDRAWN.value
-    assert _reply_to(answered, answered.proposed_issue, RETIRING).kind is tickets.CommentKind.REPLY
+    assert (
+        _reply_to(answered, answered.proposed_issue, SUPERSEDING).kind is tickets.CommentKind.REPLY
+    )
     assert answered.checked.returncode == OK, answered.checked.stdout + answered.checked.stderr
     account = json.loads(tickets.responses_path(answered.gathering).read_text(encoding="utf-8"))
     withdrawn = [
@@ -763,10 +776,10 @@ def test_a_comment_clearly_retiring_the_runs_own_proposal_withdraws_it_and_is_an
     assert [entry["action"] for entry in withdrawn] == [WITHDREW], account
 
 
-def test_a_comment_that_does_not_clearly_retire_a_proposal_is_answered_and_changes_nothing(
+def test_a_comment_whose_answer_leaves_a_proposal_relevant_is_answered_and_changes_nothing(
     answered: Answered,
 ) -> None:
-    """Asking whether a proposal is still needed is no ruling that it is not: replied to only."""
+    """A proposal still relevant after its comment is investigated keeps its status."""
     _settled(answered)
 
     assert _category(answered.unsure_after) == tickets.Status.PROPOSED.value
@@ -780,13 +793,16 @@ def test_a_comment_that_does_not_clearly_retire_a_proposal_is_answered_and_chang
 def test_the_same_comment_on_a_deferred_item_leaves_its_status_as_a_person_set_it(
     answered: Answered,
 ) -> None:
-    """`board-status --withdraw` refuses an item a person deferred, so nothing is copied."""
+    """A deferred ticket no longer relevant is never withdrawn: `board-status --withdraw`
+    refuses an item a person deferred, so nothing is copied."""
     _settled(answered)
 
     assert _category(answered.deferred_after) == tickets.Status.DEFERRED.value
     assert f"refused {tickets.PROTECTED}" in answered.witness, answered.witness
     assert "copied" not in answered.witness, answered.witness
-    assert _reply_to(answered, answered.deferred_issue, RETIRING).kind is tickets.CommentKind.REPLY
+    assert (
+        _reply_to(answered, answered.deferred_issue, SUPERSEDING).kind is tickets.CommentKind.REPLY
+    )
     account = json.loads(tickets.responses_path(answered.gathering).read_text(encoding="utf-8"))
     kept = [entry for entry in account["responses"] if entry["issue"] == answered.deferred_issue]
     assert [entry["action"] for entry in kept] == [KEPT_DEFERRED], account
@@ -898,6 +914,8 @@ def test_the_dispatched_task_carries_the_investigation_exception_schema_and_disp
 
     assert "## Investigating what a comment asks" in task
     assert " ".join(tickets.WITHDRAWAL_EXCEPTION.split()) in flat
+    assert "whether or not the comment asks for an edit" in flat
+    assert "**It carries only this run's new occurrence**" in flat
     assert "a ticket of an older schema is brought to the current shape before it is copied" in (
         flat
     )

@@ -349,16 +349,20 @@ _KEPT_OPEN = [
 # `test_a_withdrawal_of_a_ticket_a_person_accepted_or_deferred_is_refused_and_moves_nothing`,
 # parametrized over each), and `tests/plan_tooling/test_follow_ups_comment_answers_e2e.py`
 # drives a comment dispatch withdrawing its own `Proposal` and being refused at `Deferred`.
-# Whether a comment clearly retires its ticket is the agent's reading, which no journey scripts.
+# Whether a ticket is still relevant is the agent's reading, which no journey scripts.
 WITHDRAWAL_EXCEPTION = (
-    "**Never change a board item's status except by one withdrawal.** Where a quoted comment "
-    "clearly says the ticket of the issue it sits on is not needed — that it is handled "
-    "elsewhere, say, or will not be needed — and that issue is this run's own item at "
+    "**Never change a board item's status except by one withdrawal.** Where the ticket of the "
+    "issue a quoted comment sits on is no longer relevant — handled elsewhere, superseded, or "
+    "its premise shown wrong, by the comment or by what investigating it found, whether or "
+    "not the comment says so — and that issue is this run's own item at "
     f"`{board_option(Status.PROPOSED)}` (`{linear_state(Status.PROPOSED)}` on Linear), withdraw "
     "it: run `board-status` with `--withdraw` on "
     "its ticket, write the word it prints as the ticket's `status`, validate the ticket and "
-    "copy it, and say in that comment's account entry that the item was withdrawn. A comment "
-    "that does not clearly say so is replied to and changes nothing. No item at "
+    "copy it, and say in that comment's reply and account entry that the item was withdrawn "
+    "and why. A ticket at "
+    f"`{board_option(Status.DEFERRED)}` (`{linear_state(Status.DEFERRED)}` on Linear) may have its "
+    "content edited but is never withdrawn: where it is no longer relevant, the reply says so "
+    "with its evidence and recommends the person close it. No item at "
     f"{', '.join(_KEPT_OPEN[:-1])} or {_KEPT_OPEN[-1]}, and no closed one, is ever withdrawn, "
     "and `board-status --withdraw` refuses the ones a person decided on."
 )
@@ -3756,6 +3760,7 @@ def filed_board_problems(
                 "board"
             )
             continue
+        found.extend(evidence_comment_problems(run, carrier, reads))
         found.extend(board_estimate_problems(carrier, reads))
         if copied and (held := held_priority(reads.item(carrier))) != ticket.priority:
             found.append(
@@ -3798,6 +3803,49 @@ def _evidence_carrier(
         ):
             return issue
     return None
+
+
+def ticket_section_headings() -> tuple[str, ...]:
+    """Every level-2 heading a ticket's body carries or once carried.
+
+    An evidence comment carries only its run's new occurrence, so one carrying any of these
+    has re-rendered the ticket into the comment; deriving them here means a heading added to
+    a ticket is refused in a comment with no further edit.
+    """
+    return (*HEADINGS, REJECTED_FIXES, *RETIRED_HEADINGS)
+
+
+#: A Markdown ATX level-2 heading line, its text without the optional closing hashes.
+_LEVEL_TWO_HEADING = re.compile(r" {0,3}##[ \t]+(?P<text>.*?)(?:[ \t]+#+)?[ \t]*")
+
+
+def comment_ticket_headings(body: str) -> list[str]:
+    """The ticket section headings ``body`` carries as level-2 headings, in order."""
+    sections = {heading.casefold(): heading for heading in ticket_section_headings()}
+    return [
+        sections[matched["text"].casefold()]
+        for line in body.splitlines()
+        if (matched := _LEVEL_TWO_HEADING.fullmatch(line)) is not None
+        and matched["text"].casefold() in sections
+    ]
+
+
+def evidence_comment_problems(run: str, issue: str, reads: BoardReads) -> list[str]:
+    """Every ticket section heading an evidence comment of ``run`` on ``issue`` carries.
+
+    Only ``run``'s own evidence comments are judged: another run's comment is not this
+    run's to change, so it never makes this run's check refuse.
+    """
+    return [
+        f"{issue} holds an evidence comment of run {run} carrying the ticket heading "
+        f"`## {heading}`; an evidence comment carries only this run's new occurrence, so edit "
+        "it in place to drop what repeats the issue"
+        for body in reads.comments(issue)
+        if (owner := comment_owner(body)) is not None
+        and owner.run == run
+        and owner.kind is CommentKind.EVIDENCE
+        for heading in comment_ticket_headings(body)
+    ]
 
 
 def dispositions_path(root: Path, run: str) -> Path:
@@ -4660,12 +4708,14 @@ def budget_account_problems(  # noqa: C901, PLR0912 - one pass over every entry'
             {cause: [one.item for one in filed if one.cause == cause] for cause in causes},
         )
     )
-    found.extend(
-        f"{named} names {question.item}, which holds no evidence comment of run {run} for "
-        f"{question.cause}, so the question never reached the board"
-        for named, question in questions
-        if _evidence_carrier(run, question.cause, board, reads, (question.item,)) is None
-    )
+    for named, question in questions:
+        if _evidence_carrier(run, question.cause, board, reads, (question.item,)) is None:
+            found.append(
+                f"{named} names {question.item}, which holds no evidence comment of run {run} "
+                f"for {question.cause}, so the question never reached the board"
+            )
+        else:
+            found.extend(evidence_comment_problems(run, question.item, reads))
     return found
 
 
@@ -5373,6 +5423,7 @@ def shape(run: str) -> dict[str, object]:
         "tasks_directory": TASKS_DIRECTORY,
         "tickets_directory": TICKETS,
         "ticket_suffix": TICKET_SUFFIX,
+        "ticket_headings": ", ".join(f"`{heading}`" for heading in ticket_section_headings()),
         "ticket_id": qualified_id(run, "<root-cause>"),
         "record_key": KEY,
         "title_limit": TITLE_LIMIT,

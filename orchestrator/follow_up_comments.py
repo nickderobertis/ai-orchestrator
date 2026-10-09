@@ -75,7 +75,8 @@ run with no such response has no boundary, and every person's comment on its iss
 :data:`BOUNDARY_FILE`, and the watermark — never the board, and nothing on a dry run. A
 person's move of an item to `Todo`, `Deferred` or `In Progress` is a decision no run undoes, so
 the feedback says so again, beside the one status change a comment dispatch may make —
-withdrawing this run's own proposal a comment clearly retires — in the words of
+withdrawing this run's own proposal whose ticket the comment, or investigating it, shows is no
+longer relevant, whether or not the comment says so, and never a deferred one — in the words of
 :data:`follow_up_tickets.WITHDRAWAL_EXCEPTION`, which the feedback task carries too.
 """
 
@@ -666,9 +667,12 @@ def render(run: str, board: str, chosen: Sequence[Selected], since: datetime | N
         "is quoted verbatim below with its id, its URL, its author and when it last "
         "changed.\n\n"
         "For each quoted comment, in this order:\n\n"
-        '1. **Act on it** under "Ownership on the board" above: perform whatever action it '
-        "calls for, or none.\n"
-        "2. **Post its one reply**, naming the comment's id, as those rules state.\n"
+        '1. **Act on it** under "Ownership on the board" above: decide whether the ticket of '
+        "the issue it sits on should change in light of it and of anything investigating it "
+        "found, whether or not it asks for an edit, make that change, and perform whatever else "
+        "it calls for.\n"
+        "2. **Post its one reply**, naming the comment's id, as those rules state, and saying "
+        "what changed in the ticket and why, or why the ticket stands as it is.\n"
         "3. **Report** the comment's URL beside what you did about it, or why you did "
         "nothing.\n\n"
         f"{tickets.WITHDRAWAL_EXCEPTION} Never touch a ticket or an issue no comment above "

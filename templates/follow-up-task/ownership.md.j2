@@ -25,6 +25,26 @@
 
   and its first line is visible to a reader: `{{ evidence_opening }}`
 
+  **It carries only this run's new occurrence**, because the issue already states the
+  ticket and a comment that re-renders it hides the one new fact it adds. Its body is, in
+  this order:
+
+  1. the opening line above;
+  2. this run's occurrence: the host it was verified on, read with `hostname`; the basis
+     commit of each repository; what was observed; and the drafts or the budget entry it
+     rests on;
+  3. optionally, one short paragraph headed in plain text — `Bears on the ticket:`, say —
+     naming the section of the issue the new evidence contradicts or extends (its root
+     cause, impact or suggested fix) and stating only the delta, since this run cannot edit
+     another run's ticket;
+  4. the marker above, as the last line.
+
+  It never repeats what the issue already says — its root cause, impact, examples,
+  suggested fix, rejected fixes or owning runs — and never carries a ticket's level-2
+  section heading, current or retired ({{ shape.ticket_headings }}): the post-settlement `--board` checks
+  refuse an evidence comment of this run carrying one as a level-2 heading, naming the
+  item and the heading.
+
   It goes only on an open issue another run created for the same root cause, which
   receives at most **one** from this run — whatever status the board holds it at, so an
   item at `Deferred` receives this run's one comment like any other open item. Where this

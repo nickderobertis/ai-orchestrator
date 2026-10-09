@@ -1227,8 +1227,12 @@ FEEDBACK_CRITERIA = (
     "closed by this dispatch, and no ticket or board item a quoted comment does not sit on "
     "was read.",
     "No board item's status was changed but by withdrawing this run's own item at `Proposal` "
-    "where a quoted comment clearly says its ticket is not needed, and that comment's account "
-    "entry says the item was withdrawn.",
+    "whose ticket a quoted comment, or investigating it, showed is no longer relevant, and that "
+    "comment's reply and account entry say the item was withdrawn and why; no item at "
+    "`Deferred` or at an accepted status changed status.",
+    f"Every quoted comment on an issue run `{RUN}` created was weighed against that issue's "
+    "ticket, whether or not it asked for an edit, and its reply states what changed in the "
+    "ticket and why, or why the ticket stands as it is.",
     "Every reply to a comment asking something only an investigation answers states what the "
     "investigation found, or what exactly would settle the question.",
     "Every claim the report makes is true of the board as it finally stands.",
@@ -1814,7 +1818,7 @@ def test_every_key_a_contract_names_is_one_its_validator_reads() -> None:
         ),
         "Ownership on the board": (
             _section(feedback, "Ownership on the board", "The account of every comment"),
-            {*record, *marker_attributes},
+            {*record, *marker_attributes, "hostname"},
         ),
         "The account of every comment": (
             _section(feedback, "The account of every comment", "Acceptance criteria"),
@@ -4068,6 +4072,130 @@ def test_a_filed_drafts_evidence_comment_on_a_matching_issue_satisfies_its_accou
     assert "accounts for every draft" in capsys.readouterr().out
 
 
+#: An evidence comment of the stated shape: the run's occurrence, and one plain-text paragraph
+#: naming the section of the issue it extends and only the delta.
+OCCURRENCE = (
+    f"Verified on host `{HOST}` at `some-service` {COMMIT}: the cursor skipped page 9 of 9 "
+    "again, on a listing of 9 pages.\n\nRests on the draft `a-cursor-draft`.\n\n"
+    "Bears on the ticket: the root cause also holds when the last page is full."
+)
+
+#: The ticket re-rendered into a comment, as three evidence comments on onevcs#266 were.
+RE_RENDERED = "## Root cause\n\nThe cursor skips the last page.\n\n## Impact\n\nPages go missing."
+
+
+def _comment_id(issue: str, run: str) -> str:
+    """The id of ``run``'s evidence comment on ``issue``."""
+    for comment in plan_store.sdk(plan_store.client().task_comment_list(issue)).comments:
+        owner = tickets.comment_owner(comment.body)
+        if owner is not None and owner.run == run and owner.kind is tickets.CommentKind.EVIDENCE:
+            return str(comment.id.model_dump())
+    raise AssertionError(f"no evidence comment of {run} on {issue}")
+
+
+def test_ticket_section_headings_are_derived_from_every_heading_a_ticket_carries() -> None:
+    """One function names them, so a heading added to a ticket is refused in a comment too."""
+    assert tickets.ticket_section_headings() == (
+        *tickets.HEADINGS,
+        tickets.REJECTED_FIXES,
+        *tickets.RETIRED_HEADINGS,
+    )
+    body = (
+        "## Root cause\n  ## impact ##\n### Examples\n# Evidence\n## Not a section\n"
+        "Bears on the ticket: the suggested fix\n    ## Owning runs\n## Rejected fixes"
+    )
+    assert tickets.comment_ticket_headings(body) == ["Root cause", "Impact", "Rejected fixes"]
+
+
+def test_check_dispositions_on_the_board_refuses_this_runs_evidence_comment_re_rendering_the_ticket(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An evidence comment carries only the new occurrence, read back off a real board.
+
+    Another run's comment re-rendering the ticket is not this run's to change and never makes
+    this run's check refuse; this run's comment of the stated shape is sound, and the same
+    comment edited to carry the ticket's sections is refused naming the item and the heading.
+    """
+    _drafted(drafts_root, RUN, "a-cursor-draft")
+    issue = _filed(drafts_root, OTHER_RUN, CAUSE, "the cursor skips the last page")
+    _write(drafts_root, _carrying())
+    account = tickets.open_dispositions(drafts_root, RUN)
+    account.write_text(json.dumps(_account(_disposed())), encoding="utf-8")
+    for run, evidence in (("a-third-run", RE_RENDERED), (RUN, OCCURRENCE)):
+        comment = tickets.render_comment(run, CAUSE, evidence)
+        plan_store.sdk(plan_store.client().task_comment_add(issue, body=comment))
+    assert tickets.main(["re-estimate", "--board", BOARD, issue]) == tickets.SOUND
+    capsys.readouterr()
+    arguments = ["check-dispositions", "--root", str(drafts_root), "--board", BOARD, RUN]
+
+    assert tickets.main(arguments) == tickets.SOUND, capsys.readouterr().err
+    assert "accounts for every draft" in capsys.readouterr().out
+
+    plan_store.sdk(
+        plan_store.client().task_comment_edit(
+            issue,
+            _comment_id(issue, RUN),
+            body=tickets.render_comment(RUN, CAUSE, f"{OCCURRENCE}\n\n{RE_RENDERED}"),
+        )
+    )
+
+    assert tickets.main(arguments) == tickets.UNSOUND
+    refused = " ".join(capsys.readouterr().err.split())
+    for heading in ("Root cause", "Impact"):
+        assert (
+            f"{issue} holds an evidence comment of run {RUN} carrying the ticket heading "
+            f"`## {heading}`"
+        ) in refused, refused
+    assert "a-third-run" not in refused, refused
+
+
+def test_check_budgets_on_the_board_refuses_this_runs_budget_question_re_rendering_the_ticket(
+    budget_registry: Path,
+    board: Path,
+    drafts_root: Path,
+    tmp_path: Path,
+) -> None:
+    """The budget question on a closed item follows the evidence comment's shape, read back."""
+    entry = _cycle_entry()
+    old = _ticket(
+        created_by_run=tickets.RunId(OTHER_RUN),
+        owning_runs=(tickets.RunId(OTHER_RUN),),
+        drafts=(),
+        budget=tickets._standing(entry),
+    )
+    item = _on_board(_write(drafts_root, old))
+    _moved(item, tickets.Status.WITHDRAWN)
+    entry["disposition"] = [_budget_disposed(item, "budget-question")]
+    _budget_account(drafts_root, entry)
+    publication = tmp_path / "registered"
+    _register_budget_repo(publication)
+    _standing_budget(publication, entry)
+    question = "budget cycle-time: actual 9 seconds. Cause: a long gate. Should the budget change?"
+    for run, evidence in (("a-third-run", RE_RENDERED), (RUN, question)):
+        comment = tickets.render_comment(run, CAUSE, evidence)
+        plan_store.sdk(plan_store.client().task_comment_add(item, body=comment))
+
+    done = _budget_cli(drafts_root, RUN, "--board", BOARD)
+    assert done.returncode == tickets.SOUND, done.stderr
+
+    plan_store.sdk(
+        plan_store.client().task_comment_edit(
+            item,
+            _comment_id(item, RUN),
+            body=tickets.render_comment(RUN, CAUSE, f"{question}\n\n## Suggested fix\n\nRaise it."),
+        )
+    )
+
+    done = _budget_cli(drafts_root, RUN, "--board", BOARD)
+    assert done.returncode == tickets.UNSOUND
+    refused = " ".join(done.stderr.split())
+    assert (
+        f"{item} holds an evidence comment of run {RUN} carrying the ticket heading "
+        "`## Suggested fix`"
+    ) in refused, refused
+    assert "a-third-run" not in refused and "`## Root cause`" not in refused, refused
+
+
 def test_a_draft_filed_under_a_ticket_that_does_not_name_it_is_refused_naming_both(
     drafts_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -4744,7 +4872,7 @@ def test_the_feedback_task_bounds_investigation_to_the_ticket_a_comment_asks_abo
 
 @pytest.mark.reads_docs
 def test_the_one_status_exception_is_stated_once_in_the_task_the_gathering_and_agents_md() -> None:
-    """Withdrawing this run's own proposal a comment clearly retires, and nothing else.
+    """Withdrawing this run's own proposal that is no longer relevant, and nothing else.
 
     The task and the gathering's preamble carry one wording, the module's; AGENTS.md states
     the same bound for a manager.
@@ -4755,18 +4883,23 @@ def test_the_one_status_exception_is_stated_once_in_the_task_the_gathering_and_a
     assert flat.count(exception) == 1, flat
     for said in (
         "**Never change a board item's status except by one withdrawal.**",
-        "clearly says the ticket of the issue it sits on is not needed",
+        "Where the ticket of the issue a quoted comment sits on is no longer relevant — handled "
+        "elsewhere, superseded, or its premise shown wrong, by the comment or by what "
+        "investigating it found, whether or not the comment says so —",
         "that issue is this run's own item at `Proposal` (`Proposed` on Linear), withdraw it",
         "run `board-status` with `--withdraw` on its ticket, write the word it prints as the "
         "ticket's `status`, validate the ticket and copy it",
-        "say in that comment's account entry that the item was withdrawn",
-        "A comment that does not clearly say so is replied to and changes nothing.",
+        "say in that comment's reply and account entry that the item was withdrawn and why",
+        "A ticket at `Deferred` (`Backlog` on Linear) may have its content edited but is never "
+        "withdrawn: where it is no longer relevant, the reply says so with its evidence and "
+        "recommends the person close it.",
         "No item at `Todo`, `Deferred`, `Queued` or `In Progress`, and no closed one, is ever "
         "withdrawn",
     ):
         assert said in exception, said
     assert f"`{BOARD_STATUS} --board followups --withdraw <path of the ticket>`" in flat
     assert "**Never change a board item's status**," not in flat, "the old rule still stands"
+    assert "clearly" not in exception, "an explicit request is no longer the trigger"
     assert exception not in _flat(_task(redispatch=True)), (
         "the initial mode withdraws by its own rule"
     )
@@ -4775,9 +4908,105 @@ def test_the_one_status_exception_is_stated_once_in_the_task_the_gathering_and_a
     agents = _flat((REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8"))
     assert (
         "It never changes a board item's status except by one withdrawal: this run's own item "
-        "at `Proposal` (`Proposed` on Linear), when a quoted comment clearly says its ticket is "
-        "not needed."
+        "at `Proposal` (`Proposed` on Linear), when its ticket is no longer relevant."
     ) in agents
+    assert (
+        "changes only the ticket of an issue a quoted comment sits on — whenever the comment, or "
+        "what investigating it found, makes a change right, not only on an explicit request —"
+    ) in agents
+    assert "an evidence comment carries only the new occurrence" in agents
+    for described in (
+        _flat(str(comments.__doc__)),
+        _flat(_template_withdrawal_description()),
+    ):
+        assert "no longer relevant" in described, described
+        assert "clearly" not in described, described
+
+
+def _template_withdrawal_description() -> str:
+    """The `withdrawal` variable's description in the template's front matter."""
+    template = (REPO_ROOT / "templates" / "follow-up-task.md.j2").read_text(encoding="utf-8")
+    start = template.index("\n  withdrawal:\n")
+    return template[start : template.index("\n  responses:\n", start)]
+
+
+def test_the_feedback_task_keeps_each_commented_ticket_right_without_an_explicit_request() -> None:
+    """Every quoted comment is a prompt to keep its ticket right, not only an explicit request.
+
+    On onevcs#266 a person asked whether a ticket's proposal held across repositories with
+    other merge and release strategies; the owning run investigated, found the fix sufficient
+    only under declared release guarantees, and left the ticket unchanged because the comment
+    "asks for clarification rather than a ticket edit". The rendered task now says the change
+    is decided from the comment and the investigation, names the kinds of change, and asks
+    every reply to say what changed or why the ticket stands.
+    """
+    task = _feedback_task()
+    flat = _flat(task)
+    step = _flat(_section(task, "What to do, in order"))
+
+    for said in (
+        "decide whether that issue's ticket should change in light of the comment and of "
+        "anything investigating it found, whether or not the comment asks for an edit",
+        "a question, a doubt or a correction is enough when the answer shows the ticket is "
+        "wrong or incomplete",
+        "refine the suggested fix, narrow or widen the root cause, add an unknown or a "
+        "precondition, correct the impact",
+        "or withdraw it under the withdrawal rule below",
+        "leaving the rest of it exactly as it stands",
+        "The reply states what changed in the ticket and why, or why the ticket stands as it is",
+    ):
+        assert said in step, said
+    for framing in (
+        "changing what the comment asks for",
+        "A ticket a comment asks you to change",
+        "only in what that comment asks for",
+        "Where it asks for a change",
+        "asking for clarification leaves the ticket unchanged",
+        "clearly says",
+    ):
+        assert framing not in flat, framing
+        assert framing not in _flat(_task(redispatch=True)), framing
+    where = _flat(_section(task, "Where everything is"))
+    assert (
+        f"Only the ticket of an issue a comment below sits on, and that run `{RUN}` created, is "
+        "yours to change here"
+    ) in where, where
+
+
+@pytest.mark.parametrize("mode", list(tickets.Mode))
+def test_both_modes_state_an_evidence_comments_body_as_only_the_new_occurrence(
+    mode: tickets.Mode,
+) -> None:
+    """An evidence comment's body, in order, and what it never repeats, in both modes.
+
+    On onevcs#266 three evidence comments re-rendered the ticket's `## Root cause`, `## Impact`,
+    `## Examples` and `## Evidence`, hiding the one fact each added.
+    """
+    task = _feedback_task() if mode is tickets.Mode.FEEDBACK else _task(mode, redispatch=True)
+    ownership = _flat(_section(task, "Ownership on the board"))
+    ordered = [
+        f"and its first line is visible to a reader: `{tickets.comment_opening(RUN)}`",
+        "**It carries only this run's new occurrence**",
+        "1. the opening line above;",
+        "2. this run's occurrence: the host it was verified on, read with `hostname`; the basis "
+        "commit of each repository; what was observed; and the drafts or the budget entry it "
+        "rests on;",
+        "3. optionally, one short paragraph headed in plain text — `Bears on the ticket:`, say — "
+        "naming the section of the issue the new evidence contradicts or extends (its root "
+        "cause, impact or suggested fix) and stating only the delta",
+        "4. the marker above, as the last line.",
+        "It never repeats what the issue already says — its root cause, impact, examples, "
+        "suggested fix, rejected fixes or owning runs — and never carries a ticket's level-2 "
+        "section heading, current or retired",
+        "the post-settlement `--board` checks refuse an evidence comment of this run carrying "
+        "one as a level-2 heading, naming the item and the heading.",
+    ]
+    at = [ownership.index(said) for said in ordered]
+    assert at == sorted(at), ordered
+    assert all(f"`{heading}`" in ownership for heading in tickets.ticket_section_headings()), (
+        ownership
+    )
+    assert tickets.comment_marker(RUN, "<root-cause>") in ownership
 
 
 #: The one file the older-schema rule is written in, which both modes include.
@@ -4800,7 +5029,9 @@ def test_the_older_schema_rule_is_one_source_rendered_into_both_tasks() -> None:
     """
     rule = _older_schema_rule(_task(redispatch=True))
     step = _section(_feedback_task(), "What to do, in order")
-    step = _flat(step.split("1. **Act on it**", 1)[1].split("\n2. ", 1)[0])
+    step = _flat(
+        step.split("1. **Keep the ticket right in light of it**", 1)[1].split("\n2. ", 1)[0]
+    )
 
     assert rule.startswith("- a ticket of an older schema is brought to the current shape"), rule
     assert rule in step, step
