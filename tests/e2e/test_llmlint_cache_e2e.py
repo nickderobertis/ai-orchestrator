@@ -294,6 +294,40 @@ def test_an_ambient_global_cache_skip_is_reported_and_ignored(workspace: Workspa
         assert f"just lint-llm-diff {base} --skip-nx-cache" in result.stderr
 
 
+def test_what_the_deterministic_tier_leaves_in_the_tree_does_not_move_the_verdict(
+    workspace: Workspace,
+) -> None:
+    """The gate judges before `just check` runs, so what that tier writes cannot key the verdict.
+
+    A worker's gate judges a tree `just check` has not yet written to, then runs the
+    suite; the pre-push gate judges the same tree carrying the outputs that run left —
+    `.coverage` and the preserved logs under `.logs/`. Both are gitignored, and the two
+    gates have to resolve one verdict, so their appearing or changing between two judged
+    runs on an unchanged tree and base replays the first green rather than rolling again.
+    """
+    base = workspace.head()
+    coverage = workspace.root / ".coverage"
+    check_log = workspace.root / ".logs/gate-check.log"
+    coverage.unlink(missing_ok=True)
+
+    first = workspace.lint(base)
+    coverage.write_bytes(b"coverage data the suite measured")
+    check_log.parent.mkdir(parents=True, exist_ok=True)
+    check_log.write_text("check: all deterministic checks passed\n", encoding="utf-8")
+    appeared = workspace.lint(base)
+    coverage.write_bytes(b"coverage data a later suite run measured")
+    check_log.write_text("check: deterministic checks failed in 1 of 3 phases\n", encoding="utf-8")
+    changed = workspace.lint(base)
+
+    for result in (first, appeared, changed):
+        assert result.returncode == 0, result.stdout + result.stderr
+    assert workspace.judge_runs() == 1
+    assert f"judged this diff against base {base} (Nx cache miss)" in first.stderr
+    for result in (appeared, changed):
+        assert f"replayed the recorded verdict for base {base} (Nx cache hit)" in result.stderr
+        assert PASS_VERDICT in result.stdout
+
+
 def test_changed_source_reruns_the_judge(workspace: Workspace) -> None:
     base = workspace.head()
     workspace.lint(base)

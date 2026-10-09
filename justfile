@@ -76,19 +76,28 @@ check:
     @source ./scripts/preserved-log.sh; preserved_log_open "{{repo_root}}" check; log=$PRESERVED_LOG; selection=$(./scripts/nx-selection.sh) || { echo "check: could not decide which projects to run over; repair the failure scripts/nx-selection.sh reported and retry" >&2; exit 1; }; read -ra selected <<<"$selection"; failed=(); ./scripts/nx.sh "${selected[@]}" -t format-check,lint,typecheck,test,test-docs,test-recipes,budgets 2>&1 | redact_secrets >>"$log" || failed+=("the diff selection"); ./scripts/nx.sh run-many -t test-checkouts,coverage,validate-budgets,budgets-host 2>&1 | redact_secrets >>"$log" || failed+=("test-checkouts,coverage,validate-budgets,budgets-host"); ./scripts/nx.sh run workspace:check-nx-cache 2>&1 | redact_secrets >>"$log" || failed+=("workspace:check-nx-cache"); if (( ${#failed[@]} )); then cat "$log" >&2; phases=$(printf '%s; ' "${failed[@]}"); echo "check: deterministic checks failed in ${#failed[@]} of 3 phases (${phases%; }); fix every reported finding and retry (full output: $log)" >&2; exit 1; fi; total=$(./scripts/coverage-total.sh "{{repo_root}}"); echo "check: all deterministic checks passed${total:+ (line coverage ${total}%)}; project selection: $selection"
 
 # Complete pre-push gate: llmlint's model-free `validate` against the comparison base,
-# then the deterministic checks, then llmlint's judged diff on this branch. `validate`
-# runs first because it is seconds of static checks — the config, every ignore
-# directive naming a real rule, a fragment edited without its version bump — and a
-# failure there is one no judged turn or suite run should be paid for first.
+# then llmlint's judged diff on this branch, then the deterministic checks. Cheapest
+# refusal first: `validate` is seconds of static checks — the config, every ignore
+# directive naming a real rule, a fragment edited without its version bump — and the
+# judged diff is about a minute, where `just check` can run the better part of an hour.
+# A judged refusal learned after that hour sends the branch back to pay the whole suite
+# again, so the judge runs before it. The accepted cost is an occasional judged turn
+# spent on a tree whose suite then fails; a green verdict is cached on the tree and the
+# base commit, so the re-run after a suite fix that leaves the judged content unchanged
+# replays it rather than judging again, and only a fix that moves the tree re-judges.
 #
-# A passing run says everything it has to say on one line: the line coverage it
-# measured, which base commit the llmlint verdict covers, and whether that verdict
-# was judged now or replayed. The judge is non-deterministic and a clean run of it
-# is cached, so "green" is a claim about one judged diff against one base commit —
-# and a worker whose gate replayed a cached run needs to know that, and which base
-# commit it covers, before it settles. The coverage total is measured either
-# way; printing it here is what stops a reader opening `.coverage` by hand.
-# llmlint: ignore[changed_behavior_has_e2e] Running the complete gate from a test would recursively run this same suite; the tier whose provenance is passed through here is proven end to end in tests/e2e/test_llmlint_cache_e2e.py.
+# A passing run says everything it has to say on one line, printed once every stage
+# has passed: the line coverage `just check` measured, which base commit the llmlint
+# verdict covers, and whether that verdict was judged now or replayed. The judge is
+# non-deterministic and a clean run of it is cached, so "green" is a claim about one
+# judged diff against one base commit — and a worker whose gate replayed a cached run
+# needs to know that, and which base commit it covers, before it settles. The coverage
+# total is measured either way; printing it here is what stops a reader opening
+# `.coverage` by hand. The judged stage and the deterministic one share one shell line
+# because that line is what carries the provenance to the summary: `just` runs each
+# line in its own shell, and the log the judged stage wrote can be a diverted path
+# (`scripts/preserved-log.sh`) that no later line could re-derive.
+# llmlint: ignore[changed_behavior_has_e2e] Running the complete gate from a test would recursively run this same suite; the stage order, refusals and summary are driven through traced Nx and llmlint doubles in tests/e2e/test_workspace_contract_e2e.py, and the tier whose provenance is passed through here is proven end to end in tests/e2e/test_llmlint_cache_e2e.py.
 # Both arguments default to empty and are passed straight through, because
 # `scripts/comparison-base.sh` is the one source of which remote and base the gate
 # judges against — including the environment chain the lifecycle exports it under.
@@ -98,8 +107,7 @@ check:
 gate remote="" base="":
     @comparison=$(scripts/comparison-base.sh "$1" "$2")
     @source ./scripts/preserved-log.sh; comparison=$(scripts/comparison-base.sh "$1" "$2"); preserved_log_open "{{repo_root}}" gate-llmlint-validate; log=$PRESERVED_LOG; just lint-llm-validate --diff-base "$comparison" 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "gate: llmlint validate failed; fix the llmlint config or ignore directive it names (a rule that does not exist, or a fragment edited without its version bump) against 'just lint-llm-validate --diff-base $comparison' alone, then rerun 'just gate ${comparison%%/*} ${comparison#*/}' (full output: $log)" >&2; exit 1; }
-    @source ./scripts/preserved-log.sh; preserved_log_open "{{repo_root}}" gate-check; log=$PRESERVED_LOG; just check 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "gate: deterministic checks failed; fix the reported findings and rerun 'just gate' (full output: $log)" >&2; exit 1; }
-    @source ./scripts/preserved-log.sh; comparison=$(scripts/comparison-base.sh "$1" "$2"); preserved_log_open "{{repo_root}}" gate-llmlint; log=$PRESERVED_LOG; just lint-llm-diff "$comparison" 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "gate: llmlint failed; clear the reported findings against 'just lint-llm-diff $comparison' alone, then rerun 'just gate ${comparison%%/*} ${comparison#*/}' once to confirm (full output: $log)" >&2; exit 1; }; provenance=$(grep -m1 -E '^lint-llm-diff: (judged|replayed) ' "$log" || echo "lint-llm-diff: verdict provenance unavailable"); note=$(grep -q '^lint-llm-diff: ignoring ' "$log" && echo " [ignored an ambient global Nx cache skip]" || true); total=$(./scripts/coverage-total.sh "{{repo_root}}"); echo "gate: complete gate passed${total:+ (line coverage ${total}%)}; ${provenance#lint-llm-diff: }${note}"
+    @source ./scripts/preserved-log.sh; comparison=$(scripts/comparison-base.sh "$1" "$2"); preserved_log_open "{{repo_root}}" gate-llmlint; log=$PRESERVED_LOG; just lint-llm-diff "$comparison" 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "gate: llmlint failed; clear the reported findings against 'just lint-llm-diff $comparison' alone, then rerun 'just gate ${comparison%%/*} ${comparison#*/}' once to confirm (full output: $log)" >&2; exit 1; }; provenance=$(grep -m1 -E '^lint-llm-diff: (judged|replayed) ' "$log" || echo "lint-llm-diff: verdict provenance unavailable"); note=$(grep -q '^lint-llm-diff: ignoring ' "$log" && echo " [ignored an ambient global Nx cache skip]" || true); preserved_log_open "{{repo_root}}" gate-check; log=$PRESERVED_LOG; just check 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "gate: deterministic checks failed; fix the reported findings against 'just check' alone, then rerun 'just gate ${comparison%%/*} ${comparison#*/}' (full output: $log)" >&2; exit 1; }; total=$(./scripts/coverage-total.sh "{{repo_root}}"); echo "gate: complete gate passed${total:+ (line coverage ${total}%)}; ${provenance#lint-llm-diff: }${note}"
 
 # Whole suite (unit + e2e) with coverage enforced on the orchestrator package.
 #

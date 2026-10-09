@@ -2338,7 +2338,8 @@ def test_gate_recipe_leaves_the_failing_llmlint_run_readable(tmp_path: Path) -> 
     checkout, trace = _gate_checkout(tmp_path)
 
     # The llmlint tier alone, not the deterministic stages `just check` runs
-    # through the same Nx double: this asserts the *second* gate stage's log.
+    # through the same Nx double: this asserts the judged stage's log, the stage
+    # after `validate` and before the deterministic tier.
     result = _recipe_run(
         checkout,
         trace,
@@ -2352,6 +2353,71 @@ def test_gate_recipe_leaves_the_failing_llmlint_run_readable(tmp_path: Path) -> 
     log = checkout / ".logs/gate-llmlint.log"
     assert f"full output: {log}" in result.stderr
     assert "nx.sh: captured failure detail" in log.read_text()
+
+
+@pytest.mark.reads_recipes
+def test_gate_recipe_ends_on_a_judged_refusal_before_the_deterministic_tier(
+    tmp_path: Path,
+) -> None:
+    """A judged refusal is learned in the judge's minute, not after the whole suite.
+
+    The refusal names the one command to iterate with and the gate rerun against the
+    same remote and base, and no deterministic-tier Nx invocation is ever started.
+    """
+    checkout, trace = _gate_checkout(tmp_path)
+
+    result = _recipe_run(
+        checkout,
+        trace,
+        "gate",
+        "origin",
+        "main",
+        FAIL_INVOCATION="nx.sh run workspace:lint-llm-diff",
+    )
+
+    assert result.returncode != 0, result.stdout
+    log = checkout / ".logs/gate-llmlint.log"
+    assert (
+        "gate: llmlint failed; clear the reported findings against "
+        "'just lint-llm-diff origin/main' alone, then rerun 'just gate origin main' "
+        f"once to confirm (full output: {log})"
+    ) in result.stderr, result.stderr
+    assert not [line for line in result.stdout.splitlines() if line.startswith("gate: ")]
+    assert not (checkout / ".logs/gate-check.log").exists()
+    ran = trace.read_text(encoding="utf-8").splitlines()
+    assert ran == [
+        "llmlint validate --diff-base origin/main",
+        "nx.sh run workspace:lint-llm-diff",
+    ], ran
+
+
+@pytest.mark.reads_recipes
+def test_gate_recipe_reports_a_deterministic_failure_after_a_green_judge(
+    tmp_path: Path,
+) -> None:
+    """The last stage's refusal keeps its own message and log, and claims no pass."""
+    checkout, trace = _gate_checkout(tmp_path)
+
+    result = _recipe_run(
+        checkout,
+        trace,
+        "gate",
+        "origin",
+        "main",
+        FAIL_INVOCATION=f"nx.sh run-many -t {CHECK_UNCONDITIONAL}",
+    )
+
+    assert result.returncode != 0, result.stdout
+    log = checkout / ".logs/gate-check.log"
+    assert "gate: deterministic checks failed; fix the reported findings against " in (
+        result.stderr
+    )
+    assert f"rerun 'just gate origin main' (full output: {log})" in result.stderr
+    assert not [line for line in result.stdout.splitlines() if line.startswith("gate: ")]
+    ran = trace.read_text(encoding="utf-8").splitlines()
+    assert ran.index("nx.sh run workspace:lint-llm-diff") < ran.index(
+        f"nx.sh run-many -t {CHECK_UNCONDITIONAL}"
+    ), ran
 
 
 # llmlint: ignore-block[shell_test_tiers_stay_split] These two drive the gate recipe through the
@@ -2443,22 +2509,42 @@ def test_gate_recipe_refuses_an_invalid_ignore_directive_before_any_judged_turn(
 @pytest.mark.skipif(
     shutil.which("llmlint") is None, reason="the gate's first stage is the installed llmlint"
 )
-def test_gate_recipe_validates_first_then_checks_then_judges(tmp_path: Path) -> None:
-    """A tree `validate` accepts goes on to the deterministic tier and then the judge."""
+def test_gate_recipe_validates_first_then_judges_then_checks(tmp_path: Path) -> None:
+    """A tree `validate` accepts goes on to the judge, and only then the deterministic tier.
+
+    The one summary line comes after every stage, carrying the coverage the last stage
+    measured and the provenance the judged stage printed.
+    """
     checkout, trace = _validating_gate_checkout(tmp_path, "robust_shell")
     (checkout / ".coverage").write_text("")
+    base = subprocess.run(
+        ["git", "rev-parse", "origin/main"],
+        cwd=checkout,
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.strip()
 
     result = _recipe_run(
-        checkout, trace, "gate", "origin", "main", REAL_LLMLINT=str(shutil.which("llmlint"))
+        checkout,
+        trace,
+        "gate",
+        "origin",
+        "main",
+        REAL_LLMLINT=str(shutil.which("llmlint")),
+        FAKE_COVERAGE_TOTAL="96.41",
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
     ran = trace.read_text(encoding="utf-8").splitlines()
     assert ran[0] == "llmlint validate --diff-base origin/main", ran
-    judged = ran.index("nx.sh run workspace:lint-llm-diff")
-    assert any(line.startswith("nx.sh ") and "-t format-check" in line for line in ran[:judged]), (
-        ran
-    )
+    assert ran[1] == "nx.sh run workspace:lint-llm-diff", ran
+    assert any(line.startswith("nx.sh ") and "-t format-check" in line for line in ran[2:]), ran
+    assert not any("-t format-check" in line for line in ran[:2]), ran
+    assert [line for line in result.stdout.splitlines() if line.startswith("gate: ")] == [
+        "gate: complete gate passed (line coverage 96.41%); "
+        f"judged this diff against base {base} (Nx cache miss)"
+    ], result.stdout
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

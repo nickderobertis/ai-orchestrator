@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Pre-push gate. With no CI, this is the enforcement point: nothing lands on the
-# remote without passing the deterministic gate AND the llmlint LLM-judge tier.
+# remote without passing llmlint's validate, then its LLM-judge tier, then the
+# deterministic checks — `just gate`, cheapest refusal first.
 # Activated by `just bootstrap` (git config core.hooksPath .githooks).
 set -euo pipefail
 

@@ -838,12 +838,19 @@ for an invisible one.
 
 ### One judged diff, one verdict
 
-Before any judged turn, `just gate` runs llmlint's model-free `validate` against its
-comparison base — through `just lint-llm-validate --diff-base <comparison>`, ahead of
-`just check` — so a config that does not parse, an ignore directive naming no configured
-rule, or a fragment edited without its version bump refuses the push in seconds, with
-nothing judged and no suite run. The refusal names the command to iterate with, and its
-output is kept at `.logs/gate-llmlint-validate.log`.
+`just gate` runs its three stages cheapest refusal first. llmlint's model-free `validate`
+runs against its comparison base — through `just lint-llm-validate --diff-base
+<comparison>` — so a config that does not parse, an ignore directive naming no
+configured rule, or a fragment edited without its version bump refuses the push in
+seconds, with nothing judged and no suite run; its output is kept at
+`.logs/gate-llmlint-validate.log`. The judged diff, `just lint-llm-diff <comparison>`,
+comes next, about a minute, kept at `.logs/gate-llmlint.log`; `just check`, the
+deterministic tier and the long one, runs last, kept at `.logs/gate-check.log`. So a
+judged refusal arrives before the suite rather than after it, and a branch it sends
+back has not paid the suite to learn it. The cost accepted for that is an occasional
+judged turn spent on a tree whose suite then fails — and since a green verdict is
+cached on the tree and the base commit, the re-run after a suite fix that leaves the
+judged content unchanged replays it. Each refusal names the command to iterate with.
 
 A gate tier can end in a judge that is not reproducible — this repository's
 llmlint tier does — so the judge *run* is cached: `just lint-llm-diff` drives the
