@@ -73,7 +73,8 @@
       "{workspaceRoot}/orchestrator/unfinished.py",
       "{workspaceRoot}/orchestrator/unpublished.py",
       "{workspaceRoot}/scripts/unfinished.sh",
-      "{workspaceRoot}/scripts/unpublished.sh"
+      "{workspaceRoot}/scripts/unpublished.sh",
+      "{workspaceRoot}/config/manager-allowlist.toml"
     ]
   },
   "targets": {

@@ -127,8 +127,8 @@ for step in re.findall(r"^\d+\. (.*)$", prompt, re.MULTILINE):
     if any(word in step for word in skip):
         continue
     # llmlint: ignore-block[changed_behavior_has_e2e] The double stands at the paid model and
-    # applies no grant of its own: whether Claude Code's `Edit(scratch/envelope.json)` lets its
-    # `Write` tool through is its own matching, which only a real turn shows, and `just
+    # applies no grant of its own: whether Claude Code's `Edit(scratch/envelopes/*.json)` lets
+    # its `Write` tool through is its own matching, which only a real turn shows, and `just
     # probe-allowlist`'s `envelope-write` row is that turn.
     write = re.match(r"Use your file-write tool \(not the shell\) to write the file (\S+)", step)
     # llmlint: ignore-end[changed_behavior_has_e2e]
@@ -141,6 +141,8 @@ for step in re.findall(r"^\d+\. (.*)$", prompt, re.MULTILINE):
         tool = os.environ.get("FAKE_CLAUDE_DENIAL_TOOL") or ("Write" if write else "Bash")
         denials.append({"tool_name": tool, "tool_input": {key: command}})
     elif write:
+        # Claude Code's `Write` creates the directories a path needs, as the envelope's does.
+        os.makedirs(os.path.dirname(command), exist_ok=True)
         open(command, "w").write("{}")
     elif any(word in command for word in shadow):
         pass
@@ -1065,7 +1067,7 @@ def test_a_row_writing_outside_the_scratch_tree_is_refused(
     scratch = probe.Scratch(tmp_path / "scratch")
     write = next(row for row in probe.INVOCATIONS if row.kind == "write")
 
-    inside = scratch.project / "scratch" / "envelope.json"
+    inside = scratch.project / "scratch" / "envelopes" / "run-probe.json"
     assert probe._written(scratch, write, str(inside)) == inside
     with pytest.raises(SystemExit):
         probe._written(scratch, write, str(tmp_path / "elsewhere.json"))

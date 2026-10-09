@@ -1717,8 +1717,11 @@ an unset variable or a `..` in any argument sends the whole line to the classifi
 holds the `cd` to a rule as well, and none can be bounded to this checkout, so there the
 verb is written alone. So
 name the run id rather than a variable, spell a revision range `HEAD ^<base>` or `diff
---merge-base <base> HEAD`, and write the envelope to `scratch/envelope.json` with your own
-file-write tool, the one file its grant names, before `just channel-reply` reads it. A
+--merge-base <base> HEAD`, and write the envelope to `scratch/envelopes/<run-id>.json`
+with your own file-write tool, one file per run as its grant names, before `just
+channel-reply` reads it — never one file shared between runs, because another manager's
+write between yours and your send carries its commands to your run unnoticed; piping the
+envelope on `just channel-reply`'s standard input writes no file at all. A
 `git -C <path>` read is not granted, because Claude Code's `*` spans words: `git -C *
 log*` also passed `git -C <path> merge log-fix`, and neither is a `git log`, `diff` or
 `show` here, whose `--output` writes a file, so those reads go to the classifier. Of `onevcs`'s own verbs, the release reads and

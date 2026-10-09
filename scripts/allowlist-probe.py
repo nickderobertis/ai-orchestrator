@@ -296,7 +296,7 @@ class Row:
 
 def _values(scratch: Scratch, invocation: Invocation, pid: int) -> dict[str, str]:
     """Placeholder values unique to one row, so each row's argv is its own; the envelope is
-    the one file its grant names, and the rows naming it differ in their run."""
+    the run's own file under the one directory its grant names."""
     tag = invocation.id
     runs = scratch.project / "runs"
     return {
@@ -307,7 +307,7 @@ def _values(scratch: Scratch, invocation: Invocation, pid: int) -> dict[str, str
         "co": f"checkout-{tag}",
         "branch": f"probe/{tag}",
         "base": "main",
-        "envelope": str(scratch.project / "scratch" / "envelope.json"),
+        "envelope": str(scratch.project / "scratch" / "envelopes" / f"run-{tag}.json"),
         "correlation": f"c-{tag}",
         "brief": str(scratch.project / "scratch" / f"brief-{tag}.md"),
         "project": f"plans:probe-{tag}",

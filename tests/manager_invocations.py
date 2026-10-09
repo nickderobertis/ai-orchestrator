@@ -105,7 +105,11 @@ _UNPUBLISHED = (
     "For every identity from anywhere, or for the sessions your own runs opened, with "
     "what each costs in disk, read `just unpublished` instead"
 )
-_ENVELOPE = "write the envelope to `scratch/envelope.json` with your own file-write tool"
+_ENVELOPE = (
+    "write the envelope to `scratch/envelopes/<run-id>.json` with your own file-write tool, "
+    "one file per run as its grant names"
+)
+_SHARED_ENVELOPE = "never one file shared between runs"
 _PLAN = "`just plan <brief.md>` turns a manager-written brief into the project the planner authors"
 _FINISH = "`just finish-plan <brief>` is its tail"
 _CHECK_PLAN = "`just check-plan` reads a project against the bar each node will be judged against"
@@ -424,6 +428,9 @@ INVOCATIONS: tuple[Invocation, ...] = (
     _refuse("gh-api-write", "gh api -X POST repos/{owner}/{name}/issues -f title=probe", _BYPASS),
     _refuse("gh-run-cancel", "gh run cancel {ci_run}", _FORBIDDEN),
     _refuse("kill", "kill {pid}", _KILL),
+    _refuse(
+        "shared-envelope-edit", "{checkout}/scratch/envelope.json", _SHARED_ENVELOPE, kind="write"
+    ),
     _refuse("launch-edit", "{runs}/{run}/launch.json", _RUN_STATE, kind="write"),
     _refuse("cursor-edit", "{runs}/{run}/channel/commands-cursor.json", _RUN_STATE, kind="write"),
     _refuse("launch-shell-edit", "echo {{}} > {runs}/{run}/launch.json", _RUN_STATE),

@@ -99,7 +99,7 @@ SAMPLE = {name: f"sample-{name}" for name in PLACEHOLDERS} | {
     "checkout": f"{HOME}/ai-orchestrator",
     "runs": f"{HOME}/ai-orchestrator/runs",
     "workspace": f"{HOME}/.onevcs/workspaces/github.com-example/runs/s-1/worktree",
-    "envelope": f"{HOME}/ai-orchestrator/scratch/envelope.json",
+    "envelope": f"{HOME}/ai-orchestrator/scratch/envelopes/sample-run.json",
     "log": f"{HOME}/ai-orchestrator/.logs/watch.log",
 }
 #: The commands Claude Code runs as reads without a rule, on a path in its working

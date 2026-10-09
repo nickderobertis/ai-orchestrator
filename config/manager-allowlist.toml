@@ -71,10 +71,12 @@ allowed_tools = [
     "Bash(just channel-next:*)",
     "Bash(just channel-reply:*)",
     # llmlint: ignore-end[least_privilege_grants]
-    # A reply's envelope is written to this one file with the agent's own file tool. Claude
-    # Code applies an `Edit` rule to every built-in tool that edits a file, `Write` included,
-    # which only a real turn shows: `just probe-allowlist`'s `envelope-write` row.
-    "Edit(scratch/envelope.json)",
+    # A reply's envelope is written with the agent's own file tool to one file per run, so
+    # two managers supervising different runs never share one. Claude Code applies an `Edit`
+    # rule to every built-in tool that edits a file, `Write` included, which only a real turn
+    # shows: `just probe-allowlist`'s `envelope-write` row.
+    # llmlint: ignore[least_privilege_grants] A rendered grant cannot name a run id minted after it is rendered, so one file per run is spelled as the narrowest glob Claude Code matches — one name under one gitignored directory, never a subdirectory — and the alternative, one file every run shares, is the cross-run leak this grant replaces.
+    "Edit(scratch/envelopes/*.json)",
 
     # The plan flow. `just plans` is granted per read: `sources fields` without `--apply`
     # for each configured source, because a prefix would admit the write.

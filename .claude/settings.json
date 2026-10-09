@@ -1,4 +1,7 @@
 {
+  "env": {
+    "ONEPIPELINE_WAKE_BUDGET": "2100"
+  },
   "hooks": {
     "SessionStart": [
       {
@@ -77,7 +80,7 @@
       "Bash(onemessagebus status:*)",
       "Bash(just channel-next:*)",
       "Bash(just channel-reply:*)",
-      "Edit(scratch/envelope.json)",
+      "Edit(scratch/envelopes/*.json)",
       "Bash(just plans sources fields authoring)",
       "Bash(just plans sources fields plans)",
       "Bash(just plans sources fields followups)",
@@ -119,8 +122,5 @@
       "Read(~/.onevcs/workspaces/*/runs/*/worktree/.logs/*.log)"
     ],
     "deny": []
-  },
-  "env": {
-    "ONEPIPELINE_WAKE_BUDGET": "2100"
   }
 }

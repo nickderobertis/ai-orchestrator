@@ -32,7 +32,9 @@ whole output is the engine's receipt and exit status. The journeys:
 * a novel whole task whose judged turn answers nothing is not applied, because an unjudged
   envelope never passes;
 * an identical envelope sent again under an unchanged bar passes from the pass cache,
-  spending no second judged turn.
+  spending no second judged turn;
+* two runs' envelopes, written to the per-run paths the manager allowlist grants and both
+  written before either is sent, each reach only their own run.
 
 Only the paid model is doubled, at the `oneharness` seam, exactly as
 `tests/ask_seam/ask_manager/test_ask_manager_e2e.py` doubles it. A channel is read through
@@ -64,6 +66,7 @@ import shutil
 import signal
 import subprocess
 import time
+import tomllib
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, NamedTuple, NewType, cast
@@ -273,8 +276,8 @@ def _launched(
     return Replying(environment, run, runs / run / "channel", runs / run)
 
 
-@pytest.fixture
-def replying(tmp_path: Path, request: pytest.FixtureRequest) -> Iterator[Replying]:
+@contextlib.contextmanager
+def _gated(tmp_path: Path, run: RunId) -> Iterator[Replying]:
     """A launched run whose frontier is a human gate, and which nothing drives.
 
     Nothing is ever dispatched — `work` depends on the gate and nobody attests it — so this
@@ -282,7 +285,6 @@ def replying(tmp_path: Path, request: pytest.FixtureRequest) -> Iterator[Replyin
     back at the gate: from then on nothing drives it, which `_undriven` asks the run itself.
     """
     _require_just()
-    run = _named(request, "channel-reply")
     launched = _launched(
         tmp_path,
         _environment(tmp_path),
@@ -301,6 +303,20 @@ def replying(tmp_path: Path, request: pytest.FixtureRequest) -> Iterator[Replyin
         yield launched
     finally:
         _just("stop", run, environment=launched.environment, seconds=60)
+
+
+@pytest.fixture
+def replying(tmp_path: Path, request: pytest.FixtureRequest) -> Iterator[Replying]:
+    """A gated run nothing drives; see `_gated`."""
+    with _gated(tmp_path, _named(request, "channel-reply")) as launched:
+        yield launched
+
+
+@pytest.fixture
+def other_replying(tmp_path: Path, request: pytest.FixtureRequest) -> Iterator[Replying]:
+    """A second gated run beside `replying`, as another manager's would be."""
+    with _gated(tmp_path / "other", _named(request, "other-reply")) as launched:
+        yield launched
 
 
 @pytest.fixture
@@ -1144,3 +1160,58 @@ def test_an_identical_envelope_under_an_unchanged_bar_passes_from_the_cache(
     )
     assert len(_committed(replying, "cached")) == 1
     assert len(_committed(settled, "cached")) == 1
+
+
+#: The manager's allowlist, whose one file-write grant says where a reply's envelope goes.
+MANAGER_ALLOWLIST = REPO_ROOT / "config" / "manager-allowlist.toml"
+
+
+def _envelope_path(run: RunId) -> Path:
+    """Where a manager writes `run`'s envelope: the allowlist's one write grant, for `run`.
+
+    Read off the grant rather than restated, so the journey below is about the path a
+    manager is actually granted; a grant naming one file for every run fails here.
+    """
+    (grant,) = [
+        rule
+        for rule in tomllib.loads(MANAGER_ALLOWLIST.read_text(encoding="utf-8"))["allowed_tools"]
+        if rule.startswith("Edit(")
+    ]
+    glob = grant.removeprefix("Edit(").removesuffix(")")
+    assert glob.count("*") == 1, f"the envelope grant {grant} does not name one file per run"
+    return Path(glob.replace("*", run))
+
+
+def test_two_runs_envelopes_written_before_either_send_each_reach_only_their_own_run(
+    replying: Replying, other_replying: Replying, tmp_path: Path
+) -> None:
+    """Two managers' replies never share a file, so an interleaving cannot cross them.
+
+    Each run's envelope is written to the path the allowlist grants for that run, both
+    writes landing before either send — the interleaving a shared file turned into one
+    manager's commands reaching the other's run — and each is then sent through the real
+    recipe by its path, as a manager sends it. Each run's journal records the node its own
+    envelope added and nothing of the other's. The grant's paths are laid out under a
+    stand-in checkout rather than this one, so the journey leaves nothing in the tree.
+    """
+    sends = {replying.run: replying, other_replying.run: other_replying}
+    paths = {run: _envelope_path(run) for run in sends}
+    assert len(set(paths.values())) == len(sends), f"two runs share an envelope path: {paths}"
+    checkout = tmp_path / "checkout"
+    for run, path in paths.items():
+        written = checkout / path
+        written.parent.mkdir(parents=True, exist_ok=True)
+        written.write_text(json.dumps(_settling(f"from-{run}", GATE_NODE)), encoding="utf-8")
+
+    for run, path in paths.items():
+        sent = _just("channel-reply", run, str(checkout / path), environment=sends[run].environment)
+        assert _receipt(sent)["state"] == "applied", sent.stdout
+
+    for run, own in sends.items():
+        (other,) = set(sends) - {run}
+        assert len(_committed(own, f"from-{run}")) == 1, (
+            f"run {run} did not record the node its own envelope added"
+        )
+        assert _committed(own, f"from-{other}") == [], (
+            f"run {run} recorded the node run {other}'s envelope added"
+        )
