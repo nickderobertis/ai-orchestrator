@@ -310,7 +310,10 @@ def _filed(
     host: str = HOST,
     repository: str | None = None,
 ) -> QualifiedTaskId:
-    """``run``'s verified ticket for ``cause``, written and copied onto the board; its item."""
+    """``run``'s verified ticket for ``cause``, written, copied onto the board and bound; its item.
+
+    Its binding is what a gathering scoped to its run or its issue reads that item by.
+    """
     path = tickets.ticket_path(bench.drafts_root, run, cause)
     path.parent.mkdir(parents=True, exist_ok=True)
     ticket = _ticket(
@@ -325,10 +328,19 @@ def _filed(
         **({"repository": repository} if repository else {}),
     )
     path.write_text(tickets.render(ticket), encoding="utf-8")
-    copied = _store(bench, "task", "copy", tickets.qualified_id(run, cause), "--to", BOARD)
-    items = copied["items"]
-    assert isinstance(items, list) and len(items) == 1, copied
-    return QualifiedTaskId(str(items[0]["destination"]))
+    # Placed and copied through the module's own verbs, as the follow-up agent does: the
+    # first copy binds the ticket to the item it creates, and a later copy follows it.
+    for verb in ("board-status", "copy"):
+        done = _run(
+            [str(REPO_ROOT / ".venv" / "bin" / "python3"), "-m", "orchestrator.follow_up_tickets"]
+            + [verb, "--board", BOARD, str(path)],
+            bench,
+        )
+        assert done.returncode == 0, done.stdout + done.stderr
+    record = _item(bench, tickets.qualified_id(run, cause))["metadata"]
+    assert isinstance(record, dict), record
+    native = record[tickets.KEY][tickets.BINDING_FIELD]
+    return QualifiedTaskId(f"{BOARD}:{native}")
 
 
 def _reply(bench: Bench, run: str, issue: str, answers: str, cause: str) -> str:
@@ -425,6 +437,7 @@ class Life(NamedTuple):
     statuses_before: dict[str, object]
     dry: Invocation
     after_dry: dict[str, bytes]
+    issue_dry: Invocation
     real: Invocation
     real_started: datetime
     real_ended: datetime
@@ -643,6 +656,9 @@ def life(tmp_path_factory: pytest.TempPathFactory) -> Life:  # noqa: PLR0915 - o
 
         dry = _answer(bench, checkout, record, "--dry-run", "--to", BOARD)
         after_dry = _snapshot(bench.drafts_root)
+        issue_dry = _answer(
+            bench, checkout, record, "--issue", issues["a"], "--dry-run", "--to", BOARD
+        )
 
         # Every run's turn waits for all three launch records before it answers.
         records = [
@@ -750,6 +766,7 @@ def life(tmp_path_factory: pytest.TempPathFactory) -> Life:  # noqa: PLR0915 - o
             statuses_before=statuses_before,
             dry=dry,
             after_dry=after_dry,
+            issue_dry=issue_dry,
             real=real,
             real_started=real_started,
             real_ended=real_ended,
@@ -842,19 +859,21 @@ def _settled(life: Life) -> None:
 def test_every_listing_the_command_makes_is_narrowed_and_reads_comments_only_where_it_returned(
     life: Life,
 ) -> None:
-    """Both properties on a real run, read off the store: no unnarrowed board listing, and no
-    comment read of an item the narrowed listing did not return — and nothing names a
-    repository, an owner or a repository set, so the board is the only scope."""
+    """Both properties on a real run, read off the store: no board listing the store did not
+    narrow to this host's items, and no comment read of an item the narrowed listing did not
+    return — and nothing names a repository, an owner or a repository set."""
     _settled(life)
-    for invocation in (life.dry, life.real, life.again, life.scoped, life.detached):
+    for invocation in (life.dry, life.real, life.again, life.detached):
         listings = _board_listings(invocation.recorded)
         assert listings, invocation.recorded
         for one in listings:
             flags = {word for word in one.argv if word.startswith("--")}
             assert "--commented-since" in flags, one.argv
+            assert _option(one.argv, "--metadata") == comments.host_query(HOST), one.argv
             assert flags <= {
                 "--source",
                 "--commented-since",
+                "--metadata",
                 "--page",
                 "--json",
                 "--no-interactive",
@@ -914,7 +933,8 @@ def test_the_dry_run_names_where_each_comment_would_go_and_why_the_rest_are_left
     assert said("a", ANSWERED_ELSEWHERE).endswith(f": answered by reply {life.elsewhere_reply}")
     marker = next(text for text in ids if text.startswith("<!--") or "Seen in A." in text)
     assert said("c", marker).endswith(f": marked by run {runs['A']}")
-    assert said("a-elsewhere", ELSEWHERE).endswith(": ticket verified on host other-host")
+    # Verified on another host, so the store's narrowing never returned it to be read.
+    assert issues["a-elsewhere"] not in dry.report
     status = _item(life.bench, issues["a-todo"])["status"]
     assert isinstance(status, dict)
     assert said("a-todo", ON_TODO).endswith(f": item at {status['name']}")
@@ -1054,7 +1074,56 @@ def test_a_run_scoped_gathering_launches_only_that_run_and_leaves_the_watermark(
             assert issue.split(":", 1)[1].startswith(f"{runs['A']}/"), line
     assert _url(life, life.issues["b"], life.ids[LATER_B]) not in scoped.report
     assert life.watermark_after_scoped == life.watermark_after_again
-    assert f"--run {runs['A']} gathered one run's comments" in scoped.report
+    assert f"the gathering was scoped to run {runs['A']}'s comments" in scoped.report
+    # Each item run A's tickets are bound to, read by id: the board is listed nowhere.
+    assert _board_listings(scoped.recorded) == []
+    bound = {issue for key, issue in life.issues.items() if key.startswith("a")}
+    shown = {one.argv[2] for one in scoped.recorded if one.argv[:2] == ["task", "show"]}
+    read = {one.argv[3] for one in scoped.recorded if one.argv[:3] == ["task", "comment", "list"]}
+    assert shown == read == bound, (shown, read, bound)
+
+
+# llmlint: ignore-block[shell_test_tiers_stay_split] The task this journey answers names
+# this module as where `--issue` is driven through the recipe, and its tier is the module's:
+# it drives the recipe every journey here drives, from the `plan-tooling` project whose
+# `planToolingWorkspace` key already covers what it reads, so a project of its own would
+# split one recipe's journeys across tiers behind no narrower key.
+def test_an_issue_scoped_dry_run_reads_and_selects_only_that_issue(life: Life) -> None:
+    """`--issue <id> --dry-run`: that one item and its comments, read by id with no listing,
+    and the comments on it an unscoped dry run selects, and nothing else."""
+    issue_dry = life.issue_dry
+    assert issue_dry.result.returncode == OK, issue_dry.report + issue_dry.result.stderr
+    own = life.issues["a"]
+    named = [
+        line
+        for line in issue_dry.report.splitlines()
+        if line.startswith(("selected: ", "left out: "))
+    ]
+    assert named, issue_dry.report
+    assert all(f" on {own}" in line for line in named), named
+    selected = [line for line in named if line.startswith("selected: ")]
+    assert selected == [
+        line
+        for line in life.dry.report.splitlines()
+        if line.startswith("selected: ") and f" on {own} " in line
+    ], (selected, life.dry.report)
+    assert {line.split(" on ", 1)[0] for line in selected} == {
+        f"selected: {_url(life, own, life.ids[text])}" for text in (ON_A, EDITED)
+    }
+    assert _board_listings(issue_dry.recorded) == []
+    shown = [one.argv[2] for one in issue_dry.recorded if one.argv[:2] == ["task", "show"]]
+    read = [
+        one.argv[3] for one in issue_dry.recorded if one.argv[:3] == ["task", "comment", "list"]
+    ]
+    assert shown == read == [own], (shown, read)
+    assert "wrote run" not in issue_dry.report
+    assert issue_dry.report.splitlines()[-1].endswith(
+        f"read 1 item(s) run {life.runs['A']}'s tickets are bound to, each directly, and listed "
+        "none"
+    ), issue_dry.report
+
+
+# llmlint: ignore-end[shell_test_tiers_stay_split]
 
 
 def test_a_detached_gathering_returns_before_its_run_settles_naming_how_to_check_it(

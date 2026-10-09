@@ -16,13 +16,16 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import re
 import shlex
 import socket
 import sys
 import time
+from collections.abc import Coroutine
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import NamedTuple
 
 import follow_up_variables
 import pytest
@@ -151,6 +154,13 @@ def _filed(
     )
     destination = copied.items[0].root.destination
     assert destination is not None, copied
+    if record:
+        # Bound to the item the copy reached, as `board-status` binds a ticket it copies.
+        native = destination.model_dump().partition(":")[2]
+        text = path.read_text(encoding="utf-8")
+        opening = f"    created_by_run: {run}\n"
+        binding = f"    {tickets.BINDING_FIELD}: {native}\n"
+        path.write_text(text.replace(opening, opening + binding, 1), encoding="utf-8")
     return destination.model_dump()
 
 
@@ -212,12 +222,17 @@ def _gathered(
     return captured.out, comments.read_plan(plan, root) if written else None
 
 
-def _written(root: Path, capsys: pytest.CaptureFixture[str], run: str = RUN) -> str:
-    """The feedback file one `--run` gathering wrote for ``run``."""
-    _, plan = _gathered(root, capsys, "--run", run)
+def _written(
+    root: Path, capsys: pytest.CaptureFixture[str], run: str = RUN, *, scoped: bool = True
+) -> str:
+    """The feedback file one gathering wrote for ``run``: a `--run` one unless not ``scoped``.
+
+    A run whose ticket file is gone has no binding a `--run` gathering reads its item by, so a
+    test that removes it gathers unscoped, which narrows by host instead.
+    """
+    _, plan = _gathered(root, capsys, *(["--run", run] if scoped else []))
     assert plan is not None
-    ((named, path),) = plan.runs
-    assert named == run
+    ((named, path),) = [one for one in plan.runs if one.run == run]
     assert path.parent == root / comments.FEEDBACK_DIRECTORY / run, path
     return path.read_text(encoding="utf-8")
 
@@ -320,7 +335,7 @@ def test_a_comment_any_runs_marker_owns_is_never_selected_whatever_its_kind(
     ):
         _commented(own, body, None)
 
-    written = _written(drafts_root, capsys)
+    written = _written(drafts_root, capsys, scoped=False)
 
     assert written.count("### Comment ") == 1, written
     assert f"- Comment id: {person}\n" in written
@@ -390,23 +405,35 @@ def test_comments_on_items_no_run_here_answers_are_each_left_out_with_their_one_
     assert isinstance(status, dict)
     assert _id_line(report, decided, on_decided).endswith(f": item at {status['name']}")
     assert _id_line(report, deferred, on_deferred).endswith(f"goes to run {RUN}")
-    assert _id_line(report, elsewhere, on_elsewhere).endswith(
-        ": ticket verified on host another-host"
-    )
-    assert _id_line(report, hostless, on_hostless).endswith(
-        ": ticket verified on host (none recorded)"
-    )
     assert _id_line(report, gone, on_gone).endswith(f": no records for owning run {THIRD_RUN} here")
-    assert _id_line(report, unowned, on_unowned).endswith(
-        ": the no-answer rule: the item carries no follow-up record, so no run answers it"
-    )
     assert _id_line(report, dotted, on_dotted).endswith(
         ": owning run a.dotted.run is not a run id `just follow-ups` launches"
     )
     assert _id_line(report, deferred, by_app).endswith(": bot author dependabot[bot]")
     assert _id_line(report, deferred, by_actions).endswith(": bot author github-actions")
+    # The store narrowed the query to this host's items, so an item verified elsewhere, one
+    # recording no host and one carrying no record were never read at all.
+    for absent in (elsewhere, hostless, unowned):
+        assert absent not in report, report
     assert plan is not None
     assert [run for run, _ in plan.runs] == [RUN]
+
+    # An item read by id is not narrowed by host, so the reasons for those three still hold
+    # wherever one is read: in their order, each before every later reason.
+    read = {
+        item: comments.bound_issue(comments.QualifiedTaskId(item), WRITABLE_PLUGIN)
+        for item in (elsewhere, hostless, unowned)
+    }
+    selection = comments.select(list(read.values()), {}, HOST, {tickets.RunId(RUN)})
+    assert selection.chosen == {}
+    reasons = {(str(left.issue.id), left.id): left.reason for left in selection.left}
+    assert reasons == {
+        (elsewhere, on_elsewhere): "ticket verified on host another-host",
+        (hostless, on_hostless): "ticket verified on host (none recorded)",
+        (unowned, on_unowned): (
+            "the no-answer rule: the item carries no follow-up record, so no run answers it"
+        ),
+    }
 
 
 def test_a_dry_run_reports_what_would_go_where_and_writes_nothing(
@@ -442,6 +469,32 @@ def test_a_run_scoped_gathering_names_only_that_runs_comments(
     assert plan is not None and plan.scope == RUN
     assert [run for run, _ in plan.runs] == [RUN]
     assert own in report and others not in report
+
+
+def test_a_run_scoped_gathering_reads_an_item_another_run_owns_and_names_none_of_its_comments(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A `--run` ticket bound to another run's item reads that item, and neither the comment
+    selected for its owner nor the one left out is reported or launched under this scope."""
+    own = _filed(drafts_root, RUN, CAUSE)
+    others = _filed(drafts_root, OTHER_RUN, SHARED_CAUSE)
+    _bound(drafts_root, RUN, "bound-to-another-runs-item", _native_of(others))
+    _next_second()
+    marked = _commented(
+        others, tickets.render_comment(RUN, SHARED_CAUSE, "This run's evidence."), None
+    )
+    _next_second()
+    asked = _commented(own, "Ours.\n")
+    theirs = _commented(others, "Theirs.\n")
+
+    report, plan = _gathered(drafts_root, capsys, "--run", RUN)
+
+    assert plan is not None and plan.scope == RUN
+    assert [run for run, _ in plan.runs] == [RUN]
+    assert f"read {others} and its comments directly" in report, report
+    assert _id_line(report, own, asked).endswith(f"goes to run {RUN}")
+    for unnamed in (theirs, marked):
+        assert f"#comment-{unnamed} on {others}" not in report, report
 
 
 def test_a_comment_written_after_the_first_gathering_is_selected_whatever_responses_follow_it(
@@ -547,7 +600,9 @@ def test_a_computed_boundary_is_recorded_beside_the_runs_feedback_and_read_from_
     _gathered(drafts_root, capsys, "--run", OTHER_RUN)
     assert not path.exists(), "a gathering scoped to another run recorded this run's boundary"
 
-    report, plan = _gathered(drafts_root, capsys, "--run", RUN)
+    # Unscoped, because the evidence comment the boundary rests on is on another run's item,
+    # which a gathering scoped to this run never reads.
+    report, plan = _gathered(drafts_root, capsys)
 
     assert plan is not None and plan.runs == ()
     assert "nothing to answer: no comment was selected, so nothing was launched" in report
@@ -589,7 +644,8 @@ def test_an_earliest_feedback_file_recording_no_boundary_falls_back_to_the_compu
     # A copy after that gathering, which a recomputed boundary with no stamp would rest on.
     _filed(drafts_root, RUN, CAUSE, "Copied again after the old gathering.")
 
-    written = _written(drafts_root, capsys)
+    # Unscoped, because the evidence comment the boundary rests on is on another run's item.
+    written = _written(drafts_root, capsys, scoped=False)
 
     assert f"- Comment id: {missed}\n" in written
     assert "Answered by the evidence comment that follows." not in written
@@ -627,7 +683,7 @@ def test_the_feedback_file_asks_for_an_action_a_reply_and_a_report_per_comment(
     tickets.ticket_path(drafts_root, RUN, CAUSE).unlink()
     identifier = _commented(own, "Please add page 9.\n")
 
-    written = _written(drafts_root, capsys)
+    written = _written(drafts_root, capsys, scoped=False)
     flat = " ".join(written.split())
 
     (comment,) = plan_store.sdk(plan_store.client().task_comment_list(own)).comments
@@ -878,7 +934,10 @@ def test_detached_and_run_scoped_settlements_leave_the_watermark_and_say_why(
     lines.clear()
     scoped = dataclasses.replace(plan, scope=tickets.RunId(RUN))
     assert comments.settle(drafts_root, scoped, {RUN: "fu-1"}, say=lines.append) == comments.DONE
-    assert f"watermark: left as it was, because --run {RUN} gathered one run's comments" in lines
+    assert (
+        f"watermark: left as it was, because the gathering was scoped to run {RUN}'s comments"
+        in lines
+    )
     assert comments.read_watermark(drafts_root, BOARD) is None
 
 
@@ -1326,3 +1385,450 @@ def test_a_boards_configured_plugin_decides_whether_an_unattributed_comment_is_a
 
     assert _id_line(report, own, unattributed).endswith(f": bot author {comments.LINEAR_BOT}")
     assert _id_line(report, own, person).endswith(f"would go to run {RUN}")
+
+
+# llmlint: ignore-block[budgets_reuse_gate_telemetry, budgets_scoped_to_minimal_tree] The plan that registered `follow-up-scoped-comment-reads` states its measurement source as direct and its command as this test; a store-request count is recorded by no gate's telemetry, and this test, its constants and its crowded board live with the module's other tests, as `orchestrator/budgets.yaml`'s other budgets' do.  # noqa: E501 - llmlint reads a directive's rule list off one line
+#: How many unrelated items the crowded board holds, each commented since the watermark.
+CROWD = 200
+OTHER_HOST = "another-host"
+
+
+class Request(NamedTuple):
+    """One request made through the store client: the method, and what it was asked."""
+
+    method: str
+    arguments: tuple[object, ...]
+    keywords: dict[str, object]
+
+    def on_board(self) -> bool:
+        """Whether it reads the stand-in board: an item or its comments by id, or a page."""
+        if self.method == "task_list":
+            return BOARD in (self.keywords.get("source") or [])
+        return bool(self.arguments) and str(self.arguments[0]).startswith(f"{BOARD}:")
+
+
+class _Counted:
+    """The real store client, recording every request made through it before making it."""
+
+    def __init__(self, real: object, requests: list[Request]):
+        self._real = real
+        self._requests = requests
+
+    def __getattr__(self, name: str) -> object:
+        method = getattr(self._real, name)
+
+        def recorded(*arguments: object, **keywords: object) -> object:
+            self._requests.append(Request(name, arguments, keywords))
+            return method(*arguments, **keywords)
+
+        return recorded
+
+
+class BoardReads(NamedTuple):
+    """The requests one pass made of the stand-in board, by what each read."""
+
+    items: int
+    comment_lists: int
+    pages: int
+
+    @property
+    def total(self) -> int:
+        return self.items + self.comment_lists + self.pages
+
+    def __str__(self) -> str:
+        return (
+            f"{self.total} ({self.items} item read(s), {self.comment_lists} comment-list "
+            f"read(s), {self.pages} listing page(s))"
+        )
+
+
+def _board_reads(requests: list[Request]) -> BoardReads:
+    """Count the requests that read the stand-in board: an item, a comment list, or a page."""
+    read = [request.method for request in requests if request.on_board()]
+    return BoardReads(
+        items=read.count("task_show"),
+        comment_lists=read.count("task_comment_list"),
+        pages=read.count("task_list"),
+    )
+
+
+@pytest.fixture
+def counted(monkeypatch: pytest.MonkeyPatch) -> list[Request]:
+    """Every request the module makes through its store client, recorded as it is made."""
+    requests: list[Request] = []
+    real = plan_store.client
+    monkeypatch.setattr(plan_store, "client", lambda: _Counted(real(), requests))
+    return requests
+
+
+def _crowd(board: Path, at: datetime) -> None:
+    """Put :data:`CROWD` unrelated items on the stand-in board, each carrying one comment.
+
+    Half are another host's tickets and half carry no follow-up record, which is everything a
+    board shared by several hosts holds that no run here owns. Written as the `local-md`
+    store writes an item and its comment, so the store reads them as its own.
+    """
+    instant = at.strftime(comments.MOMENT_FORMAT)
+    native = instant.replace("-", "").replace(":", "")
+    directory = board / "tasks" / "crowd"
+    directory.mkdir(parents=True)
+    for number in range(CROWD):
+        record = (
+            f"  {tickets.KEY}:\n    created_by_run: crowd-run-{number}\n    host: {OTHER_HOST}\n"
+            if number % 2
+            else "  other: 1\n"
+        )
+        (directory / f"item-{number:03d}.md").write_text(
+            "---\n"
+            f"title: 'crowd: item {number}'\n"
+            "status: backlog\n"
+            "metadata:\n"
+            f"{record}"
+            "---\n"
+            "An unrelated item.\n\n"
+            "## Comments\n\n"
+            f'<!-- onetaskgraph:comment id="{native}-{number}" '
+            f'author="{PERSON}" created_at="{instant}" updated_at="{instant}" -->\n'
+            f"### {PERSON} — {instant}\n\n"
+            "A comment nobody here owes an answer to.\n\n\n"
+            "<!-- /onetaskgraph:comment -->\n",
+            encoding="utf-8",
+        )
+
+
+def _selected(report: str) -> list[str]:
+    return [line for line in report.splitlines() if line.startswith("selected: ")]
+
+
+def _crowded_passes(
+    drafts_root: Path,
+    board: Path,
+    capsys: pytest.CaptureFixture[str],
+    counted: list[Request],
+) -> dict[str, BoardReads]:
+    """What an unscoped, an `--issue` and a `--run` dry run each read of a crowded board.
+
+    One issue a run here owns has one comment waiting, and :data:`CROWD` unrelated items were
+    commented on since the watermark too; each pass selects that one comment.
+    """
+    own = _filed(drafts_root, RUN, CAUSE)
+    _next_second()
+    waiting = _commented(own, "Does this also hit page 9?\n")
+    _crowd(board, datetime.now(UTC))
+    comments.write_watermark(drafts_root, BOARD, datetime(2026, 1, 1, 0, 15, tzinfo=UTC))
+
+    reads: dict[str, BoardReads] = {}
+    selected: dict[str, list[str]] = {}
+    for name, arguments in (
+        ("unscoped", ()),
+        ("--issue", ("--issue", own)),
+        ("--run", ("--run", RUN)),
+    ):
+        counted.clear()
+        report, plan = _gathered(drafts_root, capsys, "--dry-run", *arguments, since=None)
+        assert plan is None
+        reads[name] = _board_reads(counted)
+        selected[name] = _selected(report)
+    assert selected["unscoped"] == [
+        f"selected: {_id_line(selected['unscoped'][0], own, waiting).removeprefix('selected: ')}"
+    ]
+    assert selected["--issue"] == selected["unscoped"] == selected["--run"], selected
+    return reads
+
+
+def test_a_pass_about_one_issue_reads_that_item_alone_however_crowded_the_board(
+    drafts_root: Path,
+    board: Path,
+    capsys: pytest.CaptureFixture[str],
+    counted: list[Request],
+) -> None:
+    """`--issue` and `--run` read one item and its comments; unscoped reads only owned items.
+
+    A pass scoped to the one issue a run here owns, or to that run, selects the comment an
+    unscoped pass selects, reads that one item and its comment list by id and lists no page;
+    and the unscoped pass, narrowed by host at the store, reads that one item's comments alone.
+    """
+    reads = _crowded_passes(drafts_root, board, capsys, counted)
+    for name in ("--issue", "--run"):
+        assert reads[name] == BoardReads(items=1, comment_lists=1, pages=0), (
+            name,
+            str(reads[name]),
+        )
+    assert reads["unscoped"].comment_lists == 1, str(reads["unscoped"])
+    assert reads["unscoped"].pages == 1, str(reads["unscoped"])
+
+
+def test_scoped_comment_reads_cost_one_issues_reads_however_crowded_the_board(
+    drafts_root: Path,
+    board: Path,
+    capsys: pytest.CaptureFixture[str],
+    counted: list[Request],
+) -> None:
+    """Reports budget `follow-up-scoped-comment-reads`: what a pass about one issue reads.
+
+    The figure is the larger of the `--issue` and `--run` passes' board requests over the
+    crowded board, with each pass's breakdown and the unscoped pass's beside it; comparing it
+    with the budget's threshold is onebudgetspec's alone.
+    """
+    reads = _crowded_passes(drafts_root, board, capsys, counted)
+    scoped = max(reads["--issue"].total, reads["--run"].total)
+    detail = (
+        f"--issue: {reads['--issue']}; --run: {reads['--run']}; the unscoped pass over the "
+        f"same board of {CROWD + 1} commented items: {reads['unscoped']}"
+    )
+    print(f"{scoped} board request(s); {detail}")
+    if destination := os.environ.get("ONEBUDGETSPEC_RESULT"):
+        Path(destination).write_text(
+            json.dumps({"value": scoped, "detail": detail}), encoding="utf-8"
+        )
+
+
+# llmlint: ignore-end[budgets_reuse_gate_telemetry, budgets_scoped_to_minimal_tree]
+
+
+def _bound(root: Path, run: str, cause: str, native: str | None) -> None:
+    """Write ``run``'s ticket for ``cause`` bound to ``native`` on the board, copying nothing."""
+    path = tickets.ticket_path(root, run, cause)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    binding = "" if native is None else f"    {tickets.BINDING_FIELD}: {native}\n"
+    path.write_text(
+        "---\n"
+        f'title: "some-service: {cause}"\n'
+        'status: "backlog"\n'
+        "metadata:\n"
+        f"  {tickets.KEY}:\n    created_by_run: {run}\n{binding}    host: {HOST}\n"
+        "---\n"
+        "What the ticket says.\n",
+        encoding="utf-8",
+    )
+
+
+def _native_of(issue: str) -> str:
+    return issue.partition(":")[2]
+
+
+def test_an_issue_scoped_gathering_sends_its_comments_to_the_run_bound_to_it(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    own = _filed(drafts_root, RUN, CAUSE)
+    others = _filed(drafts_root, OTHER_RUN, SHARED_CAUSE)
+    _next_second()
+    asked = _commented(own, "Ours.\n")
+    _commented(others, "Theirs.\n")
+
+    report, plan = _gathered(drafts_root, capsys, "--issue", own)
+
+    assert plan is not None and plan.scope == RUN
+    assert [run for run, _ in plan.runs] == [RUN]
+    assert list(plan.issues) == [own]
+    assert _id_line(report, own, asked).endswith(f"goes to run {RUN}")
+    assert others not in report
+    assert (
+        f"read {own} and its comments directly, the item run {RUN}'s ticket is bound to" in report
+    )
+
+
+def _refused(
+    root: Path, capsys: pytest.CaptureFixture[str], *arguments: str, since: str | None = EARLY
+) -> str:
+    plan = root.parent / f"plan-{time.monotonic_ns()}.json"
+    status = comments.main(
+        ["gather", "--root", str(root), "--plan", str(plan), "--to", BOARD]
+        + (["--since", since] if since is not None else [])
+        + list(arguments)
+    )
+    captured = capsys.readouterr()
+    assert status == comments.UNRUNNABLE, captured
+    assert not plan.exists(), "a refused gathering wrote a plan to launch from"
+    written = list((root / comments.FEEDBACK_DIRECTORY).glob("*/*.md"))
+    assert written == [], "a refused gathering wrote feedback"
+    return captured.err
+
+
+def test_an_issue_no_run_of_this_host_owns_is_refused_naming_why_and_nothing_is_launched(
+    drafts_root: Path,
+    board: Path,
+    capsys: pytest.CaptureFixture[str],
+    counted: list[Request],
+) -> None:
+    _filed(drafts_root, RUN, CAUSE)
+    stranger = _filed(drafts_root, THIRD_RUN, "a-strangers-cause")
+    tickets.ticket_path(drafts_root, THIRD_RUN, "a-strangers-cause").unlink()
+    _commented(stranger, "Nobody here holds this.\n")
+    counted.clear()
+
+    said = _refused(drafts_root, capsys, "--issue", stranger)
+
+    assert f"--issue {stranger}: no run of this host owns it, because no ticket under " in said
+    assert f"is bound to it (no record's `{tickets.BINDING_FIELD}` names it" in said
+    assert said.rstrip().endswith("nothing was launched")
+    assert _board_reads(counted).total == 0, "an issue no ticket here is bound to was read"
+
+    said = _refused(drafts_root, capsys, "--issue", f"elsewhere:{_native_of(stranger)}")
+    assert f"because it is no item of {BOARD!r} or a board it routes to ({BOARD})" in said
+    said = _refused(drafts_root, capsys, "--issue", "not-qualified")
+    assert "--issue 'not-qualified' is not a qualified id, <source>:<native-id>" in said
+    with pytest.raises(SystemExit) as exited:
+        _refused(drafts_root, capsys, "--issue", stranger, "--run", RUN)
+    assert exited.value.code == comments.UNRUNNABLE
+    assert "argument --run: not allowed with argument --issue" in capsys.readouterr().err
+
+    # Bound here, and the board says another run created it, another host verified it, or
+    # no run did at all: read once, then refused.
+    theirs = _filed(drafts_root, OTHER_RUN, SHARED_CAUSE)
+    tickets.ticket_path(drafts_root, OTHER_RUN, SHARED_CAUSE).unlink()
+    _bound(drafts_root, RUN, "bound-to-another-runs-item", _native_of(theirs))
+    said = _refused(drafts_root, capsys, "--issue", theirs)
+    assert (
+        f"the item names run {OTHER_RUN} as its creator, where run {RUN}'s ticket is bound to it"
+    ) in said
+    elsewhere = _filed(drafts_root, RUN, "a-cause-seen-elsewhere", host=OTHER_HOST)
+    said = _refused(drafts_root, capsys, "--issue", elsewhere)
+    assert f"its ticket was verified on host {OTHER_HOST}, not {HOST}" in said
+    unrecorded = _filed(drafts_root, "no-run", "an-unowned-cause", record=False)
+    _bound(drafts_root, RUN, "bound-to-an-unrecorded-item", _native_of(unrecorded))
+    said = _refused(drafts_root, capsys, "--issue", unrecorded)
+    assert "the item carries no follow-up record naming the run that created it" in said
+
+    # Bound to an item the board no longer holds: refused by the store's own answer.
+    _bound(drafts_root, RUN, "bound-to-a-deleted-item", "deleted/item")
+    said = _refused(drafts_root, capsys, "--issue", f"{BOARD}:deleted/item")
+    assert "refused: onetaskgraph: no task with that id" in said, said
+
+    # Two runs' tickets bound to one item: no one run owns its comments.
+    _bound(drafts_root, OTHER_RUN, "also-bound", _native_of(unrecorded))
+    said = _refused(drafts_root, capsys, "--issue", unrecorded)
+    assert f"the tickets of runs {OTHER_RUN}, {RUN} under {drafts_root} are all bound" in said
+
+
+def test_a_run_scoped_gathering_says_which_of_its_tickets_is_bound_to_no_item(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    own = _filed(drafts_root, RUN, CAUSE)
+    _bound(drafts_root, RUN, "never-copied", None)
+    # A record outside the run's tickets directory carrying its creator is not a ticket.
+    stray = drafts_root / "tasks" / RUN / "drafts" / "a-draft.md"
+    stray.parent.mkdir(parents=True)
+    stray.write_text(
+        "---\ntitle: a draft\nstatus: draft\nmetadata:\n"
+        f"  {tickets.KEY}:\n    created_by_run: {RUN}\n    {tickets.BINDING_FIELD}: nowhere\n"
+        "---\nA draft.\n",
+        encoding="utf-8",
+    )
+    _next_second()
+    asked = _commented(own, "Ours.\n")
+
+    report, plan = _gathered(drafts_root, capsys, "--run", RUN, "--dry-run")
+
+    assert plan is None
+    assert f"run {RUN}'s ticket never-copied is bound to no board item; nothing read" in report
+    assert _id_line(report, own, asked).endswith(f"would go to run {RUN}")
+    assert "nowhere" not in report
+    assert report.splitlines()[-1].endswith(
+        f"read 1 item(s) run {RUN}'s tickets are bound to, each directly, and listed none"
+    ), report
+
+    # A binding that is no native id is refused naming the ticket, before the board is read.
+    for malformed in ('"two words"', "[a-list]"):
+        _bound(drafts_root, RUN, "never-copied", "placeholder")
+        path = tickets.ticket_path(drafts_root, RUN, "never-copied")
+        path.write_text(
+            path.read_text(encoding="utf-8").replace("placeholder", malformed), encoding="utf-8"
+        )
+        said = _refused(drafts_root, capsys, "--run", RUN)
+        assert f"run {RUN}'s ticket never-copied records `{tickets.BINDING_FIELD}` " in said, said
+        assert "which is not a board item's native id" in said, said
+
+
+def test_an_item_read_by_id_that_the_store_answers_other_than_as_asked_is_refused(
+    drafts_root: Path, board: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real store refuses a missing id itself; no item, two, or another item is refused here."""
+    own = _filed(drafts_root, RUN, CAUSE)
+    shown = plan_store.sdk(plan_store.client().task_show(own, no_comments=True))
+    (item,) = shown.items
+    other = item.model_copy(update={"id": item.id.__class__(f"{BOARD}:another/item")})
+    for items, refusal in (
+        ([], f"answered 0 items for {re.escape(own)}"),
+        ([item, item], f"answered 2 items for {re.escape(own)}"),
+        ([other], f"answered '{BOARD}:another/item' when asked for {re.escape(own)}"),
+    ):
+        answer = shown.model_copy(update={"items": items})
+
+        def answered(
+            awaitable: Coroutine[object, object, object], answer: object = answer
+        ) -> object:
+            awaitable.close()
+            return answer
+
+        monkeypatch.setattr(plan_store, "sdk", answered)
+        with pytest.raises(OSError, match=refusal):
+            comments.bound_issue(comments.QualifiedTaskId(own), WRITABLE_PLUGIN)
+
+
+def test_scoped_gatherings_read_a_ticket_bound_on_the_board_its_repository_routes_to(
+    drafts_root: Path, routed: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A binding names an item of the board the ticket's repositories route it to, and a
+    gathering scoped to its run or its issue reads it there, listing neither board."""
+    routed_issue = _filed(drafts_root, RUN, ROUTED_CAUSE, repository=ROUTED_REPOSITORY)
+    assert routed_issue.startswith(f"{ROUTED}:"), "the store did not route the petsinc ticket"
+    _next_second()
+    asked = _commented(routed_issue, "Does the intake form still drop it?\n")
+
+    for scope in (("--run", RUN), ("--issue", routed_issue)):
+        report, plan = _gathered(drafts_root, capsys, "--dry-run", *scope)
+
+        assert plan is None
+        assert _id_line(report, routed_issue, asked).endswith(f"would go to run {RUN}"), report
+        assert f"read {routed_issue} and its comments directly" in report, report
+        assert report.splitlines()[-1].endswith("each directly, and listed none"), report
+
+
+def test_a_first_gathering_scoped_to_a_run_quotes_again_what_its_evidence_elsewhere_answered(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Scoped, a run's evidence comment on another run's item is never read, so the boundary
+    its first gathering computes and records is the earlier one its own items give: a comment
+    that evidence answered is quoted again, never dropped."""
+    own = _filed(drafts_root, RUN, CAUSE)
+    others = _filed(drafts_root, OTHER_RUN, SHARED_CAUSE)
+    _next_second()
+    answered = _commented(own, "Answered by the evidence comment that follows.\n")
+    _next_second()
+    _commented(others, tickets.render_comment(RUN, SHARED_CAUSE, "This run's evidence."), None)
+    (evidence,) = plan_store.sdk(plan_store.client().task_comment_list(others)).comments
+    evidenced = comments.moment(evidence.updated_at or evidence.created_at, "the evidence")
+
+    written = _written(drafts_root, capsys)
+
+    assert f"- Comment id: {answered}\n" in written
+    recorded = comments.recorded_boundary(written, "the feedback file")
+    assert recorded is not None and recorded.moment is not None
+    assert recorded.moment < evidenced
+    assert comments.stored_boundary(drafts_root, RUN) == recorded
+
+
+def test_a_scoped_gathering_takes_no_start_so_no_watermark_or_unbounded_run_refuses_it(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--run` and `--issue` read their items whole: an unreadable watermark and a run whose
+    records give no start, which refuse an unscoped pass, refuse neither."""
+    own = _filed(drafts_root, RUN, CAUSE)
+    _next_second()
+    asked = _commented(own, "Ours.\n")
+    watermark = comments.watermark_path(drafts_root, BOARD)
+    watermark.parent.mkdir(parents=True)
+    watermark.write_text("not a watermark", encoding="utf-8")
+    (drafts_root / "tasks" / OTHER_RUN / tickets.TICKETS).mkdir(parents=True)
+
+    assert "is not JSON" in _refused(drafts_root, capsys, "--dry-run", since=None)
+    watermark.unlink()
+    assert f"run(s) {OTHER_RUN} under" in _refused(drafts_root, capsys, "--dry-run", since=None)
+    watermark.write_text("not a watermark", encoding="utf-8")
+    for scope in (("--run", RUN), ("--issue", own)):
+        report, plan = _gathered(drafts_root, capsys, "--dry-run", *scope, since=None)
+
+        assert plan is None
+        assert _id_line(report, own, asked).endswith(f"would go to run {RUN}"), report
+        assert "for comments since" not in report, report

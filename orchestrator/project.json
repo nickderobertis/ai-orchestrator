@@ -208,6 +208,7 @@
         "default",
         "{workspaceRoot}/tests/test_plan_review.py",
         "{workspaceRoot}/tests/test_host_installs.py",
+        "{workspaceRoot}/tests/test_follow_up_comments.py",
         "{workspaceRoot}/templates/**/*",
         "{workspaceRoot}/personas/planner.yaml",
         "{workspaceRoot}/config/**/*",

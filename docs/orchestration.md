@@ -1274,14 +1274,16 @@ just follow-ups-answer-comments
 run `just orchestrate` launched whose every node ended `done` has it launched for it by
 the success hook, and a manager types it for a run that ended any other way or to
 re-dispatch with feedback. `just follow-ups-answer-comments` is that re-dispatch for what
-people wrote on the board, for every run at once: it asks the store only for the items
-commented on since the board's watermark, sends each person's comment to the run owning the
-issue it sits on until any run's reply names it, writes one feedback file per such run under
+people wrote on the board, for every run at once: it asks the store only for this host's
+items commented on since the board's watermark, narrowed by the store before any comment is
+read, sends each person's comment to the run owning the issue it sits on until any run's
+reply names it, writes one feedback file per such run under
 the drafts root's `feedback/<run-id>/`, each comment with its id, its URL, its author and its
 text, and hands each to `just follow-ups --feedback --comments`, whose agent acts on each
 comment and answers it with a reply under the run's marker. Its report names every comment
 the query returned, sent or left out with its one reason, and every reply; `--dry-run`
-writes and launches nothing, `--run RUN` narrows it to one owning run, and
+writes and launches nothing, `--run RUN` reads only the items that run's tickets are bound
+to and `--issue SOURCE:ID` that one item, each by id with no listing, and
 `orchestrator/follow_up_comments.py` states the rule. A gathering with nothing selected
 launches nothing and says so. [Follow-ups are drafted, not
 surfaced](#follow-ups-are-drafted-not-surfaced) says what it does and how the hooks

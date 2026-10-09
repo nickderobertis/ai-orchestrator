@@ -293,21 +293,34 @@ class Answered(NamedTuple):
     other_run_after: dict[str, object]
 
 
-#: A gathering for one run, composed from the module's own reads and writer: every person's
-#: comment on the issues ``run`` owns or has marked with its own comment. It is composed here
-#: rather than by `just follow-ups-answer-comments`, whose routing sends a comment to the run
-#: owning its issue alone: this journey's subject is what the dispatch does with a gathering
-#: that also quotes another run's item, which `check-gathering` admits for a run that marked
-#: it and a manager may hand `just follow-ups --comments` directly.
+#: A gathering for one run, composed from the module's own item reads and writer: every
+#: person's comment on the issues ``run`` owns or has marked with its own comment. It is
+#: composed here rather than by `just follow-ups-answer-comments`, whose routing sends a
+#: comment to the run owning its issue alone: this journey's subject is what the dispatch does
+#: with a gathering that also quotes another run's item, which `check-gathering` admits for a
+#: run that marked it and a manager may hand `just follow-ups --comments` directly. The
+#: stand-in board is listed here unnarrowed, because the recipe's own listing keeps this host's
+#: items alone and an older ticket's record names no host.
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] A program text the launching
+# journeys below run, inside their own blocks for this rule; it launches nothing itself.
 GATHER_FOR = """\
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from orchestrator import follow_up_comments as comments
 from orchestrator import follow_up_tickets as tickets
+from orchestrator import plan_store
 
 root, board, run = sys.argv[1:4]
-issues = comments.commented_issues(board, comments.moment(sys.argv[4], "since"))
+pages = plan_store.every_page(
+    "the stand-in board", plan_store.client().task_list, source=[board],
+    commented_since=sys.argv[4],
+)
+issues = [
+    comments.bound_issue(comments.QualifiedTaskId(held.id.model_dump()), None)
+    for page in pages
+    for held in page.items
+]
 chosen = [
     comments.Selected(issue, comment.id, comments.comment_url(issue, comment),
                       comment.author or comments.UNKNOWN_AUTHOR, comment.last_changed,
@@ -322,6 +335,7 @@ chosen = [
 ]
 print(comments.write_feedback(Path(root), run, board, chosen, None, datetime.now(UTC)))
 """
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 #: Before every comment these journeys write.
 GATHERED_SINCE = "2026-01-01T00:00:00Z"

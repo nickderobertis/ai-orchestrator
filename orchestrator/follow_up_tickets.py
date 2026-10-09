@@ -1413,7 +1413,7 @@ def _record_problems(
             "dot-separated labels, each 1–63 ASCII letters, digits and `-`, neither starting "
             "nor ending with `-`; write what `hostname` prints"
         )
-    if BINDING_FIELD in held and not _is_item_id(held[BINDING_FIELD]):
+    if BINDING_FIELD in held and not is_item_id(held[BINDING_FIELD]):
         found.append(
             f"`{BINDING_FIELD}` {held[BINDING_FIELD]!r} is not a board item's native id; leave "
             "it as `board-status` or `copy` wrote it"
@@ -1475,7 +1475,8 @@ def overrun_budget(value: Mapping[str, object]) -> OverrunBudget:
     )
 
 
-def _is_item_id(value: object) -> bool:
+def is_item_id(value: object) -> bool:
+    """Whether ``value`` is a board item's native id, the grammar a :data:`BINDING_FIELD` holds."""
     return isinstance(value, str) and re.fullmatch(r"\S+", value) is not None
 
 

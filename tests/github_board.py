@@ -1578,14 +1578,16 @@ def _follow_up_ticket(
     evidence: str = "",
     cause: str = PROPOSED_CAUSE,
     frequency: follow_up_tickets.Frequency = follow_up_tickets.Frequency.INTERMITTENT,
+    verified_on: str = "verifier.example",
 ) -> follow_up_tickets.Ticket:
     """One ticket about ``repository`` as the agent writes it, new and `backlog` by default.
 
     ``evidence`` is added to its `## Evidence` section, the way a later run adds its own, and
     ``frequency`` is the agent's judgment of the root cause. Its estimate, estimate line and
     priority are `board-status`'s to write, so the ticket carries none of them yet.
+    ``verified_on`` is the host its record and evidence name.
     """
-    host = follow_up_tickets.Host("verifier.example")
+    host = follow_up_tickets.Host(verified_on)
     origin = follow_up_tickets.Origin(_hosted(repository))
     medium = follow_up_tickets.Severity.MEDIUM
     impact = follow_up_tickets.impact_section(

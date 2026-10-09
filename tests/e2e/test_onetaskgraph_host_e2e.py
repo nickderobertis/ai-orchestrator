@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import socket
 import subprocess
 import time
 from collections.abc import Iterator, Mapping
@@ -2784,7 +2785,9 @@ def test_one_tickets_filing_re_copy_withdrawal_and_comment_answer_stay_within_th
         "installed: re-measure them on it and record them with its version"
     )
     environment, drafts_root = _followups_environment(tmp_path)
-    ticket = _follow_up_ticket(SIBLING_REPOSITORY)
+    # Verified on this machine, because a gathering's query is narrowed to the items whose
+    # ticket was verified on the host running it.
+    ticket = _follow_up_ticket(SIBLING_REPOSITORY, verified_on=socket.gethostname())
     path = _written_ticket(drafts_root, ticket)
     statuses = list(SEEDED_STATES)
     with _serving_followups(environment, fields=True):

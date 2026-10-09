@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# `just follow-ups-answer-comments [--dry-run] [--run RUN-ID] [--to SOURCE] [--since RFC3339]
-# [--detach]`: a thin script over `orchestrator/follow_up_comments.py`, which states what is
-# read, where each comment goes and when the watermark moves. This only runs its steps with
-# the launches between them, each through `scripts/follow-ups.sh --comments`.
+# `just follow-ups-answer-comments [--dry-run] [--run RUN-ID | --issue QUALIFIED-ID]
+# [--to SOURCE] [--since RFC3339] [--detach]`: a thin script over
+# `orchestrator/follow_up_comments.py`, which states what is read, where each comment goes and
+# when the watermark moves. This only runs its steps with the launches between them, each
+# through `scripts/follow-ups.sh --comments`.
 set -euo pipefail
 
 fail() {

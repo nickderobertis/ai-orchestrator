@@ -1,23 +1,35 @@
 """People's board comments on follow-up tickets, each routed to the one run that answers it.
 
-`just follow-ups-answer-comments [--dry-run] [--run RUN-ID] [--to SOURCE] [--since RFC3339]
-[--detach]` is how a comment somebody writes on the `followups` board reaches the run that
-owns the issue it sits on. `scripts/follow-ups-answer-comments.sh` is a thin script over the
-three commands here: :func:`gather` reads the board and writes one feedback file per run,
-the script launches `just follow-ups <run> --feedback FILE --comments` for every run at once
-and watches them, and :func:`settle` checks each run's account and reports every reply. This
-module is the one statement of which comments are gathered; the documents point here.
+`just follow-ups-answer-comments [--dry-run] [--run RUN-ID | --issue QUALIFIED-ID] [--to SOURCE]
+[--since RFC3339] [--detach]` is how a comment somebody writes on the `followups` board
+reaches the run that owns the issue it sits on. `scripts/follow-ups-answer-comments.sh` is a
+thin script over the three commands here: :func:`gather` reads the board and writes one
+feedback file per run, the script launches `just follow-ups <run> --feedback FILE --comments`
+for every run at once and watches them, and :func:`settle` checks each run's account and
+reports every reply. This module is the one statement of which comments are gathered; the
+documents point here.
 
-**What is read.** Every board of the family `--to` roots (:func:`follow_up_tickets.boards`:
-`followups` and the source its route files a `petsinc` root cause's ticket in), each asked one
-narrowed query, `task_list(source=[<board>], commented_since=<its since>)`, read through
-:func:`plan_store.every_page` to its last page, and `task comment list` for each item that
-answer holds and no other. The store's board scope is the only scope: nothing here
-names a repository, an owner or a repository set, and no status filter is sent, because a
-comment on an item at another status is still reported, skipped with its reason. The store's
-`commented_since` keeps an item when one of its comments was created or last edited at or
-after the instant, exactly, on every source this reads, so a comment edited after its reply
-comes back through the same query.
+**What is read.** Only the items the pass is about, and never an unrelated item's comments,
+because every read spends the board's share of an allowance every session on the host shares.
+
+* **`--issue QUALIFIED-ID`** reads that one item by id, `task show` and its `task comment
+  list`, and lists nothing. Its comments go to the run under this drafts root whose ticket's
+  `board_item` binding (:data:`follow_up_tickets.BINDING_FIELD`) names it, found by one
+  narrowed listing of the local drafts store; an item no run of this host owns — none bound,
+  several bound, or the board's record naming another creator or host — is refused with why,
+  and nothing is launched.
+* **`--run RUN-ID`** reads, the same way, each item that run's local tickets are bound to, and
+  lists no board.
+* **Unscoped**, every board of the family `--to` roots (:func:`follow_up_tickets.boards`:
+  `followups` and the source its route files a `petsinc` root cause's ticket in) is asked one
+  query the store narrows to this host's items before any comment is read,
+  `task_list(source=[<board>], commented_since=<its since>, metadata=[<record>/host=<this
+  hostname>])` (:func:`host_query`), read through :func:`plan_store.every_page` to its last
+  page, and `task comment list` for each item that answer holds and no other. No status filter
+  is sent, because a comment on an item at another status is still reported, skipped with its
+  reason. The store's `commented_since` keeps an item when one of its comments was created or
+  last edited at or after the instant, exactly, on every source this reads, so a comment edited
+  after its reply comes back through the same query.
 
 **`<since>`** is decided per board, in order: `--since` as given; else that board's
 **watermark**, the file :data:`WATERMARK` under `<drafts root>/feedback/`, one per board,
@@ -25,15 +37,17 @@ holding the instant the last complete gathering queried at less :data:`OVERLAP`;
 earliest bound local records give a run that has filed tickets here — its recorded boundary,
 else its ticket files' last write. A run whose records give neither is **unbounded**, and the
 command refuses naming it and asking for `--since`, rather than ever querying from the epoch.
-Only an unscoped gathering that is not a dry run, and whose every launched run was checked
-sound by `check-responses` while it waited, moves the watermark of every board it read; a
-`--run`, `--dry-run` or `--detach` invocation that launched anything leaves each
-byte-identical. So a comment a gathering selected that no reply answers is selected
-again: the next query starts no later than the one that found it.
+A scoped read takes no start: it reads its items whole. Only an unscoped gathering that is not
+a dry run, and whose every launched run was checked sound by `check-responses` while it
+waited, moves the watermark of every board it read; a `--run`, `--issue`, `--dry-run` or
+`--detach` invocation that launched anything leaves each byte-identical. So a comment a
+gathering selected that no reply answers is selected again: the next query starts no later
+than the one that found it.
 
 **Routing.** A comment goes to the run owning the issue it sits on
-(:func:`follow_up_tickets.issue_owner`) and to no other. Each comment the query returned is
-either selected for that run or left out for exactly one reason, tried in this order:
+(:func:`follow_up_tickets.issue_owner`) and to no other. Each comment read is either selected
+for that run or left out for exactly one reason, tried in this order; the first two are never
+met unscoped, whose query the store narrowed to this host's records:
 
 * **the no-answer rule** — the item carries no follow-up record, so no run answers on it;
 * **ticket verified on host** — the record's `host` is not this machine's `hostname`;
@@ -63,13 +77,16 @@ recomputed boundary would lose the response it rested on. The earliest feedback 
 wins, then that file. An earliest file recording none, written before files recorded it, is
 read as the computed boundary with its stamp as the first gathering.
 
-It is computed from the run's own marked comments on the items the query returned, with no
-other read, and that is exact. An evidence comment on an item the query did not return
-changed before `<since>`. With no watermark, `<since>` is no later than every unrecorded
-run's ticket files' last write, which is part of the boundary. With one, every earlier
+It is computed from the run's own marked comments on the items the pass read, with no other
+read. Unscoped, that misses only an evidence comment on an item no run of this host owns, or
+one changed before `<since>`: with no watermark, `<since>` is no later than every unrecorded
+run's ticket files' last write, which is part of the boundary, and with one, every earlier
 window was a complete gathering that recorded a boundary for each run whose issue or marked
-comment it returned. `--since` by hand is the one case where that rests on the operator. A
-run with no such response has no boundary, and every person's comment on its issues counts.
+comment it returned. A scoped pass reads only the run's own items, so a first gathering made
+scoped misses its evidence comments on other runs' items too. Each miss can only move the
+boundary earlier, which quotes a comment again rather than ever dropping one. `--since` by
+hand rests the rest on the operator. A run with no such response has no boundary, and every
+person's comment on its issues counts.
 
 **What is written.** Feedback files under `<drafts root>/feedback/<run-id>/`, a run's
 :data:`BOUNDARY_FILE`, and the watermark — never the board, and nothing on a dry run. A
@@ -93,9 +110,15 @@ import sys
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from itertools import chain
 from pathlib import Path
 from typing import NamedTuple, NoReturn
+
+# The SDK's `__all__` exports neither the listing's nor `task show`'s item model, as
+# `follow_up_tickets` says beside its own import of the first; the follow-up "Export the SDK's
+# query item models (QualifiedTask et al.) beside the QueryResponseOf… schema roots" retires
+# both imports.
+from onetaskgraph_sdk._generated.query_response_of_qualified_task import QualifiedTask
+from onetaskgraph_sdk._generated.task_detail import QualifiedTask as ShownTask
 
 from orchestrator import follow_up_tickets as tickets
 from orchestrator import plan_store
@@ -194,6 +217,10 @@ RFC3339 = re.compile(r"\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|
 
 class Unbounded(ValueError):
     """Local records give no start for a first gathering; names every such run."""
+
+
+class Unowned(ValueError):
+    """An `--issue` no run of this host owns; says why."""
 
 
 @dataclass(frozen=True)
@@ -312,68 +339,176 @@ def _location_path(location: Mapping[str, object], qualified: QualifiedTaskId) -
     raise OSError(f"{qualified} reports a location path {path!r}, which is not a path")
 
 
-def commented_issues(board: str, since: datetime, plugin: str | None = None) -> list[Issue]:
-    """Every item of ``board`` commented on at or after ``since``, each with its comments.
+def host_query(host: str) -> str:
+    """The `--metadata` value selecting the board items whose ticket was verified on ``host``.
 
-    The one listing of this flow: the store's own `commented_since`, read to its last page,
-    and a comment listing for each item it returned and no other. ``plugin`` is the board's,
-    which decides who counts as a bot on it.
+    The store's own narrowing question for this host's ownership: a run here writes this
+    machine's `hostname` into every ticket it verifies, so an item of a run on another host,
+    or one carrying no follow-up record, is never returned by it.
     """
-    found = []
+    return f"{tickets.KEY}/host={host}"
+
+
+def _issue(held: QualifiedTask | ShownTask, board: str, plugin: str | None) -> Issue:
+    """One item of ``board`` the store answered, with its comments read by id."""
+    listed_id = held.id.model_dump()
+    if not _board_issue(listed_id, board):
+        raise OSError(f"the board {board!r} listed {listed_id!r}, which is not one of its ids")
+    qualified = QualifiedTaskId(listed_id)
+    item = held.item.model_dump(mode="python")
+    metadata = item.get("metadata")
+    record = metadata.get(tickets.KEY) if isinstance(metadata, Mapping) else None
+    host = record.get("host") if isinstance(record, Mapping) else None
+    listed = plan_store.sdk(plan_store.client().task_comment_list(str(qualified))).comments
+    location = held.item.location.model_dump(mode="python") if held.item.location else {}
+    # A title is written into a feedback file's one-line field, so a line break in it
+    # would open a field of its own there, and a status name into the report's one line
+    # per comment. An author is too, and the store itself refuses to hold one with a
+    # line break.
+    _one_line(held.item.title, "a title", qualified)
+    _one_line(held.item.status.name, "a status name", qualified)
+    # A host is named in the report's reason for leaving a comment out.
+    if isinstance(host, str):
+        _one_line(host, "a host", qualified)
+    path = _location_path(location, qualified)
+    return Issue(
+        id=qualified,
+        title=held.item.title,
+        owner=tickets.issue_owner(item),
+        location=path,
+        url=_web_url(held.item.url),
+        comments=tuple(
+            Comment(
+                id=CommentId(comment.id.model_dump()),
+                author=comment.author,
+                body=comment.body,
+                url=_web_url(comment.url),
+                last_changed=moment(
+                    comment.updated_at or comment.created_at,
+                    f"comment {comment.id.model_dump()!r} on {qualified}",
+                ),
+            )
+            for comment in listed
+        ),
+        category=held.item.status.category.value,
+        status=held.item.status.name,
+        host=host if isinstance(host, str) else None,
+        plugin=plugin,
+    )
+
+
+def commented_issues(
+    board: str, since: datetime, plugin: str | None = None, *, host: str | None = None
+) -> list[Issue]:
+    """Every item of ``board`` this host's runs own commented on at or after ``since``.
+
+    The one listing of this flow: the store's own `commented_since`, narrowed by
+    :func:`host_query` and read to its last page, and a comment listing for each item it
+    returned and no other. ``plugin`` is the board's, which decides who counts as a bot on it;
+    ``host`` is this machine's `hostname` unless named.
+    """
     pages = plan_store.every_page(
         f"the board {board!r} commented on since {instant(since)}",
         plan_store.client().task_list,
         source=[board],
         commented_since=instant(since),
+        metadata=[host_query(host or socket.gethostname())],
     )
-    for held in chain.from_iterable(page.items for page in pages):
-        listed_id = held.id.model_dump()
-        if not _board_issue(listed_id, board):
-            raise OSError(f"the board {board!r} listed {listed_id!r}, which is not one of its ids")
-        qualified = QualifiedTaskId(listed_id)
-        item = held.item.model_dump(mode="python")
-        metadata = item.get("metadata")
-        record = metadata.get(tickets.KEY) if isinstance(metadata, Mapping) else None
-        host = record.get("host") if isinstance(record, Mapping) else None
-        listed = plan_store.sdk(plan_store.client().task_comment_list(str(qualified))).comments
-        location = held.item.location.model_dump(mode="python") if held.item.location else {}
-        # A title is written into a feedback file's one-line field, so a line break in it
-        # would open a field of its own there, and a status name into the report's one line
-        # per comment. An author is too, and the store itself refuses to hold one with a
-        # line break.
-        _one_line(held.item.title, "a title", qualified)
-        _one_line(held.item.status.name, "a status name", qualified)
-        # A host is named in the report's reason for leaving a comment out.
-        if isinstance(host, str):
-            _one_line(host, "a host", qualified)
-        path = _location_path(location, qualified)
-        found.append(
-            Issue(
-                id=qualified,
-                title=held.item.title,
-                owner=tickets.issue_owner(item),
-                location=path,
-                url=_web_url(held.item.url),
-                comments=tuple(
-                    Comment(
-                        id=CommentId(comment.id.model_dump()),
-                        author=comment.author,
-                        body=comment.body,
-                        url=_web_url(comment.url),
-                        last_changed=moment(
-                            comment.updated_at or comment.created_at,
-                            f"comment {comment.id.model_dump()!r} on {qualified}",
-                        ),
-                    )
-                    for comment in listed
-                ),
-                category=held.item.status.category.value,
-                status=held.item.status.name,
-                host=host if isinstance(host, str) else None,
-                plugin=plugin,
-            )
+    return [_issue(held, board, plugin) for page in pages for held in page.items]
+
+
+def bound_issue(qualified: QualifiedTaskId, plugin: str | None) -> Issue:
+    """The one board item ``qualified`` names and its comments, each read by id; no listing."""
+    board = str(qualified).partition(":")[0]
+    answer = plan_store.complete(
+        plan_store.sdk(plan_store.client().task_show(str(qualified), no_comments=True))
+    )
+    if len(answer.items) != 1:
+        raise OSError(f"the board {board!r} answered {len(answer.items)} items for {qualified}")
+    (held,) = answer.items
+    if held.id.model_dump() != str(qualified):
+        raise OSError(
+            f"the board {board!r} answered {held.id.model_dump()!r} when asked for {qualified}"
         )
-    return found
+    return _issue(held, board, plugin)
+
+
+class Binding(NamedTuple):
+    """One local ticket of a run here, and the board item its record is bound to, if any."""
+
+    run: tickets.RunId
+    ticket: str
+    #: The bound item qualified to the board of the family the ticket is filed on.
+    item: QualifiedTaskId | None
+
+
+def bindings(root: Path, board: str, query: str) -> list[Binding]:
+    """Every local ticket under ``root`` the drafts store's ``query`` selects, and its binding.
+
+    One narrowed listing of the drafts source, never of a board: ``query`` is a `--metadata`
+    value. A ticket the store read from anywhere but a run's tickets directory under ``root``
+    is not this root's, and the item a binding names is qualified to the board of ``board``'s
+    family the ticket's `repositories` route it to, which is where it was copied.
+    """
+    pages = plan_store.every_page(
+        f"the tickets under {root} selected by {query}",
+        plan_store.client().task_list,
+        source=[tickets.SOURCE],
+        metadata=[query],
+    )
+    found = []
+    for held in (one for page in pages for one in page.items):
+        item = held.item.model_dump(mode="python")
+        location = held.item.location.model_dump(mode="python") if held.item.location else {}
+        located = Path(str(location.get("path", "")))
+        if located.parent.parent.parent != root / TASKS_DIRECTORY or (
+            located.parent.name != tickets.TICKETS
+        ):
+            continue
+        run = tickets.RunId(located.parent.parent.name)
+        record = item.get("metadata")
+        held_record = record.get(tickets.KEY) if isinstance(record, Mapping) else None
+        native = (
+            held_record.get(tickets.BINDING_FIELD) if isinstance(held_record, Mapping) else None
+        )
+        if native is None:
+            found.append(Binding(run, located.stem, None))
+            continue
+        if not tickets.is_item_id(native):
+            raise OSError(
+                f"run {run}'s ticket {located.stem} records `{tickets.BINDING_FIELD}` {native!r}, "
+                "which is not a board item's native id; run `board-status` on it to bind it again"
+            )
+        listed = item.get("repositories")
+        repositories = [one for one in listed if isinstance(one, str)] if listed else []
+        routed = tickets.ticket_board(board, repositories)
+        found.append(Binding(run, located.stem, QualifiedTaskId(f"{routed}:{native}")))
+    return sorted(found, key=lambda one: (one.run, one.ticket))
+
+
+def run_bindings(root: Path, board: str, run: tickets.RunId) -> list[Binding]:
+    """Every ticket ``run`` filed under ``root``, and the item each is bound to."""
+    query = f"{tickets.KEY}/created_by_run={run}"
+    return [one for one in bindings(root, board, query) if one.run == run]
+
+
+def issue_binding(root: Path, board: str, issue: QualifiedTaskId) -> tickets.RunId:
+    """The one run under ``root`` whose ticket is bound to ``issue``; :class:`Unowned` else."""
+    native = str(issue).partition(":")[2]
+    query = f"{tickets.KEY}/{tickets.BINDING_FIELD}={native}"
+    runs = sorted({one.run for one in bindings(root, board, query) if one.item == issue})
+    if not runs:
+        raise Unowned(
+            f"--issue {issue}: no run of this host owns it, because no ticket under {root} is "
+            f"bound to it (no record's `{tickets.BINDING_FIELD}` names it on that board), so no "
+            "run here answers its comments"
+        )
+    if len(runs) > 1:
+        raise Unowned(
+            f"--issue {issue}: the tickets of runs {', '.join(runs)} under {root} are all bound "
+            "to it, so no one run owns its comments; settle the bindings with `board-status`"
+        )
+    return runs[0]
 
 
 def tickets_last_written(root: Path, run: str) -> datetime | None:
@@ -981,10 +1116,39 @@ def _say(line: str) -> None:
 
 
 def _store_line(plan: Plan) -> str:
+    if plan.scope is not None:
+        return (
+            f"plan store: {plan.store}; read {plan.items} item(s) run {plan.scope}'s tickets are "
+            "bound to, each directly, and listed none"
+        )
     return (
         f"plan store: {plan.store}; the narrowed query returned {plan.items} item(s) "
         f"commented on since {instant(plan.since)}"
     )
+
+
+def _plugin(settings: Mapping[str, object], source: str) -> str | None:
+    """The plugin the store configures ``source`` with, which decides who is a bot on it."""
+    plugin = settings.get(f"sources.{source}.plugin")
+    return plugin if isinstance(plugin, str) else None
+
+
+def _unowned(issue: Issue, run: tickets.RunId, host: str) -> str | None:
+    """Why ``run``, whose ticket here is bound to ``issue``, does not own it on the board.
+
+    ``None`` when it does: the item names ``run`` as its creator and this host as where its
+    ticket was verified. ``run`` has records here, since its ticket is what bound it.
+    """
+    if issue.owner is None:
+        return "the item carries no follow-up record naming the run that created it"
+    if issue.owner != run:
+        return (
+            f"the item names run {issue.owner} as its creator, where run {run}'s ticket is "
+            "bound to it"
+        )
+    if issue.host != host:
+        return f"its ticket was verified on host {issue.host or '(none recorded)'}, not {host}"
+    return None
 
 
 def gather(  # noqa: PLR0913 - each is one flag of the command
@@ -994,24 +1158,37 @@ def gather(  # noqa: PLR0913 - each is one flag of the command
     named_board: bool = False,
     since: datetime | None = None,
     scope: tickets.RunId | None = None,
+    issue: QualifiedTaskId | None = None,
     dry_run: bool = False,
     detach: bool = False,
     host: str | None = None,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
     say: Say = _say,
 ) -> Plan | None:
-    """Read each board of the family once, report every comment returned, and write what to launch.
+    """Read the items this pass is about, report every comment on them, and write what to launch.
 
-    ``board`` roots the family (:func:`follow_up_tickets.boards`), and each board is read from
-    a start of its own: ``since``, else its watermark, else the start local records derive.
-    Returns the plan the launches follow, or ``None`` for a dry run or a host no comment can
-    be owed on, which have nothing to launch. :class:`Unbounded` or :class:`OSError` refuse
-    before anything is written.
+    ``board`` roots the family (:func:`follow_up_tickets.boards`). Unscoped, each board is
+    read once, narrowed to this host's items, from a start of its own: ``since``, else its
+    watermark, else the start local records derive. A ``scope`` run's bound items, or the one
+    ``issue``, are read by id instead, and listed on no board. Returns the plan the launches
+    follow, or ``None`` for a dry run or a host no comment can be owed on, which have nothing
+    to launch. :class:`Unbounded`, :class:`Unowned` or :class:`OSError` refuse before anything
+    is written.
     """
     family = tickets.boards(board)
+    host = host or socket.gethostname()
+    issue_run: tickets.RunId | None = None
+    if issue is not None:
+        if not any(_board_issue(issue, one) for one in family):
+            raise Unowned(
+                f"--issue {issue}: no run of this host owns it, because it is no item of "
+                f"{board!r} or a board it routes to ({', '.join(family)})"
+            )
+        issue_run = scope = issue_binding(root, board, issue)
     starts: dict[str, Start] = {}
     derived: Start | None = None
-    for read in family:
+    # A scoped pass reads its items whole, so it takes no start and reads no watermark.
+    for read in family if scope is None else ():
         if since is not None:
             starts[read] = Start(since, "named with --since")
         elif (held := read_watermark(root, read)) is not None:
@@ -1029,12 +1206,28 @@ def gather(  # noqa: PLR0913 - each is one flag of the command
     queried_at = now()
     settings = plan_store.configured_settings()
     issues = []
-    for read, start in starts.items():
-        plugin = settings.get(f"sources.{read}.plugin")
-        issues.extend(
-            commented_issues(read, start.since, plugin if isinstance(plugin, str) else None)
+    if scope is None:
+        for read, start in starts.items():
+            issues.extend(commented_issues(read, start.since, _plugin(settings, read), host=host))
+            say(f"read {read!r} for comments since {instant(start.since)} ({start.origin})")
+    else:
+        bound = (
+            [Binding(scope, "", issue)] if issue is not None else run_bindings(root, board, scope)
         )
-        say(f"read {read!r} for comments since {instant(start.since)} ({start.origin})")
+        for binding in bound:
+            if binding.item is None:
+                say(
+                    f"run {scope}'s ticket {binding.ticket} is bound to no board item; nothing read"
+                )
+                continue
+            source = str(binding.item).partition(":")[0]
+            issues.append(bound_issue(binding.item, _plugin(settings, source)))
+            say(
+                f"read {binding.item} and its comments directly, the item run {scope}'s ticket "
+                "is bound to"
+            )
+    if issue_run is not None and (problem := _unowned(issues[0], issue_run, host)) is not None:
+        raise Unowned(f"--issue {issue}: no run of this host owns it, because {problem}")
     recorded = {run for run in appearing_runs(issues) if has_records(root, run)}
     boundaries: dict[tickets.RunId, Boundary] = {}
     for run in sorted(recorded):
@@ -1044,7 +1237,7 @@ def gather(  # noqa: PLR0913 - each is one flag of the command
             path = boundary_path(root, run)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(boundary_line(boundary.moment) + "\n", encoding="utf-8")
-    selection = select(issues, boundaries, host or socket.gethostname(), recorded)
+    selection = select(issues, boundaries, host, recorded)
     verb = "would go to" if dry_run else "goes to"
     for run, chosen in selection.chosen.items():
         if scope in (None, run):
@@ -1060,7 +1253,7 @@ def gather(  # noqa: PLR0913 - each is one flag of the command
         board=board,
         boards=family,
         named_board=named_board,
-        since=min(start.since for start in starts.values()),
+        since=min((start.since for start in starts.values()), default=queried_at),
         queried_at=queried_at,
         scope=scope,
         detach=detach,
@@ -1170,7 +1363,10 @@ def settle(
             advanced = write_watermark(root, board, plan.queried_at)
             say(f"watermark: advanced to {instant(advanced)} in {watermark_path(root, board)}")
     elif plan.scope is not None:
-        say(f"watermark: left as it was, because --run {plan.scope} gathered one run's comments")
+        say(
+            f"watermark: left as it was, because the gathering was scoped to run {plan.scope}'s "
+            "comments"
+        )
     elif plan.detach:
         say("watermark: left as it was, because the launched runs have not been checked")
     else:
@@ -1200,7 +1396,9 @@ def _parser() -> _Parser:
     # board reaches the `followups` source.
     gathering.add_argument("--to", dest="board", metavar="SOURCE")
     gathering.add_argument("--since", metavar="RFC3339")
-    gathering.add_argument("--run", dest="scope", metavar="RUN-ID")
+    scoped = gathering.add_mutually_exclusive_group()
+    scoped.add_argument("--run", dest="scope", metavar="RUN-ID")
+    scoped.add_argument("--issue", metavar="QUALIFIED-ID")
     gathering.add_argument("--dry-run", action="store_true")
     gathering.add_argument("--detach", action="store_true")
     launches = commands.add_parser("launches", help="print each launch the plan names")
@@ -1219,6 +1417,13 @@ def _gathered(arguments: argparse.Namespace) -> int:
     if scope is not None and not LAUNCHABLE_RUN.fullmatch(scope):
         print(f"{PROG}: refused: --run {scope!r} is not a run id", file=sys.stderr)
         return UNRUNNABLE
+    issue = arguments.issue
+    if issue is not None and not tickets.QUALIFIED_ID.fullmatch(issue):
+        print(
+            f"{PROG}: refused: --issue {issue!r} is not a qualified id, <source>:<native-id>",
+            file=sys.stderr,
+        )
+        return UNRUNNABLE
     # The board's name is spelled into its watermark's file name, so it is one path word.
     if not RECORD_COMPONENT.fullmatch(board):
         print(f"{PROG}: refused: --to {board!r} is not a source name", file=sys.stderr)
@@ -1235,10 +1440,11 @@ def _gathered(arguments: argparse.Namespace) -> int:
             named_board=arguments.board is not None,
             since=since,
             scope=scope,
+            issue=None if issue is None else QualifiedTaskId(issue),
             dry_run=arguments.dry_run,
             detach=arguments.detach,
         )
-    except Unbounded as refusal:
+    except (Unbounded, Unowned) as refusal:
         print(f"{PROG}: refused: {refusal}; nothing was launched", file=sys.stderr)
         return UNRUNNABLE
     except OSError as exc:

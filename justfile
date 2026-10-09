@@ -673,9 +673,9 @@ follow-up *args:
 follow-ups *args:
     @./scripts/follow-ups.sh "$@"
 
-# `just follow-ups-answer-comments [--dry-run] [--run RUN-ID] [--to SOURCE] [--since RFC3339]
-# [--detach]`: `orchestrator/follow_up_comments.py` states which comments are read, which run
-# each goes to, and when the board's watermark moves.
+# `just follow-ups-answer-comments [--dry-run] [--run RUN-ID | --issue QUALIFIED-ID] [--to SOURCE]
+# [--since RFC3339] [--detach]`: `orchestrator/follow_up_comments.py` states which comments are
+# read, which run each goes to, and when the board's watermark moves.
 [doc("Answer people's unanswered board comments on follow-ups, one run per owning run; `--dry-run` reports only.")]
 follow-ups-answer-comments *args:
     @./scripts/follow-ups-answer-comments.sh "$@"

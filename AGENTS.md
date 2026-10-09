@@ -981,9 +981,12 @@ comments its marker names (`orchestrator/follow_up_tickets.py`).
 
 <!-- llmlint: ignore-block[agents_md_durable_and_terse] The plan that added the command requires this section to name it, its dry run, what it reads and how a comment is routed and answered, because those decide whether a manager runs it and what its cost scales with; the rule itself is stated once, in the module this points to. -->
 People's board comments are answered by `just follow-ups-answer-comments` (`--dry-run`
-launches nothing). It reads only the items commented on since the board's watermark,
-routes each comment to the run owning its issue, and counts it answered once any run's
-reply names it; `orchestrator/follow_up_comments.py` states the rule.
+launches nothing). `--issue <source>:<id>` reads that one item and its comments by id, and
+`--run <run-id>` the items that run's tickets are bound to, each listing nothing; unscoped,
+the store narrows its query to this host's items commented on since the board's watermark
+before any comment is read. It routes each comment to the run owning its issue, refuses an
+`--issue` no run here owns, and counts a comment answered once any run's reply names it;
+`orchestrator/follow_up_comments.py` states the rule.
 <!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 
 <!-- llmlint: ignore-block[agents_md_durable_and_terse] Which recipe selects which mode is
