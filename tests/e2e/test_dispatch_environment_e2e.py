@@ -420,7 +420,7 @@ def test_a_role_that_reads_the_plan_store_keeps_its_credentials(
 def test_the_primary_claude_identity_is_handed_its_oauth_token(
     tmp_path: Path, oneharness_bin: str, candidate: Candidate
 ) -> None:
-    """The one behavior change this session made: proven against a real turn, not a report.
+    """The carve-out, proven against a real turn rather than against a reported config.
 
     A resolved-config comparison would pass whether or not `oneharness` actually carries
     the value through to the provider it starts — the equivalence suite's own docstring
