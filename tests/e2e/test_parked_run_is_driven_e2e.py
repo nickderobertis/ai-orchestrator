@@ -142,20 +142,34 @@ def test_a_live_quiet_run_reads_parked_driven_and_is_advised_stop_never_adopt(
     Under the engine before the landing the same run read `PARKED: nothing is driving this
     run; adopt it or stop it`, and the adoption that advice offered ended live work.
     """
-    status = _status(parked.run, parked.environment)
+    # Each read is its own sample of a run that turns `ACTIVE` just after every liveness
+    # beat, so each is taken in a `PARKED` stretch rather than trusting the fixture's.
+    readings: list[str] = []
 
-    assert "PARKED" in status, status
+    def _parked_status() -> bool:
+        readings.append(_status(parked.run, parked.environment))
+        return "PARKED" in readings[-1]
+
+    _until("a human reading of PARKED", _parked_status)
+    status = readings[-1]
+
     assert "is alive" in status, f"the advice does not name the live driver:\n{status}"
     assert "stop" in status, f"the advice does not offer `stop`:\n{status}"
     assert "adopt" not in status, f"a PARKED run is offered to an adoption:\n{status}"
     assert "DRIVER DEAD" not in status, status
 
-    reading = _just(
-        "status", parked.run, "--json", "--no-providers", environment=parked.environment
-    )
-    assert reading.returncode == 0, reading.stdout + reading.stderr
-    document = json.loads(reading.stdout)
-    assert document["word"] == "PARKED", document
+    documents: list[dict[str, object]] = []
+
+    def _parked_document() -> bool:
+        reading = _just(
+            "status", parked.run, "--json", "--no-providers", environment=parked.environment
+        )
+        assert reading.returncode == 0, reading.stdout + reading.stderr
+        documents.append(json.loads(reading.stdout))
+        return documents[-1]["word"] == "PARKED"
+
+    _until("a JSON reading of PARKED", _parked_document)
+    document = documents[-1]
     assert document["driven"] is True, document
     assert document["ending"] is None, document
     assert document["paused"] is None, document

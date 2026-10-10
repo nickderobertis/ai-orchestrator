@@ -2134,18 +2134,21 @@ ticket per root cause beside the drafts (`tasks/<run-id>/tickets/`), and copies 
 the `followups` GitHub Projects board, where every session's tickets accumulate —
 commenting on another run's open issue for the same root cause instead of filing a second.
 A root cause is the invariant that is missing or broken, in words independent of the file a
-run saw, with every location contributing to it listed under it: one root cause when a
-single change to the rule removes every instance, even across several places, and two when
-each needs a fix that stands alone. So drafts pointing at different files under one
+run saw, written for a reader who does not know the implementation and naming no code, with
+every location contributing to it listed in its suggested fix: one root cause when a single
+change to the rule removes every instance, even across several places, and two when each
+needs a fix that stands alone. So drafts pointing at different files under one
 invariant are one ticket, and the board search asks first in the invariant's words, then
 once per further text question with the failing file last, and by root-cause slug only for
 a budget overrun, whose slug is derived. An open item at any status whose stated root cause
 meets the bar is the same root cause whatever its location and slug: it takes the run's
 evidence as a comment, whose `Bears on the ticket:` paragraph states only the widened
-invariant and its added locations where the evidence shows the cause broader, and the run's
-ticket takes its slug, so the comment's marker, the account and the recount agree. A ticket
-records the search it ran in its last section, `## Duplicate search`, on the board rather
-than only in the verifying host's account.
+invariant, in the same plain words, and its added locations as the suggested fix's, where the
+evidence shows the cause broader, and the run's ticket takes its slug, so the comment's
+marker, the account and the recount agree. Every section a person reads to decide on a
+ticket comes first; it records the search it ran in `## Duplicate search`, on the board
+rather than only in the verifying host's account, and closes with the agent-facing
+`## Evidence`.
 A ticket's `repositories` lists every repository its fix changes. A ticket listing one has
 its issue created in that repository, as an item of the one board; it must be under the
 board's owner, and `board-status` refuses a ticket naming a repository outside that owner

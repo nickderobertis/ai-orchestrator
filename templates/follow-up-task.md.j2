@@ -118,7 +118,7 @@ variables:
     type: string
     default: ""
   ticket_example:
-    description: The example ticket, every placeholder in it, as the stored record renders. `initial` mode only.
+    description: The example ticket, every placeholder in it, as the stored record renders. Both modes.
     type: text
     default: ""
   disposition_example:
@@ -292,7 +292,7 @@ Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Review
 5. **Group what stands by root cause**, and write one ticket per root cause, to the shape
    under "The verified ticket" below. {{ shape.root_cause_bar }}. So drafts whose evidence
    points at different files but shares one invariant become one ticket, its
-   `**Contributing locations.**` listing each location they name; drafts whose fixes would
+   `## {{ shape.suggested_fix }}`'s {{ shape.contributing_locations }} listing each location they name; drafts whose fixes would
    each stand alone stay separate tickets, each listing the other under
    `## {{ shape.related_tickets }}` where it contributes to the same broader problem. One
    ticket states one concrete suggested fix, which may change several units in several
@@ -319,8 +319,9 @@ Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Review
    `{{ board_status }}` asks by origin, and nothing else does. Every question is a text search,
    `{{ board_items }} --board {{ board }} --repository <each repository the ticket lists> --search <text>`,
    asked in this order:
-   - **first, in the words of the invariant and its symptom** — what a report of this
-     problem would carry whichever file it was found in;
+   - **first, in the words of the invariant and its symptom** — the root cause's own
+     words, the broken guarantee as `## Root cause` states it in plain language, which a
+     report of this problem would carry whichever file it was found in;
    - then once per distinct further question about the symptom, the command or the message;
    - **last, the failing file or function**, because the file is exactly what differs
      between two reports of one root cause.
@@ -348,8 +349,11 @@ Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Review
      ticket for it then **takes that item's `root_cause` slug**: its file is renamed to
      `<that slug>{{ shape.ticket_suffix }}` and its record's `root_cause` is that slug, so the evidence
      comment's marker, the account and the item's occurrence recount all name the one root
-     cause. An item at `Proposal` or `Deferred` is open: no agent picks it up to work on, but
-     it is searched like any other open item and still takes this run's evidence. Where this
+     cause. Where you compare a candidate's locations with this ticket's, read them where its
+     schema puts them: under `## {{ shape.suggested_fix }}`'s {{ shape.contributing_locations }} on a
+     schema-{{ shape.plain_at }} ticket, under `## Root cause`'s {{ shape.contributing_locations }} on a
+     schema-{{ shape.invariant_at }} ticket, and in the prose of its `## Root cause` on an older one. An
+     item at `Proposal` or `Deferred` is open: no agent picks it up to work on, but it is searched like any other open item and still takes this run's evidence. Where this
      run's evidence shows the cause broader than that item states, the comment's
      `Bears on the ticket:` paragraph is required, as "Ownership on the board" states; no run
      edits another run's item.
@@ -532,11 +536,25 @@ A ticket is a local Markdown task in the `{{ shape.drafts_source }}` source, wri
 - Its front matter carries the `{{ shape.record_key }}` record with every key present, and its body
   the headings {{ shape.headings }}, in that order, each with content. `created_by_run` is this
   run, and `owning_runs` includes it.
-- **`## Root cause` is its labelled parts**, {{ shape.root_cause_parts }}, in that order: the
-  invariant or guarantee that is missing or broken, in words that do not depend on which file
-  a run saw, then one bullet per location that contributes to it, each naming its repository
-  and path. {{ shape.root_cause_bar }}. `{{ validate }}` refuses a schema-{{ shape.schema }} ticket without them.
-- **`## {{ shape.duplicate_search }}` is its last section, and terse**, because the user reads every
+- **`## Root cause` is plain prose for a reader who knows what the project does but not how
+  it is built**: the guarantee that is missing or broken, in the product's own terms — what
+  the system should do and does not — with no labelled parts and no file path, module,
+  function, `path:line`, `::`-qualified name or backticked call. Read it back as the person
+  deciding whether to accept the ticket would, on a phone, and rewrite whatever that reader
+  could not follow. {{ shape.root_cause_bar }}. `{{ validate }}` refuses a schema-{{ shape.schema }} root cause
+  carrying a code reference or either schema-{{ shape.invariant_at }} labelled part, naming the text, and
+  misses what a matcher cannot see, so the readability is yours to judge.
+- **Every location is listed in `## {{ shape.suggested_fix }}`**, as its {{ shape.contributing_locations }}
+  part: after its opening paragraph and before its unit subsections, one bullet per
+  location that contributes to the root cause, {{ shape.location_shape }}, possibly several and
+  in several repositories. Every specific code reference the ticket carries belongs in that
+  section. `{{ validate }}` refuses a schema-{{ shape.schema }} fix without the part, with no bullet in it,
+  or with it after a unit subsection.
+- **Every section a person reads to decide on the ticket comes first**, and the agent-facing
+  ones trail: `## {{ shape.duplicate_search }}`, then `## {{ shape.evidence }}`, which closes the ticket.
+  `{{ validate }}` refuses a schema-{{ shape.schema }} body whose last section is not `## {{ shape.evidence }}` or
+  whose `## {{ shape.duplicate_search }}` is not directly before it.
+- **`## {{ shape.duplicate_search }}` comes directly before `## {{ shape.evidence }}`, and is terse**, because the user reads every
   ticket: one line naming the text queries step 7 ran, then one line per open item those
   searches returned that was judged a different root cause — a link to it whose text is its
   title, never a bare URL, and why one change would not remove both — or `none` in place of
@@ -577,11 +595,15 @@ A ticket is a local Markdown task in the `{{ shape.drafts_source }}` source, wri
   carrying {{ shape.workaround_costs }} — or, with a workaround of `{{ shape.no_workaround }}`, saying there is
   {{ shape.no_acceptable_workaround }} and why. `{{ validate }}` refuses a schema-{{ shape.schema }} ticket without them, and
   one whose workaround is not `{{ shape.no_workaround }}` but whose severity with the workaround equals a
-  severity above `low`.
+  severity above `low`. The rubric judges across users, development and resources, but the
+  product owner's part states the impact itself in plain words — how many users lose what,
+  how much a regularly used workflow slows, or the $/month and quota share — never opening on
+  a label naming which area decides ("Users decide: …"), which `{{ validate }}` refuses on a
+  schema-{{ shape.schema }} ticket.
 - **`## {{ shape.suggested_fix }}` states one concrete fix**: a single change, or a single set of changes
   that together remove the root cause, never a list of options or alternatives to choose
   between. It opens with one paragraph saying what changes overall and why that removes the
-  root cause, then one subsection per unit that changes, headed {{ shape.unit_heading }}. Each says
+  root cause, then its {{ shape.contributing_locations }}, then one subsection per unit that changes, headed {{ shape.unit_heading }}. Each says
   what changes in a sentence or two, then shows only the contracts that change — public
   interfaces, CLI flags, schemas, output shapes and documented behaviour — each as a diff
   or the full shape. {{ shape.concision }}. `## {{ shape.rejected_fixes }}` is optional: when another fix was considered, it comes directly
@@ -650,8 +672,8 @@ The shape, with every placeholder to fill:
 ````markdown
 {{ ticket_example }}````
 
-A ticket's `## {{ shape.impact }}` and `## {{ shape.suggested_fix }}` at the level of detail to write, as the
-user approved them for onepipeline#625:
+A ticket's `## Root cause`, `## {{ shape.impact }}` and `## {{ shape.suggested_fix }}` at the level of detail to
+write, as the user approved them for onepipeline#625 and brought to schema {{ shape.schema }}:
 
 ````markdown
 {{ shape.worked_example }}````
@@ -833,6 +855,21 @@ what the comment disputes.
 
 {{ shape.rubric }}
 <!-- llmlint: ignore-end[changed_behavior_has_e2e] -->
+
+## The shape a changed ticket is left in
+
+A ticket this dispatch changes is left at schema {{ shape.schema }}, the shape below, written for the
+person deciding whether to accept it: `## Root cause` is plain prose for a reader who knows
+what the project does but not how it is built, naming no file, module, function,
+`path:line` or code identifier; every location contributing to it is listed in
+`## {{ shape.suggested_fix }}`'s {{ shape.contributing_locations }}, {{ shape.location_shape }}, after its opening paragraph and
+before its unit subsections; the `**{{ shape.owner_cost }}.**` part states the impact with no
+label naming which area decides; and `## {{ shape.duplicate_search }}`, then `## {{ shape.evidence }}`, close it.
+`{{ validate }}` refuses a schema-{{ shape.schema }} ticket that departs from it, and `{{ check_responses }}`
+refuses this account while the ticket of an issue it answers on is refused.
+
+````markdown
+{{ ticket_example }}````
 
 ## What to do, in order
 

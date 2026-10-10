@@ -1062,13 +1062,16 @@ carries natively and `onetaskgraph task deps` walks it from either end — and i
 at each changed place which accepted ticket changed it, by URL, listing it as a `dependency`
 entry of its `## Related tickets`. A `Proposal` or `Deferred` item's fix is never assumed;
 it is at most a `related` entry there. **A root cause is the invariant that is missing or
-broken**, in words independent of the file a run saw, with every location contributing to
-it listed under it: one root cause when a single change to the rule removes every instance,
-even across several places, and two when each needs a fix that stands alone. So a run
-groups its drafts by invariant. The same-root-cause path is unchanged: an accepted item for
-a ticket's own root cause takes the run's evidence as a comment, never a dependency — and an
-open item at any status whose stated root cause meets that bar is the ticket's own root
-cause whatever its location and slug, whose slug the run's ticket then takes.
+broken**, in words independent of the file a run saw, written for a reader who does not know
+the implementation and naming no code, with every location contributing to it listed in its
+suggested fix: one root cause when a single change to the rule removes every instance, even
+across several places, and two when each needs a fix that stands alone. So a run groups its
+drafts by invariant, and a ticket's sections a person decides from come first, its
+`## Duplicate search` and `## Evidence` last. The same-root-cause path is unchanged: an
+accepted item for a ticket's own root cause takes the run's evidence as a comment, never a
+dependency — and an open item at any status whose stated root cause meets that bar is the
+ticket's own root cause whatever its location and slug, whose slug the run's ticket then
+takes.
 
 **The board is searched, never listed: every query of it is `python -m
 orchestrator.follow_up_tickets board-items`.** Reading every item of the board spends a share

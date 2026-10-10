@@ -239,7 +239,8 @@ def test_each_follow_up_section_states_the_root_cause_bar_and_the_invariant_firs
 
     for described in (
         "the invariant that is missing or broken",
-        "with every location contributing to it listed under it",
+        "written for a reader who does not know the implementation",
+        "with every location contributing to it listed in its suggested fix",
         "one root cause when a single change to the rule removes every instance, even across "
         "several places, and two when each needs a fix that stands alone",
         "whose stated root cause meets",

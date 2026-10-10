@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
-from follow_up_ticket_shape import before_schema_10
+from follow_up_ticket_shape import before_schema_10, before_schema_11
 from nx_workspace import WORKSPACE_INSTALL_MARKS
 from published_tools import ONETASKGRAPH_BIN
 from test_follow_ups_answer_comments_recipe_e2e import (
@@ -51,6 +51,7 @@ from test_follow_ups_recipe_e2e import (
     BOARD,
     FULL_SEVERITY,
     HOST,
+    LOCATIONS,
     OK,
     REFUSED,
     REPOSITORY,
@@ -95,10 +96,12 @@ pytestmark = [*WORKSPACE_INSTALL_MARKS, pytest.mark.xdist_group("follow-ups-comm
 #: 1, with no `host`, no `repositories` and no `## Impact`; 2, with a `host` but neither of the
 #: others; 3, with `repositories` but no `## Impact`; 4, the last with the headings schema 5
 #: retired; 5, which the onepipeline#438 ticket carried; 6, the last with no stored estimate; 7,
-#: the last before the rubric's structure; 8, the first with it; and 9, the one before the
-#: current, the last whose `## Root cause` is plain prose and which closes with no
-#: `## Duplicate search` — 7, 8 and 9 all still validate, and are brought forward when they
-#: are rewritten.
+#: the last before the rubric's structure; 8, the first with it; 9, the last whose
+#: `## Root cause` is plain prose naming where it lives and which closes with no
+#: `## Duplicate search`; and 10, the one before the current, whose `## Root cause` is its
+#: invariant and contributing locations and which closes with `## Duplicate search` rather than
+#: `## Evidence` — 7, 8, 9 and 10 all still validate, and are brought forward when they are
+#: rewritten.
 PROPOSED_CAUSE = "listing-cursor-skips-last-page"
 UNSURE_CAUSE = "lock-file-left-after-crash"
 DEFERRED_CAUSE = "sweep-trailer-omits-a-family"
@@ -117,6 +120,7 @@ OLDER_CAUSES = dict(
             "cache-never-expires",
             "badge-counts-stale-items",
             "feed-skips-a-retried-entry",
+            "queue-drops-a-late-job",
         ),
         strict=True,
     )
@@ -136,7 +140,7 @@ ASKING = "Is this still needed once the listing rewrite lands? I can't tell from
 SEEN_AGAIN = "Seen again on the current release: the watcher missed a rename under `src/`.\n"
 REQUESTED_FIX = "Page the export by cursor in `src/export.py`, as the listing already does."
 #: The whole `## Suggested fix` the agent writes from that request: its paragraph and its unit.
-REQUESTED_SECTION = f"{REQUESTED_FIX}\n\n{UNIT}"
+REQUESTED_SECTION = f"{REQUESTED_FIX}\n\n{LOCATIONS}\n\n{UNIT}"
 
 WITHDREW = (
     "Withdrew this run's proposal: the listing rewrite the comment names removed the cursor, so "
@@ -190,14 +194,13 @@ else:
         text, count=1, flags=re.DOTALL,
     )
 text = re.sub(r"## Repository\\n\\n.*?\\n\\n(?=## )", "", text, count=1, flags=re.DOTALL)
+# The root cause is the plain guarantee alone: its labelled parts, and any location its prose
+# named, go, because every location is the fix's, which `fix` carries.
 invariant, located = (f"**{part}.**" for part in tickets.ROOT_CAUSE_PARTS)
-if invariant not in text:
-    text = re.sub(
-        rf"(## {tickets.ROOT_CAUSE}\\n\\n)(.*?)(\\n\\n## )",
-        lambda held: f"{held[1]}{invariant} {held[2]}\\n\\n{located}\\n"
-        f"- some-service `src/cursor.py`: where it is seen.{held[3]}",
-        text, count=1, flags=re.DOTALL,
-    )
+cause = re.search(rf"## {tickets.ROOT_CAUSE}\\n\\n(.*?)(?=\\n\\n## )", text, flags=re.DOTALL)
+stated = cause[1].split(f"\\n\\n{located}", 1)[0].replace(f"{invariant} ", "", 1).strip()
+plain = re.split(r"(?<=[.!?])\\s", stated, maxsplit=1)[0]
+text = text[: cause.start(1)] + plain + text[cause.end(1) :]
 if f"## {tickets.DUPLICATE_SEARCH}\\n" not in text:
     text = text.rstrip("\\n") + (
         f"\\n\\n## {tickets.DUPLICATE_SEARCH}\\n\\n"
@@ -210,6 +213,12 @@ text = re.sub(
     rf"(## {tickets.SUGGESTED_FIX}\\n\\n).*?(\\n\\n## )", lambda held: held[1] + fix + held[2],
     text, count=1, flags=re.DOTALL,
 )
+# `## Evidence` closes the ticket, after `## Duplicate search`.
+evidence = re.search(
+    rf"\\n\\n## {tickets.EVIDENCE}\\n\\n.*?(?=\\n\\n## |\\Z)", text, flags=re.DOTALL
+)
+text = text[: evidence.start()] + text[evidence.end() :]
+text = text.rstrip("\\n") + evidence[0].rstrip("\\n") + "\\n"
 path.write_text(text, encoding="utf-8")
 """
 
@@ -458,6 +467,10 @@ def _impact(body: str) -> str:
     return body.split(f"## {tickets.IMPACT}\n\n", 1)[1].split("\n\n## ", 1)[0].strip()
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split]  # noqa: E501 - llmlint reads a directive's rule list off one line
+# A pure helper composing the body an older schema stored; it launches nothing and drives no
+# recipe, and the journeys that hand its body to the recipe sit inside their own blocks for
+# both rules.
 def _older(ticket: tickets.Ticket, schema: int) -> str:
     """``ticket`` as ``schema`` stored it: no estimate, frequency or item binding.
 
@@ -471,12 +484,22 @@ def _older(ticket: tickets.Ticket, schema: int) -> str:
     :data:`tickets.HOST_AT` its record names no `host` and its `## Evidence` no machine. From
     schema 5 (:data:`tickets.RETIRED_AT`) its body keeps today's headings; before it, the body
     carries the two that schema retired — `## Repository`, after `## Root cause`, and
-    `## Suggested fixes` in place of `## Suggested fix`. Before :data:`tickets.INVARIANT_AT` its
-    `## Root cause` is plain prose and it carries no `## Duplicate search`.
+    `## Suggested fixes` in place of `## Suggested fix`. Before :data:`tickets.PLAIN_AT` its
+    `## Root cause` is its invariant and the locations, which its fix does not list, and its
+    `## Evidence` follows `## Examples`; before :data:`tickets.INVARIANT_AT` its
+    `## Root cause` is plain prose naming where it lives, and it carries no
+    `## Duplicate search`.
     """
     assert tickets.PRIOR_SCHEMAS[0] <= schema < tickets.SCHEMA, schema
     assert f"- {tickets.ESTIMATE_LINE}:" not in ticket.body, ticket.body
-    ticket = dataclasses.replace(ticket, body=before_schema_10(ticket.body))
+    ticket = dataclasses.replace(
+        ticket,
+        body=(
+            before_schema_11(ticket.body)
+            if schema >= tickets.INVARIANT_AT
+            else before_schema_10(ticket.body)
+        ),
+    )
     intermittent = tickets.Frequency.INTERMITTENT
     if schema >= tickets.STRUCTURE_AT:
         # The rubric's structure as it stands: what came after it is an optional field alone.
@@ -523,6 +546,9 @@ def _older(ticket: tickets.Ticket, schema: int) -> str:
         held["repositories"] = [ticket.repository]
     held["metadata"] = {tickets.KEY: record | {"schema": schema}}
     return frontmatter(held, body)
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split]  # noqa: E501 - llmlint reads a directive's rule list off one line
 
 
 def _file_older(bench: Bench, run: str, cause: str, schema: int) -> Filed:

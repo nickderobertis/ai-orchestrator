@@ -41,6 +41,7 @@ reader to prove it.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -127,12 +128,47 @@ def private_node_modules(destination: Path) -> None:
     `.bin` included — is the copy's own, so the in-sync Bun install `scripts/nx.sh` runs
     there re-links the copy's `.bin` and never this checkout's. A symlink instead is one
     tree under two names, and a copy's install then writes this checkout's.
+
+    A hardlink cannot cross a filesystem, and a host whose temporary directory is on
+    another one than this checkout fails `cp -al` with `Invalid cross-device link`. There
+    the source is `_same_device_install`'s seed instead: one real copy per session on the
+    destination's filesystem, which every copy is hardlinked from as it would be from
+    this checkout's.
     """
+    destination.mkdir(parents=True, exist_ok=True)
+    source = NODE_MODULES
+    if destination.stat().st_dev != NODE_MODULES.stat().st_dev:
+        source = _same_device_install(destination)
     subprocess.run(
-        ["cp", "-al", str(NODE_MODULES), str(destination / "node_modules")],
+        ["cp", "-al", str(source), str(destination / "node_modules")],
         check=True,
         capture_output=True,
     )
+
+
+def _same_device_install(destination: Path) -> Path:
+    """A real copy of this checkout's install on `destination`'s filesystem, made once.
+
+    It sits in the pytest session's own temporary root (`pytest-<n>`, shared by every
+    xdist worker), so pytest's retention removes it with the session; outside one it
+    sits beside `destination`. Workers racing to make it each copy under a private name
+    and rename into place, and the loser discards its copy.
+    """
+    root = next(
+        (parent for parent in destination.parents if re.fullmatch(r"pytest-\d+", parent.name)),
+        destination.parent,
+    )
+    seed = root / "node-modules-seed"
+    if not seed.is_dir():
+        staging = root / f"node-modules-seed.{os.getpid()}"
+        subprocess.run(
+            ["cp", "-a", str(NODE_MODULES), str(staging)], check=True, capture_output=True
+        )
+        try:
+            staging.rename(seed)
+        except OSError:
+            shutil.rmtree(staging)
+    return seed
 
 
 def copy_checkout(destination: Path) -> None:

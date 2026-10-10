@@ -120,12 +120,17 @@ BOARD = "followups"
 #: `## Duplicate search` section recording what the board search asked and what it judged a
 #: different root cause, and the optional `## Related tickets` section before it, on whose
 #: `dependency` bullets a dependency's URL is named. Schemas 7, 8 and 9 stay sound without them.
-SCHEMA = 10
+#: Schema 11 made the body readable top to bottom by someone who knows what a project does but
+#: not how it is built: `## Root cause` is plain prose naming no code, the contributing
+#: locations moved to `## Suggested fix`'s :data:`CONTRIBUTING_LOCATIONS` part, the
+#: product owner's cost states the impact with no who-decides label, and `## Evidence`, which
+#: agents read, moved last, after `## Duplicate search`. Schemas 7 to 10 stay sound as they were.
+SCHEMA = 11
 #: Every earlier schema a re-dispatch brings a ticket forward from, enumerated rather than
 #: admitted by range, so a record declaring any other schema — zero, negative, a later one or
 #: no integer — is refused by name rather than read as an older ticket. `board-status` reads a
 #: board item's record of one before :data:`ESTIMATE_AT` as storing no estimate.
-PRIOR_SCHEMAS = (1, 2, 3, 4, 5, 6, 7, 8, 9)
+PRIOR_SCHEMAS = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
 #: The schema just before, which every reader still accepts as sound: its body predates
 #: :data:`SCHEMA`'s structure, and a run that rewrites it brings it forward.
 PRIOR_SCHEMA = PRIOR_SCHEMAS[-1]
@@ -140,9 +145,13 @@ STRUCTURE_AT = 8
 #: The schema whose `## Root cause` is its labelled parts, whose body ends with
 #: `## Duplicate search`, and whose dependencies are named on `## Related tickets` bullets.
 INVARIANT_AT = 10
+#: The schema whose `## Root cause` is plain prose naming no code, whose `## Suggested fix`
+#: carries the contributing locations, and whose body ends with `## Evidence`.
+PLAIN_AT = 11
 #: Every schema a reader accepts as sound: from :data:`ESTIMATE_AT` on, because schema 7's body
-#: predates the structure :data:`STRUCTURE_AT` added, and schemas 7 to 9 the structure
-#: :data:`INVARIANT_AT` added, which a run that rewrites its own ticket brings it to.
+#: predates the structure :data:`STRUCTURE_AT` added, schemas 7 to 9 the structure
+#: :data:`INVARIANT_AT` added, and schemas 7 to 10 the shape :data:`PLAIN_AT` gave it, which a
+#: run that rewrites its own ticket brings it to.
 SOUND_SCHEMAS = tuple(range(ESTIMATE_AT, SCHEMA + 1))
 
 #: The metadata key a ticket's record sits under, which travels onto the board item.
@@ -513,21 +522,41 @@ QUALIFIED_ID = re.compile(r"(?P<source>[^:\s]+):(?P<native>\S+)")
 #: The `url` the board reports for an accepted item, as a ticket's text links it: a web URL.
 ITEM_URL = re.compile(r"https?://\S+")
 
-#: The heading whose section states the root cause: from :data:`INVARIANT_AT`, its labelled
-#: parts :data:`ROOT_CAUSE_PARTS`, in this order — the invariant or guarantee that is missing or
-#: broken, in words that do not depend on which file a run saw, then one bullet per location
-#: that contributes to it, each naming its repository and path.
+#: The heading whose section states the root cause. From :data:`PLAIN_AT` it is plain prose
+#: for a reader who knows what the project does but not how it is built: the guarantee that is
+#: missing or broken, in the product's own terms, naming no file, module, function or line.
+#: At :data:`INVARIANT_AT` alone it was the labelled parts :data:`ROOT_CAUSE_PARTS`, in this
+#: order — the invariant, then one bullet per location that contributes to it.
 ROOT_CAUSE = "Root cause"
 ROOT_CAUSE_PARTS = ("Invariant", "Contributing locations")
+#: The labelled part of a :data:`PLAIN_AT` `## Suggested fix` that lists the locations, after
+#: its opening paragraph and before its unit subsections, in the bullet shape
+#: :data:`LOCATION_SHAPE` names: every specific code reference a ticket carries is there.
+CONTRIBUTING_LOCATIONS = ROOT_CAUSE_PARTS[1]
+#: How one contributing location reads, wherever a ticket's schema puts the list.
+LOCATION_SHAPE = "`- <repository> `<path>`: <what this location does that breaks the guarantee>`"
 
-#: The last section from :data:`INVARIANT_AT` on: the text queries the board search ran, then
-#: one line per open item it returned that was judged a different root cause, or `none`. It is
-#: on the board because the disposition account stays on the host that verified the ticket.
+#: The section that closes the ticket at :data:`INVARIANT_AT`, and directly precedes
+#: `## Evidence` from :data:`PLAIN_AT` on: the text queries the board search ran, then one line
+#: per open item it returned that was judged a different root cause, or `none`. It is on the
+#: board because the disposition account stays on the host that verified the ticket.
 DUPLICATE_SEARCH = "Duplicate search"
 
-#: The level-2 headings a ticket's body carries, in this order, each with content;
-#: :data:`DUPLICATE_SEARCH` from :data:`INVARIANT_AT` on.
+#: The level-2 headings a :data:`SCHEMA` ticket's body carries, in this order, each with
+#: content: every section a person reads to decide on the ticket first, then the agent-facing
+#: :data:`DUPLICATE_SEARCH` and `## Evidence` last.
 HEADINGS = (
+    ROOT_CAUSE,
+    "Impact",
+    "Examples",
+    "Suggested fix",
+    "Owning runs",
+    DUPLICATE_SEARCH,
+    "Evidence",
+)
+#: The headings a ticket before :data:`PLAIN_AT` carries, in that schema's order;
+#: :data:`DUPLICATE_SEARCH`, last, only from :data:`INVARIANT_AT` on.
+PRIOR_HEADINGS = (
     ROOT_CAUSE,
     "Impact",
     "Examples",
@@ -738,6 +767,13 @@ IMPACT_PARTS = (
 #: The last part, whose content is :data:`WORKAROUND_COSTS` as bullets, or with a workaround
 #: of :data:`NO_WORKAROUND` a statement carrying :data:`NO_ACCEPTABLE_WORKAROUND` and why.
 WORKAROUND_COST = IMPACT_PARTS[-1]
+#: The part stating what the root cause costs the product owner, and the label a
+#: :data:`PLAIN_AT` ticket's part never opens with: which impact area decides the severity.
+#: The rubric still judges across those areas; the reader is told the impact, not the area.
+OWNER_COST = IMPACT_PARTS[2]
+WHO_DECIDES = re.compile(
+    r"(?:the\s+)?(?:users|development|resources)(?:\s+area)?\s+decides?\b", re.IGNORECASE
+)
 WORKAROUND_COSTS = ("Applying it", "Side effects on the outcome", "Discovery")
 NO_ACCEPTABLE_WORKAROUND = "no acceptable workaround"
 _LABELLED_PART = re.compile(r"^\*\*(?P<part>[^*\n]+)\.\*\*", re.MULTILINE)
@@ -1612,7 +1648,7 @@ def _repositories_problems(repositories: object, repository: object) -> list[str
 
 
 def _impact_problems(
-    text: str, held: Mapping[str, object] | None, *, structured: bool = True
+    text: str, held: Mapping[str, object] | None, *, structured: bool = True, plain: bool = False
 ) -> list[str]:
     """Every way an `## Impact` section's content is not prose followed by its lines.
 
@@ -1623,6 +1659,7 @@ def _impact_problems(
     ``structured`` holds a :data:`STRUCTURE_AT` ticket to its labelled parts and to the rule
     that an acceptable workaround lowers a severity above `low`, and its estimate line to the
     capped raise; an older ticket predates all three, so its line may be the uncapped rule's.
+    ``plain`` holds a :data:`PLAIN_AT` ticket's product owner's cost to stating the impact.
     """
     where = f"the body's `## {IMPACT}` section"
     lines = [line for line in IMPACT_LINE.finditer(text) if line["label"] in IMPACT_LINES]
@@ -1667,7 +1704,7 @@ def _impact_problems(
             f"how it is applied, or write `{NO_WORKAROUND}`"
         )
     if structured and prose.strip():
-        found.extend(_impact_parts_problems(prose, workaround))
+        found.extend(_impact_parts_problems(prose, workaround, plain=plain))
     if held is not None:
         found.extend(
             _estimate_problems(text, held, severities.get(MITIGATED_LINE), prior=not structured)
@@ -1714,13 +1751,14 @@ def _workaround_problems(
     return []
 
 
-def _impact_parts_problems(prose: str, workaround: str | None) -> list[str]:
+def _impact_parts_problems(prose: str, workaround: str | None, *, plain: bool) -> list[str]:
     """How a :data:`STRUCTURE_AT` section's prose is not its :data:`IMPACT_PARTS`, in order.
 
     Each part opens a line as `**<part>.**` and has content up to the next part. The last,
     :data:`WORKAROUND_COST`, carries the bullets :data:`WORKAROUND_COSTS` in order, each with
     content — or, with a workaround of :data:`NO_WORKAROUND`, says there is
-    :data:`NO_ACCEPTABLE_WORKAROUND`, and why, in their place.
+    :data:`NO_ACCEPTABLE_WORKAROUND`, and why, in their place. On a ``plain`` ticket the
+    product owner's cost states the impact itself, never opening on :data:`WHO_DECIDES`.
     """
     where = f"the body's `## {IMPACT}` section"
     labelled = list(_LABELLED_PART.finditer(prose))
@@ -1743,6 +1781,12 @@ def _impact_parts_problems(prose: str, workaround: str | None) -> list[str]:
     empty = [f"`**{part}.**`" for part, content in contents.items() if not content]
     if empty:
         return [f"{where}'s part {', '.join(empty)} carries no content"]
+    if plain and (label := WHO_DECIDES.match(contents[OWNER_COST])):
+        return [
+            f"{where}'s `**{OWNER_COST}.**` part opens with {label[0]!r}, a label naming the "
+            "deciding area; state the impact itself in plain words — how many users lose what, "
+            "how much a regularly used workflow slows, or the $/month and quota share"
+        ]
     cost = contents[WORKAROUND_COST]
     if workaround == NO_WORKAROUND:
         if NO_ACCEPTABLE_WORKAROUND not in cost.lower():
@@ -1813,11 +1857,16 @@ def _body_problems(
     *,
     structured: bool = True,
     invariant: bool = True,
+    plain: bool = True,
 ) -> list[str]:
     """Every way a body is not a ticket's; ``structured`` is :func:`_impact_problems`'s, and
     also holds `## Suggested fix` to its opening paragraph and unit subsections. ``invariant``
-    holds an :data:`INVARIANT_AT` ticket to its `## Root cause` parts, its last
-    `## Duplicate search` and its optional `## Related tickets`; an older body carries none."""
+    holds an :data:`INVARIANT_AT` ticket to its `## Duplicate search` and its optional
+    `## Related tickets`; an older body carries none. ``plain`` holds a :data:`PLAIN_AT` ticket
+    to its order, its plain `## Root cause`, the :data:`CONTRIBUTING_LOCATIONS` of its
+    `## Suggested fix` and its last `## Evidence`; without it an :data:`INVARIANT_AT` ticket's
+    `## Root cause` is its :data:`ROOT_CAUSE_PARTS` and `## Duplicate search` is its last."""
+    plain = plain and invariant
     if not isinstance(body, str):
         return ["the ticket has no body"]
     found = drafts.sections(body)
@@ -1828,7 +1877,13 @@ def _body_problems(
             + " and ".join(f"`## {heading}`" for heading in retired)
             + f", which schema {RETIRED_AT} retired; bring the ticket to the current shape"
         ]
-    headings = HEADINGS if invariant else tuple(one for one in HEADINGS if one != DUPLICATE_SEARCH)
+    headings = (
+        HEADINGS
+        if plain
+        else PRIOR_HEADINGS
+        if invariant
+        else tuple(one for one in PRIOR_HEADINGS if one != DUPLICATE_SEARCH)
+    )
     after = 0
     for required in headings:
         try:
@@ -1842,13 +1897,25 @@ def _body_problems(
             ]
         if not found[at][1].strip():
             return [f"the body's `## {required}` section is empty"]
-        if required == ROOT_CAUSE and invariant and (cause := _root_cause_problems(found[at][1])):
+        if (
+            required == ROOT_CAUSE
+            and invariant
+            and (
+                cause := _plain_cause_problems(found[at][1])
+                if plain
+                else _root_cause_problems(found[at][1])
+            )
+        ):
             return cause
         if required == IMPACT and (
-            impact := _impact_problems(found[at][1], held, structured=structured)
+            impact := _impact_problems(found[at][1], held, structured=structured, plain=plain)
         ):
             return impact
-        if required == SUGGESTED_FIX and structured and (fix := _fix_problems(found[at][1])):
+        if (
+            required == SUGGESTED_FIX
+            and structured
+            and (fix := _fix_problems(found[at][1], locations=plain))
+        ):
             return fix
         if required == EVIDENCE and is_host(host) and str(host) not in found[at][1]:
             return [
@@ -1856,7 +1923,103 @@ def _body_problems(
                 "record's `host` states; state there the host the verification ran on"
             ]
         after = at + 1
-    return _rejected_fixes_problems(found) + (_tail_problems(found) if invariant else [])
+    return _rejected_fixes_problems(found) + (
+        _tail_problems(found, plain=plain) if invariant else []
+    )
+
+
+#: What a :data:`PLAIN_AT` `## Root cause` names only by leaving the product's own terms, each
+#: refused there and nowhere else: a file path carrying an extension, a `path:line` reference,
+#: a `::`-qualified name and a backticked call. Written to miss rather than over-refuse: an
+#: extension is one a source or configuration file carries, a capitalised `Name.js` is the
+#: product it names, and a URL is stripped before any is read.
+_FILE_EXTENSIONS = (
+    "rs|py|pyi|sh|bash|ts|tsx|js|jsx|mjs|cjs|json|jsonl|ya?ml|toml|md|j2|go|rb|java|kt|swift|"
+    "cc|cpp|hpp|cs|sql|html|css|scss|lock|txt|cfg|ini|proto"
+)
+#: A token a path is made of, and where one starts: not inside a longer word, path or number.
+_TOKEN = r"[\w./-]"
+_STARTS = rf"(?<!{_TOKEN})"
+CODE_REFERENCES = (
+    (
+        "a file path",
+        re.compile(rf"{_STARTS}[\w.-]*?[\w-](?:/[\w.-]+)*\.(?:{_FILE_EXTENSIONS})(?![\w/-])"),
+    ),
+    # A path or a dotted name — so not `step:2` — then a colon and a line number.
+    (
+        "a `path:line` reference",
+        re.compile(rf"{_STARTS}(?=[\w-]*[./]){_TOKEN}*[A-Za-z]{_TOKEN}*:\d+(?!\w)"),
+    ),
+    ("a `::`-qualified name", re.compile(r"\w+(?:::\w+)+")),
+)
+#: A backticked span, paired left to right, and a call inside one: a name, then parentheses.
+_CODE_SPAN = re.compile(r"`[^`\n]+`")
+_CALL = re.compile(r"[A-Za-z_][\w.:]*\([^()\n]*\)")
+#: What a URL or a markdown link's target is, which a plain root cause may carry.
+_LINKED = re.compile(r"\]\([^)\s]*\)|https?://\S+")
+
+
+@dataclass(frozen=True)
+class CodeReference:
+    """One code reference a plain root cause carries: what kind it is, and its text."""
+
+    kind: str
+    text: str
+
+
+def code_references(text: str) -> list[CodeReference]:
+    """Each code reference in ``text``: what it is, and the text that is one.
+
+    :data:`CODE_REFERENCES`, then each backticked call. A URL, or a markdown link's target, is
+    blanked first, so a link is never one; a file path that is a product's name is not one.
+    """
+    unlinked = _LINKED.sub(lambda link: " " * len(link[0]), text)
+    found = [
+        CodeReference(kind, match[0])
+        for kind, pattern in CODE_REFERENCES
+        for match in pattern.finditer(unlinked)
+        if not (kind == CODE_REFERENCES[0][0] and _product_name(match[0]))
+    ]
+    found.extend(
+        CodeReference("a backticked call", span[0])
+        for span in _CODE_SPAN.finditer(unlinked)
+        if _CALL.search(span[0])
+    )
+    return found
+
+
+def _product_name(token: str) -> bool:
+    """Whether ``token`` is a product named like a file, as `Node.js` is: one capitalised word."""
+    stem, _, extension = token.rpartition(".")
+    return extension == "js" and "/" not in stem and stem[:1].isupper()
+
+
+def _plain_cause_problems(text: str) -> list[str]:
+    """How a :data:`PLAIN_AT` `## Root cause` is not plain prose in the product's own terms.
+
+    It carries neither schema-10 labelled part and no code reference :func:`code_references`
+    finds; each refusal names the text and points at where it belongs.
+    """
+    where = f"the body's `## {ROOT_CAUSE}` section"
+    moved = f"`## {SUGGESTED_FIX}`'s `**{CONTRIBUTING_LOCATIONS}.**`"
+    labelled = [
+        part["part"].strip()
+        for part in _LABELLED_PART.finditer(text)
+        if part["part"].strip() in ROOT_CAUSE_PARTS
+    ]
+    if labelled:
+        return [
+            f"{where} carries "
+            + " and ".join(f"`**{part}.**`" for part in labelled)
+            + f", which schema {PLAIN_AT} retired; state the guarantee that is missing or broken "
+            f"as plain prose in the product's own terms, and list each location under {moved}"
+        ]
+    return [
+        f"{where} names {found.text!r}, {found.kind}; state the guarantee in the product's own "
+        "terms for a reader who does not know the implementation, and move every code "
+        f"reference to {moved}"
+        for found in code_references(text)
+    ]
 
 
 def _root_cause_problems(text: str) -> list[str]:
@@ -1887,16 +2050,27 @@ def _root_cause_problems(text: str) -> list[str]:
     return []
 
 
-def _tail_problems(found: Sequence[tuple[str, str]]) -> list[str]:
+def _tail_problems(found: Sequence[tuple[str, str]], *, plain: bool) -> list[str]:
     """How an :data:`INVARIANT_AT` body does not end with its optional `## Related tickets`
-    and then `## Duplicate search`, each at most once."""
+    and then `## Duplicate search`, each at most once — and, when ``plain``, then
+    `## Evidence`, which closes a :data:`PLAIN_AT` ticket."""
     names = [name for name, _ in found]
     problems = []
     if names.count(DUPLICATE_SEARCH) > 1:
         problems.append(
             f"the body carries `## {DUPLICATE_SEARCH}` {names.count(DUPLICATE_SEARCH)} times"
         )
-    elif names[-1] != DUPLICATE_SEARCH:
+    elif plain and names[-1] != EVIDENCE:
+        problems.append(
+            f"the body's `## {EVIDENCE}` section is not its last; from schema {PLAIN_AT} it "
+            "closes the ticket, after every section a person reads to decide on it"
+        )
+    elif plain and names[-2] != DUPLICATE_SEARCH:
+        problems.append(
+            f"the body's `## {DUPLICATE_SEARCH}` section is not directly before "
+            f"`## {EVIDENCE}`; from schema {PLAIN_AT} it comes right before it"
+        )
+    elif not plain and names[-1] != DUPLICATE_SEARCH:
         problems.append(
             f"the body's `## {DUPLICATE_SEARCH}` section is not its last; it closes the ticket"
         )
@@ -1997,12 +2171,13 @@ _FENCE = re.compile(
 )
 
 
-def _fix_problems(text: str) -> list[str]:
+def _fix_problems(text: str, *, locations: bool) -> list[str]:
     """How a :data:`STRUCTURE_AT` `## Suggested fix` is not a paragraph, then its units.
 
     It opens with a high-level paragraph, then carries one or more level-3 subsections, each
     headed as :data:`UNIT_HEADING` heads a unit and each with content. A fenced block is
-    content, so a heading-shaped line inside one is not a subsection.
+    content, so a heading-shaped line inside one is not a subsection. With ``locations``, a
+    :data:`PLAIN_AT` fix carries its :data:`CONTRIBUTING_LOCATIONS` between the two.
     """
     where = f"the body's `## {SUGGESTED_FIX}` section"
     # Blanked to the same length, so a position in it is the same position in ``text``.
@@ -2015,11 +2190,17 @@ def _fix_problems(text: str) -> list[str]:
             f"{where} carries no unit subsection; open it with one paragraph saying what changes "
             f"and why that removes the root cause, then one subsection per unit headed {shape}"
         ]
-    if not unfenced[: headings[0].start()].strip():
+    # The opening paragraph is what precedes the locations, where a fix carries them.
+    opening = unfenced[: headings[0].start()]
+    if locations:
+        opening = opening.split(f"**{CONTRIBUTING_LOCATIONS}.**", 1)[0]
+    if not opening.strip():
         return [
             f"{where} does not open with a paragraph before its first unit subsection; say "
             "there what changes overall and why that removes the root cause"
         ]
+    if locations and (listed := _locations_problems(unfenced, headings[0].start())):
+        return listed
     ends = [heading.start() for heading in headings[1:]] + [len(text)]
     for heading, end in zip(headings, ends, strict=True):
         if not UNIT_HEADING.fullmatch(heading[0].rstrip()):
@@ -2029,6 +2210,44 @@ def _fix_problems(text: str) -> list[str]:
                 f"{where}'s subsection {heading[0].strip()!r} is empty; say what changes in that "
                 "unit and show each contract that changes"
             ]
+    return []
+
+
+#: One contributing location, as :data:`LOCATION_SHAPE` names it: its repository, its path in
+#: backticks, then what it does.
+LOCATION = re.compile(r"^- [^`\n]*\S[ \t]+`[^`\n]+`:[ \t]*\S", re.MULTILINE)
+
+
+def _locations_problems(unfenced: str, units: int) -> list[str]:
+    """How a :data:`PLAIN_AT` `## Suggested fix` does not carry its contributing locations.
+
+    ``unfenced`` is the section with its fenced blocks blanked, and ``units`` where its first
+    unit subsection starts: the part :data:`CONTRIBUTING_LOCATIONS` opens a line after the
+    opening paragraph, before that subsection, and carries a bullet in :data:`LOCATION_SHAPE`.
+    """
+    where = f"the body's `## {SUGGESTED_FIX}` section"
+    part = f"`**{CONTRIBUTING_LOCATIONS}.**`"
+    placed = [
+        found.start()
+        for found in _LABELLED_PART.finditer(unfenced)
+        if found["part"].strip() == CONTRIBUTING_LOCATIONS
+    ]
+    if not placed:
+        return [
+            f"{where} carries no {part} part; list there, after its opening paragraph and "
+            f"before its unit subsections, every location that contributes to the root cause, "
+            f"one bullet each, {LOCATION_SHAPE}"
+        ]
+    if placed[0] > units:
+        return [
+            f"{where}'s {part} part comes after a unit subsection; it comes after the opening "
+            "paragraph and before the first unit subsection"
+        ]
+    if not LOCATION.search(unfenced[placed[0] : units]):
+        return [
+            f"{where}'s {part} part carries no bullet {LOCATION_SHAPE}; list every location that "
+            "contributes to the root cause, one bullet each naming its repository and path"
+        ]
     return []
 
 
@@ -2165,9 +2384,15 @@ def problems(  # noqa: PLR0913 - each reading of an item is its own keyword
     checked = None if pending or not isinstance(held, Mapping) else held
     structured = isinstance(held, Mapping) and _structured(held)
     invariant = isinstance(held, Mapping) and _invariant(held)
+    plain = isinstance(held, Mapping) and _plain_shape(held)
     found.extend(
         _body_problems(
-            item.get("content"), host, checked, structured=structured, invariant=invariant
+            item.get("content"),
+            host,
+            checked,
+            structured=structured,
+            invariant=invariant,
+            plain=plain,
         )
     )
     found.extend(edge_problems(edges))
@@ -2184,6 +2409,12 @@ def _invariant(held: Mapping[str, object]) -> bool:
     """Whether ``held`` is a record whose body carries :data:`INVARIANT_AT`'s structure."""
     schema = held.get("schema")
     return type(schema) is int and schema >= INVARIANT_AT
+
+
+def _plain_shape(held: Mapping[str, object]) -> bool:
+    """Whether ``held`` is a record whose body carries :data:`PLAIN_AT`'s shape."""
+    schema = held.get("schema")
+    return type(schema) is int and schema >= PLAIN_AT
 
 
 def _category(status: object) -> object:
@@ -3220,7 +3451,12 @@ def re_estimate(board: str, issue: str) -> ReEstimated:
     # three severity lines once each and in order, and at most one estimate line after them —
     # and a malformed one is refused rather than written back.
     if unsound := _body_problems(
-        text, held.get("host"), None, structured=_structured(held), invariant=_invariant(held)
+        text,
+        held.get("host"),
+        None,
+        structured=_structured(held),
+        invariant=_invariant(held),
+        plain=_plain_shape(held),
     ):
         raise Refused([f"{issue}'s content is not sound: {problem}" for problem in unsound])
     frequency = _record_frequency(held, issue)
@@ -3885,15 +4121,31 @@ def draft_ids(root: Path, run: str) -> list[QualifiedDraftId]:
     return sorted(found)
 
 
-def read_run_tickets(root: Path, run: str) -> dict[str, Ticket | None]:
-    """Read each local ticket once; a refused ticket cannot account for any draft."""
+def read_run_tickets(
+    root: Path, run: str, refusals: dict[str, list[str]] | None = None
+) -> dict[str, Ticket | None]:
+    """Read each local ticket once; a refused ticket cannot account for any draft.
+
+    ``refusals``, when given, collects what each refused ticket whose record declares one of
+    :data:`SOUND_SCHEMAS` was refused for, by root cause: that ticket is one its run wrote to
+    a shape it then left. A ticket the store cannot read as a record at all is left to
+    `check-run`, which names it in its own words.
+    """
     held = (root / TASKS_DIRECTORY / run / TICKETS).glob(f"*{TICKET_SUFFIX}")
     found: dict[str, Ticket | None] = {}
     for path in (one for one in held if one.is_file()):
+        stored = None
         try:
-            found[path.stem] = read_ticket(path)
-        except Refused:
+            stored = stored_ticket(path)
+            found[path.stem] = ticket_from(path, stored)
+        except Refused as refusal:
             found[path.stem] = None
+            if (
+                refusals is not None
+                and stored is not None
+                and _held_record(stored.item).get("schema") in SOUND_SCHEMAS
+            ):
+                refusals[path.stem] = list(refusal.problems)
     return found
 
 
@@ -5066,6 +5318,7 @@ def disposition_problems(
     run: str,
     present: Sequence[QualifiedDraftId] = (),
     written: Mapping[str, Collection[str] | None] | None = None,
+    refused: Mapping[str, Sequence[str]] | None = None,
 ) -> list[str]:
     """Every way a disposition artifact fails to account for the run's drafts.
 
@@ -5084,6 +5337,10 @@ def disposition_problems(
     or to nothing: a slug alone is only a word, and an account filing a draft under a root
     cause no ticket carries — or under one whose ticket never names it — says its evidence
     reached the board when nothing did.
+
+    ``refused`` is what each of this run's tickets `validate` refuses was refused for, by root
+    cause: a draft filed under one is filed under a ticket that is not sound, which is named
+    with its problems, once per ticket.
     """
     found = _envelope_problems(document, run, DISPOSITION_KEYS, "dispositions", DISPOSITIONS_SCHEMA)
     expected, problems = _drafts_recorded(document.get("drafts"), run)
@@ -5133,6 +5390,12 @@ def disposition_problems(
         for one in recorded
         for cause in one.root_causes
         if (carried := held.get(cause)) is not None and one.draft not in carried
+    )
+    filed = dict.fromkeys(cause for one in recorded for cause in one.root_causes)
+    found.extend(
+        f"the ticket {qualified_id(run, cause)} a draft is filed under is not sound: {problem}"
+        for cause in filed
+        for problem in (refused or {}).get(cause, ())
     )
     counted = Counter(one.draft for one in recorded)
     found.extend(
@@ -5381,26 +5644,28 @@ _CONCISION = (
 # llmlint: ignore-block[changed_behavior_has_e2e] Whether two reports share an invariant is the
 # agent's judgment, which no journey scripts a verdict for. What the tooling decides is driven:
 # `tests/test_follow_up_tickets.py` holds the rendered task and the example ticket to this text
-# and `validate` to the `## Root cause` parts, and drives `check-dispositions --board` accepting
-# evidence under an adopted slug and refusing it under a different one over a real board.
+# and `validate` to the plain `## Root cause` and the fix's contributing locations, and drives
+# `check-dispositions --board` accepting evidence under an adopted slug and refusing it under a
+# different one over a real board.
 ROOT_CAUSE_BAR = (
-    "A root cause is the **invariant or guarantee that is missing or broken** — the rule the "
-    "system should hold and does not — stated in words that do not depend on which file a run "
-    "happened to see, with every location that contributes to it listed under it: possibly "
-    "several, possibly in several repositories. It is **one root cause when a single change to "
+    "A root cause is the **invariant or guarantee that is missing or broken** — what the "
+    "system should do and does not — stated in the product's own terms, for a reader who knows "
+    "what the project does but not how it is built, and so in words that do not depend on "
+    "which file a run happened to see. Every location that contributes to it — possibly "
+    "several, possibly in several repositories — is listed in the ticket's suggested fix, "
+    f"under `**{CONTRIBUTING_LOCATIONS}.**`. It is **one root cause when a single change to "
     "the rule removes every instance, even if that change touches several places; two when "
-    "they need independent fixes that each stand alone.** The invariant is specific enough that "
-    "one concrete suggested fix removes it, so no catch-all ticket stands"
+    "they need independent fixes that each stand alone.** The invariant is specific enough "
+    "that one concrete suggested fix removes it, so no catch-all ticket stands"
 )
 # llmlint: ignore-end[changed_behavior_has_e2e]
 
 _HEADING_GUIDANCE = (
-    f"<the two labelled parts below, in this order. {ROOT_CAUSE_BAR}>\n\n"
-    f"**{ROOT_CAUSE_PARTS[0]}.** <the guarantee that is missing or broken, in words that do not "
-    "depend on which file a run saw>\n\n"
-    f"**{ROOT_CAUSE_PARTS[1]}.**\n"
-    "- <repository name> `<path>`: <what this location does that breaks the invariant>\n"
-    "- <one bullet per location that contributes, in whichever repository it is>",
+    "<plain prose, with no labelled parts, for a reader who knows what the project does but "
+    "not how it is built: the guarantee that is missing or broken, in the product's own terms — "
+    "what the system should do and does not, and what a user or developer sees when it fails. "
+    "Name no file, module, function, `path:line` or code identifier here; every one goes under "
+    f"`## {SUGGESTED_FIX}`'s `**{CONTRIBUTING_LOCATIONS}.**`. {ROOT_CAUSE_BAR}>",
     "<the four labelled parts below, each in one or two sentences, in this order; then the "
     "three lines below, each exactly once, in this order, with nothing between or after them. "
     "Both severities are judged by this rubric:\n\n"
@@ -5415,9 +5680,9 @@ _HEADING_GUIDANCE = (
         f"**{IMPACT_PARTS[0]}.** <each affected group by name: users of X, developers of Y, or "
         "spend only>\n"
         f"**{IMPACT_PARTS[1]}.** <the concrete cost per occurrence, and how often it happens>\n"
-        f"**{IMPACT_PARTS[2]}.** <the deciding area (users, development or resources) and its "
-        "measure: how many users lose what, the slowdown multiple, or $/month and quota "
-        "share>\n"
+        f"**{IMPACT_PARTS[2]}.** <the impact itself, in plain words and with no label naming "
+        "which area decides: how many users lose what, how much a regularly used workflow "
+        "slows, or the $/month and quota share>\n"
         f"**{IMPACT_PARTS[3]}.**\n"
         f"- {WORKAROUND_COSTS[0]}: <effort, and who does it>\n"
         f"- {WORKAROUND_COSTS[1]}: <what is lost or degraded, or none>\n"
@@ -5429,12 +5694,13 @@ _HEADING_GUIDANCE = (
     )
     + f"- {ESTIMATE_LINE}: <written by `board-status`: the estimate and why>",
     "<one or more examples of it>",
-    "<the host the verification ran on, exactly as `hostname` printed it; then per draft: "
-    "the qualified draft id, its run and node, the verified claim with `path:line` at the "
-    "basis commit, and the transcript command from the draft>",
     "<one paragraph: what changes overall, and why that removes the root cause. The one fix "
     "this ticket recommends, concrete enough that whoever picks it up has nothing left to "
     "choose; never a list of options or alternatives to choose between>\n\n"
+    f"**{CONTRIBUTING_LOCATIONS}.**\n"
+    "- <repository name> `<path>`: <what this location does that breaks the guarantee>\n"
+    "- <one bullet per location that contributes, in whichever repository it is: every "
+    "specific code reference this ticket carries belongs in this section>\n\n"
     "### <unit> — `<repository>` (`<package or path>`)\n\n"
     "<one subsection per unit that changes, headed as the design document heads a unit: a "
     "unit is a repository, or a part of a project, and the parenthesis appears only when the "
@@ -5450,13 +5716,26 @@ _HEADING_GUIDANCE = (
     "item's content>\n\n"
     "Queries: <each text query, in the order it was asked>\n"
     "- [<that item's title>](<its URL>): <why one change would not remove both>",
+    "<the host the verification ran on, exactly as `hostname` printed it; then per draft: "
+    "the qualified draft id, its run and node, the verified claim with `path:line` at the "
+    "basis commit, and the transcript command from the draft>",
 )
 
-#: **A ticket at the level the user approved**: onepipeline#625's `## Impact` and
-#: `## Suggested fix`, verbatim as the user approved them, shown to a follow-up agent beside
-#: the example ticket's placeholders. `tests/test_follow_up_tickets.py` holds it to the
-#: validator, so the level an agent is shown is one the validator accepts.
-WORKED_EXAMPLE = """## Impact
+#: **A ticket at the level the user approved**: onepipeline#625's `## Root cause`, `## Impact`
+#: and `## Suggested fix`, as the user approved them and brought to schema 11 — the root cause
+#: stated for a reader who does not know the implementation, the product owner's cost with no
+#: who-decides label, and the file the fix touches listed among its contributing locations —
+#: shown to a follow-up agent beside the example ticket's placeholders.
+#: `tests/test_follow_up_tickets.py` holds it to the validator, so the level an agent is shown
+#: is one the validator accepts.
+WORKED_EXAMPLE = """## Root cause
+
+A manager can verify a run's follow-ups by hand only once they know nothing is still driving \
+that run, and onepipeline gives no direct answer to "is this run being driven?". So the \
+follow-up verification cannot tell an abandoned run from a live one, and refuses to verify the \
+drafts of every run that ended without each of its steps done.
+
+## Impact
 
 **Who is affected.** Managers who verify follow-ups by hand (`just follow-ups <run>`) for a \
 run that ended without every node done. Also any program that needs to ask onepipeline \
@@ -5467,9 +5746,9 @@ driven?". So the recipe can't tell an abandoned run from a live one, and refuses
 its drafts. This happens every time (2 recorded). Nothing is lost; verification is blocked \
 until the run is settled.
 
-**What it costs the product owner.** The users area decides: one capability is unusable in \
-that situation. That capability is verifying the follow-ups of a run nothing is driving. \
-It's not an outage and nothing is lost, so `high`.
+**What it costs the product owner.** One capability is unusable in that situation: \
+verifying the follow-ups of a run nothing is driving. It's not an outage and nothing is \
+lost, so `high`.
 
 **Cost of the workaround.**
 - Applying it: adopt and settle the run, then re-run the recipe. That's a few minutes of a \
@@ -5488,6 +5767,12 @@ occurrences; raised one level because it fires consistently)
 Give onepipeline a machine-readable answer to whether one run is being driven. \
 ai-orchestrator's follow-up recipe then reads that answer, instead of guessing from a \
 zero-second `watch`.
+
+**Contributing locations.**
+- onepipeline `onepipeline status`: reports whether a run is driven only as words for a \
+person to read, with no form a program can rely on.
+- ai-orchestrator `scripts/follow-ups.sh`: guesses whether the run is driven from a \
+zero-second `watch`, and refuses whenever the guess says it might be.
 
 ### Status CLI — `onepipeline`
 
@@ -5538,7 +5823,8 @@ _RELATED_TICKETS_GUIDANCE = (
 
 
 def _example_body() -> str:
-    """The body of the example ticket: every heading with its guidance, the optional ones too."""
+    """The body of the example ticket: every heading with its guidance, the optional ones too,
+    in :data:`HEADINGS`' order, so it closes with `## Duplicate search` and `## Evidence`."""
     sections = []
     for heading, guidance in zip(HEADINGS, _HEADING_GUIDANCE, strict=True):
         if heading == DUPLICATE_SEARCH:
@@ -5704,6 +5990,9 @@ def shape(run: str) -> dict[str, object]:
         "headings": ", ".join(f"`## {heading}`" for heading in HEADINGS),
         "root_cause_bar": ROOT_CAUSE_BAR,
         "root_cause_parts": ", ".join(f"`**{part}.**`" for part in ROOT_CAUSE_PARTS),
+        "contributing_locations": f"`**{CONTRIBUTING_LOCATIONS}.**`",
+        "location_shape": LOCATION_SHAPE,
+        "plain_at": PLAIN_AT,
         "duplicate_search": DUPLICATE_SEARCH,
         "related_tickets": RELATED_TICKETS,
         "related_shape": RELATED_SHAPE,
@@ -5728,6 +6017,7 @@ def shape(run: str) -> dict[str, object]:
         "estimate_at": ESTIMATE_AT,
         "impact_parts": ", ".join(f"`**{part}.**`" for part in IMPACT_PARTS),
         "workaround_cost": WORKAROUND_COST,
+        "owner_cost": OWNER_COST,
         "workaround_costs": ", ".join(f"`- {cost}:`" for cost in WORKAROUND_COSTS),
         "no_workaround": NO_WORKAROUND,
         "no_acceptable_workaround": NO_ACCEPTABLE_WORKAROUND,
@@ -5931,6 +6221,7 @@ def answers(
         ),
         "reply_opening": reply_opening(run, "<comment URL>", "<author>"),
         "reply_opening_unattributed": reply_opening(run, "<comment URL>", None),
+        "ticket_example": ticket_example(run, board),
     }
     if feedback is not None:
         answered["feedback"] = feedback.rstrip()
@@ -5942,7 +6233,6 @@ def answers(
             "accepted_statuses": accepted_statuses(),
             "dispositions": str(dispositions),
             "check_dispositions": str(check_dispositions),
-            "ticket_example": ticket_example(run, board),
             "disposition_example": disposition_example(run),
             "budgets": str(budgets),
             "check_budgets": str(check_budgets),
@@ -6307,12 +6597,14 @@ def _accounted(arguments: argparse.Namespace) -> int:
                 ],
             )
         document = _artifact(path)
-        local = read_run_tickets(arguments.root, arguments.run)
+        refusals: dict[str, list[str]] = {}
+        local = read_run_tickets(arguments.root, arguments.run, refusals)
         problems = disposition_problems(
             document,
             arguments.run,
             draft_ids(arguments.root, arguments.run),
             {cause: None if ticket is None else ticket.drafts for cause, ticket in local.items()},
+            refusals,
         )
         if not problems and arguments.board:
             # `disposition_problems` proved every entry and every root-causes list above.
@@ -6522,7 +6814,45 @@ def responses_unanswered(board: str, feedback: Path, run: str) -> Unanswered | N
         problems = gathering_on_board(gathering, run, check_issue_title=False)
     if not problems:
         problems = replies_posted(run, answered)
+    if not problems:
+        problems = answered_ticket_problems(feedback, run, answered)
     return Unanswered(path, problems) if problems else None
+
+
+def answered_ticket_problems(feedback: Path, run: str, answered: Sequence[Response]) -> list[str]:
+    """How the local ticket of each issue ``run`` owns that an answered comment sits on is not
+    sound, for a gathering ``feedback`` under its drafts root.
+
+    A comment may change that ticket, and the ticket a feedback dispatch leaves is held to the
+    shape its record declares as `validate` holds it. A ticket of a schema no reader accepts as
+    sound is one no answer brought forward, which its copy refuses, so it is left to that.
+    """
+    from . import follow_up_comments
+
+    if feedback.parent.name != run or feedback.parent.parent.name != (
+        follow_up_comments.FEEDBACK_DIRECTORY
+    ):
+        return []
+    root = feedback.parent.parent.parent
+    found: list[str] = []
+    for issue in dict.fromkeys(one.comment.issue for one in answered):
+        item = plan_store.task_record(issue)
+        cause = _held_record(item).get("root_cause")
+        path = ticket_path(root, run, str(cause))
+        if issue_owner(item) != run or not _is_slug(cause) or not path.is_file():
+            continue
+        stored = stored_ticket(path)
+        if _held_record(stored.item).get("schema") not in SOUND_SCHEMAS:
+            continue
+        try:
+            ticket_from(path, stored)
+        except Refused as refusal:
+            found.extend(
+                f"the ticket {qualified_id(run, str(cause))} of {issue}, which a comment it "
+                f"answered sits on, is not sound: {problem}"
+                for problem in refusal.problems
+            )
+    return found
 
 
 def _answered(arguments: argparse.Namespace) -> int:

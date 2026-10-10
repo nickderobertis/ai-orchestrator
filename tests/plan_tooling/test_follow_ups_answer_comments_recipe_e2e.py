@@ -1069,6 +1069,10 @@ def test_a_second_gathering_selects_nothing_launches_nothing_and_says_so(life: L
     assert "wrote run" not in again.report
 
 
+# llmlint: ignore-block[shell_test_tiers_stay_split] Its tier is the module's: it drives the
+# recipe every journey here drives, from the `plan-tooling` project whose
+# `planToolingWorkspace` key already covers what it reads, so a project of its own would
+# split one recipe's journeys across tiers behind no narrower key.
 def test_a_run_scoped_gathering_launches_only_that_run_and_leaves_the_watermark(
     life: Life,
 ) -> None:
@@ -1088,7 +1092,14 @@ def test_a_run_scoped_gathering_launches_only_that_run_and_leaves_the_watermark(
     bound = {issue for key, issue in life.issues.items() if key.startswith("a")}
     shown = {one.argv[2] for one in scoped.recorded if one.argv[:2] == ["task", "show"]}
     read = {one.argv[3] for one in scoped.recorded if one.argv[:3] == ["task", "comment", "list"]}
-    assert shown == read == bound, (shown, read, bound)
+    # `check-responses` also reads the local ticket of each issue it answered on, to hold it
+    # to its shape: run A's tickets in the drafts source, and nothing of the board.
+    local = {one for one in shown if one.startswith(f"{tickets.SOURCE}:")}
+    assert all(one.startswith(f"{tickets.SOURCE}:{runs['A']}/tickets/") for one in local), local
+    assert shown - local == read == bound, (shown, read, bound)
+
+
+# llmlint: ignore-end[shell_test_tiers_stay_split]
 
 
 # llmlint: ignore-block[shell_test_tiers_stay_split] The task this journey answers names

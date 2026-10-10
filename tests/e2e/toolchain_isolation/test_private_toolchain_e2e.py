@@ -19,6 +19,7 @@ from nx_workspace import (
     OFFLINE_INSTALLS,
     copy_checkout,
     isolated_python_root,
+    private_node_modules,
     rewrites_workspace_toolchain,
     shares_workspace_install,
 )
@@ -80,3 +81,36 @@ def test_an_isolated_python_root_runs_an_interpreter_prefix_of_its_own(python_ro
     assert Path(prefix) == root / ".venv", prefix
     assert not (root / ".venv").is_symlink()
     assert not (root / "node_modules").is_symlink()
+
+
+@shares_workspace_install
+@rewrites_workspace_toolchain
+def test_copies_are_hardlinked_from_the_checkout_or_from_one_seed_on_their_filesystem(
+    copy: Path, tmp_path: Path
+) -> None:
+    """Copies on this checkout's filesystem are hardlinked from its install; on a host whose
+    temporary directory is another filesystem, where `cp -al` from it fails with `Invalid
+    cross-device link`, from one session seed on theirs — and either way run its tools."""
+    package = Path("nx") / "package.json"
+    first = (copy / "node_modules" / package).stat()
+    private_node_modules(tmp_path / "second")
+    second = (tmp_path / "second" / "node_modules" / package).stat()
+
+    assert first.st_ino == second.st_ino, "the two copies share no package file"
+    assert (tmp_path / "second" / "node_modules" / ".bin").stat().st_ino != (
+        copy / "node_modules" / ".bin"
+    ).stat().st_ino
+    source = (NODE_MODULES / package).stat()
+    if source.st_dev == first.st_dev:
+        assert first.st_ino == source.st_ino
+    else:
+        assert first.st_ino != source.st_ino
+        assert first.st_nlink >= 3, "the copies were not hardlinked from a seed"
+    ran = subprocess.run(
+        [str(tmp_path / "second" / "node_modules" / ".bin" / "nx"), "--version"],
+        cwd=copy,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert ran.returncode == 0, ran.stdout + ran.stderr

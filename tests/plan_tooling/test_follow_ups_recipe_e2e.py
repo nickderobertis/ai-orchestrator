@@ -242,6 +242,10 @@ NARROWED_SEVERITY = (tickets.Severity.MEDIUM, tickets.Severity.LOW)
 #: with after its opening paragraph, as schema 8 requires.
 WORKAROUND = "readers request the last page by its number"
 UNIT = "### Listing — `some-service` (`src/cursor.py`)\n\n`list` returns every page."
+#: The contributing locations a ticket's `## Suggested fix` lists before its unit.
+LOCATIONS = (
+    f"**{tickets.CONTRIBUTING_LOCATIONS}.**\n- some-service `src/cursor.py`: where it is seen."
+)
 FULL_SEVERITY = (tickets.Severity.HIGH, tickets.Severity.MEDIUM)
 RELATED = (
     f"- [some-service: the sweep stays inside its root]({PROPOSED_URL}) — related: It proposes "
@@ -487,7 +491,7 @@ def _ticket(
     ``estimated`` writes them as `board-status` would for one occurrence, which is what an
     item an earlier run copied onto the board carries. ``related`` is its `## Related tickets`
     section, directly before `## Duplicate search`; its `## Root cause` is ``body``'s invariant
-    and one contributing location.
+    in plain prose, and its fix lists the one contributing location.
     """
     line = tickets.estimate_line(severity[1], frequency, 1) + "\n" if estimated else ""
     level = tickets.estimate(severity[1], frequency, 1) if estimated else None
@@ -505,7 +509,7 @@ def _ticket(
                 text += line
             case tickets.SUGGESTED_FIX:
                 fix = suggested_fix if suggested_fix is not None else f"{body} ({heading})."
-                text = f"{fix}\n\n{UNIT}"
+                text = f"{fix}\n\n{LOCATIONS}\n\n{UNIT}"
                 if rejected is not None:
                     text += f"\n\n## {tickets.REJECTED_FIXES}\n\n{rejected}"
             case tickets.ROOT_CAUSE:
@@ -539,11 +543,9 @@ def _ticket(
 
 
 def _root_cause(invariant: str) -> str:
-    """A `## Root cause` stating ``invariant`` and the one location that contributes to it."""
-    return (
-        f"**{tickets.ROOT_CAUSE_PARTS[0]}.** {invariant}\n\n"
-        f"**{tickets.ROOT_CAUSE_PARTS[1]}.**\n- some-service `src/cursor.py`: where it is seen."
-    )
+    """A `## Root cause` stating ``invariant``, the broken guarantee, as plain prose: the one
+    location that contributes to it is :data:`LOCATIONS`, in the ticket's `## Suggested fix`."""
+    return invariant
 
 
 def _dependency(title: str, url: str) -> str:
@@ -3081,7 +3083,7 @@ def test_a_feedback_re_dispatch_brings_a_schema_4_ticket_to_one_fix_updating_its
     flat_task = " ".join(task.split())
     for step in (
         "its `## Repository` section removed, any path the ticket still needs moved into "
-        "`## Root cause`",
+        "`## Suggested fix`'s `**Contributing locations.**`",
         "its `## Suggested fixes` rewritten as `## Suggested fix`, stating the one fix the "
         "ticket's evidence supports",
         "every other option it offered moved into `## Rejected fixes`, with why each was not "
@@ -3096,20 +3098,20 @@ def test_a_feedback_re_dispatch_brings_a_schema_4_ticket_to_one_fix_updating_its
             "Root cause",
             "Impact",
             "Examples",
-            "Evidence",
             "Suggested fix",
             "Rejected fixes",
             "Owning runs",
             "Duplicate search",
+            "Evidence",
         ], headings
         fix = ticket.body.split(f"## {tickets.SUGGESTED_FIX}\n\n", 1)[1].split("\n\n## ", 1)[0]
-        assert fix == f"{ONE_FIX}\n\n{UNIT}"
+        assert fix == f"{ONE_FIX}\n\n{LOCATIONS}\n\n{UNIT}"
         assert REJECTED in ticket.body.split(f"## {tickets.REJECTED_FIXES}\n\n", 1)[1]
         assert ticket.host == HOST, "the rewritten ticket's host is not what `hostname` printed"
         assert shown["repositories"] == [REPOSITORY] == [ticket.repository]
         metadata = shown["metadata"]
         assert isinstance(metadata, dict)
-        assert metadata[tickets.KEY]["schema"] == tickets.SCHEMA == 10
+        assert metadata[tickets.KEY]["schema"] == tickets.SCHEMA == 11
         assert _category(shown) == accepted, "bringing a ticket to the current shape undid it"
     metadata_after = after["metadata"]
     assert isinstance(metadata_after, dict)
@@ -3612,9 +3614,14 @@ def test_a_ticket_narrowed_by_an_accepted_fix_lands_depending_on_it_with_the_url
     cause = landed.body.split("## Root cause\n\n", 1)[1].split("\n\n## ", 1)[0]
     assert NARROWED_CAUSE in cause, "the narrowed root cause did not land"
     fix = landed.body.split(f"## {tickets.SUGGESTED_FIX}\n\n", 1)[1].split("\n\n## ", 1)[0]
-    assert fix == f"{REPLACEMENT_FIX}\n\n{UNIT}", (
+    # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] `tests/plan_tooling`
+    # is already the Nx project edge this repository keeps for journeys that launch the
+    # installed engine, keyed on `planToolingWorkspace`, which covers every file this launch
+    # reads; this assertion only states the schema-11 fix the journey lands.
+    assert fix == f"{REPLACEMENT_FIX}\n\n{LOCATIONS}\n\n{UNIT}", (
         "the fix that remains right once the accepted one is in"
     )
+    # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
     assert NARROWING_URL in fix, "the replacement does not say which accepted fix it is chosen on"
     rejected = landed.body.split(f"## {tickets.REJECTED_FIXES}\n\n", 1)[1].split("\n\n## ", 1)[0]
     assert rejected == REFIXED, "the fix the accepted one displaced was not recorded as rejected"
