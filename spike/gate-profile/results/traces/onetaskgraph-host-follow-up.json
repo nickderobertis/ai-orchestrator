@@ -1,0 +1,264 @@
+{
+ "label": "onetaskgraph-host-follow-up",
+ "nodeids": [
+  "tests/e2e/test_onetaskgraph_host_e2e.py::test_a_realistic_follow_up_run_reads_and_writes_only_the_items_it_is_about"
+ ],
+ "exit_status": 0,
+ "wall_clock_s": 63.002077642,
+ "tracked_read_in_root": [
+  "config/onemessagebus.yaml",
+  "config/onetaskgraph.version",
+  "config/onevcs.checkouts",
+  "justfile",
+  "nx.json",
+  "oneharness.check-in.toml",
+  "oneharness.identities.toml",
+  "oneharness.pr-author.toml",
+  "onetaskgraph.yaml",
+  "orchestrator/project.json",
+  "project.json",
+  "pyproject.toml",
+  "scripts/credentials-env.sh",
+  "scripts/follow-up-env.sh",
+  "scripts/plan-root-env.sh",
+  "tests/ask_seam/ask_manager/project.json",
+  "tests/ask_seam/bus_resolution/project.json",
+  "tests/ask_seam/channel_reply/project.json",
+  "tests/ask_seam/follow_up_drafts_launch/project.json",
+  "tests/ask_seam/launch/project.json",
+  "tests/ask_seam/planner_fallback_ask/project.json",
+  "tests/ask_seam/settled_correlated_ruling/project.json",
+  "tests/ask_seam/structural_reply/project.json",
+  "tests/dag_ui/project.json",
+  "tests/e2e/board_copy_approval/project.json",
+  "tests/e2e/project.json",
+  "tests/e2e/unpublished_view/project.json",
+  "tests/fixtures/planner-channel.json",
+  "tests/graceful_cancel/project.json",
+  "tests/host_sweep/project.json",
+  "tests/host_views/project.json",
+  "tests/manager_allowlist/project.json",
+  "tests/merge_policy/project.json",
+  "tests/plan_store_assets/project.json",
+  "tests/plan_tooling/project.json",
+  "tests/project_store_race/project.json",
+  "tests/render_diagram/project.json",
+  "tests/run_end_hooks/project.json",
+  "tests/session_open_conflict/project.json",
+  "tests/session_setup/project.json",
+  "tests/session_setup_pypi/project.json",
+  "tests/support/budget_telemetry/project.json",
+  "tests/support/command_ceiling/project.json",
+  "tests/support/conftest/project.json",
+  "tests/support/credential_dialect/project.json",
+  "tests/support/criteria_examples/project.json",
+  "tests/support/delegation_checkout/project.json",
+  "tests/support/example_records/project.json",
+  "tests/support/fake_backend/project.json",
+  "tests/support/fake_codex/project.json",
+  "tests/support/fake_codex_untrusted_directory/project.json",
+  "tests/support/fake_gh/project.json",
+  "tests/support/follow_up_ticket_shape/project.json",
+  "tests/support/follow_up_variables/project.json",
+  "tests/support/github_board/project.json",
+  "tests/support/harness_configs/project.json",
+  "tests/support/harness_indirections/project.json",
+  "tests/support/judge_protocol_double/project.json",
+  "tests/support/llmlint_install/project.json",
+  "tests/support/lost_turn_producer/project.json",
+  "tests/support/manager_invocations/project.json",
+  "tests/support/mock_oneharness/project.json",
+  "tests/support/monitor_conversation/project.json",
+  "tests/support/no_paid_provider/project.json",
+  "tests/support/nx_inputs/project.json",
+  "tests/support/nx_workspace/project.json",
+  "tests/support/observer_environment/project.json",
+  "tests/support/older_plan_store/project.json",
+  "tests/support/onejudge_bundle/project.json",
+  "tests/support/onevcs_stand_in/project.json",
+  "tests/support/onevcs_state_snapshot/project.json",
+  "tests/support/persona_identifiers/project.json",
+  "tests/support/persona_probe/project.json",
+  "tests/support/persona_recipes/project.json",
+  "tests/support/persona_stand_in/project.json",
+  "tests/support/plan_fixture_source/project.json",
+  "tests/support/plan_root_variable/project.json",
+  "tests/support/plan_sources/project.json",
+  "tests/support/plan_store_pin/project.json",
+  "tests/support/planner_channel/project.json",
+  "tests/support/planner_fallback/project.json",
+  "tests/support/probe_run_root/project.json",
+  "tests/support/project_fixtures/project.json",
+  "tests/support/provisioning/project.json",
+  "tests/support/published_surface/project.json",
+  "tests/support/published_tools/project.json",
+  "tests/support/registered_checkouts/project.json",
+  "tests/support/run_snapshot/project.json",
+  "tests/support/run_task_store_instruction/project.json",
+  "tests/support/scratch_identity/project.json",
+  "tests/support/served_recipe/project.json",
+  "tests/support/shared_dispatch_bar/project.json",
+  "tests/support/short_state/project.json",
+  "tests/support/sibling_facts/project.json",
+  "tests/support/stand_in_claude/project.json",
+  "tests/support/test_dispatch_appendix/project.json",
+  "tests/support/test_observer_judge_ops/project.json",
+  "tests/support/test_shared_dispatch_bar/project.json",
+  "tests/support/test_short_state_budget/project.json",
+  "tests/support/timeout_harness/project.json",
+  "tests/support/unpublished_registry/project.json",
+  "tests/support/waits/project.json",
+  "tests/support/watch_rule/project.json",
+  "tests/unfinished/project.json",
+  "tests/unwatched/project.json",
+  "tests/writeback_budget/project.json"
+ ],
+ "tracked_read_in_copies": [
+  "scripts/plan-store.sh"
+ ],
+ "by_top_dir_root": {
+  "tests": 91,
+  "config": 3,
+  "scripts": 3,
+  "pyproject.toml": 1,
+  "onetaskgraph.yaml": 1,
+  "oneharness.check-in.toml": 1,
+  "oneharness.identities.toml": 1,
+  "oneharness.pr-author.toml": 1,
+  "orchestrator": 1,
+  "project.json": 1,
+  "nx.json": 1,
+  "justfile": 1
+ },
+ "by_top_dir_copies": {
+  "scripts": 1
+ },
+ "process_count": 506,
+ "slowest_process_kinds_inclusive_s": [
+  {
+   "argv_head": ".venv/bin/python -m pytest",
+   "count": 1,
+   "summed_s": 63.0
+  },
+  {
+   "argv_head": "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python3 -m orchestrator.follow_up_tickets",
+   "count": 93,
+   "summed_s": 57.0
+  },
+  {
+   "argv_head": "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/onetaskgraph task show",
+   "count": 128,
+   "summed_s": 6.4
+  },
+  {
+   "argv_head": "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/onetaskgraph task deps",
+   "count": 100,
+   "summed_s": 5.3
+  },
+  {
+   "argv_head": "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/onetaskgraph task list",
+   "count": 44,
+   "summed_s": 2.0
+  },
+  {
+   "argv_head": "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/onetaskgraph task copy",
+   "count": 20,
+   "summed_s": 1.7
+  },
+  {
+   "argv_head": "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/onetaskgraph sources route",
+   "count": 64,
+   "summed_s": 0.6
+  },
+  {
+   "argv_head": "openssl req -new",
+   "count": 2,
+   "summed_s": 0.3
+  },
+  {
+   "argv_head": "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/onetaskgraph config show",
+   "count": 24,
+   "summed_s": 0.2
+  },
+  {
+   "argv_head": "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/onetaskgraph task comment",
+   "count": 4,
+   "summed_s": 0.2
+  },
+  {
+   "argv_head": "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/onetaskgraph task content",
+   "count": 4,
+   "summed_s": 0.2
+  },
+  {
+   "argv_head": "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/onetaskgraph task metadata",
+   "count": 4,
+   "summed_s": 0.2
+  },
+  {
+   "argv_head": "bash -c source",
+   "count": 5,
+   "summed_s": 0.1
+  },
+  {
+   "argv_head": "git ls-files -z",
+   "count": 1,
+   "summed_s": 0.1
+  },
+  {
+   "argv_head": "just plans sources",
+   "count": 1,
+   "summed_s": 0.1
+  },
+  {
+   "argv_head": "bash ./scripts/plan-store.sh ./.venv/bin/onetaskgraph",
+   "count": 1,
+   "summed_s": 0.1
+  },
+  {
+   "argv_head": "openssl ca -batch",
+   "count": 2,
+   "summed_s": 0.0
+  },
+  {
+   "argv_head": "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/onemessagebus schemas fetch",
+   "count": 1,
+   "summed_s": 0.0
+  },
+  {
+   "argv_head": "bash -euo pipefail",
+   "count": 1,
+   "summed_s": 0.0
+  },
+  {
+   "argv_head": "mkdir -p .logs/just",
+   "count": 1,
+   "summed_s": 0.0
+  },
+  {
+   "argv_head": "dirname -- ./scripts/plan-store.sh",
+   "count": 1,
+   "summed_s": 0.0
+  },
+  {
+   "argv_head": "dirname -- /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/scripts",
+   "count": 1,
+   "summed_s": 0.0
+  },
+  {
+   "argv_head": "dirname -- /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/scripts/credentials-env.sh",
+   "count": 1,
+   "summed_s": 0.0
+  },
+  {
+   "argv_head": "./.venv/bin/onetaskgraph sources fields",
+   "count": 1,
+   "summed_s": 0.0
+  },
+  {
+   "argv_head": "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/onetaskgraph sources fields",
+   "count": 1,
+   "summed_s": 0.0
+  }
+ ]
+}

@@ -1,0 +1,43 @@
+tier | wall s | tests | summed s | serialised group s (top) 
+orchestrator-e2e:test | 1746.5 | 1007 | 2933.1 | shared-checkout-toolchain=1757.2, None=632.3, monitor-survives-the-channel=98.2
+orchestrator:test-docs | 760.2 | 507 | 1164.3 | shared-checkout-toolchain=764.9, None=368.6, orchestrate-launch=15.2
+plan-tooling:test-docs | 298.4 | 85 | 760.5 | plan-spike-flow=299.9, shared-checkout-toolchain=114.0, finish-plan=104.5
+orchestrator:test | 94.3 | 3058 | 363.0 | None=363.0
+orchestrator-e2e:test-recipes | 51.3 | 377 | 185.9 | None=185.9
+orchestrator-e2e:test-checkouts | 28.7 | 62 | 76.5 | None=39.3, redispatch-published-tip=16.1, shared-checkout-toolchain=15.6
+orchestrator:test-checkouts | 15.6 | 353 | 49.8 | None=49.8
+unfinished:test-host | 9.4 | 1 | 7.8 | shared-checkout-toolchain=7.8
+
+30 slowest modules: module | summed s | tests | max single test s | tier | groups
+tests/e2e/test_publish_branch_e2e.py | 936.9 | 27 | 85.0 | orchestrator-e2e:test | {'shared-checkout-toolchain': 27}
+tests/e2e/test_nx_cache_scope_e2e.py | 649.8 | 27 | 154.8 | orchestrator:test-docs | {'shared-checkout-toolchain': 27}
+tests/e2e/test_budget_target_e2e.py | 321.7 | 8 | 301.2 | orchestrator-e2e:test | {'shared-checkout-toolchain': 8}
+tests/e2e/test_budget_telemetry_e2e.py | 300.4 | 3 | 298.3 | orchestrator-e2e:test | {'shared-checkout-toolchain': 3}
+tests/plan_tooling/test_plan_spike_flow_e2e.py | 299.9 | 30 | 31.2 | plan-tooling:test-docs | {'plan-spike-flow': 30}
+tests/test_nx_cache_scope.py | 249.8 | 62 | 100.0 | orchestrator:test-docs | {'None': 62}
+tests/e2e/test_onetaskgraph_host_e2e.py | 246.6 | 60 | 41.7 | orchestrator-e2e:test,orchestrator-e2e:test-checkouts | {'None': 60}
+tests/e2e/test_orchestrate_launch_e2e.py | 158.5 | 69 | 21.1 | orchestrator-e2e:test,orchestrator:test-docs | {'None': 36, 'orchestrate-launch': 22, 'monitor-ops': 3, 'observer-environment': 3, 'verdict-recipes': 3, 'cancellation': 2}
+tests/e2e/test_delegated_recipes_e2e.py | 152.1 | 241 | 9.2 | orchestrator-e2e:test,orchestrator-e2e:test-recipes | {'None': 241}
+tests/test_follow_up_tickets.py | 115.0 | 698 | 6.7 | orchestrator:test,orchestrator:test-checkouts,orchestrator:test-docs | {'None': 698}
+tests/plan_tooling/test_follow_ups_recipe_e2e.py | 114.0 | 8 | 24.0 | plan-tooling:test-docs | {'shared-checkout-toolchain': 8}
+tests/e2e/test_repo_registry_apply_e2e.py | 104.2 | 109 | 11.1 | orchestrator-e2e:test | {'None': 109}
+tests/e2e/test_monitor_survives_the_channel_e2e.py | 101.2 | 7 | 98.1 | orchestrator-e2e:test | {'monitor-survives-the-channel': 6, 'monitor-scored-by-the-planner': 1}
+tests/plan_tooling/test_finish_plan_budgets_e2e.py | 98.8 | 7 | 17.4 | plan-tooling:test-docs | {'finish-plan': 7}
+tests/plan_tooling/test_linear_routed_follow_ups_e2e.py | 88.9 | 7 | 88.7 | plan-tooling:test-docs | {'linear-follow-ups': 7}
+tests/e2e/test_monitor_quiet_turn_e2e.py | 77.1 | 12 | 29.0 | orchestrator-e2e:test | {'monitor-judge-side': 10, 'monitor-quiet-turn': 1, 'monitor-lost-turn': 1}
+tests/plan_tooling/test_linear_routed_plans_e2e.py | 77.0 | 3 | 33.1 | plan-tooling:test-docs | {'linear-routed': 3}
+tests/e2e/test_work_status_and_import_e2e.py | 75.1 | 4 | 30.6 | orchestrator-e2e:test | {'None': 4}
+tests/e2e/test_plan_recipe_e2e.py | 71.9 | 43 | 9.0 | orchestrator-e2e:test,orchestrator:test-docs | {'None': 35, 'plan-recipe': 8}
+tests/test_budgets_files.py | 67.1 | 20 | 64.3 | orchestrator:test | {'None': 20}
+tests/e2e/test_extends_chain_dispatch_e2e.py | 63.0 | 5 | 22.3 | orchestrator-e2e:test | {'shared-checkout-toolchain': 5}
+tests/e2e/test_parked_run_is_driven_e2e.py | 62.5 | 3 | 47.2 | orchestrator-e2e:test | {'shared-checkout-toolchain': 3}
+tests/e2e/test_session_reuse_retry_e2e.py | 54.5 | 4 | 36.0 | orchestrator-e2e:test | {'session-reuse-retry': 4}
+tests/test_follow_up_comments.py | 52.1 | 42 | 7.2 | orchestrator:test | {'None': 42}
+tests/e2e/test_graph_overrides_dispatch_e2e.py | 49.6 | 6 | 11.2 | orchestrator:test-docs | {'shared-checkout-toolchain': 6}
+tests/e2e/test_llmlint_cache_e2e.py | 49.5 | 28 | 4.7 | orchestrator:test-docs | {'shared-checkout-toolchain': 28}
+tests/e2e/test_workspace_contract_e2e.py | 45.1 | 96 | 14.2 | orchestrator-e2e:test,orchestrator-e2e:test-recipes,orchestrator:test-docs | {'None': 92, 'shared-checkout-toolchain': 4}
+tests/e2e/test_gate_time_budget_e2e.py | 42.3 | 27 | 6.0 | orchestrator-e2e:test | {'None': 27}
+tests/e2e/test_live_note_leaves_the_run_journalling_e2e.py | 37.9 | 3 | 37.8 | orchestrator-e2e:test | {'live-note-busy-turn': 3}
+tests/e2e/test_supervisory_prompt_discipline_e2e.py | 37.9 | 13 | 37.5 | orchestrator-e2e:test | {'supervisory-prompts': 13}
+
+all tiers: 5450 tests, 5541.0 s summed

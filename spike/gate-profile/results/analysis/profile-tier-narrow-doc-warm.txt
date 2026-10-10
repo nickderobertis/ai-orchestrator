@@ -1,0 +1,44 @@
+tier | wall s | tests | summed s | serialised group s (top) 
+orchestrator-e2e:test | 1625.5 | 1007 | 2816.7 | shared-checkout-toolchain=1642.3, None=661.5, monitor-survives-the-channel=97.1
+plan-tooling:test | 457.7 | 644 | 1837.3 | None=938.1, shared-checkout-toolchain=458.5, approve-design=200.2
+orchestrator:test-docs | 805.0 | 507 | 1162.6 | shared-checkout-toolchain=811.6, None=322.7, orchestrate-launch=13.9
+plan-tooling:test-docs | 220.3 | 85 | 532.2 | plan-spike-flow=221.5, linear-routed=65.3, finish-plan=62.4
+orchestrator:test | 82.6 | 3058 | 320.7 | None=320.7
+orchestrator-e2e:test-checkouts | 24.9 | 62 | 67.5 | None=34.0, shared-checkout-toolchain=14.7, redispatch-published-tip=13.6
+orchestrator:test-checkouts | 14.1 | 353 | 42.7 | None=42.7
+unfinished:test-host | 8.0 | 1 | 6.1 | shared-checkout-toolchain=6.1
+orchestrator:test-recipes | 2.4 | 19 | 0.2 | None=0.2
+
+30 slowest modules: module | summed s | tests | max single test s | tier | groups
+tests/e2e/test_publish_branch_e2e.py | 842.5 | 27 | 82.5 | orchestrator-e2e:test | {'shared-checkout-toolchain': 27}
+tests/e2e/test_nx_cache_scope_e2e.py | 711.1 | 27 | 148.8 | orchestrator:test-docs | {'shared-checkout-toolchain': 27}
+tests/plan_tooling/test_check_plan_recipe_e2e.py | 601.8 | 173 | 92.2 | plan-tooling:test | {'None': 173}
+tests/e2e/test_budget_target_e2e.py | 314.9 | 8 | 299.9 | orchestrator-e2e:test | {'shared-checkout-toolchain': 8}
+tests/plan_tooling/test_follow_ups_recipe_e2e.py | 307.7 | 93 | 98.0 | plan-tooling:test,plan-tooling:test-docs | {'shared-checkout-toolchain': 93}
+tests/e2e/test_budget_telemetry_e2e.py | 290.6 | 3 | 288.3 | orchestrator-e2e:test | {'shared-checkout-toolchain': 3}
+tests/e2e/test_onetaskgraph_host_e2e.py | 261.9 | 60 | 46.8 | orchestrator-e2e:test,orchestrator-e2e:test-checkouts | {'None': 60}
+tests/test_nx_cache_scope.py | 231.5 | 62 | 98.8 | orchestrator:test-docs | {'None': 62}
+tests/plan_tooling/test_plan_spike_flow_e2e.py | 221.5 | 30 | 17.8 | plan-tooling:test-docs | {'plan-spike-flow': 30}
+tests/plan_tooling/test_approve_design_recipe_e2e.py | 200.2 | 51 | 27.0 | plan-tooling:test | {'None': 1, 'approve-design': 50}
+tests/plan_tooling/test_plan_review_e2e.py | 163.1 | 58 | 6.2 | plan-tooling:test,plan-tooling:test-docs | {'None': 58}
+tests/e2e/test_orchestrate_launch_e2e.py | 143.3 | 69 | 18.6 | orchestrator-e2e:test,orchestrator:test-docs | {'orchestrate-launch': 22, 'None': 36, 'monitor-ops': 3, 'observer-environment': 3, 'verdict-recipes': 3, 'cancellation': 2}
+tests/plan_tooling/test_follow_ups_answer_comments_recipe_e2e.py | 131.1 | 44 | 69.5 | plan-tooling:test | {'shared-checkout-toolchain': 44}
+tests/plan_tooling/test_finish_plan_recipe_e2e.py | 110.6 | 29 | 23.5 | plan-tooling:test,plan-tooling:test-docs | {'finish-plan': 29}
+tests/e2e/test_monitor_survives_the_channel_e2e.py | 100.3 | 7 | 97.0 | orchestrator-e2e:test | {'monitor-survives-the-channel': 6, 'monitor-scored-by-the-planner': 1}
+tests/e2e/test_repo_registry_apply_e2e.py | 97.8 | 109 | 8.7 | orchestrator-e2e:test | {'None': 109}
+tests/test_follow_up_tickets.py | 97.1 | 698 | 4.8 | orchestrator:test,orchestrator:test-checkouts,orchestrator:test-docs | {'None': 698}
+tests/e2e/test_work_status_and_import_e2e.py | 91.3 | 4 | 44.9 | orchestrator-e2e:test | {'None': 4}
+tests/plan_tooling/test_follow_ups_comment_answers_e2e.py | 82.1 | 28 | 33.5 | plan-tooling:test | {'shared-checkout-toolchain': 28}
+tests/e2e/test_monitor_quiet_turn_e2e.py | 76.9 | 12 | 28.8 | orchestrator-e2e:test | {'monitor-quiet-turn': 1, 'monitor-lost-turn': 1, 'monitor-judge-side': 10}
+tests/plan_tooling/test_copy_plan_recipe_e2e.py | 73.2 | 13 | 8.0 | plan-tooling:test | {'None': 13}
+tests/e2e/test_plan_recipe_e2e.py | 70.6 | 43 | 6.3 | orchestrator-e2e:test,orchestrator:test-docs | {'plan-recipe': 8, 'None': 35}
+tests/plan_tooling/test_check_plan_budgets_e2e.py | 67.4 | 44 | 2.4 | plan-tooling:test,plan-tooling:test-docs | {'None': 44}
+tests/plan_tooling/test_linear_routed_plans_e2e.py | 65.3 | 3 | 28.8 | plan-tooling:test-docs | {'linear-routed': 3}
+tests/e2e/test_parked_run_is_driven_e2e.py | 64.0 | 3 | 48.5 | orchestrator-e2e:test | {'shared-checkout-toolchain': 3}
+tests/e2e/test_extends_chain_dispatch_e2e.py | 63.5 | 5 | 22.4 | orchestrator-e2e:test | {'shared-checkout-toolchain': 5}
+tests/plan_tooling/test_finish_plan_budgets_e2e.py | 62.7 | 8 | 10.7 | plan-tooling:test,plan-tooling:test-docs | {'finish-plan': 8}
+tests/test_budgets_files.py | 52.3 | 20 | 50.5 | orchestrator:test | {'None': 20}
+tests/test_follow_up_comments.py | 49.6 | 42 | 7.1 | orchestrator:test | {'None': 42}
+tests/plan_tooling/test_linear_routed_follow_ups_e2e.py | 49.5 | 7 | 49.5 | plan-tooling:test-docs | {'linear-follow-ups': 7}
+
+all tiers: 5736 tests, 6786.0 s summed

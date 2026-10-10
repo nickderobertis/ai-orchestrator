@@ -1,0 +1,285 @@
+{
+ "label": "follow-ups-followed-fixture",
+ "nodeids": [
+  "tests/plan_tooling/test_follow_ups_recipe_e2e.py::test_a_run_with_no_drafts_or_tickets_ends_at_one_line_and_launches_nothing"
+ ],
+ "exit_status": 0,
+ "wall_clock_s": 124.773485471,
+ "tracked_read_in_root": [
+  "config/onemessagebus.yaml",
+  "config/onepipeline.maintenance.yaml",
+  "config/onepipeline.version",
+  "config/onetaskgraph.version",
+  "config/onevcs.checkouts",
+  "graphs/follow-up.yaml",
+  "graphs/node-scope.yaml",
+  "justfile",
+  "nx.json",
+  "onetaskgraph.yaml",
+  "orchestrator/project.json",
+  "project.json",
+  "pyproject.toml",
+  "scripts/ask-manager-env.sh",
+  "scripts/claude-alt-config-dir.sh",
+  "scripts/codex-alt-home.sh",
+  "scripts/credentials-env.sh",
+  "scripts/dispatch-env-hook.sh",
+  "scripts/dispatch-env.sh",
+  "scripts/follow-up-draft.sh",
+  "scripts/follow-up-env.sh",
+  "scripts/launcher-session.sh",
+  "scripts/lock-timeout.sh",
+  "scripts/onepipeline.sh",
+  "scripts/plan-brief.sh",
+  "scripts/plan-root-env.sh",
+  "scripts/template-env.sh",
+  "templates/follow-up-task.md.j2",
+  "templates/follow-up-task/older-schema.md.j2",
+  "templates/follow-up-task/ownership.md.j2",
+  "templates/templates.yaml",
+  "tests/ask_seam/ask_manager/project.json",
+  "tests/ask_seam/bus_resolution/project.json",
+  "tests/ask_seam/channel_reply/project.json",
+  "tests/ask_seam/follow_up_drafts_launch/project.json",
+  "tests/ask_seam/launch/project.json",
+  "tests/ask_seam/planner_fallback_ask/project.json",
+  "tests/ask_seam/settled_correlated_ruling/project.json",
+  "tests/ask_seam/structural_reply/project.json",
+  "tests/dag_ui/project.json",
+  "tests/e2e/board_copy_approval/project.json",
+  "tests/e2e/fake_codex.py",
+  "tests/e2e/fake_codex_untrusted_directory.py",
+  "tests/e2e/project.json",
+  "tests/e2e/run_task_store_instruction.py",
+  "tests/e2e/unpublished_view/project.json",
+  "tests/fixtures/planner-channel.json",
+  "tests/graceful_cancel/project.json",
+  "tests/host_sweep/project.json",
+  "tests/host_views/project.json",
+  "tests/manager_allowlist/project.json",
+  "tests/merge_policy/project.json",
+  "tests/plan_store_assets/project.json",
+  "tests/plan_tooling/project.json",
+  "tests/project_store_race/project.json",
+  "tests/render_diagram/project.json",
+  "tests/run_end_hooks/project.json",
+  "tests/session_open_conflict/project.json",
+  "tests/session_setup/project.json",
+  "tests/session_setup_pypi/project.json",
+  "tests/support/budget_telemetry/project.json",
+  "tests/support/command_ceiling/project.json",
+  "tests/support/conftest/project.json",
+  "tests/support/credential_dialect/project.json",
+  "tests/support/criteria_examples/project.json",
+  "tests/support/delegation_checkout/project.json",
+  "tests/support/example_records/project.json",
+  "tests/support/fake_backend/project.json",
+  "tests/support/fake_codex/project.json",
+  "tests/support/fake_codex_untrusted_directory/project.json",
+  "tests/support/fake_gh/project.json",
+  "tests/support/follow_up_ticket_shape/project.json",
+  "tests/support/follow_up_variables/project.json",
+  "tests/support/github_board/project.json",
+  "tests/support/harness_configs/project.json",
+  "tests/support/harness_indirections/project.json",
+  "tests/support/judge_protocol_double/project.json",
+  "tests/support/llmlint_install/project.json",
+  "tests/support/lost_turn_producer/project.json",
+  "tests/support/manager_invocations/project.json",
+  "tests/support/mock_oneharness/project.json",
+  "tests/support/monitor_conversation/project.json",
+  "tests/support/no_paid_provider/project.json",
+  "tests/support/nx_inputs/project.json",
+  "tests/support/nx_workspace/project.json",
+  "tests/support/observer_environment/project.json",
+  "tests/support/older_plan_store/project.json",
+  "tests/support/onejudge_bundle/project.json",
+  "tests/support/onevcs_stand_in/project.json",
+  "tests/support/onevcs_state_snapshot/project.json",
+  "tests/support/persona_identifiers/project.json",
+  "tests/support/persona_probe/project.json",
+  "tests/support/persona_recipes/project.json",
+  "tests/support/persona_stand_in/project.json",
+  "tests/support/plan_fixture_source/project.json",
+  "tests/support/plan_root_variable/project.json",
+  "tests/support/plan_sources/project.json",
+  "tests/support/plan_store_pin/project.json",
+  "tests/support/planner_channel/project.json",
+  "tests/support/planner_fallback/project.json",
+  "tests/support/probe_run_root/project.json",
+  "tests/support/project_fixtures/project.json",
+  "tests/support/provisioning/project.json",
+  "tests/support/published_surface/project.json",
+  "tests/support/published_tools/project.json",
+  "tests/support/registered_checkouts/project.json",
+  "tests/support/run_snapshot/project.json",
+  "tests/support/run_task_store_instruction/project.json",
+  "tests/support/scratch_identity/project.json",
+  "tests/support/served_recipe/project.json",
+  "tests/support/shared_dispatch_bar/project.json",
+  "tests/support/short_state/project.json",
+  "tests/support/sibling_facts/project.json",
+  "tests/support/stand_in_claude/project.json",
+  "tests/support/test_dispatch_appendix/project.json",
+  "tests/support/test_observer_judge_ops/project.json",
+  "tests/support/test_shared_dispatch_bar/project.json",
+  "tests/support/test_short_state_budget/project.json",
+  "tests/support/timeout_harness/project.json",
+  "tests/support/unpublished_registry/project.json",
+  "tests/support/waits/project.json",
+  "tests/support/watch_rule/project.json",
+  "tests/unfinished/project.json",
+  "tests/unwatched/project.json",
+  "tests/writeback_budget/project.json",
+  "uv.lock"
+ ],
+ "tracked_read_in_copies": [
+  "scripts/follow-ups.sh",
+  "scripts/onepipeline.sh"
+ ],
+ "by_top_dir_root": {
+  "tests": 94,
+  "scripts": 14,
+  "config": 5,
+  "templates": 4,
+  "graphs": 2,
+  "pyproject.toml": 1,
+  "onetaskgraph.yaml": 1,
+  "justfile": 1,
+  "uv.lock": 1,
+  "orchestrator": 1,
+  "project.json": 1,
+  "nx.json": 1
+ },
+ "by_top_dir_copies": {
+  "scripts": 2
+ },
+ "process_count": 1261,
+ "slowest_process_kinds_inclusive_s": [
+  {
+   "argv_head": ".venv/bin/python -m pytest",
+   "count": 1,
+   "summed_s": 124.8
+  },
+  {
+   "argv_head": "/home/nick.guest/.onevcs/workspa -m orchestrator.follow_up_tickets",
+   "count": 122,
+   "summed_s": 55.4
+  },
+  {
+   "argv_head": "/home/nick.guest/.onevcs/workspa start --require-rendered",
+   "count": 8,
+   "summed_s": 45.8
+  },
+  {
+   "argv_head": "just follow-ups fu-main-26676",
+   "count": 2,
+   "summed_s": 36.6
+  },
+  {
+   "argv_head": "bash ./scripts/follow-ups.sh fu-main-26676",
+   "count": 2,
+   "summed_s": 36.5
+  },
+  {
+   "argv_head": "/home/nick.guest/.onevcs/workspa drive /home/nick.guest/.onevcs/workspa",
+   "count": 8,
+   "summed_s": 25.1
+  },
+  {
+   "argv_head": "/home/nick.guest/.onevcs/workspa /home/nick.guest/.onevcs/workspa exec",
+   "count": 8,
+   "summed_s": 24.2
+  },
+  {
+   "argv_head": "/home/nick.guest/.onevcs/workspa -c \\nimport",
+   "count": 43,
+   "summed_s": 16.5
+  },
+  {
+   "argv_head": "just follow-ups fu-legacy-26676",
+   "count": 1,
+   "summed_s": 13.2
+  },
+  {
+   "argv_head": "bash ./scripts/follow-ups.sh fu-legacy-26676",
+   "count": 1,
+   "summed_s": 13.2
+  },
+  {
+   "argv_head": "just follow-ups fu-later-two-26676",
+   "count": 1,
+   "summed_s": 12.7
+  },
+  {
+   "argv_head": "bash ./scripts/follow-ups.sh fu-later-two-26676",
+   "count": 1,
+   "summed_s": 12.7
+  },
+  {
+   "argv_head": "just follow-ups fu-later-one-26676",
+   "count": 1,
+   "summed_s": 12.4
+  },
+  {
+   "argv_head": "bash ./scripts/follow-ups.sh fu-later-one-26676",
+   "count": 1,
+   "summed_s": 12.4
+  },
+  {
+   "argv_head": "just follow-ups fu-unsound-26676",
+   "count": 1,
+   "summed_s": 10.5
+  },
+  {
+   "argv_head": "bash ./scripts/follow-ups.sh fu-unsound-26676",
+   "count": 1,
+   "summed_s": 10.5
+  },
+  {
+   "argv_head": "just follow-ups fu-omitted-26676",
+   "count": 1,
+   "summed_s": 10.1
+  },
+  {
+   "argv_head": "bash ./scripts/follow-ups.sh fu-omitted-26676",
+   "count": 1,
+   "summed_s": 10.1
+  },
+  {
+   "argv_head": "just follow-ups fu-detach-26676",
+   "count": 1,
+   "summed_s": 8.3
+  },
+  {
+   "argv_head": "bash ./scripts/follow-ups.sh fu-detach-26676",
+   "count": 1,
+   "summed_s": 8.2
+  },
+  {
+   "argv_head": "uv run orchestrator-launch-gate",
+   "count": 8,
+   "summed_s": 6.5
+  },
+  {
+   "argv_head": "/home/nick.guest/.onevcs/workspa drive-run fu-detach-26676-follow-ups",
+   "count": 1,
+   "summed_s": 6.5
+  },
+  {
+   "argv_head": "/home/nick.guest/.onevcs/workspa task show",
+   "count": 132,
+   "summed_s": 5.0
+  },
+  {
+   "argv_head": "/home/nick.guest/.onevcs/workspa task deps",
+   "count": 91,
+   "summed_s": 4.0
+  },
+  {
+   "argv_head": "/home/nick.guest/.onevcs/workspa task list",
+   "count": 75,
+   "summed_s": 3.1
+  }
+ ]
+}
