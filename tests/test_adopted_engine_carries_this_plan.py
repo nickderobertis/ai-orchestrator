@@ -835,6 +835,28 @@ IMAGE_ASSETS_LANDINGS = (
     ),
 )
 
+#: The engine-side nodes of the accepted-follow-ups plan: a cancel no longer waits behind a
+#: live note its node never answers, and an adopting driver replays the command envelopes a
+#: dead one had claimed exactly once — the second also relinking the onevcs release whose
+#: publication watch counts a required context with no run as pending and the onetaskgraph
+#: release whose re-copy keeps what only the destination holds.
+#: `tests/e2e/board_copy_approval/test_board_copy_design_approval_e2e.py` drives that
+#: plan-store release's CLI through an approval and a re-copy.
+FOLLOW_UP_FIXES_LANDINGS = (
+    Landing(
+        node="op-cancel-preempts-note",
+        change_request=819,
+        commit="edb2dfbe4e5566dff917fa8e61ee043a6bdaae82",
+        did="let a cancel preempt the live note its node has not answered",
+    ),
+    Landing(
+        node="op-adopt-replays-claims",
+        change_request=827,
+        commit="cedaa817527b09ed67c77ad93d56ff3d67524a1e",
+        did="replay the commands a dead driver claimed, linking the fixed onevcs and onetaskgraph",
+    ),
+)
+
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
     Landing(
@@ -882,6 +904,7 @@ LANDINGS = (
     *PRESERVE_ON_PRESERVE_LANDINGS,
     *PROJECT_ROLE_LANDINGS,
     *IMAGE_ASSETS_LANDINGS,
+    *FOLLOW_UP_FIXES_LANDINGS,
 )
 
 

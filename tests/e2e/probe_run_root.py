@@ -199,6 +199,46 @@ def _started(pid: int) -> str:
     return stat[stat.rindex(")") + 2 :].split()[19]
 
 
+def record_command_outcomes(directory: Path) -> None:
+    """Journal one committed and one refused command for their field-by-field contract gate.
+
+    Each names the command envelope it came in, which is what an adopting driver reads to
+    replay a claimed envelope exactly once. Journeys send commands through the engine;
+    this builder supplies specimens only to the drift gate, so no journey's views read
+    them.
+    """
+    journal = directory / "events.jsonl"
+    payloads = {
+        "edit-committed": {
+            "author": "planner",
+            "command": {"op": "drop", "id": "probe-node"},
+            "operations": [{"kind": "remove-node", "id": "probe-node"}],
+            "operation_kinds": ["remove-node"],
+            "envelope": 0,
+        },
+        "edit-rejected": {
+            "author": "monitor",
+            "command": {"op": "drop", "id": "probe-node"},
+            "reason": "refused: the monitor may not drop a node",
+            "envelope": 1,
+        },
+    }
+    seq = len(journal.read_text(encoding="utf-8").splitlines())
+    with journal.open("a", encoding="utf-8") as appended:
+        for offset, (kind, payload) in enumerate(payloads.items()):
+            event = {
+                "v": 2,
+                "ts": f"2026-01-01T00:00:0{2 + offset}.000Z",
+                "stream": "supervision-readings-e2e",
+                "seq": seq + offset,
+                "source": "pipeline",
+                "kind": kind,
+                "labels": {"run_id": directory.name, "node": "probe-node"},
+                "payload": payload,
+            }
+            appended.write(f"{json.dumps(event)}\n")
+
+
 def record_supervision(directory: Path, *, pid: int, session: str) -> None:
     """Compose the two supervision records for their field-by-field contract gate.
 

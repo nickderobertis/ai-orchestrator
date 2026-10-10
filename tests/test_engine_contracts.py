@@ -65,6 +65,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import NamedTuple
 
+import jsonschema
 import onejudge_bundle
 import probe_run_root
 import pytest
@@ -2234,7 +2235,7 @@ START_TOKEN_ENCODING = re.compile(r'\.map\(\|ticks\| format!\("([^"{]*)\{ticks\}
 #: One field of a serde-derived record, with the attributes above it — which is where a
 #: `rename` moves its wire name and a `default` says the engine can read a record that
 #: omits it. Both are what part a field this repository must write from one it may.
-SERDE_FIELD = re.compile(r"((?:[ \t]*#\[[^\]]*\]\n)*)[ \t]*pub (\w+):")
+SERDE_FIELD = re.compile(r"((?:[ \t]*#\[[^\]]*\]\n)*)[ \t]*pub(?:\([^)]*\))? (\w+):")
 SERDE_RENAME = re.compile(r'rename\s*=\s*"([^"]+)"')
 #: The struct a field's type names, by the last segment of its path (`V::Dimensions`).
 SERDE_FIELD_TYPE = re.compile(r"\s*(?:\w+::)*(\w+)")
@@ -2315,7 +2316,7 @@ def _declared_fields(
     the field would reconcile the record against fewer keys than it carries.
     """
     body = re.search(
-        rf"pub struct {re.escape(struct)}(?:<[^>{{]*>)? \{{(.*?)\n\}}",
+        rf"pub(?:\([^)]*\))? struct {re.escape(struct)}(?:<[^>{{]*>)? \{{(.*?)\n\}}",
         _source(engine, source),
         re.DOTALL,
     )
@@ -2445,6 +2446,20 @@ def test_a_draft_strips_the_start_token_the_engine_stamps() -> None:
     )
 
 
+def _journalled_payloads(root: Path, kind: str) -> list[dict[str, object]]:
+    """The payload of every event of one kind a built run root's journal carries."""
+    payloads: list[dict[str, object]] = []
+    for envelope in _built_envelopes(root):
+        if envelope["kind"] != kind:
+            continue
+        payload = envelope["payload"]
+        assert isinstance(payload, dict), (
+            f"{PROBE_RUN_ROOT.name} journals a {kind!r} event whose payload is not an object"
+        )
+        payloads.append(payload)
+    return payloads
+
+
 #: Every record `probe_run_root.run_root` composes, and where to find each one in a
 #: root it has built. Built and read back rather than parsed out of the builder's
 #: source: what has to agree with the engine is the JSON that reaches disk, and a
@@ -2516,6 +2531,33 @@ BUILT_RECORDS = (
         ],
         flattened_from=Declared(ONEPIPELINE, "vocabulary.rs"),
     ),
+    # The records a command's outcome leaves name the envelope it came in, optionally,
+    # since onepipeline 0.63.6: an adopting driver reads that off the journal to answer a
+    # claimed envelope from its record rather than apply it twice.
+    # `test_the_built_run_root_journals_command_outcomes_the_engine_schemas_admit` holds
+    # the nested command too.
+    # llmlint: ignore-block[shell_test_tiers_stay_split] Two data rows in this existing
+    # uncached producer drift gate, holding the `envelope` field the adopted engine
+    # journals, which this adoption task requires the gate to reconcile. They add no tier
+    # or suite: the module's `reads_checkouts` mark already routes them to
+    # orchestrator:test-checkouts, because the engine's source lives in a registered
+    # checkout outside every cache key, and moving the module to a project of its own is
+    # restructuring outside this adoption.
+    Record(
+        "each committed command's payload",
+        ONEPIPELINE,
+        "payload.rs",
+        "EditCommitted",
+        lambda root: _journalled_payloads(root, "edit-committed"),
+    ),
+    Record(
+        "each refused command's payload",
+        ONEPIPELINE,
+        "payload.rs",
+        "EditRejected",
+        lambda root: _journalled_payloads(root, "edit-rejected"),
+    ),
+    # llmlint: ignore-end[shell_test_tiers_stay_split]
     Record(
         "each dispatch registry entry",
         ONEPIPELINE,
@@ -2539,6 +2581,7 @@ def _built_run_root(tmp_path: Path) -> Path:
     """
     root = probe_run_root.run_root(tmp_path, probe_run_root.run_name(), dispatch_pid=os.getpid())
     probe_run_root.record_supervision(root, pid=os.getpid(), session=probe_run_root.DEFAULT_SESSION)
+    probe_run_root.record_command_outcomes(root)
     return root
 
 
@@ -2577,6 +2620,77 @@ def test_the_built_run_root_writes_the_records_the_engine_declares(
             f"{record.engine.ref}'s `{record.struct}` requires, so the engine cannot "
             "read the run root these journeys drive the views over"
         )
+
+
+# llmlint: ignore-block[shell_test_tiers_stay_split] This helper and the test it serves
+# extend this existing uncached producer drift gate with the `envelope` field the adopted
+# engine journals, which this adoption task requires the gate to hold. They add no tier or
+# suite: the module's `reads_checkouts` mark already routes them to
+# orchestrator:test-checkouts, because the engine's published schemas live in a registered
+# checkout outside every cache key, and moving the module to a project of its own is
+# restructuring outside this adoption.
+def _published_schema(name: str) -> dict[str, object]:
+    """One JSON schema onepipeline publishes under `schemas/`, at the adopted release."""
+    read = subprocess.run(
+        ["git", "-C", str(_checkout(ONEPIPELINE)), "show", f"{ONEPIPELINE.ref}:schemas/{name}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert read.returncode == 0, (
+        f"the onepipeline checkout cannot show schemas/{name} at {ONEPIPELINE.ref}: "
+        f"{read.stderr.strip()}"
+    )
+    schema = json.loads(read.stdout)
+    assert isinstance(schema, dict)
+    return schema
+
+
+@pytest.mark.parametrize("kind", ["edit-committed", "edit-rejected"])
+def test_the_built_run_root_journals_command_outcomes_the_engine_schemas_admit(
+    built_run_root: Path, kind: str
+) -> None:
+    """A built command outcome is one the engine's published schemas admit, its command included.
+
+    The field gate above reads the payload's keys; this reads its values, against the
+    payload schema `schemas/events.json` declares for the kind — so `envelope` is the
+    unsigned integer the engine writes — and its `command`, which that schema leaves an
+    open object, against the reply envelope's own `Command`, whose op is one `op_of` spells.
+    """
+    events = _published_schema("events.json")
+    entries = events["schemas"]
+    assert isinstance(entries, list)
+    (payload_schema,) = [
+        entry["schema"]
+        for entry in entries
+        if str(entry["id"]).startswith(f"agent.pipeline.{kind}@")
+    ]
+    reply = _published_schema("reply-envelope-v3.schema.json")
+    command_schema = {"$ref": "#/$defs/Command", "$defs": reply["$defs"]}
+    op_words = set(
+        re.findall(r'Command::\w+ \{ \.\. \} => "([a-z-]+)"', _source(ONEPIPELINE, "channel.rs"))
+    )
+    assert op_words, (
+        f"onepipeline {ONEPIPELINE.ref} no longer spells each command's op in `op_of` where "
+        "this gate reads it; re-read `channel.rs`"
+    )
+    outcomes = _journalled_payloads(built_run_root, kind)
+    assert outcomes, f"{PROBE_RUN_ROOT.name} no longer journals a {kind!r} event"
+    for payload in outcomes:
+        jsonschema.validate(payload, payload_schema)
+        assert "envelope" in payload, (
+            f"{PROBE_RUN_ROOT.name} journals a {kind!r} event naming no envelope"
+        )
+        command = payload["command"]
+        jsonschema.validate(command, command_schema)
+        assert isinstance(command, dict)
+        assert command["op"] in op_words, (
+            f"{PROBE_RUN_ROOT.name} journals a command whose op {command['op']!r} is "
+            f"not one of onepipeline {ONEPIPELINE.ref}'s {sorted(op_words)}"
+        )
+
+
+# llmlint: ignore-end[shell_test_tiers_stay_split]
 
 
 def test_onepipeline_stamps_the_newest_envelope_version_its_vocabulary_reads() -> None:

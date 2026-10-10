@@ -13,13 +13,13 @@ onejudge dispatch mechanics are in [onejudge-integration.md](./onejudge-integrat
 Everything below about engine behaviour was read out of the engines' own source
 rather than remembered, and the load-bearing part of it — [the outcome
 vocabulary](#the-outcome-vocabulary-is-closed-and-it-is-this) — is reconciled against
-that source on every `just check` rather than restated: **`onepipeline` v0.63.2**
+that source on every `just check` rather than restated: **`onepipeline` v0.63.6**
 (`config/onepipeline.version`) and
-the **`onevcs` 0.42.1** its `Cargo.lock` resolves, which is the copy a dispatched
+the **`onevcs` 0.43.1** its `Cargo.lock` resolves, which is the copy a dispatched
 lifecycle node publishes through — and the copy `just publish-branch` and `just
 repo-recover` land through, since both run the engine's own landing verbs. The other
 manager verbs — `just recoverable`, `just work-status`, `just integrate` — run the
-`onevcs` CLI `config/onevcs.version` pins, which is **onevcs 0.42.1** as well at this
+`onevcs` CLI `config/onevcs.version` pins, which is **onevcs 0.43.1** as well at this
 pair of pins; the two are separate pins that have coincided before and will
 diverge again, so where a claim depends on which copy runs it this document says so.
 **They diverged again at the adoption on 2026-08-25 and have not re-converged**: two
@@ -678,7 +678,7 @@ the merge left in progress**, and reports it as the session's `conflict` (`paths
 the refusal at open that used to be the only answer, and nothing on this host asks for
 it. A publication over a merge nobody concluded is refused as a
 sync conflict before anything is committed or pushed, and a session's teardown aborts
-the merge and keeps every commit. onepipeline 0.63.2 dispatches the worker into that
+the merge and keeps every commit. onepipeline 0.63.6 dispatches the worker into that
 session — a node's first step, a pinned continuation, or the re-dispatch after a
 `sync-conflict` — with the conflict under `## Planner context` and one engine-written
 criterion under `### Merge resolution` at the end of `## Acceptance criteria`, so the
@@ -741,13 +741,14 @@ gate-skipping switch to inherit. The `Node` schema is `deny_unknown_fields`, so
 `recorded_gate`, `verify_cmd`, `skip_verify`, and `no_identity_gate` are not
 "accepted and ignored" — a plan carrying any of them is **refused while it loads**. `verify_via_ci` was the one
 survivor and is no longer even that: it is not a field of `Node` on onepipeline
-v0.63.2 and is refused **by its own name**, at every schema version and on a live
+v0.63.6 and is refused **by its own name**, at every schema version and on a live
 edit's `add` alike, because a plan's author has to act on the field rather than on
 a version number. The refusal says where what it asked for went, which is the whole
 of the change: nothing ever read the flag, and the host's own required checks are
 now the merge-path verification of a `change-auto` node — watched to their
 conclusion, settling the node `checks-failed` when one concludes red and
-`checks-unsettled` when the bound elapses with one still outstanding.
+`checks-unsettled` when the bound elapses with one still outstanding — a declared context
+that has not started among them, which the reason names as not started.
 
 `just integrate` runs no gate per candidate either — it has none to run. Each
 candidate fast-forwards the *local* base before the single optional push, and what
@@ -1361,11 +1362,19 @@ lands it after a reconcile.
   merge it is about to perform itself, a `change-auto` one arms auto-merge
   inside a watch that ends at the merge the host performs, and — since onevcs 0.36.0 —
   a `change-open` one watches the draft's checks to decide whether to lift it. Only required checks
-  count (`statusCheckRollup.isRequired`), each transition is emitted as an
+  count, and since onevcs 0.43.0 the required set is the one the host *declares* — its
+  branch protection and rulesets — rather than whatever `statusCheckRollup.isRequired`
+  marks among the runs that exist: a declared context with no run yet is **pending**, so
+  `checks-settled` is never recorded `passed` before every declared context has reported,
+  where an aggregate gate that had not started used to let a publication read green. A
+  host that declares nothing required settles at once, and one whose declaration cannot
+  be read falls back to the rollup's own marking, says so, and no longer reads an empty
+  rollup as passed. Each transition is emitted as an
   `EventKind::ChangeCheck` event carrying the check's log as an artifact, and the
   three ways out are each named: the watch's own ending, a required check concluding
   red (`Error::ChecksFailed`, quoting its log), or the bound elapsing with one still
-  outstanding (`Error::ChecksUnsettled`, naming what was pending). Those are two
+  outstanding (`Error::ChecksUnsettled`, naming what was pending, and marking each
+  declared context that never started). Those are two
   different situations and they now settle two different words — see [What a failed
   publication actually settles](#what-a-failed-publication-actually-settles) — where
   a single sentence about settled checks used to cover both.
@@ -1637,7 +1646,7 @@ warn on the node — `onepipeline: node '<id>': … so it publishes with no body
 publish with no body at all. There is no deterministic body it falls back to and no
 retry of the graph run.
 
-**It is not silent either, on the adopted onepipeline 0.63.2.** Where a drafting
+**It is not silent either, on the adopted onepipeline 0.63.6.** Where a drafting
 dispatch was *configured and attempted* and produced no body, the run records a
 `body-not-drafted` event against the node carrying `ending` and `detail`, and the
 same `detail` lands on the node's own settlement — after the publication's reason
@@ -1713,8 +1722,8 @@ goes when the session does.
 
 **A pause pushes nothing and opens nothing.** The conclusion is unchanged and the
 reason it used to rest on is gone: both engines now have a draft change request —
-`onevcs` 0.42.1 answers `PublishOutcome::ChangeDraft`, *"change request open as a draft
-… which cannot land while it is one"*, and `onepipeline` v0.63.2 settles the node that
+`onevcs` 0.43.1 answers `PublishOutcome::ChangeDraft`, *"change request open as a draft
+… which cannot land while it is one"*, and `onepipeline` v0.63.6 settles the node that
 made one `complete-but-draft` where a release is awaited — so "no notion of one" is no
 longer why. A draft is a **publication** outcome, reached once the last step has settled and
 the publication starts, because a release the node adopted early has not happened yet,
@@ -2446,7 +2455,7 @@ exist.
 **The cost analysis that used to follow this section has been removed rather than
 corrected.** It measured a Python lifecycle implementation that no longer exists —
 `run_repo_task`, `MAX_AUTOMATIC_STEP_RESUMES`, `terminate_process_group`, and every
-journey it named are absent from `onepipeline` v0.63.2 — so every number in it was a
+journey it named are absent from `onepipeline` v0.63.6 — so every number in it was a
 measurement of something else. The one part of it that still holds is the shape:
 **read a journey's price as its number of dispatches times the price of one**, since
 the clone, the worktree, the commit and the push are not the cost and never were.

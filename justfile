@@ -354,12 +354,14 @@ review-plan *args:
 # command records that they approved it — after which `just orchestrate` will launch that
 # plan, and before which it refuses to.
 #
-# The record goes onto the document in the plan store, so it travels with the plan
-# through `just copy-plan` exactly as a review record travels with a task: approve where
-# you draft, then copy up. It is keyed on the document's title, the template's chain digest
-# as the pinned engine resolves it now, the body digest the store recorded when it
-# rendered the document, and the SHA-256 of every image it shows, so editing or
-# regenerating the document or replacing an image's bytes leaves it unapproved and
+# The record goes onto the document in the plan store, on the board copy the user read:
+# copy up, then approve there. A re-copy of the unchanged plan — `just finish-plan` again —
+# keeps it, because the store keeps metadata only the destination holds; a key both copies
+# hold is the source's, so an approval recorded where you draft would replace the board's
+# on the next copy, and approves nothing there. It is keyed on the document's title, the
+# template's chain digest as the pinned engine resolves it now, the body digest the store
+# recorded when it rendered the document, and the SHA-256 of every image it shows, so
+# editing or regenerating the document or replacing an image's bytes leaves it unapproved and
 # changing the template leaves every approved document unapproved; a document that is not
 # the rendering its provenance records is refused, naming the regenerate that repairs it,
 # and so is one referencing an image the store does not hold, naming the image.
@@ -465,7 +467,9 @@ channel-next *args:
 # reply itself, and a completion verdict or a `complete` closes a settled run whose
 # driver has exited. Stdout is the engine's one-line receipt,
 # `{"reply":N,"state":"delivered|applied|queued",…}`, at exit 0 — a `queued` one
-# included, with its advice on stderr — and every refusal exits 2.
+# included, with its advice on stderr — and every refusal exits 2. A `queued` edit
+# resolves even if its driver dies first: `just orchestrate --adopt` replays each
+# envelope the dead driver claimed exactly once.
 # `[no-exit-message]` because the engine's own refusal is the whole account of a failed
 # reply, and `just`'s line after it would only restate the exit status.
 # llmlint: ignore-block[tool_output_is_signal] This process is replaced by the engine's verb, so its receipt and refusals are the whole of the output; a block because `just` takes no comment between an attribute and its recipe.

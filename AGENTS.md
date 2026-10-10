@@ -212,7 +212,9 @@ signal that terminated it — so read that line before re-running any gate to le
 failed. `checks-unsettled` is not a verdict on the tree: a required check with no
 verdict ends there, whether it was still pending when the watch's bound elapsed or
 completed `cancelled` or `stale`, which the linked `onevcs` reads as no verdict rather
-than as red. A check concluded `skipped` is its own state, never read as passed: a
+than as red. The required set is the one the host declares, and a declared context with
+no run yet is pending, so `checks-settled` is never recorded `passed` before every
+declared context has reported, and the reason names each one that had not started. A check concluded `skipped` is its own state, never read as passed: a
 publication a skipped required check let through records `checks-settled` with the
 verdict `passed-with-skipped`, naming that check, and its settlement says so. A change request the host merged after that watch stopped is reconciled on
 the next `status`, `release status` or publication that meets it — `onevcs` asks the
@@ -844,7 +846,8 @@ question about your own task, and `amend` before the judge answers it.
 or escalate with evidence; never launch a duplicate parallel path — a manager-driven
 integrate or recovery beside a live node delivering it counts — without explicit
 operator approval. `cancel` idles a redundant or misdirected node — interrupting a
-publication it waits on, branch and change request left open — and `requeue` resumes it.
+publication it waits on, branch and change request left open, and preempting a live note
+to it the node has not answered, which is answered `refused` — and `requeue` resumes it.
 
 **Ask the user in the chat unless you are truly blocked.** A harness's built-in
 question tool — Claude Code's is one — holds you until it is answered, so use it only
@@ -1300,8 +1303,10 @@ reasoned escape hatch, mirroring `just unpublished --acknowledge`.
   `applied` means the edit is committed; `queued` means the driver holding the run had
   not reconciled it within `ONEPIPELINE_REPLY_TIMEOUT_SECONDS` — 30 seconds by the
   engine's default — so the recipe returned rather than hung, and the edit is durable:
-  never send it again. The run's `edit-committed` and `edit-rejected` records stay the
-  record, and are where a `queued` edit's fate is read. The asker's answer is the reply
+  never send it again, not even after `just orchestrate --adopt`, because the adopting
+  driver replays each envelope a dead one had claimed exactly once. The run's
+  `edit-committed` and `edit-rejected` records stay the record, each naming the
+  `envelope` it came in, and are where a `queued` edit's fate is read. The asker's answer is the reply
   echoing its correlation and nothing else:
   a wait that elapses answers `timeout` at exit 1, never a ruling, so no token goes in
   your prose.
@@ -1592,7 +1597,8 @@ image's bytes; any change to that template moves the chain, which leaves every u
 plan's approval to be recorded again. Both keep the same four properties: only a pass is
 recorded, a record is authoritative, there is no escape hatch, and the key covers the
 bar and every step's content as well as the prose, so moving any of those invalidates
-the record while a settlement write-back does not. Three questions are the review's
+the record while a settlement write-back does not, and neither does a re-copy of the
+unchanged plan, which keeps an approval recorded on the board copy. Three questions are the review's
 rather than a matcher's: whether a number is the right number, whether the criteria
 answer a demand their bar or their `## Additional info` makes, judged by meaning, and
 whether a lifecycle node whose criteria change no repository file declares

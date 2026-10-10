@@ -22,7 +22,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.63.2 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.63.6 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -100,7 +100,9 @@ session stream:
 A `change-check` carries one of five states — `passed`, `failed`, `skipped`, `pending`,
 `no-verdict` — and `skipped` is its own state, never read as passed; `checks-settled`
 records the watch's verdict, `passed-with-skipped` where a skipped required check let
-the publication through.
+the publication through. A required context the host declares with no run yet is
+pending, so a `checks-settled` reading `passed` comes only after every declared context
+has reported.
 
 A session's last record is what it is doing until the next one, and a kind this build
 does not know — one a newer `onevcs` emits, or one that ends the session — leaves it
@@ -439,7 +441,7 @@ served them.
    `just telemetry-server` — or by `just dag-ui`, which is the same published server
    with the browser view built into it answering on the same origin) is the structured
    view. Measured against real runs on
-   **`onepipeline-api` 0.26.4**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.26.5**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
    what re-opens this paragraph: `telemetry_schema_version` 21 on the envelope, where
    0.13.0 served 20 and

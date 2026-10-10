@@ -204,7 +204,7 @@ def _location(environment: Mapping[str, str], qualified: str) -> str:
 
 
 class _Drafted(NamedTuple):
-    """The plan :func:`_approved_where_drafted` leaves approved where it was drafted."""
+    """The plan :func:`_drafted_for_the_board` leaves ready to copy where it was drafted."""
 
     #: The environment the authoring store, the engine and the recipes run in.
     environment: dict[str, str]
@@ -214,13 +214,17 @@ class _Drafted(NamedTuple):
     tasks: dict[str, str]
 
 
-def _approved_where_drafted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Drafted:
-    """Author, design, review and approve the plan where it was drafted, ready to copy.
+def _drafted_for_the_board(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, approve: bool = True
+) -> _Drafted:
+    """Author, design and review the plan where it was drafted, and approve it there by default.
 
     Answers the authoring environment, the first task's authoring location, and the
     authored task ids by title. The design document's Planned tasks table names the first
     task by the location the authoring store reports for it, the way the writer's table
-    locates a task, so the copy has a reference to rewrite.
+    locates a task, so the copy has a reference to rewrite. `approve=False` leaves the
+    authoring copy unapproved, as `just finish-plan` leaves it, so the board copy is the
+    only one carrying an approval.
     """
     root = tmp_path / "authoring"
     root.mkdir()
@@ -249,8 +253,9 @@ def _approved_where_drafted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
         environment,
     )
     reviewed(RENDERED_QUALIFIED)
-    approved = _recipe(environment, "approve-design", RENDERED_QUALIFIED)
-    assert approved.returncode == 0, approved.stdout + approved.stderr
+    if approve:
+        approved = _recipe(environment, "approve-design", RENDERED_QUALIFIED)
+        assert approved.returncode == 0, approved.stdout + approved.stderr
     return _Drafted(environment, located, tasks)
 
 
@@ -298,7 +303,7 @@ def test_a_design_document_copied_onto_the_board_is_approved_there_and_launchabl
     location, so the board copy is not the bytes the writer rendered — and the adopted store
     records the digest of what it wrote, which is what lets the approval be recorded there.
     """
-    environment, located, _ = _approved_where_drafted(tmp_path, monkeypatch)
+    environment, located, _ = _drafted_for_the_board(tmp_path, monkeypatch)
     with _serving_board() as remote:
         on_the_board = {**environment, **remote}
         copied = _recipe(on_the_board, "copy-plan", RENDERED_QUALIFIED, "--to", "plans")
@@ -355,7 +360,7 @@ def test_a_board_copy_carrying_an_earlier_stores_stale_digest_is_refused_naming_
     `just copy-plan` that re-records it beside the regenerate for a hand edit, and nothing
     is recorded on the copy.
     """
-    environment, _, _ = _approved_where_drafted(tmp_path, monkeypatch)
+    environment, _, _ = _drafted_for_the_board(tmp_path, monkeypatch)
     authored = plan_store.read_documents(RENDERED_QUALIFIED)[0]
     stale = authored.metadata[PROVENANCE]
     assert isinstance(stale, dict)
@@ -394,4 +399,54 @@ def test_a_board_copy_carrying_an_earlier_stores_stale_digest_is_refused_naming_
     assert gated.returncode == 1, gated.stdout + gated.stderr
     assert "earlier plan store" in " ".join(gated.stderr.split()), gated.stderr
     # llmlint: ignore-end[e2e_not_mocked, tests_mirror_real_usage]
+    # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] `board-copy-approval` is
+# this directory's own leaf project, keyed on `boardCopyApprovalWorkspace`, the edge this rule
+# asks for; that key names the recipes, scripts and package these journeys drive, so narrowing
+# it would memoize a verdict over a tree never run.
+# llmlint: ignore-block[e2e_not_mocked] The same one doubled boundary as the journeys above.
+def test_an_approval_recorded_on_the_board_copy_survives_a_re_copy_of_the_unchanged_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`just copy-plan` again after `just approve-design` on the board leaves the plan launchable.
+
+    The approval is metadata only the board copy holds, and a store before onetaskgraph
+    0.3.10 replaced a destination's metadata with the source's on every re-copy, so
+    re-running `just finish-plan` over a plan nobody changed deleted the approval the user
+    gave and the launch refused it. The adopted store keeps it. The authoring copy is left
+    unapproved, as `just finish-plan` leaves it: a key both copies hold is the source's on
+    a re-copy, so an approval recorded where the plan was drafted would replace the board's.
+    """
+    environment, _, _ = _drafted_for_the_board(tmp_path, monkeypatch, approve=False)
+    with _serving_board() as remote:
+        on_the_board = {**environment, **remote}
+        copied = _recipe(on_the_board, "copy-plan", RENDERED_QUALIFIED, "--to", "plans")
+        assert copied.returncode == 0, copied.stdout + copied.stderr
+        board_project = _copied(copied.stdout)[RENDERED_QUALIFIED]
+
+        _on_the_board(monkeypatch, remote)
+        approved = _recipe(on_the_board, "approve-design", board_project)
+        assert approved.returncode == 0, approved.stdout + approved.stderr
+        approval = design_approval.recorded(design_approval.design_document(board_project))
+        before = design_approval.design_document(board_project).content
+
+        recopied = _recipe(on_the_board, "copy-plan", RENDERED_QUALIFIED, "--to", "plans")
+        after = design_approval.design_document(board_project)
+        gated = _launch_gate(on_the_board, board_project)
+
+    assert recopied.returncode == 0, recopied.stdout + recopied.stderr
+    assert _copied(recopied.stdout)[RENDERED_QUALIFIED] == board_project, recopied.stdout
+    assert after.content == before, "the re-copied plan has to be the unchanged one"
+    assert approval is not None
+    assert design_approval.recorded(after) == approval, (
+        f"the re-copy has to keep the approval recorded on {board_project}'s board copy; "
+        f"it now carries {after.metadata.get(design_approval.RECORD_KEY)!r}"
+    )
+    assert gated.returncode == 0, (
+        f"the launch gate has to accept {board_project} after a re-copy of the unchanged "
+        f"plan, and answered {gated.stdout}{gated.stderr}"
+    )
+    # llmlint: ignore-end[e2e_not_mocked]
     # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

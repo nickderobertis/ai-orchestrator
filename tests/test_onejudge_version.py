@@ -101,7 +101,10 @@ PUBLISHED_VERSION_REFERENCE_COUNTS: dict[str, dict[Path, int]] = {
     # times a second and started backing it off, which is a fourth behavioural literal and
     # is re-opened by a bump for the same reason: the retry rate an operator is told about
     # is the release's, and a stale number describes an outage nobody would recognise.
-    "onepipeline": {Path("docs/orchestration.md"): 9},
+    # The tenth and eleventh are the release whose adopting driver replays the envelopes a
+    # dead one claimed, and whose `cancel` preempts a live note its node never answered:
+    # two more behavioural literals, re-opened by a bump for the same reason.
+    "onepipeline": {Path("docs/orchestration.md"): 11},
 }
 
 

@@ -3,7 +3,7 @@
   "private": true,
   "packageManager": "bun@1.3.14",
   "dependencies": {
-    "onepipeline-ui": "0.26.4"
+    "onepipeline-ui": "0.26.5"
   },
   "devDependencies": {
     "@expo-google-fonts/noto-sans": "0.4.2",
