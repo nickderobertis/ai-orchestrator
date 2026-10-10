@@ -1,0 +1,186 @@
+{
+  "mode": "cmd",
+  "label": "writers-only-target-alone",
+  "base_commit": "3b6a1ef79ff3953763fcf644c496c5d6a9248e36",
+  "measured_head": "bed1d558bb409cf62e511da60f6f6dacaa3170d9",
+  "tree": "522b7b56ce0edf077fb528b0395c73c76fe4cd7d",
+  "edit": "none",
+  "edit_spec": " patch:prototype-writer-only-target.patch",
+  "cache_state": "warm",
+  "comparison_base": "origin/main@803859874cd324b065abba029263ac8fc121bf7b",
+  "nx_cache_dir": "/home/nick.guest/.cache/gate-profile-spike/xdg/ai-orchestrator/nx/756e79f93796751d",
+  "nx_cache_entries_before_seed": 36,
+  "nx_cache_entries_at_start": 36,
+  "uv": "uv 0.11.32 (aarch64-unknown-linux-gnu)",
+  "nx": "v23.1.0",
+  "llmlint": "llmlint 0.4.7",
+  "llmlint_fingerprint_sha256_16": "f8415a2fd16a02f4",
+  "exit_status": 1,
+  "cmd": [
+    "./scripts/nx.sh",
+    "run",
+    "orchestrator:test-toolchain-writers",
+    "--skip-nx-cache"
+  ],
+  "started_at": "2026-10-10T05:46:44.893243+00:00",
+  "wall_clock_s": 1202.4,
+  "host": {
+    "load1_max": 5.3,
+    "load1_mean": 3.15,
+    "load1_samples": 231,
+    "dispatches_max": "unknown",
+    "dispatches_proven_max": 2,
+    "dispatches_samples": [
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 2,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 2,
+        "unproven": 7
+      }
+    ]
+  },
+  "gate_phases": null,
+  "phases": [
+    {
+      "kind": "nx",
+      "label": "other run orchestrator:test-toolchain-writers --skip-nx-cache",
+      "start_offset_s": 0.5,
+      "duration_s": 1201.4
+    }
+  ],
+  "lint_llm_diff_provenance": null,
+  "nx_runs": [
+    {
+      "invocation": "other run orchestrator:test-toolchain-writers --skip-nx-cache",
+      "command": "nx run-many -t format-check",
+      "start_offset_s": 6.5,
+      "duration_s": 0.1,
+      "tasks": [
+        {
+          "task": "orchestrator:format-check",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 6.5,
+          "duration_s": 0.1
+        }
+      ],
+      "snapshot": "1791611211.505-6ea6bd90.json"
+    },
+    {
+      "invocation": "other run orchestrator:test-toolchain-writers --skip-nx-cache",
+      "command": "nx run orchestrator:test-toolchain-writers --skip-nx-cache",
+      "start_offset_s": 0.4,
+      "duration_s": 1201.9,
+      "tasks": [
+        {
+          "task": "orchestrator:test-toolchain-writers",
+          "cache": "cache-miss",
+          "status": 1,
+          "start_offset_s": 0.4,
+          "duration_s": 1201.9
+        }
+      ],
+      "snapshot": "1791612407.298-7ff01590.json"
+    }
+  ],
+  "pytest_tiers": {
+    "orchestrator:test-toolchain-writers": {
+      "wall_clock_s": 1200.9,
+      "exitstatus": 1,
+      "tests": 194,
+      "summed_test_s": 1269.8,
+      "group_s": {
+        "shared-checkout-toolchain": 1219.4,
+        "None": 50.4
+      },
+      "group_tests": {
+        "shared-checkout-toolchain": 102,
+        "None": 92
+      },
+      "failures": [
+        "tests/e2e/test_workspace_contract_e2e.py::test_gate_recipe_validates_first_then_judges_then_checks"
+      ],
+      "slowest_modules": [
+        [
+          "tests/e2e/test_nx_cache_scope_e2e.py",
+          574.4
+        ],
+        [
+          "tests/e2e/test_budget_telemetry_e2e.py",
+          294.3
+        ],
+        [
+          "tests/e2e/test_budget_target_e2e.py",
+          292.5
+        ],
+        [
+          "tests/e2e/test_workspace_contract_e2e.py",
+          55.0
+        ],
+        [
+          "tests/e2e/test_llmlint_cache_e2e.py",
+          26.0
+        ],
+        [
+          "tests/session_setup/test_locked_plan_store_setup_e2e.py",
+          16.1
+        ],
+        [
+          "tests/e2e/test_llmlint_two_path_verdict_e2e.py",
+          8.0
+        ],
+        [
+          "tests/dag_ui/test_dag_ui_serving_e2e.py",
+          3.0
+        ],
+        [
+          "tests/test_project_boundaries.py",
+          0.4
+        ],
+        [
+          "tests/e2e/test_nx_wrapper_version_e2e.py",
+          0.1
+        ]
+      ]
+    }
+  }
+}

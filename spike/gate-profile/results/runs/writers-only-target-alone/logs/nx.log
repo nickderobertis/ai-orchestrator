@@ -1,0 +1,88 @@
+
+> nx run orchestrator:test-toolchain-writers
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/e2e/test_nx_cache_scope_e2e.py tests/e2e/test_llmlint_cache_e2e.py tests/e2e/test_llmlint_two_path_verdict_e2e.py tests/e2e/test_budget_target_e2e.py tests/e2e/test_budget_telemetry_e2e.py tests/e2e/test_workspace_contract_e2e.py tests/e2e/test_nx_wrapper_version_e2e.py tests/test_project_boundaries.py tests/session_setup/test_locked_plan_store_setup_e2e.py tests/dag_ui/test_dag_ui_serving_e2e.py --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [ 37%]
+.......F................................................................ [ 74%]
+..................................................                       [100%]
+=================================== FAILURES ===================================
+___________ test_gate_recipe_validates_first_then_judges_then_checks ___________
+[gw3] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-nick/pytest-867/popen-gw3/test_gate_recipe_validates_fir0')
+
+    @pytest.mark.reads_recipes
+    @pytest.mark.skipif(
+        shutil.which("llmlint") is None, reason="the gate's first stage is the installed llmlint"
+    )
+    def test_gate_recipe_validates_first_then_judges_then_checks(tmp_path: Path) -> None:
+        """A tree `validate` accepts goes on to the judge, and only then the deterministic tier.
+    
+        The one summary line comes after every stage, carrying the coverage the last stage
+        measured and the provenance the judged stage printed.
+        """
+        checkout, trace = _validating_gate_checkout(tmp_path, "robust_shell")
+        (checkout / ".coverage").write_text("")
+        base = subprocess.run(
+            ["git", "rev-parse", "origin/main"],
+            cwd=checkout,
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.strip()
+    
+        result = _recipe_run(
+            checkout,
+            trace,
+            "gate",
+            "origin",
+            "main",
+            REAL_LLMLINT=str(shutil.which("llmlint")),
+            FAKE_COVERAGE_TOTAL="96.41",
+        )
+    
+        assert result.returncode == 0, result.stdout + result.stderr
+        ran = trace.read_text(encoding="utf-8").splitlines()
+        assert ran[0] == "llmlint validate --diff-base origin/main", ran
+        assert ran[1] == "nx.sh run workspace:lint-llm-diff", ran
+        assert any(line.startswith("nx.sh ") and "-t format-check" in line for line in ran[2:]), ran
+        assert not any("-t format-check" in line for line in ran[:2]), ran
+>       assert [line for line in result.stdout.splitlines() if line.startswith("gate: ")] == [
+            "gate: complete gate passed (line coverage 96.41%); "
+            f"judged this diff against base {base} (Nx cache miss)"
+        ], result.stdout
+E       AssertionError: gate: complete gate passed (line coverage 96.41%); judged this diff against base 0a404c1e8d1769d5a8f61c9f04cd3bba2167f90c (Nx cache miss) [ignored an ambient global Nx cache skip]
+E         
+E       assert ['gate: compl... cache skip]'] == ['gate: compl... cache miss)']
+E         
+E         At index 0 diff: 'gate: complete gate passed (line coverage 96.41%); judged this diff against base 0a404c1e8d1769d5a8f61c9f04cd3bba2167f90c (Nx cache miss) [ignored an ambient global Nx cache skip]' != 'gate: complete gate passed (line coverage 96.41%); judged this diff against base 0a404c1e8d1769d5a8f61c9f04cd3bba2167f90c (Nx cache miss)'
+E         Use -v to get more diff
+
+tests/e2e/test_workspace_contract_e2e.py:2730: AssertionError
+=========================== short test summary info ============================
+FAILED tests/e2e/test_workspace_contract_e2e.py::test_gate_recipe_validates_first_then_judges_then_checks
+1 failed, 193 passed in 1221.03s (0:20:21)
+Warning: command "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/e2e/test_nx_cache_scope_e2e.py tests/e2e/test_llmlint_cache_e2e.py tests/e2e/test_llmlint_two_path_verdict_e2e.py tests/e2e/test_budget_target_e2e.py tests/e2e/test_budget_telemetry_e2e.py tests/e2e/test_workspace_contract_e2e.py tests/e2e/test_nx_wrapper_version_e2e.py tests/test_project_boundaries.py tests/session_setup/test_locked_plan_store_setup_e2e.py tests/dag_ui/test_dag_ui_serving_e2e.py --no-cov -n 4 --dist loadgroup" exited with non-zero status code
+
+
+ NX   Running target test-toolchain-writers for project orchestrator failed
+
+Failed tasks:
+
+- orchestrator:test-toolchain-writers
+
+Hint: run the command with --verbose for more details.
+
+  Run duration:      20m 2s
+  Cache:             Skipped (--skip-nx-cache)
+  Critical path:     20m 2s (1 task)
+  Recoverable time:  <1ms
+
+  Recommendations:
+    - Cache: drop --skip-nx-cache to restore unchanged tasks instantly.
+    - Speed up or split the longest tasks on the critical path:
+        orchestrator:test-toolchain-writers    20m 2s

@@ -1,0 +1,27 @@
+{
+  "mode": "cmd",
+  "label": "writers-only-target-alone",
+  "base_commit": "3b6a1ef79ff3953763fcf644c496c5d6a9248e36",
+  "measured_head": "bed1d558bb409cf62e511da60f6f6dacaa3170d9",
+  "tree": "522b7b56ce0edf077fb528b0395c73c76fe4cd7d",
+  "edit": "none",
+  "edit_spec": " patch:prototype-writer-only-target.patch",
+  "cache_state": "warm",
+  "comparison_base": "origin/main@803859874cd324b065abba029263ac8fc121bf7b",
+  "nx_cache_dir": "/home/nick.guest/.cache/gate-profile-spike/xdg/ai-orchestrator/nx/756e79f93796751d",
+  "nx_cache_entries_before_seed": 36,
+  "nx_cache_entries_at_start": 36,
+  "uv": "uv 0.11.32 (aarch64-unknown-linux-gnu)",
+  "nx": "v23.1.0",
+  "llmlint": "llmlint 0.4.7",
+  "llmlint_fingerprint_sha256_16": "f8415a2fd16a02f4",
+  "start": 1791611204.8932433,
+  "end": 1791612407.3387032,
+  "exit_status": 1,
+  "cmd": [
+    "./scripts/nx.sh",
+    "run",
+    "orchestrator:test-toolchain-writers",
+    "--skip-nx-cache"
+  ]
+}

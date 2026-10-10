@@ -1,0 +1,17 @@
+{
+ "option_i_writer_only_target": {
+  "measured_alone_s": 1201.9,
+  "exit_status": 1,
+  "tests": 194,
+  "group_serialised_s": 1219.4,
+  "load1_max": 5.3,
+  "wide_gate_lower_bound_s": 1912.3,
+  "arithmetic": "1201.9 (writer target, parallelism:false, nothing beside it) + (3549.3 phase-1 work after - 1515.4 writer-module test s) / 3 slots = 678.0 + 32.4 (phase 2 + check-nx-cache + replayed llmlint)"
+ },
+ "option_ii_isolated_writer_toolchains": {
+  "isolation_added_total_s": 34.05,
+  "writer_modules_wall_ungrouped_s": 494.4,
+  "writer_modules_summed_test_s": 1515.4,
+  "wide_gate_projected_s": 1313.5
+ }
+}
