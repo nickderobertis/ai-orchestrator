@@ -1,0 +1,233 @@
+spike: spike-gate-profile
+branch: nick/gate-time-split-and-lock/spike-gate-profile
+harness: |
+  Everything is under `spike/gate-profile/` on the branch. Run every command from the root of a bootstrapped checkout of that branch (`just bootstrap`), with a clean tree. The command checks out the measured commit detached, commits one representative edit (or `--patch`) on top, and then returns to the branch.
+
+  - `spike/gate-profile/measure.sh offline <edit>...` (**offline mode**). Lists the cached test targets whose Nx key covers each edited path, using `tests/nx_inputs.py`'s `target_input_globs`. It also lists the uncached targets that always run and the projects `nx affected` selects. It runs nothing.
+  - `spike/gate-profile/measure.sh tier --commit <sha> --edit <edit> --cache cold|warm --label <label>` (**tier mode**). Runs `just check` exactly as the gate does: same `scripts/nx-selection.sh` narrowing, targets and phases. It writes `summary.json` with:
+    - wall clock per phase;
+    - per Nx task, its cache hit or miss, exit status and duration;
+    - per pytest tier, per-test setup/call/teardown durations with each test's xdist group, collected by `plugin/gate_profile_plugin.py` through `PYTEST_ADDOPTS`;
+    - host samples.
+  - `spike/gate-profile/measure.sh gate --commit <sha> --edit <edit> --cache cold|warm --label <label>` (**gate mode**). Times `just gate <remote> <base>` end to end, split into `llmlint` validate, the judged lint diff (with its `lint-llm-diff: judged|replayed` line) and `just check`. It also records the Nx cache state the run started from, each Nx task's hit or miss, and the exit status (provenance only).
+  - `spike/gate-profile/measure.sh judge ...` spends one judged lint turn on a tree, so later gate runs replay it.
+  - `spike/gate-profile/measure.sh three --commit <sha> [--patch <file>] ...` runs `orchestrator-e2e:test`, `plan-tooling:test` and `orchestrator:test-docs` at once through `three.sh`.
+  - `spike/gate-profile/measure.sh pin-base <sha>` creates a throwaway local remote `spikebase` whose `main` is `<sha>`. Run with `GATE_PROFILE_REMOTE=spikebase`, every mode then compares against it, `just check`'s affected selection included.
+
+  The representative edits are named in `measure.sh` (`EDITS`): `narrow-script`, `narrow-persona`, `narrow-doc`, `wide-conftest` and `wide-justfile`. Each inserts one empty line.
+
+  Every run uses its own Nx cache: `XDG_CACHE_HOME=$GATE_PROFILE_HOME/xdg`, default `~/.cache/gate-profile-spike/xdg`. Only `ai-orchestrator/nx` there is private; every other cache entry symlinks to the host's.
+  - `cold` starts from an empty Nx cache, seeded with the judged verdicts in `~/.cache/gate-profile-spike/verdicts/`.
+  - `warm` keeps whatever the previous run left.
+
+  A run writes to `~/.cache/gate-profile-spike/runs/<label>/`. `archive-run.sh <label>` copies it onto the branch under `spike/gate-profile/results/runs/<label>/`.
+
+  Other tools on the branch:
+  - `trace/trace.sh <label> <nodeid>...` traces one pytest selection under `strace -f -e trace=openat,execve`. It writes `results/traces/<label>.json`: the tracked files read in the root or in any copy, and the slowest processes spawned.
+  - The scripts under `analysis/` produce every derived table in `results/analysis/`:
+    - `profile.py <run>` gives the per-tier profile and the 30 slowest modules;
+    - `modules.py` gives module tables per tier;
+    - `split_map.py` gives the split-map group seconds;
+    - `project_wide.py` gives the after-projection.
+
+  The re-measure the last node owes is two runs:
+  - `GATE_PROFILE_REMOTE=spikebase spike/gate-profile/measure.sh gate --commit 3b6a1ef79ff3953763fcf644c496c5d6a9248e36 --edit wide-conftest --cache cold --label <l>`;
+  - the same with `--edit narrow-script --cache warm`.
+
+  Run `measure.sh pin-base 3b6a1ef7` once first. Each of those runs replays its before tree's verdict.
+
+  The prototype is `spike/gate-profile/prototype-isolated-writer-toolchains.patch`. The branch's own `tests/` also carries it, applied in commit `67db1222`.
+method: |
+  **Base commit measured.** Every tree is `3b6a1ef79ff3953763fcf644c496c5d6a9248e36` plus one edit. The last node re-measures that same commit as its before.
+
+  **Toolchain.** uv 0.11.32 (aarch64), Nx 23.1.0 (local), Bun 1.3.14, llmlint 0.4.7. The judge fingerprint is `scripts/llmlint-fingerprint.sh` output, sha256 prefix `f8415a2fd16a02f4`. The host has 14 cores and is shared with other dispatches. Nx runs at its default `parallel` of 3 (`nx.json` sets none), and each pytest runs with `-n 4 --dist loadgroup`.
+
+  **Isolated Nx cache.** `/home/nick.guest/.cache/gate-profile-spike/xdg/ai-orchestrator/nx/756e79f93796751d`, whose key is this clone's origin URL. The judged verdicts are copied beside it in `/home/nick.guest/.cache/gate-profile-spike/verdicts/`, with a `README.txt` mapping each entry to its tree.
+
+  **Representative edits.** Each inserts one empty line.
+
+  | edit | path | used in |
+  | --- | --- | --- |
+  | `narrow-script` | `scripts/budget-dispatches.sh` | gate mode |
+  | `narrow-persona` | `personas/researcher.yaml` | tier mode |
+  | `narrow-doc` | `docs/budgets.md` | tier mode |
+  | `wide-conftest` | `tests/conftest.py` | gate mode |
+  | `wide-justfile` | `justfile` | gate mode |
+
+  Offline mode covered all five (`results/offline-representative-edits.json`). The `justfile` covers 29 cached test targets and `tests/conftest.py` covers 33; the four extra are `session-setup:test`, `plan-store-assets:test`, `project-store-race:test` and `ask-seam-bus-resolution:test`. The two wide edits are therefore not equivalent, and the `justfile` edit was gate-measured too.
+
+  **Runs.** Each lives in `results/runs/<label>/`. Host conditions come from `scripts/budget-dispatches.sh` and `/proc/loadavg`, sampled every 5 s.
+
+  | run | load1_max | dispatches_max |
+  | --- | --- | --- |
+  | `gate-wide-conftest-cold` | 12.67 | `unknown` |
+  | `gate-narrow-script-warm` | 15.73 | `unknown` |
+  | `gate-wide-justfile-cold` | 11.89 | `unknown` |
+  | `tier-narrow-doc-warm` | 13.86 | `unknown` |
+  | `tier-narrow-persona-warm` | 19.05 | `unknown` |
+  | `three-prototype` | 18.44 | `unknown` |
+  | judged turns | 2.35-3.69 | `unknown` |
+
+  `dispatches_max` is `unknown` in every sample, as the budget script itself reports it. It proved 1 dispatch and could not prove 7 others, which it counts toward neither answer.
+
+  **Limits.**
+  - **Warm cache provenance.** `warm` means the cache left by the previous run of a *different* tree, not by a run of the base.
+    - For `gate-narrow-script-warm` this changes nothing that matters. Its 11 phase-1 tasks were exactly the targets offline mode says cover the edit (7 test targets), plus `orchestrator`'s lint/typecheck/format-check/budgets, which took 20.7 s together. Those would miss over a base-warmed cache too.
+    - `tier-narrow-doc-warm` also reran `orchestrator-e2e:test`, `plan-tooling:test` and `orchestrator:test`, which a doc edit does not key. That is an artefact of the cache state, so its wall clock is not a narrow-doc figure. The narrow-doc figure is projected under findings.
+  - **Moved comparison base.** At 21:14 local the harness fast-forwarded this clone's `origin/main` from `3b6a1ef7` to `80385987` by a fetch. That was mid-spike, so the runs split by start time:
+    - **Before the fetch:** every gate and judge run except the `justfile` ones, which compared against `3b6a1ef7`.
+    - **After the fetch, unpinned:** `tier-narrow-persona-warm` (started 21:15) selected projects `affected --base origin/main=80385987`. Its keys and misses are still the tree's own, but its selection may be wider than over `3b6a1ef7`.
+    - **After the fetch, pinned:** the `justfile` runs use `spikebase/main=3b6a1ef7`.
+  - **Load.** Each figure moves with host load (load1 peaks of 11.9-19.1 on 14 cores).
+  - **Prototype run.** `three-prototype` ran the three tiers alone. In the gates they shared Nx's three slots with the other phase-1 tasks.
+candidates:
+  - budget: gate-time
+    measure: "Complete pre-push gate wall clock, `just gate <remote> <base>` timed as `.githooks/pre-push` times it: `llmlint` validate, then the judged lint diff, then `just check`. Every figure comes from gate mode and is split into those three phases, with its cache provenance and host conditions."
+    workload: "Base `3b6a1ef7` plus one edit, comparison base `3b6a1ef7`. Narrow: `narrow-script` over the Nx cache the wide-conftest run left. Wide: `wide-conftest` and `wide-justfile`, each over a cold Nx cache seeded only with judged verdicts. The judged lint was replayed in every gate run, as on a typical publishing push."
+    achievable: "**Narrow diff (`narrow-script`), before: 1638.7 s (27.3 min).** Validate 0.3 s, judged lint 0.4 s (replayed; the verdict for this tree was judged once in 38.9 s), handoff 0.3 s, `just check` 1637.7 s. Cache: warm, 11 phase-1 tasks, all missed. The critical path is `orchestrator-e2e:test` at 1606.3 s, then 28.1 s of uncached phase 2, where coverage is 0.9 s. `load1_max` 15.73, `dispatches_max` unknown (1 proven). Exit 0.
+
+    **Wide diff (`wide-conftest`), before: 1943.3 s (32.4 min).** Validate 0.2 s, judged lint 0.4 s (replayed; judged once in 26.1 s), handoff 0.4 s, `just check` 1942.3 s. Cache: cold, 36 phase-1 tasks, all missed. Phase 1 took 1863.0 s, with `orchestrator-e2e:test` at 1715.5 s. Phase 2 took 73.3 s, of which a re-run of `orchestrator:test` was 73.8 s. `load1_max` 12.67, `dispatches_max` unknown. Exit 1, on 7 harness-artefact failures: the profiling plugin was missing from nested pytest runs in `test_coverage_gate.py` (5) and `test_nx_cache_scope.py` (2), and the harness was fixed in commit `29c55df7`.
+
+    **Wide diff (`wide-justfile`), before: 3482.0 s (58.0 min).** Validate 0.3 s, judged lint 0.4 s (replayed; judged once in 28.4 s against `spikebase/main=3b6a1ef7`), handoff 0.3 s, `just check` 3481.0 s. Cache: cold, all missed. Phase 1 took 1900.0 s, with `orchestrator-e2e:test` at 1760.0 s. Exit 1, because one test of that tier failed: `test_gate_time_budget_e2e::test_a_host_variable_over_beside_a_strict_over_is_still_refused`, whose measured time rounded to exactly its 1 s budget, which reads as within the budget rather than over it. With that tier uncached, phase 2 re-ran `orchestrator-e2e:test` in full (1578.5 s), so phase 2 took 1579.3 s. Without the failure the gate would have been about 1900.0 + 28.1 + 0.3 + 0.4 + 0.3 ≈ 1929 s, the same as the conftest edit. `load1_max` 11.89, `dispatches_max` unknown.
+
+    **Wide diff after the plan: 1313.5 s projected (21.9 min), from 1943.3 s.** This projection is not a measurement. Its arithmetic is in `results/analysis/projection-wide-after.json`:
+    - **Prototype tiers (measured, all misses).** With isolated writer toolchains and the group removed, the three big tiers were measured in `three-prototype`: `orchestrator-e2e:test` 920.7 s, `plan-tooling:test` 912.9 s, `orchestrator:test-docs` 414.1 s.
+    - **Phase 1 (projected).** The wide-conftest run's other 33 phase-1 tasks took 1301.6 s. Scheduling all of them on Nx's 3 slots, big tiers first, gives 1281.1 s; the work/3 lower bound is 3549.3 / 3 = 1183.1 s.
+    - **Rest of the gate.** Uncached phase 2 adds 28.1 s (the narrow run's) and `check-nx-cache` 3.3 s, so the deterministic tier is 1312.5 s. The replayed `llmlint` phases add 1.0 s (0.2 + 0.4 + 0.4).
+    - **Why it is conservative.** The 1301.6 s was measured with those tasks' journeys still serialised by the group: `writeback-budget:test` takes 295 s for 5 tests and `run-end-hooks:test` 148 s.
+    - **Split map not included.** The projection does not count the split map, which does not shorten a wide diff that reruns everything; it lowers narrow diffs.
+    - **Deterministic tier only.** The three prototype tiers' own critical path is 920.7 s, against 1715.5 s for the same three in the wide-conftest gate. That is a tier-mode figure, not a complete-gate figure."
+    limits: "**What a complete gate costs today.** A complete gate is `llmlint` (~1 s replayed, 26-39 s when judged) plus `just check`. `just check` is phase 1 (Nx `affected`, 3 slots), then phase 2 (uncached `test-checkouts`, `coverage`, `budgets-host`; 26-30 s), then `check-nx-cache` (0-3.3 s).
+
+    **Why narrow is close to wide.** Every narrow edit measured reruns `orchestrator-e2e:test` except the doc edit. Offline mode: the script edit covers 7 test targets and the persona 5, both including `orchestrator-e2e:test`, while the doc edit covers only the 2 `test-docs` targets. That tier is the gate's critical path, so before the plan a narrow gate is 84% of a wide one (1638.7 / 1943.3).
+
+    **Narrow-doc, deterministic tier, projected.** About 832 s over a base-warmed cache. Its covering targets, measured in `tier-narrow-doc-warm`, are `orchestrator:test-docs` at 805.8 s and `plan-tooling:test-docs` at 222.8 s, in parallel, plus phase 2 at 26.6 s.
+
+    **Narrow-persona, deterministic tier, measured.** 1784.3 s. Its critical path is `orchestrator-e2e:test` at 1751.4 s, which the persona edit genuinely keys. Its affected base had moved, as stated under method.
+
+    **Lower bound after the fix.** For a wide diff, Nx `parallel` 3 sets the floor at total task seconds / 3 = 1183 s. Below that takes either more slots or less work per gate. The draft candidate threshold of 1200 s sits within 2% of that floor and under the 1313.5 s projection, so headroom for this host's load needs the tuning node's `parallel` and xdist changes or the split on top.
+
+    **Projection uncertainty.** `three-prototype` summed 8632.9 s of test time for three tiers, against 5874.2 s for the same three before. Contention inflates per-test time: 3 × 4 workers on a 14-core host shared with other dispatches."
+    consumed: "**Wall clock:** spike wall clock from 19:15:06 local on 2026-10-09 (session branch cut) to the report at about 23:40, about 4 h 25 min. **Judged lint turns: 4**, as the manager granted:
+    - narrow-script, 38.9 s;
+    - wide-conftest, 26.1 s;
+    - wide-justfile, 28.5 s, spent against the moved `origin/main=80385987` and unusable at `3b6a1ef7`;
+    - wide-justfile again against the pinned `3b6a1ef7`, 28.4 s.
+
+    The 4th is the plan-wide spare: the plan's measurement total is now the cap of 8, `gate-tuning-and-measure` keeps its 4, and no spare is left.
+
+    **Full-suite runs: 5 complete `just check` runs.** Three were inside gate mode: 1943 s, 1639 s and 3482 s. Two were tier mode: 1662 s and 1784 s.
+
+    **Partial runs:**
+    - one tier run killed when its turn ended, about 10 min in;
+    - one three-tier run, 921 s;
+    - eight single-test strace traces, 23-316 s each;
+    - lock experiments of seconds each."
+findings:
+  - |-
+    **Lock mechanism.** Every `uv run` variant takes the exclusive `<root>/.venv/.lock` only while it resolves and syncs, never for the child's lifetime. The evidence is under `results/lock-experiments/`.
+      - **`uv run` (plain), `--no-sync` / `UV_NO_SYNC=1`, `--frozen` / `UV_FROZEN=1` and `--locked`** all take the same lock: `flock(.venv/.lock, LOCK_EX)` after a shared lock on `~/.cache/uv/.lock`. They hold it 2-20 ms when the environment is in sync, then `execve` the child after releasing it. The cache lock stays shared for the child's lifetime, which blocks only `uv cache clean`/`prune`, never a reader.
+      - **Blocking behaviour.** While the `.venv` lock is held, every one of those readers blocks (5.4-5.5 s against a held lock, versus 0.03-0.10 s unheld, `matrix-envlock.txt`). `--no-sync` and `--frozen` still lock.
+      - **`.venv/bin/<tool>` directly** takes no lock (0.02 s held and unheld).
+      - **Writers.** `uv sync --locked` (`scripts/python-install.sh`) holds the lock about 10 ms when in sync and 2.2 s with `--reinstall` (`strace-sync_--locked*.txt`). `scripts/session-setup.sh` syncs the root only when its version checks fail.
+      - **Bun.** `scripts/workspace-install.sh` holds a `flock -x` on the tree's lock around `bun install --frozen-lockfile` for that install's duration: milliseconds when in sync (`strace-wsi.txt`). A no-change `bun install` still unlinks and re-links every package `bin` (`strace-bunbin.txt`), so it rewrites `node_modules/.bin` and is a writer even when in sync.
+      - **Nx heal.** `scripts/nx.sh` runs both installs before every Nx invocation.
+      - **What actually serialises the gate.** No reader waits on uv's lock for longer than a sync. The idle workers come from the `shared-checkout-toolchain` xdist group itself: `--dist loadgroup` puts its 594 tests (3754 s in the wide run) on one worker per tier.
+      - **Readers are unprotected.** A reader running through `.venv/bin` or an already-started `uv run` child is not protected from a concurrent writer by any lock.
+  - |-
+    **Writers and readers of `SHARED_TOOLCHAIN_GROUP`** (`results/item4-shared-toolchain-group-static-read.md`, a static read at `3b6a1ef7`). 46 modules carry the group: 10 writers and 36 readers.
+      - **Writers of the root `node_modules`** run `scripts/nx.sh` or `just`, and so `workspace-install.sh`'s `bun install`, through a copy whose `node_modules` symlinks to the root's:
+        - `test_nx_cache_scope_e2e`, `test_llmlint_cache_e2e`, `test_llmlint_two_path_verdict_e2e`, `test_budget_target_e2e`, `test_budget_telemetry_e2e`;
+        - `test_workspace_contract_e2e`, 3 of its 4 grouped tests, through `_provisioning_copy` then `./scripts/nx.sh`.
+      - **Writers of both the root `.venv` and `node_modules`:** `test_nx_wrapper_version_e2e` (`./scripts/nx.sh --version` at the root) and `test_project_boundaries` (`./scripts/nx.sh graph` at the root), through `python-install.sh`'s `uv sync --locked`.
+      - **Conditional writer of the root `.venv`:** `session_setup/test_locked_plan_store_setup_e2e`, through `scripts/session-setup.sh`, only when its checks fail. Its first test also runs `uv tool install --upgrade llmlint-cli` under the real HOME.
+      - **Fixture-only writer:** `dag_ui/test_dag_ui_serving_e2e`, through `workspace_install`.
+      - **Does `workspace_install` rewrite a provisioned toolchain? Yes.** It runs `workspace-install.sh` once per xdist worker, unconditionally, and Bun re-links every `bin`, so every module requesting it (51 tests) is a writer.
+      - **Readers.** The 36 readers include `test_publish_branch_e2e`, the plan-tooling follow-ups modules, `run_end_hooks`, `writeback_budget`, `unfinished`, `unwatched` and the `ask_seam` launches; the file lists them all. They only run recipes through `uv run` or `.venv/bin`.
+      - **Detection gap.** `_reprovisioning_tests` detects only 1 of these writers, the inline `session-setup.sh` call. It sees none of the `nx.sh` or Bun writers.
+  - |-
+    **Fix chosen: (ii) isolated writer toolchains.**
+      - **What the prototype changes** (`prototype-isolated-writer-toolchains.patch`, applied in `67db1222`):
+        - a copy gets a private, hardlinked `node_modules` rather than a symlink to the root's;
+        - `test_nx_wrapper_version_e2e` and `test_project_boundaries` run `scripts/nx.sh` in a copy;
+        - `workspace_install` provisions only what is absent;
+        - a collection hook strips the group.
+      - **Why it protects readers.**
+        - **Within one pytest process:** no writer touches the root toolchain any more, so a reader on another worker never meets a toolchain mid-rewrite.
+        - **Across concurrent Nx tiers:** the same holds, because no test writes the root `.venv` or `node_modules` while tiers run. The one root write left in a gate is `scripts/nx.sh`'s heal. It relinks `node_modules/.bin` under the Bun lock, and `uv sync` takes milliseconds when in sync. `just check` runs that heal once per phase, before the phase's tasks start, never while tests run.
+        - **Residual the real fix must also close:** `session_setup/test_locked_plan_store_setup_e2e` still runs the root's `scripts/session-setup.sh`. That script runs `uv sync` on the root `.venv` only when its version checks fail, so it does nothing on a provisioned checkout. The prototype did not isolate it; the fix should run it in a copy with its own `.venv`.
+      - **Why not (i).** Writer-only targets with `parallelism: false` would put every writer journey on the critical path with nothing beside it. The grouped tests of the profiled writer modules sum 1276.3 s over 97 tests in the wide run: `nx_cache_scope_e2e` 624.4, `budget_target` 301.6, `budget_telemetry` 287.3, `llmlint_cache` 42.4, `llmlint_two_path` 11.4, `workspace_contract` 5.8, `dag_ui` 2.9, and under 1 s for the other two. `session-setup:test` (18.0 s as an Nx task) was not profiled. Writers all rewrite the one root `node_modules`, so they also exclude one another; about 1276 s would sit serially with nothing beside it. That exceeds the whole projected deterministic tier.
+      - **Cost of isolation per writer.** A hardlinked `node_modules` per copy (no extra disk for package files) and a Bun relink per copy. `test_nx_cache_scope_e2e`'s heaviest test ran in 186.7 s traced under the prototype, against 149.2 s before.
+      - **Three tiers run together** (before from `gate-wide-conftest-cold`, after from `three-prototype`):
+
+        | tier | before | after |
+        | --- | --- | --- |
+        | `orchestrator-e2e:test` | 1715.5 s, exit 0 | 920.7 s, 1 failure |
+        | `orchestrator:test-docs` | 724.7 s, 2 harness-artefact failures | 414.1 s, 14 failures |
+        | `plan-tooling:test` | 453.5 s | 912.9 s, exit 0 |
+        | critical path | 1715.5 s | 920.7 s (−46%) |
+
+        `plan-tooling:test` grew because its formerly serialised journeys now contend with the other tiers.
+      - **Failures after, each with its cause** (`results/runs/three-prototype/failure-triage.md`):
+        - `test_observer_graph_liveness_e2e::test_a_paced_monitor_keeps_the_run_watched_between_its_turns` saw a `member-died` envelope 2 s after the run settled, under a load1 of 18.4. Re-run twice alone on the prototype tree, it passed both times. The envelope's text was truncated in the log, so whether that death touched the toolchain is not established.
+        - `test_workspace_contract_e2e::test_a_worktree_provisioned_before_the_pin_moved_reinstalls_from_the_lockfile` fails on `just format-check`, because the prototype's five edited test files are unformatted spike code.
+        - 13 `test_nx_cache_scope.py` drift gates fail. They encode the group rule and the Nx dependency graph, and the prototype strips the group and makes `tests/conftest.py` import `tests/e2e/nx_workspace.py` without adding the `support-nx-workspace` edge. The real fix rewrites those rules.
+      - **No timeouts.** No failure is a reader seeing a toolchain mid-rewrite.
+  - |-
+    **Split map** (`results/analysis/split-map-gate-wide-conftest-cold.txt`; read sets from `results/traces/*.json`). Test seconds are summed per-test time in the wide run.
+      - **`e2e/publish-and-landing`, 1163 s.** `test_publish_branch` 946 s, `work_status_and_import`, `session_reuse_retry`, `merge_path_audit` and friends.
+        - Reads: its `just` recipe, `scripts/onepipeline.sh` and env helpers, `config/` (`onevcs` rules), `graphs/pr-author`, `oneharness.pr-author.toml`, `pyproject.toml`, `uv.lock`; traced.
+        - Rerun by `wide-conftest` and `wide-justfile`.
+      - **`e2e/launch-monitor-observer`, 851 s, 532 tests.** Orchestrate-launch, monitor, observer, adopted-engine, dispatch and persona journeys.
+        - Reads: `scripts/onepipeline.sh`, graphs, personas, `oneharness*.toml`, `config/`.
+        - Rerun by both wide edits; the persona edit reruns `shipped_persona_catalog` and `orchestrate_launch`.
+      - **`e2e/budget-gate`, 663 s.** `budget_target` 302 s, `budget_telemetry` 287 s, `gate_time_budget`, `budget_capabilities`, `lock_timeout_bound`.
+        - Reads: `justfile`, `nx.json`, `package.json`, `bun.lock`, `scripts/*` (66 scripts, among them `budget-dispatches.sh` through `lock-timeout.sh`), `budgets.yaml`; traced.
+        - Rerun by `narrow-script` and both wide edits.
+      - **`e2e/plan-store-host`, 263 s.** `onetaskgraph_host`.
+        - Reads: `onetaskgraph.yaml`, `config/`, and `orchestrator/follow_up_tickets` in 93 subprocesses; traced.
+        - Rerun by both wide edits.
+      - **`e2e/registry-and-recipes`, 226 s.** `delegated_recipes`, `repo_registry_apply`, `repos_bootstrap`, `watch_selector`.
+        - Reads: `justfile` and `scripts/`.
+        - Rerun by both wide edits.
+      - **`e2e/toolchain-writers`, 1001 s.** `nx_cache_scope_e2e` 624 s, `workspace_contract` 320 s, `llmlint_cache`, `llmlint_two_path`, `nx_wrapper_version`, `project_boundaries`, `gate_selection`. Nearly all of it sits in `orchestrator:test-docs`.
+        - Reads: every tracked file, because `copy_checkout` copies the whole tree; traced.
+        - Rerun by every edit.
+      - **`e2e/harness-routing` + other, 15 s.** Not worth a project of its own; fold it into a neighbour.
+      - **`plan-tooling/check-and-review`, 886 s.** `check_plan_recipe` 581 s, `plan_review` 169 s.
+        - Reads: templates, personas, `config/`, `oneharness.plan-review*.toml`, `onetaskgraph.yaml`; traced.
+        - Rerun by `narrow-persona` (the plan-review bar reads personas) and both wide edits.
+      - **`plan-tooling/follow-ups`, 579 s.** `follow_ups_recipe` 296 s, `answer_comments` 130 s, `comment_answers` 88 s, `linear_routed_follow_ups` 50 s.
+        - Reads: `scripts/follow-ups.sh` and env helpers, `templates/follow-up-task`, `graphs`, `orchestrator/follow_up_tickets`; traced.
+        - Rerun by both wide edits.
+      - **`plan-tooling/plan-flow`, 406 s.** `plan_spike_flow` 225 s, `linear_routed_plans`, `visual_plan_flow`, `unwatched_planning`.
+        - Reads: every tracked file, because it copies the checkout; traced.
+        - Rerun by every edit.
+      - **`plan-tooling/finish-approve-copy`, 469 s.** `approve_design` 210 s, `finish_plan` 107 s, `copy_plan` 65 s.
+        - Reads: templates, `design-doc`, `scripts/finish-plan.sh`.
+        - Rerun by both wide edits.
+      - **Root drift gates (`tests/*.py`) in `orchestrator:test-docs`, 98.8 s, 401 tests,** of which `tests/test_nx_cache_scope.py` is 79 s. By contrast, the `tests/e2e` journeys in that tier are 1099.8 s, 106 tests, and the copies of the checkout among them dominate (`nx_cache_scope_e2e` 624 s, `workspace_contract` 294 s). So the `reads_docs` tier is 92% copy-the-checkout journeys and 8% root drift gates. `split-docs-tier` alone would move about 99 s, which supports folding it into `split-e2e-journeys`.
+      - **Imports are not visible to the traces.** Python imports read `__pycache__` rather than `openat` the source, so every group also reads `tests/conftest.py` and its import graph, as `tests/nx_inputs.py` already declares.
+      - **Copy-the-checkout groups cannot be narrowed.** `toolchain-writers` and `plan-flow` can only be narrowed by narrowing what the copy copies.
+  - |-
+    **Uncached tiers in a narrow gate.** In `gate-narrow-script-warm`, phase 2 took 28.1 s of 1638.7 s (1.7%): `orchestrator-e2e:test-checkouts` 28.1 s and `orchestrator:test-checkouts` 18.3 s running beside it, `unfinished:test-host` 18.3 s, and `coverage` 0.9 s (0.05%). That is far below the plan's 20% threshold, so no follow-up draft is owed for them.
+  - |-
+    **Outliers.**
+      - **`test_nx_cache_scope_e2e`, 624-728 s, 27 tests, all on one worker under the group.** It is dominated by `scripts/check-nx-cache.sh`'s fixture `just bootstrap`s, 14 `bun install --frozen-lockfile` at 141.7 s, and Nx runs in copies. Its 149 s test spends 167.7 s of a traced 186.7 s in two `check-nx-cache.sh` runs (`results/traces/nx-cache-scope-cross-worktree.json`).
+      - **`test_budget_target_e2e`'s 285-298 s test** (`test_real_check_measures_host_budgets_when_no_project_is_touched`), and `test_budget_telemetry_e2e`'s 285-291 s test, each run a real `just check` twice in a scratch workspace. 288.8 s of the traced 315.9 s is `check-nx-cache.sh`. Its 138.4 s is one cold `bun install --lockfile-only`, because the test sandboxes `XDG_CACHE_HOME`. That misses the per-host fixture resolution cache under `ai-orchestrator/nx-cache-fixture/` that the script keeps exactly to avoid that cost (`results/traces/budget-target-real-check.json`).
+      - **`test_follow_ups_recipe_e2e`'s startup is not per-test.** The median test takes 0.06 s. The cost is two module-scoped journey fixtures, `followed` (91.1 s setup) and `endings` (67.6 s setup), charged to the first test that uses each. Inside them, 122 `python -m orchestrator.follow_up_tickets` subprocesses take 55 s and 8 engine starts 46 s (`results/traces/follow-ups-followed-fixture.json`). The group puts all 93 tests on one worker.
+  - |-
+    **Gaps in uv, Nx or a pinned library.** The chosen fix needs none, because it removes writers from the shared toolchain rather than coordinating them. Writer-only targets would not need one either. Two observations, both reported here without a fill in this repository:
+      - `uv` offers no shared/read lock on a project environment. `--no-sync` and `--frozen` still take the exclusive `.venv` lock briefly.
+      - Bun 1.3.14's no-change `bun install --frozen-lockfile` still rewrites `node_modules/.bin`. Concurrent runs over one tree fail `EEXIST`, as `workspace-install.sh` records.
+  - |-
+    **Observations that contradict the plan's assumptions.**
+      - The premise that most xdist workers sit idle behind one `uv` lock does not hold as a lock: `uv`'s `.venv` lock is held for milliseconds. The idleness is the `shared-checkout-toolchain` xdist group serialising its 594 tests per tier. Dropping the group, with writers isolated, is the fix.
+      - Narrow diffs are not cheap today. The script and persona edits rerun the critical `orchestrator-e2e:test`, and a narrow gate costs 84% of a wide one.
+      - The gate's wall clock is bounded below by Nx's default `parallel` of 3: total phase-1 work / 3 ≈ 1183 s for a wide diff after the fix. So the draft 1200 s threshold is not reachable for a wide diff from the lock fix alone, and the projected figure is 1313.5 s.
+      - The manager's unbootstrapped profile does not carry over. In a bootstrapped worktree the suite ran 6531 per-tier test results, 8241 s summed, with 594 tests and 3754 s in the group across tiers, and the only real failure was a timing flake. The 6118 / 5240 s / 592 / 2782 s figures are the manager's, from an unbootstrapped single-pytest run.
+      - A single test failure in phase 1 doubles the cost of `orchestrator-e2e:test`: phase 2's `test-checkouts`/`coverage` re-run the uncached failed tier (`gate-wide-justfile-cold`: +1578.5 s).
+      - `tests/e2e/test_gate_time_budget_e2e.py::test_a_host_variable_over_beside_a_strict_over_is_still_refused` is timing-sensitive at a 1 s budget.
+      - `dispatches_max` reads `unknown` on this host in every sample (1 proven, 7 unprovable), so the `gate-time` budget's dispatch condition will read `unknown` too.
+      - The harness fetched `origin/main` into this run clone mid-dispatch, which moves the comparison base. A measurement node must pin its base, as `measure.sh pin-base` does.
+      - The judged turn spent against the moved base (`judge-wide-justfile-wrong-base`) is why this spike spent 4 turns. With the manager's grant that uses the plan's one spare, so `gate-tuning-and-measure` keeps its cap of 4 and the plan has no spare left.
