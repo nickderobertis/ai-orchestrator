@@ -42,6 +42,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict, cast
 
@@ -549,7 +550,9 @@ def start(arguments: list[str]) -> int:
             nodes = design(scenario, project)
     root = Path(os.environ.get("ONEPIPELINE_RUNS_DIR", "runs")) / run
     root.mkdir(parents=True, exist_ok=True)
-    (root / "launch.json").write_text(json.dumps({"run_id": run, "project": project}), "utf-8")
+    # The launch instant the engine records as it starts a run, which an adoption keeps.
+    launch = {"run_id": run, "project": project, "started_at": datetime.now(UTC).isoformat()}
+    (root / "launch.json").write_text(json.dumps(launch), "utf-8")
     done = all(node["status"] == "done" for node in nodes)
     ledger = {
         "schema_version": 5,

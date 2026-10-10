@@ -29,7 +29,10 @@
 #   4. **hold** the written document's budget answers to what the plan's records state;
 #   5. **copy** the plan and its documents into the destination a person reviews them in;
 #   6. **report** where that destination holds the project and the document, read back
-#      out of the store rather than composed from a name.
+#      out of the store rather than composed from a name;
+#   7. **report** what the plan checklist cost the flow: its two `planning` budgets of
+#      orchestrator/budgets.yaml over the flow's draft run and the reviews of its plan, an
+#      overrun warning rather than refusing a plan that has already landed.
 #
 # **Every run id this flow will use is decided before anything is launched.** `just plan`
 # resolves this flow's name the same way and refuses the design run's id as taken before
@@ -39,7 +42,7 @@
 #
 # **The refusals are told apart by exit status**, because a builder that could not tell
 # them apart would retry one as the other: 1 is the review refusing the plan's own
-# criteria, 3 is the pre-launch check refusing the plan, 6 is the engine refusing the
+# criteria or its plan checklist failing a rule, 3 is the pre-launch check refusing the plan, 6 is the engine refusing the
 # design-document node's own rendered task, 7 is the written document restating budget
 # answers that differ from the plan's records, 5 is the destination refusing the copy, 4 is
 # the design-document launch not settling, and 2 is a flow that could not run at all. There is no repair loop here and there will not be one: the planner's own
@@ -54,7 +57,7 @@
 # untouched.
 #
 # llmlint: ignore-file[changed_behavior_has_e2e] What this script *decides* — the order of
-# the six steps, which of them each refusal stops at, the exit status each ends on, the
+# the seven steps, which of them each refusal stops at, the exit status each ends on, the
 # one-node project the design launch runs, the file that launch's judge is pointed at (and
 # the plan outside the authoring source whose judge is pointed at none), and the two
 # locations it reports — is driven end
@@ -868,3 +871,20 @@ fi
 uv run orchestrator-plan-locations "$plan_project" --in "$destination" ||
     fail "$plan_project landed in '$destination', but where it holds the plan and its design document could not be read" \
         "read the copy's own per-record report above, then ask the store directly with 'just plans project list --source $destination'"
+
+# 7. What the plan checklist cost this flow, measured once the flow has ended, the way a
+# landed change's cycle time is measured once it lands: the `planning` budgets of
+# orchestrator/budgets.yaml over the flow's draft run (its finalize run beside it) and the
+# reviews of its plan. Each figure is printed with its threshold and breakdown, and an
+# overrun or a figure that could not be read warns without refusing the plan, which has
+# already landed above.
+runs_root=${!PLAN_RUNS_ROOT_ENV:-$PLAN_DEFAULT_RUNS_ROOT}
+budget_status=0
+# llmlint: ignore[tool_output_is_signal] The budget figures, thresholds and breakdowns are what this step exists to show the manager, so the check's report reaches the operator's stream whole.
+ONEPIPELINE_RUNS_DIR=$(cd "$runs_root" 2>/dev/null && pwd || printf '%s' "$runs_root") \
+    PLAN_CHECKLIST_FLOW="$name" PLAN_CHECKLIST_PROJECT="$plan_project" \
+    "$script_dir/../.venv/bin/onebudgetspec" check "$script_dir/../orchestrator/budgets.yaml" --label planning >&2 ||
+    budget_status=$?
+if [ "$budget_status" -ne 0 ]; then
+    echo "finish-plan: warning: the plan checklist's budgets for run $name and $plan_project are over their thresholds or could not be read (status $budget_status), as reported above; the plan stands. For a figure that could not be read, repair the record the report names; for an overrun, read its breakdown for the decision or review that grew and raise it with whoever owns the checklist's rules" >&2
+fi

@@ -1,0 +1,40 @@
+# The agent graph a planning flow's draft and finalize planners are to run under:
+# `graphs/node-scope.yaml`'s worker, judged by a panel of two.
+#
+# **No node names it yet.** onejudge refuses a panel holding a judge in a writable mode
+# (`refuse_writable_panels`), and this host's reviewer runs in `default`, with its
+# read-only enforcement pinned per harness, for the reason docs/onejudge-integration.md's
+# "The mode a judge runs in" gives. The one lever that accepts it is the split's
+# `allow_writable_judges`, which the pinned oneagentgraph composes no field for. Once a
+# release carries one from a member's judge list to the split, and the engine linking it
+# is adopted, this graph sets it and `scripts/plan.sh` names it as the draft and finalize
+# nodes' `agent_graph`; the spikes and the design-document node keep their own graphs.
+#
+# - `reviewer` is the simulated user every dispatch has, holding the planner persona's
+#   review bar: the judgment calls.
+# - `plan-checklist` is llmlint over the plan the planner is writing, under
+#   `config/plan-checklist.llmlint.yml`: the rules the plan's code would otherwise first
+#   meet on its merge path. Its `bin` is `scripts/plan-checklist.sh`, which runs llmlint
+#   over that plan's documents from the plan-authoring root rather than over the worktree,
+#   and is named relative to the directory the run is launched from — this checkout's
+#   root, as every `agent_graph` a plan names is — because a graph anchors an llmlint
+#   side's `config` to its own directory and hands its `bin` over as written.
+#
+# The worker is handed each judge's instruction under its own header, and the panel
+# completes only when both do. Every other ref below is relative to THIS file's directory.
+version: 1
+name: planner
+members:
+  worker:
+    kind: onejudge
+    base_config: ../config/onejudge.base.yaml
+    agent:
+      oneharness_config: ../oneharness.toml
+    judge:
+      - oneharness_config: ../oneharness.judge.toml
+        label: reviewer
+      - kind: llmlint
+        label: plan-checklist
+        bin: scripts/plan-checklist.sh
+        config: ../config/plan-checklist.llmlint.yml
+    mode: bypass

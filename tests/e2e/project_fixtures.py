@@ -566,6 +566,9 @@ def reviewed(project: str) -> str:
     environment["PATH"] = f"{_PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
     environment["FAKE_CODEX_ANSWERS"] = json.dumps([_PASSING_VERDICT])
     environment["XDG_STATE_HOME"] = str(_HISTORY)
+    # The review's plan checklist keeps its history pointer file under the runs root, so
+    # it is given this process's own rather than whichever one the caller's names.
+    environment["ONEPIPELINE_RUNS_DIR"] = str(_HISTORY / "runs")
     reviewing = subprocess.run(
         ["just", "review-plan", project],
         cwd=REPO_ROOT,

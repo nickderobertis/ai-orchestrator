@@ -95,6 +95,7 @@ import argparse
 import dataclasses
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -380,6 +381,9 @@ class PlanReview(StrEnum):
     HELD = "held"
     REFUSED = "refused"
     UNASKED = "unasked"
+    #: The plan checklist failed a rule, so the plan-level turn was not spent: the plan it
+    #: would read whole is one its author is about to change.
+    CHECKLIST_REFUSED = "checklist-refused"
 
 
 class Reviewed(NamedTuple):
@@ -403,6 +407,8 @@ class Reviewed(NamedTuple):
     #: refusal, and the task records above stand whatever this says.
     plan: PlanReview = PlanReview.UNASKED
     plan_findings: Sequence[Finding] = ()
+    #: llmlint's own report of the plan checklist's failing rules, when it refused.
+    checklist_report: str = ""
 
 
 #: How this checkout's own `origin` remote is asked for, and the one shape it answers
@@ -1259,12 +1265,163 @@ PLAN_PROMPT_LIMIT = 210_000
 THE_PLAN = "the plan"
 
 
+#: The plan checklist: llmlint over a plan's documents under its own configuration, which
+#: this review runs before its plan-level turn, so a plan is held to the rules its code would
+#: otherwise first meet on its merge path before anyone approves it. The script chooses which
+#: files make up the plan; the rules and the verdict are llmlint's.
+CHECKLIST_CONFIG = Path("config") / "plan-checklist.llmlint.yml"
+CHECKLIST_SCRIPT = Path("scripts") / "plan-checklist.sh"
+#: The oneharness routing every llmlint run here judges through, which `llmlint config`
+#: renders from the environment and so is set to this checkout's before it is asked.
+CHECKLIST_ONEHARNESS_BIN = Path("scripts") / "llmlint-oneharness.sh"
+#: How the human report is asked for: the one llmlint prints for a person, which is what a
+#: refusal hands the operator verbatim.
+CHECKLIST_REPORT = ("--format", "human", "--color", "never", "--progress", "never")
+#: llmlint's exit statuses for every rule holding and for at least one failing; anything
+#: else is a run that could not complete, which is never read as a verdict.
+CHECKLIST_PASSED = 0
+CHECKLIST_FAILED = 1
+
+#: Where a review keeps the oneharness history pointer file of each checklist run, under
+#: the runs root a planning flow's runs are recorded in, so the plan-checklist budgets read
+#: a review's judge calls the way they read a planning dispatch's: one directory per review
+#: run, named for when it started, beneath one directory per plan project.
+RUNS_ROOT_ENV = "ONEPIPELINE_RUNS_DIR"
+DEFAULT_RUNS_ROOT = "runs"
+REVIEWS_DIRECTORY = "plan-reviews"
+POINTER_FILE = "oneharness-sessions.jsonl"
+#: How a review run's directory names the instant it started, ahead of its process id.
+REVIEW_STARTED = "%Y%m%dT%H%M%S%fZ"
+#: The labels a review's checklist run stamps on its history beside `role=llmlint`, which
+#: the routing's own role file adds, so a record says which plan it judged.
+CHECKLIST_LABEL = "orchestrator.plan-review"
+HISTORY_ENV = "ONEHARNESS_HISTORY"
+POINTER_ENV = "ONEHARNESS_HISTORY_POINTER_FILE"
+LABELS_ENV = "ONEHARNESS_HISTORY_LABELS"
+UNSAFE = re.compile(r"[^A-Za-z0-9_.-]")
+
+
+class Checklist(NamedTuple):
+    """One plan checklist run: whether every rule held, and llmlint's own report."""
+
+    passed: bool
+    report: str
+
+
+def runs_root() -> Path:
+    """The runs root a planning flow records its runs under, as `scripts/plan.sh` reads it."""
+    return Path(os.environ.get(RUNS_ROOT_ENV) or DEFAULT_RUNS_ROOT).expanduser().absolute()
+
+
+def reviews_of(project: str, root: Path) -> Path:
+    """The directory holding one directory per checklist run a review made of ``project``."""
+    return root / REVIEWS_DIRECTORY / UNSAFE.sub("_", project)
+
+
+def checklist_fingerprint(root: Path = REPO_ROOT) -> str:
+    """A digest of the plan checklist in force: its configuration and what llmlint resolves.
+
+    The configuration's bytes, the installed llmlint's version, and the effective merged
+    configuration `llmlint config` prints — every rule each pinned plugin resolves to, as
+    `scripts/llmlint-fingerprint.sh` keys the repository's own judged tier — so a plugin
+    release the `@1` pin admits that changes a rule moves it as surely as an edit here does.
+    A release changing no rule may leave it standing: the pinned llmlint reports which
+    version a run resolved only in its error output, so nothing here can key on it, and a
+    follow-up asks llmlint for that report. The routing the environment names is the one
+    thing left out, as that script leaves it out: it says where a judge runs, never what it
+    is asked.
+    """
+    environment = {**os.environ, "LLMLINT_ONEHARNESS_BIN": str(root / CHECKLIST_ONEHARNESS_BIN)}
+    config = root / CHECKLIST_CONFIG
+    answered: list[str] = []
+    for command in (("llmlint", "--version"), ("llmlint", "config", "-c", str(config))):
+        try:
+            ran = subprocess.run(  # noqa: S603 - the installed llmlint, asked what it resolves
+                command,
+                cwd=root,
+                env=environment,
+                text=True,
+                capture_output=True,
+                stdin=subprocess.DEVNULL,
+                check=False,
+            )
+        except OSError as exc:
+            raise OSError(
+                f"`{' '.join(command)}` could not run ({exc}); run `just setup-llmlint`"
+            ) from exc
+        if ran.returncode != 0:
+            raise OSError(
+                f"`{' '.join(command)}` failed (exit {ran.returncode}): {ran.stderr.strip()}"
+            )
+        answered.append(ran.stdout)
+    version, resolved = answered
+    try:
+        # llmlint: ignore[boundary_inputs_validated] llmlint's own `config` document, read
+        # for its one `config` object and hashed whole; no field of it is trusted.
+        effective = json.loads(resolved)["config"]
+        effective["oneharness"].pop("bin", None)
+    except (ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise OSError(f"`llmlint config` printed no effective configuration ({exc})") from exc
+    digest = hashlib.sha256()
+    for part in (
+        config.read_bytes(),
+        version.strip().encode("utf-8"),
+        json.dumps(effective, sort_keys=True).replace(str(root), "{root}").encode("utf-8"),
+    ):
+        digest.update(part)
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def checklist(project: str) -> Checklist:
+    """Run the plan checklist over ``project``'s documents, recording its judge calls.
+
+    oneharness history is on for the run, with a pointer file of its own under
+    :func:`reviews_of`, so the plan-checklist budgets find the review's judge calls the way
+    they find a planning dispatch's. A run llmlint could not complete is an ``OSError``,
+    never a verdict.
+    """
+    started = datetime.now(UTC).strftime(REVIEW_STARTED)
+    where = reviews_of(project, runs_root()) / f"{started}-{os.getpid()}"
+    where.mkdir(parents=True, exist_ok=True)
+    labels = ",".join(
+        part
+        for part in (os.environ.get(LABELS_ENV), f"{CHECKLIST_LABEL}={UNSAFE.sub('_', project)}")
+        if part
+    )
+    environment = {
+        **os.environ,
+        HISTORY_ENV: "1",
+        POINTER_ENV: str(where / POINTER_FILE),
+        LABELS_ENV: labels,
+    }
+    try:
+        ran = subprocess.run(  # noqa: S603 - this checkout's own checklist script
+            [str(REPO_ROOT / CHECKLIST_SCRIPT), "review", project, *CHECKLIST_REPORT],
+            cwd=REPO_ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            check=False,
+        )
+    except OSError as exc:
+        raise OSError(f"the plan checklist could not run ({exc})") from exc
+    if ran.returncode not in (CHECKLIST_PASSED, CHECKLIST_FAILED):
+        raise OSError(
+            f"the plan checklist could not complete (exit {ran.returncode}): "
+            f"{(ran.stderr or ran.stdout).strip()}"
+        )
+    return Checklist(ran.returncode == CHECKLIST_PASSED, ran.stdout.strip())
+
+
 def plan_bar_fingerprint(root: Path = REPO_ROOT) -> BarFingerprint:
     """A digest of the bar a plan is held to whole, over ``root``'s copy of the files.
 
     The task bar, the plan-level question, the table the question is asked over, and
     every constant that decides what the compact view shows the reviewer
-    (:data:`COMPACT_VIEW`) — distinct from :func:`bar_fingerprint` so that rewording the
+    (:data:`COMPACT_VIEW`), and the plan checklist the plan is held to before that turn
+    (:func:`checklist_fingerprint`) — distinct from :func:`bar_fingerprint` so that rewording the
     plan-level prompt, or showing the reviewer more or less of a plan, moves every plan
     record and no task record, while a change to the table moves both, since both
     prompts render it.
@@ -1277,6 +1434,8 @@ def plan_bar_fingerprint(root: Path = REPO_ROOT) -> BarFingerprint:
     digest.update(host_installs.rendered().encode("utf-8"))
     digest.update(b"\0")
     digest.update(json.dumps(COMPACT_VIEW, sort_keys=True).encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(checklist_fingerprint(root).encode("utf-8"))
     return BarFingerprint(digest.hexdigest())
 
 
@@ -1915,6 +2074,17 @@ def review(project: str) -> Reviewed:
         owned = owned_by_node(records)
         if not plan_unreviewed(project_record, plan, plan_bar, owned):
             return Reviewed(recorded, held, refused, plan=PlanReview.HELD)
+        # The checklist first: a plan that fails a rule is one its author is about to
+        # change, so the plan-level turn would be spent reading a plan that will not exist.
+        checked = checklist(project)
+        if not checked.passed:
+            return Reviewed(
+                recorded,
+                held,
+                refused,
+                plan=PlanReview.CHECKLIST_REFUSED,
+                checklist_report=checked.report,
+            )
         # The records again, now carrying every pass this run wrote, so the view shows
         # each node's record as it stands rather than as it stood before the run.
         view = plan_view(
@@ -1985,6 +2155,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"were refused and nothing was recorded for them; correct every criterion named "
             f"above in the plan's own task record, then run this command again — the "
             f"plan-level review is spent only once every task carries a record",
+            file=sys.stderr,
+        )
+        return 1
+    if answered.plan is PlanReview.CHECKLIST_REFUSED:
+        print(answered.checklist_report, file=sys.stderr)
+        print(
+            f"review-plan: the plan checklist ({CHECKLIST_CONFIG}) failed the rule(s) its "
+            f"report above names, so no plan-level turn was spent and no plan-level record "
+            f"was written; every task's own record stands. Correct the plan's own records, "
+            f"or record a deliberate departure as an `ignore-file` line with its reason, "
+            f"then run this command again",
             file=sys.stderr,
         )
         return 1

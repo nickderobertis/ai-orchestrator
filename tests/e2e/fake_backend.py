@@ -109,6 +109,26 @@ MOCK_STDOUT_ENV = "MOCK_STDOUT"
 #: the command line at all.
 JUDGE_CONFIG_NAME = "oneharness.judge.toml"
 
+#: A harness judge's config in a member whose judge side is a panel: `oneagentgraph` writes
+#: each one to `judge-<label>.toml` in the member's scratch rather than to the name above,
+#: so a panel's harness judge — `graphs/planner.yaml`'s `reviewer` — is that side too.
+PANEL_JUDGE_CONFIG = re.compile(r"judge-[A-Za-z0-9_-]+\.toml")
+
+
+def _judges(config: str | None) -> bool:
+    """Whether a turn carrying ``config`` is a two-party member's judge side."""
+    if config is None:
+        return False
+    name = Path(config).name
+    return name == JUDGE_CONFIG_NAME or PANEL_JUDGE_CONFIG.fullmatch(name) is not None
+
+
+def _judged(config: str) -> bool:
+    """Whether the member ``config`` belongs to has a harness judge beside it."""
+    beside = Path(config).parent
+    return beside.is_dir() and any(_judges(str(path)) for path in beside.iterdir())
+
+
 #: What this stand-in answers for a single-sided member — one with no judge config
 #: beside it, which on this host is `graphs/dag-scope.yaml`'s `check-in` pacemaker.
 #: Named rather than inlined because a journey asserting that member's surface still
@@ -705,7 +725,7 @@ def _await_turn_gate(config: str | None) -> None:
         or config is None
         or member is None
         or member.group(1) != DISPATCHED_MEMBER
-        or Path(config).name == JUDGE_CONFIG_NAME
+        or _judges(config)
     ):
         return
     released = Path(gate) / TURN_GATE_RELEASED
@@ -773,7 +793,7 @@ def main(argv: list[str]) -> int:
                 "control": _flag(argv, SESSION_FLAG) if CONTROL_FLAG in argv else None,
             }
             recorded.write(json.dumps(turn) + "\n")
-    if config and Path(config).name == JUDGE_CONFIG_NAME:
+    if _judges(config):
         if EVALUATION_MARKER in prompt:
             return _answer(argv, json.dumps({"value": True, "reason": "the stand-in accepts"}))
         if os.environ.get(JUDGE_SEND_BACK_ENV) and prompt.count(WORKER_REPLY) < 2:
@@ -807,7 +827,7 @@ def main(argv: list[str]) -> int:
     read = _read_the_stream(original, config, system, _flag(argv, CWD_FLAG))
     if read is not None:
         return _answer(argv, read)
-    if config and not Path(config).with_name(JUDGE_CONFIG_NAME).exists():
+    if config and not _judged(config):
         return _answer(argv, PACEMAKER_REPORT)
     _ask_manager(config)
     _author_plan(config)

@@ -45,6 +45,10 @@ WATCH_SECTION = "### Never let dispatched work run unwatched"
 ENGINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
 RECORDED_RUNS = REPO_ROOT / "tests" / "fixtures" / "timeline-runs"
 SETTLED_RUN = "gate-parity-2"
+#: The watcher records a live `onepipeline watch` writes and removes inside a run it
+#: watches. Other journeys watch the checked-in recordings in place, so a copy taken
+#: while one runs can meet a record that vanishes mid-copy; none is ever checked in.
+LIVE_WATCHERS = shutil.ignore_patterns("watchers")
 #: The launcher whose observer default is why a planning run has nothing watching it.
 PLAN_LAUNCHER = "scripts/plan.sh"
 #: What that launcher names when the caller names no graph. Quoted as the assignment so
@@ -178,7 +182,7 @@ def test_a_watch_given_a_log_writes_its_human_form_there_through_the_recipe(
     # A copy, because a reading verb writes the run's checkpoint cache beside it, and other
     # journeys copy the recorded runs while this one runs.
     runs = tmp_path / "runs"
-    shutil.copytree(RECORDED_RUNS / SETTLED_RUN, runs / SETTLED_RUN)
+    shutil.copytree(RECORDED_RUNS / SETTLED_RUN, runs / SETTLED_RUN, ignore=LIVE_WATCHERS)
 
     watched = subprocess.run(
         ["just", "watch", SETTLED_RUN, "--timeout", "0", "--log", str(log)],

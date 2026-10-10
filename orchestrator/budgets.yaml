@@ -3,6 +3,12 @@
 # analyses what the test targets that `budgets` depends on recorded during their normal
 # run (`tests/budget_telemetry.py`), reporting the figure and its breakdown. This file is
 # the one statement of each threshold.
+#
+# A budget labelled `planning` is about one planning flow the way `cycle-time` is about one
+# landed change, so no push gate and no Nx target selects it: `scripts/finish-plan.sh`
+# checks it over the flow it has just finished, with `PLAN_CHECKLIST_FLOW` naming the
+# flow's draft run and `PLAN_CHECKLIST_PROJECT` its plan project, and an overrun warns
+# without refusing the plan. Its command reads that flow's own run records.
 schema_version: 1
 budgets:
   - id: follow-up-run-points
@@ -56,3 +62,29 @@ budgets:
     direction: max
     threshold: 1600
   # llmlint: ignore-end[budgets_track_product_owner_outcomes]
+  # This repository's orchestrator project keeps every test under tests/ and every fixture
+  # under tests/fixtures, and orchestrator/ holds the package alone; the budgets above are
+  # measured from tests/ too, through tests/budget_telemetry.py.
+  # llmlint: ignore-block[budgets_scoped_to_minimal_tree] see above
+  - id: plan-checklist-added-seconds
+    description: >-
+      Seconds one planning flow waits on the plan checklist beyond its planners' reviewer,
+      read off the harness's recorded judge time. It protects how long planning takes.
+    labels: [host, planning]
+    measure: reported
+    command: ["uv", "run", "--directory", "..", "python", "-m", "orchestrator.plan_checklist_budgets"]
+    unit: seconds
+    direction: max
+    threshold: 400
+  - id: plan-checklist-tokens
+    description: >-
+      Harness tokens, input plus output as oneharness records them, that the plan checklist
+      spends over one planning flow: its draft and finalize planner dispatches and its `just
+      review-plan` run. It protects the subscription quota planning draws on.
+    labels: [planning]
+    measure: reported
+    command: ["uv", "run", "--directory", "..", "python", "-m", "orchestrator.plan_checklist_budgets"]
+    unit: tokens
+    direction: max
+    threshold: 3000000
+  # llmlint: ignore-end[budgets_scoped_to_minimal_tree]

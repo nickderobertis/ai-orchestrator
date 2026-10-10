@@ -53,6 +53,8 @@ GATED_TOOLS = ("onevcs", "onepipeline")
 #: is prose this repository ships. `design-doc-why` is tracked but is the same kind of
 #: prose: plan records preserved byte for byte from `.plans` as the fixtures a regenerated
 #: design document's Why is read against, naming the recipes of the repositories they plan.
+#: `plan-checklist-plans` is a plan preserved the same way, the one the plan checklist's
+#: journeys run llmlint over.
 NOT_OURS = (
     "node_modules",
     ".venv",
@@ -63,6 +65,7 @@ NOT_OURS = (
     ".plans",
     "runs",
     "design-doc-why",
+    "plan-checklist-plans",
 )
 
 #: A fenced code block, whose every line is a candidate invocation. The leading

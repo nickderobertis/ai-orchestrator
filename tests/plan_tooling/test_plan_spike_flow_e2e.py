@@ -397,6 +397,52 @@ def test_the_finalize_planner_runs_after_the_spikes_and_its_closeout_before_the_
     assert "holds the plan at" in done.stdout + done.stderr
 
 
+def test_no_node_of_the_flow_launches_under_the_planner_panel(
+    spiked: tuple[Flow, subprocess.CompletedProcess[str]],
+) -> None:
+    """The draft, finalize and spike nodes name no graph; the document keeps its own.
+
+    `graphs/planner.yaml` judges a planner with the plan checklist beside its reviewer, and
+    onejudge refuses that panel while this host's reviewer runs in a writable mode the
+    graph cannot accept on the split's behalf, so no node of the flow names it yet.
+    """
+    flow, done = spiked
+    assert done.returncode == 0, done.stdout + done.stderr
+
+    graphs: dict[str, list[object]] = {}
+    for start in _starts(flow):
+        source, _, native = str(start["project"]).partition(":")
+        listed = _items(_store(flow, "task", "list", "--source", source, "--project", native))
+        graphs[str(start["run"])] = [
+            item["item"]["metadata"].get("onepipeline.agent_graph") for item in listed
+        ]
+    assert graphs[flow.run] == [None]
+    assert graphs[f"{flow.run}-finalize"] == [None]
+    assert graphs[f"{flow.run}-spikes"] == [None] * len(flow.spikes)
+    assert graphs[f"{flow.run}-design"] == ["graphs/design-doc.yaml"]
+    assert not any("planner.yaml" in str(graph) for named in graphs.values() for graph in named)
+
+
+def test_the_tail_reports_what_the_plan_checklist_cost_the_flow(
+    spiked: tuple[Flow, subprocess.CompletedProcess[str]],
+) -> None:
+    """Both `planning` budgets are checked over the flow just finished, as its last step.
+
+    Measured once the flow has ended, the way a landed change's cycle time is, and over the
+    flow this launch ran: its draft run and each review of its plan since it launched. The
+    finalize planner revised the plan the draft wrote, so the tail's review spent the
+    checklist on it, and that run is the one each budget's breakdown names.
+    """
+    flow, done = spiked
+    assert done.returncode == 0, done.stdout + done.stderr
+
+    reported = done.stderr
+    for budget in ("plan-checklist-added-seconds", "plan-checklist-tokens"):
+        assert f"budget {budget}: actual" in reported, reported
+    assert f"draft run {flow.run}: no checklist call recorded" in reported, reported
+    assert "plan-review run " in reported and f" of {flow.plan}" in reported, reported
+
+
 def test_a_draft_that_wrote_no_spikes_goes_straight_to_the_tail(
     workspace: Workspace, tmp_path: Path
 ) -> None:

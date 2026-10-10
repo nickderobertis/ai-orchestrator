@@ -28,8 +28,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 
 import jsonschema
@@ -49,7 +51,7 @@ from project_fixtures import (
 )
 from waits import timeout as e2e_timeout
 
-from orchestrator import plan_budgets, plan_review, plan_store
+from orchestrator import plan_budgets, plan_checklist_budgets, plan_review, plan_store
 from orchestrator.criteria_guard import APPENDIX
 from orchestrator.project_store import render_plan_project, write_plan_project
 from orchestrator.root import REPO_ROOT
@@ -156,8 +158,10 @@ def _reviewing(tmp_path: Path, *answers: object) -> dict[str, str]:
     environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
     environment["FAKE_CODEX_ANSWERS"] = json.dumps([json.dumps(one) for one in answers])
     environment["FAKE_CODEX_ATTEMPT_LOG"] = str(tmp_path / "launches")
-    # Keeps this journey's harness history out of the host's.
+    # Keeps this journey's harness history out of the host's, and the history pointer
+    # file the review's plan checklist keeps under the runs root with it.
     environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
+    environment["ONEPIPELINE_RUNS_DIR"] = str(tmp_path / "runs")
     return environment
 
 
@@ -2691,6 +2695,226 @@ def test_moving_what_the_compact_view_shows_invalidates_the_plan_record_and_no_t
     assert "no review record for" not in refused.stderr, "a task record moved with the view"
     still = _just("check-plan", project)
     assert still.returncode == 0, still.stdout + still.stderr
+
+
+#: The plan checklist's rule its stand-in judge is told to fail on a task, and why.
+CHECKLIST_RULE = "tests_hold_no_nonfunctional_thresholds"
+CHECKLIST_FINDING = "a test asserts the route answers within 200 ms"
+
+
+def _relative(project: str) -> str:
+    """The plan's one task document, named relative to the plan-authoring root."""
+    document = _document(project)
+    return str(document.relative_to(document.parents[2]))
+
+
+def test_a_plan_the_checklist_fails_is_refused_with_llmlints_report(tmp_path: Path) -> None:
+    """The failing rule reaches the operator in llmlint's own words; the plan is not cleared.
+
+    Every task's own record stands, because the per-task turns passed; what the checklist
+    refuses is the plan as a whole, so no plan-level turn is spent and none is recorded.
+    """
+    project = _project("review-checklist-refuses")
+    environment = _reviewing(tmp_path, PASSES, PASSES)
+    environment["FAKE_CODEX_LLMLINT_FAIL"] = json.dumps(
+        {CHECKLIST_RULE: {"file": _relative(project), "line": 5, "message": CHECKLIST_FINDING}}
+    )
+
+    review = _just("review-plan", project, environment=environment)
+
+    assert review.returncode == 1, review.stdout + review.stderr
+    assert f"FAIL {CHECKLIST_RULE}" in review.stderr, review.stderr
+    assert CHECKLIST_FINDING in review.stderr, review.stderr
+    assert "the plan checklist (config/plan-checklist.llmlint.yml) failed" in review.stderr
+    assert _record_of(project, "route") is not None
+    assert _plan_record_of(project) is None
+    # One per-task turn; the plan-level turn was never spent.
+    assert _launches(tmp_path) == 1
+
+
+def test_a_plan_the_checklist_passes_is_recorded_and_its_run_is_the_flows_review_run(
+    tmp_path: Path,
+) -> None:
+    """The review's checklist run is found where the budgets look, and counted by both.
+
+    The pointer file the review keeps under the runs root names the oneharness history of
+    every judge call its checklist made; each budget's command, run by onebudgetspec over
+    a flow whose draft run is this plan's, counts that run as the flow's plan-review run
+    with its recorded time and tokens.
+    """
+    project = _project("review-checklist-passes")
+    environment = _reviewing(tmp_path, PASSES, PASSES)
+
+    # The flow's draft launched before its plan was reviewed.
+    launched = datetime.now(UTC).isoformat()
+    review = _just("review-plan", project, environment=environment)
+
+    assert review.returncode == 0, review.stdout + review.stderr
+    assert _plan_record_of(project) is not None
+    runs = Path(environment["ONEPIPELINE_RUNS_DIR"])
+    (pointers,) = plan_review.reviews_of(project, runs).glob(f"*/{plan_review.POINTER_FILE}")
+    calls = [json.loads(line) for line in pointers.read_text(encoding="utf-8").splitlines()]
+    assert calls and all(call["labels"]["role"] == "llmlint" for call in calls), calls
+    recorded = [
+        json.loads(line)
+        for call in calls
+        for line in Path(call["history_file"]).read_text(encoding="utf-8").splitlines()
+        if json.loads(line).get("type") == "run"
+    ]
+    tokens = sum(
+        record["usage"]["input_tokens"] + record["usage"]["output_tokens"] for record in recorded
+    )
+    # A draft run whose planner recorded no checklist call, with the launch record the engine
+    # writes: launching a real one would dispatch a paid planner, and what is under test is
+    # the review's run being found.
+    # llmlint: ignore-block[tests_mirror_real_usage] see above
+    (runs / "the-draft-run").mkdir()
+    (runs / "the-draft-run" / plan_checklist_budgets.LAUNCH_FILE).write_text(
+        json.dumps({"run_id": "the-draft-run", plan_checklist_budgets.LAUNCHED: launched}),
+        encoding="utf-8",
+    )
+    # llmlint: ignore-end[tests_mirror_real_usage]
+
+    checked = subprocess.run(
+        [
+            str(REPO_ROOT / ".venv" / "bin" / "onebudgetspec"),
+            "check",
+            str(REPO_ROOT / "orchestrator" / "budgets.yaml"),
+            "--label",
+            "planning",
+            "--json",
+        ],
+        cwd=REPO_ROOT,
+        env=environment
+        | {
+            plan_checklist_budgets.FLOW_ENV: "the-draft-run",
+            plan_checklist_budgets.PROJECT_ENV: project,
+        },
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+
+    results = {result["id"]: result for result in json.loads(checked.stdout)["results"]}
+    seconds = results[plan_checklist_budgets.ADDED_SECONDS]
+    assert seconds["actual"] == sum(record["duration_ms"] for record in recorded) / 1000
+    assert results[plan_checklist_budgets.TOKENS]["actual"] == tokens
+    for result in results.values():
+        assert f"plan-review run {pointers.parent.name} of {project}" in result["detail"]
+
+
+def _move_the_checklist_bytes(checkout: Path, _: dict[str, str]) -> None:
+    """One byte more in the copy's checklist configuration."""
+    config = checkout / plan_review.CHECKLIST_CONFIG
+    config.write_text(config.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+
+
+# The fragment's origin is a public URL whose next release this journey cannot publish, and
+# llmlint resolves an `@1` pin to the newest cached version it admits (its README, "The cache
+# follows the pin's promise"); seeding that version in a cache of the journey's own is how a
+# release reaches this host short of publishing one.
+# llmlint: ignore-block[tests_mirror_real_usage] see above
+def _move_the_resolved_plugin(_: Path, environment: dict[str, str]) -> None:
+    """A newer project-graph release its `@1` pin admits, cached, one rule's text changed.
+
+    project-graph is the second plugin the checklist loads, so its `version` is not one the
+    merged configuration carries: what moves the bar here is the rule, which is what a
+    recorded pass has to answer to.
+    """
+    cache = Path(environment["LLMLINT_CACHE_DIR"])
+    (entry,) = {
+        found.parent
+        for found in cache.glob("*/v*.json")
+        if "assets/llmlint/project-graph.llmlint.yml" in found.read_text(encoding="utf-8")
+    }
+    resolved = max(
+        (path.stem.removeprefix("v") for path in entry.glob("v*.yml")),
+        key=lambda version: tuple(int(part) for part in version.split(".")),
+    )
+    newer = f"{resolved.split('.')[0]}.{resolved.split('.')[1]}.99"
+    record = json.loads((entry / f"v{resolved}.json").read_text(encoding="utf-8"))
+    (entry / f"v{newer}.json").write_text(json.dumps(record | {"version": newer}), "utf-8")
+    fragment = (entry / f"v{resolved}.yml").read_text(encoding="utf-8")
+    moved = fragment.replace(f"version: {resolved}", f"version: {newer}", 1).replace(
+        "actually tests, so an unrelated change cannot make it run.",
+        "actually tests, so no unrelated change can make it run.",
+        1,
+    )
+    assert moved.count(newer) == 1 and "no unrelated change" in moved, "the rule text moved"
+    (entry / f"v{newer}.yml").write_text(moved, encoding="utf-8")
+
+
+# llmlint: ignore-end[tests_mirror_real_usage]
+
+
+CHECKLIST_MOVES = (
+    ("its-configuration", _move_the_checklist_bytes),
+    ("a-rule-its-plugin-resolves", _move_the_resolved_plugin),
+)
+
+
+# This journey copies tracked prose, and tests/plan_tooling/AGENTS.md assigns such journeys
+# to this project's whole-workspace test-docs target through `reads_docs`, as the moved-bar
+# journeys above are; the marker routes within plan-tooling rather than out of it.
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] see the note above
+@COPIES_THE_TRACKED_TREE
+@pytest.mark.parametrize(
+    ("half", "move"), CHECKLIST_MOVES, ids=[named for named, _ in CHECKLIST_MOVES]
+)
+def test_moving_the_plan_checklist_invalidates_the_plan_record_and_no_task_record(
+    tmp_path: Path, half: str, move: Callable[[Path, dict[str, str]], None]
+) -> None:
+    """A plan cleared under one checklist is not cleared under another.
+
+    The checklist is its configuration and every rule llmlint resolves its pinned plugins
+    to. Each is moved for real — the configuration's bytes in a copy of this checkout, and a
+    rule by caching a newer project-graph release its pin admits with that rule's text
+    changed, in a plugin cache of this journey's own that nothing revalidates — and the
+    plan-level record the review wrote is refused while every task's record still stands.
+    A release changing no rule is not one this host can see: llmlint reports no resolved
+    plugin version outside its error output, and a follow-up asks it to.
+    """
+    cache = tmp_path / "plugin-cache"
+    shutil.copytree(
+        json.loads(
+            subprocess.run(
+                ["llmlint", "plugins", "--format", "json"],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout
+        )["dir"],
+        cache,
+    )
+    pinned = {"LLMLINT_CACHE_DIR": str(cache), "LLMLINT_PLUGIN_TTL": "31536000"}
+    project = _project(f"review-checklist-{half}")
+    environment = _reviewing(tmp_path, PASSES, PASSES) | pinned
+    assert _just("review-plan", project, environment=environment).returncode == 0
+    checking = dict(os.environ) | pinned
+    assert _just("check-plan", project, environment=checking).returncode == 0
+
+    moved = tmp_path / "checkout-with-a-moved-checklist"
+    moved.mkdir()
+    copy_working_tree(moved)
+    answering_this_checkouts_origin(moved)
+    move(moved, checking)
+
+    refused = subprocess.run(
+        ["just", "check-plan", project],
+        cwd=moved,
+        env=checking,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(180),
+        check=False,
+    )
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "no plan-level review record" in refused.stderr, refused.stderr
+    assert "no review record for" not in refused.stderr, "a task record moved with the checklist"
+
+
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

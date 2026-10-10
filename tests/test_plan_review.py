@@ -21,6 +21,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import os
 import re
 import subprocess
 import tomllib
@@ -42,6 +43,37 @@ from orchestrator.plan_store import StoreTask
 from orchestrator.root import REPO_ROOT
 
 BAR = "bar-fingerprint"
+
+#: The plan checklist's run and its fingerprint, which this tier stands in for: each runs the
+#: installed llmlint, outside the workspace this tier's cache key covers. They are exercised
+#: here offline, through a stand-in script and a stand-in `llmlint`, and for real by the
+#: plan-tooling journeys in tests/plan_tooling/test_plan_review_e2e.py.
+REAL_CHECKLIST = plan_review.checklist
+REAL_FINGERPRINT = plan_review.checklist_fingerprint
+
+
+def _configuration_digest(root: Path = REPO_ROOT) -> str:
+    return hashlib.sha256((root / plan_review.CHECKLIST_CONFIG).read_bytes()).hexdigest()
+
+
+@pytest.fixture(autouse=True)
+def _checklist_offline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Every review here passes a checklist this tier does not run; answers what it checked.
+
+    The runs root a checklist keeps its history pointer files under is this test's own,
+    rather than whichever runs root the caller's environment names.
+    """
+    monkeypatch.setenv(plan_review.RUNS_ROOT_ENV, str(tmp_path / "runs"))
+    checked: list[str] = []
+
+    def passes(project: str) -> plan_review.Checklist:
+        checked.append(project)
+        return plan_review.Checklist(passed=True, report="")
+
+    monkeypatch.setattr(plan_review, "checklist", passes)
+    monkeypatch.setattr(plan_review, "checklist_fingerprint", _configuration_digest)
+    return checked
+
 
 #: The two verdicts a review turn can answer with, in the shape the response schema
 #: declares and `orchestrator/plan_review.py` reads. The refusal carries two findings
@@ -592,7 +624,7 @@ def test_the_bar_fingerprint_reads_the_files_the_bar_is(tmp_path: Path, edited: 
     original = tmp_path / "original"
     moved = tmp_path / "moved"
     for root in (original, moved):
-        for relative in plan_review.BAR_FILES:
+        for relative in (*plan_review.BAR_FILES, plan_review.CHECKLIST_CONFIG):
             destination = root / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes((REPO_ROOT / relative).read_bytes())
@@ -1686,6 +1718,155 @@ def test_no_plan_level_turn_is_spent_while_a_task_is_refused_or_unreviewed(
     assert len(prompts) == 1, "a plan-level turn was spent beside a refused task"
     assert store.written("plan", project=True) is None
     assert "spent only once every task carries a record" in capsys.readouterr().err
+
+
+def test_a_plan_the_checklist_fails_is_refused_with_llmlints_report_and_no_plan_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """llmlint's own report of the failing rule reaches the operator; the task record stands."""
+    store = _Store(tmp_path / "store", [_task()])
+    store.install(monkeypatch)
+    monkeypatch.setattr(plan_review, "bar_fingerprint", lambda *_: BAR)
+    report = (
+        "FAIL tests_hold_no_nonfunctional_thresholds\n"
+        "     tasks/plan/route.md:3: a test asserts the route answers within 200 ms\n\n"
+        "11 rules: 5 passed, 1 failed, 0 skipped, 5 not relevant"
+    )
+    monkeypatch.setattr(
+        plan_review, "checklist", lambda project: plan_review.Checklist(False, report)
+    )
+    prompts = _verdicts(monkeypatch, PASSES)
+
+    assert plan_review.main(["demo:plan"]) == 1
+    reported = capsys.readouterr().err
+    assert report in reported, reported
+    assert "no plan-level turn was spent" in reported, reported
+    assert isinstance(store.written("plan/route"), dict)
+    assert store.written("plan", project=True) is None
+    assert len(prompts) == 1, "a plan-level turn was spent beside a failing checklist"
+
+
+#: A stand-in for `scripts/plan-checklist.sh`: it records the argv and the history
+#: environment it was given, prints a report, and exits with the status it is told to.
+CHECKLIST_STAND_IN = """#!/bin/sh
+printf '%s\\n' "$*" "$ONEHARNESS_HISTORY" "$ONEHARNESS_HISTORY_POINTER_FILE" \\
+    "$ONEHARNESS_HISTORY_LABELS" > "$CHECKLIST_RECORD"
+echo "11 rules: the stand-in's report"
+echo "the stand-in's diagnostic" >&2
+exit "$CHECKLIST_EXIT"
+"""
+
+
+@pytest.mark.parametrize(("status", "passed"), [(0, True), (1, False)])
+def test_the_checklist_runs_the_review_form_and_records_its_history_on_its_own(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: int, passed: bool
+) -> None:
+    """Exit 0 passes and 1 fails, carrying llmlint's report, with a pointer file per run."""
+    script = tmp_path / "plan-checklist.sh"
+    script.write_text(CHECKLIST_STAND_IN, encoding="utf-8")
+    script.chmod(0o755)
+    record = tmp_path / "record"
+    monkeypatch.setattr(plan_review, "CHECKLIST_SCRIPT", script)
+    monkeypatch.setenv("CHECKLIST_RECORD", str(record))
+    monkeypatch.setenv("CHECKLIST_EXIT", str(status))
+    monkeypatch.setenv("ONEHARNESS_HISTORY_LABELS", "onepipeline.run_id=a-run")
+
+    checked = REAL_CHECKLIST("demo:plan")
+
+    assert checked == plan_review.Checklist(passed, "11 rules: the stand-in's report")
+    argv, history, pointer, labels = record.read_text(encoding="utf-8").splitlines()
+    assert argv == "review demo:plan --format human --color never --progress never"
+    assert history == "1"
+    runs = plan_review.reviews_of("demo:plan", tmp_path / "runs")
+    assert Path(pointer).parent.parent == runs and Path(pointer).name == plan_review.POINTER_FILE
+    assert labels == "onepipeline.run_id=a-run,orchestrator.plan-review=demo_plan"
+
+
+@pytest.mark.parametrize(
+    ("script", "reason"),
+    [
+        ("missing", "the plan checklist could not run"),
+        ("exits-2", "the plan checklist could not complete \\(exit 2\\): the stand-in's"),
+    ],
+)
+def test_a_checklist_that_does_not_complete_is_never_read_as_a_verdict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, script: str, reason: str
+) -> None:
+    """No script to run, or one that could not finish: an error, never a pass or a fail."""
+    stand_in = tmp_path / "plan-checklist.sh"
+    if script == "exits-2":
+        stand_in.write_text(CHECKLIST_STAND_IN, encoding="utf-8")
+        stand_in.chmod(0o755)
+        monkeypatch.setenv("CHECKLIST_RECORD", str(tmp_path / "record"))
+        monkeypatch.setenv("CHECKLIST_EXIT", "2")
+    monkeypatch.setattr(plan_review, "CHECKLIST_SCRIPT", stand_in)
+
+    with pytest.raises(OSError, match=reason):
+        REAL_CHECKLIST("demo:plan")
+
+
+#: A stand-in for the installed llmlint: it answers its version, and `config` with an
+#: effective configuration naming the resolved fragment version `RESOLVED` holds and the
+#: routing `LLMLINT_ONEHARNESS_BIN` names — or, as `BROKEN` says, fails or answers nothing.
+LLMLINT_STAND_IN = """#!/bin/sh
+[ "$1" = --version ] && { echo "llmlint 0.4.7"; exit 0; }
+[ "$BROKEN" = fails ] && { echo "the stand-in cannot load it" >&2; exit 2; }
+[ "$BROKEN" = garbles ] && { echo "not a document"; exit 0; }
+printf '{"config": {"version": "%s", "oneharness": {"bin": "%s"}, "rules": []}}\\n' \\
+    "$RESOLVED" "$LLMLINT_ONEHARNESS_BIN"
+"""
+
+
+def test_the_checklist_fingerprint_moves_with_its_configuration_and_what_llmlint_resolves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The configuration's bytes and the resolved plugins move it; the routing does not."""
+    stand_in = tmp_path / "bin"
+    stand_in.mkdir()
+    (stand_in / "llmlint").write_text(LLMLINT_STAND_IN, encoding="utf-8")
+    (stand_in / "llmlint").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{stand_in}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("RESOLVED", "1.1.1")
+    root = tmp_path / "checkout"
+    (root / "config").mkdir(parents=True)
+    config = root / plan_review.CHECKLIST_CONFIG
+    config.write_bytes((REPO_ROOT / plan_review.CHECKLIST_CONFIG).read_bytes())
+
+    first = REAL_FINGERPRINT(root)
+    assert REAL_FINGERPRINT(root) == first
+    elsewhere = tmp_path / "elsewhere"
+    (elsewhere / "config").mkdir(parents=True)
+    (elsewhere / plan_review.CHECKLIST_CONFIG).write_bytes(config.read_bytes())
+    assert REAL_FINGERPRINT(elsewhere) == first, "the routing's path moved the bar"
+    monkeypatch.setenv("RESOLVED", "1.1.2")
+    assert REAL_FINGERPRINT(root) != first, "a newer resolved plugin left the bar standing"
+    monkeypatch.setenv("RESOLVED", "1.1.1")
+    config.write_bytes(config.read_bytes() + b"\\n")
+    assert REAL_FINGERPRINT(root) != first, "a moved configuration left the bar standing"
+
+
+@pytest.mark.parametrize(
+    ("broken", "reason"),
+    [
+        ("absent", "`llmlint --version` could not run"),
+        ("fails", "`llmlint config -c .*` failed \\(exit 2\\): the stand-in cannot load it"),
+        ("garbles", "printed no effective configuration"),
+    ],
+)
+def test_the_checklist_fingerprint_refuses_an_llmlint_it_cannot_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, broken: str, reason: str
+) -> None:
+    """No llmlint, one that cannot load the configuration, or one answering no configuration."""
+    stand_in = tmp_path / "bin"
+    stand_in.mkdir()
+    if broken != "absent":
+        (stand_in / "llmlint").write_text(LLMLINT_STAND_IN, encoding="utf-8")
+        (stand_in / "llmlint").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{stand_in}{os.pathsep}/bin{os.pathsep}/usr/bin")
+    monkeypatch.setenv("BROKEN", broken)
+
+    with pytest.raises(OSError, match=reason):
+        REAL_FINGERPRINT()
 
 
 def test_a_plan_level_turn_that_answers_nothing_leaves_the_task_records_standing(

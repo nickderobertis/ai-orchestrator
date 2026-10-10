@@ -114,12 +114,12 @@
       "cache": false
     },
     "budgets": {
-      "command": "uv run onebudgetspec check {projectRoot}/budgets.yaml --exclude-label host --exclude-label onepipeline",
+      "command": "uv run onebudgetspec check {projectRoot}/budgets.yaml --exclude-label host --exclude-label onepipeline --exclude-label planning",
       "options": {
         "cwd": "."
       },
       "metadata": {
-        "description": "Cached, so it skips every budget labelled host: label each elapsed or host-reading budget host, and the uncached budgets-host target runs it."
+        "description": "Cached, so it skips every budget labelled host: label each elapsed or host-reading budget host, and the uncached budgets-host target runs it. Neither target runs a budget labelled onepipeline or planning, which are measured once a change lands or a planning flow ends."
       },
       "cache": true,
       "inputs": [
@@ -130,7 +130,7 @@
       ]
     },
     "budgets-host": {
-      "command": "uv run onebudgetspec check {projectRoot}/budgets.yaml --label host --exclude-label onepipeline",
+      "command": "uv run onebudgetspec check {projectRoot}/budgets.yaml --label host --exclude-label onepipeline --exclude-label planning",
       "options": {
         "cwd": "."
       },

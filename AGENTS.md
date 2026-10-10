@@ -1611,6 +1611,12 @@ records that pass on the project rather than on any task. That turn reads a comp
 each node's fields, its task record, its task file's path and a bounded summary — and
 opens what it needs read-only under `oneharness.plan-review-whole.toml`; a prompt past
 `PLAN_PROMPT_LIMIT` exits 2 before any turn is spent.
+<!-- llmlint: ignore-block[agents_md_durable_and_terse] This document states what a manager's review holds a plan to, so it names the plan checklist and the planner's panel; these four lines are the least that does. -->
+Before that turn it holds the plan to the **plan checklist**
+(`config/plan-checklist.llmlint.yml`), so a rule its code would first meet on the merge
+path refuses it before approval; a deliberate departure is the user's to approve in the
+design document. `graphs/planner.yaml` pairs that checklist with the planner's reviewer.
+<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 `just plan`'s own closeout records what its planner authored, so a planner-written plan
 you did not touch costs nothing; the approval is not a second opinion on the plan, and
 every launch is refused without it save the bounded planning exemption above.

@@ -114,6 +114,10 @@ INSTALLED = Path(sys.executable).parent
 
 #: A run this repository recorded, copied per journey so a new event can be written to it.
 RECORDED_RUN = REPO_ROOT / "tests" / "fixtures" / "timeline-runs" / "gate-parity-2"
+#: The watcher records a live `onepipeline watch` writes and removes inside a run it
+#: watches. Other journeys watch the checked-in recordings in place, so a copy taken
+#: while one runs can meet a record that vanishes mid-copy; none is ever checked in.
+LIVE_WATCHERS = shutil.ignore_patterns("watchers")
 #: The resume line `onepipeline monitor` ends a pass with, and one rendered event line.
 CURSOR_LINE = "-- cursor "
 EVENT_LINE = re.compile(r"^\d{4}-\d{2}-\d{2}T\S+Z\s")
@@ -223,7 +227,7 @@ def test_a_monitor_resumed_from_its_cursor_renders_only_what_was_recorded_since(
 ) -> None:
     onepipeline = _installed("onepipeline", "onepipeline")
     runs = tmp_path / "runs"
-    shutil.copytree(RECORDED_RUN, runs / RECORDED_RUN.name)
+    shutil.copytree(RECORDED_RUN, runs / RECORDED_RUN.name, ignore=LIVE_WATCHERS)
     env = {**os.environ, "ONEPIPELINE_RUNS_DIR": str(runs)}
 
     first = _run(onepipeline, "monitor", RECORDED_RUN.name, env=env, cwd=tmp_path)
@@ -279,7 +283,7 @@ def test_a_stated_landing_is_authoritative_in_the_results_view(tmp_path: Path) -
     )
     for tier, landing in landings:
         run = tier
-        shutil.copytree(RECORDED_RUN, runs / run)
+        shutil.copytree(RECORDED_RUN, runs / run, ignore=LIVE_WATCHERS)
         envelope = _settle_envelope(landing)
         replied = _reply(run, envelope, env)
         assert replied.returncode == 0, replied.stdout + replied.stderr
@@ -293,7 +297,7 @@ def test_a_stated_landing_is_authoritative_in_the_results_view(tmp_path: Path) -
         assert "NOT landed" not in line, line
 
     refused_run = "unusable-stated-landing"
-    shutil.copytree(RECORDED_RUN, runs / refused_run)
+    shutil.copytree(RECORDED_RUN, runs / refused_run, ignore=LIVE_WATCHERS)
     envelope = _settle_envelope("not-a-landing")
     refused = _reply(refused_run, envelope, env)
     assert refused.returncode != 0, refused.stdout + refused.stderr
@@ -457,7 +461,7 @@ def test_a_settle_correlates_its_stated_landing_with_the_release(tmp_path: Path)
 
     runs = tmp_path / "runs"
     refused_run = "refused-release-correlation"
-    shutil.copytree(RECORDED_RUN, runs / refused_run)
+    shutil.copytree(RECORDED_RUN, runs / refused_run, ignore=LIVE_WATCHERS)
     run_env = {**env, "ONEPIPELINE_RUNS_DIR": str(runs)}
     refused = _reply(
         refused_run,
@@ -468,7 +472,7 @@ def test_a_settle_correlates_its_stated_landing_with_the_release(tmp_path: Path)
     assert "is not a semantic version" in refused.stderr, refused.stderr
 
     run = "release-correlation"
-    shutil.copytree(RECORDED_RUN, runs / run)
+    shutil.copytree(RECORDED_RUN, runs / run, ignore=LIVE_WATCHERS)
     replied = _reply(
         run,
         _settle_envelope(landing_commit, release={"target": "wheel", "version": "1.0.0"}),

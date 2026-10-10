@@ -3404,9 +3404,10 @@ def test_a_destination_this_host_cannot_answer_for_refuses_nothing(
 #: Every way this host can have nothing to say about a release: no `onevcs` at all, one
 #: that refuses the question, and one whose answer is not the shape the rules read.
 #: ``None`` is a PATH holding the system's tools, the installed engine — which the check
-#: needs, to read the review bar out of — and the installed plan store — which it needs,
-#: to read the plan-level review record from — and no `onevcs`, so the CLI's absence is
-#: the one thing tested.
+#: needs, to read the review bar out of — the installed plan store — which it needs, to
+#: read the plan-level review record from — and the installed llmlint — which it needs, to
+#: read the plan checklist that record is keyed on — and no `onevcs`, so the CLI's absence
+#: is the one thing tested.
 UNANSWERABLE_ADOPTION = (
     ("no onevcs on PATH", None),
     ("a verb that exits non-zero", "import sys\n\nsys.exit(3)\n"),
@@ -3447,6 +3448,11 @@ def test_a_release_this_host_cannot_ask_about_refuses_nothing(
         store = shutil.which("onetaskgraph")
         assert store is not None, "the installed store is what the check reads the plan record from"
         (binary / "onetaskgraph").symlink_to(store)
+        checklist = shutil.which("llmlint")
+        assert checklist is not None, (
+            "the installed llmlint is what the check reads the checklist through"
+        )
+        (binary / "llmlint").symlink_to(checklist)
         path = f"{binary}{os.pathsep}/usr/bin:/bin"
     plan = _publishing_plan(
         tmp_path,

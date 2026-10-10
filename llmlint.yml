@@ -22,6 +22,16 @@ files:
     # `llmlint: ignore` inside one is quoted text rather than a suppression, and closing
     # it inline would break the bytes the test holds. Excluded on the manager's ruling.
     - "tests/fixtures/design-doc-why/**"
+    # A real plan's documents preserved as the plan checklist's journey reads them
+    # (tests/e2e/test_plan_checklist_e2e.py). Every task body quotes this host's dispatch
+    # appendix, so an `llmlint: ignore` inside one is quoted text rather than a
+    # suppression, and the documents are a plan's rather than code this tier judges.
+    - "tests/fixtures/plan-checklist-plans/**"
+    # Real oneharness history records and a real onejudge report, copied verbatim as the
+    # workload the plan-checklist budgets were approved at; they are data the tests read
+    # rather than code this tier judges, and JSON carries no inline directive, so this one
+    # path is the narrowest suppression the tool offers.
+    - "tests/fixtures/plan-checklist-budgets/**"
 rationales: true
 # Findings and broken judge runs are not cached by the `lint-llm-diff` tier — Nx
 # caches successful tasks only — so a branch working through a red re-rolls the

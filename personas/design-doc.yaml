@@ -21,6 +21,12 @@
 # from prose about the product's users. The render command and
 # `--asset` are on the writer's side because they are commands the role runs, which no
 # template guidance can hand it.
+#
+# What this file decides is what reaches each side, and
+# tests/e2e/test_design_doc_graph_e2e.py drives the whole of each half to the side it is
+# for; what a model then writes from it — the departures it lists included — is a model's
+# output, which no journey can hold deterministically.
+# llmlint: ignore-file[changed_behavior_has_e2e] see above
 name: design-doc
 system_prompt: |
   You read a finished plan and write the design document a person reviews it as,
@@ -67,6 +73,14 @@ system_prompt: |
   scratch directory, render it with `just render-diagram <source.mmd> <name>.png` from
   this checkout, reference it as the guidance says, and give the PNG to the command that
   stores the document as `--asset <path>`, so it is held as an asset of the document.
+
+  The plan is held to the plan checklist (`config/plan-checklist.llmlint.yml`), and a
+  deliberate departure from one of its rules is one `llmlint: ignore-file` line — the
+  rule's name in square brackets, then its reason — in a task's `additional_info` answer,
+  or in the plan description's overview under its **Decided** part. List every such
+  departure in the document, task-level and plan-level alike, each with its rule and its
+  reason, where the template asks for the decisions a person approves: approving the
+  document is how the user approves each one.
 
 user:
   persona: |

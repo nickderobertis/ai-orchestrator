@@ -38,6 +38,10 @@ from orchestrator.root import REPO_ROOT
 #: The recorded run, and the node that dispatched inside it. Both are the real ids, so
 #: an operator meeting this journey can go and read the whole run it was cut from.
 RECORDED_RUNS = REPO_ROOT / "tests" / "fixtures" / "transcript-runs"
+#: The watcher records a live `onepipeline watch` writes and removes inside a run it
+#: watches. Other journeys watch the checked-in recordings in place, so a copy taken
+#: while one runs can meet a record that vanishes mid-copy; none is ever checked in.
+LIVE_WATCHERS = shutil.ignore_patterns("watchers")
 RECORDED_RUN = "adopt-and-retire-gate"
 RECORDED_NODE = "adopt-and-retire-gate"
 
@@ -72,7 +76,7 @@ RESULT_FRAGMENT = "onevcs-0.11.0"
 def runs_root(tmp_path: Path) -> Path:
     """A private copy, so no journey can write into the checked-in recording."""
     root = tmp_path / "runs"
-    shutil.copytree(RECORDED_RUNS, root)
+    shutil.copytree(RECORDED_RUNS, root, ignore=LIVE_WATCHERS)
     return root
 
 

@@ -1,0 +1,251 @@
+{
+  "schema_version": 14,
+  "verdicts": [
+    {
+      "criterion": "Both of these must hold:\n\n1. every acceptance criterion stated in the task is met, with every change this dispatch made committed and nothing half-applied left behind\n\n2. the plan is written where the task said to write it, every fork that could have changed a key outcome was asked of the manager rather than decided alone, and every exception the planner took is recorded in the plan and escalated",
+      "kind": "boolean",
+      "verdict": {
+        "value": true,
+        "reason": "The corrected plan is in the authoring store, key choices and exceptions were approved and recorded, checks confirm the reported state, and the checkout remains clean on main as required.",
+        "usage": {
+          "input_tokens": 450050,
+          "output_tokens": 1731,
+          "cache_read_tokens": 391680
+        }
+      }
+    }
+  ],
+  "completion_reason": "The authoring plan covers the requested configuration, judge wiring, check dispositions, instruction alignment, and approved departures. The invocation defect is corrected in the stored task with realistic verification criteria. Manager decisions and exceptions are recorded; the checkout remains clean on main, as required.",
+  "usage": {
+    "input_tokens": 172,
+    "output_tokens": 101338,
+    "cache_read_tokens": 16791901,
+    "cache_write_tokens": 291060,
+    "cost_usd": 22.090697999999996
+  },
+  "telemetry": {
+    "wall_ms": 1252545,
+    "agent": {
+      "usage": {
+        "input_tokens": 172,
+        "output_tokens": 101338,
+        "cache_read_tokens": 16791901,
+        "cache_write_tokens": 291060,
+        "cost_usd": 22.090697999999996
+      },
+      "session_ids": [
+        "3e219f0a-efec-47c2-82e7-652dba94b395"
+      ]
+    },
+    "judge": {
+      "time_to_first_token_ms": 4423,
+      "session_ids": [
+        "01a1233f-0d15-7032-ad8e-744038458091",
+        "01a12340-fcb5-7d81-b4b0-b5d80c76fc62"
+      ]
+    },
+    "orchestration_ms": 1252545,
+    "sessions": [
+      {
+        "session_id": "01a12340-fcb5-7d81-b4b0-b5d80c76fc62",
+        "role": "judge",
+        "turn_index": 3,
+        "started_at": "2026-10-10T00:40:22.522Z",
+        "finished_at": "2026-10-10T00:41:21.876Z"
+      }
+    ],
+    "attribution": [
+      {
+        "role": "agent",
+        "turn_index": 1,
+        "ran": "claude-code:alternate",
+        "candidates": [
+          {
+            "harness": "claude-code",
+            "harness_id": "claude-code:alternate",
+            "variant": "alternate",
+            "model": "claude-opus-5-5",
+            "status": "ok",
+            "available": true,
+            "ran": true,
+            "exit_code": 0,
+            "duration_ms": 1055982,
+            "session_id": "3e219f0a-efec-47c2-82e7-652dba94b395",
+            "history_id": "01a1232d-f478-72f2-8c39-4397fa6189aa",
+            "usage": {
+              "input_tokens": 158,
+              "output_tokens": 96886,
+              "cache_read_tokens": 14711951,
+              "cache_write_tokens": 282987,
+              "cost_usd": 7.144638199999999
+            }
+          }
+        ],
+        "history_file": "/home/whoop/.local/state/oneharness/history/home-whoop-ai-orchestrator/node-scope-1791591576674-2212821-worker-skill-20261010T001936Z-2212845.jsonl"
+      },
+      {
+        "role": "agent",
+        "turn_index": 2,
+        "ran": "claude-code:alternate",
+        "candidates": [
+          {
+            "harness": "claude-code",
+            "harness_id": "claude-code:alternate",
+            "variant": "alternate",
+            "model": "claude-opus-5-5",
+            "status": "ok",
+            "available": true,
+            "ran": true,
+            "exit_code": 0,
+            "duration_ms": 18813,
+            "session_id": "3e219f0a-efec-47c2-82e7-652dba94b395",
+            "history_id": "01a1233e-bc9f-7bd2-898f-2a8220a10441",
+            "usage": {
+              "input_tokens": 2,
+              "output_tokens": 633,
+              "cache_read_tokens": 293227,
+              "cache_write_tokens": 1975,
+              "cost_usd": 7.231751599999999
+            }
+          }
+        ],
+        "history_file": "/home/whoop/.local/state/oneharness/history/home-whoop-ai-orchestrator/node-scope-1791591576674-2212821-worker-skill-20261010T003756Z-2622309.jsonl"
+      },
+      {
+        "role": "judge",
+        "turn_index": 1,
+        "ran": "codex:primary",
+        "candidates": [
+          {
+            "harness": "codex",
+            "harness_id": "codex:primary",
+            "variant": "primary",
+            "model": "gpt-6.1-sol",
+            "status": "ok",
+            "available": true,
+            "ran": true,
+            "duration_ms": 32215,
+            "session_id": "01a1233f-0d15-7032-ad8e-744038458091"
+          }
+        ],
+        "history_file": "/home/whoop/.local/state/oneharness/history/home-whoop-ai-orchestrator/node-scope-1791591576674-2212821-worker-user-20261010T003816Z-2629522.jsonl",
+        "posture": {
+          "mode": "default",
+          "source": "/home/whoop/.local/state/oneagentgraph/runs/node-scope-1791591576674-2212821/members/worker/oneharness.judge.toml",
+          "config_files": [
+            "/run/claude-remote-control/onejudge/judge-defaults-v1.toml",
+            "/home/whoop/ai-orchestrator/graphs/../oneharness.identities.toml",
+            "/home/whoop/ai-orchestrator/graphs/../oneharness.dispatch.toml",
+            "/home/whoop/.local/state/oneagentgraph/runs/node-scope-1791591576674-2212821/members/worker/oneharness.judge.toml",
+            "environment"
+          ]
+        }
+      },
+      {
+        "role": "agent",
+        "turn_index": 3,
+        "ran": "claude-code:alternate",
+        "candidates": [
+          {
+            "harness": "claude-code",
+            "harness_id": "claude-code:alternate",
+            "variant": "alternate",
+            "model": "claude-opus-5-5",
+            "status": "ok",
+            "available": true,
+            "ran": true,
+            "exit_code": 0,
+            "duration_ms": 71974,
+            "session_id": "3e219f0a-efec-47c2-82e7-652dba94b395",
+            "history_id": "01a1233f-8e19-76b3-9da8-ca8fb3e12ac9",
+            "usage": {
+              "input_tokens": 12,
+              "output_tokens": 3819,
+              "cache_read_tokens": 1786723,
+              "cache_write_tokens": 6098,
+              "cost_usd": 7.7143082
+            }
+          }
+        ],
+        "history_file": "/home/whoop/.local/state/oneharness/history/home-whoop-ai-orchestrator/node-scope-1791591576674-2212821-worker-skill-20261010T003850Z-2642138.jsonl"
+      },
+      {
+        "role": "judge",
+        "turn_index": 2,
+        "ran": "codex:primary",
+        "candidates": [
+          {
+            "harness": "codex",
+            "harness_id": "codex:primary",
+            "variant": "primary",
+            "model": "gpt-6.1-sol",
+            "status": "ok",
+            "available": true,
+            "ran": true,
+            "duration_ms": 16366,
+            "session_id": "01a1233f-0d15-7032-ad8e-744038458091"
+          }
+        ],
+        "history_file": "/home/whoop/.local/state/oneharness/history/home-whoop-ai-orchestrator/node-scope-1791591576674-2212821-worker-user-20261010T004006Z-2871825.jsonl",
+        "posture": {
+          "mode": "default",
+          "source": "/home/whoop/.local/state/oneagentgraph/runs/node-scope-1791591576674-2212821/members/worker/oneharness.judge.toml",
+          "config_files": [
+            "/run/claude-remote-control/onejudge/judge-defaults-v1.toml",
+            "/home/whoop/ai-orchestrator/graphs/../oneharness.identities.toml",
+            "/home/whoop/ai-orchestrator/graphs/../oneharness.dispatch.toml",
+            "/home/whoop/.local/state/oneagentgraph/runs/node-scope-1791591576674-2212821/members/worker/oneharness.judge.toml",
+            "environment"
+          ]
+        }
+      },
+      {
+        "role": "judge",
+        "turn_index": 3,
+        "ran": "codex:primary",
+        "candidates": [
+          {
+            "harness": "codex",
+            "harness_id": "codex:primary",
+            "variant": "primary",
+            "model": "gpt-6.1-sol",
+            "status": "ok",
+            "available": true,
+            "ran": true,
+            "exit_code": 0,
+            "duration_ms": 56788,
+            "session_id": "01a12340-fcb5-7d81-b4b0-b5d80c76fc62",
+            "usage": {
+              "input_tokens": 450050,
+              "output_tokens": 1731,
+              "cache_read_tokens": 391680
+            }
+          }
+        ],
+        "history_file": "/home/whoop/.local/state/oneharness/history/home-whoop-ai-orchestrator/node-scope-1791591576674-2212821-worker-judge-20261010T004022Z-2914828.jsonl",
+        "posture": {
+          "mode": "default",
+          "source": "/home/whoop/.local/state/oneagentgraph/runs/node-scope-1791591576674-2212821/members/worker/oneharness.judge.toml",
+          "config_files": [
+            "/run/claude-remote-control/onejudge/judge-defaults-v1.toml",
+            "/home/whoop/ai-orchestrator/graphs/../oneharness.identities.toml",
+            "/home/whoop/ai-orchestrator/graphs/../oneharness.dispatch.toml",
+            "/home/whoop/.local/state/oneagentgraph/runs/node-scope-1791591576674-2212821/members/worker/oneharness.judge.toml",
+            "environment"
+          ]
+        }
+      }
+    ]
+  },
+  "control": {
+    "session": "node-scope-1791591576674-2212821-worker-skill",
+    "session_dir": "/home/whoop/.local/state/oneharness/sessions",
+    "cwd": "."
+  },
+  "supervisor_control": {
+    "session": "node-scope-1791591576674-2212821-worker-user",
+    "session_dir": "/home/whoop/.local/state/oneharness/sessions",
+    "cwd": "."
+  },
+  "stopped_early": false
+}

@@ -72,6 +72,18 @@ tell one outcome from another deterministically:
   thing substituted. A prompt listing no task file, or files carrying no marker, is
   answered as any other launch is.
 
+* ``FAKE_CODEX_LLMLINT_FAIL`` scripts the one launch that is not a reviewer's: an
+  llmlint judge batch, recognized by the ``## Target files`` and ``## Rules to evaluate``
+  sections llmlint's prompt carries, is answered in the shape llmlint's schema asks for,
+  every rule the batch lists holding — except each rule this JSON object names, mapped to
+  the ``file``, ``line`` and ``message`` of the violation it is answered with. A violation
+  is reported only in a file the batch lists and the rule's ``Scope:`` line covers, as a
+  model reading the prompt would. The batch is answered outside the scripted launches:
+  it is not counted in ``FAKE_CODEX_ATTEMPT_LOG``, takes no ``FAKE_CODEX_ANSWERS`` entry,
+  and is recorded in ``FAKE_CODEX_LLMLINT_PROMPT_LOG`` rather than ``FAKE_CODEX_PROMPT_LOG``,
+  so a journey scripting or reading a reviewer's turns in order is not shifted by an
+  llmlint judge running beside it.
+
 Keep this deterministic and stdlib-only — this file *is* the provider binary.
 """
 
@@ -83,7 +95,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Literal, NotRequired, TypedDict
+from typing import Literal, NamedTuple, NotRequired, TypedDict
 
 
 class AgentMessage(TypedDict):
@@ -212,10 +224,9 @@ def read_prompt(argv: list[str]) -> str | None:
     is `-`, which says the prompt is on stdin — what oneharness hands over when a
     prompt outgrows a command line, as a plan reviewed whole does — so that word is
     read through rather than taken as the prompt. Read once, because stdin can be read
-    once, and only when something reads the prompt.
+    once, and always, because an llmlint judge batch is told apart by what it asks.
     """
-    wanted = ("FAKE_CODEX_PROMPT_LOG", "FAKE_CODEX_RUN_ON_MARKER", "FAKE_CODEX_READ_LISTED_FOR")
-    if not argv or not any(os.environ.get(name) for name in wanted):
+    if not argv:
         return None
     positional: list[str] = []
     words = iter(argv)
@@ -229,9 +240,14 @@ def read_prompt(argv: list[str]) -> str | None:
     return sys.stdin.read() if positional[-1] == "-" else positional[-1]
 
 
-def record_prompt(prompt: str | None, argv: list[str], read: list[str]) -> None:
-    """Append the prompt this launch was given, its argv and what it opened, when asked."""
-    log = os.environ.get("FAKE_CODEX_PROMPT_LOG")
+def record_prompt(
+    prompt: str | None, argv: list[str], read: list[str], *, log: str | None = None
+) -> None:
+    """Append the prompt this launch was given, its argv and what it opened, when asked.
+
+    Into ``log`` when one is named, and otherwise into ``FAKE_CODEX_PROMPT_LOG``.
+    """
+    log = log if log is not None else os.environ.get("FAKE_CODEX_PROMPT_LOG")
     if log is None or prompt is None:
         return
     with Path(log).open("a", encoding="utf-8") as stream:
@@ -351,8 +367,131 @@ def hold() -> None:
         time.sleep(0.1)
 
 
+#: The sections of llmlint's judge prompt that say a launch is one of its batches, and the
+#: lines that name a batch's files and each rule's scope.
+LLMLINT_TARGETS = "## Target files"
+LLMLINT_RULES = "## Rules to evaluate"
+LLMLINT_RULE = "### "
+LLMLINT_SCOPE = "Scope: "
+LLMLINT_ALL = "all target files"
+LLMLINT_EXCEPT = "all target files except: "
+LLMLINT_RELEVANCE = "Relevant only when:"
+
+
+class BatchRule(NamedTuple):
+    """One rule of an llmlint batch: where it applies and whether it asks for relevance.
+
+    ``conditional`` is whether the rule carries a relevance condition, which decides
+    whether llmlint's schema asks for a ``relevant`` field on its answer.
+    """
+
+    scope: str
+    conditional: bool
+
+
+class Batch(NamedTuple):
+    """One llmlint judge batch: the files it names and each rule it asks about."""
+
+    targets: list[str]
+    rules: dict[str, BatchRule]
+
+
+class Violation(TypedDict):
+    """One violation of a rule, in the fields llmlint's schema asks for."""
+
+    file: str
+    line: int
+    message: str
+
+
+class RuleVerdict(TypedDict):
+    """One rule's answer in llmlint's batch schema; `relevant` only for a conditional rule."""
+
+    name: str
+    rationale: str
+    relevant: NotRequired[bool]
+    holds: bool
+    violations: list[Violation]
+
+
+def llmlint_batch(prompt: str | None) -> Batch | None:
+    """The files and rules of an llmlint judge batch, or None when ``prompt`` is not one."""
+    if prompt is None or LLMLINT_TARGETS not in prompt or LLMLINT_RULES not in prompt:
+        return None
+    targets_part = prompt.split(LLMLINT_TARGETS, 1)[1].split(LLMLINT_RULES, 1)[0]
+    targets = [
+        line.removeprefix("- ").strip()
+        for line in targets_part.splitlines()
+        if line.startswith("- ")
+    ]
+    rules: dict[str, BatchRule] = {}
+    name = ""
+    for line in prompt.split(LLMLINT_RULES, 1)[1].splitlines():
+        match line:
+            case _ if line.startswith(LLMLINT_RULE):
+                name = line.removeprefix(LLMLINT_RULE).strip()
+                rules[name] = BatchRule(scope=LLMLINT_ALL, conditional=False)
+            case _ if name and line.startswith(LLMLINT_SCOPE):
+                rules[name] = rules[name]._replace(scope=line.removeprefix(LLMLINT_SCOPE).strip())
+            case _ if name and line.startswith(LLMLINT_RELEVANCE):
+                rules[name] = rules[name]._replace(conditional=True)
+            case _ if line.startswith("## "):
+                break
+    return Batch(targets, rules)
+
+
+def in_scope(path: str, scope: str, targets: list[str]) -> bool:
+    """Whether a rule whose ``Scope:`` line reads ``scope`` applies to ``path``."""
+    if path not in targets:
+        return False
+    if scope == LLMLINT_ALL:
+        return True
+    if scope.startswith(LLMLINT_EXCEPT):
+        return path not in [part.strip() for part in scope.removeprefix(LLMLINT_EXCEPT).split(",")]
+    return path in [part.strip() for part in scope.split(",")]
+
+
+def llmlint_verdict(batch: Batch) -> str:
+    """The answer to one llmlint batch: each rule holds unless scripted to fail in scope."""
+    failing = json.loads(os.environ.get("FAKE_CODEX_LLMLINT_FAIL") or "{}")
+    answered: dict[str, RuleVerdict] = {}
+    for name, rule in batch.rules.items():
+        scripted = failing.get(name)
+        violations: list[Violation] = (
+            [
+                Violation(
+                    file=str(scripted["file"]),
+                    line=int(scripted.get("line", 1)),
+                    message=str(scripted["message"]),
+                )
+            ]
+            if isinstance(scripted, dict)
+            and in_scope(str(scripted["file"]), rule.scope, batch.targets)
+            else []
+        )
+        verdict = RuleVerdict(
+            name=name,
+            rationale=f"fake_codex: {name} {'fails' if violations else 'holds'} as scripted",
+            holds=not violations,
+            violations=violations,
+        )
+        if rule.conditional:
+            verdict["relevant"] = True
+        answered[name] = verdict
+    return json.dumps(answered)
+
+
 def main() -> int:
     prompt = read_prompt(sys.argv[1:])
+    batch = llmlint_batch(prompt)
+    if batch is not None:
+        # Recorded only where a journey asks for llmlint's batches, and never beside the
+        # reviewer's turns, which journeys read back in order.
+        if llmlint_log := os.environ.get("FAKE_CODEX_LLMLINT_PROMPT_LOG"):
+            record_prompt(prompt, sys.argv[1:], [], log=llmlint_log)
+        for event in turn_events(llmlint_verdict(batch), billed=True):
+            print(json.dumps(event), flush=True)
+        return 0
     read, findings = read_listed(prompt)
     record_prompt(prompt, sys.argv[1:], read)
     launches = record_launch()

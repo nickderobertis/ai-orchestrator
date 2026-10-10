@@ -1,0 +1,135 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/nickderobertis/llmlint/main/assets/llmlint.schema.json
+#
+# The plan checklist: the llmlint rules a plan is held to while it is reviewed, so a rule
+# its code would later meet on the merge path refuses the plan before approval instead.
+# It is the planner's second judge (`graphs/planner.yaml`) and the checklist `just
+# review-plan` runs, both through `scripts/plan-checklist.sh`, and the one source of every
+# plan-checklist rule. The repository's own `llmlint.yml` never loads it, and llmlint never
+# discovers it, because it is not named `llmlint.yml`.
+#
+# Every rule judges exactly the plan documents it is passed — the project's description
+# and each task's Markdown document — and never a file of a repository's tree. Under `-c`
+# llmlint roots every glob at its working directory rather than at this file's, and drops
+# a passed path outside that directory without a word, so the script runs llmlint from the
+# plan-authoring root (the directory holding `projects/` and `tasks/`), names the
+# documents relative to it, and selects them with `**/*.md` here and on every rule.
+#
+# The judge's oneharness routing is `oneharness.llmlint.toml`'s, the same as this
+# repository's judged tier: `oneharness.bin` resolves against llmlint's working
+# directory, which is the plan-authoring root and not this checkout, so the script
+# names `scripts/llmlint-oneharness.sh` through `LLMLINT_ONEHARNESS_BIN` rather than
+# this file naming it.
+#
+# A deliberate departure from a rule is one HTML comment on its own line in the departing
+# task's `additional_info` answer — `<!--`, then `llmlint: ignore-file`, then the rule's name
+# in square brackets, then the reason, then `-->` — or, for a rule judged on the plan's
+# description, the same line in its overview under `**Decided**`. The checklist runs with
+# `--no-ignore-check`, so a departure naming a misspelled rule suppresses nothing and the
+# rule still fires.
+files:
+  include: ["**/*.md"]
+rationales: true
+history:
+  max_runs: 200
+plugins:
+  - "https://raw.githubusercontent.com/nickderobertis/dero-skills/main/skills/bootstrap/create-repo/assets/llmlint/tools/onebudgetspec.llmlint.yml@1"
+  - "https://raw.githubusercontent.com/nickderobertis/dero-skills/main/skills/bootstrap/create-repo/assets/llmlint/project-graph.llmlint.yml@1"
+
+agents:
+  plan:
+    prompt_template: |
+
+      ## You are reading a plan, not code
+
+      Every target file is a document of one execution plan, written before any of its
+      work exists. Each is either the plan's description (its goal, its workload and
+      sizing, its answer about 10x usage, and its budget checklist) or one plan task's
+      Markdown document. A task document carries YAML frontmatter, whose
+      `orchestrator.budgets` record lists the budgets that task owns, and a body with
+      `## What`, `## Why`, `## Acceptance criteria`, an optional `## Budgets` section
+      and `## Additional info`. Text under `### Operational notes for this host` is a
+      standard appendix every task carries: read it as context, never as the plan's
+      own content, and never report a violation inside it.
+
+      The plan describes work in a target repository you cannot see. Judge each rule
+      against what the plan says will exist once its tasks are done. A rule written
+      about code, tests, scripts, `budgets.yaml` files or project definitions is
+      judged against the plan's own statements of them: where each budget will be
+      registered and what its command will read and measure, what each test will
+      assert and with what doubled, and which project a test will land in and what
+      that project will depend on. A plan that states nothing a rule could judge
+      makes that rule not relevant; never report a rule against a file only because
+      the repository it describes is not visible to you.
+
+rules:
+  # The fragment rules a plan is held to. Each inherits its description from the fragment,
+  # so its wording stays upstream; only where it looks and when it applies are stated here.
+  - name: budgets_track_product_owner_outcomes
+    override: true
+    agent: plan
+    files:
+      include: ["**/*.md"]
+    relevance: the plan registers or keeps a budget, in a task's budget record or a description's budget checklist
+  - name: budgets_reuse_gate_telemetry
+    override: true
+    agent: plan
+    files:
+      include: ["**/*.md"]
+    relevance: the plan registers a budget and states what its command runs or reads
+  - name: budgets_scoped_to_minimal_tree
+    override: true
+    agent: plan
+    files:
+      include: ["**/*.md"]
+    relevance: the plan registers a budget and states where its budgets file, command, or budget-only fixtures will live
+  - name: budget_commands_measure_directly
+    override: true
+    agent: plan
+    files:
+      include: ["**/*.md"]
+    relevance: the plan registers a budget and states its command
+  - name: tests_hold_no_nonfunctional_thresholds
+    override: true
+    agent: plan
+    files:
+      include: ["**/*.md"]
+    relevance: the plan states what a test it adds or changes will assert about a timing, size or count figure, or how it bounds a wait
+  - name: expensive_tests_stay_behind_their_own_edge
+    override: true
+    agent: plan
+    files:
+      include: ["**/*.md"]
+    relevance: the plan adds or changes a test that is slow or reaches an external service, or a project definition or dependency edge that owns one, or makes a budget's figure depend on one
+
+  # Every other rule the two fragments ship, off: each is about a repository's own files
+  # rather than anything a plan states.
+  - name: budget_descriptions_durable_and_terse
+    override: true
+    agent: plan
+    files:
+      include: ["**/*.md"]
+    relevance: false
+  - name: onebudgetspec_is_the_only_judge
+    override: true
+    agent: plan
+    files:
+      include: ["**/*.md"]
+    relevance: false
+  - name: instruction_layer_localized
+    override: true
+    agent: plan
+    files:
+      include: ["**/*.md"]
+    relevance: false
+  - name: new_projects_keep_the_graph_uniform
+    override: true
+    agent: plan
+    files:
+      include: ["**/*.md"]
+    relevance: false
+  - name: code_lands_in_the_domain_that_owns_it
+    override: true
+    agent: plan
+    files:
+      include: ["**/*.md"]
+    relevance: false

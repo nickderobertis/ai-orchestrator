@@ -106,8 +106,9 @@ just plan brief.md                       # the planner drafts into `authoring`, 
                                          # and a planner finalizes from them, and the tail
                                          # then reviews the plan, checks it, launches the
                                          # design document, holds its budget answers to the
-                                         # plan's records, copies both onto `plans`, and
-                                         # reports where that board holds them
+                                         # plan's records, copies both onto `plans`,
+                                         # reports where that board holds them, and
+                                         # reports what the plan checklist cost the flow
 just approve-design plans:<project>      # the user's approval of the copy they read
 just orchestrate plans:<project>
 ```
@@ -122,9 +123,43 @@ is why the copy comes before the approval rather than after it.
 **`just finish-plan brief.md` is that tail on its own**, and is what an operator runs
 after editing a plan the planner authored: the edit leaves that task carrying no review
 record for what it now says, so the review spends a real judged turn on it before anything
-else happens. It is the same six steps in the same order — review, check, launch the
-document, hold its budget answers to the plan's records, copy, report — because `just
-plan` reaches them by running that script rather than by repeating them.
+else happens. It is the same seven steps in the same order — review, check, launch the
+document, hold its budget answers to the plan's records, copy, report, and report what the
+plan checklist cost — because `just plan` reaches them by running that script rather than
+by repeating them.
+
+**The review holds a plan to the plan checklist before its plan-level turn.** `just
+review-plan` runs `scripts/plan-checklist.sh review <source:project>`, which runs llmlint
+under `config/plan-checklist.llmlint.yml` over the plan's description and task documents
+and nothing else: from the plan-authoring root, naming each document relative to it,
+because llmlint roots every glob at its working directory and drops a path outside it
+without a word. The checklist holds the onebudgetspec and project-graph fragment rules
+that read a plan, under one `plan` agent that frames each document as a plan of work not
+yet done. A failing rule refuses the plan with llmlint's own report, exit **1**, and
+spends no plan-level turn; a pass is what lets that turn be spent, and the plan-level
+record it writes is keyed on the checklist's configuration, llmlint's version and every
+rule llmlint resolves its pinned plugins to, so moving any of them clears every plan's
+record; a plugin release that changes no rule may not, since the pinned llmlint reports a
+resolved plugin version only in its error output. A deliberate departure
+is one `llmlint: ignore-file` line naming the rule and giving the reason, in the departing
+task's `additional_info` answer, or in the description's overview under **Decided** for a
+rule judged there; the checklist runs with `--no-ignore-check`, so a misspelled rule name
+suppresses nothing, and the design document lists every departure for the user to approve.
+The review keeps the checklist's oneharness history through a pointer file of its own,
+under the runs root at `plan-reviews/<project>/<started>/oneharness-sessions.jsonl`.
+`graphs/planner.yaml` makes the checklist a second judge of the planner's own dispatch
+beside its reviewer, and no node names it yet — `docs/onejudge-integration.md`'s "The
+judge side may be a list of judges" says why.
+
+**What the checklist costs a flow is measured once the flow ends**, the way a landed
+change's cycle time is: `orchestrator/budgets.yaml`'s `plan-checklist-added-seconds` and
+`plan-checklist-tokens`, labelled `planning` so no gate and no Nx target selects them.
+The tail's last step runs `onebudgetspec check` over them with `PLAN_CHECKLIST_FLOW` naming
+the flow's draft run and `PLAN_CHECKLIST_PROJECT` its plan; each reads the checklist's
+judge calls from the draft and finalize runs' `oneharness-sessions.jsonl` (the lines
+labelled `role=llmlint`), their onejudge reports, and each review of the plan started since
+the draft run launched, so a plan planned again counts no earlier flow's review, and prints
+its figure, threshold and breakdown. An overrun warns and does not refuse the plan.
 
 **The ordering is the point, and the second launch is what buys it.** A design document
 describes a plan, so one written before anything reviewed that plan describes content
@@ -146,7 +181,7 @@ reach every run's channel.
 
 **Its refusals are told apart by exit status**, because each names a different thing to
 correct and a caller scripting the flow branches on the status: **1** is the review
-refusing the plan's own criteria, **3** is the pre-launch check refusing the plan, **6** is
+refusing the plan's own criteria or its plan checklist failing a rule, **3** is the pre-launch check refusing the plan, **6** is
 the engine refusing the design-document node's own rendered task, **4** is the document
 launch not settling, **7** is the written document restating budget answers that differ
 from what `python -m orchestrator.plan_budgets <plan>` prints, **5** is the destination

@@ -9,7 +9,13 @@
     "testSupport": [
       "{workspaceRoot}/tests/test_observer_judge_ops.py",
       "{workspaceRoot}/justfile",
-      "{workspaceRoot}/scripts/onepipeline.sh"
+      "{workspaceRoot}/scripts/onepipeline.sh",
+      "{workspaceRoot}/graphs/dag-scope.yaml",
+      "{workspaceRoot}/graphs/design-doc.yaml",
+      "{workspaceRoot}/graphs/follow-up.yaml",
+      "{workspaceRoot}/graphs/node-scope.yaml",
+      "{workspaceRoot}/graphs/planner.yaml",
+      "{workspaceRoot}/graphs/pr-author.yaml"
     ]
   },
   "targets": {

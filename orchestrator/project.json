@@ -72,6 +72,7 @@
       "{workspaceRoot}/config/read-api.address",
       "{workspaceRoot}/tests/fixtures/**/*",
       "!{workspaceRoot}/tests/fixtures/design-doc-why/**/*",
+      "!{workspaceRoot}/tests/fixtures/plan-checklist-plans/**/*",
       "{workspaceRoot}/tests/test_launcher_session.py",
       "{workspaceRoot}/tests/fixtures/planner-channel.json",
       "{workspaceRoot}/config/onemessagebus.yaml",

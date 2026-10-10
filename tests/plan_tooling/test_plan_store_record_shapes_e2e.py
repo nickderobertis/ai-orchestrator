@@ -311,8 +311,10 @@ def _environment(tmp_path: Path, *answers: object) -> dict[str, str]:
     environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
     environment["FAKE_CODEX_ANSWERS"] = json.dumps([json.dumps(one) for one in answers])
     environment["FAKE_CODEX_ATTEMPT_LOG"] = str(tmp_path / "launches")
-    # Keeps these journeys' harness history out of the host's.
+    # Keeps these journeys' harness history out of the host's, and the history pointer
+    # file a review's plan checklist keeps under the runs root with it.
     environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
+    environment["ONEPIPELINE_RUNS_DIR"] = str(tmp_path / "runs")
     return environment
 
 

@@ -234,15 +234,33 @@ members:
       - command: [my-judge, --flag]                   # a command side: optional `label`
 ```
 
-**This host stacks none today.** `config/onejudge.base.yaml`'s `provider:` names the one
-`oneharness.judge.toml`, every member of the graphs under `graphs/` keeps a single judge
-side, and every dispatch keeps its single simulated user; stacking one is a change to a
-graph and a manager's decision. The shape is stated in [onejudge v0.17.2's
+**One graph here declares a panel: `graphs/planner.yaml`**, the planner's own worker
+judged by its reviewer — `../oneharness.judge.toml`, labelled `reviewer` — and the plan
+checklist — `kind: llmlint`, labelled `plan-checklist`, whose `bin` is
+`scripts/plan-checklist.sh` and whose `config` is `config/plan-checklist.llmlint.yml` — in
+that order. The script runs llmlint over the documents of the plan the planner is writing,
+from the plan-authoring root, rather than over the worktree onejudge names. The graph anchors
+the llmlint side's `config` to its own directory and hands its `bin` over as written, so
+the script is named relative to the directory a run is launched from, this checkout's root.
+
+**No planning node names that graph yet, and the reason is this host's judge mode.**
+onejudge refuses a panel of two or more judges holding one whose mode is writable
+(`refuse_writable_panels` in its `cli/config.rs`), and `oneharness.judge.toml` runs in
+`default`, with its read-only enforcement pinned per harness, for the reason the section
+above gives. The one lever that accepts it is the split's `allow_writable_judges`, which
+the pinned oneagentgraph composes no field for, so a member judged by that panel dies
+`unstartable` before its first turn. Until a release carries the flag from a member's judge
+list to the split and the engine linking it is adopted, `scripts/plan.sh` names the graph on
+no node, `config/onejudge.base.yaml`'s `provider:` names the one `oneharness.judge.toml`,
+and every dispatch keeps its single simulated user; the plan checklist reaches a plan
+through `just review-plan` instead. The shape is stated in [onejudge v0.17.2's
 `judges.md`](https://github.com/nickderobertis/onejudge/blob/v0.17.2/docs/judges.md)
 — the config, how a panel decides, and what each surface carries per judge — and, for a
 graph member, in [oneagentgraph v0.5.5's
 `contract.md`](https://github.com/nickderobertis/oneagentgraph/blob/v0.5.5/docs/contract.md).
-`tests/e2e/test_judge_panel_e2e.py` drives the pinned `onejudge run` over a two-judge
+`tests/e2e/test_plan_checklist_e2e.py` drives the pinned oneagentgraph's composition of
+the graph and the pinned `onejudge run` under its two judges, with the script as the
+llmlint side's `bin`; `tests/e2e/test_judge_panel_e2e.py` drives it over a two-judge
 list, a single `judge:`, and a single provider, offline.
 
 ## Provider wiring

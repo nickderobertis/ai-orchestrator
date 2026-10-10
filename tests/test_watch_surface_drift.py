@@ -123,6 +123,10 @@ NODE_ID_PLACEHOLDER = "<ID>"
 #: A recorded run that settled, for the wait with no bound: it returns on the first pass
 #: whatever the wait says, which is what makes an unbounded spelling drivable at all.
 SETTLED_RUN = "gate-parity-2"
+#: The watcher records a live `onepipeline watch` writes and removes inside a run it
+#: watches. Other journeys watch the checked-in recordings in place, so a copy taken
+#: while one runs can meet a record that vanishes mid-copy; none is ever checked in.
+LIVE_WATCHERS = shutil.ignore_patterns("watchers")
 
 
 #: What tells an accepted value from a refused one, without reading either's words. A
@@ -567,7 +571,7 @@ def test_a_run_that_changes_under_a_waiting_watch_ends_it_at_the_status_the_rule
     the queued surface can end the wait only as a change.
     """
     runs = tmp_path / "runs"
-    shutil.copytree(RECORDED_RUNS / NAMED_NODE_RUN, runs / NAMED_NODE_RUN)
+    shutil.copytree(RECORDED_RUNS / NAMED_NODE_RUN, runs / NAMED_NODE_RUN, ignore=LIVE_WATCHERS)
     _claimed_by_a_driver_gone_from_this_host(runs / NAMED_NODE_RUN / "launch.json")
     environment = {**os.environ, "ONEPIPELINE_RUNS_DIR": str(runs)}
     waiting = subprocess.Popen(  # noqa: S603 - the installed engine, as a caller runs it
