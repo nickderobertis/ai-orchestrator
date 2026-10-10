@@ -125,6 +125,31 @@ candidates:
     - lock experiments of seconds each."
 findings:
   - |-
+    **Per-tier profile.** These are deterministic-tier figures, taken from the `just check` phase of `gate-wide-conftest-cold` (cold, every tier missed). They are not complete-gate figures; `results/analysis/profile-*.txt` has every run.
+      - The run produced 6531 per-tier test results summing 8241.4 s. The `shared-checkout-toolchain` group held 594 of them and 3754.0 s.
+      - The tiers over 40 s summed (wall s / tests / summed test s / group s):
+
+        | tier | wall | tests | summed | group |
+        | --- | --- | --- | --- | --- |
+        | `orchestrator-e2e:test` | 1714.5 | 1007 | 2869.0 | 1726.7 |
+        | `plan-tooling:test` | 452.4 | 644 | 1806.6 | 450.3 |
+        | `orchestrator:test-docs` | 723.8 | 507 | 1198.6 | 725.1 |
+        | `orchestrator:test` | 106.4 | 3058 | 694.6 | 0 |
+        | `plan-tooling:test-docs` | 223.5 | 85 | 533.6 | 64.2 |
+        | `writeback-budget:test` | 294.3 | 5 | 296.6 | 296.6 |
+        | `run-end-hooks:test` | 144.3 | 39 | 143.8 | 143.8 |
+        | `orchestrator-e2e:test-recipes` | 48.2 | 377 | 139.4 | 0 |
+        | `unfinished:test` | 84.7 | 52 | 84.5 | 84.5 |
+        | `orchestrator-e2e:test-checkouts` | 27.0 | 62 | 73.1 | 14.9 |
+        | `ask-seam-channel-reply:test` | 70.3 | 14 | 69.7 | 69.7 |
+        | `board-copy-approval:test` | 18.5 | 3 | 48.6 | 0 |
+        | `orchestrator:test-checkouts` | 14.9 | 353 | 48.2 | 0 |
+
+      - **The 30 slowest modules** (summed s / tests): `test_publish_branch_e2e` 945.6/27, `test_nx_cache_scope_e2e` 624.4/27, `test_check_plan_recipe_e2e` 581.4/173, `test_workspace_contract_e2e` 320.0/96, `test_budget_target_e2e` 301.6/8, `test_follow_ups_recipe_e2e` 295.9/93, `test_budget_telemetry_e2e` 287.3/3, `test_onetaskgraph_host_e2e` 262.6/60, `test_plan_spike_flow_e2e` 224.8/30, `test_approve_design_recipe_e2e` 209.6/51, `test_follow_up_tickets` 192.9/698, `test_plan_review_e2e` 169.2/58, `test_orchestrate_launch_e2e` 143.6/69, `test_budgets_files` 142.3/20, `test_follow_ups_answer_comments_recipe_e2e` 130.1/44, `test_adopted_engine_projects_incrementally_e2e` 120.7/1, `test_finish_plan_recipe_e2e` 107.1/29, `test_follow_up_comments` 107.0/42, `test_run_end_hooks_e2e` 102.8/29, `test_monitor_survives_the_channel_e2e` 101.5/7, `test_delegated_recipes_e2e` 99.2/241, `test_repo_registry_apply_e2e` 93.3/109, `test_unfinished_e2e` 89.9/53, `test_follow_ups_comment_answers_e2e` 88.5/28, `test_lineage_item_reuse_e2e` 85.6/1, `test_nx_cache_scope` 79.0/62, `test_monitor_quiet_turn_e2e` 78.2/12, `test_work_status_and_import_e2e` 72.5/4, `test_follow_up_priority` 72.3/123, `test_channel_reply_e2e` 69.7/14.
+      - **How a narrow and a wide gate divide:**
+        - **Narrow, `gate-narrow-script-warm`, 1638.7 s.** `llmlint` 1.0 s, phase 1 1606.9 s, phase 2 28.1 s. Phase 1's critical path was `orchestrator-e2e:test` at 1606.3 s. Beside it on the other two slots ran `orchestrator:test-docs` 829.0 s, `plan-tooling:test` 484.0 s, `plan-tooling:test-docs` 219.6 s, `orchestrator:test` 92.0 s, `orchestrator-e2e:test-recipes` 54.4 s and `orchestrator:lint` 19.9 s.
+        - **Wide, `gate-wide-conftest-cold`, 1943.3 s.** `llmlint` 1.0 s, phase 1 1863.0 s, phase 2 73.3 s, `check-nx-cache` 3.3 s. Phase 1 had 36 tasks; `orchestrator-e2e:test` at 1715.5 s was followed by `run-end-hooks:test` at 147.7 s on the freed slot.
+  - |-
     **Lock mechanism.** Every `uv run` variant takes the exclusive `<root>/.venv/.lock` only while it resolves and syncs, never for the child's lifetime. The evidence is under `results/lock-experiments/`.
       - **`uv run` (plain), `--no-sync` / `UV_NO_SYNC=1`, `--frozen` / `UV_FROZEN=1` and `--locked`** all take the same lock: `flock(.venv/.lock, LOCK_EX)` after a shared lock on `~/.cache/uv/.lock`. They hold it 2-20 ms when the environment is in sync, then `execve` the child after releasing it. The cache lock stays shared for the child's lifetime, which blocks only `uv cache clean`/`prune`, never a reader.
       - **Blocking behaviour.** While the `.venv` lock is held, every one of those readers blocks (5.4-5.5 s against a held lock, versus 0.03-0.10 s unheld, `matrix-envlock.txt`). `--no-sync` and `--frozen` still lock.
