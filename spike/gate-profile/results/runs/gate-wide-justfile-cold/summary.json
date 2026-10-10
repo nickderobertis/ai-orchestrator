@@ -1,0 +1,1934 @@
+{
+  "mode": "gate",
+  "label": "gate-wide-justfile-cold",
+  "base_commit": "3b6a1ef79ff3953763fcf644c496c5d6a9248e36",
+  "measured_head": "0ba02cf2c483c49518c9c704de388df6f9261964",
+  "tree": "c0ba630b9720e6d72e0f077ceebab4e3040b51c3",
+  "edit": "wide-justfile",
+  "edit_spec": "justfile:7",
+  "cache_state": "cold",
+  "comparison_base": "spikebase/main@3b6a1ef79ff3953763fcf644c496c5d6a9248e36",
+  "nx_cache_dir": "/home/nick.guest/.cache/gate-profile-spike/xdg/ai-orchestrator/nx/756e79f93796751d",
+  "nx_cache_entries_before_seed": 73,
+  "nx_cache_entries_at_start": 4,
+  "uv": "uv 0.11.32 (aarch64-unknown-linux-gnu)",
+  "nx": "v23.1.0",
+  "llmlint": "llmlint 0.4.7",
+  "llmlint_fingerprint_sha256_16": "f8415a2fd16a02f4",
+  "exit_status": 1,
+  "cmd": [
+    "just",
+    "gate",
+    "spikebase",
+    "main"
+  ],
+  "started_at": "2026-10-10T04:28:35.809250+00:00",
+  "wall_clock_s": 3482.0,
+  "host": {
+    "load1_max": 11.89,
+    "load1_mean": 5.12,
+    "load1_samples": 667,
+    "dispatches_max": "unknown",
+    "dispatches_proven_max": 1,
+    "dispatches_samples": [
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      }
+    ]
+  },
+  "gate_phases": {
+    "method": "validate ends at its log's last write; the judged-lint phase ends at its log's last write; `just check` from its process start to the gate's exit",
+    "llmlint_validate_s": 0.3,
+    "lint_llm_diff_s": 0.4,
+    "handoff_s": 0.3,
+    "just_check_s": 3481.0
+  },
+  "phases": [
+    {
+      "kind": "just",
+      "label": "lint-llm-diff",
+      "start_offset_s": 0.5,
+      "duration_s": 0.0
+    },
+    {
+      "kind": "nx",
+      "label": "lint-llm-diff run workspace:lint-llm-diff",
+      "start_offset_s": 0.5,
+      "duration_s": 0.0
+    },
+    {
+      "kind": "nx",
+      "label": "lint-llm-diff run workspace:lint-llm-diff",
+      "start_offset_s": 0.5,
+      "duration_s": 0.0
+    },
+    {
+      "kind": "just",
+      "label": "check",
+      "start_offset_s": 1.0,
+      "duration_s": 3480.5
+    },
+    {
+      "kind": "nx",
+      "label": "check affected --base spikebase/main -t format-check,lint,typecheck,test,test-docs,test-recipes,budgets",
+      "start_offset_s": 1.0,
+      "duration_s": 1900.1
+    },
+    {
+      "kind": "nx",
+      "label": "check affected --base spikebase/main -t format-check,lint,typecheck,test,test-docs,test-recipes,budgets",
+      "start_offset_s": 1.0,
+      "duration_s": 1900.1
+    },
+    {
+      "kind": "nx",
+      "label": "check run-many -t test-checkouts,coverage,validate-budgets,budgets-host",
+      "start_offset_s": 1901.6,
+      "duration_s": 1578.9
+    },
+    {
+      "kind": "nx",
+      "label": "check run-many -t test-checkouts,coverage,validate-budgets,budgets-host",
+      "start_offset_s": 1901.6,
+      "duration_s": 1578.9
+    },
+    {
+      "kind": "nx",
+      "label": "check run workspace:check-nx-cache",
+      "start_offset_s": 3481.0,
+      "duration_s": 0.5
+    },
+    {
+      "kind": "nx",
+      "label": "check run workspace:check-nx-cache",
+      "start_offset_s": 3481.5,
+      "duration_s": 0.0
+    }
+  ],
+  "lint_llm_diff_provenance": "lint-llm-diff: replayed the recorded verdict for base 3b6a1ef79ff3953763fcf644c496c5d6a9248e36 (Nx cache hit)",
+  "nx_runs": [
+    {
+      "invocation": "lint-llm-diff run workspace:lint-llm-diff",
+      "command": "nx run workspace:lint-llm-diff",
+      "start_offset_s": 0.7,
+      "duration_s": 0.0,
+      "tasks": [
+        {
+          "task": "workspace:lint-llm-diff",
+          "cache": "local-cache-hit",
+          "status": 0,
+          "start_offset_s": 0.7,
+          "duration_s": 0.0
+        }
+      ],
+      "snapshot": "1791606516.611-90563a6e.json"
+    },
+    {
+      "invocation": "check affected --base spikebase/main -t format-check,lint,typecheck,test,test-docs,test-recipes,budgets",
+      "command": "nx affected --base spikebase/main -t format-check,lint,typecheck,test,test-docs,test-recipes,budgets",
+      "start_offset_s": 1.0,
+      "duration_s": 1900.0,
+      "tasks": [
+        {
+          "task": "unfinished:budgets",
+          "cache": "local-cache-hit",
+          "status": 0,
+          "start_offset_s": 1.1,
+          "duration_s": 0.0
+        },
+        {
+          "task": "plan-tooling:test",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1.1,
+          "duration_s": 445.6
+        },
+        {
+          "task": "plan-tooling:test-docs",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 446.6,
+          "duration_s": 210.4
+        },
+        {
+          "task": "orchestrator:test-docs",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1.1,
+          "duration_s": 845.8
+        },
+        {
+          "task": "writeback-budget:test",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 657.1,
+          "duration_s": 295.9
+        },
+        {
+          "task": "orchestrator:test",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 846.8,
+          "duration_s": 114.6
+        },
+        {
+          "task": "ask-seam-channel-reply:test",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 961.6,
+          "duration_s": 65.8
+        },
+        {
+          "task": "unfinished:test",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 953.0,
+          "duration_s": 88.8
+        },
+        {
+          "task": "orchestrator-e2e:test-recipes",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1027.4,
+          "duration_s": 37.3
+        },
+        {
+          "task": "ask-seam-ask-manager:test",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1041.8,
+          "duration_s": 35.3
+        },
+        {
+          "task": "host-views:test",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1077.1,
+          "duration_s": 16.8
+        },
+        {
+          "task": "ask-seam-launch:test",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1064.7,
+          "duration_s": 37.8
+        },
+        {
+          "task": "graceful-cancel:test",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1093.9,
+          "duration_s": 25.2
+        },
+        {
+          "task": "board-copy-approval:test",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1102.6,
+          "duration_s": 20.5
+        },
+        {
+          "task": "session-open-conflict:test",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1119.2,
+          "duration_s": 19.8
+        },
+        {
+          "task": "orchestrator:lint",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1123.1,
+          "duration_s": 22.0
+        },
+        {
+          "task": "render-diagram:test",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1139.0,
+          "duration_s": 18.3
+        },
+        {
+          "task": "ask-seam-planner-fallback-ask:test",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1145.1,
+          "duration_s": 16.6
+        },
+        {
+          "task": "unwatched:test",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1157.2,
+          "duration_s": 11.9
+        },
+        {
+          "task": "unpublished-view:test",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1161.8,
+          "duration_s": 11.5
+        },
+        {
+          "task": "ask-seam-structural-reply:test",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1169.1,
+          "duration_s": 8.1
+        },
+        {
+          "task": "merge-policy:test",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1173.2,
+          "duration_s": 6.3
+        },
+        {
+          "task": "ask-seam-settled-correlated-ruling:test",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1177.3,
+          "duration_s": 6.2
+        },
+        {
+          "task": "host-sweep:test",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1179.5,
+          "duration_s": 7.0
+        },
+        {
+          "task": "ask-seam-follow-up-drafts-launch:test",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1183.4,
+          "duration_s": 6.2
+        },
+        {
+          "task": "manager-allowlist:test",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1186.5,
+          "duration_s": 4.8
+        },
+        {
+          "task": "orchestrator:test-recipes",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1191.4,
+          "duration_s": 2.6
+        },
+        {
+          "task": "orchestrator:typecheck",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1194.2,
+          "duration_s": 0.2
+        },
+        {
+          "task": "orchestrator:format-check",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1194.4,
+          "duration_s": 0.1
+        },
+        {
+          "task": "dag-ui:test",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1189.6,
+          "duration_s": 4.9
+        },
+        {
+          "task": "orchestrator-e2e:test",
+          "cache": "cache-miss",
+          "status": 1,
+          "start_offset_s": 1.1,
+          "duration_s": 1760.0
+        },
+        {
+          "task": "run-end-hooks:test",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1761.1,
+          "duration_s": 139.9
+        }
+      ],
+      "snapshot": "1791608416.953-d67b10e6.json"
+    },
+    {
+      "invocation": "check run-many -t test-checkouts,coverage,validate-budgets,budgets-host",
+      "command": "nx run-many -t test-checkouts,coverage,validate-budgets,budgets-host",
+      "start_offset_s": 1901.7,
+      "duration_s": 1579.3,
+      "tasks": [
+        {
+          "task": "orchestrator:test",
+          "cache": "local-cache-hit",
+          "status": 0,
+          "start_offset_s": 1901.7,
+          "duration_s": 0.0
+        },
+        {
+          "task": "unfinished:test-host",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1901.7,
+          "duration_s": 6.2
+        },
+        {
+          "task": "orchestrator:test-checkouts",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1907.9,
+          "duration_s": 13.0
+        },
+        {
+          "task": "unfinished:budgets-host",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1921.0,
+          "duration_s": 0.2
+        },
+        {
+          "task": "workspace:validate-budgets",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1921.1,
+          "duration_s": 0.0
+        },
+        {
+          "task": "orchestrator:budgets-host",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1921.2,
+          "duration_s": 0.0
+        },
+        {
+          "task": "orchestrator-e2e:test-checkouts",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1901.7,
+          "duration_s": 24.6
+        },
+        {
+          "task": "orchestrator-e2e:test",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 1901.7,
+          "duration_s": 1578.5
+        },
+        {
+          "task": "orchestrator:coverage",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 3480.3,
+          "duration_s": 0.7
+        }
+      ],
+      "snapshot": "1791609996.863-b5f65fd8.json"
+    },
+    {
+      "invocation": "check run workspace:check-nx-cache",
+      "command": "nx run workspace:check-nx-cache",
+      "start_offset_s": 3481.9,
+      "duration_s": 0.0,
+      "tasks": [
+        {
+          "task": "workspace:check-nx-cache",
+          "cache": "local-cache-hit",
+          "status": 0,
+          "start_offset_s": 3481.9,
+          "duration_s": 0.0
+        }
+      ],
+      "snapshot": "1791609997.867-a402ce79.json"
+    }
+  ],
+  "pytest_tiers": {
+    "ask-seam-ask-manager:test": {
+      "wall_clock_s": 34.1,
+      "exitstatus": 0,
+      "tests": 17,
+      "summed_test_s": 33.2,
+      "group_s": {
+        "shared-checkout-toolchain": 33.2
+      },
+      "group_tests": {
+        "shared-checkout-toolchain": 17
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/ask_seam/ask_manager/test_ask_manager_e2e.py",
+          33.2
+        ]
+      ]
+    },
+    "ask-seam-channel-reply:test": {
+      "wall_clock_s": 63.8,
+      "exitstatus": 0,
+      "tests": 14,
+      "summed_test_s": 63.5,
+      "group_s": {
+        "shared-checkout-toolchain": 63.5
+      },
+      "group_tests": {
+        "shared-checkout-toolchain": 14
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/ask_seam/channel_reply/test_channel_reply_e2e.py",
+          63.5
+        ]
+      ]
+    },
+    "ask-seam-follow-up-drafts-launch:test": {
+      "wall_clock_s": 5.3,
+      "exitstatus": 0,
+      "tests": 6,
+      "summed_test_s": 4.1,
+      "group_s": {
+        "shared-checkout-toolchain": 4.1
+      },
+      "group_tests": {
+        "shared-checkout-toolchain": 6
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/ask_seam/follow_up_drafts_launch/test_follow_up_drafts_launch_e2e.py",
+          4.1
+        ]
+      ]
+    },
+    "ask-seam-launch:test": {
+      "wall_clock_s": 37.1,
+      "exitstatus": 0,
+      "tests": 67,
+      "summed_test_s": 36.4,
+      "group_s": {
+        "shared-checkout-toolchain": 36.4
+      },
+      "group_tests": {
+        "shared-checkout-toolchain": 67
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/ask_seam/launch/test_launch_ask_seam_e2e.py",
+          36.4
+        ]
+      ]
+    },
+    "ask-seam-planner-fallback-ask:test": {
+      "wall_clock_s": 15.4,
+      "exitstatus": 0,
+      "tests": 2,
+      "summed_test_s": 14.2,
+      "group_s": {
+        "shared-checkout-toolchain": 14.2
+      },
+      "group_tests": {
+        "shared-checkout-toolchain": 2
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/ask_seam/planner_fallback_ask/test_planner_fallback_ask_e2e.py",
+          14.2
+        ]
+      ]
+    },
+    "ask-seam-settled-correlated-ruling:test": {
+      "wall_clock_s": 5.2,
+      "exitstatus": 0,
+      "tests": 1,
+      "summed_test_s": 4.1,
+      "group_s": {
+        "shared-checkout-toolchain": 4.1
+      },
+      "group_tests": {
+        "shared-checkout-toolchain": 1
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/ask_seam/settled_correlated_ruling/test_settled_correlated_ruling_e2e.py",
+          4.1
+        ]
+      ]
+    },
+    "ask-seam-structural-reply:test": {
+      "wall_clock_s": 7.1,
+      "exitstatus": 0,
+      "tests": 1,
+      "summed_test_s": 5.9,
+      "group_s": {
+        "shared-checkout-toolchain": 5.9
+      },
+      "group_tests": {
+        "shared-checkout-toolchain": 1
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/ask_seam/structural_reply/test_structural_reply_e2e.py",
+          5.9
+        ]
+      ]
+    },
+    "board-copy-approval:test": {
+      "wall_clock_s": 19.5,
+      "exitstatus": 0,
+      "tests": 3,
+      "summed_test_s": 50.3,
+      "group_s": {
+        "None": 50.3
+      },
+      "group_tests": {
+        "None": 3
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/e2e/board_copy_approval/test_board_copy_design_approval_e2e.py",
+          31.8
+        ],
+        [
+          "tests/e2e/board_copy_approval/test_board_copy_spike_evidence_e2e.py",
+          18.5
+        ]
+      ]
+    },
+    "dag-ui:test": {
+      "wall_clock_s": 4.0,
+      "exitstatus": 0,
+      "tests": 19,
+      "summed_test_s": 2.6,
+      "group_s": {
+        "shared-checkout-toolchain": 2.6
+      },
+      "group_tests": {
+        "shared-checkout-toolchain": 19
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/dag_ui/test_dag_ui_serving_e2e.py",
+          2.6
+        ]
+      ]
+    },
+    "graceful-cancel:test": {
+      "wall_clock_s": 24.1,
+      "exitstatus": 0,
+      "tests": 1,
+      "summed_test_s": 22.6,
+      "group_s": {
+        "shared-checkout-toolchain": 22.6
+      },
+      "group_tests": {
+        "shared-checkout-toolchain": 1
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/graceful_cancel/test_graceful_cancel_e2e.py",
+          22.6
+        ]
+      ]
+    },
+    "host-sweep:test": {
+      "wall_clock_s": 5.7,
+      "exitstatus": 0,
+      "tests": 41,
+      "summed_test_s": 17.0,
+      "group_s": {
+        "None": 17.0
+      },
+      "group_tests": {
+        "None": 41
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/host_sweep/test_host_sweep_e2e.py",
+          17.0
+        ]
+      ]
+    },
+    "host-views:test": {
+      "wall_clock_s": 14.1,
+      "exitstatus": 0,
+      "tests": 8,
+      "summed_test_s": 30.5,
+      "group_s": {
+        "None": 30.5
+      },
+      "group_tests": {
+        "None": 8
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/host_views/test_status_and_host_views_e2e.py",
+          30.5
+        ]
+      ]
+    },
+    "manager-allowlist:test": {
+      "wall_clock_s": 4.0,
+      "exitstatus": 0,
+      "tests": 65,
+      "summed_test_s": 11.6,
+      "group_s": {
+        "None": 11.6
+      },
+      "group_tests": {
+        "None": 65
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/manager_allowlist/test_manager_allowlist_recipes_e2e.py",
+          11.6
+        ],
+        [
+          "tests/manager_allowlist/test_manager_allowlist_sync.py",
+          0.0
+        ]
+      ]
+    },
+    "merge-policy:test": {
+      "wall_clock_s": 5.6,
+      "exitstatus": 0,
+      "tests": 4,
+      "summed_test_s": 4.7,
+      "group_s": {
+        "shared-checkout-toolchain": 4.7
+      },
+      "group_tests": {
+        "shared-checkout-toolchain": 4
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/merge_policy/test_merge_policy_vocabulary_e2e.py",
+          4.7
+        ]
+      ]
+    },
+    "orchestrator-e2e:test-checkouts": {
+      "wall_clock_s": 23.8,
+      "exitstatus": 0,
+      "tests": 62,
+      "summed_test_s": 66.4,
+      "group_s": {
+        "None": 35.4,
+        "shared-checkout-toolchain": 14.5,
+        "redispatch-published-tip": 11.8,
+        "lost-turn-wire-contract": 3.6,
+        "persona-review-bar": 1.0
+      },
+      "group_tests": {
+        "shared-checkout-toolchain": 4,
+        "None": 52,
+        "redispatch-published-tip": 4,
+        "lost-turn-wire-contract": 1,
+        "persona-review-bar": 1
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/e2e/test_merge_path_audit_e2e.py",
+          27.8
+        ],
+        [
+          "tests/e2e/test_watch_selector_e2e.py",
+          14.5
+        ],
+        [
+          "tests/e2e/test_redispatch_names_the_published_tip_e2e.py",
+          11.8
+        ],
+        [
+          "tests/e2e/test_release_adoption_in_force_e2e.py",
+          3.8
+        ],
+        [
+          "tests/e2e/test_lost_turn_wire_contract_e2e.py",
+          3.6
+        ],
+        [
+          "tests/e2e/test_adopted_cli_fixes_e2e.py",
+          1.9
+        ],
+        [
+          "tests/e2e/test_persona_review_bar_e2e.py",
+          1.0
+        ],
+        [
+          "tests/e2e/test_controlled_turn_model_e2e.py",
+          0.7
+        ],
+        [
+          "tests/e2e/test_watch_recipe_e2e.py",
+          0.7
+        ],
+        [
+          "tests/e2e/test_judge_panel_e2e.py",
+          0.3
+        ],
+        [
+          "tests/e2e/test_onetaskgraph_host_e2e.py",
+          0.1
+        ],
+        [
+          "tests/e2e/test_commit_msg_hook_e2e.py",
+          0.0
+        ],
+        [
+          "tests/e2e/test_template_layers_e2e.py",
+          0.0
+        ]
+      ]
+    },
+    "orchestrator-e2e:test-recipes": {
+      "wall_clock_s": 36.5,
+      "exitstatus": 0,
+      "tests": 377,
+      "summed_test_s": 134.3,
+      "group_s": {
+        "None": 134.3
+      },
+      "group_tests": {
+        "None": 377
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/e2e/test_delegated_recipes_e2e.py",
+          101.3
+        ],
+        [
+          "tests/e2e/test_workspace_contract_e2e.py",
+          18.5
+        ],
+        [
+          "tests/e2e/test_repos_bootstrap_e2e.py",
+          11.6
+        ],
+        [
+          "tests/e2e/test_ask_manager_shim_e2e.py",
+          2.3
+        ],
+        [
+          "tests/e2e/test_setup_llmlint_e2e.py",
+          0.4
+        ],
+        [
+          "tests/e2e/test_base_freshness_e2e.py",
+          0.2
+        ],
+        [
+          "tests/e2e/test_just_tempdir_e2e.py",
+          0.1
+        ]
+      ]
+    },
+    "orchestrator-e2e:test": {
+      "wall_clock_s": 1758.9,
+      "exitstatus": 1,
+      "tests": 1007,
+      "summed_test_s": 5500.3,
+      "group_s": {
+        "shared-checkout-toolchain": 3365.1,
+        "None": 1160.6,
+        "monitor-survives-the-channel": 193.0,
+        "session-reuse-retry": 85.9,
+        "live-note-busy-turn": 75.1,
+        "supervisory-prompts": 63.4,
+        "observer-graph-liveness": 61.2,
+        "monitor-quiet-turn": 58.3,
+        "monitor-lost-turn": 53.8,
+        "monitor-cursor": 52.1,
+        "human-readable-branch": 50.1,
+        "worker-start-directory": 49.8,
+        "repositories-field-dispatch": 48.9,
+        "budget-capabilities": 40.7,
+        "monitor-judge-side": 40.3,
+        "orchestrate-launch": 37.8,
+        "cancellation": 18.6,
+        "verdict-recipes": 15.7,
+        "plan-recipe": 12.1,
+        "observer-environment": 8.1,
+        "monitor-scored-by-the-planner": 5.5,
+        "monitor-ops": 3.0,
+        "persona-review-bar": 0.5,
+        "design-doc-graph": 0.4,
+        "path-dispatched-personas": 0.3
+      },
+      "group_tests": {
+        "shared-checkout-toolchain": 57,
+        "monitor-judge-side": 10,
+        "plan-recipe": 7,
+        "repositories-field-dispatch": 4,
+        "worker-start-directory": 4,
+        "live-note-busy-turn": 3,
+        "None": 846,
+        "monitor-cursor": 1,
+        "monitor-quiet-turn": 1,
+        "monitor-lost-turn": 1,
+        "supervisory-prompts": 13,
+        "session-reuse-retry": 4,
+        "human-readable-branch": 3,
+        "monitor-ops": 3,
+        "observer-environment": 3,
+        "verdict-recipes": 3,
+        "design-doc-graph": 2,
+        "cancellation": 2,
+        "path-dispatched-personas": 2,
+        "persona-review-bar": 1,
+        "orchestrate-launch": 21,
+        "budget-capabilities": 8,
+        "monitor-survives-the-channel": 6,
+        "monitor-scored-by-the-planner": 1,
+        "observer-graph-liveness": 1
+      },
+      "failures": [
+        "tests/e2e/test_gate_time_budget_e2e.py::test_a_host_variable_over_beside_a_strict_over_is_still_refused"
+      ],
+      "slowest_modules": [
+        [
+          "tests/e2e/test_publish_branch_e2e.py",
+          1803.1
+        ],
+        [
+          "tests/e2e/test_budget_target_e2e.py",
+          601.1
+        ],
+        [
+          "tests/e2e/test_budget_telemetry_e2e.py",
+          589.7
+        ],
+        [
+          "tests/e2e/test_onetaskgraph_host_e2e.py",
+          471.3
+        ],
+        [
+          "tests/e2e/test_monitor_survives_the_channel_e2e.py",
+          198.5
+        ],
+        [
+          "tests/e2e/test_repo_registry_apply_e2e.py",
+          184.7
+        ],
+        [
+          "tests/e2e/test_orchestrate_launch_e2e.py",
+          174.0
+        ],
+        [
+          "tests/e2e/test_monitor_quiet_turn_e2e.py",
+          152.4
+        ],
+        [
+          "tests/e2e/test_extends_chain_dispatch_e2e.py",
+          125.8
+        ],
+        [
+          "tests/e2e/test_parked_run_is_driven_e2e.py",
+          122.9
+        ],
+        [
+          "tests/e2e/test_work_status_and_import_e2e.py",
+          121.1
+        ],
+        [
+          "tests/e2e/test_plan_recipe_e2e.py",
+          96.7
+        ],
+        [
+          "tests/e2e/test_session_reuse_retry_e2e.py",
+          85.9
+        ],
+        [
+          "tests/e2e/test_gate_time_budget_e2e.py",
+          84.2
+        ],
+        [
+          "tests/e2e/test_live_note_leaves_the_run_journalling_e2e.py",
+          75.1
+        ],
+        [
+          "tests/e2e/test_supervisory_prompt_discipline_e2e.py",
+          63.4
+        ],
+        [
+          "tests/e2e/test_observer_graph_liveness_e2e.py",
+          61.2
+        ],
+        [
+          "tests/e2e/test_monitor_cursor_e2e.py",
+          52.1
+        ],
+        [
+          "tests/e2e/test_human_readable_branch_e2e.py",
+          50.1
+        ],
+        [
+          "tests/e2e/test_worker_start_directory_e2e.py",
+          49.8
+        ],
+        [
+          "tests/e2e/test_repositories_field_dispatch_e2e.py",
+          48.9
+        ],
+        [
+          "tests/e2e/test_budget_capabilities_adopted_e2e.py",
+          40.7
+        ],
+        [
+          "tests/e2e/test_shipped_persona_catalog_e2e.py",
+          34.6
+        ],
+        [
+          "tests/e2e/test_adopted_engine_reads_an_adopted_run_e2e.py",
+          31.4
+        ],
+        [
+          "tests/e2e/test_launch_walks_no_host_identity_e2e.py",
+          30.1
+        ],
+        [
+          "tests/e2e/test_adopted_engine_settles_and_logs_e2e.py",
+          24.6
+        ],
+        [
+          "tests/e2e/test_reparent_waiting_human_adopted_e2e.py",
+          24.3
+        ],
+        [
+          "tests/e2e/test_dispatch_environment_e2e.py",
+          16.1
+        ],
+        [
+          "tests/e2e/test_oneharness_timeout_e2e.py",
+          13.0
+        ],
+        [
+          "tests/e2e/test_session_labels_e2e.py",
+          12.6
+        ]
+      ]
+    },
+    "orchestrator:test-checkouts": {
+      "wall_clock_s": 12.4,
+      "exitstatus": 0,
+      "tests": 353,
+      "summed_test_s": 41.9,
+      "group_s": {
+        "None": 41.9
+      },
+      "group_tests": {
+        "None": 353
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/test_registry_resolution.py",
+          17.1
+        ],
+        [
+          "tests/test_persona_identifier_drift.py",
+          7.6
+        ],
+        [
+          "tests/test_engine_contracts.py",
+          4.3
+        ],
+        [
+          "tests/test_publication_guard.py",
+          4.2
+        ],
+        [
+          "tests/test_adoption_guard.py",
+          3.2
+        ],
+        [
+          "tests/test_watch_surface_drift.py",
+          1.9
+        ],
+        [
+          "tests/test_credential_dialect_drift.py",
+          0.8
+        ],
+        [
+          "tests/test_command_ceiling_providers.py",
+          0.8
+        ],
+        [
+          "tests/test_adopted_engine_carries_this_plan.py",
+          0.5
+        ],
+        [
+          "tests/test_linked_libraries.py",
+          0.3
+        ],
+        [
+          "tests/test_workspaces_file.py",
+          0.2
+        ],
+        [
+          "tests/test_task_body.py",
+          0.2
+        ],
+        [
+          "tests/test_plan_source_roots.py",
+          0.1
+        ],
+        [
+          "tests/test_watch_and_release_reading_guidance.py",
+          0.1
+        ],
+        [
+          "tests/test_ui_api_contract.py",
+          0.1
+        ],
+        [
+          "tests/test_host_installs.py",
+          0.1
+        ],
+        [
+          "tests/test_engine_history_vocabulary.py",
+          0.0
+        ],
+        [
+          "tests/test_recoverable_repo_surface.py",
+          0.0
+        ],
+        [
+          "tests/test_run_reading.py",
+          0.0
+        ],
+        [
+          "tests/test_design_approval.py",
+          0.0
+        ],
+        [
+          "tests/test_persona_recipe_drift.py",
+          0.0
+        ],
+        [
+          "tests/test_planner_channel_personas.py",
+          0.0
+        ],
+        [
+          "tests/test_llmlint_release_pin.py",
+          0.0
+        ],
+        [
+          "tests/test_short_state_budget.py",
+          0.0
+        ],
+        [
+          "tests/test_follow_up_tickets.py",
+          0.0
+        ]
+      ]
+    },
+    "orchestrator:test-docs": {
+      "wall_clock_s": 844.8,
+      "exitstatus": 0,
+      "tests": 507,
+      "summed_test_s": 1195.0,
+      "group_s": {
+        "shared-checkout-toolchain": 852.8,
+        "None": 317.2,
+        "orchestrate-launch": 12.2,
+        "dispatched-operational-notes": 7.6,
+        "plan-recipe": 5.1
+      },
+      "group_tests": {
+        "shared-checkout-toolchain": 72,
+        "None": 420,
+        "plan-recipe": 1,
+        "orchestrate-launch": 1,
+        "dispatched-operational-notes": 13
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/e2e/test_nx_cache_scope_e2e.py",
+          756.8
+        ],
+        [
+          "tests/test_nx_cache_scope.py",
+          229.2
+        ],
+        [
+          "tests/e2e/test_orchestrate_launch_e2e.py",
+          48.5
+        ],
+        [
+          "tests/e2e/test_llmlint_cache_e2e.py",
+          42.0
+        ],
+        [
+          "tests/e2e/test_graph_overrides_dispatch_e2e.py",
+          38.5
+        ],
+        [
+          "tests/e2e/test_workspace_contract_e2e.py",
+          18.4
+        ],
+        [
+          "tests/e2e/test_llmlint_two_path_verdict_e2e.py",
+          11.5
+        ],
+        [
+          "tests/e2e/test_plan_recipe_e2e.py",
+          8.3
+        ],
+        [
+          "tests/e2e/test_dispatched_operational_notes_e2e.py",
+          7.6
+        ],
+        [
+          "tests/e2e/test_legacy_runs_root_e2e.py",
+          7.3
+        ],
+        [
+          "tests/e2e/test_driver_death_is_recoverable_e2e.py",
+          6.6
+        ],
+        [
+          "tests/test_smoke_selector.py",
+          4.6
+        ],
+        [
+          "tests/test_follow_up_tickets.py",
+          4.6
+        ],
+        [
+          "tests/e2e/test_commit_msg_hook_e2e.py",
+          2.3
+        ],
+        [
+          "tests/test_typed_sdks.py",
+          2.1
+        ],
+        [
+          "tests/test_design_approval.py",
+          1.8
+        ],
+        [
+          "tests/test_plan_review.py",
+          1.6
+        ],
+        [
+          "tests/test_cli_surface_drift.py",
+          1.1
+        ],
+        [
+          "tests/test_decomposition_guidance.py",
+          0.6
+        ],
+        [
+          "tests/test_project_boundaries.py",
+          0.5
+        ],
+        [
+          "tests/test_plan_store_guidance.py",
+          0.1
+        ],
+        [
+          "tests/test_tracked_path_references.py",
+          0.1
+        ],
+        [
+          "tests/test_plan_budgets_template.py",
+          0.1
+        ],
+        [
+          "tests/test_claude_identity_docs_drift.py",
+          0.1
+        ],
+        [
+          "tests/test_dispatch_appendix.py",
+          0.1
+        ],
+        [
+          "tests/test_onejudge_version.py",
+          0.1
+        ],
+        [
+          "tests/test_upstream_workaround_rule.py",
+          0.0
+        ],
+        [
+          "tests/e2e/test_oneharness_history_segments_e2e.py",
+          0.0
+        ],
+        [
+          "tests/test_envelope_review.py",
+          0.0
+        ],
+        [
+          "tests/test_follow_up_ticket_docs.py",
+          0.0
+        ]
+      ]
+    },
+    "orchestrator:test-recipes": {
+      "wall_clock_s": 1.8,
+      "exitstatus": 0,
+      "tests": 19,
+      "summed_test_s": 0.1,
+      "group_s": {
+        "None": 0.1
+      },
+      "group_tests": {
+        "None": 19
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/test_launcher_session.py",
+          0.1
+        ]
+      ]
+    },
+    "orchestrator:test": {
+      "wall_clock_s": 113.6,
+      "exitstatus": 0,
+      "tests": 3058,
+      "summed_test_s": 446.3,
+      "group_s": {
+        "None": 446.3
+      },
+      "group_tests": {
+        "None": 3058
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/test_follow_up_tickets.py",
+          133.0
+        ],
+        [
+          "tests/test_budgets_files.py",
+          83.9
+        ],
+        [
+          "tests/test_follow_up_comments.py",
+          53.0
+        ],
+        [
+          "tests/test_follow_up_priority.py",
+          44.5
+        ],
+        [
+          "tests/test_coverage_gate.py",
+          28.7
+        ],
+        [
+          "tests/test_plan_budgets.py",
+          28.2
+        ],
+        [
+          "tests/test_unpublished.py",
+          10.0
+        ],
+        [
+          "tests/test_spike_flow.py",
+          7.8
+        ],
+        [
+          "tests/test_plan_store_sdk.py",
+          6.5
+        ],
+        [
+          "tests/test_unfinished.py",
+          4.6
+        ],
+        [
+          "tests/test_sibling_drift.py",
+          4.4
+        ],
+        [
+          "tests/test_plan_store_pages.py",
+          4.4
+        ],
+        [
+          "tests/test_adoption_guard.py",
+          3.8
+        ],
+        [
+          "tests/test_publication_guard.py",
+          3.5
+        ],
+        [
+          "tests/test_plan_review.py",
+          3.4
+        ],
+        [
+          "tests/test_dispatch_environment_contract.py",
+          3.1
+        ],
+        [
+          "tests/test_plan_check.py",
+          2.5
+        ],
+        [
+          "tests/test_host_installs.py",
+          2.4
+        ],
+        [
+          "tests/test_envelope_review.py",
+          2.1
+        ],
+        [
+          "tests/test_criteria_guard.py",
+          2.1
+        ],
+        [
+          "tests/test_onemessagebus_config.py",
+          1.6
+        ],
+        [
+          "tests/test_budget_telemetry.py",
+          1.5
+        ],
+        [
+          "tests/test_labels.py",
+          1.4
+        ],
+        [
+          "tests/test_design_approval.py",
+          1.1
+        ],
+        [
+          "tests/test_task_body.py",
+          1.0
+        ],
+        [
+          "tests/test_session_setup.py",
+          0.9
+        ],
+        [
+          "tests/test_spike_branches.py",
+          0.9
+        ],
+        [
+          "tests/test_design_doc_template.py",
+          0.6
+        ],
+        [
+          "tests/test_follow_ups_launch_sites.py",
+          0.5
+        ],
+        [
+          "tests/test_fixture_history_lifetime.py",
+          0.5
+        ]
+      ]
+    },
+    "plan-tooling:test-docs": {
+      "wall_clock_s": 208.6,
+      "exitstatus": 0,
+      "tests": 85,
+      "summed_test_s": 500.5,
+      "group_s": {
+        "plan-spike-flow": 210.0,
+        "linear-routed": 66.9,
+        "finish-plan": 59.3,
+        "shared-checkout-toolchain": 59.1,
+        "linear-follow-ups": 45.1,
+        "None": 39.6,
+        "plan-flow": 12.6,
+        "finish-plan-diagram": 7.8
+      },
+      "group_tests": {
+        "shared-checkout-toolchain": 8,
+        "plan-flow": 2,
+        "None": 23,
+        "linear-follow-ups": 7,
+        "linear-routed": 3,
+        "finish-plan": 8,
+        "finish-plan-diagram": 4,
+        "plan-spike-flow": 30
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/plan_tooling/test_plan_spike_flow_e2e.py",
+          210.0
+        ],
+        [
+          "tests/plan_tooling/test_linear_routed_plans_e2e.py",
+          66.9
+        ],
+        [
+          "tests/plan_tooling/test_follow_ups_recipe_e2e.py",
+          59.1
+        ],
+        [
+          "tests/plan_tooling/test_finish_plan_budgets_e2e.py",
+          55.3
+        ],
+        [
+          "tests/plan_tooling/test_linear_routed_follow_ups_e2e.py",
+          45.1
+        ],
+        [
+          "tests/plan_tooling/test_plan_review_e2e.py",
+          23.8
+        ],
+        [
+          "tests/plan_tooling/test_shipped_examples_check_plan_e2e.py",
+          15.2
+        ],
+        [
+          "tests/plan_tooling/test_plan_flow_e2e.py",
+          12.6
+        ],
+        [
+          "tests/plan_tooling/test_finish_plan_diagram_e2e.py",
+          7.8
+        ],
+        [
+          "tests/plan_tooling/test_finish_plan_recipe_e2e.py",
+          4.0
+        ],
+        [
+          "tests/plan_tooling/test_plan_write_refusals_e2e.py",
+          0.5
+        ],
+        [
+          "tests/plan_tooling/test_check_plan_budgets_e2e.py",
+          0.1
+        ]
+      ]
+    },
+    "plan-tooling:test": {
+      "wall_clock_s": 444.8,
+      "exitstatus": 0,
+      "tests": 644,
+      "summed_test_s": 1774.0,
+      "group_s": {
+        "None": 899.9,
+        "shared-checkout-toolchain": 446.8,
+        "approve-design": 194.8,
+        "finish-plan": 105.3,
+        "visual-plan-flow": 37.7,
+        "unwatched-planning": 37.1,
+        "plan-flow": 17.3,
+        "finish-plan-visual": 16.6,
+        "plan-task-template": 14.4,
+        "plan-store-record-shapes": 4.0
+      },
+      "group_tests": {
+        "shared-checkout-toolchain": 157,
+        "None": 375,
+        "finish-plan": 29,
+        "plan-task-template": 5,
+        "approve-design": 50,
+        "plan-flow": 8,
+        "unwatched-planning": 6,
+        "visual-plan-flow": 6,
+        "finish-plan-visual": 5,
+        "plan-store-record-shapes": 3
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/plan_tooling/test_check_plan_recipe_e2e.py",
+          572.0
+        ],
+        [
+          "tests/plan_tooling/test_follow_ups_recipe_e2e.py",
+          239.7
+        ],
+        [
+          "tests/plan_tooling/test_approve_design_recipe_e2e.py",
+          194.8
+        ],
+        [
+          "tests/plan_tooling/test_plan_review_e2e.py",
+          158.9
+        ],
+        [
+          "tests/plan_tooling/test_follow_ups_answer_comments_recipe_e2e.py",
+          127.4
+        ],
+        [
+          "tests/plan_tooling/test_finish_plan_recipe_e2e.py",
+          101.2
+        ],
+        [
+          "tests/plan_tooling/test_follow_ups_comment_answers_e2e.py",
+          79.6
+        ],
+        [
+          "tests/plan_tooling/test_check_plan_budgets_e2e.py",
+          62.5
+        ],
+        [
+          "tests/plan_tooling/test_copy_plan_recipe_e2e.py",
+          49.8
+        ],
+        [
+          "tests/plan_tooling/test_visual_plan_flow_e2e.py",
+          37.7
+        ],
+        [
+          "tests/plan_tooling/test_unwatched_planning_launches_e2e.py",
+          37.1
+        ],
+        [
+          "tests/plan_tooling/test_check_plan_spikes_e2e.py",
+          32.5
+        ],
+        [
+          "tests/plan_tooling/test_plan_flow_e2e.py",
+          17.3
+        ],
+        [
+          "tests/plan_tooling/test_finish_plan_visual_e2e.py",
+          16.6
+        ],
+        [
+          "tests/plan_tooling/test_follow_up_drafts_e2e.py",
+          15.2
+        ],
+        [
+          "tests/plan_tooling/test_plan_task_template_e2e.py",
+          14.4
+        ],
+        [
+          "tests/plan_tooling/test_design_document_body_limit_e2e.py",
+          4.7
+        ],
+        [
+          "tests/plan_tooling/test_finish_plan_budgets_e2e.py",
+          4.1
+        ],
+        [
+          "tests/plan_tooling/test_plan_store_record_shapes_e2e.py",
+          4.0
+        ],
+        [
+          "tests/plan_tooling/test_plan_root_env.py",
+          3.4
+        ],
+        [
+          "tests/plan_tooling/test_task_templates.py",
+          0.5
+        ],
+        [
+          "tests/plan_tooling/test_plan_copy_destination_ids_e2e.py",
+          0.4
+        ]
+      ]
+    },
+    "render-diagram:test": {
+      "wall_clock_s": 17.5,
+      "exitstatus": 0,
+      "tests": 18,
+      "summed_test_s": 17.7,
+      "group_s": {
+        "render-diagram": 17.7
+      },
+      "group_tests": {
+        "render-diagram": 18
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/render_diagram/test_render_diagram_e2e.py",
+          17.7
+        ]
+      ]
+    },
+    "run-end-hooks:test": {
+      "wall_clock_s": 136.7,
+      "exitstatus": 0,
+      "tests": 39,
+      "summed_test_s": 137.4,
+      "group_s": {
+        "shared-checkout-toolchain": 137.4
+      },
+      "group_tests": {
+        "shared-checkout-toolchain": 39
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/run_end_hooks/test_run_end_hooks_e2e.py",
+          101.4
+        ],
+        [
+          "tests/run_end_hooks/test_spike_branch_discard_e2e.py",
+          29.2
+        ],
+        [
+          "tests/run_end_hooks/test_configured_plan_stores_stay_untouched_e2e.py",
+          6.7
+        ]
+      ]
+    },
+    "session-open-conflict:test": {
+      "wall_clock_s": 18.5,
+      "exitstatus": 0,
+      "tests": 4,
+      "summed_test_s": 17.1,
+      "group_s": {
+        "shared-checkout-toolchain": 17.1
+      },
+      "group_tests": {
+        "shared-checkout-toolchain": 4
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/session_open_conflict/test_session_open_conflict_e2e.py",
+          17.1
+        ]
+      ]
+    },
+    "unfinished:test-host": {
+      "wall_clock_s": 5.2,
+      "exitstatus": 0,
+      "tests": 1,
+      "summed_test_s": 4.4,
+      "group_s": {
+        "shared-checkout-toolchain": 4.4
+      },
+      "group_tests": {
+        "shared-checkout-toolchain": 1
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/unfinished/test_unfinished_e2e.py",
+          4.4
+        ]
+      ]
+    },
+    "unfinished:test": {
+      "wall_clock_s": 87.2,
+      "exitstatus": 0,
+      "tests": 52,
+      "summed_test_s": 86.8,
+      "group_s": {
+        "shared-checkout-toolchain": 86.8
+      },
+      "group_tests": {
+        "shared-checkout-toolchain": 52
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/unfinished/test_unfinished_e2e.py",
+          86.8
+        ]
+      ]
+    },
+    "unpublished-view:test": {
+      "wall_clock_s": 10.7,
+      "exitstatus": 0,
+      "tests": 44,
+      "summed_test_s": 9.8,
+      "group_s": {
+        "shared-checkout-toolchain": 9.7,
+        "None": 0.1
+      },
+      "group_tests": {
+        "shared-checkout-toolchain": 39,
+        "None": 5
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/e2e/unpublished_view/test_unpublished_e2e.py",
+          7.8
+        ],
+        [
+          "tests/e2e/unpublished_view/test_superseded_branches_e2e.py",
+          1.3
+        ],
+        [
+          "tests/e2e/unpublished_view/test_unpublished_held_publication_e2e.py",
+          0.7
+        ],
+        [
+          "tests/e2e/unpublished_view/test_unpublished_onevcs_vocabulary.py",
+          0.1
+        ]
+      ]
+    },
+    "unwatched:test": {
+      "wall_clock_s": 11.0,
+      "exitstatus": 0,
+      "tests": 24,
+      "summed_test_s": 9.8,
+      "group_s": {
+        "shared-checkout-toolchain": 9.8
+      },
+      "group_tests": {
+        "shared-checkout-toolchain": 24
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/unwatched/test_unwatched_launch_shapes_e2e.py",
+          6.5
+        ],
+        [
+          "tests/unwatched/test_unwatched_and_stop_hook_e2e.py",
+          3.3
+        ]
+      ]
+    },
+    "writeback-budget:test": {
+      "wall_clock_s": 295.1,
+      "exitstatus": 0,
+      "tests": 5,
+      "summed_test_s": 297.3,
+      "group_s": {
+        "shared-checkout-toolchain": 297.3
+      },
+      "group_tests": {
+        "shared-checkout-toolchain": 5
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/writeback_budget/test_adopted_engine_projects_incrementally_e2e.py",
+          125.0
+        ],
+        [
+          "tests/writeback_budget/test_lineage_item_reuse_e2e.py",
+          82.8
+        ],
+        [
+          "tests/writeback_budget/test_targeted_writeback_e2e.py",
+          50.2
+        ],
+        [
+          "tests/writeback_budget/test_linked_plan_store_e2e.py",
+          39.3
+        ]
+      ]
+    }
+  }
+}

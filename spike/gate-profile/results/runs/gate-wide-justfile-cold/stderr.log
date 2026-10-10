@@ -1,0 +1,470 @@
+
+ NX   Running targets format-check, lint, typecheck, test, test-docs, test-recipes, budgets for 24 projects:
+
+- ask-seam-settled-correlated-ruling
+- ask-seam-follow-up-drafts-launch
+- orchestrator
+- orchestrator-e2e
+- ask-seam-planner-fallback-ask
+- plan-tooling
+- ask-seam-structural-reply
+- board-copy-approval
+- ask-seam-channel-reply
+- session-open-conflict
+- ask-seam-ask-manager
+- unpublished-view
+- manager-allowlist
+- writeback-budget
+- ask-seam-launch
+- graceful-cancel
+- render-diagram
+- run-end-hooks
+- merge-policy
+- host-sweep
+- host-views
+- unfinished
+- unwatched
+- dag-ui
+
+
+
+> nx run unfinished:budgets  [existing outputs match the cache, left as is]
+
+
+> nx run plan-tooling:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/plan_tooling -m 'not reads_docs' --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [ 11%]
+........................................................................ [ 22%]
+........................................................................ [ 33%]
+........................................................................ [ 44%]
+........................................................................ [ 55%]
+........................................................................ [ 67%]
+........................................................................ [ 78%]
+........................................................................ [ 89%]
+....................................................................     [100%]
+644 passed in 450.48s (0:07:30)
+
+> nx run plan-tooling:test-docs
+
+> rm -rf .telemetry/plan-tooling/test-docs && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/plan-tooling/test-docs NO_COLOR=1 uv run pytest tests/plan_tooling -m reads_docs --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [ 84%]
+.............                                                            [100%]
+85 passed in 212.23s (0:03:32)
+
+> nx run orchestrator:test-docs
+
+> rm -rf .telemetry/orchestrator/test-docs && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/orchestrator/test-docs NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/host_sweep --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/plan_store_assets --ignore=tests/render_diagram --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval --ignore=tests/unfinished --ignore=tests/graceful_cancel --ignore=tests/session_open_conflict --ignore=tests/manager_allowlist -m reads_docs --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [ 14%]
+........................................................................ [ 28%]
+........................................................................ [ 42%]
+........................................................................ [ 56%]
+........................................................................ [ 71%]
+........................................................................ [ 85%]
+....................s................................................... [ 99%]
+...                                                                      [100%]
+506 passed, 1 skipped in 855.56s (0:14:15)
+
+> nx run writeback-budget:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/writeback_budget --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+.....                                                                    [100%]
+5 passed in 298.91s (0:04:58)
+
+> nx run orchestrator:test
+
+> env -u FORCE_COLOR NO_COLOR=1 COVERAGE_FILE=.coverage.parallel uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/host_sweep --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/plan_store_assets --ignore=tests/render_diagram --ignore=tests/e2e --ignore=tests/unfinished --ignore=tests/graceful_cancel --ignore=tests/session_open_conflict --ignore=tests/manager_allowlist -m 'not reads_docs and not reads_recipes and not reads_checkouts' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0
+
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [  2%]
+........................................................................ [  4%]
+........................................................................ [  7%]
+........................................................................ [  9%]
+........................................................................ [ 11%]
+........................................................................ [ 14%]
+........................................................................ [ 16%]
+........................................................................ [ 18%]
+........................................................................ [ 21%]
+........................................................................ [ 23%]
+........................................................................ [ 25%]
+........................................................................ [ 28%]
+........................................................................ [ 30%]
+........................................................................ [ 32%]
+........................................................................ [ 35%]
+........................................................................ [ 37%]
+........................................................................ [ 40%]
+........................................................................ [ 42%]
+........................................................................ [ 44%]
+........................................................................ [ 47%]
+........................................................................ [ 49%]
+........................................................................ [ 51%]
+........................................................................ [ 54%]
+........................................................................ [ 56%]
+........................................................................ [ 58%]
+........................................................................ [ 61%]
+........................................................................ [ 63%]
+........................................................................ [ 65%]
+........................................................................ [ 68%]
+........................................................................ [ 70%]
+........................................................................ [ 72%]
+........................................................................ [ 75%]
+........................................................................ [ 77%]
+........................................................................ [ 80%]
+........................................................................ [ 82%]
+........................................................................ [ 84%]
+........................................................................ [ 87%]
+........................................................................ [ 89%]
+........................................................................ [ 91%]
+........................................................................ [ 94%]
+........................................................................ [ 96%]
+........................................................................ [ 98%]
+..................................                                       [100%]
+=============================== warnings summary ===============================
+tests/test_plan_store_sdk.py::test_a_task_the_store_created_is_read_as_its_projects_whatever_the_source_named_it
+  /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/orchestrator/plan_store.py:193: RuntimeWarning: coroutine 'GeneratedClient.project_list' was never awaited
+    answer = complete(sdk(query(**keywords, page=cursor)))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_plan_store_sdk.py::test_a_task_the_store_created_is_read_as_its_projects_whatever_the_source_named_it
+  /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/orchestrator/plan_store.py:193: RuntimeWarning: coroutine 'GeneratedClient.task_list' was never awaited
+    answer = complete(sdk(query(**keywords, page=cursor)))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+3058 passed, 2 warnings in 115.20s (0:01:55)
+
+> nx run ask-seam-channel-reply:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/ask_seam/channel_reply --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+..............                                                           [100%]
+14 passed in 65.87s (0:01:05)
+
+> nx run unfinished:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/unfinished --deselect tests/unfinished/test_unfinished_e2e.py::test_the_own_sessions_read_lists_only_its_own_branches_at_this_hosts_scale --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+....................................................                     [100%]
+52 passed in 88.39s (0:01:28)
+
+> nx run orchestrator-e2e:test-recipes
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/e2e --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval -m reads_recipes --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [ 19%]
+........................................................................ [ 38%]
+........................................................................ [ 57%]
+........................................................................ [ 76%]
+........................................................................ [ 95%]
+.................                                                        [100%]
+377 passed in 36.94s
+
+> nx run ask-seam-ask-manager:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/ask_seam/ask_manager --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+.................                                                        [100%]
+17 passed in 34.65s
+
+> nx run host-views:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/host_views --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+........                                                                 [100%]
+8 passed in 15.42s
+
+> nx run ask-seam-launch:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/ask_seam/launch --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+...................................................................      [100%]
+67 passed in 37.49s
+
+> nx run graceful-cancel:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/graceful_cancel --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+.                                                                        [100%]
+1 passed in 24.59s
+
+> nx run board-copy-approval:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/e2e/board_copy_approval --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+...                                                                      [100%]
+3 passed in 19.73s
+
+> nx run session-open-conflict:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/session_open_conflict --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+....                                                                     [100%]
+4 passed in 18.78s
+
+> nx run orchestrator:lint
+
+> uv run ruff check . && { command -v shellcheck >/dev/null || { echo "lint: required 'shellcheck' executable was not found; run 'just bootstrap' from the repository root to install it, then retry" >&2; exit 1; }; } && shellcheck scripts/*.sh .githooks/* && uv run oneagentgraph persona validate personas
+
+[1;32mAll checks passed![0m
+personas: OK
+
+> nx run render-diagram:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/render_diagram --no-cov
+
+..................                                                       [100%]
+18 passed in 17.72s
+
+> nx run ask-seam-planner-fallback-ask:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/ask_seam/planner_fallback_ask --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+..                                                                       [100%]
+2 passed in 15.47s
+
+> nx run unwatched:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/unwatched --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+........................                                                 [100%]
+24 passed in 11.18s
+
+> nx run unpublished-view:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/e2e/unpublished_view --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+............................................                             [100%]
+44 passed in 10.83s
+
+> nx run ask-seam-structural-reply:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/ask_seam/structural_reply --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+.                                                                        [100%]
+1 passed in 7.24s
+
+> nx run merge-policy:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/merge_policy --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+....                                                                     [100%]
+4 passed in 5.78s
+
+> nx run ask-seam-settled-correlated-ruling:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/ask_seam/settled_correlated_ruling --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+.                                                                        [100%]
+1 passed in 5.17s
+
+> nx run host-sweep:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/host_sweep --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+.........................................                                [100%]
+41 passed in 5.83s
+
+> nx run ask-seam-follow-up-drafts-launch:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/ask_seam/follow_up_drafts_launch --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+......                                                                   [100%]
+6 passed in 5.39s
+
+> nx run manager-allowlist:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/manager_allowlist --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+.................................................................        [100%]
+65 passed in 4.05s
+
+> nx run orchestrator:test-recipes
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/host_sweep --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/plan_store_assets --ignore=tests/render_diagram --ignore=tests/e2e --ignore=tests/unfinished --ignore=tests/graceful_cancel --ignore=tests/session_open_conflict --ignore=tests/manager_allowlist -m reads_recipes --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+...................                                                      [100%]
+19 passed in 1.87s
+
+> nx run orchestrator:typecheck
+
+> uv run mypy
+
+Success: no issues found in 30 source files
+
+> nx run orchestrator:format-check
+
+> uv run ruff format --check .
+
+354 files already formatted
+
+> nx run dag-ui:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/dag_ui --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+...................                                                      [100%]
+19 passed in 3.97s
+
+> nx run orchestrator-e2e:test
+
+> rm -rf .telemetry/orchestrator-e2e/test && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/orchestrator-e2e/test NO_COLOR=1 COVERAGE_FILE=.coverage.e2e uv run pytest tests/e2e --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval -m 'not reads_docs and not reads_recipes and not reads_checkouts' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0
+
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [  7%]
+........................................................................ [ 14%]
+........................................................................ [ 21%]
+........................................................................ [ 28%]
+........................................................................ [ 35%]
+........................................................................ [ 42%]
+........................................................................ [ 50%]
+............................F........................................... [ 57%]
+........................................................................ [ 64%]
+........................................................................ [ 71%]
+........................................................................ [ 78%]
+........................................................................ [ 85%]
+........................................................................ [ 92%]
+.......................................................................  [100%]
+=================================== FAILURES ===================================
+_______ test_a_host_variable_over_beside_a_strict_over_is_still_refused ________
+[gw3] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+host = Host(root=PosixPath('/tmp/pytest-of-nick/pytest-811/popen-gw3/test_a_host_variable_over_besi0'), runs=PosixPath('/tmp/...ver_besi0/loadavg'), state=PosixPath('/tmp/pytest-of-nick/pytest-811/popen-gw3/test_a_host_variable_over_besi0/state'))
+
+    def test_a_host_variable_over_beside_a_strict_over_is_still_refused(host: Host) -> None:
+        """The warning about `gate-time` does not turn the strict budget's refusal into an admission."""
+        budgets = host.budgets(threshold=1, extra=[_strict("strict-probe", ["sleep", "1.5"])])
+    
+        pushed = _push(host, budgets, host.gate("sleep 2"))
+    
+        assert pushed.returncode == 1, pushed.stdout + pushed.stderr
+        _ran_once(host, pushed)
+>       assert "— over" in pushed.result(), pushed.result()
+E       AssertionError: budget gate-time: actual 1 seconds, budget 1 seconds, headroom 0 seconds (0%) — within; host: load=9.75439453125/14 mem_available=21037MiB dispatches=0 dispatches_max=0 load1_max=0.10
+E       assert '— over' in 'budget gate-time: actual 1 seconds, budget 1 seconds, headroom 0 seconds (0%) — within; host: load=9.75439453125/14 mem_available=21037MiB dispatches=0 dispatches_max=0 load1_max=0.10'
+E        +  where 'budget gate-time: actual 1 seconds, budget 1 seconds, headroom 0 seconds (0%) — within; host: load=9.75439453125/14 mem_available=21037MiB dispatches=0 dispatches_max=0 load1_max=0.10' = result()
+E        +    where result = Pushed(returncode=1, stdout='budget gate-time: actual 1 seconds, budget 1 seconds, headroom 0 seconds (0%) — within; h...esult above: dispatches and load when it was checked, dispatches_max and load1_max at their peak while the gate ran\n').result
+
+tests/e2e/test_gate_time_budget_e2e.py:527: AssertionError
+=========================== short test summary info ============================
+FAILED tests/e2e/test_gate_time_budget_e2e.py::test_a_host_variable_over_beside_a_strict_over_is_still_refused
+1 failed, 1006 passed in 1780.95s (0:29:40)
+Warning: command "rm -rf .telemetry/orchestrator-e2e/test && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/orchestrator-e2e/test NO_COLOR=1 COVERAGE_FILE=.coverage.e2e uv run pytest tests/e2e --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval -m 'not reads_docs and not reads_recipes and not reads_checkouts' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0" exited with non-zero status code
+> nx run run-end-hooks:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/run_end_hooks --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+.......................................                                  [100%]
+39 passed in 140.90s (0:02:20)
+
+
+
+ NX   Running targets format-check, lint, typecheck, test, test-docs, test-recipes, budgets for 24 projects failed
+
+Tasks not run because their dependencies failed or --nx-bail=true:
+
+- orchestrator:budgets
+
+Failed tasks:
+
+- orchestrator-e2e:test
+
+  Run duration:      31m 40s
+  Cache:             1/31 hit (3%)
+  Critical path:     29m 20s (1 task)
+  Recoverable time:  2m 20s (7% of the run)
+
+  Recommendations:
+    - Drastically reduce your run duration by sharing a cache across your team and CI → https://nx.dev/ci/features/remote-cache?utm_source=nx-cli&utm_medium=cli&utm_campaign=performance-report&utm_content=remote-cache.
+    - Speed up or split the longest tasks on the critical path:
+        orchestrator-e2e:test    29m 20s
+nx: targets failed; fix the reported project findings and rerun the same 'just' recipe (full output: /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.logs/nx.log)
+nx: requested targets succeeded
+nx: requested targets succeeded
+check: deterministic checks failed in 1 of 3 phases (the diff selection); fix every reported finding and retry (full output: /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.logs/check.log)
+error: Recipe `check` failed on line 80 with exit code 1
+gate: deterministic checks failed; fix the reported findings against 'just check' alone, then rerun 'just gate spikebase main' (full output: /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.logs/gate-check.log)
+error: Recipe `gate` failed on line 114 with exit code 1

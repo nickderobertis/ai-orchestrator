@@ -1,0 +1,21 @@
+{
+  "run": {
+    "command": "nx run workspace:check-nx-cache",
+    "startTime": "2026-10-10T05:26:37.670Z",
+    "endTime": "2026-10-10T05:26:37.689Z",
+    "inner": false
+  },
+  "tasks": [
+    {
+      "taskId": "workspace:check-nx-cache",
+      "target": "check-nx-cache",
+      "projectName": "workspace",
+      "hash": "11604454431860659248",
+      "startTime": "2026-10-10T05:26:37.688Z",
+      "endTime": "2026-10-10T05:26:37.689Z",
+      "params": "",
+      "cacheStatus": "local-cache-hit",
+      "status": 0
+    }
+  ]
+}

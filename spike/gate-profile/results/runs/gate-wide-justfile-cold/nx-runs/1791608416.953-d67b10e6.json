@@ -1,0 +1,362 @@
+{
+  "run": {
+    "command": "nx affected --base spikebase/main -t format-check,lint,typecheck,test,test-docs,test-recipes,budgets",
+    "startTime": "2026-10-10T04:28:36.858Z",
+    "endTime": "2026-10-10T05:00:16.871Z",
+    "inner": false
+  },
+  "tasks": [
+    {
+      "taskId": "unfinished:budgets",
+      "target": "budgets",
+      "projectName": "unfinished",
+      "hash": "15679294693204793624",
+      "startTime": "2026-10-10T04:28:36.863Z",
+      "endTime": "2026-10-10T04:28:36.863Z",
+      "params": "",
+      "cacheStatus": "local-cache-hit",
+      "status": 0
+    },
+    {
+      "taskId": "plan-tooling:test",
+      "target": "test",
+      "projectName": "plan-tooling",
+      "hash": "8820091893500894908",
+      "startTime": "2026-10-10T04:28:36.864Z",
+      "endTime": "2026-10-10T04:36:02.431Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "plan-tooling:test-docs",
+      "target": "test-docs",
+      "projectName": "plan-tooling",
+      "hash": "14892606945272658494",
+      "startTime": "2026-10-10T04:36:02.441Z",
+      "endTime": "2026-10-10T04:39:32.832Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "orchestrator:test-docs",
+      "target": "test-docs",
+      "projectName": "orchestrator",
+      "hash": "16727505023380280329",
+      "startTime": "2026-10-10T04:28:36.864Z",
+      "endTime": "2026-10-10T04:42:42.644Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "writeback-budget:test",
+      "target": "test",
+      "projectName": "writeback-budget",
+      "hash": "14908058151085281355",
+      "startTime": "2026-10-10T04:39:32.887Z",
+      "endTime": "2026-10-10T04:44:28.809Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "orchestrator:test",
+      "target": "test",
+      "projectName": "orchestrator",
+      "hash": "3158625679337520884",
+      "startTime": "2026-10-10T04:42:42.652Z",
+      "endTime": "2026-10-10T04:44:37.238Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "ask-seam-channel-reply:test",
+      "target": "test",
+      "projectName": "ask-seam-channel-reply",
+      "hash": "18098114079610618190",
+      "startTime": "2026-10-10T04:44:37.394Z",
+      "endTime": "2026-10-10T04:45:43.212Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "unfinished:test",
+      "target": "test",
+      "projectName": "unfinished",
+      "hash": "14968099955984280112",
+      "startTime": "2026-10-10T04:44:28.824Z",
+      "endTime": "2026-10-10T04:45:57.596Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "orchestrator-e2e:test-recipes",
+      "target": "test-recipes",
+      "projectName": "orchestrator-e2e",
+      "hash": "3428054071783061342",
+      "startTime": "2026-10-10T04:45:43.238Z",
+      "endTime": "2026-10-10T04:46:20.491Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "ask-seam-ask-manager:test",
+      "target": "test",
+      "projectName": "ask-seam-ask-manager",
+      "hash": "1159208989126367132",
+      "startTime": "2026-10-10T04:45:57.606Z",
+      "endTime": "2026-10-10T04:46:32.926Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "host-views:test",
+      "target": "test",
+      "projectName": "host-views",
+      "hash": "6657475825896411094",
+      "startTime": "2026-10-10T04:46:32.938Z",
+      "endTime": "2026-10-10T04:46:49.722Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "ask-seam-launch:test",
+      "target": "test",
+      "projectName": "ask-seam-launch",
+      "hash": "821038554029171393",
+      "startTime": "2026-10-10T04:46:20.513Z",
+      "endTime": "2026-10-10T04:46:58.338Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "graceful-cancel:test",
+      "target": "test",
+      "projectName": "graceful-cancel",
+      "hash": "1408409850159223022",
+      "startTime": "2026-10-10T04:46:49.735Z",
+      "endTime": "2026-10-10T04:47:14.955Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "board-copy-approval:test",
+      "target": "test",
+      "projectName": "board-copy-approval",
+      "hash": "4521940979351007880",
+      "startTime": "2026-10-10T04:46:58.397Z",
+      "endTime": "2026-10-10T04:47:18.882Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "session-open-conflict:test",
+      "target": "test",
+      "projectName": "session-open-conflict",
+      "hash": "18383939769131039309",
+      "startTime": "2026-10-10T04:47:14.975Z",
+      "endTime": "2026-10-10T04:47:34.763Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "orchestrator:lint",
+      "target": "lint",
+      "projectName": "orchestrator",
+      "hash": "7661471646620296144",
+      "startTime": "2026-10-10T04:47:18.898Z",
+      "endTime": "2026-10-10T04:47:40.928Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "render-diagram:test",
+      "target": "test",
+      "projectName": "render-diagram",
+      "hash": "1283437493633096711",
+      "startTime": "2026-10-10T04:47:34.776Z",
+      "endTime": "2026-10-10T04:47:53.031Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "ask-seam-planner-fallback-ask:test",
+      "target": "test",
+      "projectName": "ask-seam-planner-fallback-ask",
+      "hash": "5106214825759457783",
+      "startTime": "2026-10-10T04:47:40.942Z",
+      "endTime": "2026-10-10T04:47:57.559Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "unwatched:test",
+      "target": "test",
+      "projectName": "unwatched",
+      "hash": "7892964252709585929",
+      "startTime": "2026-10-10T04:47:53.047Z",
+      "endTime": "2026-10-10T04:48:04.923Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "unpublished-view:test",
+      "target": "test",
+      "projectName": "unpublished-view",
+      "hash": "10514377824312526934",
+      "startTime": "2026-10-10T04:47:57.564Z",
+      "endTime": "2026-10-10T04:48:09.030Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "ask-seam-structural-reply:test",
+      "target": "test",
+      "projectName": "ask-seam-structural-reply",
+      "hash": "11485180261777659148",
+      "startTime": "2026-10-10T04:48:04.930Z",
+      "endTime": "2026-10-10T04:48:13.044Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "merge-policy:test",
+      "target": "test",
+      "projectName": "merge-policy",
+      "hash": "13316761558980917266",
+      "startTime": "2026-10-10T04:48:09.034Z",
+      "endTime": "2026-10-10T04:48:15.306Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "ask-seam-settled-correlated-ruling:test",
+      "target": "test",
+      "projectName": "ask-seam-settled-correlated-ruling",
+      "hash": "16308755482235486868",
+      "startTime": "2026-10-10T04:48:13.068Z",
+      "endTime": "2026-10-10T04:48:19.242Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "host-sweep:test",
+      "target": "test",
+      "projectName": "host-sweep",
+      "hash": "16568028185875605002",
+      "startTime": "2026-10-10T04:48:15.311Z",
+      "endTime": "2026-10-10T04:48:22.304Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "ask-seam-follow-up-drafts-launch:test",
+      "target": "test",
+      "projectName": "ask-seam-follow-up-drafts-launch",
+      "hash": "14057841791797390982",
+      "startTime": "2026-10-10T04:48:19.251Z",
+      "endTime": "2026-10-10T04:48:25.439Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "manager-allowlist:test",
+      "target": "test",
+      "projectName": "manager-allowlist",
+      "hash": "16419985904027348892",
+      "startTime": "2026-10-10T04:48:22.307Z",
+      "endTime": "2026-10-10T04:48:27.129Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "orchestrator:test-recipes",
+      "target": "test-recipes",
+      "projectName": "orchestrator",
+      "hash": "1999045045271362161",
+      "startTime": "2026-10-10T04:48:27.163Z",
+      "endTime": "2026-10-10T04:48:29.781Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "orchestrator:typecheck",
+      "target": "typecheck",
+      "projectName": "orchestrator",
+      "hash": "7132582469705060299",
+      "startTime": "2026-10-10T04:48:30.021Z",
+      "endTime": "2026-10-10T04:48:30.248Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "orchestrator:format-check",
+      "target": "format-check",
+      "projectName": "orchestrator",
+      "hash": "3648576625590424065",
+      "startTime": "2026-10-10T04:48:30.251Z",
+      "endTime": "2026-10-10T04:48:30.305Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "dag-ui:test",
+      "target": "test",
+      "projectName": "dag-ui",
+      "hash": "4521293412974577975",
+      "startTime": "2026-10-10T04:48:25.453Z",
+      "endTime": "2026-10-10T04:48:30.330Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "orchestrator-e2e:test",
+      "target": "test",
+      "projectName": "orchestrator-e2e",
+      "hash": "11987944316107582316",
+      "startTime": "2026-10-10T04:28:36.864Z",
+      "endTime": "2026-10-10T04:57:56.889Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 1
+    },
+    {
+      "taskId": "run-end-hooks:test",
+      "target": "test",
+      "projectName": "run-end-hooks",
+      "hash": "5714032894374646463",
+      "startTime": "2026-10-10T04:57:56.898Z",
+      "endTime": "2026-10-10T05:00:16.835Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    }
+  ]
+}

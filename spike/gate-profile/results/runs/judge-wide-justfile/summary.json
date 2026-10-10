@@ -1,0 +1,80 @@
+{
+  "mode": "judge",
+  "label": "judge-wide-justfile",
+  "base_commit": "3b6a1ef79ff3953763fcf644c496c5d6a9248e36",
+  "measured_head": "0ba02cf2c483c49518c9c704de388df6f9261964",
+  "tree": "c0ba630b9720e6d72e0f077ceebab4e3040b51c3",
+  "edit": "wide-justfile",
+  "edit_spec": "justfile:7",
+  "cache_state": "warm",
+  "comparison_base": "spikebase/main@3b6a1ef79ff3953763fcf644c496c5d6a9248e36",
+  "nx_cache_dir": "/home/nick.guest/.cache/gate-profile-spike/xdg/ai-orchestrator/nx/756e79f93796751d",
+  "nx_cache_entries_before_seed": 72,
+  "nx_cache_entries_at_start": 72,
+  "uv": "uv 0.11.32 (aarch64-unknown-linux-gnu)",
+  "nx": "v23.1.0",
+  "llmlint": "llmlint 0.4.7",
+  "llmlint_fingerprint_sha256_16": "f8415a2fd16a02f4",
+  "exit_status": 0,
+  "cmd": [
+    "just",
+    "lint-llm-diff",
+    "spikebase/main"
+  ],
+  "started_at": "2026-10-10T04:27:22.530443+00:00",
+  "wall_clock_s": 28.4,
+  "host": {
+    "load1_max": 2.85,
+    "load1_mean": 2.71,
+    "load1_samples": 6,
+    "dispatches_max": "unknown",
+    "dispatches_proven_max": 1,
+    "dispatches_samples": [
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      }
+    ]
+  },
+  "gate_phases": null,
+  "phases": [
+    {
+      "kind": "nx",
+      "label": "other run workspace:lint-llm-diff",
+      "start_offset_s": 0.5,
+      "duration_s": 27.5
+    },
+    {
+      "kind": "nx",
+      "label": "other run workspace:lint-llm-diff",
+      "start_offset_s": 0.5,
+      "duration_s": 27.5
+    }
+  ],
+  "lint_llm_diff_provenance": "lint-llm-diff: judged this diff against base 3b6a1ef79ff3953763fcf644c496c5d6a9248e36 (Nx cache miss)",
+  "nx_runs": [
+    {
+      "invocation": "other run workspace:lint-llm-diff",
+      "command": "nx run workspace:lint-llm-diff",
+      "start_offset_s": 0.4,
+      "duration_s": 27.8,
+      "tasks": [
+        {
+          "task": "workspace:lint-llm-diff",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 0.4,
+          "duration_s": 27.7
+        }
+      ],
+      "snapshot": "1791606470.757-ccae2e71.json"
+    }
+  ],
+  "pytest_tiers": {}
+}
