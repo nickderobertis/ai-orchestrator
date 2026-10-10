@@ -1,0 +1,39 @@
+### e2e/toolchain-writers: 1001 s summed, 170 tests
+  by tier: orchestrator:test-docs 972, orchestrator-e2e:test-recipes 26, orchestrator-e2e:test 2
+  heaviest: test_nx_cache_scope_e2e.py 624, test_workspace_contract_e2e.py 320, test_llmlint_cache_e2e.py 42, test_llmlint_two_path_verdict_e2e.py 11
+### e2e/budget-gate: 663 s summed, 62 tests
+  by tier: orchestrator-e2e:test 663
+  heaviest: test_budget_target_e2e.py 302, test_budget_telemetry_e2e.py 287, test_gate_time_budget_e2e.py 43, test_budget_capabilities_adopted_e2e.py 27
+### e2e/publish-and-landing: 1163 s summed, 97 tests
+  by tier: orchestrator-e2e:test 1107, orchestrator-e2e:test-checkouts 48, orchestrator:test-docs 8, orchestrator-e2e:test-recipes 0
+  heaviest: test_publish_branch_e2e.py 946, test_work_status_and_import_e2e.py 73, test_session_reuse_retry_e2e.py 49, test_merge_path_audit_e2e.py 30
+### e2e/plan-store-host: 263 s summed, 60 tests
+  by tier: orchestrator-e2e:test 262, orchestrator-e2e:test-checkouts 0
+  heaviest: test_onetaskgraph_host_e2e.py 263
+### e2e/registry-and-recipes: 226 s summed, 476 tests
+  by tier: orchestrator-e2e:test-recipes 113, orchestrator-e2e:test 94, orchestrator-e2e:test-checkouts 16, orchestrator:test-docs 2
+  heaviest: test_delegated_recipes_e2e.py 99, test_repo_registry_apply_e2e.py 93, test_watch_selector_e2e.py 15, test_repos_bootstrap_e2e.py 11
+### e2e/launch-monitor-observer: 851 s summed, 532 tests
+  by tier: orchestrator-e2e:test 725, orchestrator:test-docs 117, orchestrator-e2e:test-checkouts 9
+  heaviest: test_orchestrate_launch_e2e.py 144, test_monitor_survives_the_channel_e2e.py 101, test_monitor_quiet_turn_e2e.py 78, test_extends_chain_dispatch_e2e.py 63
+### e2e/harness-routing: 13 s summed, 138 tests
+  by tier: orchestrator-e2e:test 13, orchestrator:test-docs 0
+  heaviest: test_oneharness_timeout_e2e.py 7, test_claude_identity_routing_e2e.py 4, test_fake_codex_reads_each_roles_prompt_e2e.py 1, test_oneharness_history_segments_e2e.py 0
+### e2e/other: 2 s summed, 19 tests
+  by tier: orchestrator-e2e:test 2
+  heaviest: test_waits.py 2, test_run_snapshot.py 1
+### plan-tooling/check-and-review: 886 s summed, 342 tests
+  by tier: plan-tooling:test 844, plan-tooling:test-docs 42
+  heaviest: test_check_plan_recipe_e2e.py 581, test_plan_review_e2e.py 169, test_check_plan_budgets_e2e.py 66, test_check_plan_spikes_e2e.py 28
+### plan-tooling/follow-ups: 579 s summed, 207 tests
+  by tier: plan-tooling:test 465, plan-tooling:test-docs 114
+  heaviest: test_follow_ups_recipe_e2e.py 296, test_follow_ups_answer_comments_recipe_e2e.py 130, test_follow_ups_comment_answers_e2e.py 88, test_linear_routed_follow_ups_e2e.py 50
+### plan-tooling/plan-flow: 406 s summed, 68 tests
+  by tier: plan-tooling:test-docs 307, plan-tooling:test 100
+  heaviest: test_plan_spike_flow_e2e.py 225, test_linear_routed_plans_e2e.py 69, test_visual_plan_flow_e2e.py 39, test_unwatched_planning_launches_e2e.py 39
+### plan-tooling/finish-approve-copy: 469 s summed, 112 tests
+  by tier: plan-tooling:test 397, plan-tooling:test-docs 71
+  heaviest: test_approve_design_recipe_e2e.py 210, test_finish_plan_recipe_e2e.py 107, test_copy_plan_recipe_e2e.py 65, test_finish_plan_budgets_e2e.py 63
+### root drift gates (tests/*.py): 98 s summed, 399 tests
+  by tier: orchestrator:test-docs 98
+  heaviest: test_nx_cache_scope.py 79, test_smoke_selector.py 6, test_follow_up_tickets.py 5, test_design_approval.py 2
