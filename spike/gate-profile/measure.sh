@@ -4,7 +4,13 @@
 #   measure.sh offline EDIT...                      which test targets' keys cover each edit (runs nothing)
 #   measure.sh judge  --commit SHA [--edit EDIT] --label L          judge the tree once (one paid llmlint turn)
 #   measure.sh tier   --commit SHA [--edit EDIT] --cache cold|warm --label L   time `just check`
-#   measure.sh gate   --commit SHA [--edit EDIT] --cache cold|warm --label L   time `just gate origin main`
+#   measure.sh gate   --commit SHA [--edit EDIT] --cache cold|warm --label L   time `just gate $REMOTE $BASE`
+#
+# The comparison base is GATE_PROFILE_REMOTE/GATE_PROFILE_BASE (default origin/main), exported
+# as ORCHESTRATOR_COMPARISON_REMOTE/BASE so `just check`'s affected selection uses it too.
+# `measure.sh pin-base SHA` makes a throwaway local remote `spikebase` whose `main` is SHA, so
+# a harness fetch that moves origin/main mid-spike cannot move the measured base:
+#   GATE_PROFILE_REMOTE=spikebase measure.sh gate ...
 #   measure.sh three  --commit SHA [--patch FILE] --cache cold|warm --label L  the three big tiers at once (three.sh)
 #
 # --patch FILE applies a diff (the prototype) to SHA and commits it, in place of an edit.
@@ -94,6 +100,16 @@ mode=${1:-}; shift || true
 ROOT=$(git rev-parse --show-toplevel)
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 
+CMP_REMOTE=${GATE_PROFILE_REMOTE:-origin}; CMP_BASE=${GATE_PROFILE_BASE:-main}
+export ORCHESTRATOR_COMPARISON_REMOTE=$CMP_REMOTE ORCHESTRATOR_COMPARISON_BASE=$CMP_BASE
+if [[ $mode == pin-base ]]; then
+  sha=$(git -C "$ROOT" rev-parse --verify "$1^{commit}"); bare=$HOME_DIR/base.git
+  [[ -d $bare ]] || git init --quiet --bare "$bare"
+  git -C "$bare" fetch --quiet "$ROOT" "+$sha:refs/heads/main"
+  git -C "$ROOT" remote get-url spikebase >/dev/null 2>&1 || git -C "$ROOT" remote add spikebase "$bare"
+  git -C "$ROOT" fetch --quiet spikebase
+  echo "spikebase/main = $(git -C "$ROOT" rev-parse spikebase/main)"; exit 0
+fi
 if [[ $mode == offline ]]; then
   (( $# )) || die "offline needs at least one edit"
   paths=()
@@ -158,19 +174,19 @@ mkdir -p "$nxdir"
 cache_entries_start=$(find "$nxdir" -mindepth 1 -maxdepth 1 -type d ! -name terminalOutputs | wc -l)
 
 case $mode in
-  judge) cmd=(just lint-llm-diff origin/main) ;;
+  judge) cmd=(just lint-llm-diff "$CMP_REMOTE/$CMP_BASE") ;;
   tier) cmd=(just check) ;;
-  gate) cmd=(just gate origin main) ;;
+  gate) cmd=(just gate "$CMP_REMOTE" "$CMP_BASE") ;;
   three) cmd=("$HERE/three.sh") ;;
 esac
 mkdir -p "$out"
 jq -n --arg mode "$mode" --arg label "$label" --arg base "$base_sha" --arg head "$(git rev-parse HEAD)" \
-  --arg tree "$tree" --arg edit "${edit:-none}" --arg spec "$edit_spec${patch:+ patch:${patch##*/}}" --arg cache "$cache" \
+  --arg tree "$tree" --arg edit "${edit:-none}" --arg spec "$edit_spec${patch:+ patch:${patch##*/}}" --arg cache "$cache" --arg cmp "$CMP_REMOTE/$CMP_BASE@$(git rev-parse "$CMP_REMOTE/$CMP_BASE")" \
   --arg nxdir "$nxdir" --argjson before "$cache_entries_before" --argjson start "$cache_entries_start" \
   --arg uv "$(uv --version)" --arg nx "$(node_modules/.bin/nx --version 2>/dev/null | sed -n 's/.*Local: //p')" \
   --arg llmlint "$(llmlint --version 2>/dev/null)" --arg fp "$(./scripts/llmlint-fingerprint.sh 2>/dev/null | sha256sum | cut -c1-16)" \
   '{mode:$mode,label:$label,base_commit:$base,measured_head:$head,tree:$tree,edit:$edit,edit_spec:$spec,
-    cache_state:$cache,nx_cache_dir:$nxdir,nx_cache_entries_before_seed:$before,nx_cache_entries_at_start:$start,
+    cache_state:$cache,comparison_base:$cmp,nx_cache_dir:$nxdir,nx_cache_entries_before_seed:$before,nx_cache_entries_at_start:$start,
     uv:$uv,nx:$nx,llmlint:$llmlint,llmlint_fingerprint_sha256_16:$fp}' >"$out/meta-in.json"
 
 # Nested journeys that replace PYTHONPATH but inherit PYTEST_ADDOPTS (tests/test_coverage_gate.py,

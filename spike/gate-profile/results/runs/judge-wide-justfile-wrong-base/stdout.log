@@ -1,0 +1,150 @@
+
+> nx run workspace:lint-llm-diff
+
+> ./scripts/llmlint-judge.sh
+
+Plan: 1 judge call(s) across 1 agent(s), linting 1 file(s)
+  737 file(s) matched globs but excluded as unchanged/deleted vs base (--diff): .claude/settings.json, .codex/rules/oneharness.rules, .git, .githooks/commit-msg, .githooks/pre-push, .github/CODEOWNERS, .github/pull_request_template.md, .gitignore, …+729 more
+  agent "default" (batch_size 20)
+    batch 1: [orchestration_contract_changes_update_docs, least_privilege_grants, new_projects_keep_the_graph_uniform, comments_earn_their_place, names_match_behavior, suppressions_justified, no_hardcoded_secrets, diagnostics_error_or_absent, tool_output_is_signal, contracts_have_one_source_or_a_drift_gate, external_service_suite_stays_out_of_the_affected_tier]
+      file: justfile
+      grouped: shares justfile with other rules in this batch (paid once)
+  not judged:
+    changed_behavior_has_e2e — no files matched
+    boundary_inputs_validated — no files matched
+    description_yields_clear_verdict — no files matched
+    name_describes_what_the_rule_checks — no files matched
+    relevance_scopes_conditional_rules — no files matched
+    path_scoped_rules_use_files_not_relevance — no files matched
+    description_omits_already_excluded_situations — no files matched
+    relevance_scopes_without_deciding_the_verdict — no files matched
+    description_and_relevance_are_concise — no files matched
+    line_localizable_rules_require_attribution — no files matched
+    e2e_not_mocked — no files matched
+    tests_mirror_real_usage — no files matched
+    tests_assert_real_behavior — no files matched
+    agents_md_durable_and_terse — no files matched
+    no_redundant_instruction_pointers — no files matched
+    new_code_lands_in_a_project — no files matched
+    work_goes_through_command_surface — no files matched
+    scripts_runtime_independent — no files matched
+    determinism_vs_judgment — no files matched
+    skill_description_trigger_and_compatibility_needs — no files matched
+    each_skill_is_its_own_project — no files matched
+    instruction_layer_localized — no files matched
+    expensive_tests_stay_behind_their_own_edge — no files matched
+    code_lands_in_the_domain_that_owns_it — no files matched
+    structural_pattern_matching — no files matched
+    modern_domain_modeling — no files matched
+    protocol_based_seams — no files matched
+    no_injection_from_untrusted_input — no files matched
+    projects_stay_in_one_uv_workspace — no files matched
+    test_tiers_split_by_project_not_by_marker — no files matched
+    robust_shell — no files matched
+    portable_to_target_shell — no files matched
+    shell_test_tiers_stay_split — no files matched
+    live_tier_compiles_and_requires_credential — no files matched
+    no_untrusted_interpolation_in_run — no files matched
+    ci_invokes_gate_recipe_not_inline_stages — no files matched
+    no_second_broader_sweep_over_an_already_gated_commit — no files matched
+    budget_descriptions_durable_and_terse — no files matched
+    budgets_scoped_to_minimal_tree — no files matched
+    onebudgetspec_is_the_only_judge — no files matched
+    budget_commands_measure_directly — no files matched
+    budgets_reuse_gate_telemetry — no files matched
+    tests_hold_no_nonfunctional_thresholds — no files matched
+    budgets_track_product_owner_outcomes — no files matched
+
+SKIP agents_md_durable_and_terse (no files matched)
+N/A async_typed_clients_at_boundaries (not relevant)
+     rationale: declared not relevant (relevance: false)
+SKIP boundary_inputs_validated (no files matched)
+SKIP budget_commands_measure_directly (no files matched)
+SKIP budget_descriptions_durable_and_terse (no files matched)
+SKIP budgets_reuse_gate_telemetry (no files matched)
+SKIP budgets_scoped_to_minimal_tree (no files matched)
+SKIP budgets_track_product_owner_outcomes (no files matched)
+SKIP changed_behavior_has_e2e (no files matched)
+SKIP ci_invokes_gate_recipe_not_inline_stages (no files matched)
+SKIP code_lands_in_the_domain_that_owns_it (no files matched)
+PASS comments_earn_their_place
+     rationale: justfile contains comments, but the added blank line changes none.
+PASS contracts_have_one_source_or_a_drift_gate
+     rationale: justfile contains CLI contract restatements; the diff introduces or modifies none.
+SKIP description_and_relevance_are_concise (no files matched)
+SKIP description_omits_already_excluded_situations (no files matched)
+SKIP description_yields_clear_verdict (no files matched)
+SKIP determinism_vs_judgment (no files matched)
+PASS diagnostics_error_or_absent
+     rationale: justfile configures quality-check invocations; the diff changes no diagnostic handling.
+SKIP e2e_not_mocked (no files matched)
+SKIP each_skill_is_its_own_project (no files matched)
+SKIP expensive_tests_stay_behind_their_own_edge (no files matched)
+PASS external_service_suite_stays_out_of_the_affected_tier
+     rationale: justfile includes external-service test recipes; the diff changes no suite wiring or gate selection.
+SKIP instruction_layer_localized (no files matched)
+N/A least_privilege_grants (not relevant)
+     rationale: The added blank line grants no permissions or access.
+SKIP line_localizable_rules_require_attribution (no files matched)
+SKIP live_tier_compiles_and_requires_credential (no files matched)
+SKIP modern_domain_modeling (no files matched)
+SKIP name_describes_what_the_rule_checks (no files matched)
+PASS names_match_behavior
+     rationale: justfile declares recipes and variables; the diff changes no names or behavior.
+SKIP new_code_lands_in_a_project (no files matched)
+N/A new_projects_keep_the_graph_uniform (not relevant)
+     rationale: The justfile diff declares no new project.
+PASS no_hardcoded_secrets
+     rationale: justfile holds command configuration; the added blank line introduces no secret literals.
+SKIP no_injection_from_untrusted_input (no files matched)
+SKIP no_redundant_instruction_pointers (no files matched)
+SKIP no_second_broader_sweep_over_an_already_gated_commit (no files matched)
+SKIP no_untrusted_interpolation_in_run (no files matched)
+SKIP onebudgetspec_is_the_only_judge (no files matched)
+N/A orchestration_contract_changes_update_docs (not relevant)
+     rationale: The justfile diff adds only a blank line; operator behavior is unchanged.
+SKIP path_scoped_rules_use_files_not_relevance (no files matched)
+SKIP portable_to_target_shell (no files matched)
+SKIP projects_stay_in_one_uv_workspace (no files matched)
+SKIP protocol_based_seams (no files matched)
+SKIP relevance_scopes_conditional_rules (no files matched)
+SKIP relevance_scopes_without_deciding_the_verdict (no files matched)
+SKIP robust_shell (no files matched)
+SKIP scripts_runtime_independent (no files matched)
+SKIP shell_test_tiers_stay_split (no files matched)
+SKIP skill_description_trigger_and_compatibility_needs (no files matched)
+SKIP structural_pattern_matching (no files matched)
+PASS suppressions_justified
+     rationale: justfile contains suppression directives; the diff adds or modifies none.
+SKIP test_tiers_split_by_project_not_by_marker (no files matched)
+SKIP tests_assert_real_behavior (no files matched)
+SKIP tests_hold_no_nonfunctional_thresholds (no files matched)
+SKIP tests_mirror_real_usage (no files matched)
+PASS tool_output_is_signal
+     rationale: justfile defines command recipes; the added blank line changes no output or failure handling.
+SKIP work_goes_through_command_surface (no files matched)
+
+56 rules: 8 passed, 0 failed, 44 skipped, 4 not relevant
+
+# oneharness: agent default judge 1 [orchestration_contract_changes_update_docs, least_privilege_grants, new_projects_keep_the_graph_uniform, comments_earn_their_place, names_match_behavior, suppressions_justified, no_hardcoded_secrets, diagnostics_error_or_absent, tool_output_is_signal, contracts_have_one_source_or_a_drift_gate, external_service_suite_stays_out_of_the_affected_tier]
+$ /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/scripts/llmlint-oneharness.sh run --system-file /tmp/llmlint-system-I8Gyii.txt --prompt 'Evaluate each rule against the target files and respond with the structured verdict object.' --schema /tmp/llmlint-schema-pDZ05C.json --cwd /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree --timeout 600 --mode read-only --require-available --format json --compact
+exit: 0
+result:
+lint-llm-diff: elided a 257711-character serialized judge call; `llmlint history <id>` above has the full record
+See full results with `llmlint history 20261010T042454Z-f6ac9`
+
+
+
+ NX   Successfully ran target lint-llm-diff for project workspace
+
+
+  Run duration:      27.7s
+  Cache:             0/1 hit (0%)
+  Critical path:     27.7s (1 task)
+  Recoverable time:  <1ms
+
+  Recommendations:
+    - Drastically reduce your run duration by sharing a cache across your team and CI → https://nx.dev/ci/features/remote-cache?utm_source=nx-cli&utm_medium=cli&utm_campaign=performance-report&utm_content=remote-cache.
+    - Speed up or split the longest tasks on the critical path:
+        workspace:lint-llm-diff    27.7s
+nx: requested targets succeeded

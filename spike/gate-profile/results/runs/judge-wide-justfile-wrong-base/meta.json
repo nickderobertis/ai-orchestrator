@@ -1,0 +1,25 @@
+{
+  "mode": "judge",
+  "label": "judge-wide-justfile",
+  "base_commit": "3b6a1ef79ff3953763fcf644c496c5d6a9248e36",
+  "measured_head": "0ba02cf2c483c49518c9c704de388df6f9261964",
+  "tree": "c0ba630b9720e6d72e0f077ceebab4e3040b51c3",
+  "edit": "wide-justfile",
+  "edit_spec": "justfile:7",
+  "cache_state": "warm",
+  "nx_cache_dir": "/home/nick.guest/.cache/gate-profile-spike/xdg/ai-orchestrator/nx/756e79f93796751d",
+  "nx_cache_entries_before_seed": 71,
+  "nx_cache_entries_at_start": 71,
+  "uv": "uv 0.11.32 (aarch64-unknown-linux-gnu)",
+  "nx": "v23.1.0",
+  "llmlint": "llmlint 0.4.7",
+  "llmlint_fingerprint_sha256_16": "f8415a2fd16a02f4",
+  "start": 1791606266.5503988,
+  "end": 1791606295.0548708,
+  "exit_status": 0,
+  "cmd": [
+    "just",
+    "lint-llm-diff",
+    "origin/main"
+  ]
+}
