@@ -123,7 +123,7 @@ candidates:
     **Lower bound after the fix.** For a wide diff, Nx `parallel` 3 sets the floor at total task seconds / 3 = 1183 s. Below that takes either more slots or less work per gate. The draft candidate threshold of 1200 s sits within 2% of that floor and under the 1313.5 s projection, so headroom for this host's load needs the tuning node's `parallel` and xdist changes or the split on top.
 
     **Projection uncertainty.** `three-prototype` summed 8632.9 s of test time for three tiers, against 5874.2 s for the same three before. Contention inflates per-test time: 3 × 4 workers on a 14-core host shared with other dispatches."
-    consumed: "**Wall clock:** spike wall clock from 19:15:06 local on 2026-10-09 (session branch cut) to the last report revision at about 04:25 on 2026-10-10, about 9 h 10 min. Of that, 4 h 25 min went to the first report, about 2 h 50 min to the option-comparison runs and the first tier trace, and about 1 h 55 min to the `execve` tier trace and the liveness evidence. **Judged lint turns: 4**, as the manager granted:
+    consumed: "**Wall clock**, against the 2-3 hours the manager approved: spike wall clock from 19:15:06 local on 2026-10-09 (session branch cut) to the last report revision at about 04:25 on 2026-10-10, about 9 h 10 min. Of that, 4 h 25 min went to the first report, about 2 h 50 min to the option-comparison runs and the first tier trace, and about 1 h 55 min to the `execve` tier trace and the liveness evidence. **Judged lint turns: 4**, as the manager granted:
     - narrow-script, 38.9 s;
     - wide-conftest, 26.1 s;
     - wide-justfile, 28.5 s, spent against the moved `origin/main=80385987` and unusable at `3b6a1ef7`;
@@ -143,6 +143,34 @@ candidates:
 
     **No judged lint turn** was spent after the fourth."
 findings:
+  - |-
+    **What was measured, what was inferred, and what is left open.** This is the account the finalize stage and the split nodes should start from.
+      - **Measured** (each a recorded run under `results/`):
+        - complete gate, narrow (`narrow-script`) and wide (`wide-conftest`, `wide-justfile`), with phases, cache provenance and host conditions;
+        - the deterministic tier for `narrow-persona` and for `narrow-doc` (whose cache state makes it no narrow-doc figure);
+        - offline coverage of all five edits;
+        - the `uv` and Bun lock experiments;
+        - the three big tiers together under prototype v1;
+        - the 10 writer modules under prototype v2, with per-step isolation cost;
+        - option (i)'s writer-only target alone (1201.9 s);
+        - two traced runs of the six affected tiers (`openat`; then `openat` and `execve`), with reads and execs attributed per test.
+      - **Inferred, by arithmetic over those runs:**
+        - the wide gate after the fix, 1313.5 s;
+        - option (i)'s wide-gate floor, 1912.3 s;
+        - the narrow-doc deterministic tier, about 832 s;
+        - each proposed group's test seconds, which are its modules' seconds in the grouped, serialised `gate-wide-conftest-cold` run, so they overstate wall clock once the group is gone;
+        - which edits rerun which group, read off the traced read sets.
+      - **Left open, for the split nodes to establish in their own dispatch.** After the manager's note asking the spike to converge, I ran no further suite or trace:
+        1. **Imported modules.** The traces see a Python import only when its source is read rather than its `__pycache__`, so no group's import graph is established by tracing. Take it from `tests/nx_inputs.py` and the `tests/conftest.py` read guards, as the existing keys do.
+        2. **Tiers never traced.** `orchestrator:test`, `orchestrator:test-recipes`, `orchestrator:test-checkouts`, `unfinished:test` and `unfinished:test-host`, and the small per-journey projects: `ask-seam-*`, `writeback-budget`, `run-end-hooks`, `unwatched`, `unpublished-view`, `board-copy-approval`, `dag-ui`, `session-setup`, `host-*`, `graceful-cancel`, `merge-policy`, `manager-allowlist`, `session-open-conflict`, `render-diagram`, `plan-store-*`, `project-store-race`. Their reads rest on their current Nx inputs and read guards, unverified by this spike. Any node that moves one of them traces its own tier command first.
+        3. **A conditional read in `plan-tooling/check-and-review`.** It read `scripts/budget-dispatches.sh` in one trace and not in the other, so what triggers the read is unknown. Its key should cover the script until a node shows why.
+        4. **The 11 whole-checkout copying modules** read the whole tree by construction. Their group can only narrow if what `copy_working_tree` copies narrows, and nothing here measured that.
+        5. **Prototype v2 over the whole suite.** Only its writer modules ran. The after-figure is a projection, and the tuning node's measurement is what replaces it.
+        6. **Failure causes not established:**
+           - the v1 liveness `member-died` (stderr cut short by oneharness);
+           - under tracing, the liveness `cron-reset` miss and two `workspace_contract` installer tests.
+           Whether any of them involves a reader meeting a toolchain mid-rewrite is not established.
+        7. **No narrow-doc complete gate** was measured, because a base-warmed cache was never built.
   - |-
     **Per-tier profile.** These are deterministic-tier figures, taken from the `just check` phase of `gate-wide-conftest-cold` (cold, every tier missed). They are not complete-gate figures; `results/analysis/profile-*.txt` has every run.
       - The run produced 6531 per-tier test results summing 8241.4 s. The `shared-checkout-toolchain` group held 594 of them and 3754.0 s.
