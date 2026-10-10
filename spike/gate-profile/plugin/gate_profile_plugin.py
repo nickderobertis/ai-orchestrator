@@ -43,7 +43,9 @@ def pytest_configure(config):  # noqa: ANN001
         if os.environ.get("GATE_PROFILE_TOP"):
             return
         os.environ["GATE_PROFILE_TOP"] = str(os.getpid())
-        role = "controller"
+        # A tier run without xdist runs its tests in this process: record them here.
+        distributed = (config.getoption("dist", "no") or "no") != "no" and bool(config.getoption("numprocesses", None))
+        role = "controller" if distributed else "solo"
         worker = None
     else:
         if os.environ.get("GATE_PROFILE_TOP") != str(os.getppid()):
@@ -84,7 +86,7 @@ def pytest_collection_finish(session):  # noqa: ANN001
 def pytest_runtest_makereport(item, call):  # noqa: ANN001
     # Recorded from the call info rather than a hookwrapper so the plugin stays
     # independent of pluggy's wrapper API across pytest releases.
-    if _state["fh"] is None or _state["role"] != "worker":
+    if _state["fh"] is None or _state["role"] not in ("worker", "solo"):
         return
     marker = item.get_closest_marker("xdist_group")
     group = (marker.args[0] if marker.args else marker.kwargs.get("name")) if marker else None

@@ -1,0 +1,1518 @@
+
+ NX   Running targets format-check, lint, typecheck, test, test-docs, test-recipes, budgets for 28 projects:
+
+- ask-seam-settled-correlated-ruling
+- ask-seam-follow-up-drafts-launch
+- ask-seam-planner-fallback-ask
+- ask-seam-structural-reply
+- ask-seam-launch
+- run-end-hooks
+- plan-tooling
+- orchestrator
+- orchestrator-e2e
+- ask-seam-bus-resolution
+- board-copy-approval
+- ask-seam-channel-reply
+- session-open-conflict
+- ask-seam-ask-manager
+- unpublished-view
+- project-store-race
+- manager-allowlist
+- plan-store-assets
+- writeback-budget
+- graceful-cancel
+- render-diagram
+- session-setup
+- merge-policy
+- host-sweep
+- host-views
+- unfinished
+- unwatched
+- dag-ui
+
+
+
+> nx run unfinished:budgets
+
+> uv run onebudgetspec check tests/unfinished/budgets.yaml --exclude-label host --exclude-label onepipeline
+
+
+> nx run plan-tooling:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/plan_tooling -m 'not reads_docs' --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [ 11%]
+........................................................................ [ 22%]
+........................................................................ [ 33%]
+........................................................................ [ 44%]
+........................................................................ [ 55%]
+........................................................................ [ 67%]
+........................................................................ [ 78%]
+........................................................................ [ 89%]
+....................................................................     [100%]
+644 passed in 455.31s (0:07:35)
+
+> nx run plan-tooling:test-docs
+
+> rm -rf .telemetry/plan-tooling/test-docs && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/plan-tooling/test-docs NO_COLOR=1 uv run pytest tests/plan_tooling -m reads_docs --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [ 84%]
+.............                                                            [100%]
+85 passed in 226.90s (0:03:46)
+
+> nx run orchestrator:test-docs
+
+> rm -rf .telemetry/orchestrator/test-docs && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/orchestrator/test-docs NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/host_sweep --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/plan_store_assets --ignore=tests/render_diagram --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval --ignore=tests/unfinished --ignore=tests/graceful_cancel --ignore=tests/session_open_conflict --ignore=tests/manager_allowlist -m reads_docs --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [ 14%]
+........................................................................ [ 28%]
+........................................................................ [ 42%]
+...........FF........................................................... [ 56%]
+........................................................................ [ 71%]
+........................................................................ [ 85%]
+........................s............................................... [ 99%]
+...                                                                      [100%]
+=================================== FAILURES ===================================
+______ test_a_module_whose_setup_writes_this_checkout_lands_on_one_worker ______
+[gw0] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-nick/pytest-641/popen-gw0/test_a_module_whose_setup_writ0')
+
+    def test_a_module_whose_setup_writes_this_checkout_lands_on_one_worker(
+        tmp_path: Path,
+    ) -> None:
+        """An autouse module-scoped fixture constrains its whole module, not its callers.
+    
+        `repository_credentials_file` in `tests/ask_seam/launch/test_launch_ask_seam_e2e.py`
+        adds a name to this checkout's own `.env` and puts the original bytes back afterwards. It is
+        `scope="module"` and `autouse`, so it runs once per worker that receives *any* test
+        from that module — and its create is `O_EXCL`, so two workers reaching it together
+        means one of them raises `FileExistsError` before its test starts.
+    
+        That is not hypothetical. The five tests of that module which named no group were
+        scattered across the other workers by `--dist loadgroup`, and every one of them
+        errored in setup on a publication clone — where, unlike a developer's checkout,
+        there is no `.env` for the fixture to append to, so all four workers took the
+        creating branch at once. The gate refused the push and the branch could not land.
+    
+        The rule the older reasoning got wrong was to ask what each test's *body* does:
+        refusal journeys launch no run and wait on no deadline, so leaving them ungrouped
+        read as free. Setup is what they share, and setup is not free.
+        """
+        writers = _module_scope_checkout_writers()
+        assert writers, (
+            "no journey module declares an autouse module-scoped fixture that touches "
+            f"{SHARED_CHECKOUT_ROOT}; this scan is looking for the shape that forces a "
+            "module onto one worker, and finding none means it has stopped matching"
+        )
+    
+>       groups = _collected_groups(tmp_path)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_nx_cache_scope.py:807: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+tmp_path = PosixPath('/tmp/pytest-of-nick/pytest-641/popen-gw0/test_a_module_whose_setup_writ0')
+
+    def _collected_groups(tmp_path: Path) -> dict[str, str]:
+        """Every collected test id, and the xdist group it resolves to — from real pytest."""
+        plugins = tmp_path / "plugins"
+        plugins.mkdir(parents=True, exist_ok=True)
+        (plugins / "group_dump.py").write_text(GROUP_DUMP_PLUGIN, encoding="utf-8")
+        log = tmp_path / "groups.tsv"
+        collected = subprocess.run(
+            ["uv", "run", "pytest", "--collect-only", "--no-cov", "-p", "group_dump"],
+            cwd=REPO_ROOT,
+            env={
+                **os.environ,
+                "PYTHONPATH": str(plugins),
+                GROUP_LOG_ENV: str(log),
+            },
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+>       assert collected.returncode == 0, collected.stdout + collected.stderr
+E       AssertionError: Traceback (most recent call last):
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 913, in import_plugin
+E             mod = importlib.import_module(importspec)
+E           File "/home/nick.guest/.local/share/uv/python/cpython-3.14.6-linux-aarch64-gnu/lib/python3.14/importlib/__init__.py", line 88, in import_module
+E             return _bootstrap._gcd_import(name[level:], package, level)
+E                    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           File "<frozen importlib._bootstrap>", line 1406, in _gcd_import
+E           File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+E           File "<frozen importlib._bootstrap>", line 1335, in _find_and_load_unlocked
+E         ModuleNotFoundError: No module named 'gate_profile_plugin'
+E         
+E         The above exception was the direct cause of the following exception:
+E         
+E         Traceback (most recent call last):
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/pytest", line 10, in <module>
+E             sys.exit(_console_main())
+E                      ~~~~~~~~~~~~~^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 253, in _console_main
+E             code = _main(prog=_get_prog_name(sys.argv))
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 223, in _main
+E             config = _prepareconfig(new_args, plugins, prog=prog)
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 410, in _prepareconfig
+E             config: Config = pluginmanager.hook.pytest_cmdline_parse(
+E                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+E                 pluginmanager=pluginmanager, args=args
+E                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E             )
+E             ^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/pluggy/_hooks.py", line 512, in __call__
+E             return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+E                    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/pluggy/_manager.py", line 120, in _hookexec
+E             return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+E                    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/pluggy/_callers.py", line 167, in _multicall
+E             raise exception
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/pluggy/_callers.py", line 139, in _multicall
+E             teardown.throw(exception)
+E             ~~~~~~~~~~~~~~^^^^^^^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/helpconfig.py", line 124, in pytest_cmdline_parse
+E             config = yield
+E                      ^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/pluggy/_callers.py", line 121, in _multicall
+E             res = hook_impl.function(*args)
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 1232, in pytest_cmdline_parse
+E             self.parse(args)
+E             ~~~~~~~~~~^^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 1576, in parse
+E             self.pluginmanager.consider_preparse(args, exclude_only=False)
+E             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 835, in consider_preparse
+E             self.consider_pluginarg(parg)
+E             ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 864, in consider_pluginarg
+E             self.import_plugin(arg, consider_entry_points=True)
+E             ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 920, in import_plugin
+E             raise ImportError(
+E                 f'Error importing plugin "{modname}": {e.args[0]}'
+E             ).with_traceback(e.__traceback__) from e
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 913, in import_plugin
+E             mod = importlib.import_module(importspec)
+E           File "/home/nick.guest/.local/share/uv/python/cpython-3.14.6-linux-aarch64-gnu/lib/python3.14/importlib/__init__.py", line 88, in import_module
+E             return _bootstrap._gcd_import(name[level:], package, level)
+E                    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           File "<frozen importlib._bootstrap>", line 1406, in _gcd_import
+E           File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+E           File "<frozen importlib._bootstrap>", line 1335, in _find_and_load_unlocked
+E         ImportError: Error importing plugin "gate_profile_plugin": No module named 'gate_profile_plugin'
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['uv', 'run', 'pytest', '--collect-only', '--no-cov', '-p', 'group_dump'], returncode=1, stdout=...d_load_unlocked\nImportError: Error importing plugin "gate_profile_plugin": No module named \'gate_profile_plugin\'\n').returncode
+
+tests/test_nx_cache_scope.py:686: AssertionError
+__ test_the_toolchain_writers_and_readers_are_collected_into_one_xdist_group ___
+[gw0] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-nick/pytest-641/popen-gw0/test_the_toolchain_writers_and0')
+
+    def test_the_toolchain_writers_and_readers_are_collected_into_one_xdist_group(
+        tmp_path: Path,
+    ) -> None:
+        """One group name, or the constraint is not a constraint.
+    
+        `uv` holds an **exclusive** lock on `<root>/.venv`, and every `just` recipe in this
+        suite reaches its tool through `uv run`, which waits on that lock for as long as a
+        holder keeps it. A journey running this checkout's own `session-setup.sh` takes that
+        lock and rewrites the `.venv/bin` other workers resolve their tools from; the
+        deadline-based channel journeys are what waits on it, one `just` recipe at a time.
+    
+        `--dist loadgroup` co-locates the tests that share a group *name* and says nothing
+        about two different names — those run on two workers at once. So a writer in one
+        group and a reader in another are exactly as concurrent as if neither declared
+        anything, which is what this asserts against: not that each side declares *a*
+        group, but that every one of them resolves to the same one.
+    
+        Read off a real collection, so the assertion is about the items the scheduler will
+        see rather than about how any of them happens to be spelled. The readers are found
+        the same way — which modules name a launching `just` recipe, over the recipes
+        derived from the `justfile` — so what may scatter is decided by something this check
+        reads.
+    
+        Inside a module that names one, nothing may scatter, whatever its tests look like.
+        The premise this replaces allowed an ungrouped test there on the ground that the
+        refusal journeys launch no run: their bodies do not, and their fixtures do. Asking
+        what a test's *body* does is the same mistake
+        :func:`test_a_module_whose_setup_writes_this_checkout_lands_on_one_worker` records.
+        """
+>       groups = _collected_groups(tmp_path)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_nx_cache_scope.py:856: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+tmp_path = PosixPath('/tmp/pytest-of-nick/pytest-641/popen-gw0/test_the_toolchain_writers_and0')
+
+    def _collected_groups(tmp_path: Path) -> dict[str, str]:
+        """Every collected test id, and the xdist group it resolves to — from real pytest."""
+        plugins = tmp_path / "plugins"
+        plugins.mkdir(parents=True, exist_ok=True)
+        (plugins / "group_dump.py").write_text(GROUP_DUMP_PLUGIN, encoding="utf-8")
+        log = tmp_path / "groups.tsv"
+        collected = subprocess.run(
+            ["uv", "run", "pytest", "--collect-only", "--no-cov", "-p", "group_dump"],
+            cwd=REPO_ROOT,
+            env={
+                **os.environ,
+                "PYTHONPATH": str(plugins),
+                GROUP_LOG_ENV: str(log),
+            },
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+>       assert collected.returncode == 0, collected.stdout + collected.stderr
+E       AssertionError: Traceback (most recent call last):
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 913, in import_plugin
+E             mod = importlib.import_module(importspec)
+E           File "/home/nick.guest/.local/share/uv/python/cpython-3.14.6-linux-aarch64-gnu/lib/python3.14/importlib/__init__.py", line 88, in import_module
+E             return _bootstrap._gcd_import(name[level:], package, level)
+E                    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           File "<frozen importlib._bootstrap>", line 1406, in _gcd_import
+E           File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+E           File "<frozen importlib._bootstrap>", line 1335, in _find_and_load_unlocked
+E         ModuleNotFoundError: No module named 'gate_profile_plugin'
+E         
+E         The above exception was the direct cause of the following exception:
+E         
+E         Traceback (most recent call last):
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/pytest", line 10, in <module>
+E             sys.exit(_console_main())
+E                      ~~~~~~~~~~~~~^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 253, in _console_main
+E             code = _main(prog=_get_prog_name(sys.argv))
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 223, in _main
+E             config = _prepareconfig(new_args, plugins, prog=prog)
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 410, in _prepareconfig
+E             config: Config = pluginmanager.hook.pytest_cmdline_parse(
+E                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+E                 pluginmanager=pluginmanager, args=args
+E                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E             )
+E             ^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/pluggy/_hooks.py", line 512, in __call__
+E             return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+E                    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/pluggy/_manager.py", line 120, in _hookexec
+E             return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+E                    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/pluggy/_callers.py", line 167, in _multicall
+E             raise exception
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/pluggy/_callers.py", line 139, in _multicall
+E             teardown.throw(exception)
+E             ~~~~~~~~~~~~~~^^^^^^^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/helpconfig.py", line 124, in pytest_cmdline_parse
+E             config = yield
+E                      ^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/pluggy/_callers.py", line 121, in _multicall
+E             res = hook_impl.function(*args)
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 1232, in pytest_cmdline_parse
+E             self.parse(args)
+E             ~~~~~~~~~~^^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 1576, in parse
+E             self.pluginmanager.consider_preparse(args, exclude_only=False)
+E             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 835, in consider_preparse
+E             self.consider_pluginarg(parg)
+E             ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 864, in consider_pluginarg
+E             self.import_plugin(arg, consider_entry_points=True)
+E             ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 920, in import_plugin
+E             raise ImportError(
+E                 f'Error importing plugin "{modname}": {e.args[0]}'
+E             ).with_traceback(e.__traceback__) from e
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 913, in import_plugin
+E             mod = importlib.import_module(importspec)
+E           File "/home/nick.guest/.local/share/uv/python/cpython-3.14.6-linux-aarch64-gnu/lib/python3.14/importlib/__init__.py", line 88, in import_module
+E             return _bootstrap._gcd_import(name[level:], package, level)
+E                    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           File "<frozen importlib._bootstrap>", line 1406, in _gcd_import
+E           File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+E           File "<frozen importlib._bootstrap>", line 1335, in _find_and_load_unlocked
+E         ImportError: Error importing plugin "gate_profile_plugin": No module named 'gate_profile_plugin'
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['uv', 'run', 'pytest', '--collect-only', '--no-cov', '-p', 'group_dump'], returncode=1, stdout=...d_load_unlocked\nImportError: Error importing plugin "gate_profile_plugin": No module named \'gate_profile_plugin\'\n').returncode
+
+tests/test_nx_cache_scope.py:686: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_nx_cache_scope.py::test_a_module_whose_setup_writes_this_checkout_lands_on_one_worker
+FAILED tests/test_nx_cache_scope.py::test_the_toolchain_writers_and_readers_are_collected_into_one_xdist_group
+2 failed, 504 passed, 1 skipped in 729.76s (0:12:09)
+Warning: command "rm -rf .telemetry/orchestrator/test-docs && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/orchestrator/test-docs NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/host_sweep --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/plan_store_assets --ignore=tests/render_diagram --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval --ignore=tests/unfinished --ignore=tests/graceful_cancel --ignore=tests/session_open_conflict --ignore=tests/manager_allowlist -m reads_docs --no-cov -n 4 --dist loadgroup" exited with non-zero status code
+> nx run orchestrator:test
+
+> env -u FORCE_COLOR NO_COLOR=1 COVERAGE_FILE=.coverage.parallel uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/host_sweep --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/plan_store_assets --ignore=tests/render_diagram --ignore=tests/e2e --ignore=tests/unfinished --ignore=tests/graceful_cancel --ignore=tests/session_open_conflict --ignore=tests/manager_allowlist -m 'not reads_docs and not reads_recipes and not reads_checkouts' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0
+
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [  2%]
+........................................................................ [  4%]
+........................................................................ [  7%]
+........................................................................ [  9%]
+........................FFF....F..............................F......... [ 11%]
+........................................................................ [ 14%]
+........................................................................ [ 16%]
+........................................................................ [ 18%]
+........................................................................ [ 21%]
+........................................................................ [ 23%]
+........................................................................ [ 25%]
+........................................................................ [ 28%]
+........................................................................ [ 30%]
+........................................................................ [ 32%]
+........................................................................ [ 35%]
+........................................................................ [ 37%]
+........................................................................ [ 40%]
+........................................................................ [ 42%]
+........................................................................ [ 44%]
+........................................................................ [ 47%]
+........................................................................ [ 49%]
+........................................................................ [ 51%]
+........................................................................ [ 54%]
+........................................................................ [ 56%]
+........................................................................ [ 58%]
+........................................................................ [ 61%]
+........................................................................ [ 63%]
+........................................................................ [ 65%]
+........................................................................ [ 68%]
+........................................................................ [ 70%]
+........................................................................ [ 72%]
+........................................................................ [ 75%]
+........................................................................ [ 77%]
+........................................................................ [ 80%]
+........................................................................ [ 82%]
+........................................................................ [ 84%]
+........................................................................ [ 87%]
+........................................................................ [ 89%]
+........................................................................ [ 91%]
+........................................................................ [ 94%]
+........................................................................ [ 96%]
+........................................................................ [ 98%]
+..................................                                       [100%]
+=================================== FAILURES ===================================
+______________ test_the_measuring_tier_does_not_decide_the_floor _______________
+[gw1] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-nick/pytest-654/popen-gw1/test_the_measuring_tier_does_n0')
+floor = 100.0, precision = 2, relative_files = True
+
+    def test_the_measuring_tier_does_not_decide_the_floor(
+        tmp_path: Path, floor: float, precision: int, relative_files: bool
+    ) -> None:
+        """The tier runs below the floor and still succeeds: measuring is not judging.
+    
+        Its verdict is memoized and the floor's is not, so a tier that still evaluated
+        ``fail_under`` would let a replayed pass stand in for a comparison nobody made.
+        A tier told to ignore the floor is what keeps the declared one the only floor
+        there is.
+        """
+        root = tmp_path / "measure"
+        _write_project(
+            root,
+            uncalled=_uncalled_for_band(floor),
+            fail_under=floor,
+            precision=precision,
+            relative_files=relative_files,
+        )
+    
+        measured = _measure(root)
+    
+>       assert measured.returncode == 0, measured.stdout + measured.stderr
+E       AssertionError: Traceback (most recent call last):
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 913, in import_plugin
+E             mod = importlib.import_module(importspec)
+E           File "/home/nick.guest/.local/share/uv/python/cpython-3.14.6-linux-aarch64-gnu/lib/python3.14/importlib/__init__.py", line 88, in import_module
+E             return _bootstrap._gcd_import(name[level:], package, level)
+E                    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           File "<frozen importlib._bootstrap>", line 1406, in _gcd_import
+E           File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+E           File "<frozen importlib._bootstrap>", line 1335, in _find_and_load_unlocked
+E         ModuleNotFoundError: No module named 'gate_profile_plugin'
+E         
+E         The above exception was the direct cause of the following exception:
+E         
+E         Traceback (most recent call last):
+E           File "<frozen runpy>", line 203, in _run_module_as_main
+E           File "<frozen runpy>", line 88, in _run_code
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/pytest/__main__.py", line 9, in <module>
+E             raise SystemExit(_console_main())
+E                              ~~~~~~~~~~~~~^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 253, in _console_main
+E             code = _main(prog=_get_prog_name(sys.argv))
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 223, in _main
+E             config = _prepareconfig(new_args, plugins, prog=prog)
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 410, in _prepareconfig
+E             config: Config = pluginmanager.hook.pytest_cmdline_parse(
+E                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+E                 pluginmanager=pluginmanager, args=args
+E                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E             )
+E             ^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/pluggy/_hooks.py", line 512, in __call__
+E             return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+E                    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/pluggy/_manager.py", line 120, in _hookexec
+E             return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+E                    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/pluggy/_callers.py", line 167, in _multicall
+E             raise exception
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/pluggy/_callers.py", line 139, in _multicall
+E             teardown.throw(exception)
+E             ~~~~~~~~~~~~~~^^^^^^^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/helpconfig.py", line 124, in pytest_cmdline_parse
+E             config = yield
+E                      ^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/pluggy/_callers.py", line 121, in _multicall
+E             res = hook_impl.function(*args)
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 1232, in pytest_cmdline_parse
+E             self.parse(args)
+E             ~~~~~~~~~~^^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 1576, in parse
+E             self.pluginmanager.consider_preparse(args, exclude_only=False)
+E             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 835, in consider_preparse
+E             self.consider_pluginarg(parg)
+E             ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 864, in consider_pluginarg
+E             self.import_plugin(arg, consider_entry_points=True)
+E             ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 920, in import_plugin
+E             raise ImportError(
+E                 f'Error importing plugin "{modname}": {e.args[0]}'
+E             ).with_traceback(e.__traceback__) from e
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 913, in import_plugin
+E             mod = importlib.import_module(importspec)
+E           File "/home/nick.guest/.local/share/uv/python/cpython-3.14.6-linux-aarch64-gnu/lib/python3.14/importlib/__init__.py", line 88, in import_module
+E             return _bootstrap._gcd_import(name[level:], package, level)
+E                    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           File "<frozen importlib._bootstrap>", line 1406, in _gcd_import
+E           File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+E           File "<frozen importlib._bootstrap>", line 1335, in _find_and_load_unlocked
+E         ImportError: Error importing plugin "gate_profile_plugin": No module named 'gate_profile_plugin'
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/poo...d_load_unlocked\nImportError: Error importing plugin "gate_profile_plugin": No module named \'gate_profile_plugin\'\n').returncode
+
+tests/test_coverage_gate.py:245: AssertionError
+____________ test_a_tier_that_did_not_measure_fails_the_enforcement ____________
+[gw2] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-nick/pytest-654/popen-gw2/test_a_tier_that_did_not_measu0')
+floor = 100.0, precision = 2, relative_files = True
+
+    def test_a_tier_that_did_not_measure_fails_the_enforcement(
+        tmp_path: Path, floor: float, precision: int, relative_files: bool
+    ) -> None:
+        """A tier that did not measure must stop the run, not leave the floor judged on nothing.
+    
+        This is why the enforcing command names the tier's data file instead of letting
+        `coverage report` discover whatever is lying about: data that never arrived
+        would otherwise leave the floor evaluated against a stale file, or against
+        nothing at all — a failure that reads as a coverage regression rather than as a
+        tier that never ran.
+        """
+        root = tmp_path / "missing"
+        _write_project(
+            root,
+            uncalled=_uncalled_for_band(floor),
+            fail_under=floor,
+            precision=precision,
+            relative_files=relative_files,
+        )
+        _measure(root)
+>       (root / PARALLEL_DATA).unlink()
+
+tests/test_coverage_gate.py:305: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PosixPath('/tmp/pytest-of-nick/pytest-654/popen-gw2/test_a_tier_that_did_not_measu0/missing/.coverage.parallel')
+missing_ok = False
+
+    def unlink(self, missing_ok=False):
+        """
+        Remove this file or link.
+        If the path is a directory, use rmdir() instead.
+        """
+        try:
+>           os.unlink(self)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-nick/pytest-654/popen-gw2/test_a_tier_that_did_not_measu0/missing/.coverage.parallel'
+
+/home/nick.guest/.local/share/uv/python/cpython-3.14.6-linux-aarch64-gnu/lib/python3.14/pathlib/__init__.py:1042: FileNotFoundError
+___ test_the_floor_is_enforced_on_data_measured_in_a_directory_that_is_gone ____
+[gw3] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-nick/pytest-654/popen-gw3/test_the_floor_is_enforced_on_0')
+floor = 100.0, precision = 2, relative_files = True
+
+    def test_the_floor_is_enforced_on_data_measured_in_a_directory_that_is_gone(
+        tmp_path: Path, floor: float, precision: int, relative_files: bool
+    ) -> None:
+        """A measured data file is a statement about the tree, not about one directory.
+    
+        The measuring tier declares its data file as an Nx output, so a cache hit hands
+        the enforcing tier a file some *other* checkout wrote. On this host that
+        other checkout is a per-dispatch worktree which is usually deleted by then, so
+        coverage recording absolute paths turned the saving into a failure: combine
+        succeeded, and the report then said "No source for code" about a file sitting
+        under the current root the whole time — a green branch failing its own gate for
+        where it had been measured rather than for what it covers.
+    
+        Measure, move the whole project to a path the data was never written under, and
+        delete the original: that is the replay, at the real boundary.
+        """
+        measured = tmp_path / "measured"
+        total = _write_project(
+            measured,
+            uncalled=_uncalled_for_band(floor),
+            fail_under=(STATEMENTS - _uncalled_for_band(floor)) / STATEMENTS * 100.0,
+            precision=precision,
+            relative_files=relative_files,
+        )
+        _measure(measured)
+    
+        replayed = tmp_path / "replayed"
+        shutil.copytree(measured, replayed)
+        shutil.rmtree(measured)
+>       result = _enforce(replayed)
+                 ^^^^^^^^^^^^^^^^^^
+
+tests/test_coverage_gate.py:364: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/tmp/pytest-of-nick/pytest-654/popen-gw3/test_the_floor_is_enforced_on_0/replayed')
+
+    def _enforce(root: Path) -> subprocess.CompletedProcess[str]:
+        """Read what the tier measured and compare its total to the floor, as ``coverage`` does."""
+        (root / COMBINED_DATA).unlink(missing_ok=True)
+        combined = _run(root, "coverage", "combine", "--keep", PARALLEL_DATA)
+>       assert combined.returncode == 0, combined.stdout + combined.stderr
+E       AssertionError: Couldn't combine from non-existent path '.coverage.parallel'
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/poo....coverage.parallel'], returncode=1, stdout="Couldn't combine from non-existent path '.coverage.parallel'\n", stderr='').returncode
+
+tests/test_coverage_gate.py:213: AssertionError
+_____ test_the_enforced_total_is_what_was_measured_and_can_fail_the_build ______
+[gw1] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-nick/pytest-654/popen-gw1/test_the_enforced_total_is_wha0')
+floor = 100.0, precision = 2, relative_files = True
+
+    def test_the_enforced_total_is_what_was_measured_and_can_fail_the_build(
+        tmp_path: Path, floor: float, precision: int, relative_files: bool
+    ) -> None:
+        """The floor is decided once, on the data the tier wrote, and it can fail."""
+        root = tmp_path / "below"
+        total = _write_project(
+            root,
+            uncalled=_uncalled_for_band(floor),
+            fail_under=floor,
+            precision=precision,
+            relative_files=relative_files,
+        )
+        _measure(root)
+>       alone = _reported_total(_run(root, "coverage", "report", data_file=PARALLEL_DATA).stdout)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_coverage_gate.py:268: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+output = 'No data to report.\n'
+
+    def _reported_total(output: str) -> float:
+        """The total percentage one ``coverage report`` printed."""
+        match = re.search(r"^TOTAL\s+.*?([0-9]+\.[0-9]+)%", output, flags=re.MULTILINE)
+>       assert match is not None, output
+E       AssertionError: No data to report.
+E         
+E       assert None is not None
+
+tests/test_coverage_gate.py:220: AssertionError
+____________________ test_at_or_above_floor_run_exits_zero _____________________
+[gw2] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-nick/pytest-654/popen-gw2/test_at_or_above_floor_run_exi0')
+floor = 100.0, precision = 2, relative_files = True
+
+    def test_at_or_above_floor_run_exits_zero(
+        tmp_path: Path, floor: float, precision: int, relative_files: bool
+    ) -> None:
+        """The same fixture passes once the floor sits at its total — the failure is the floor's."""
+        root = tmp_path / "above"
+        uncalled = _uncalled_for_band(floor)
+        total = _write_project(
+            root,
+            uncalled=uncalled,
+            fail_under=(STATEMENTS - uncalled) / STATEMENTS * 100.0,
+            precision=precision,
+            relative_files=relative_files,
+        )
+        _measure(root)
+    
+>       result = _enforce(root)
+                 ^^^^^^^^^^^^^^
+
+tests/test_coverage_gate.py:328: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/tmp/pytest-of-nick/pytest-654/popen-gw2/test_at_or_above_floor_run_exi0/above')
+
+    def _enforce(root: Path) -> subprocess.CompletedProcess[str]:
+        """Read what the tier measured and compare its total to the floor, as ``coverage`` does."""
+        (root / COMBINED_DATA).unlink(missing_ok=True)
+        combined = _run(root, "coverage", "combine", "--keep", PARALLEL_DATA)
+>       assert combined.returncode == 0, combined.stdout + combined.stderr
+E       AssertionError: Couldn't combine from non-existent path '.coverage.parallel'
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/poo....coverage.parallel'], returncode=1, stdout="Couldn't combine from non-existent path '.coverage.parallel'\n", stderr='').returncode
+
+tests/test_coverage_gate.py:213: AssertionError
+=============================== warnings summary ===============================
+tests/test_plan_store_sdk.py::test_a_task_the_store_created_is_read_as_its_projects_whatever_the_source_named_it
+  /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/orchestrator/plan_store.py:193: RuntimeWarning: coroutine 'GeneratedClient.project_list' was never awaited
+    answer = complete(sdk(query(**keywords, page=cursor)))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_plan_store_sdk.py::test_a_task_the_store_created_is_read_as_its_projects_whatever_the_source_named_it
+  /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/orchestrator/plan_store.py:193: RuntimeWarning: coroutine 'GeneratedClient.task_list' was never awaited
+    answer = complete(sdk(query(**keywords, page=cursor)))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_coverage_gate.py::test_the_measuring_tier_does_not_decide_the_floor
+FAILED tests/test_coverage_gate.py::test_a_tier_that_did_not_measure_fails_the_enforcement
+FAILED tests/test_coverage_gate.py::test_the_floor_is_enforced_on_data_measured_in_a_directory_that_is_gone
+FAILED tests/test_coverage_gate.py::test_the_enforced_total_is_what_was_measured_and_can_fail_the_build
+FAILED tests/test_coverage_gate.py::test_at_or_above_floor_run_exits_zero - A...
+5 failed, 3053 passed, 2 warnings in 107.56s (0:01:47)
+Warning: command "env -u FORCE_COLOR NO_COLOR=1 COVERAGE_FILE=.coverage.parallel uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/host_sweep --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/plan_store_assets --ignore=tests/render_diagram --ignore=tests/e2e --ignore=tests/unfinished --ignore=tests/graceful_cancel --ignore=tests/session_open_conflict --ignore=tests/manager_allowlist -m 'not reads_docs and not reads_recipes and not reads_checkouts' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0" exited with non-zero status code
+> nx run unfinished:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/unfinished --deselect tests/unfinished/test_unfinished_e2e.py::test_the_own_sessions_read_lists_only_its_own_branches_at_this_hosts_scale --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+....................................................                     [100%]
+52 passed in 86.70s (0:01:26)
+
+> nx run writeback-budget:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/writeback_budget --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+.....                                                                    [100%]
+5 passed in 297.75s (0:04:57)
+
+> nx run ask-seam-channel-reply:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/ask_seam/channel_reply --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+..............                                                           [100%]
+14 passed in 71.09s (0:01:11)
+
+> nx run ask-seam-ask-manager:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/ask_seam/ask_manager --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+.................                                                        [100%]
+17 passed in 34.27s
+
+> nx run orchestrator-e2e:test-recipes
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/e2e --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval -m reads_recipes --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [ 19%]
+........................................................................ [ 38%]
+........................................................................ [ 57%]
+........................................................................ [ 76%]
+........................................................................ [ 95%]
+.................                                                        [100%]
+377 passed in 48.80s
+
+> nx run ask-seam-launch:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/ask_seam/launch --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+...................................................................      [100%]
+67 passed in 30.87s
+
+> nx run host-views:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/host_views --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+........                                                                 [100%]
+8 passed in 12.28s
+
+> nx run graceful-cancel:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/graceful_cancel --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+.                                                                        [100%]
+1 passed in 24.77s
+
+> nx run board-copy-approval:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/e2e/board_copy_approval --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+...                                                                      [100%]
+3 passed in 18.77s
+
+> nx run session-open-conflict:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/session_open_conflict --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+....                                                                     [100%]
+4 passed in 16.71s
+
+> nx run orchestrator:lint
+
+> uv run ruff check . && { command -v shellcheck >/dev/null || { echo "lint: required 'shellcheck' executable was not found; run 'just bootstrap' from the repository root to install it, then retry" >&2; exit 1; }; } && shellcheck scripts/*.sh .githooks/* && uv run oneagentgraph persona validate personas
+
+[1;32mAll checks passed![0m
+personas: OK
+
+> nx run ask-seam-planner-fallback-ask:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/ask_seam/planner_fallback_ask --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+..                                                                       [100%]
+2 passed in 14.89s
+
+> nx run session-setup:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/session_setup --no-cov
+
+.....                                                                    [100%]
+5 passed in 17.02s
+
+> nx run render-diagram:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/render_diagram --no-cov
+
+..................                                                       [100%]
+18 passed in 21.74s
+
+> nx run unwatched:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/unwatched --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+........................                                                 [100%]
+24 passed in 17.89s
+
+> nx run ask-seam-structural-reply:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/ask_seam/structural_reply --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+.                                                                        [100%]
+1 passed in 10.71s
+
+> nx run unpublished-view:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/e2e/unpublished_view --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+............................................                             [100%]
+44 passed in 15.10s
+
+> nx run ask-seam-settled-correlated-ruling:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/ask_seam/settled_correlated_ruling --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+.                                                                        [100%]
+1 passed in 5.89s
+
+> nx run merge-policy:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/merge_policy --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+....                                                                     [100%]
+4 passed in 8.72s
+
+> nx run manager-allowlist:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/manager_allowlist --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+.................................................................        [100%]
+65 passed in 4.80s
+
+> nx run host-sweep:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/host_sweep --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+.........................................                                [100%]
+41 passed in 6.37s
+
+> nx run ask-seam-follow-up-drafts-launch:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/ask_seam/follow_up_drafts_launch --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+......                                                                   [100%]
+6 passed in 6.86s
+
+> nx run dag-ui:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/dag_ui --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+...................                                                      [100%]
+19 passed in 4.33s
+
+> nx run project-store-race:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/project_store_race --no-cov
+
+..                                                                       [100%]
+2 passed in 3.47s
+
+> nx run ask-seam-bus-resolution:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/ask_seam/bus_resolution --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+.                                                                        [100%]
+1 passed in 2.54s
+
+> nx run orchestrator:typecheck
+
+> uv run mypy
+
+Success: no issues found in 30 source files
+
+> nx run plan-store-assets:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/plan_store_assets --no-cov
+
+.                                                                        [100%]
+1 passed in 0.16s
+
+> nx run orchestrator:format-check
+
+> uv run ruff format --check .
+
+354 files already formatted
+
+> nx run orchestrator:test-recipes
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/host_sweep --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/plan_store_assets --ignore=tests/render_diagram --ignore=tests/e2e --ignore=tests/unfinished --ignore=tests/graceful_cancel --ignore=tests/session_open_conflict --ignore=tests/manager_allowlist -m reads_recipes --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+...................                                                      [100%]
+19 passed in 2.09s
+
+> nx run orchestrator-e2e:test
+
+> rm -rf .telemetry/orchestrator-e2e/test && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/orchestrator-e2e/test NO_COLOR=1 COVERAGE_FILE=.coverage.e2e uv run pytest tests/e2e --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval -m 'not reads_docs and not reads_recipes and not reads_checkouts' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0
+
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [  7%]
+........................................................................ [ 14%]
+........................................................................ [ 21%]
+........................................................................ [ 28%]
+........................................................................ [ 35%]
+........................................................................ [ 42%]
+........................................................................ [ 50%]
+........................................................................ [ 57%]
+........................................................................ [ 64%]
+........................................................................ [ 71%]
+........................................................................ [ 78%]
+........................................................................ [ 85%]
+........................................................................ [ 92%]
+.......................................................................  [100%]
+1007 passed in 1729.31s (0:28:49)
+
+> nx run run-end-hooks:test
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/run_end_hooks --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+.......................................                                  [100%]
+39 passed in 147.68s (0:02:27)
+
+
+
+ NX   Running targets format-check, lint, typecheck, test, test-docs, test-recipes, budgets for 28 projects failed
+
+Tasks not run because their dependencies failed or --nx-bail=true:
+
+- orchestrator:budgets
+
+Failed tasks:
+
+- orchestrator:test-docs
+- orchestrator:test
+
+  Run duration:      31m 3s
+  Cache:             0/34 hit (0%)
+  Critical path:     28m 36s (1 task)
+  Recoverable time:  2m 28s (8% of the run)
+
+  Recommendations:
+    - Drastically reduce your run duration by sharing a cache across your team and CI → https://nx.dev/ci/features/remote-cache?utm_source=nx-cli&utm_medium=cli&utm_campaign=performance-report&utm_content=remote-cache.
+    - Speed up or split the longest tasks on the critical path:
+        orchestrator-e2e:test    28m 36s
+nx: targets failed; fix the reported project findings and rerun the same 'just' recipe (full output: /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.logs/nx.log)
+
+ NX   Running targets test-checkouts, coverage, validate-budgets, budgets-host for 4 projects and 3 tasks they depend on:
+
+- unfinished
+- orchestrator
+- orchestrator-e2e
+- workspace
+
+
+
+> nx run orchestrator-e2e:test  [local cache]
+
+> rm -rf .telemetry/orchestrator-e2e/test && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/orchestrator-e2e/test NO_COLOR=1 COVERAGE_FILE=.coverage.e2e uv run pytest tests/e2e --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval -m 'not reads_docs and not reads_recipes and not reads_checkouts' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0
+
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [  7%]
+........................................................................ [ 14%]
+........................................................................ [ 21%]
+........................................................................ [ 28%]
+........................................................................ [ 35%]
+........................................................................ [ 42%]
+........................................................................ [ 50%]
+........................................................................ [ 57%]
+........................................................................ [ 64%]
+........................................................................ [ 71%]
+........................................................................ [ 78%]
+........................................................................ [ 85%]
+........................................................................ [ 92%]
+.......................................................................  [100%]
+1007 passed in 1729.31s (0:28:49)
+
+> nx run unfinished:test-host
+
+> rm -rf .telemetry/unfinished/test-host && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/unfinished/test-host NO_COLOR=1 uv run pytest tests/unfinished/test_unfinished_e2e.py::test_the_own_sessions_read_lists_only_its_own_branches_at_this_hosts_scale --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+.                                                                        [100%]
+1 passed in 6.77s
+
+> nx run unfinished:budgets-host
+
+> uv run onebudgetspec check tests/unfinished/budgets.yaml --label host --exclude-label onepipeline
+
+budget own-sessions-read-seconds: actual 0.09626003599260002 seconds, budget 10 seconds, headroom 9.9037399640074 seconds (99.037399640074%) — within; host: load=4.787109375/14 mem_available=21157MiB
+  3 identities, 60 closed sessions, 10 preserved branches: 0.10 seconds
+  largest: 3 identities, 60 closed sessions, 10 preserved branches
+
+> nx run orchestrator:test-checkouts
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/host_sweep --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/plan_store_assets --ignore=tests/render_diagram --ignore=tests/e2e --ignore=tests/unfinished --ignore=tests/graceful_cancel --ignore=tests/session_open_conflict --ignore=tests/manager_allowlist -m reads_checkouts --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [ 20%]
+.s...................................................................... [ 40%]
+........................................................................ [ 61%]
+........................................................................ [ 81%]
+.................................................................        [100%]
+=============================== warnings summary ===============================
+tests/test_linked_libraries.py::test_whether_the_installed_engine_wheel_is_behind_the_registry_is_read_and_reported
+  /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/tests/test_linked_libraries.py:1359: RegistryReadingWarning: onepipeline-cli 0.63.2 is installed and PyPI publishes 0.63.6; the pins in config/ are reconciled against the older wheel, so adopting is a decision to make between runs
+    warnings.warn(reading.sentence(), RegistryReadingWarning, stacklevel=1)
+
+tests/test_task_body.py::test_a_document_s_body_is_composed_by_the_plugin_exactly_as_a_task_s_is
+  /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/tests/test_task_body.py:499: SiblingDrift: a registered sibling repository disagrees with what this repository states of it; this change touches no registration file, so it is reported rather than failed, and the change that next edits one is refused for it:
+  - /home/nick.guest/.ai-orchestrator/repos/nickderobertis__onetaskgraph at v0.3.9 no longer writes a design document's body the way orchestrator/task_body.py measures it; it lacks:
+              &Incoming {
+                  written: Written::Document,
+                  title: &write.item.title,
+                  content: write.item.content.as_deref(),
+                  labels: &write.item.labels,
+                  metadata: &write.item.metadata,
+  - /home/nick.guest/.ai-orchestrator/repos/nickderobertis__onetaskgraph at v0.3.9 no longer writes a design document's body the way orchestrator/task_body.py measures it; it lacks:
+          let slot = slot_metadata(incoming, own_repository.as_ref(), &fallback);
+          let body = compose_body(incoming.content, &slot)?;
+    settle_drift(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+352 passed, 1 skipped, 2 warnings in 15.04s
+
+> nx run workspace:validate-budgets
+
+> uv run onebudgetspec validate --recursive .
+
+valid: 9 budget(s) in 3 file(s)
+
+> nx run orchestrator:budgets-host
+
+> uv run onebudgetspec check orchestrator/budgets.yaml --label host --exclude-label onepipeline
+
+
+> nx run orchestrator-e2e:test-checkouts
+
+> rm -rf .telemetry/orchestrator-e2e/test-checkouts && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/orchestrator-e2e/test-checkouts NO_COLOR=1 uv run pytest tests/e2e --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval -m reads_checkouts --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+..............................................................           [100%]
+62 passed in 27.08s
+
+> nx run orchestrator:test
+
+> env -u FORCE_COLOR NO_COLOR=1 COVERAGE_FILE=.coverage.parallel uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/host_sweep --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/plan_store_assets --ignore=tests/render_diagram --ignore=tests/e2e --ignore=tests/unfinished --ignore=tests/graceful_cancel --ignore=tests/session_open_conflict --ignore=tests/manager_allowlist -m 'not reads_docs and not reads_recipes and not reads_checkouts' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0
+
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [  2%]
+........................................................................ [  4%]
+........................................................................ [  7%]
+........................................................................ [  9%]
+........................FFF..F.......................................... [ 11%]
+....F................................................................... [ 14%]
+........................................................................ [ 16%]
+........................................................................ [ 18%]
+........................................................................ [ 21%]
+........................................................................ [ 23%]
+........................................................................ [ 25%]
+........................................................................ [ 28%]
+........................................................................ [ 30%]
+........................................................................ [ 32%]
+........................................................................ [ 35%]
+........................................................................ [ 37%]
+........................................................................ [ 40%]
+........................................................................ [ 42%]
+........................................................................ [ 44%]
+........................................................................ [ 47%]
+........................................................................ [ 49%]
+........................................................................ [ 51%]
+........................................................................ [ 54%]
+........................................................................ [ 56%]
+........................................................................ [ 58%]
+........................................................................ [ 61%]
+........................................................................ [ 63%]
+........................................................................ [ 65%]
+........................................................................ [ 68%]
+........................................................................ [ 70%]
+........................................................................ [ 72%]
+........................................................................ [ 75%]
+........................................................................ [ 77%]
+........................................................................ [ 80%]
+........................................................................ [ 82%]
+........................................................................ [ 84%]
+........................................................................ [ 87%]
+........................................................................ [ 89%]
+........................................................................ [ 91%]
+........................................................................ [ 94%]
+........................................................................ [ 96%]
+........................................................................ [ 98%]
+..................................                                       [100%]
+=================================== FAILURES ===================================
+______________ test_the_measuring_tier_does_not_decide_the_floor _______________
+[gw3] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-nick/pytest-688/popen-gw3/test_the_measuring_tier_does_n0')
+floor = 100.0, precision = 2, relative_files = True
+
+    def test_the_measuring_tier_does_not_decide_the_floor(
+        tmp_path: Path, floor: float, precision: int, relative_files: bool
+    ) -> None:
+        """The tier runs below the floor and still succeeds: measuring is not judging.
+    
+        Its verdict is memoized and the floor's is not, so a tier that still evaluated
+        ``fail_under`` would let a replayed pass stand in for a comparison nobody made.
+        A tier told to ignore the floor is what keeps the declared one the only floor
+        there is.
+        """
+        root = tmp_path / "measure"
+        _write_project(
+            root,
+            uncalled=_uncalled_for_band(floor),
+            fail_under=floor,
+            precision=precision,
+            relative_files=relative_files,
+        )
+    
+        measured = _measure(root)
+    
+>       assert measured.returncode == 0, measured.stdout + measured.stderr
+E       AssertionError: Traceback (most recent call last):
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 913, in import_plugin
+E             mod = importlib.import_module(importspec)
+E           File "/home/nick.guest/.local/share/uv/python/cpython-3.14.6-linux-aarch64-gnu/lib/python3.14/importlib/__init__.py", line 88, in import_module
+E             return _bootstrap._gcd_import(name[level:], package, level)
+E                    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           File "<frozen importlib._bootstrap>", line 1406, in _gcd_import
+E           File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+E           File "<frozen importlib._bootstrap>", line 1335, in _find_and_load_unlocked
+E         ModuleNotFoundError: No module named 'gate_profile_plugin'
+E         
+E         The above exception was the direct cause of the following exception:
+E         
+E         Traceback (most recent call last):
+E           File "<frozen runpy>", line 203, in _run_module_as_main
+E           File "<frozen runpy>", line 88, in _run_code
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/pytest/__main__.py", line 9, in <module>
+E             raise SystemExit(_console_main())
+E                              ~~~~~~~~~~~~~^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 253, in _console_main
+E             code = _main(prog=_get_prog_name(sys.argv))
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 223, in _main
+E             config = _prepareconfig(new_args, plugins, prog=prog)
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 410, in _prepareconfig
+E             config: Config = pluginmanager.hook.pytest_cmdline_parse(
+E                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+E                 pluginmanager=pluginmanager, args=args
+E                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E             )
+E             ^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/pluggy/_hooks.py", line 512, in __call__
+E             return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+E                    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/pluggy/_manager.py", line 120, in _hookexec
+E             return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+E                    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/pluggy/_callers.py", line 167, in _multicall
+E             raise exception
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/pluggy/_callers.py", line 139, in _multicall
+E             teardown.throw(exception)
+E             ~~~~~~~~~~~~~~^^^^^^^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/helpconfig.py", line 124, in pytest_cmdline_parse
+E             config = yield
+E                      ^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/pluggy/_callers.py", line 121, in _multicall
+E             res = hook_impl.function(*args)
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 1232, in pytest_cmdline_parse
+E             self.parse(args)
+E             ~~~~~~~~~~^^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 1576, in parse
+E             self.pluginmanager.consider_preparse(args, exclude_only=False)
+E             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 835, in consider_preparse
+E             self.consider_pluginarg(parg)
+E             ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 864, in consider_pluginarg
+E             self.import_plugin(arg, consider_entry_points=True)
+E             ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 920, in import_plugin
+E             raise ImportError(
+E                 f'Error importing plugin "{modname}": {e.args[0]}'
+E             ).with_traceback(e.__traceback__) from e
+E           File "/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/lib/python3.14/site-packages/_pytest/config/__init__.py", line 913, in import_plugin
+E             mod = importlib.import_module(importspec)
+E           File "/home/nick.guest/.local/share/uv/python/cpython-3.14.6-linux-aarch64-gnu/lib/python3.14/importlib/__init__.py", line 88, in import_module
+E             return _bootstrap._gcd_import(name[level:], package, level)
+E                    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           File "<frozen importlib._bootstrap>", line 1406, in _gcd_import
+E           File "<frozen importlib._bootstrap>", line 1371, in _find_and_load
+E           File "<frozen importlib._bootstrap>", line 1335, in _find_and_load_unlocked
+E         ImportError: Error importing plugin "gate_profile_plugin": No module named 'gate_profile_plugin'
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/poo...d_load_unlocked\nImportError: Error importing plugin "gate_profile_plugin": No module named \'gate_profile_plugin\'\n').returncode
+
+tests/test_coverage_gate.py:245: AssertionError
+_____ test_the_enforced_total_is_what_was_measured_and_can_fail_the_build ______
+[gw2] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-nick/pytest-688/popen-gw2/test_the_enforced_total_is_wha0')
+floor = 100.0, precision = 2, relative_files = True
+
+    def test_the_enforced_total_is_what_was_measured_and_can_fail_the_build(
+        tmp_path: Path, floor: float, precision: int, relative_files: bool
+    ) -> None:
+        """The floor is decided once, on the data the tier wrote, and it can fail."""
+        root = tmp_path / "below"
+        total = _write_project(
+            root,
+            uncalled=_uncalled_for_band(floor),
+            fail_under=floor,
+            precision=precision,
+            relative_files=relative_files,
+        )
+        _measure(root)
+>       alone = _reported_total(_run(root, "coverage", "report", data_file=PARALLEL_DATA).stdout)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_coverage_gate.py:268: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+output = 'No data to report.\n'
+
+    def _reported_total(output: str) -> float:
+        """The total percentage one ``coverage report`` printed."""
+        match = re.search(r"^TOTAL\s+.*?([0-9]+\.[0-9]+)%", output, flags=re.MULTILINE)
+>       assert match is not None, output
+E       AssertionError: No data to report.
+E         
+E       assert None is not None
+
+tests/test_coverage_gate.py:220: AssertionError
+___ test_the_floor_is_enforced_on_data_measured_in_a_directory_that_is_gone ____
+[gw0] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-nick/pytest-688/popen-gw0/test_the_floor_is_enforced_on_0')
+floor = 100.0, precision = 2, relative_files = True
+
+    def test_the_floor_is_enforced_on_data_measured_in_a_directory_that_is_gone(
+        tmp_path: Path, floor: float, precision: int, relative_files: bool
+    ) -> None:
+        """A measured data file is a statement about the tree, not about one directory.
+    
+        The measuring tier declares its data file as an Nx output, so a cache hit hands
+        the enforcing tier a file some *other* checkout wrote. On this host that
+        other checkout is a per-dispatch worktree which is usually deleted by then, so
+        coverage recording absolute paths turned the saving into a failure: combine
+        succeeded, and the report then said "No source for code" about a file sitting
+        under the current root the whole time — a green branch failing its own gate for
+        where it had been measured rather than for what it covers.
+    
+        Measure, move the whole project to a path the data was never written under, and
+        delete the original: that is the replay, at the real boundary.
+        """
+        measured = tmp_path / "measured"
+        total = _write_project(
+            measured,
+            uncalled=_uncalled_for_band(floor),
+            fail_under=(STATEMENTS - _uncalled_for_band(floor)) / STATEMENTS * 100.0,
+            precision=precision,
+            relative_files=relative_files,
+        )
+        _measure(measured)
+    
+        replayed = tmp_path / "replayed"
+        shutil.copytree(measured, replayed)
+        shutil.rmtree(measured)
+>       result = _enforce(replayed)
+                 ^^^^^^^^^^^^^^^^^^
+
+tests/test_coverage_gate.py:364: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/tmp/pytest-of-nick/pytest-688/popen-gw0/test_the_floor_is_enforced_on_0/replayed')
+
+    def _enforce(root: Path) -> subprocess.CompletedProcess[str]:
+        """Read what the tier measured and compare its total to the floor, as ``coverage`` does."""
+        (root / COMBINED_DATA).unlink(missing_ok=True)
+        combined = _run(root, "coverage", "combine", "--keep", PARALLEL_DATA)
+>       assert combined.returncode == 0, combined.stdout + combined.stderr
+E       AssertionError: Couldn't combine from non-existent path '.coverage.parallel'
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/poo....coverage.parallel'], returncode=1, stdout="Couldn't combine from non-existent path '.coverage.parallel'\n", stderr='').returncode
+
+tests/test_coverage_gate.py:213: AssertionError
+____________ test_a_tier_that_did_not_measure_fails_the_enforcement ____________
+[gw3] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-nick/pytest-688/popen-gw3/test_a_tier_that_did_not_measu0')
+floor = 100.0, precision = 2, relative_files = True
+
+    def test_a_tier_that_did_not_measure_fails_the_enforcement(
+        tmp_path: Path, floor: float, precision: int, relative_files: bool
+    ) -> None:
+        """A tier that did not measure must stop the run, not leave the floor judged on nothing.
+    
+        This is why the enforcing command names the tier's data file instead of letting
+        `coverage report` discover whatever is lying about: data that never arrived
+        would otherwise leave the floor evaluated against a stale file, or against
+        nothing at all — a failure that reads as a coverage regression rather than as a
+        tier that never ran.
+        """
+        root = tmp_path / "missing"
+        _write_project(
+            root,
+            uncalled=_uncalled_for_band(floor),
+            fail_under=floor,
+            precision=precision,
+            relative_files=relative_files,
+        )
+        _measure(root)
+>       (root / PARALLEL_DATA).unlink()
+
+tests/test_coverage_gate.py:305: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PosixPath('/tmp/pytest-of-nick/pytest-688/popen-gw3/test_a_tier_that_did_not_measu0/missing/.coverage.parallel')
+missing_ok = False
+
+    def unlink(self, missing_ok=False):
+        """
+        Remove this file or link.
+        If the path is a directory, use rmdir() instead.
+        """
+        try:
+>           os.unlink(self)
+E           FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-nick/pytest-688/popen-gw3/test_a_tier_that_did_not_measu0/missing/.coverage.parallel'
+
+/home/nick.guest/.local/share/uv/python/cpython-3.14.6-linux-aarch64-gnu/lib/python3.14/pathlib/__init__.py:1042: FileNotFoundError
+____________________ test_at_or_above_floor_run_exits_zero _____________________
+[gw2] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-nick/pytest-688/popen-gw2/test_at_or_above_floor_run_exi0')
+floor = 100.0, precision = 2, relative_files = True
+
+    def test_at_or_above_floor_run_exits_zero(
+        tmp_path: Path, floor: float, precision: int, relative_files: bool
+    ) -> None:
+        """The same fixture passes once the floor sits at its total — the failure is the floor's."""
+        root = tmp_path / "above"
+        uncalled = _uncalled_for_band(floor)
+        total = _write_project(
+            root,
+            uncalled=uncalled,
+            fail_under=(STATEMENTS - uncalled) / STATEMENTS * 100.0,
+            precision=precision,
+            relative_files=relative_files,
+        )
+        _measure(root)
+    
+>       result = _enforce(root)
+                 ^^^^^^^^^^^^^^
+
+tests/test_coverage_gate.py:328: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/tmp/pytest-of-nick/pytest-688/popen-gw2/test_at_or_above_floor_run_exi0/above')
+
+    def _enforce(root: Path) -> subprocess.CompletedProcess[str]:
+        """Read what the tier measured and compare its total to the floor, as ``coverage`` does."""
+        (root / COMBINED_DATA).unlink(missing_ok=True)
+        combined = _run(root, "coverage", "combine", "--keep", PARALLEL_DATA)
+>       assert combined.returncode == 0, combined.stdout + combined.stderr
+E       AssertionError: Couldn't combine from non-existent path '.coverage.parallel'
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/poo....coverage.parallel'], returncode=1, stdout="Couldn't combine from non-existent path '.coverage.parallel'\n", stderr='').returncode
+
+tests/test_coverage_gate.py:213: AssertionError
+=============================== warnings summary ===============================
+tests/test_plan_store_sdk.py::test_a_task_the_store_created_is_read_as_its_projects_whatever_the_source_named_it
+  /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/orchestrator/plan_store.py:193: RuntimeWarning: coroutine 'GeneratedClient.project_list' was never awaited
+    answer = complete(sdk(query(**keywords, page=cursor)))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_plan_store_sdk.py::test_a_task_the_store_created_is_read_as_its_projects_whatever_the_source_named_it
+  /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/orchestrator/plan_store.py:193: RuntimeWarning: coroutine 'GeneratedClient.task_list' was never awaited
+    answer = complete(sdk(query(**keywords, page=cursor)))
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_coverage_gate.py::test_the_measuring_tier_does_not_decide_the_floor
+FAILED tests/test_coverage_gate.py::test_the_enforced_total_is_what_was_measured_and_can_fail_the_build
+FAILED tests/test_coverage_gate.py::test_the_floor_is_enforced_on_data_measured_in_a_directory_that_is_gone
+FAILED tests/test_coverage_gate.py::test_a_tier_that_did_not_measure_fails_the_enforcement
+FAILED tests/test_coverage_gate.py::test_at_or_above_floor_run_exits_zero - A...
+5 failed, 3053 passed, 2 warnings in 73.07s (0:01:13)
+Warning: command "env -u FORCE_COLOR NO_COLOR=1 COVERAGE_FILE=.coverage.parallel uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/host_sweep --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/plan_store_assets --ignore=tests/render_diagram --ignore=tests/e2e --ignore=tests/unfinished --ignore=tests/graceful_cancel --ignore=tests/session_open_conflict --ignore=tests/manager_allowlist -m 'not reads_docs and not reads_recipes and not reads_checkouts' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0" exited with non-zero status code
+
+
+ NX   Running targets test-checkouts, coverage, validate-budgets, budgets-host for 4 projects and 3 tasks they depend on failed
+
+Tasks not run because their dependencies failed or --nx-bail=true:
+
+- orchestrator:coverage
+
+Failed tasks:
+
+- orchestrator:test
+
+  Run duration:      1m 14s
+  Cache:             1/7 hit (14%)
+  Critical path:     1m 14s (1 task)
+  Recoverable time:  15ms (0% of the run)
+
+  Recommendations:
+    - Speed up or split the longest tasks on the critical path:
+        orchestrator:test    1m 14s
+nx: targets failed; fix the reported project findings and rerun the same 'just' recipe (full output: /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.logs/nx.log)
+nx: requested targets succeeded
+check: deterministic checks failed in 2 of 3 phases (the diff selection; test-checkouts,coverage,validate-budgets,budgets-host); fix every reported finding and retry (full output: /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.logs/check.log)
+error: Recipe `check` failed on line 79 with exit code 1

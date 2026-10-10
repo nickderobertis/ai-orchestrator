@@ -1,0 +1,78 @@
+{
+  "mode": "judge",
+  "label": "judge-wide-conftest",
+  "base_commit": "3b6a1ef79ff3953763fcf644c496c5d6a9248e36",
+  "measured_head": "edee4de1019b635f3e3e95d0497613174c5089ec",
+  "tree": "85ff9e0bb848633a3bcb74b09adb897f46b54a4c",
+  "edit": "wide-conftest",
+  "edit_spec": "tests/conftest.py:120",
+  "cache_state": "cold",
+  "nx_cache_dir": "/home/nick.guest/.cache/gate-profile-spike/xdg/ai-orchestrator/nx/756e79f93796751d",
+  "nx_cache_entries_before_seed": 0,
+  "nx_cache_entries_at_start": 0,
+  "uv": "uv 0.11.32 (aarch64-unknown-linux-gnu)",
+  "nx": "v23.1.0",
+  "llmlint": "llmlint 0.4.7",
+  "llmlint_fingerprint_sha256_16": "f8415a2fd16a02f4",
+  "exit_status": 0,
+  "cmd": [
+    "just",
+    "lint-llm-diff",
+    "origin/main"
+  ],
+  "started_at": "2026-10-10T01:27:33.923407+00:00",
+  "wall_clock_s": 26.1,
+  "host": {
+    "load1_max": 3.44,
+    "load1_mean": 3.29,
+    "load1_samples": 5,
+    "dispatches_max": "unknown",
+    "dispatches_proven_max": 1,
+    "dispatches_samples": [
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      }
+    ]
+  },
+  "phases": [
+    {
+      "kind": "nx",
+      "label": "other run workspace:lint-llm-diff",
+      "start_offset_s": 1.0,
+      "duration_s": 24.0
+    },
+    {
+      "kind": "nx",
+      "label": "other run workspace:lint-llm-diff",
+      "start_offset_s": 1.0,
+      "duration_s": 24.0
+    }
+  ],
+  "lint_llm_diff_provenance": "lint-llm-diff: judged this diff against base 3b6a1ef79ff3953763fcf644c496c5d6a9248e36 (Nx cache miss)",
+  "nx_runs": [
+    {
+      "invocation": "other run workspace:lint-llm-diff",
+      "command": "nx run workspace:lint-llm-diff",
+      "start_offset_s": 0.5,
+      "duration_s": 24.9,
+      "tasks": [
+        {
+          "task": "workspace:lint-llm-diff",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 0.5,
+          "duration_s": 24.9
+        }
+      ],
+      "snapshot": "1791595679.283-768539da.json"
+    }
+  ],
+  "pytest_tiers": {}
+}

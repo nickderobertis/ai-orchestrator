@@ -182,7 +182,7 @@ def run(args: argparse.Namespace) -> int:
                 samples.write(json.dumps({"t": now, "load1": load1}) + "\n")
                 samples.flush()
                 last_load = now
-            time.sleep(1)
+            time.sleep(0.5)
     t1 = time.time()
     stop.set()
     time.sleep(0.5)
@@ -277,6 +277,19 @@ def summarise(out: Path) -> dict:
                 "snapshot": f.name,
             }
         )
+    gate_phases = None
+    logs = out / "logs"
+    v, g = logs / "gate-llmlint-validate.log", logs / "gate-llmlint.log"
+    if v.exists() and g.exists():
+        check_start = min((p["first_seen"] for p in phases if p["kind"] == "just" and p["label"] == "check"), default=g.stat().st_mtime)
+        ve, ge = v.stat().st_mtime, g.stat().st_mtime
+        gate_phases = {
+            "method": "validate ends at its log's last write; the judged-lint phase ends at its log's last write; `just check` from its process start to the gate's exit",
+            "llmlint_validate_s": round(ve - t0, 1),
+            "lint_llm_diff_s": round(ge - ve, 1),
+            "handoff_s": round(check_start - ge, 1),
+            "just_check_s": round(t1 - check_start, 1),
+        }
     lint = None
     for path in [out / "stderr.log", out / "stdout.log", *sorted((out / "logs").glob("*.log"))]:
         if path.exists():
@@ -290,6 +303,7 @@ def summarise(out: Path) -> dict:
         "started_at": dt.datetime.fromtimestamp(t0, dt.UTC).isoformat(),
         "wall_clock_s": round(t1 - t0, 1),
         "host": host,
+        "gate_phases": gate_phases,
         "phases": phase_rows,
         "lint_llm_diff_provenance": lint,
         "nx_runs": runs,
@@ -312,7 +326,7 @@ def summarise_pytest(directory: Path) -> dict:
         t = tiers.setdefault(
             tier, {"controller": None, "tests": collections.defaultdict(lambda: {"duration": 0.0, "group": None, "exc": None, "worker": None})}
         )
-        if recs[0]["role"] == "controller":
+        if recs[0]["role"] in ("controller", "solo"):
             start = recs[0]["t"]
             fin = next((r for r in recs if r["type"] == "finish"), None)
             t["controller"] = {
@@ -321,7 +335,8 @@ def summarise_pytest(directory: Path) -> dict:
                 "exitstatus": fin["exitstatus"] if fin else None,
                 "args": recs[0]["args"],
             }
-            continue
+            if recs[0]["role"] == "controller":
+                continue
         for r in recs:
             if r["type"] != "phase":
                 continue

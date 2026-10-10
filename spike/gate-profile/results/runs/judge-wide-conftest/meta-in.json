@@ -1,0 +1,17 @@
+{
+  "mode": "judge",
+  "label": "judge-wide-conftest",
+  "base_commit": "3b6a1ef79ff3953763fcf644c496c5d6a9248e36",
+  "measured_head": "edee4de1019b635f3e3e95d0497613174c5089ec",
+  "tree": "85ff9e0bb848633a3bcb74b09adb897f46b54a4c",
+  "edit": "wide-conftest",
+  "edit_spec": "tests/conftest.py:120",
+  "cache_state": "cold",
+  "nx_cache_dir": "/home/nick.guest/.cache/gate-profile-spike/xdg/ai-orchestrator/nx/756e79f93796751d",
+  "nx_cache_entries_before_seed": 0,
+  "nx_cache_entries_at_start": 0,
+  "uv": "uv 0.11.32 (aarch64-unknown-linux-gnu)",
+  "nx": "v23.1.0",
+  "llmlint": "llmlint 0.4.7",
+  "llmlint_fingerprint_sha256_16": "f8415a2fd16a02f4"
+}

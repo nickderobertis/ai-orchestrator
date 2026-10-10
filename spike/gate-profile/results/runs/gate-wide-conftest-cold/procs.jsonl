@@ -1,0 +1,11 @@
+{"event": "start", "pid": 2943767, "kind": "just", "label": "check", "t": 1791595737.5431473}
+{"event": "start", "pid": 2943792, "kind": "nx", "label": "check affected --base origin/main -t format-check,lint,typecheck,test,test-docs,test-recipes,budgets", "t": 1791595737.5431473}
+{"event": "start", "pid": 2943868, "kind": "nx", "label": "check affected --base origin/main -t format-check,lint,typecheck,test,test-docs,test-recipes,budgets", "t": 1791595737.5431473}
+{"event": "start", "pid": 165987, "kind": "nx", "label": "check run-many -t test-checkouts,coverage,validate-budgets,budgets-host", "t": 1791597601.5148866}
+{"event": "start", "pid": 166102, "kind": "nx", "label": "check run-many -t test-checkouts,coverage,validate-budgets,budgets-host", "t": 1791597601.5148866}
+{"event": "start", "pid": 264885, "kind": "nx", "label": "check run workspace:check-nx-cache", "t": 1791597676.7932432}
+{"event": "start", "pid": 264968, "kind": "nx", "label": "check run workspace:check-nx-cache", "t": 1791597676.7932432}
+{"event": "start", "pid": 265212, "kind": "nx", "label": "check run cache-proof:typecheck", "t": 1791597677.7991686}
+{"event": "start", "pid": 265622, "kind": "nx", "label": "check run cache-proof:typecheck", "t": 1791597677.7991686}
+{"event": "start", "pid": 266656, "kind": "nx", "label": "check run cache-proof:typecheck", "t": 1791597678.8057766}
+{"event": "start", "pid": 266712, "kind": "nx", "label": "check run cache-proof:typecheck", "t": 1791597678.8057766}

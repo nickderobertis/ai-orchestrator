@@ -1,0 +1,8 @@
+3070622 19:30:33.532614 execve("/home/nick.guest/.local/bin/uv", ["uv", "run", "--locked", "python", "-c", "import time; time.sleep(1)"], 0xffffef9473a8 /* 73 vars */) = 0
+3070659 19:30:33.580587 flock(9, LOCK_SH|LOCK_NB) = 0
+3070659 19:30:33.583797 flock(10, LOCK_EX|LOCK_NB) = 0
+3070637 19:30:33.591816 flock(10, LOCK_UN) = 0
+3070659 19:30:33.592270 flock(10, LOCK_EX|LOCK_NB) = 0
+3070637 19:30:33.611627 flock(10, LOCK_UN) = 0
+3070724 19:30:33.617122 execve("<scratch>/proj/.venv/bin/python3", ["/home/nick.guest/ai-orchestrator"..., "-c", "import time; time.sleep(1)"], 0xf21290984100 /* 76 vars */) = 0
+3070637 19:30:34.668051 flock(9, LOCK_UN) = 0

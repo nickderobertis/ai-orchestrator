@@ -1,0 +1,21 @@
+
+> nx run workspace:check-nx-cache
+
+> ./scripts/check-nx-cache.sh
+
+nx cache check: cross-worktree hit, broken-input miss, and preserved failure log verified
+
+
+
+ NX   Successfully ran target check-nx-cache for project workspace
+
+
+  Run duration:      3.4s
+  Cache:             0/1 hit (0%)
+  Critical path:     3.2s (1 task)
+  Recoverable time:  <1ms
+
+  Recommendations:
+    - Drastically reduce your run duration by sharing a cache across your team and CI → https://nx.dev/ci/features/remote-cache?utm_source=nx-cli&utm_medium=cli&utm_campaign=performance-report&utm_content=remote-cache.
+    - Speed up or split the longest tasks on the critical path:
+        workspace:check-nx-cache    3.2s

@@ -1,0 +1,14 @@
+2966251 19:29:23.621344 execve("/home/nick.guest/.local/bin/uv", ["uv", "run", "python", "-c", "import time; time.sleep(2)"], 0xfffff9d41210 /* 73 vars */) = 0
+2966256 19:29:23.660227 openat(AT_FDCWD, "/home/nick.guest/.cache/uv/.lock", O_RDWR|O_CLOEXEC) = 9
+2966260 19:29:23.660332 flock(9, LOCK_SH|LOCK_NB) = 0
+2966256 19:29:23.660931 openat(AT_FDCWD, "/tmp/uv-b20104600d4f831c.lock", O_RDWR|O_CLOEXEC) = 10
+2966260 19:29:23.661007 flock(10, LOCK_EX|LOCK_NB) = 0
+2966256 19:29:23.662169 flock(10, LOCK_UN) = 0
+2966256 19:29:23.662208 openat(AT_FDCWD, "<scratch>/proj/.venv/.lock", O_RDWR|O_CLOEXEC) = 10
+2966260 19:29:23.662246 flock(10, LOCK_EX|LOCK_NB) = 0
+2966260 19:29:23.662318 openat(AT_FDCWD, "<scratch>/proj/uv.lock", O_RDONLY|O_CLOEXEC) = 11
+2966256 19:29:23.671672 flock(10, LOCK_UN) = 0
+2966268 19:29:23.675110 execve("<scratch>/proj/.venv/bin/python3", ["/home/nick.guest/ai-orchestrator"..., "-c", "import time; time.sleep(2)"], 0xfe934b184100 /* 76 vars */) = 0
+2966268 19:29:25.723876 exit_group(0)   = ?
+2966256 19:29:25.725040 flock(9, LOCK_UN) = 0
+2966251 19:29:25.732880 exit_group(0)   = ?

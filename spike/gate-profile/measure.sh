@@ -162,6 +162,14 @@ jq -n --arg mode "$mode" --arg label "$label" --arg base "$base_sha" --arg head 
     cache_state:$cache,nx_cache_dir:$nxdir,nx_cache_entries_before_seed:$before,nx_cache_entries_at_start:$start,
     uv:$uv,nx:$nx,llmlint:$llmlint,llmlint_fingerprint_sha256_16:$fp}' >"$out/meta-in.json"
 
+# Nested journeys that replace PYTHONPATH but inherit PYTEST_ADDOPTS (tests/test_coverage_gate.py,
+# tests/test_nx_cache_scope.py's collection probes) must still import the plugin, or they fail
+# on the harness rather than on the tree: so it is also placed, for the run only, in the root
+# environment's site-packages (gitignored, additive, removed on exit). The first wide run
+# predates this and carries seven such artefact failures.
+site=$(ls -d "$ROOT"/.venv/lib/python3*/site-packages)
+cp "$HERE/plugin/gate_profile_plugin.py" "$site/gate_profile_plugin.py"
+restore() { rm -f "$site/gate_profile_plugin.py"; git checkout --quiet "$branch"; }
 status=0
 XDG_CACHE_HOME=$XDG \
 GATE_PROFILE_OUT=$out/pytest GATE_PROFILE_ROOT=$ROOT \

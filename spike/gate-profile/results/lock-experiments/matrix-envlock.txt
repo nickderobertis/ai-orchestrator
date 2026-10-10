@@ -1,0 +1,8 @@
+plain                      held-lock:   5.46s (rc=0)   unheld:  0.10s
+no-sync-flag               held-lock:   5.53s (rc=0)   unheld:  0.04s
+UV_NO_SYNC=1               held-lock:   5.51s (rc=0)   unheld:  0.03s
+frozen-flag                held-lock:   5.53s (rc=0)   unheld:  0.06s
+UV_FROZEN=1                held-lock:   5.52s (rc=0)   unheld:  0.03s
+locked-flag                held-lock:   5.41s (rc=0)   unheld:  0.03s
+venv-bin-direct            held-lock:   0.02s (rc=0)   unheld:  0.02s
+uv-sync-locked (writer)    held-lock:   5.51s (rc=0)   unheld:  0.02s

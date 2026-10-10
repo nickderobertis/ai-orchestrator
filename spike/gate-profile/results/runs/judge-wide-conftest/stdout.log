@@ -1,0 +1,159 @@
+
+> nx run workspace:lint-llm-diff
+
+> ./scripts/llmlint-judge.sh
+
+Plan: 2 judge call(s) across 1 agent(s), linting 1 file(s)
+  737 file(s) matched globs but excluded as unchanged/deleted vs base (--diff): .claude/settings.json, .codex/rules/oneharness.rules, .git, .githooks/commit-msg, .githooks/pre-push, .github/CODEOWNERS, .github/pull_request_template.md, .gitignore, …+729 more
+  agent "default" (batch_size 20)
+    batch 1: [changed_behavior_has_e2e, least_privilege_grants, new_projects_keep_the_graph_uniform, comments_earn_their_place, tests_assert_real_behavior, names_match_behavior, suppressions_justified, no_hardcoded_secrets, budget_commands_measure_directly, budgets_reuse_gate_telemetry, tests_hold_no_nonfunctional_thresholds]
+      file: tests/conftest.py
+      grouped: shares tests/conftest.py with other rules in this batch (paid once)
+    batch 2: [new_code_lands_in_a_project, contracts_have_one_source_or_a_drift_gate, code_lands_in_the_domain_that_owns_it, structural_pattern_matching, modern_domain_modeling, protocol_based_seams, no_injection_from_untrusted_input, test_tiers_split_by_project_not_by_marker, shell_test_tiers_stay_split, budget_descriptions_durable_and_terse, budgets_scoped_to_minimal_tree, onebudgetspec_is_the_only_judge]
+      file: tests/conftest.py
+      grouped: shares tests/conftest.py with other rules in this batch (paid once)
+  not judged:
+    orchestration_contract_changes_update_docs — no files matched
+    boundary_inputs_validated — no files matched
+    description_yields_clear_verdict — no files matched
+    name_describes_what_the_rule_checks — no files matched
+    relevance_scopes_conditional_rules — no files matched
+    path_scoped_rules_use_files_not_relevance — no files matched
+    description_omits_already_excluded_situations — no files matched
+    relevance_scopes_without_deciding_the_verdict — no files matched
+    description_and_relevance_are_concise — no files matched
+    line_localizable_rules_require_attribution — no files matched
+    e2e_not_mocked — no files matched
+    tests_mirror_real_usage — no files matched
+    diagnostics_error_or_absent — no files matched
+    tool_output_is_signal — no files matched
+    agents_md_durable_and_terse — no files matched
+    no_redundant_instruction_pointers — no files matched
+    work_goes_through_command_surface — no files matched
+    scripts_runtime_independent — no files matched
+    determinism_vs_judgment — no files matched
+    skill_description_trigger_and_compatibility_needs — no files matched
+    each_skill_is_its_own_project — no files matched
+    instruction_layer_localized — no files matched
+    expensive_tests_stay_behind_their_own_edge — no files matched
+    projects_stay_in_one_uv_workspace — no files matched
+    robust_shell — no files matched
+    portable_to_target_shell — no files matched
+    live_tier_compiles_and_requires_credential — no files matched
+    no_untrusted_interpolation_in_run — no files matched
+    ci_invokes_gate_recipe_not_inline_stages — no files matched
+    external_service_suite_stays_out_of_the_affected_tier — no files matched
+    no_second_broader_sweep_over_an_already_gated_commit — no files matched
+    budgets_track_product_owner_outcomes — no files matched
+
+SKIP agents_md_durable_and_terse (no files matched)
+N/A async_typed_clients_at_boundaries (not relevant)
+     rationale: declared not relevant (relevance: false)
+SKIP boundary_inputs_validated (no files matched)
+N/A budget_commands_measure_directly (not relevant)
+     rationale: tests/conftest.py neither declares budgets nor implements a budget measurement command.
+N/A budget_descriptions_durable_and_terse (not relevant)
+     rationale: tests/conftest.py declares no budget description.
+N/A budgets_reuse_gate_telemetry (not relevant)
+     rationale: tests/conftest.py supplies shared fixtures rather than budget declarations, measurement commands, or tests of measured behavior.
+N/A budgets_scoped_to_minimal_tree (not relevant)
+     rationale: The whitespace-only change alters no budget command, test, fixture, or file placement.
+SKIP budgets_track_product_owner_outcomes (no files matched)
+N/A changed_behavior_has_e2e (not relevant)
+     rationale: The diff adds only a blank line after seed_process_cache(); observable behavior is unchanged.
+SKIP ci_invokes_gate_recipe_not_inline_stages (no files matched)
+N/A code_lands_in_the_domain_that_owns_it (not relevant)
+     rationale: The whitespace-only change adds no declaration, registration, or dependency.
+PASS comments_earn_their_place
+     rationale: tests/conftest.py contains comments, but the diff adds or modifies none.
+N/A contracts_have_one_source_or_a_drift_gate (not relevant)
+     rationale: The added blank line in tests/conftest.py introduces or changes no contract restatement.
+SKIP description_and_relevance_are_concise (no files matched)
+SKIP description_omits_already_excluded_situations (no files matched)
+SKIP description_yields_clear_verdict (no files matched)
+SKIP determinism_vs_judgment (no files matched)
+SKIP diagnostics_error_or_absent (no files matched)
+SKIP e2e_not_mocked (no files matched)
+SKIP each_skill_is_its_own_project (no files matched)
+SKIP expensive_tests_stay_behind_their_own_edge (no files matched)
+SKIP external_service_suite_stays_out_of_the_affected_tier (no files matched)
+SKIP instruction_layer_localized (no files matched)
+N/A least_privilege_grants (not relevant)
+     rationale: tests/conftest.py grants no permissions, token scopes, roles, or command allowlists.
+SKIP line_localizable_rules_require_attribution (no files matched)
+SKIP live_tier_compiles_and_requires_credential (no files matched)
+N/A modern_domain_modeling (not relevant)
+     rationale: The whitespace-only change defines or passes no structured domain data.
+SKIP name_describes_what_the_rule_checks (no files matched)
+PASS names_match_behavior
+     rationale: tests/conftest.py declares names, but the added blank line changes none.
+N/A new_code_lands_in_a_project (not relevant)
+     rationale: The supplied diff adds only a blank line to existing tests/conftest.py.
+N/A new_projects_keep_the_graph_uniform (not relevant)
+     rationale: The added blank line declares no new project.
+PASS no_hardcoded_secrets
+     rationale: The fixtures configure test environments, but the blank-line change introduces no credentials or configuration values.
+N/A no_injection_from_untrusted_input (not relevant)
+     rationale: Existing subprocess calls are unchanged; the added blank line introduces no execution or deserialization behavior.
+SKIP no_redundant_instruction_pointers (no files matched)
+SKIP no_second_broader_sweep_over_an_already_gated_commit (no files matched)
+SKIP no_untrusted_interpolation_in_run (no files matched)
+N/A onebudgetspec_is_the_only_judge (not relevant)
+     rationale: The added blank line changes no budget measurement or threshold comparison.
+SKIP orchestration_contract_changes_update_docs (no files matched)
+SKIP path_scoped_rules_use_files_not_relevance (no files matched)
+SKIP portable_to_target_shell (no files matched)
+SKIP projects_stay_in_one_uv_workspace (no files matched)
+N/A protocol_based_seams (not relevant)
+     rationale: The added blank line introduces or changes no pluggable dependency or seam.
+SKIP relevance_scopes_conditional_rules (no files matched)
+SKIP relevance_scopes_without_deciding_the_verdict (no files matched)
+SKIP robust_shell (no files matched)
+SKIP scripts_runtime_independent (no files matched)
+N/A shell_test_tiers_stay_split (not relevant)
+     rationale: The added blank line changes no shell test suite or owning project definition.
+SKIP skill_description_trigger_and_compatibility_needs (no files matched)
+N/A structural_pattern_matching (not relevant)
+     rationale: The added blank line changes no dispatch logic in tests/conftest.py.
+PASS suppressions_justified
+     rationale: Existing Any annotations and suppression directives are unchanged; the diff adds only whitespace.
+N/A test_tiers_split_by_project_not_by_marker (not relevant)
+     rationale: The whitespace-only change alters no pytest suite behavior or marker configuration.
+N/A tests_assert_real_behavior (not relevant)
+     rationale: tests/conftest.py defines fixtures and helpers, not tests.
+PASS tests_hold_no_nonfunctional_thresholds
+     rationale: tests/conftest.py installs default wait bounds, but the diff changes no bounds or measurements.
+SKIP tests_mirror_real_usage (no files matched)
+SKIP tool_output_is_signal (no files matched)
+SKIP work_goes_through_command_surface (no files matched)
+
+56 rules: 5 passed, 0 failed, 32 skipped, 19 not relevant
+
+# oneharness: agent default judge 1 [changed_behavior_has_e2e, least_privilege_grants, new_projects_keep_the_graph_uniform, comments_earn_their_place, tests_assert_real_behavior, names_match_behavior, suppressions_justified, no_hardcoded_secrets, budget_commands_measure_directly, budgets_reuse_gate_telemetry, tests_hold_no_nonfunctional_thresholds]
+$ /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/scripts/llmlint-oneharness.sh run --system-file /tmp/llmlint-system-uBnGUD.txt --prompt 'Evaluate each rule against the target files and respond with the structured verdict object.' --schema /tmp/llmlint-schema-DH05pP.json --cwd /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree --timeout 600 --mode read-only --require-available --format json --compact
+exit: 0
+result:
+lint-llm-diff: elided a 162816-character serialized judge call; `llmlint history <id>` above has the full record
+
+# oneharness: agent default judge 1 [new_code_lands_in_a_project, contracts_have_one_source_or_a_drift_gate, code_lands_in_the_domain_that_owns_it, structural_pattern_matching, modern_domain_modeling, protocol_based_seams, no_injection_from_untrusted_input, test_tiers_split_by_project_not_by_marker, shell_test_tiers_stay_split, budget_descriptions_durable_and_terse, budgets_scoped_to_minimal_tree, onebudgetspec_is_the_only_judge]
+$ /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/scripts/llmlint-oneharness.sh run --system-file /tmp/llmlint-system-RtLhwa.txt --prompt 'Evaluate each rule against the target files and respond with the structured verdict object.' --schema /tmp/llmlint-schema-1FXWGj.json --cwd /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree --timeout 600 --mode read-only --require-available --format json --compact
+exit: 0
+result:
+lint-llm-diff: elided a 161412-character serialized judge call; `llmlint history <id>` above has the full record
+See full results with `llmlint history 20261010T012759Z-79704`
+
+
+
+ NX   Successfully ran target lint-llm-diff for project workspace
+
+
+  Run duration:      24.9s
+  Cache:             0/1 hit (0%)
+  Critical path:     24.9s (1 task)
+  Recoverable time:  <1ms
+
+  Recommendations:
+    - Drastically reduce your run duration by sharing a cache across your team and CI → https://nx.dev/ci/features/remote-cache?utm_source=nx-cli&utm_medium=cli&utm_campaign=performance-report&utm_content=remote-cache.
+    - Speed up or split the longest tasks on the critical path:
+        workspace:lint-llm-diff    24.9s
+nx: requested targets succeeded
