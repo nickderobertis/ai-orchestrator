@@ -1,0 +1,1 @@
+check: all deterministic checks passed (line coverage 100.00%); project selection: affected --base origin/main

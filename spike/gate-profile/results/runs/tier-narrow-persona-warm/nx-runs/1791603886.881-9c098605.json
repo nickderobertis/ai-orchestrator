@@ -1,0 +1,109 @@
+{
+  "run": {
+    "command": "nx run-many -t test-checkouts,coverage,validate-budgets,budgets-host",
+    "startTime": "2026-10-10T03:44:17.195Z",
+    "endTime": "2026-10-10T03:44:46.799Z",
+    "inner": false
+  },
+  "tasks": [
+    {
+      "taskId": "orchestrator-e2e:test",
+      "target": "test",
+      "projectName": "orchestrator-e2e",
+      "hash": "4447026549744652063",
+      "startTime": "2026-10-10T03:44:17.203Z",
+      "endTime": "2026-10-10T03:44:17.207Z",
+      "params": "",
+      "cacheStatus": "local-cache-hit",
+      "status": 0
+    },
+    {
+      "taskId": "orchestrator:test",
+      "target": "test",
+      "projectName": "orchestrator",
+      "hash": "1228231064717273865",
+      "startTime": "2026-10-10T03:44:17.203Z",
+      "endTime": "2026-10-10T03:44:17.207Z",
+      "params": "",
+      "cacheStatus": "local-cache-hit",
+      "status": 0
+    },
+    {
+      "taskId": "unfinished:test-host",
+      "target": "test-host",
+      "projectName": "unfinished",
+      "hash": "7561380269313564442",
+      "startTime": "2026-10-10T03:44:17.207Z",
+      "endTime": "2026-10-10T03:44:33.015Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "orchestrator:test-checkouts",
+      "target": "test-checkouts",
+      "projectName": "orchestrator",
+      "hash": "7362863012361606930",
+      "startTime": "2026-10-10T03:44:17.207Z",
+      "endTime": "2026-10-10T03:44:33.975Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "unfinished:budgets-host",
+      "target": "budgets-host",
+      "projectName": "unfinished",
+      "hash": "8052367689328663844",
+      "startTime": "2026-10-10T03:44:33.983Z",
+      "endTime": "2026-10-10T03:44:34.374Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "workspace:validate-budgets",
+      "target": "validate-budgets",
+      "projectName": "workspace",
+      "hash": "14123193630573370875",
+      "startTime": "2026-10-10T03:44:34.377Z",
+      "endTime": "2026-10-10T03:44:34.420Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "orchestrator:budgets-host",
+      "target": "budgets-host",
+      "projectName": "orchestrator",
+      "hash": "2114075642518796289",
+      "startTime": "2026-10-10T03:44:34.423Z",
+      "endTime": "2026-10-10T03:44:34.454Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "orchestrator:coverage",
+      "target": "coverage",
+      "projectName": "orchestrator",
+      "hash": "6236698511020659410",
+      "startTime": "2026-10-10T03:44:33.037Z",
+      "endTime": "2026-10-10T03:44:34.558Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "orchestrator-e2e:test-checkouts",
+      "target": "test-checkouts",
+      "projectName": "orchestrator-e2e",
+      "hash": "9938821951627407606",
+      "startTime": "2026-10-10T03:44:17.207Z",
+      "endTime": "2026-10-10T03:44:46.790Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    }
+  ]
+}

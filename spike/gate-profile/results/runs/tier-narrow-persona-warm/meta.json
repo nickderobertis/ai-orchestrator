@@ -1,0 +1,24 @@
+{
+  "mode": "tier",
+  "label": "tier-narrow-persona-warm",
+  "base_commit": "3b6a1ef79ff3953763fcf644c496c5d6a9248e36",
+  "measured_head": "29d5bdca57c11a16a816af465781eea25222c7fc",
+  "tree": "3d74d6d5fe2d7a221a390fe08ed27680371503e9",
+  "edit": "narrow-persona",
+  "edit_spec": "personas/researcher.yaml:9",
+  "cache_state": "warm",
+  "nx_cache_dir": "/home/nick.guest/.cache/gate-profile-spike/xdg/ai-orchestrator/nx/756e79f93796751d",
+  "nx_cache_entries_before_seed": 62,
+  "nx_cache_entries_at_start": 62,
+  "uv": "uv 0.11.32 (aarch64-unknown-linux-gnu)",
+  "nx": "v23.1.0",
+  "llmlint": "llmlint 0.4.7",
+  "llmlint_fingerprint_sha256_16": "f8415a2fd16a02f4",
+  "start": 1791602104.2452278,
+  "end": 1791603888.508665,
+  "exit_status": 0,
+  "cmd": [
+    "just",
+    "check"
+  ]
+}
