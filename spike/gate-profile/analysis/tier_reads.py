@@ -2,7 +2,8 @@
 module and split-map group) each xdist worker was running, and to each tier as a whole.
 
   tier_reads.py RUN_DIR  -> RUN_DIR/tier-reads-summary.json
-Reads RUN_DIR/tier-reads/reads.json (trace/filter.py) and RUN_DIR/pytest/*.jsonl (the plugin)."""
+Reads RUN_DIR/tier-reads/reads.json and execs.jsonl (trace/filter.py) and RUN_DIR/pytest/*.jsonl
+(the plugin). Each execve is attributed the same way as a read: to the test its worker was running."""
 import bisect, collections, glob, importlib.util, json, os, re, sys
 run = sys.argv[1]
 here = os.path.dirname(os.path.abspath(__file__))
@@ -63,6 +64,44 @@ core_reads = collections.defaultdict(set)
 for mod, paths in module_reads.items():
     if len(paths) < 700:
         core_reads[sm.group_of(mod)] |= paths
+tracked = set(open(os.path.join(run, "tier-reads", "tracked.txt")).read().split("\n")) - {""}
+def tracked_of(arg, cwd):
+    if not arg or ("/" not in arg and arg not in tracked):
+        return None
+    path = os.path.normpath(arg if arg.startswith("/") else os.path.join(cwd or "/", arg))
+    parts = path.split("/")
+    for i in range(1, len(parts)):
+        r = "/".join(parts[i:])
+        if r in tracked:
+            return r
+    return None
+INTERP = {"bash", "sh", "python", "node", "uv", "just", "env"}
+def program(e):
+    base = os.path.basename(e["path"])
+    if base.startswith("python"): base = "python"
+    if base in INTERP:
+        for a in e["argv"][1:4]:
+            r = tracked_of(a, e.get("cwd"))
+            if r: return f"{base} {r}"
+        if base in ("uv", "just", "env") and len(e["argv"]) > 1:
+            return f"{base} {' '.join(e['argv'][1:3])}"[:80]
+    return base
+exec_tier = collections.defaultdict(collections.Counter); exec_group = collections.defaultdict(collections.Counter)
+scripts_tier = collections.defaultdict(set); scripts_group = collections.defaultdict(set)
+exec_total = 0; exec_outside = collections.Counter()
+for line in open(os.path.join(run, "tier-reads", "execs.jsonl")):
+    e = json.loads(line); exec_total += 1
+    kind, owner_pid = owner(e["pid"])
+    prog = program(e)
+    ran = {r for r in (tracked_of(a, e.get("cwd")) for a in [e["path"], *e["argv"][1:4]]) if r}
+    if kind is None:
+        exec_outside[prog] += 1; continue
+    tier = (workers if kind == "worker" else controllers)[owner_pid]
+    exec_tier[tier][prog] += 1; scripts_tier[tier] |= ran
+    if kind == "worker":
+        n = test_at(owner_pid, e["t"])
+        if n:
+            g = sm.group_of(n.split("::")[0]); exec_group[g][prog] += 1; scripts_group[g] |= ran
 def tops(paths):
     c = collections.Counter(p.split("/")[0] if "/" in p else p for p in paths); return dict(c.most_common())
 out = {
@@ -72,6 +111,13 @@ out = {
  "whole_checkout_copy_modules (read >=700 of the tracked files)": sorted(m for m, p in module_reads.items() if len(p) >= 700),
  "groups_without_whole_copy_modules": {g: {"tracked_files_read": len(p), "by_top_dir": tops(p), "representative_edits_read": [e for e in EDITS if e in p], "files": sorted(p)}
      for g, p in sorted(core_reads.items())},
+ "execve": {
+   "total_recorded": exec_total,
+   "tiers": {t: {"execs": sum(c.values()), "top_programs": c.most_common(15), "tracked_files_executed": sorted(scripts_tier[t]),
+                 "representative_edits_executed": [e for e in EDITS if e in scripts_tier[t]]} for t, c in sorted(exec_tier.items())},
+   "groups": {g: {"execs": sum(c.values()), "top_programs": c.most_common(10), "tracked_files_executed": sorted(scripts_group[g]),
+                  "representative_edits_executed": [e for e in EDITS if e in scripts_group[g]]} for g, c in sorted(exec_group.items())},
+   "outside_any_pytest": {"execs": sum(exec_outside.values()), "top_programs": exec_outside.most_common(15)}},
  "outside_any_pytest (nx, nx.sh heal, uv run)": {"tracked_files_read": len(harness), "by_top_dir": tops(harness)},
  "worker_reads_outside_a_test_phase": len(unattributed),
  "note": "Python imports usually read __pycache__ rather than the source, so an imported tracked module appears only where its bytecode was stale; tests/nx_inputs.py declares imports separately.",
@@ -79,4 +125,5 @@ out = {
 json.dump(out, open(os.path.join(run, "tier-reads-summary.json"), "w"), indent=1)
 print(json.dumps({k: v for k, v in out.items() if k in ("tiers",)}, indent=1)[:3000])
 print({g: (v["tracked_files_read"], v["representative_edits_read"]) for g, v in out["groups"].items()})
+print("execve:", out["execve"]["total_recorded"], {g: (v["execs"], v["representative_edits_executed"]) for g, v in out["execve"]["groups"].items()})
 print("without whole-copy modules:", {g: (v["tracked_files_read"], v["representative_edits_read"]) for g, v in out["groups_without_whole_copy_modules"].items()})

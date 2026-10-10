@@ -1,0 +1,409 @@
+
+> nx run orchestrator-e2e:test
+
+> rm -rf .telemetry/orchestrator-e2e/test && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/orchestrator-e2e/test NO_COLOR=1 COVERAGE_FILE=.coverage.e2e uv run pytest tests/e2e --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval -m 'not reads_docs and not reads_recipes and not reads_checkouts' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0
+
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [  7%]
+........................................................................ [ 14%]
+........................................................................ [ 21%]
+........................................................................ [ 28%]
+........................................................................ [ 35%]
+........................................................................ [ 42%]
+........................................................................ [ 50%]
+.................F...................................................... [ 57%]
+......................................F............................F.... [ 64%]
+........................................................................ [ 71%]
+........................................................................ [ 78%]
+........................................................................ [ 85%]
+........................................................................ [ 92%]
+.......................................................................  [100%]
+=================================== FAILURES ===================================
+_________ test_a_gate_within_budget_prints_its_result_and_is_admitted __________
+[gw3] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+host = Host(root=PosixPath('/tmp/pytest-of-nick/pytest-891/popen-gw3/test_a_gate_within_budget_prin0'), runs=PosixPath('/tmp/...get_prin0/loadavg'), state=PosixPath('/tmp/pytest-of-nick/pytest-891/popen-gw3/test_a_gate_within_budget_prin0/state'))
+dispatches = [223537, 223554, 223569]
+
+    def test_a_gate_within_budget_prints_its_result_and_is_admitted(
+        host: Host, dispatches: list[int]
+    ) -> None:
+        """Actual, budget, headroom, `within`, and the host conditions, the gate's own included.
+    
+        The budget is the tracked file's threshold, read from it rather than restated, and
+        an `onepipeline`-labelled budget the journey places in the file is never run.
+        """
+        threshold = float(_tracked_gate_time()["threshold"])
+        telemetry_ran = host.root / "telemetry-ran"
+        budgets = host.budgets(
+            extra=[
+                {
+                    "id": "cycle-time-probe",
+                    "labels": [ONEPIPELINE_LABEL],
+                    "measure": "elapsed",
+                    "command": ["touch", str(telemetry_ran)],
+                    "unit": "seconds",
+                    "direction": "max",
+                    "threshold": 1,
+                }
+            ]
+        )
+    
+        pushed = _push(host, budgets, host.gate("sleep 3"))
+    
+        assert pushed.returncode == 0, pushed.stdout + pushed.stderr
+        _ran_once(host, pushed)
+        line = pushed.result()
+        seconds = int(host.record.read_text(encoding="utf-8").split("seconds=")[1].split()[0])
+        assert seconds >= 3, host.record.read_text(encoding="utf-8")
+        assert f"actual {seconds} seconds" in line, line
+        assert f"budget {_format(threshold)} seconds" in line, line
+        assert f"headroom {_format(threshold - seconds)} seconds" in line, line
+        assert "— within" in line, line
+        conditions = pushed.conditions()
+        assert conditions["dispatches"] == "3", line
+>       assert conditions["dispatches_max"] == "3", line
+E       AssertionError: budget gate-time: actual 3 seconds, budget 1800 seconds, headroom 1797 seconds (99.83333333333333%) — within; host: load=10.4833984375/14 mem_available=13960MiB dispatches=3 dispatches_max=unknown load1_max=0.10
+E       assert 'unknown' == '3'
+E         
+E         - 3
+E         + unknown
+
+tests/e2e/test_gate_time_budget_e2e.py:383: AssertionError
+____________ test_recording_a_run_reads_no_index_and_walks_no_store ____________
+[gw3] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-nick/pytest-891/popen-gw3/test_recording_a_run_reads_no_0')
+oneharness_bin = '/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/oneharness'
+
+    def test_recording_a_run_reads_no_index_and_walks_no_store(
+        tmp_path: Path, oneharness_bin: str
+    ) -> None:
+        """Record, then read back, through the installed CLI; only the run's own paths open."""
+        store = tmp_path / "history"
+        project = tmp_path / "project"
+        project.mkdir()
+        sessions, legacy = _store_with_unopenable_legacy_indexes(store)
+        for index in legacy:
+            with pytest.raises(PermissionError):
+                index.open("rb")
+        before = _snapshot(sessions)
+        legacy_stat = {index: index.stat() for index in legacy}
+        env = {**_environment(tmp_path), "MOCK_STDOUT": TURN}
+    
+        run = _traced(
+            mock_run_command(
+                oneharness_bin,
+                "--no-config",
+                "--harness",
+                "claude-code",
+                "--events",
+                "--history",
+                "--history-dir",
+                str(store),
+                "--prompt",
+                "record this run",
+                "--format",
+                "json",
+                "--compact",
+                harnesses=("claude-code",),
+            ),
+            trace=tmp_path / "run.trace",
+            cwd=project,
+            env=env,
+        )
+    
+>       assert run.returncode == 0, run.stderr
+E       AssertionError: /usr/bin/strace: test_ptrace_get_syscall_info: PTRACE_TRACEME: Operation not permitted
+E         /usr/bin/strace: ptrace(PTRACE_TRACEME, ...): Operation not permitted
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['/usr/bin/strace', '-f', '-y', '-qq', '-e', 'trace=%file,getdents64', '-o', '/tmp/pytest-of-nic...nfo: PTRACE_TRACEME: Operation not permitted\n/usr/bin/strace: ptrace(PTRACE_TRACEME, ...): Operation not permitted\n').returncode
+
+tests/e2e/test_oneharness_history_segments_e2e.py:238: AssertionError
+_________ test_a_paced_monitor_keeps_the_run_watched_between_its_turns _________
+[gw1] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-nick/pytest-891/popen-gw1/test_a_paced_monitor_keeps_the0')
+oneharness_bin = '/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/oneharness'
+
+    @pytest.mark.xdist_group("observer-graph-liveness")
+    def test_a_paced_monitor_keeps_the_run_watched_between_its_turns(
+        tmp_path: Path, oneharness_bin: str
+    ) -> None:
+        """The shipped document, launched for real, paces the monitor and stays alive for it.
+    
+        Six claims, each read off the graph's own record of one launch or off the run's
+        status while that launch was live:
+    
+        * the monitor opens with the wave, and its next agent turn opens no sooner than the
+          hold after its judge answered — two consecutive turns at least `every` apart;
+        * the run is watched through the hold: the graph does not settle, the member's own
+          heartbeat lands inside every hold long enough to contain one, and `just status`
+          read inside one reports neither `OBSERVER DEAD` nor `OBSERVER NOT RESTARTED`;
+        * the pacemaker fires inside a hold and the graph survives it, taking another monitor
+          turn afterwards;
+        * reading a planner surface restarts the pacemaker's clock and no other member's,
+          because the pacemaker is the one member the launched document declares
+          `resettable`;
+        * the observer ends when the run settles rather than when the hold would have: the
+          driver asks the graph to stop and its process is gone by the time the launch
+          returns, with the monitor's schedule never firing after a hold that opened once
+          the run had settled; and a turn its own closeout cancelled after the settlement is
+          the observer being ended, never a death.
+    
+        Reverting the document's `schedule` fails before any of it: `--set
+        members.monitor.schedule.every` on a member with no schedule is refused by the reader
+        (`this graph has no schedule`), the launch attaches no observer, and the graph records
+        nothing for the run. Reverting `background: false` fails at the reader too, because
+        the pacemaker's deferred first turn then has nothing to hold the run open for it.
+        """
+        if shutil.which("just") is None:
+            pytest.skip("just is not installed")
+        paced = _paced_launch(tmp_path, oneharness_bin)
+        assert paced.status == 0, (
+            f"the attached launch exited {paced.status}, so what follows is read off a run "
+            f"that did not settle cleanly:\n{paced.printed}"
+        )
+        events = paced.events
+        assert events, f"the dag-scope graph recorded nothing for this run:\n{paced.printed}"
+    
+        started = _of(events, "graph-started")
+        assert started, f"the observer graph never started:\n{paced.printed}"
+        # A turn the driver's own closeout cancels once the run has settled is the observer
+        # being ended, not dying: the linked release journals that cancel as a
+        # `provider-failure` death with cause `cancelled`. Every other death counts, and so
+        # does a cancel before the settlement, which nothing in this run asked for.
+        assert paced.settled is not None, (
+            f"the run's detailed stream renders no settlement of `{HELD_NODE}`, so a death "
+            f"cannot be placed before or after it:\n{paced.printed}"
+        )
+        died = [
+            death
+            for death in _of(events, "member-died")
+            if not (death.payload.get("cause") == "cancelled" and death.at >= paced.settled)
+        ]
+        assert not died, (
+            f"a member of the observer graph died during a paced run: {died}\n{paced.printed}"
+        )
+    
+        turns = _agent_turns(events, MONITOR_MEMBER)
+        assert len(turns) >= 3, (
+            f"the `{MONITOR_MEMBER}` member took {len(turns)} agent turn(s) in a run whose "
+            f"worker waited for hold {RELEASE_AT_HOLD} at a {PACED_HOLD_SECONDS}s hold, so "
+            f"it is not being paced through the run — or not held open between its turns at "
+            f"all:\n{paced.printed}"
+        )
+        # A turn the schedule defers opens on the member's `cron-fired`, as every later turn
+        # does; the first one opening on none is the conversation opening with the wave.
+        monitor_fired = _of(events, "cron-fired", MONITOR_MEMBER)
+        fired_first = [firing.at.isoformat() for firing in monitor_fired if firing.at <= turns[0].at]
+        assert not fired_first, (
+            f"the monitor's first turn opened on its schedule firing at {fired_first}, which is "
+            "a deferred first turn: `start_after: 0` is what opens the conversation with the "
+            f"wave, and the document no longer says it:\n{paced.printed}"
+        )
+        gaps = [
+            (later.at - earlier.at).total_seconds()
+            for earlier, later in zip(turns, turns[1:], strict=False)
+        ]
+        assert all(gap >= PACED_HOLD_SECONDS - CLOCK_GRANULARITY_SECONDS for gap in gaps), (
+            f"consecutive `{MONITOR_MEMBER}` agent turns opened {gaps} seconds apart, and the "
+            f"graph was told to hold {PACED_HOLD_SECONDS}s between them; a turn that opened "
+            f"sooner is a conversation the graph is not pacing:\n{paced.printed}"
+        )
+    
+        holds = _holds(events)
+        assert len(holds) >= 2, f"fewer than two holds completed: {holds}\n{paced.printed}"
+        settled = _of(events, "graph-settled")
+        for hold in holds:
+            assert not any(hold.covers(one.at) for one in settled), (
+                f"the observer graph settled inside a hold {hold}, so the monitor's "
+                f"`background: false` is not holding the run open:\n{paced.printed}"
+            )
+        # A held conversation is not silent: every hold long enough that a beat published at
+        # the cadence `HEARTBEAT_BOUND_SECONDS` sets was due inside it contains one. Which
+        # holds that is follows from the bound rather than from where the beats fell, so the
+        # check holds at any phase between the cadence and the holds.
+        heartbeats = _of(events, "member-heartbeat", MONITOR_MEMBER)
+        long_enough = [
+            hold
+            for hold in holds
+            if (hold.closed - hold.opened).total_seconds() > HEARTBEAT_GAP_SECONDS
+        ]
+        assert long_enough, (
+            f"no hold outlasted the {HEARTBEAT_GAP_SECONDS}s between two heartbeats ({holds}), "
+            f"so nothing here says whether a held conversation beats:\n{paced.printed}"
+        )
+        silent = [hold for hold in long_enough if not any(hold.covers(beat.at) for beat in heartbeats)]
+        assert not silent, (
+            f"no heartbeat of the `{MONITOR_MEMBER}` member landed inside the holds {silent} "
+            f"(beats at {[beat.at.isoformat() for beat in heartbeats]}), each longer than the "
+            f"{HEARTBEAT_GAP_SECONDS}s between beats, so a held conversation is silent to the "
+            f"activity watchdog:\n{paced.printed}"
+        )
+        inside = [
+            reading
+            for reading in paced.readings
+            if any(hold.covers(reading.began) and hold.covers(reading.ended) for hold in holds)
+        ]
+        assert inside, (
+            f"no `just status` reading fell wholly inside a hold, so nothing here says what "
+            f"the view reports while the monitor waits: {paced.readings}"
+        )
+        for reading in inside:
+            assert reading.status == 0, (
+                f"`just status` failed inside a hold, so its silence about the observer says "
+                f"nothing:\n{reading.said}"
+            )
+            assert OBSERVER_DEAD not in reading.said and OBSERVER_NOT_RESTARTED not in reading.said, (
+                "`just status` read the monitor's hold as the observer having died, which is "
+                f"what a paced watch must never look like from outside:\n{reading.said}"
+            )
+    
+        fired = _of(events, "cron-fired", PACEMAKER_MEMBER)
+        fired_inside = [firing for firing in fired if any(hold.covers(firing.at) for hold in holds)]
+        assert fired_inside, (
+            f"the `{PACEMAKER_MEMBER}` member never fired inside a monitor hold "
+            f"({[firing.at.isoformat() for firing in fired]} against {holds}), so nothing here "
+            f"shows a background member firing while a foreground one holds the run open:\n"
+            f"{paced.printed}"
+        )
+        assert any(turn.at > fired_inside[0].at for turn in turns), (
+            f"the monitor took no turn after the pacemaker fired at {fired_inside[0].at}, so "
+            f"the firing may have ended the graph:\n{paced.printed}"
+        )
+    
+        # The pacemaker is the graph's one resettable member, read back off this launch: the
+        # surface read during it restarted the pacemaker's clock and nobody else's.
+>       assert _of(events, "cron-reset", PACEMAKER_MEMBER), (
+            f"reading a surface restarted no clock of the `{PACEMAKER_MEMBER}` member, so the "
+            f"launched document did not declare it resettable:\n{paced.printed}"
+        )
+E       AssertionError: reading a surface restarted no clock of the `check-in` member, so the launched document did not declare it resettable:
+E         onepipeline: engine requested 0.63.2 (config/onepipeline.version), about to run 0.63.2 (/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/onepipeline)
+E         Concise graph events; ask the producing library for full detail by stream id.
+E         2026-10-10T08:35:53.112Z  graph:-                      planner-surface-queued kind="check-in" message="a planner-visible update, raised so that reading it resets a clock" source="check-in" blocking=false
+E         2026-10-10T08:35:53.374Z  graph:-                      run-started
+E         2026-10-10T08:35:53.864Z  graph:-                      planner-surfaced kind="check-in" message="a planner-visible update, raised so that reading it resets a clock" source="check-in" blocking=false
+E         2026-10-10T08:35:54.067Z  agent:dag-scope-1791621354049-251959 graph-started
+E         2026-10-10T08:35:54.067Z  agent:dag-scope-1791621354049-251959 member-started
+E         2026-10-10T08:35:54.073Z  agent:dag-scope-1791621354049-251959 member-started
+E         2026-10-10T08:35:54.083Z  agent:dag-scope-1791621354049-251959 turn-started
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T08:35:54.412Z  graph:held                   node-dispatched
+E         2026-10-10T08:35:54.495Z  agent:dag-scope-1791621354049-251959 turn-message
+E         2026-10-10T08:35:54.495Z  agent:dag-scope-1791621354049-251959 turn-completed
+E         2026-10-10T08:35:54.495Z  agent:dag-scope-1791621354049-251959 turn-started
+E         2026-10-10T08:35:54.637Z  agent:dag-scope-1791621354049-251959 judge-decided the monitor took its turn; a report reaches the planner as a finding
+E         2026-10-10T08:35:54.638Z  agent:dag-scope-1791621354049-251959 turn-message
+E         2026-10-10T08:35:54.638Z  agent:dag-scope-1791621354049-251959 turn-completed
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T08:35:55.062Z  agent:node-scope-1791621355042-253628 member-started
+E         2026-10-10T08:35:55.070Z  agent:node-scope-1791621355042-253628 turn-started
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T08:35:59.134Z  agent:dag-scope-1791621354049-251959 member-started
+E         2026-10-10T08:35:59.459Z  agent:dag-scope-1791621354049-251959 turn-started
+E         2026-10-10T08:35:59.462Z  agent:dag-scope-1791621354049-251959 turn-activity › smoke-ok
+E         2026-10-10T08:35:59.471Z  agent:dag-scope-1791621354049-251959 turn-completed
+E         2026-10-10T08:35:59.473Z  agent:dag-scope-1791621354049-251959 member-settled
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T08:36:04.433Z  agent:dag-scope-1791621354049-251959 member-started
+E         2026-10-10T08:36:04.719Z  agent:dag-scope-1791621354049-251959 turn-started
+E         2026-10-10T08:36:04.720Z  agent:dag-scope-1791621354049-251959 turn-activity › smoke-ok
+E         2026-10-10T08:36:04.725Z  agent:dag-scope-1791621354049-251959 turn-completed
+E         2026-10-10T08:36:04.727Z  agent:dag-scope-1791621354049-251959 member-settled
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T08:36:06.565Z  agent:dag-scope-1791621354049-251959 turn-started
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T08:36:06.942Z  agent:dag-scope-1791621354049-251959 turn-completed
+E         2026-10-10T08:36:06.942Z  agent:dag-scope-1791621354049-251959 turn-started
+E         2026-10-10T08:36:07.054Z  agent:dag-scope-1791621354049-251959 judge-decided the monitor took its turn; a report reaches the planner as a finding
+E         2026-10-10T08:36:07.055Z  agent:dag-scope-1791621354049-251959 turn-message
+E         2026-10-10T08:36:07.055Z  agent:dag-scope-1791621354049-251959 turn-completed
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T08:36:09.792Z  agent:dag-scope-1791621354049-251959 member-started
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T08:36:10.024Z  agent:dag-scope-1791621354049-251959 turn-started
+E         2026-10-10T08:36:10.025Z  agent:dag-scope-1791621354049-251959 turn-activity › smoke-ok
+E         2026-10-10T08:36:10.031Z  agent:dag-scope-1791621354049-251959 turn-completed
+E         2026-10-10T08:36:10.032Z  agent:dag-scope-1791621354049-251959 member-settled
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T08:36:15.106Z  agent:dag-scope-1791621354049-251959 member-started
+E         2026-10-10T08:36:15.366Z  agent:dag-scope-1791621354049-251959 turn-started
+E         2026-10-10T08:36:15.366Z  agent:dag-scope-1791621354049-251959 turn-activity › smoke-ok
+E         2026-10-10T08:36:15.372Z  agent:dag-scope-1791621354049-251959 turn-completed
+E         2026-10-10T08:36:15.374Z  agent:dag-scope-1791621354049-251959 member-settled
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T08:36:19.097Z  agent:dag-scope-1791621354049-251959 turn-started
+E         2026-10-10T08:36:19.683Z  agent:dag-scope-1791621354049-251959 turn-message
+E         2026-10-10T08:36:19.684Z  agent:dag-scope-1791621354049-251959 turn-completed
+E         2026-10-10T08:36:19.684Z  agent:dag-scope-1791621354049-251959 turn-started
+E         2026-10-10T08:36:19.848Z  agent:dag-scope-1791621354049-251959 judge-decided the monitor took its turn; a report reaches the planner as a finding
+E         2026-10-10T08:36:19.849Z  agent:dag-scope-1791621354049-251959 turn-message
+E         2026-10-10T08:36:19.850Z  agent:dag-scope-1791621354049-251959 turn-completed
+E         2026-10-10T08:36:19.980Z  agent:node-scope-1791621355042-253628 member-heartbeat
+E         2026-10-10T08:36:20.000Z  agent:node-scope-1791621355042-253628 turn-message
+E         2026-10-10T08:36:20.001Z  agent:node-scope-1791621355042-253628 turn-completed
+E         2026-10-10T08:36:20.001Z  agent:node-scope-1791621355042-253628 turn-started
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T08:36:20.452Z  agent:dag-scope-1791621354049-251959 member-started
+E         2026-10-10T08:36:20.494Z  agent:node-scope-1791621355042-253628 turn-completed
+E         2026-10-10T08:36:20.778Z  agent:dag-scope-1791621354049-251959 turn-started
+E         2026-10-10T08:36:20.779Z  agent:dag-scope-1791621354049-251959 turn-activity › smoke-ok
+E         2026-10-10T08:36:20.789Z  agent:dag-scope-1791621354049-251959 turn-completed
+E         2026-10-10T08:36:20.791Z  agent:dag-scope-1791621354049-251959 member-settled
+E         2026-10-10T08:36:20.991Z  agent:node-scope-1791621355042-253628 member-settled
+E         2026-10-10T08:36:20.998Z  agent:node-scope-1791621355042-253628 graph-settled
+E         2026-10-10T08:36:21.039Z  graph:held                   node-settled done
+E         -- observer-liveness-paced  1/1 done  SETTLED  complete
+E         -- observer-liveness-paced  1/1 done  SETTLED  complete
+E         {"run_id":"observer-liveness-paced","settlement":"complete"}
+E         follow-ups: run observer-liveness-paced holds no follow-up drafts, no tickets and no budget overrun under /tmp/pytest-of-nick/pytest-891/popen-gw1/test_a_paced_monitor_keeps_the0/follow-ups, so there is nothing to verify and no follow-up run was launched
+E         
+E       assert []
+E        +  where [] = _of([Envelope(kind='graph-started', at=datetime.datetime(2026, 10, 10, 8, 35, 54, 67000, tzinfo=datetime.timezone.utc), me...: 'assistant', 'usage': {}, 'started_at': '2026-10-10T08:35:54.083Z', 'finished_at': '2026-10-10T08:35:54.495Z'}), ...], 'cron-reset', 'check-in')
+
+tests/e2e/test_observer_graph_liveness_e2e.py:891: AssertionError
+=========================== short test summary info ============================
+FAILED tests/e2e/test_gate_time_budget_e2e.py::test_a_gate_within_budget_prints_its_result_and_is_admitted
+FAILED tests/e2e/test_oneharness_history_segments_e2e.py::test_recording_a_run_reads_no_index_and_walks_no_store
+FAILED tests/e2e/test_observer_graph_liveness_e2e.py::test_a_paced_monitor_keeps_the_run_watched_between_its_turns@observer-graph-liveness
+3 failed, 1004 passed in 2674.47s (0:44:34)
+Warning: command "rm -rf .telemetry/orchestrator-e2e/test && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/orchestrator-e2e/test NO_COLOR=1 COVERAGE_FILE=.coverage.e2e uv run pytest tests/e2e --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval -m 'not reads_docs and not reads_recipes and not reads_checkouts' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0" exited with non-zero status code
+
+
+ NX   Running target test for project orchestrator-e2e failed
+
+Failed tasks:
+
+- orchestrator-e2e:test
+
+Hint: run the command with --verbose for more details.
+
+
+ NX   Nx detected a flaky task
+
+  orchestrator-e2e:test
+
+Flaky tasks can disrupt your CI pipeline. Automatically retry them with Nx Cloud. Learn more at https://nx.dev/ci/features/flaky-tasks
+
+  Run duration:      44m 31s
+  Cache:             Skipped (--skip-nx-cache)
+  Critical path:     44m 31s (1 task)
+  Recoverable time:  <1ms
+
+  Recommendations:
+    - Cache: drop --skip-nx-cache to restore unchanged tasks instantly.
+    - Speed up or split the longest tasks on the critical path:
+        orchestrator-e2e:test    44m 31s

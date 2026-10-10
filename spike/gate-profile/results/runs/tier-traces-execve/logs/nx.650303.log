@@ -1,0 +1,26 @@
+
+> nx run plan-tooling:test-docs
+
+> rm -rf .telemetry/plan-tooling/test-docs && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/plan-tooling/test-docs NO_COLOR=1 uv run pytest tests/plan_tooling -m reads_docs --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [ 84%]
+.............                                                            [100%]
+85 passed in 1168.99s (0:19:28)
+
+
+
+ NX   Successfully ran target test-docs for project plan-tooling
+
+
+  Run duration:      19m 28s
+  Cache:             Skipped (--skip-nx-cache)
+  Critical path:     19m 28s (1 task)
+  Recoverable time:  <1ms
+
+  Recommendations:
+    - Cache: drop --skip-nx-cache to restore unchanged tasks instantly.
+    - Speed up or split the longest tasks on the critical path:
+        plan-tooling:test-docs    19m 28s

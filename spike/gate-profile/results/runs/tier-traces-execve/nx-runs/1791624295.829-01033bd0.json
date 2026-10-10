@@ -1,0 +1,21 @@
+{
+  "run": {
+    "command": "nx run plan-tooling:test-docs --skip-nx-cache",
+    "startTime": "2026-10-10T09:05:27.607Z",
+    "endTime": "2026-10-10T09:24:55.718Z",
+    "inner": false
+  },
+  "tasks": [
+    {
+      "taskId": "plan-tooling:test-docs",
+      "target": "test-docs",
+      "projectName": "plan-tooling",
+      "hash": "3063644851861303680",
+      "startTime": "2026-10-10T09:05:27.656Z",
+      "endTime": "2026-10-10T09:24:55.710Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    }
+  ]
+}

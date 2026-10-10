@@ -1,0 +1,26 @@
+{
+  "mode": "cmd",
+  "label": "tier-traces-execve",
+  "base_commit": "3b6a1ef79ff3953763fcf644c496c5d6a9248e36",
+  "measured_head": "3b6a1ef79ff3953763fcf644c496c5d6a9248e36",
+  "tree": "3a2e8edb4850a17ffe0d98d6500ad7d6f02b2ca5",
+  "edit": "none",
+  "edit_spec": "",
+  "cache_state": "warm",
+  "comparison_base": "origin/main@803859874cd324b065abba029263ac8fc121bf7b",
+  "nx_cache_dir": "/home/nick.guest/.cache/gate-profile-spike/xdg/ai-orchestrator/nx/756e79f93796751d",
+  "nx_cache_entries_before_seed": 36,
+  "nx_cache_entries_at_start": 36,
+  "uv": "uv 0.11.32 (aarch64-unknown-linux-gnu)",
+  "nx": "v23.1.0",
+  "llmlint": "llmlint 0.4.7",
+  "llmlint_fingerprint_sha256_16": "f8415a2fd16a02f4",
+  "start": 1791620678.6486285,
+  "end": 1791626969.996339,
+  "exit_status": 0,
+  "cmd": [
+    "bash",
+    "-c",
+    "\"$GATE_PROFILE_HARNESS\"/trace/tiers.sh"
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "run": {
+    "command": "nx run orchestrator-e2e:test-checkouts --skip-nx-cache",
+    "startTime": "2026-10-10T10:06:49.848Z",
+    "endTime": "2026-10-10T10:08:20.281Z",
+    "inner": false
+  },
+  "tasks": [
+    {
+      "taskId": "orchestrator-e2e:test-checkouts",
+      "target": "test-checkouts",
+      "projectName": "orchestrator-e2e",
+      "hash": "9938821951627407606",
+      "startTime": "2026-10-10T10:06:49.896Z",
+      "endTime": "2026-10-10T10:08:20.273Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    }
+  ]
+}
