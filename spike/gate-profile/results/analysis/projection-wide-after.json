@@ -1,0 +1,17 @@
+{
+ "after_three_tiers_s": {
+  "orchestrator-e2e:test": 920.7,
+  "orchestrator:test-docs": 414.1,
+  "plan-tooling:test": 912.9
+ },
+ "other_phase1_tasks_sum_s (wide-cold, before)": 1301.6,
+ "phase1_total_work_s": 3549.3,
+ "phase1_lower_bound_work_over_3_s": 1183.1,
+ "phase1_list_scheduled_s": 1281.1,
+ "phase2_uncached_s (narrow-script run)": 28.1,
+ "check_nx_cache_s (wide-cold run)": 3.3,
+ "deterministic_tier_projected_s": 1312.5,
+ "llmlint_phases_replayed_s (wide-cold run: validate+lint-llm-diff+handoff)": 1.0,
+ "complete_gate_wide_projected_s": 1313.5,
+ "complete_gate_wide_before_s": 1943.3
+}
