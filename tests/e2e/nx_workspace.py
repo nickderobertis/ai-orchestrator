@@ -111,10 +111,21 @@ def copy_working_tree(destination: Path) -> None:
         shutil.copy2(REPO_ROOT / relative, target, follow_symlinks=False)
 
 
+def isolated_node_modules(destination: Path) -> None:
+    """SPIKE PROTOTYPE (isolated writer toolchains): give a copy a node_modules of its own.
+
+    A hardlinked tree (`cp -al`): package files share inodes with this checkout's install,
+    but every directory — `.bin` included — is the copy's own, so the in-sync Bun install
+    `scripts/nx.sh` runs in the copy re-links the copy's `.bin` and never this checkout's.
+    Measured at 0.69 s per copy, and no data blocks.
+    """
+    subprocess.run(["cp", "-al", str(NODE_MODULES), str(destination / "node_modules")], check=True)
+
+
 def copy_checkout(destination: Path) -> None:
-    """A copy of this checkout wired to this checkout's own workspace install."""
+    """A copy of this checkout with a private copy of this checkout's workspace install."""
     copy_working_tree(destination)
-    (destination / "node_modules").symlink_to(NODE_MODULES, target_is_directory=True)
+    isolated_node_modules(destination)
 
 
 def answering_this_checkouts_origin(destination: Path) -> None:

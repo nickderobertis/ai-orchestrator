@@ -136,7 +136,7 @@ class TwoPaths:
         self.rebuilt += 1
         scratch = self.scratch_parent / f"orchestrator-merge-{self.rebuilt}" / "worktree"
         git("worktree", "add", "--detach", str(scratch), f"origin/{BASE_BRANCH}", cwd=self.clone)
-        (scratch / "node_modules").symlink_to(REPO_ROOT / "node_modules", target_is_directory=True)
+        __import__('nx_workspace').isolated_node_modules(scratch)
         git("merge", "--squash", f"origin/{FEATURE_BRANCH}", cwd=scratch)
         git("commit", "-m", "publication", cwd=scratch)
         try:
@@ -251,7 +251,7 @@ def two_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TwoPa
     exclude.write_text("node_modules\n", encoding="utf-8")
     worker = tmp_path / "run" / "worker"
     git("worktree", "add", "-b", FEATURE_BRANCH, str(worker), f"origin/{BASE_BRANCH}", cwd=clone)
-    (worker / "node_modules").symlink_to(REPO_ROOT / "node_modules", target_is_directory=True)
+    __import__('nx_workspace').isolated_node_modules(worker)
 
     binaries = tmp_path / "bin"
     real_llmlint = shutil.which("llmlint")

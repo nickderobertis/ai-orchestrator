@@ -389,6 +389,28 @@ def _real_plan_store_roots(request: pytest.FixtureRequest) -> Iterator[None]:
         yield
 
 
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """SPIKE PROTOTYPE: no test joins the shared-toolchain group any more.
+
+    Writers work on toolchains of their own (`nx_workspace.isolated_node_modules`), and an
+    in-sync `uv run` neither rewrites `.venv` nor holds its lock past the sync check, so
+    readers need no scheduling. Runs before xdist's own hook appends `@group` to node ids.
+    """
+    from nx_workspace import SHARED_TOOLCHAIN_GROUP
+
+    for item in items:
+        for node in item.listchain():
+            node.own_markers[:] = [
+                mark
+                for mark in node.own_markers
+                if not (
+                    mark.name == "xdist_group"
+                    and (mark.args[0] if mark.args else mark.kwargs.get("name")) == SHARED_TOOLCHAIN_GROUP
+                )
+            ]
+
+
 @pytest.fixture(scope="session")
 def workspace_install() -> None:
     """Provision `node_modules` once per session, as `scripts/nx.sh` would.
@@ -397,6 +419,11 @@ def workspace_install() -> None:
     have happened here first; paying for it once per session is what keeps that from
     being a per-journey cost.
     """
+    # SPIKE PROTOTYPE: an in-sync `bun install` re-links every `.bin` entry, so a session
+    # fixture that runs it in a provisioned checkout is a writer racing every reader of
+    # `node_modules/.bin`. Provision only what is absent.
+    if (REPO_ROOT / "node_modules" / ".bin" / "nx").exists():
+        return
     result = subprocess.run([str(WORKSPACE_INSTALL)], text=True, capture_output=True)
     if result.returncode != 0:
         pytest.fail(f"workspace-install failed: {result.stderr or result.stdout}")

@@ -207,7 +207,7 @@ def workspace(tmp_path: Path) -> Workspace:
         (root / relative).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(REPO_ROOT / relative, root / relative)
     (root / ".gitignore").write_text("node_modules\n.nx\n.logs\n", encoding="utf-8")
-    (root / "node_modules").symlink_to(NODE_MODULES, target_is_directory=True)
+    __import__('nx_workspace').isolated_node_modules(root)
     shutil.copytree(REPO_ROOT / "tests/fixtures/nx-cache", root / "tests/fixtures/nx-cache")
     marker = tmp_path / "ran"
     (root / DEPENDENCY).mkdir()

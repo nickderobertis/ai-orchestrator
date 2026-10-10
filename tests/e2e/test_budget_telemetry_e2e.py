@@ -237,7 +237,7 @@ def workspace(tmp_path: Path) -> Workspace:
     (root / ".gitignore").write_text(
         "node_modules\n.nx\n.logs\n.telemetry\n__pycache__\n", encoding="utf-8"
     )
-    (root / "node_modules").symlink_to(NODE_MODULES, target_is_directory=True)
+    __import__('nx_workspace').isolated_node_modules(root)
     shutil.copytree(REPO_ROOT / "tests/fixtures/nx-cache", root / "tests/fixtures/nx-cache")
     (root / PROJECT).mkdir()
     (root / PROJECT / "project.json").write_text(json.dumps(_project(), indent=2), "utf-8")

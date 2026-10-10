@@ -118,12 +118,22 @@ def violations(graph: Graph, stated: tuple[Rule, ...]) -> list[str]:
     return found
 
 
+def _private_copy(parent: Path) -> Path:
+    """SPIKE PROTOTYPE: the wrapper heals the install it runs in, so it runs in a copy."""
+    from nx_workspace import copy_checkout
+
+    copy = parent / "checkout"
+    copy_checkout(copy)
+    subprocess.run(["git", "init", "-q", str(copy)], check=True)
+    return copy
+
+
 def _nx_graph(written: Path) -> dict:
     """The project graph this checkout's own Nx builds, through the repository's wrapper."""
     result = subprocess.run(
         ["./scripts/nx.sh", "graph", f"--file={written}"],
-        cwd=REPO_ROOT,
-        env={**os.environ, "NX_DAEMON": "false"},
+        cwd=_private_copy(written.parent),
+        env={**os.environ, "NX_DAEMON": "false", "UV_NO_SYNC": "1"},
         check=False,
         text=True,
         capture_output=True,
