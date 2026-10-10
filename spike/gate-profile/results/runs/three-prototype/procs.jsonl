@@ -1,0 +1,6 @@
+{"event": "start", "pid": 3669445, "kind": "nx", "label": "other run orchestrator-e2e:test", "t": 1791603975.8863995}
+{"event": "start", "pid": 3669446, "kind": "nx", "label": "other run plan-tooling:test", "t": 1791603975.8863995}
+{"event": "start", "pid": 3669447, "kind": "nx", "label": "other run orchestrator:test-docs", "t": 1791603975.8863995}
+{"event": "start", "pid": 3669640, "kind": "nx", "label": "other run orchestrator:test-docs", "t": 1791603975.8863995}
+{"event": "start", "pid": 3669652, "kind": "nx", "label": "other run orchestrator-e2e:test", "t": 1791603975.8863995}
+{"event": "start", "pid": 3669680, "kind": "nx", "label": "other run plan-tooling:test", "t": 1791603975.8863995}

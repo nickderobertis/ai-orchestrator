@@ -1,0 +1,21 @@
+{
+  "run": {
+    "command": "nx run orchestrator:test-docs",
+    "startTime": "2026-10-10T03:46:15.931Z",
+    "endTime": "2026-10-10T03:53:10.111Z",
+    "inner": false
+  },
+  "tasks": [
+    {
+      "taskId": "orchestrator:test-docs",
+      "target": "test-docs",
+      "projectName": "orchestrator",
+      "hash": "10209747337856870106",
+      "startTime": "2026-10-10T03:46:15.937Z",
+      "endTime": "2026-10-10T03:53:10.080Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 1
+    }
+  ]
+}

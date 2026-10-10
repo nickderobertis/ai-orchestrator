@@ -1,0 +1,21 @@
+{
+  "run": {
+    "command": "nx run orchestrator-e2e:test",
+    "startTime": "2026-10-10T03:46:15.792Z",
+    "endTime": "2026-10-10T04:01:36.468Z",
+    "inner": false
+  },
+  "tasks": [
+    {
+      "taskId": "orchestrator-e2e:test",
+      "target": "test",
+      "projectName": "orchestrator-e2e",
+      "hash": "9746752852970608277",
+      "startTime": "2026-10-10T03:46:15.803Z",
+      "endTime": "2026-10-10T04:01:36.455Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 1
+    }
+  ]
+}

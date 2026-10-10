@@ -1,0 +1,1057 @@
+
+> nx run orchestrator:test-docs
+
+> rm -rf .telemetry/orchestrator/test-docs && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/orchestrator/test-docs NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/host_sweep --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/plan_store_assets --ignore=tests/render_diagram --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval --ignore=tests/unfinished --ignore=tests/graceful_cancel --ignore=tests/session_open_conflict --ignore=tests/manager_allowlist -m reads_docs --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [ 14%]
+......................F................................................. [ 28%]
+........................................................................ [ 42%]
+.......................................................................F [ 56%]
+F......F...FF.F...........FFF...F.FF...F..........F..................... [ 70%]
+........................................................................ [ 85%]
+....................................................s................... [ 99%]
+....                                                                     [100%]
+=================================== FAILURES ===================================
+_ test_a_worktree_provisioned_before_the_pin_moved_reinstalls_from_the_lockfile _
+[gw3] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-nick/pytest-788/popen-gw3/test_a_worktree_provisioned_be0')
+
+    @pytest.mark.reads_docs
+    def test_a_worktree_provisioned_before_the_pin_moved_reinstalls_from_the_lockfile(
+        tmp_path: Path,
+    ) -> None:
+        """A moved pin heals itself, the way a missing `node_modules` already did.
+    
+        Every checkout that already had a `node_modules` used to be exempt from the
+        lockfile: the installer asked whether Nx was there, which answers for *an*
+        install rather than *the locked* one. So the pin moved, nothing reinstalled,
+        and an operator reading the served view had no way to tell a stale install
+        from a broken feature.
+    
+        Driven against real Bun and a lockfile that really moved, because the whole
+        defect was an install nobody could see: both entry points into the wrapper
+        chain are exercised — the script every recipe routes through, and a `just`
+        recipe on top of it.
+        """
+        worktree = tmp_path / "moved-pin-worktree"
+        # `--no-checkout`, so this working tree's own change is what provisions here.
+        _run("git", "worktree", "add", "--no-checkout", "--detach", str(worktree), "HEAD")
+        try:
+            copy_working_tree(worktree)
+            manifest = worktree / "package.json"
+            lockfile = worktree / "bun.lock"
+            committed_manifest = manifest.read_bytes()
+            committed_lock = lockfile.read_bytes()
+            pinned = json.loads(committed_manifest)["dependencies"][STALENESS_WITNESS]
+    
+            # Provisioned from the lockfile as it was before the bump, for real: the
+            # tree a checkout carries when the pin moves under it.
+            before_the_bump = json.loads(committed_manifest)
+            del before_the_bump["dependencies"][STALENESS_WITNESS]
+            manifest.write_text(json.dumps(before_the_bump, indent=2) + "\n", encoding="utf-8")
+            provision = _run("bun", "install", cwd=worktree)
+            assert provision.returncode == 0, provision.stderr
+            assert (worktree / "node_modules/.bin/nx").is_file()
+            assert not (worktree / "node_modules" / STALENESS_WITNESS).exists()
+    
+            # The bump lands: the committed manifest and lockfile move, and nothing
+            # else does.
+            manifest.write_bytes(committed_manifest)
+            lockfile.write_bytes(committed_lock)
+    
+            wrapper = _run("./scripts/nx.sh", "show", "projects", cwd=worktree)
+    
+            assert wrapper.returncode == 0, wrapper.stderr
+            bundle = worktree / "node_modules" / STALENESS_WITNESS / "package.json"
+            assert bundle.is_file(), (
+                f"the wrapper left {STALENESS_WITNESS} uninstalled under a {pinned} pin: a tree "
+                f"provisioned before the bump stayed exempt from the lockfile"
+            )
+            installed = json.loads(bundle.read_text(encoding="utf-8"))
+            assert installed["version"] == pinned, (
+                f"the wrapper left {STALENESS_WITNESS} {installed['version']} installed under a "
+                f"{pinned} pin"
+            )
+            assert lockfile.read_bytes() == committed_lock, "the committed lockfile decides"
+    
+            # Again from the recipe an operator runs, against a tree that disagrees with
+            # the lockfile the other way: a package the lockfile names, gone.
+            shutil.rmtree(worktree / "node_modules" / STALENESS_WITNESS)
+            recipe = _run("just", "format-check", cwd=worktree)
+    
+>           assert recipe.returncode == 0, recipe.stdout + recipe.stderr
+E           AssertionError: ./scripts/nx.sh run-many -t format-check
+E             
+E              NX   Running target format-check for project orchestrator:
+E             
+E             - orchestrator
+E             
+E             
+E             
+E             > nx run orchestrator:format-check
+E             
+E             > uv run ruff format --check .
+E             
+E             warning: `VIRTUAL_ENV=/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+E             Would reformat: [1mtests/conftest.py[0m
+E             Would reformat: [1mtests/e2e/test_budget_target_e2e.py[0m
+E             Would reformat: [1mtests/e2e/test_budget_telemetry_e2e.py[0m
+E             Would reformat: [1mtests/e2e/test_llmlint_two_path_verdict_e2e.py[0m
+E             Would reformat: [1mtests/e2e/test_nx_wrapper_version_e2e.py[0m
+E             5 files would be reformatted, 349 files already formatted
+E             Warning: command "uv run ruff format --check ." exited with non-zero status code
+E             
+E             
+E              NX   Running target format-check for project orchestrator failed
+E             
+E             Failed tasks:
+E             
+E             - orchestrator:format-check
+E             
+E               Run duration:      243ms
+E               Critical path:     216ms (1 task)
+E               Recoverable time:  <1ms
+E             
+E               Recommendations:
+E                 - Speed up or split the longest tasks on the critical path:
+E                     orchestrator:format-check    216ms
+E             nx: targets failed; fix the reported project findings and rerun the same 'just' recipe (full output: /tmp/pytest-of-nick/pytest-788/popen-gw3/test_a_worktree_provisioned_be0/moved-pin-worktree/.logs/nx.log)
+E             error: Recipe `format-check` failed on line 153 with exit code 1
+E             
+E           assert 1 == 0
+E            +  where 1 = CompletedProcess(args=('just', 'format-check'), returncode=1, stdout='', stderr='./scripts/nx.sh run-many -t format-ch..._provisioned_be0/moved-pin-worktree/.logs/nx.log)\nerror: Recipe `format-check` failed on line 153 with exit code 1\n').returncode
+
+tests/e2e/test_workspace_contract_e2e.py:1831: AssertionError
+______ test_a_module_whose_setup_writes_this_checkout_lands_on_one_worker ______
+[gw3] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-nick/pytest-788/popen-gw3/test_a_module_whose_setup_writ0')
+
+    def test_a_module_whose_setup_writes_this_checkout_lands_on_one_worker(
+        tmp_path: Path,
+    ) -> None:
+        """An autouse module-scoped fixture constrains its whole module, not its callers.
+    
+        `repository_credentials_file` in `tests/ask_seam/launch/test_launch_ask_seam_e2e.py`
+        adds a name to this checkout's own `.env` and puts the original bytes back afterwards. It is
+        `scope="module"` and `autouse`, so it runs once per worker that receives *any* test
+        from that module — and its create is `O_EXCL`, so two workers reaching it together
+        means one of them raises `FileExistsError` before its test starts.
+    
+        That is not hypothetical. The five tests of that module which named no group were
+        scattered across the other workers by `--dist loadgroup`, and every one of them
+        errored in setup on a publication clone — where, unlike a developer's checkout,
+        there is no `.env` for the fixture to append to, so all four workers took the
+        creating branch at once. The gate refused the push and the branch could not land.
+    
+        The rule the older reasoning got wrong was to ask what each test's *body* does:
+        refusal journeys launch no run and wait on no deadline, so leaving them ungrouped
+        read as free. Setup is what they share, and setup is not free.
+        """
+        writers = _module_scope_checkout_writers()
+        assert writers, (
+            "no journey module declares an autouse module-scoped fixture that touches "
+            f"{SHARED_CHECKOUT_ROOT}; this scan is looking for the shape that forces a "
+            "module onto one worker, and finding none means it has stopped matching"
+        )
+    
+        groups = _collected_groups(tmp_path)
+        for module, fixture in sorted(writers.items()):
+            collected = {node: group for node, group in groups.items() if f"/{module}::" in node}
+            assert collected, f"{module} declares {fixture} but collected no tests"
+    
+            scattered = sorted(node for node, group in collected.items() if not group)
+>           assert not scattered, (
+                f"{module}::{fixture} is autouse and module-scoped, so it runs on every "
+                f"worker that receives a test from {module}; these name no xdist group and "
+                f"so are scattered across workers by `--dist loadgroup`, running that "
+                f"fixture concurrently against one shared checkout: {scattered}"
+            )
+E           AssertionError: test_launch_ask_seam_e2e.py::repository_credentials_file is autouse and module-scoped, so it runs on every worker that receives a test from test_launch_ask_seam_e2e.py; these name no xdist group and so are scattered across workers by `--dist loadgroup`, running that fixture concurrently against one shared checkout: ['tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_direct_dispatch_is_given_no_session_at_all[orchestrate_adopted]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_direct_dispatch_is_given_no_session_at_all[orchestrate_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_direct_dispatch_is_given_no_session_at_all[orchestrate_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_direct_dispatch_is_given_no_session_at_all[plan_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_direct_dispatch_is_given_no_session_at_all[plan_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_dispatch_of_a_launch_can_reach_its_manager_with_nothing_set_up_by_hand[orchestrate_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_dispatch_of_a_launch_can_reach_its_manager_with_nothing_set_up_by_hand[orchestrate_lifecycle]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_dispatch_of_a_launch_can_reach_its_manager_with_nothing_set_up_by_hand[plan_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_dispatch_of_a_launch_can_reach_its_manager_with_nothing_set_up_by_hand[plan_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_dispatch_of_a_plan_launch_resolves_the_authoring_source_to_that_root', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_dispatch_over_a_chosen_root_resolves_its_store_to_that_root', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_launch_whose_wrapper_it_cannot_run_is_refused_before_anything_starts[adopt]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_launch_whose_wrapper_it_cannot_run_is_refused_before_anything_starts[start]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_lifecycle_dispatch_is_given_the_session_its_worktree_belongs_to', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_keeps_a_plan_authoring_root_its_caller_already_chose', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_over_an_unusable_credentials_file_writes_nothing[malformed line]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_over_an_unusable_credentials_file_writes_nothing[not a regular file]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_over_an_unusable_plan_authoring_root_writes_nothing[a file-<lambda>]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_over_an_unusable_plan_authoring_root_writes_nothing[a read-only directory-<lambda>]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_takes_back_its_own_records_and_leaves_everyone_elses', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_tells_its_dispatch_the_run_it_actually_created', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_that_cannot_search_the_ledger_refuses_rather_than_assuming[a directory nothing may search]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_that_cannot_search_the_ledger_refuses_rather_than_assuming[a file]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_whose_helper_cannot_be_loaded_writes_nothing[ask-manager-env.sh]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_whose_helper_cannot_be_loaded_writes_nothing[credentials-env.sh]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_whose_helper_cannot_be_loaded_writes_nothing[plan-root-env.sh]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_without_a_helper_that_establishes_its_environment_writes_nothing[ask-manager-env.sh]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_without_a_helper_that_establishes_its_environment_writes_nothing[credentials-env.sh]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_without_a_helper_that_establishes_its_environment_writes_nothing[plan-root-env.sh]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_writes_its_own_project_under_the_root_its_caller_chose', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_second_plan_launch_under_one_name_is_refused_rather_than_given_another_run', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_exports_repository_credentials_onto_its_dispatch[orchestrate_adopted]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_exports_repository_credentials_onto_its_dispatch[orchestrate_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_exports_repository_credentials_onto_its_dispatch[orchestrate_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_exports_repository_credentials_onto_its_dispatch[plan_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_exports_repository_credentials_onto_its_dispatch[plan_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_gives_its_dispatch_an_asker_to_ask_as[orchestrate_adopted]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_gives_its_dispatch_an_asker_to_ask_as[orchestrate_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_gives_its_dispatch_an_asker_to_ask_as[orchestrate_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_gives_its_dispatch_an_asker_to_ask_as[plan_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_gives_its_dispatch_an_asker_to_ask_as[plan_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_gives_its_dispatch_the_absolute_runs_root_its_channel_is_under[orchestrate_adopted]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_gives_its_dispatch_the_absolute_runs_root_its_channel_is_under[orchestrate_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_gives_its_dispatch_the_absolute_runs_root_its_channel_is_under[orchestrate_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_gives_its_dispatch_the_absolute_runs_root_its_channel_is_under[orchestrate_lifecycle]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_gives_its_dispatch_the_absolute_runs_root_its_channel_is_under[plan_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_gives_its_dispatch_the_absolute_runs_root_its_channel_is_under[plan_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_records_this_checkouts_bus_configuration_for_its_run[orchestrate_adopted]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_records_this_checkouts_bus_configuration_for_its_run[orchestrate_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_records_this_checkouts_bus_configuration_for_its_run[orchestrate_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_records_this_checkouts_bus_configuration_for_its_run[orchestrate_lifecycle]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_records_this_checkouts_bus_configuration_for_its_run[plan_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_records_this_checkouts_bus_configuration_for_its_run[plan_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_records_this_checkouts_bus_configuration_for_its_run[plan_over_a_chosen_root]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_orchestrate_launch_gives_its_dispatch_a_wrapper_it_can_run[orchestrate_adopted]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_orchestrate_launch_gives_its_dispatch_a_wrapper_it_can_run[orchestrate_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_orchestrate_launch_gives_its_dispatch_a_wrapper_it_can_run[orchestrate_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_orchestrate_launch_gives_its_dispatch_the_run_it_is_under[orchestrate_adopted]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_orchestrate_launch_gives_its_dispatch_the_run_it_is_under[orchestrate_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_orchestrate_launch_gives_its_dispatch_the_run_it_is_under[orchestrate_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_plan_launch_gives_its_dispatch_each_input_the_wrapper_needs[ONEPIPELINE_RUN_ID-plan_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_plan_launch_gives_its_dispatch_each_input_the_wrapper_needs[ONEPIPELINE_RUN_ID-plan_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_plan_launch_gives_its_dispatch_each_input_the_wrapper_needs[ORCHESTRATOR_ASK_MANAGER-plan_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_plan_launch_gives_its_dispatch_each_input_the_wrapper_needs[ORCHESTRATOR_ASK_MANAGER-plan_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_plan_launch_gives_its_dispatch_the_plan_authoring_root_of_its_checkout[plan_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_plan_launch_gives_its_dispatch_the_plan_authoring_root_of_its_checkout[plan_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_the_launching_checkout_reads_the_plan_its_dispatch_authored']
+E           assert not ['tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_direct_dispatch_is_given_no_session_at_all[orchestrate_ado...seam_e2e.py::test_a_dispatch_of_a_launch_can_reach_its_manager_with_nothing_set_up_by_hand[orchestrate_attached]', ...]
+
+tests/test_nx_cache_scope.py:813: AssertionError
+__ test_the_toolchain_writers_and_readers_are_collected_into_one_xdist_group ___
+[gw3] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-nick/pytest-788/popen-gw3/test_the_toolchain_writers_and0')
+
+    def test_the_toolchain_writers_and_readers_are_collected_into_one_xdist_group(
+        tmp_path: Path,
+    ) -> None:
+        """One group name, or the constraint is not a constraint.
+    
+        `uv` holds an **exclusive** lock on `<root>/.venv`, and every `just` recipe in this
+        suite reaches its tool through `uv run`, which waits on that lock for as long as a
+        holder keeps it. A journey running this checkout's own `session-setup.sh` takes that
+        lock and rewrites the `.venv/bin` other workers resolve their tools from; the
+        deadline-based channel journeys are what waits on it, one `just` recipe at a time.
+    
+        `--dist loadgroup` co-locates the tests that share a group *name* and says nothing
+        about two different names — those run on two workers at once. So a writer in one
+        group and a reader in another are exactly as concurrent as if neither declared
+        anything, which is what this asserts against: not that each side declares *a*
+        group, but that every one of them resolves to the same one.
+    
+        Read off a real collection, so the assertion is about the items the scheduler will
+        see rather than about how any of them happens to be spelled. The readers are found
+        the same way — which modules name a launching `just` recipe, over the recipes
+        derived from the `justfile` — so what may scatter is decided by something this check
+        reads.
+    
+        Inside a module that names one, nothing may scatter, whatever its tests look like.
+        The premise this replaces allowed an ungrouped test there on the ground that the
+        refusal journeys launch no run: their bodies do not, and their fixtures do. Asking
+        what a test's *body* does is the same mistake
+        :func:`test_a_module_whose_setup_writes_this_checkout_lands_on_one_worker` records.
+        """
+        groups = _collected_groups(tmp_path)
+        recipes = _launching_recipes()
+        assert DOCUMENTED_LAUNCH_RECIPE in recipes, (
+            f"`just {DOCUMENTED_LAUNCH_RECIPE}` is the launch this repository documents, and "
+            f"this scan did not find it among {sorted(recipes)}: either the recipe stopped "
+            f"reaching /{REACHES_A_LAUNCH.pattern}/, or `JUST_RECIPE` has stopped reading "
+            "recipe bodies out of the justfile"
+        )
+    
+        launching = _modules_naming_a_launch(ASK_SEAM_ROOT, recipes)
+        assert launching, (
+            f"no test module under {ASK_SEAM_ROOT} names {sorted(recipes)}; that is the whole "
+            "of what those journeys do, so finding none means this scan has stopped matching "
+            "rather than that the constraint has lifted"
+        )
+    
+        readers = {
+            node: group
+            for node, group in groups.items()
+            if any(f"/{module}::" in node for module in launching)
+        }
+        assert readers, (
+            f"{launching} name a launch but collected no tests, so nothing there is "
+            "serialised against the journeys that re-provision this checkout"
+        )
+    
+        scattered = sorted(node for node, group in readers.items() if not group)
+>       assert not scattered, (
+            f"these are collected from {launching}, which launch runs through `just "
+            f"{'`/`just '.join(sorted(recipes))}`, and declare no xdist group — so "
+            f"`--dist loadgroup` scatters them across workers, where each spends a real "
+            f"launch beside the journeys that are polling `just` recipes through the `uv` "
+            f"lock it holds: {scattered}"
+        )
+E       AssertionError: these are collected from ['test_ask_manager_e2e.py', 'test_channel_reply_e2e.py', 'test_follow_up_drafts_launch_e2e.py', 'test_launch_ask_seam_e2e.py', 'test_planner_fallback_ask_e2e.py', 'test_settled_correlated_ruling_e2e.py', 'test_structural_reply_e2e.py'], which launch runs through `just finish-plan`/`just follow-ups`/`just orchestrate`/`just plan`, and declare no xdist group — so `--dist loadgroup` scatters them across workers, where each spends a real launch beside the journeys that are polling `just` recipes through the `uv` lock it holds: ['tests/ask_seam/ask_manager/test_ask_manager_e2e.py::test_a_dispatched_agent_is_given_the_run_it_belongs_to', 'tests/ask_seam/ask_manager/test_ask_manager_e2e.py::test_a_question_nobody_answers_ends_in_a_named_timeout_and_a_non_zero_exit', 'tests/ask_seam/ask_manager/test_ask_manager_e2e.py::test_a_question_that_cannot_reach_a_manager_names_its_cause[a blank run]', 'tests/ask_seam/ask_manager/test_ask_manager_e2e.py::test_a_question_that_cannot_reach_a_manager_names_its_cause[a climbing run]', 'tests/ask_seam/ask_manager/test_ask_manager_e2e.py::test_a_question_that_cannot_reach_a_manager_names_its_cause[a file beside words]', 'tests/ask_seam/ask_manager/test_ask_manager_e2e.py::test_a_question_that_cannot_reach_a_manager_names_its_cause[a run with no launch record]', 'tests/ask_seam/ask_manager/test_ask_manager_e2e.py::test_a_question_that_cannot_reach_a_manager_names_its_cause[a window that is not seconds]', 'tests/ask_seam/ask_manager/test_ask_manager_e2e.py::test_a_question_that_cannot_reach_a_manager_names_its_cause[an empty question]', 'tests/ask_seam/ask_manager/test_ask_manager_e2e.py::test_a_question_that_cannot_reach_a_manager_names_its_cause[an empty run]', 'tests/ask_seam/ask_manager/test_ask_manager_e2e.py::test_a_question_that_cannot_reach_a_manager_names_its_cause[an unknown option]', 'tests/ask_seam/ask_manager/test_ask_manager_e2e.py::test_a_question_that_cannot_reach_a_manager_names_its_cause[an unreadable file]', 'tests/ask_seam/ask_manager/test_ask_manager_e2e.py::test_an_observer_member_cannot_tell_its_run_from_an_enclosing_one_by_that_variable', 'tests/ask_seam/ask_manager/test_ask_manager_e2e.py::test_an_unset_run_is_refused_by_name_rather_than_guessed_at', 'tests/ask_seam/ask_manager/test_ask_manager_e2e.py::test_each_way_of_asking_puts_one_question_to_the_manager_and_returns_only_their_reply[a relative --file]', 'tests/ask_seam/ask_manager/test_ask_manager_e2e.py::test_each_way_of_asking_puts_one_question_to_the_manager_and_returns_only_their_reply[several arguments]', 'tests/ask_seam/ask_manager/test_ask_manager_e2e.py::test_each_way_of_asking_puts_one_question_to_the_manager_and_returns_only_their_reply[stdin]', 'tests/ask_seam/ask_manager/test_ask_manager_e2e.py::test_the_round_trip_survives_a_differently_pinned_tool_at_the_once_shared_path', 'tests/ask_seam/channel_reply/test_channel_reply_e2e.py::test_a_complete_command_closes_a_settled_run_whose_driver_has_exited', 'tests/ask_seam/channel_reply/test_channel_reply_e2e.py::test_a_completion_verdict_closes_a_settled_run_whose_driver_has_exited', 'tests/ask_seam/channel_reply/test_channel_reply_e2e.py::test_a_live_edit_is_never_asked_the_lifecycle_question', 'tests/ask_seam/channel_reply/test_channel_reply_e2e.py::test_a_novel_task_the_judged_review_refuses_is_refused_whole_with_its_findings', 'tests/ask_seam/channel_reply/test_channel_reply_e2e.py::test_a_novel_task_whose_judged_turn_answers_nothing_is_never_applied', 'tests/ask_seam/channel_reply/test_channel_reply_e2e.py::test_a_ruling_binds_to_its_question_and_one_no_pending_question_holds_is_refused', 'tests/ask_seam/channel_reply/test_channel_reply_e2e.py::test_a_valid_edit_is_applied_by_the_driver_holding_the_run', 'tests/ask_seam/channel_reply/test_channel_reply_e2e.py::test_a_valid_edit_to_a_run_nothing_drives_is_applied_by_the_reply_itself', 'tests/ask_seam/channel_reply/test_channel_reply_e2e.py::test_an_author_the_configuration_does_not_declare_or_grant_is_refused', 'tests/ask_seam/channel_reply/test_channel_reply_e2e.py::test_an_edit_the_driver_has_not_reconciled_in_time_is_reported_queued', 'tests/ask_seam/channel_reply/test_channel_reply_e2e.py::test_an_identical_envelope_under_an_unchanged_bar_passes_from_the_cache', 'tests/ask_seam/channel_reply/test_channel_reply_e2e.py::test_task_prose_the_validator_refuses_is_refused_whole_on_a_run_a_driver_holds', 'tests/ask_seam/channel_reply/test_channel_reply_e2e.py::test_task_prose_the_validator_refuses_is_refused_whole_where_nothing_drives_the_run', 'tests/ask_seam/channel_reply/test_channel_reply_e2e.py::test_two_runs_envelopes_written_before_either_send_each_reach_only_their_own_run', 'tests/ask_seam/follow_up_drafts_launch/test_follow_up_drafts_launch_e2e.py::test_a_draft_from_inside_the_dispatch_lands_in_the_record_shape_under_that_root', 'tests/ask_seam/follow_up_drafts_launch/test_follow_up_drafts_launch_e2e.py::test_a_launch_hands_the_drafting_seam_to_a_dispatch_and_to_a_dag_scope_member[dag-scope-member]', 'tests/ask_seam/follow_up_drafts_launch/test_follow_up_drafts_launch_e2e.py::test_a_launch_hands_the_drafting_seam_to_a_dispatch_and_to_a_dag_scope_member[dispatched-node]', 'tests/ask_seam/follow_up_drafts_launch/test_follow_up_drafts_launch_e2e.py::test_the_draft_is_stamped_with_the_run_the_dispatch_and_the_node_it_came_from', 'tests/ask_seam/follow_up_drafts_launch/test_follow_up_drafts_launch_e2e.py::test_the_draft_survives_the_dispatch_worktree_being_removed', 'tests/ask_seam/follow_up_drafts_launch/test_follow_up_drafts_launch_e2e.py::test_the_installed_store_reads_the_draft_back_with_every_value_and_type_intact', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_direct_dispatch_is_given_no_session_at_all[orchestrate_adopted]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_direct_dispatch_is_given_no_session_at_all[orchestrate_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_direct_dispatch_is_given_no_session_at_all[orchestrate_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_direct_dispatch_is_given_no_session_at_all[plan_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_direct_dispatch_is_given_no_session_at_all[plan_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_dispatch_of_a_launch_can_reach_its_manager_with_nothing_set_up_by_hand[orchestrate_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_dispatch_of_a_launch_can_reach_its_manager_with_nothing_set_up_by_hand[orchestrate_lifecycle]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_dispatch_of_a_launch_can_reach_its_manager_with_nothing_set_up_by_hand[plan_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_dispatch_of_a_launch_can_reach_its_manager_with_nothing_set_up_by_hand[plan_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_dispatch_of_a_plan_launch_resolves_the_authoring_source_to_that_root', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_dispatch_over_a_chosen_root_resolves_its_store_to_that_root', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_launch_whose_wrapper_it_cannot_run_is_refused_before_anything_starts[adopt]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_launch_whose_wrapper_it_cannot_run_is_refused_before_anything_starts[start]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_lifecycle_dispatch_is_given_the_session_its_worktree_belongs_to', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_keeps_a_plan_authoring_root_its_caller_already_chose', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_over_an_unusable_credentials_file_writes_nothing[malformed line]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_over_an_unusable_credentials_file_writes_nothing[not a regular file]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_over_an_unusable_plan_authoring_root_writes_nothing[a file-<lambda>]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_over_an_unusable_plan_authoring_root_writes_nothing[a read-only directory-<lambda>]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_takes_back_its_own_records_and_leaves_everyone_elses', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_tells_its_dispatch_the_run_it_actually_created', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_that_cannot_search_the_ledger_refuses_rather_than_assuming[a directory nothing may search]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_that_cannot_search_the_ledger_refuses_rather_than_assuming[a file]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_whose_helper_cannot_be_loaded_writes_nothing[ask-manager-env.sh]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_whose_helper_cannot_be_loaded_writes_nothing[credentials-env.sh]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_whose_helper_cannot_be_loaded_writes_nothing[plan-root-env.sh]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_without_a_helper_that_establishes_its_environment_writes_nothing[ask-manager-env.sh]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_without_a_helper_that_establishes_its_environment_writes_nothing[credentials-env.sh]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_without_a_helper_that_establishes_its_environment_writes_nothing[plan-root-env.sh]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_plan_launch_writes_its_own_project_under_the_root_its_caller_chose', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_a_second_plan_launch_under_one_name_is_refused_rather_than_given_another_run', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_exports_repository_credentials_onto_its_dispatch[orchestrate_adopted]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_exports_repository_credentials_onto_its_dispatch[orchestrate_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_exports_repository_credentials_onto_its_dispatch[orchestrate_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_exports_repository_credentials_onto_its_dispatch[plan_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_exports_repository_credentials_onto_its_dispatch[plan_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_gives_its_dispatch_an_asker_to_ask_as[orchestrate_adopted]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_gives_its_dispatch_an_asker_to_ask_as[orchestrate_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_gives_its_dispatch_an_asker_to_ask_as[orchestrate_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_gives_its_dispatch_an_asker_to_ask_as[plan_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_gives_its_dispatch_an_asker_to_ask_as[plan_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_gives_its_dispatch_the_absolute_runs_root_its_channel_is_under[orchestrate_adopted]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_gives_its_dispatch_the_absolute_runs_root_its_channel_is_under[orchestrate_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_gives_its_dispatch_the_absolute_runs_root_its_channel_is_under[orchestrate_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_gives_its_dispatch_the_absolute_runs_root_its_channel_is_under[orchestrate_lifecycle]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_gives_its_dispatch_the_absolute_runs_root_its_channel_is_under[plan_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_gives_its_dispatch_the_absolute_runs_root_its_channel_is_under[plan_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_records_this_checkouts_bus_configuration_for_its_run[orchestrate_adopted]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_records_this_checkouts_bus_configuration_for_its_run[orchestrate_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_records_this_checkouts_bus_configuration_for_its_run[orchestrate_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_records_this_checkouts_bus_configuration_for_its_run[orchestrate_lifecycle]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_records_this_checkouts_bus_configuration_for_its_run[plan_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_records_this_checkouts_bus_configuration_for_its_run[plan_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_launch_records_this_checkouts_bus_configuration_for_its_run[plan_over_a_chosen_root]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_orchestrate_launch_gives_its_dispatch_a_wrapper_it_can_run[orchestrate_adopted]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_orchestrate_launch_gives_its_dispatch_a_wrapper_it_can_run[orchestrate_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_orchestrate_launch_gives_its_dispatch_a_wrapper_it_can_run[orchestrate_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_orchestrate_launch_gives_its_dispatch_the_run_it_is_under[orchestrate_adopted]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_orchestrate_launch_gives_its_dispatch_the_run_it_is_under[orchestrate_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_orchestrate_launch_gives_its_dispatch_the_run_it_is_under[orchestrate_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_plan_launch_gives_its_dispatch_each_input_the_wrapper_needs[ONEPIPELINE_RUN_ID-plan_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_plan_launch_gives_its_dispatch_each_input_the_wrapper_needs[ONEPIPELINE_RUN_ID-plan_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_plan_launch_gives_its_dispatch_each_input_the_wrapper_needs[ORCHESTRATOR_ASK_MANAGER-plan_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_plan_launch_gives_its_dispatch_each_input_the_wrapper_needs[ORCHESTRATOR_ASK_MANAGER-plan_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_plan_launch_gives_its_dispatch_the_plan_authoring_root_of_its_checkout[plan_attached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_every_plan_launch_gives_its_dispatch_the_plan_authoring_root_of_its_checkout[plan_detached]', 'tests/ask_seam/launch/test_launch_ask_seam_e2e.py::test_the_launching_checkout_reads_the_plan_its_dispatch_authored', 'tests/ask_seam/planner_fallback_ask/test_planner_fallback_ask_e2e.py::test_the_personas_fallback_lands_the_question_the_shim_lands', 'tests/ask_seam/planner_fallback_ask/test_planner_fallback_ask_e2e.py::test_the_personas_fallback_names_no_retired_request_path', 'tests/ask_seam/settled_correlated_ruling/test_settled_correlated_ruling_e2e.py::test_a_correlated_ruling_on_a_settled_run_reaches_its_asker_and_leaves_the_run_owed', 'tests/ask_seam/structural_reply/test_structural_reply_e2e.py::test_a_node_behind_a_release_the_same_reply_states_is_refused_until_its_edge_goes']
+E       assert not ['tests/ask_seam/ask_manager/test_ask_manager_e2e.py::test_a_dispatched_agent_is_given_the_run_it_belongs_to', 'tests/...est_ask_manager_e2e.py::test_a_question_that_cannot_reach_a_manager_names_its_cause[a run with no launch record]', ...]
+
+tests/test_nx_cache_scope.py:883: AssertionError
+________ test_each_unit_depends_on_exactly_what_its_own_module_reaches _________
+[gw3] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+    def test_each_unit_depends_on_exactly_what_its_own_module_reaches() -> None:
+        """The unit graph is the import graph, so a tier's key is its imports' closure.
+    
+        Each unit's edges are the units its module imports or names as a stand-in — no more,
+        so an edit to a helper it never reaches stays out of its dependents' keys, and no
+        fewer, so one it does reach is never left out — and its `testSupport` carries every
+        tracked file the module names joined onto the root, because what a helper opens is
+        part of what it answers.
+        """
+        owners = _unit_owners()
+        tracked = _tracked()
+        for root, declared in _unit_declarations().items():
+            carried = named_input_globs(TEST_SUPPORT, project_root=root)
+            modules = [
+                path
+                for path, owner in owners.items()
+                if owner == declared["name"] and path.endswith(".py")
+            ]
+            reached: set[str] = set()
+            for module in modules:
+                reached |= _direct_units(module, owners)
+                opened = sorted(
+                    path
+                    for path in _named_files((REPO_ROOT / module).read_text(encoding="utf-8"), tracked)
+                    if not covers(carried, path)
+                )
+                assert not opened, f"{declared['name']} does not carry {opened}, which {module} opens"
+            reached.discard(declared["name"])
+>           assert sorted(declared.get("implicitDependencies", [])) == sorted(reached), (
+                f"{declared['name']} depends on {declared.get('implicitDependencies', [])} while "
+                f"its module reaches {sorted(reached)}"
+            )
+E           AssertionError: support-conftest depends on ['support-follow-up-variables', 'support-nx-inputs', 'support-onejudge-bundle', 'support-onevcs-state-snapshot', 'support-plan-fixture-source', 'support-plan-root-variable', 'support-registered-checkouts', 'support-short-state', 'support-waits'] while its module reaches ['support-follow-up-variables', 'support-nx-inputs', 'support-nx-workspace', 'support-onejudge-bundle', 'support-onevcs-state-snapshot', 'support-plan-fixture-source', 'support-plan-root-variable', 'support-registered-checkouts', 'support-short-state', 'support-waits']
+E           assert ['support-fol...ariable', ...] == ['support-fol...-source', ...]
+E             
+E             At index 2 diff: 'support-onejudge-bundle' != 'support-nx-workspace'
+E             Right contains one more item: 'support-waits'
+E             Use -v to get more diff
+
+tests/test_nx_cache_scope.py:1560: AssertionError
+_ test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach[tests/host_sweep/project.json:test] _
+[gw3] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+path = 'tests/host_sweep/project.json', target = 'test'
+
+    @pytest.mark.parametrize(
+        ("path", "target"), SUITE_TIERS, ids=[f"{path}:{target}" for path, target in SUITE_TIERS]
+    )
+    def test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach(path: str, target: str) -> None:
+        """A tier replays soundly only while every helper its modules reach is in its key.
+    
+        Imports are how a tier reads code the file-read guard cannot see: `pytest` resolves
+        `from waits import timeout` through the import machinery rather than `open`, so a
+        helper outside the key would change the tier's answer without changing its hash. So
+        every unit a tier's modules reach — through `tests/conftest.py`, which runs around
+        every test, and through what each helper reaches in turn — is a dependency of the
+        tier's project, whatever the tier's key, and nothing else here can make it one.
+    
+        Where the tier takes its units into its key through the graph, it takes exactly those:
+        one it never reaches would make an unrelated edit re-run it. A project whose one
+        narrow target reaches all its edges takes them as `dependencies`; one with two narrow
+        targets — `orchestrator`, whose `test-recipes` reaches fewer helpers than its other
+        tiers — names each such target's closure with `projects`, because Nx's edges are per
+        project and the other targets' helpers are not this one's. A tier keyed on a whole
+        tree carries every unit's files by glob already.
+        And every module of the tier's own that its tests import — one no unit carries, a
+        test module another tier owns among them — is in its key as well.
+        """
+        root = str(Path(path).parent)
+        declaring = _tier_modules(path, target)
+        assert declaring, f"{root}:{target} collects nothing; the tier would run empty"
+        reached = _reached_units(declaring)
+        assert "support-conftest" in reached, (
+            "a tier that reached no unit would leave this guard holding nothing"
+        )
+    
+        missing = sorted(reached - _dependency_names(root))
+>       assert not missing, (
+            f"{root}:{target} collects modules that reach {missing}, which {path} does not "
+            "depend on, so editing one replays a verdict recorded before it moved"
+        )
+E       AssertionError: tests/host_sweep:test collects modules that reach ['support-nx-workspace'], which tests/host_sweep/project.json does not depend on, so editing one replays a verdict recorded before it moved
+E       assert not ['support-nx-workspace']
+
+tests/test_nx_cache_scope.py:1598: AssertionError
+_ test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach[tests/session_setup_pypi/project.json:test-pypi] _
+[gw3] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+path = 'tests/session_setup_pypi/project.json', target = 'test-pypi'
+
+    @pytest.mark.parametrize(
+        ("path", "target"), SUITE_TIERS, ids=[f"{path}:{target}" for path, target in SUITE_TIERS]
+    )
+    def test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach(path: str, target: str) -> None:
+        """A tier replays soundly only while every helper its modules reach is in its key.
+    
+        Imports are how a tier reads code the file-read guard cannot see: `pytest` resolves
+        `from waits import timeout` through the import machinery rather than `open`, so a
+        helper outside the key would change the tier's answer without changing its hash. So
+        every unit a tier's modules reach — through `tests/conftest.py`, which runs around
+        every test, and through what each helper reaches in turn — is a dependency of the
+        tier's project, whatever the tier's key, and nothing else here can make it one.
+    
+        Where the tier takes its units into its key through the graph, it takes exactly those:
+        one it never reaches would make an unrelated edit re-run it. A project whose one
+        narrow target reaches all its edges takes them as `dependencies`; one with two narrow
+        targets — `orchestrator`, whose `test-recipes` reaches fewer helpers than its other
+        tiers — names each such target's closure with `projects`, because Nx's edges are per
+        project and the other targets' helpers are not this one's. A tier keyed on a whole
+        tree carries every unit's files by glob already.
+        And every module of the tier's own that its tests import — one no unit carries, a
+        test module another tier owns among them — is in its key as well.
+        """
+        root = str(Path(path).parent)
+        declaring = _tier_modules(path, target)
+        assert declaring, f"{root}:{target} collects nothing; the tier would run empty"
+        reached = _reached_units(declaring)
+        assert "support-conftest" in reached, (
+            "a tier that reached no unit would leave this guard holding nothing"
+        )
+    
+        missing = sorted(reached - _dependency_names(root))
+>       assert not missing, (
+            f"{root}:{target} collects modules that reach {missing}, which {path} does not "
+            "depend on, so editing one replays a verdict recorded before it moved"
+        )
+E       AssertionError: tests/session_setup_pypi:test-pypi collects modules that reach ['support-nx-workspace'], which tests/session_setup_pypi/project.json does not depend on, so editing one replays a verdict recorded before it moved
+E       assert not ['support-nx-workspace']
+
+tests/test_nx_cache_scope.py:1598: AssertionError
+_ test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach[tests/ask_seam/bus_resolution/project.json:test] _
+[gw3] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+path = 'tests/ask_seam/bus_resolution/project.json', target = 'test'
+
+    @pytest.mark.parametrize(
+        ("path", "target"), SUITE_TIERS, ids=[f"{path}:{target}" for path, target in SUITE_TIERS]
+    )
+    def test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach(path: str, target: str) -> None:
+        """A tier replays soundly only while every helper its modules reach is in its key.
+    
+        Imports are how a tier reads code the file-read guard cannot see: `pytest` resolves
+        `from waits import timeout` through the import machinery rather than `open`, so a
+        helper outside the key would change the tier's answer without changing its hash. So
+        every unit a tier's modules reach — through `tests/conftest.py`, which runs around
+        every test, and through what each helper reaches in turn — is a dependency of the
+        tier's project, whatever the tier's key, and nothing else here can make it one.
+    
+        Where the tier takes its units into its key through the graph, it takes exactly those:
+        one it never reaches would make an unrelated edit re-run it. A project whose one
+        narrow target reaches all its edges takes them as `dependencies`; one with two narrow
+        targets — `orchestrator`, whose `test-recipes` reaches fewer helpers than its other
+        tiers — names each such target's closure with `projects`, because Nx's edges are per
+        project and the other targets' helpers are not this one's. A tier keyed on a whole
+        tree carries every unit's files by glob already.
+        And every module of the tier's own that its tests import — one no unit carries, a
+        test module another tier owns among them — is in its key as well.
+        """
+        root = str(Path(path).parent)
+        declaring = _tier_modules(path, target)
+        assert declaring, f"{root}:{target} collects nothing; the tier would run empty"
+        reached = _reached_units(declaring)
+        assert "support-conftest" in reached, (
+            "a tier that reached no unit would leave this guard holding nothing"
+        )
+    
+        missing = sorted(reached - _dependency_names(root))
+>       assert not missing, (
+            f"{root}:{target} collects modules that reach {missing}, which {path} does not "
+            "depend on, so editing one replays a verdict recorded before it moved"
+        )
+E       AssertionError: tests/ask_seam/bus_resolution:test collects modules that reach ['support-nx-workspace'], which tests/ask_seam/bus_resolution/project.json does not depend on, so editing one replays a verdict recorded before it moved
+E       assert not ['support-nx-workspace']
+
+tests/test_nx_cache_scope.py:1598: AssertionError
+_ test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach[tests/project_store_race/project.json:test] _
+[gw3] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+path = 'tests/project_store_race/project.json', target = 'test'
+
+    @pytest.mark.parametrize(
+        ("path", "target"), SUITE_TIERS, ids=[f"{path}:{target}" for path, target in SUITE_TIERS]
+    )
+    def test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach(path: str, target: str) -> None:
+        """A tier replays soundly only while every helper its modules reach is in its key.
+    
+        Imports are how a tier reads code the file-read guard cannot see: `pytest` resolves
+        `from waits import timeout` through the import machinery rather than `open`, so a
+        helper outside the key would change the tier's answer without changing its hash. So
+        every unit a tier's modules reach — through `tests/conftest.py`, which runs around
+        every test, and through what each helper reaches in turn — is a dependency of the
+        tier's project, whatever the tier's key, and nothing else here can make it one.
+    
+        Where the tier takes its units into its key through the graph, it takes exactly those:
+        one it never reaches would make an unrelated edit re-run it. A project whose one
+        narrow target reaches all its edges takes them as `dependencies`; one with two narrow
+        targets — `orchestrator`, whose `test-recipes` reaches fewer helpers than its other
+        tiers — names each such target's closure with `projects`, because Nx's edges are per
+        project and the other targets' helpers are not this one's. A tier keyed on a whole
+        tree carries every unit's files by glob already.
+        And every module of the tier's own that its tests import — one no unit carries, a
+        test module another tier owns among them — is in its key as well.
+        """
+        root = str(Path(path).parent)
+        declaring = _tier_modules(path, target)
+        assert declaring, f"{root}:{target} collects nothing; the tier would run empty"
+        reached = _reached_units(declaring)
+        assert "support-conftest" in reached, (
+            "a tier that reached no unit would leave this guard holding nothing"
+        )
+    
+        missing = sorted(reached - _dependency_names(root))
+>       assert not missing, (
+            f"{root}:{target} collects modules that reach {missing}, which {path} does not "
+            "depend on, so editing one replays a verdict recorded before it moved"
+        )
+E       AssertionError: tests/project_store_race:test collects modules that reach ['support-nx-workspace'], which tests/project_store_race/project.json does not depend on, so editing one replays a verdict recorded before it moved
+E       assert not ['support-nx-workspace']
+
+tests/test_nx_cache_scope.py:1598: AssertionError
+_ test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach[tests/plan_store_assets/project.json:test] _
+[gw3] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+path = 'tests/plan_store_assets/project.json', target = 'test'
+
+    @pytest.mark.parametrize(
+        ("path", "target"), SUITE_TIERS, ids=[f"{path}:{target}" for path, target in SUITE_TIERS]
+    )
+    def test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach(path: str, target: str) -> None:
+        """A tier replays soundly only while every helper its modules reach is in its key.
+    
+        Imports are how a tier reads code the file-read guard cannot see: `pytest` resolves
+        `from waits import timeout` through the import machinery rather than `open`, so a
+        helper outside the key would change the tier's answer without changing its hash. So
+        every unit a tier's modules reach — through `tests/conftest.py`, which runs around
+        every test, and through what each helper reaches in turn — is a dependency of the
+        tier's project, whatever the tier's key, and nothing else here can make it one.
+    
+        Where the tier takes its units into its key through the graph, it takes exactly those:
+        one it never reaches would make an unrelated edit re-run it. A project whose one
+        narrow target reaches all its edges takes them as `dependencies`; one with two narrow
+        targets — `orchestrator`, whose `test-recipes` reaches fewer helpers than its other
+        tiers — names each such target's closure with `projects`, because Nx's edges are per
+        project and the other targets' helpers are not this one's. A tier keyed on a whole
+        tree carries every unit's files by glob already.
+        And every module of the tier's own that its tests import — one no unit carries, a
+        test module another tier owns among them — is in its key as well.
+        """
+        root = str(Path(path).parent)
+        declaring = _tier_modules(path, target)
+        assert declaring, f"{root}:{target} collects nothing; the tier would run empty"
+        reached = _reached_units(declaring)
+        assert "support-conftest" in reached, (
+            "a tier that reached no unit would leave this guard holding nothing"
+        )
+    
+        missing = sorted(reached - _dependency_names(root))
+>       assert not missing, (
+            f"{root}:{target} collects modules that reach {missing}, which {path} does not "
+            "depend on, so editing one replays a verdict recorded before it moved"
+        )
+E       AssertionError: tests/plan_store_assets:test collects modules that reach ['support-nx-workspace'], which tests/plan_store_assets/project.json does not depend on, so editing one replays a verdict recorded before it moved
+E       assert not ['support-nx-workspace']
+
+tests/test_nx_cache_scope.py:1598: AssertionError
+_ test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach[tests/render_diagram/project.json:test] _
+[gw3] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+path = 'tests/render_diagram/project.json', target = 'test'
+
+    @pytest.mark.parametrize(
+        ("path", "target"), SUITE_TIERS, ids=[f"{path}:{target}" for path, target in SUITE_TIERS]
+    )
+    def test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach(path: str, target: str) -> None:
+        """A tier replays soundly only while every helper its modules reach is in its key.
+    
+        Imports are how a tier reads code the file-read guard cannot see: `pytest` resolves
+        `from waits import timeout` through the import machinery rather than `open`, so a
+        helper outside the key would change the tier's answer without changing its hash. So
+        every unit a tier's modules reach — through `tests/conftest.py`, which runs around
+        every test, and through what each helper reaches in turn — is a dependency of the
+        tier's project, whatever the tier's key, and nothing else here can make it one.
+    
+        Where the tier takes its units into its key through the graph, it takes exactly those:
+        one it never reaches would make an unrelated edit re-run it. A project whose one
+        narrow target reaches all its edges takes them as `dependencies`; one with two narrow
+        targets — `orchestrator`, whose `test-recipes` reaches fewer helpers than its other
+        tiers — names each such target's closure with `projects`, because Nx's edges are per
+        project and the other targets' helpers are not this one's. A tier keyed on a whole
+        tree carries every unit's files by glob already.
+        And every module of the tier's own that its tests import — one no unit carries, a
+        test module another tier owns among them — is in its key as well.
+        """
+        root = str(Path(path).parent)
+        declaring = _tier_modules(path, target)
+        assert declaring, f"{root}:{target} collects nothing; the tier would run empty"
+        reached = _reached_units(declaring)
+        assert "support-conftest" in reached, (
+            "a tier that reached no unit would leave this guard holding nothing"
+        )
+    
+        missing = sorted(reached - _dependency_names(root))
+>       assert not missing, (
+            f"{root}:{target} collects modules that reach {missing}, which {path} does not "
+            "depend on, so editing one replays a verdict recorded before it moved"
+        )
+E       AssertionError: tests/render_diagram:test collects modules that reach ['support-nx-workspace'], which tests/render_diagram/project.json does not depend on, so editing one replays a verdict recorded before it moved
+E       assert not ['support-nx-workspace']
+
+tests/test_nx_cache_scope.py:1598: AssertionError
+_ test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach[tests/e2e/board_copy_approval/project.json:test] _
+[gw3] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+path = 'tests/e2e/board_copy_approval/project.json', target = 'test'
+
+    @pytest.mark.parametrize(
+        ("path", "target"), SUITE_TIERS, ids=[f"{path}:{target}" for path, target in SUITE_TIERS]
+    )
+    def test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach(path: str, target: str) -> None:
+        """A tier replays soundly only while every helper its modules reach is in its key.
+    
+        Imports are how a tier reads code the file-read guard cannot see: `pytest` resolves
+        `from waits import timeout` through the import machinery rather than `open`, so a
+        helper outside the key would change the tier's answer without changing its hash. So
+        every unit a tier's modules reach — through `tests/conftest.py`, which runs around
+        every test, and through what each helper reaches in turn — is a dependency of the
+        tier's project, whatever the tier's key, and nothing else here can make it one.
+    
+        Where the tier takes its units into its key through the graph, it takes exactly those:
+        one it never reaches would make an unrelated edit re-run it. A project whose one
+        narrow target reaches all its edges takes them as `dependencies`; one with two narrow
+        targets — `orchestrator`, whose `test-recipes` reaches fewer helpers than its other
+        tiers — names each such target's closure with `projects`, because Nx's edges are per
+        project and the other targets' helpers are not this one's. A tier keyed on a whole
+        tree carries every unit's files by glob already.
+        And every module of the tier's own that its tests import — one no unit carries, a
+        test module another tier owns among them — is in its key as well.
+        """
+        root = str(Path(path).parent)
+        declaring = _tier_modules(path, target)
+        assert declaring, f"{root}:{target} collects nothing; the tier would run empty"
+        reached = _reached_units(declaring)
+        assert "support-conftest" in reached, (
+            "a tier that reached no unit would leave this guard holding nothing"
+        )
+    
+        missing = sorted(reached - _dependency_names(root))
+>       assert not missing, (
+            f"{root}:{target} collects modules that reach {missing}, which {path} does not "
+            "depend on, so editing one replays a verdict recorded before it moved"
+        )
+E       AssertionError: tests/e2e/board_copy_approval:test collects modules that reach ['support-nx-workspace'], which tests/e2e/board_copy_approval/project.json does not depend on, so editing one replays a verdict recorded before it moved
+E       assert not ['support-nx-workspace']
+
+tests/test_nx_cache_scope.py:1598: AssertionError
+_ test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach[tests/manager_allowlist/project.json:test] _
+[gw3] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+path = 'tests/manager_allowlist/project.json', target = 'test'
+
+    @pytest.mark.parametrize(
+        ("path", "target"), SUITE_TIERS, ids=[f"{path}:{target}" for path, target in SUITE_TIERS]
+    )
+    def test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach(path: str, target: str) -> None:
+        """A tier replays soundly only while every helper its modules reach is in its key.
+    
+        Imports are how a tier reads code the file-read guard cannot see: `pytest` resolves
+        `from waits import timeout` through the import machinery rather than `open`, so a
+        helper outside the key would change the tier's answer without changing its hash. So
+        every unit a tier's modules reach — through `tests/conftest.py`, which runs around
+        every test, and through what each helper reaches in turn — is a dependency of the
+        tier's project, whatever the tier's key, and nothing else here can make it one.
+    
+        Where the tier takes its units into its key through the graph, it takes exactly those:
+        one it never reaches would make an unrelated edit re-run it. A project whose one
+        narrow target reaches all its edges takes them as `dependencies`; one with two narrow
+        targets — `orchestrator`, whose `test-recipes` reaches fewer helpers than its other
+        tiers — names each such target's closure with `projects`, because Nx's edges are per
+        project and the other targets' helpers are not this one's. A tier keyed on a whole
+        tree carries every unit's files by glob already.
+        And every module of the tier's own that its tests import — one no unit carries, a
+        test module another tier owns among them — is in its key as well.
+        """
+        root = str(Path(path).parent)
+        declaring = _tier_modules(path, target)
+        assert declaring, f"{root}:{target} collects nothing; the tier would run empty"
+        reached = _reached_units(declaring)
+        assert "support-conftest" in reached, (
+            "a tier that reached no unit would leave this guard holding nothing"
+        )
+    
+        missing = sorted(reached - _dependency_names(root))
+>       assert not missing, (
+            f"{root}:{target} collects modules that reach {missing}, which {path} does not "
+            "depend on, so editing one replays a verdict recorded before it moved"
+        )
+E       AssertionError: tests/manager_allowlist:test collects modules that reach ['support-nx-workspace'], which tests/manager_allowlist/project.json does not depend on, so editing one replays a verdict recorded before it moved
+E       assert not ['support-nx-workspace']
+
+tests/test_nx_cache_scope.py:1598: AssertionError
+_ test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach[tests/host_views/project.json:test] _
+[gw3] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+path = 'tests/host_views/project.json', target = 'test'
+
+    @pytest.mark.parametrize(
+        ("path", "target"), SUITE_TIERS, ids=[f"{path}:{target}" for path, target in SUITE_TIERS]
+    )
+    def test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach(path: str, target: str) -> None:
+        """A tier replays soundly only while every helper its modules reach is in its key.
+    
+        Imports are how a tier reads code the file-read guard cannot see: `pytest` resolves
+        `from waits import timeout` through the import machinery rather than `open`, so a
+        helper outside the key would change the tier's answer without changing its hash. So
+        every unit a tier's modules reach — through `tests/conftest.py`, which runs around
+        every test, and through what each helper reaches in turn — is a dependency of the
+        tier's project, whatever the tier's key, and nothing else here can make it one.
+    
+        Where the tier takes its units into its key through the graph, it takes exactly those:
+        one it never reaches would make an unrelated edit re-run it. A project whose one
+        narrow target reaches all its edges takes them as `dependencies`; one with two narrow
+        targets — `orchestrator`, whose `test-recipes` reaches fewer helpers than its other
+        tiers — names each such target's closure with `projects`, because Nx's edges are per
+        project and the other targets' helpers are not this one's. A tier keyed on a whole
+        tree carries every unit's files by glob already.
+        And every module of the tier's own that its tests import — one no unit carries, a
+        test module another tier owns among them — is in its key as well.
+        """
+        root = str(Path(path).parent)
+        declaring = _tier_modules(path, target)
+        assert declaring, f"{root}:{target} collects nothing; the tier would run empty"
+        reached = _reached_units(declaring)
+        assert "support-conftest" in reached, (
+            "a tier that reached no unit would leave this guard holding nothing"
+        )
+    
+        missing = sorted(reached - _dependency_names(root))
+>       assert not missing, (
+            f"{root}:{target} collects modules that reach {missing}, which {path} does not "
+            "depend on, so editing one replays a verdict recorded before it moved"
+        )
+E       AssertionError: tests/host_views:test collects modules that reach ['support-nx-workspace'], which tests/host_views/project.json does not depend on, so editing one replays a verdict recorded before it moved
+E       assert not ['support-nx-workspace']
+
+tests/test_nx_cache_scope.py:1598: AssertionError
+_ test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach[orchestrator/project.json:test-recipes] _
+[gw1] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+path = 'orchestrator/project.json', target = 'test-recipes'
+
+    @pytest.mark.parametrize(
+        ("path", "target"), SUITE_TIERS, ids=[f"{path}:{target}" for path, target in SUITE_TIERS]
+    )
+    def test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach(path: str, target: str) -> None:
+        """A tier replays soundly only while every helper its modules reach is in its key.
+    
+        Imports are how a tier reads code the file-read guard cannot see: `pytest` resolves
+        `from waits import timeout` through the import machinery rather than `open`, so a
+        helper outside the key would change the tier's answer without changing its hash. So
+        every unit a tier's modules reach — through `tests/conftest.py`, which runs around
+        every test, and through what each helper reaches in turn — is a dependency of the
+        tier's project, whatever the tier's key, and nothing else here can make it one.
+    
+        Where the tier takes its units into its key through the graph, it takes exactly those:
+        one it never reaches would make an unrelated edit re-run it. A project whose one
+        narrow target reaches all its edges takes them as `dependencies`; one with two narrow
+        targets — `orchestrator`, whose `test-recipes` reaches fewer helpers than its other
+        tiers — names each such target's closure with `projects`, because Nx's edges are per
+        project and the other targets' helpers are not this one's. A tier keyed on a whole
+        tree carries every unit's files by glob already.
+        And every module of the tier's own that its tests import — one no unit carries, a
+        test module another tier owns among them — is in its key as well.
+        """
+        root = str(Path(path).parent)
+        declaring = _tier_modules(path, target)
+        assert declaring, f"{root}:{target} collects nothing; the tier would run empty"
+        reached = _reached_units(declaring)
+        assert "support-conftest" in reached, (
+            "a tier that reached no unit would leave this guard holding nothing"
+        )
+    
+        missing = sorted(reached - _dependency_names(root))
+        assert not missing, (
+            f"{root}:{target} collects modules that reach {missing}, which {path} does not "
+            "depend on, so editing one replays a verdict recorded before it moved"
+        )
+    
+        taken = _taken_units(root, target)
+        declaration = project_declarations()[root]
+        if taken is not None:
+>           assert taken == reached, (
+                f"{root}:{target} takes {sorted(taken - reached)} it never reaches and misses "
+                f"{sorted(reached - taken)} it does"
+            )
+E           AssertionError: orchestrator:test-recipes takes [] it never reaches and misses ['support-nx-workspace'] it does
+E           assert {'support-con...-source', ...} == {'support-con...napshot', ...}
+E             
+E             Extra items in the right set:
+E             'support-nx-workspace'
+E             Use -v to get more diff
+
+tests/test_nx_cache_scope.py:1606: AssertionError
+____ test_each_ask_seam_journey_is_keyed_on_what_it_reads_and_nothing_wider ____
+[gw1] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+    def test_each_ask_seam_journey_is_keyed_on_what_it_reads_and_nothing_wider() -> None:
+        """One expensive journey, one key, and the key reaches only what that journey opens.
+    
+        Every journey here spends a real launch, so a path in its key it never reads makes an
+        unrelated edit pay for that launch — and a key shared between journeys made every one
+        of them pay for a file only one read. Three things are held, in the direction each
+        can fail safely. The key is *no wider* than the journey: every glob names one tracked
+        file, or one fixture tree of stand-ins under `tests/e2e/`, so no `config/**/*` or
+        `scripts/**/*` can carry a whole directory for one file in it; none of it is prose;
+        and every `tests/` module it carries is one the journey imports, names as a stand-in,
+        or runs under — never a sibling journey's module, never a helper it never opens. And
+        the key is *no narrower* than what a static reading can see: the journey's own module,
+        every suite module it reaches by import, and every tracked file its own module names
+        joined onto the root, because a journey reads, copies or runs what it names. What the
+        launch reaches beyond that — the pins, graphs and harness configs the engine opens —
+        was measured, as `tests/nx_inputs.py` says, and `tests/conftest.py` holds the
+        in-process half of it to the key on every run; a file the key carries that no
+        measurement showed is the one drift this cannot see.
+        """
+        tracked = _tracked()
+        modules = _suite_modules()
+        for journey in ASK_SEAM_JOURNEYS:
+            module = _journey_module(journey.root)
+            globs = _effective_inputs(journey.root, ASK_SEAM_SCOPED)
+            for glob in globs:
+                assert not glob.startswith("!"), (
+                    f"{journey.key} excludes {glob}; a key of named files has nothing to exclude"
+                )
+                if "*" in glob:
+                    tree = glob.removesuffix("/**/*")
+                    assert (
+                        glob.endswith("/**/*") and tree.startswith(f"{STAND_INS}/") and "*" not in tree
+                    ), (
+                        f"{journey.key} carries {glob}: a tree in a journey's key is a fixture of "
+                        f"stand-ins under {STAND_INS}/, never a directory of this repository"
+                    )
+                    assert any(path.startswith(f"{tree}/") for path in tracked), (
+                        f"{glob} covers nothing"
+                    )
+                    assert not any(
+                        Path(path).name.startswith("test_")
+                        for path in tracked
+                        if path.startswith(f"{tree}/")
+                    ), f"{glob} covers test modules, so it is not a tree of stand-ins"
+                else:
+                    assert glob in tracked, f"{journey.key} names {glob}, which git does not track"
+    
+            covered = {path for path in tracked if covers(globs, path)}
+            # A Markdown file under `config/` or `templates/` is a template a tool reads — the
+            # dispatch appendix, the design-document template — not prose about this repository.
+            prose = sorted(
+                path
+                for path in covered
+                if _is_documentation(path) and not path.startswith(("config/", "templates/"))
+            )
+            assert not prose, f"{journey.key} reaches prose the journey never opens: {prose}"
+    
+            sources = _journey_sources(module, modules)
+            missing = sorted(sources - covered)
+>           assert not missing, (
+                f"{journey.key} does not carry {missing}, which {module} imports or runs under, "
+                "so editing one replays a verdict recorded before it moved"
+            )
+E           AssertionError: askSeamBusResolution does not carry ['tests/e2e/nx_workspace.py'], which tests/ask_seam/bus_resolution/test_bus_resolution_e2e.py imports or runs under, so editing one replays a verdict recorded before it moved
+E           assert not ['tests/e2e/nx_workspace.py']
+
+tests/test_nx_cache_scope.py:2021: AssertionError
+=========================== short test summary info ============================
+FAILED tests/e2e/test_workspace_contract_e2e.py::test_a_worktree_provisioned_before_the_pin_moved_reinstalls_from_the_lockfile
+FAILED tests/test_nx_cache_scope.py::test_a_module_whose_setup_writes_this_checkout_lands_on_one_worker
+FAILED tests/test_nx_cache_scope.py::test_the_toolchain_writers_and_readers_are_collected_into_one_xdist_group
+FAILED tests/test_nx_cache_scope.py::test_each_unit_depends_on_exactly_what_its_own_module_reaches
+FAILED tests/test_nx_cache_scope.py::test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach[tests/host_sweep/project.json:test]
+FAILED tests/test_nx_cache_scope.py::test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach[tests/session_setup_pypi/project.json:test-pypi]
+FAILED tests/test_nx_cache_scope.py::test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach[tests/ask_seam/bus_resolution/project.json:test]
+FAILED tests/test_nx_cache_scope.py::test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach[tests/project_store_race/project.json:test]
+FAILED tests/test_nx_cache_scope.py::test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach[tests/plan_store_assets/project.json:test]
+FAILED tests/test_nx_cache_scope.py::test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach[tests/render_diagram/project.json:test]
+FAILED tests/test_nx_cache_scope.py::test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach[tests/e2e/board_copy_approval/project.json:test]
+FAILED tests/test_nx_cache_scope.py::test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach[tests/manager_allowlist/project.json:test]
+FAILED tests/test_nx_cache_scope.py::test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach[tests/host_views/project.json:test]
+FAILED tests/test_nx_cache_scope.py::test_every_tier_is_keyed_on_exactly_the_units_its_modules_reach[orchestrator/project.json:test-recipes]
+FAILED tests/test_nx_cache_scope.py::test_each_ask_seam_journey_is_keyed_on_what_it_reads_and_nothing_wider
+15 failed, 492 passed, 1 skipped in 417.51s (0:06:57)
+Warning: command "rm -rf .telemetry/orchestrator/test-docs && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/orchestrator/test-docs NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/host_sweep --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/plan_store_assets --ignore=tests/render_diagram --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval --ignore=tests/unfinished --ignore=tests/graceful_cancel --ignore=tests/session_open_conflict --ignore=tests/manager_allowlist -m reads_docs --no-cov -n 4 --dist loadgroup" exited with non-zero status code
+
+
+ NX   Running target test-docs for project orchestrator failed
+
+Failed tasks:
+
+- orchestrator:test-docs
+
+Hint: run the command with --verbose for more details.
+
+  Run duration:      6m 54s
+  Critical path:     6m 54s (1 task)
+  Recoverable time:  <1ms
+
+  Recommendations:
+    - Speed up or split the longest tasks on the critical path:
+        orchestrator:test-docs    6m 54s
+nx: targets failed; fix the reported project findings and rerun the same 'just' recipe (full output: /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.logs/nx.3669447.log)
+
+> nx run orchestrator-e2e:test
+
+> rm -rf .telemetry/orchestrator-e2e/test && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/orchestrator-e2e/test NO_COLOR=1 COVERAGE_FILE=.coverage.e2e uv run pytest tests/e2e --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval -m 'not reads_docs and not reads_recipes and not reads_checkouts' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0
+
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [  7%]
+........................................................................ [ 14%]
+........................................................................ [ 21%]
+........................................................................ [ 28%]
+........................................................................ [ 35%]
+........................................................................ [ 42%]
+........................................................................ [ 50%]
+........................................................................ [ 57%]
+..............................................................F......... [ 64%]
+........................................................................ [ 71%]
+........................................................................ [ 78%]
+........................................................................ [ 85%]
+........................................................................ [ 93%]
+......................................................................   [100%]
+=================================== FAILURES ===================================
+_________ test_a_paced_monitor_keeps_the_run_watched_between_its_turns _________
+[gw1] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-nick/pytest-790/popen-gw1/test_a_paced_monitor_keeps_the0')
+oneharness_bin = '/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/oneharness'
+
+    @pytest.mark.xdist_group("observer-graph-liveness")
+    def test_a_paced_monitor_keeps_the_run_watched_between_its_turns(
+        tmp_path: Path, oneharness_bin: str
+    ) -> None:
+        """The shipped document, launched for real, paces the monitor and stays alive for it.
+    
+        Six claims, each read off the graph's own record of one launch or off the run's
+        status while that launch was live:
+    
+        * the monitor opens with the wave, and its next agent turn opens no sooner than the
+          hold after its judge answered — two consecutive turns at least `every` apart;
+        * the run is watched through the hold: the graph does not settle, the member's own
+          heartbeat lands inside every hold long enough to contain one, and `just status`
+          read inside one reports neither `OBSERVER DEAD` nor `OBSERVER NOT RESTARTED`;
+        * the pacemaker fires inside a hold and the graph survives it, taking another monitor
+          turn afterwards;
+        * reading a planner surface restarts the pacemaker's clock and no other member's,
+          because the pacemaker is the one member the launched document declares
+          `resettable`;
+        * the observer ends when the run settles rather than when the hold would have: the
+          driver asks the graph to stop and its process is gone by the time the launch
+          returns, with the monitor's schedule never firing after a hold that opened once
+          the run had settled; and a turn its own closeout cancelled after the settlement is
+          the observer being ended, never a death.
+    
+        Reverting the document's `schedule` fails before any of it: `--set
+        members.monitor.schedule.every` on a member with no schedule is refused by the reader
+        (`this graph has no schedule`), the launch attaches no observer, and the graph records
+        nothing for the run. Reverting `background: false` fails at the reader too, because
+        the pacemaker's deferred first turn then has nothing to hold the run open for it.
+        """
+        if shutil.which("just") is None:
+            pytest.skip("just is not installed")
+        paced = _paced_launch(tmp_path, oneharness_bin)
+        assert paced.status == 0, (
+            f"the attached launch exited {paced.status}, so what follows is read off a run "
+            f"that did not settle cleanly:\n{paced.printed}"
+        )
+        events = paced.events
+        assert events, f"the dag-scope graph recorded nothing for this run:\n{paced.printed}"
+    
+        started = _of(events, "graph-started")
+        assert started, f"the observer graph never started:\n{paced.printed}"
+        # A turn the driver's own closeout cancels once the run has settled is the observer
+        # being ended, not dying: the linked release journals that cancel as a
+        # `provider-failure` death with cause `cancelled`. Every other death counts, and so
+        # does a cancel before the settlement, which nothing in this run asked for.
+        assert paced.settled is not None, (
+            f"the run's detailed stream renders no settlement of `{HELD_NODE}`, so a death "
+            f"cannot be placed before or after it:\n{paced.printed}"
+        )
+        died = [
+            death
+            for death in _of(events, "member-died")
+            if not (death.payload.get("cause") == "cancelled" and death.at >= paced.settled)
+        ]
+>       assert not died, (
+            f"a member of the observer graph died during a paced run: {died}\n{paced.printed}"
+        )
+E       AssertionError: a member of the observer graph died during a paced run: [Envelope(kind='member-died', at=datetime.datetime(2026, 10, 10, 3, 49, 41, 474000, tzinfo=datetime.timezone.utc), member='check-in', payload={'rule': 'provider-failure', 'cause': 'unclassified', 'detail': "oneharness: fallback harness `codex:primary` did the task's work and did not succeed, for a cause it could not classify (status nonzero) — so the chain stopped there and tried no candidate after it; it said: (stderr) …<frozen site>:101: RuntimeWarning: Unexpected value in sys.exec_prefix, expected /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv, got .venv"})]
+E         onepipeline: engine requested 0.63.2 (config/onepipeline.version), about to run 0.63.2 (/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/onepipeline)
+E         Concise graph events; ask the producing library for full detail by stream id.
+E         2026-10-10T03:49:15.348Z  graph:-                      run-started
+E         2026-10-10T03:49:15.363Z  agent:dag-scope-1791604155361-3836039 graph-started
+E         2026-10-10T03:49:15.363Z  agent:dag-scope-1791604155361-3836039 member-started
+E         2026-10-10T03:49:15.365Z  agent:dag-scope-1791604155361-3836039 member-started
+E         2026-10-10T03:49:15.367Z  agent:dag-scope-1791604155361-3836039 turn-started
+E         2026-10-10T03:49:15.372Z  graph:held                   node-ready
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T03:49:15.410Z  agent:dag-scope-1791604155361-3836039 turn-message
+E         2026-10-10T03:49:15.410Z  agent:dag-scope-1791604155361-3836039 turn-completed
+E         2026-10-10T03:49:15.410Z  agent:dag-scope-1791604155361-3836039 turn-started
+E         2026-10-10T03:49:15.430Z  agent:dag-scope-1791604155361-3836039 judge-decided the monitor took its turn; a report reaches the planner as a finding
+E         2026-10-10T03:49:15.430Z  agent:dag-scope-1791604155361-3836039 turn-message
+E         2026-10-10T03:49:15.431Z  agent:dag-scope-1791604155361-3836039 turn-completed
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T03:49:15.465Z  agent:node-scope-1791604155464-3837292 member-started
+E         2026-10-10T03:49:15.465Z  agent:node-scope-1791604155464-3837292 turn-started
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T03:49:21.567Z  agent:dag-scope-1791604155361-3836039 member-started
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T03:49:21.591Z  agent:dag-scope-1791604155361-3836039 turn-activity › smoke-ok
+E         2026-10-10T03:49:21.595Z  agent:dag-scope-1791604155361-3836039 turn-completed
+E         2026-10-10T03:49:21.595Z  agent:dag-scope-1791604155361-3836039 member-settled
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T03:49:26.610Z  agent:dag-scope-1791604155361-3836039 member-started
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T03:49:26.644Z  agent:dag-scope-1791604155361-3836039 turn-activity › smoke-ok
+E         2026-10-10T03:49:26.645Z  agent:dag-scope-1791604155361-3836039 turn-completed
+E         2026-10-10T03:49:26.645Z  agent:dag-scope-1791604155361-3836039 member-settled
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T03:49:27.357Z  agent:dag-scope-1791604155361-3836039 turn-started
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T03:49:27.396Z  agent:dag-scope-1791604155361-3836039 turn-completed
+E         2026-10-10T03:49:27.396Z  agent:dag-scope-1791604155361-3836039 turn-started
+E         2026-10-10T03:49:27.404Z  agent:dag-scope-1791604155361-3836039 judge-decided the monitor took its turn; a report reaches the planner as a finding
+E         2026-10-10T03:49:27.404Z  agent:dag-scope-1791604155361-3836039 turn-message
+E         2026-10-10T03:49:27.404Z  agent:dag-scope-1791604155361-3836039 turn-completed
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T03:49:31.554Z  agent:dag-scope-1791604155361-3836039 member-started
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T03:49:31.590Z  agent:dag-scope-1791604155361-3836039 turn-activity › smoke-ok
+E         2026-10-10T03:49:31.599Z  agent:dag-scope-1791604155361-3836039 turn-completed
+E         2026-10-10T03:49:31.599Z  agent:dag-scope-1791604155361-3836039 member-settled
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T03:49:36.617Z  agent:dag-scope-1791604155361-3836039 member-started
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T03:49:36.647Z  agent:dag-scope-1791604155361-3836039 turn-activity › smoke-ok
+E         2026-10-10T03:49:36.652Z  agent:dag-scope-1791604155361-3836039 turn-completed
+E         2026-10-10T03:49:36.652Z  agent:dag-scope-1791604155361-3836039 member-settled
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T03:49:39.348Z  agent:dag-scope-1791604155361-3836039 turn-started
+E         2026-10-10T03:49:39.391Z  agent:dag-scope-1791604155361-3836039 turn-message
+E         2026-10-10T03:49:39.417Z  agent:dag-scope-1791604155361-3836039 turn-completed
+E         2026-10-10T03:49:39.417Z  agent:dag-scope-1791604155361-3836039 turn-started
+E         2026-10-10T03:49:39.427Z  agent:dag-scope-1791604155361-3836039 judge-decided the monitor took its turn; a report reaches the planner as a finding
+E         2026-10-10T03:49:39.427Z  agent:dag-scope-1791604155361-3836039 turn-message
+E         2026-10-10T03:49:39.427Z  agent:dag-scope-1791604155361-3836039 turn-completed
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T03:49:39.501Z  agent:node-scope-1791604155464-3837292 turn-completed
+E         2026-10-10T03:49:39.501Z  agent:node-scope-1791604155464-3837292 turn-started
+E         2026-10-10T03:49:39.540Z  agent:node-scope-1791604155464-3837292 turn-completed
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T03:49:39.596Z  agent:node-scope-1791604155464-3837292 graph-settled
+E         2026-10-10T03:49:39.604Z  graph:held                   node-settled done
+E         -- observer-liveness-paced  1/1 done  SETTLED  complete
+E         2026-10-10T03:49:40.176Z  agent:dag-scope-1791604155361-3836039 member-heartbeat
+E         2026-10-10T03:49:41.435Z  agent:dag-scope-1791604155361-3836039 cron-fired
+E         -- observer-liveness-paced  1/1 done  SETTLED  complete
+E         {"run_id":"observer-liveness-paced","settlement":"complete"}
+E         follow-ups: run observer-liveness-paced holds no follow-up drafts, no tickets and no budget overrun under /tmp/pytest-of-nick/pytest-790/popen-gw1/test_a_paced_monitor_keeps_the0/follow-ups, so there is nothing to verify and no follow-up run was launched
+E         
+E       assert not [Envelope(kind='member-died', at=datetime.datetime(2026, 10, 10, 3, 49, 41, 474000, tzinfo=datetime.timezone.utc), mem...ck.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv, got .venv"})]
+
+tests/e2e/test_observer_graph_liveness_e2e.py:798: AssertionError
+=========================== short test summary info ============================
+FAILED tests/e2e/test_observer_graph_liveness_e2e.py::test_a_paced_monitor_keeps_the_run_watched_between_its_turns@observer-graph-liveness
+1 failed, 1005 passed in 930.24s (0:15:30)
+Warning: command "rm -rf .telemetry/orchestrator-e2e/test && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/orchestrator-e2e/test NO_COLOR=1 COVERAGE_FILE=.coverage.e2e uv run pytest tests/e2e --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval -m 'not reads_docs and not reads_recipes and not reads_checkouts' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0" exited with non-zero status code
+
+
+ NX   Running target test for project orchestrator-e2e failed
+
+Failed tasks:
+
+- orchestrator-e2e:test
+
+Hint: run the command with --verbose for more details.
+
+  Run duration:      15m 21s
+  Critical path:     15m 21s (1 task)
+  Recoverable time:  <1ms
+
+  Recommendations:
+    - Speed up or split the longest tasks on the critical path:
+        orchestrator-e2e:test    15m 21s
+nx: targets failed; fix the reported project findings and rerun the same 'just' recipe (full output: /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.logs/nx.3669445.log)

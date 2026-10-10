@@ -1,0 +1,196 @@
+
+> nx run orchestrator-e2e:test
+
+> rm -rf .telemetry/orchestrator-e2e/test && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/orchestrator-e2e/test NO_COLOR=1 COVERAGE_FILE=.coverage.e2e uv run pytest tests/e2e --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval -m 'not reads_docs and not reads_recipes and not reads_checkouts' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0
+
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [  7%]
+........................................................................ [ 14%]
+........................................................................ [ 21%]
+........................................................................ [ 28%]
+........................................................................ [ 35%]
+........................................................................ [ 42%]
+........................................................................ [ 50%]
+........................................................................ [ 57%]
+..............................................................F......... [ 64%]
+........................................................................ [ 71%]
+........................................................................ [ 78%]
+........................................................................ [ 85%]
+........................................................................ [ 93%]
+......................................................................   [100%]
+=================================== FAILURES ===================================
+_________ test_a_paced_monitor_keeps_the_run_watched_between_its_turns _________
+[gw1] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-nick/pytest-790/popen-gw1/test_a_paced_monitor_keeps_the0')
+oneharness_bin = '/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/oneharness'
+
+    @pytest.mark.xdist_group("observer-graph-liveness")
+    def test_a_paced_monitor_keeps_the_run_watched_between_its_turns(
+        tmp_path: Path, oneharness_bin: str
+    ) -> None:
+        """The shipped document, launched for real, paces the monitor and stays alive for it.
+    
+        Six claims, each read off the graph's own record of one launch or off the run's
+        status while that launch was live:
+    
+        * the monitor opens with the wave, and its next agent turn opens no sooner than the
+          hold after its judge answered — two consecutive turns at least `every` apart;
+        * the run is watched through the hold: the graph does not settle, the member's own
+          heartbeat lands inside every hold long enough to contain one, and `just status`
+          read inside one reports neither `OBSERVER DEAD` nor `OBSERVER NOT RESTARTED`;
+        * the pacemaker fires inside a hold and the graph survives it, taking another monitor
+          turn afterwards;
+        * reading a planner surface restarts the pacemaker's clock and no other member's,
+          because the pacemaker is the one member the launched document declares
+          `resettable`;
+        * the observer ends when the run settles rather than when the hold would have: the
+          driver asks the graph to stop and its process is gone by the time the launch
+          returns, with the monitor's schedule never firing after a hold that opened once
+          the run had settled; and a turn its own closeout cancelled after the settlement is
+          the observer being ended, never a death.
+    
+        Reverting the document's `schedule` fails before any of it: `--set
+        members.monitor.schedule.every` on a member with no schedule is refused by the reader
+        (`this graph has no schedule`), the launch attaches no observer, and the graph records
+        nothing for the run. Reverting `background: false` fails at the reader too, because
+        the pacemaker's deferred first turn then has nothing to hold the run open for it.
+        """
+        if shutil.which("just") is None:
+            pytest.skip("just is not installed")
+        paced = _paced_launch(tmp_path, oneharness_bin)
+        assert paced.status == 0, (
+            f"the attached launch exited {paced.status}, so what follows is read off a run "
+            f"that did not settle cleanly:\n{paced.printed}"
+        )
+        events = paced.events
+        assert events, f"the dag-scope graph recorded nothing for this run:\n{paced.printed}"
+    
+        started = _of(events, "graph-started")
+        assert started, f"the observer graph never started:\n{paced.printed}"
+        # A turn the driver's own closeout cancels once the run has settled is the observer
+        # being ended, not dying: the linked release journals that cancel as a
+        # `provider-failure` death with cause `cancelled`. Every other death counts, and so
+        # does a cancel before the settlement, which nothing in this run asked for.
+        assert paced.settled is not None, (
+            f"the run's detailed stream renders no settlement of `{HELD_NODE}`, so a death "
+            f"cannot be placed before or after it:\n{paced.printed}"
+        )
+        died = [
+            death
+            for death in _of(events, "member-died")
+            if not (death.payload.get("cause") == "cancelled" and death.at >= paced.settled)
+        ]
+>       assert not died, (
+            f"a member of the observer graph died during a paced run: {died}\n{paced.printed}"
+        )
+E       AssertionError: a member of the observer graph died during a paced run: [Envelope(kind='member-died', at=datetime.datetime(2026, 10, 10, 3, 49, 41, 474000, tzinfo=datetime.timezone.utc), member='check-in', payload={'rule': 'provider-failure', 'cause': 'unclassified', 'detail': "oneharness: fallback harness `codex:primary` did the task's work and did not succeed, for a cause it could not classify (status nonzero) — so the chain stopped there and tried no candidate after it; it said: (stderr) …<frozen site>:101: RuntimeWarning: Unexpected value in sys.exec_prefix, expected /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv, got .venv"})]
+E         onepipeline: engine requested 0.63.2 (config/onepipeline.version), about to run 0.63.2 (/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/onepipeline)
+E         Concise graph events; ask the producing library for full detail by stream id.
+E         2026-10-10T03:49:15.348Z  graph:-                      run-started
+E         2026-10-10T03:49:15.363Z  agent:dag-scope-1791604155361-3836039 graph-started
+E         2026-10-10T03:49:15.363Z  agent:dag-scope-1791604155361-3836039 member-started
+E         2026-10-10T03:49:15.365Z  agent:dag-scope-1791604155361-3836039 member-started
+E         2026-10-10T03:49:15.367Z  agent:dag-scope-1791604155361-3836039 turn-started
+E         2026-10-10T03:49:15.372Z  graph:held                   node-ready
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T03:49:15.410Z  agent:dag-scope-1791604155361-3836039 turn-message
+E         2026-10-10T03:49:15.410Z  agent:dag-scope-1791604155361-3836039 turn-completed
+E         2026-10-10T03:49:15.410Z  agent:dag-scope-1791604155361-3836039 turn-started
+E         2026-10-10T03:49:15.430Z  agent:dag-scope-1791604155361-3836039 judge-decided the monitor took its turn; a report reaches the planner as a finding
+E         2026-10-10T03:49:15.430Z  agent:dag-scope-1791604155361-3836039 turn-message
+E         2026-10-10T03:49:15.431Z  agent:dag-scope-1791604155361-3836039 turn-completed
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T03:49:15.465Z  agent:node-scope-1791604155464-3837292 member-started
+E         2026-10-10T03:49:15.465Z  agent:node-scope-1791604155464-3837292 turn-started
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T03:49:21.567Z  agent:dag-scope-1791604155361-3836039 member-started
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T03:49:21.591Z  agent:dag-scope-1791604155361-3836039 turn-activity › smoke-ok
+E         2026-10-10T03:49:21.595Z  agent:dag-scope-1791604155361-3836039 turn-completed
+E         2026-10-10T03:49:21.595Z  agent:dag-scope-1791604155361-3836039 member-settled
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T03:49:26.610Z  agent:dag-scope-1791604155361-3836039 member-started
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T03:49:26.644Z  agent:dag-scope-1791604155361-3836039 turn-activity › smoke-ok
+E         2026-10-10T03:49:26.645Z  agent:dag-scope-1791604155361-3836039 turn-completed
+E         2026-10-10T03:49:26.645Z  agent:dag-scope-1791604155361-3836039 member-settled
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T03:49:27.357Z  agent:dag-scope-1791604155361-3836039 turn-started
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T03:49:27.396Z  agent:dag-scope-1791604155361-3836039 turn-completed
+E         2026-10-10T03:49:27.396Z  agent:dag-scope-1791604155361-3836039 turn-started
+E         2026-10-10T03:49:27.404Z  agent:dag-scope-1791604155361-3836039 judge-decided the monitor took its turn; a report reaches the planner as a finding
+E         2026-10-10T03:49:27.404Z  agent:dag-scope-1791604155361-3836039 turn-message
+E         2026-10-10T03:49:27.404Z  agent:dag-scope-1791604155361-3836039 turn-completed
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T03:49:31.554Z  agent:dag-scope-1791604155361-3836039 member-started
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T03:49:31.590Z  agent:dag-scope-1791604155361-3836039 turn-activity › smoke-ok
+E         2026-10-10T03:49:31.599Z  agent:dag-scope-1791604155361-3836039 turn-completed
+E         2026-10-10T03:49:31.599Z  agent:dag-scope-1791604155361-3836039 member-settled
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T03:49:36.617Z  agent:dag-scope-1791604155361-3836039 member-started
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T03:49:36.647Z  agent:dag-scope-1791604155361-3836039 turn-activity › smoke-ok
+E         2026-10-10T03:49:36.652Z  agent:dag-scope-1791604155361-3836039 turn-completed
+E         2026-10-10T03:49:36.652Z  agent:dag-scope-1791604155361-3836039 member-settled
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T03:49:39.348Z  agent:dag-scope-1791604155361-3836039 turn-started
+E         2026-10-10T03:49:39.391Z  agent:dag-scope-1791604155361-3836039 turn-message
+E         2026-10-10T03:49:39.417Z  agent:dag-scope-1791604155361-3836039 turn-completed
+E         2026-10-10T03:49:39.417Z  agent:dag-scope-1791604155361-3836039 turn-started
+E         2026-10-10T03:49:39.427Z  agent:dag-scope-1791604155361-3836039 judge-decided the monitor took its turn; a report reaches the planner as a finding
+E         2026-10-10T03:49:39.427Z  agent:dag-scope-1791604155361-3836039 turn-message
+E         2026-10-10T03:49:39.427Z  agent:dag-scope-1791604155361-3836039 turn-completed
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T03:49:39.501Z  agent:node-scope-1791604155464-3837292 turn-completed
+E         2026-10-10T03:49:39.501Z  agent:node-scope-1791604155464-3837292 turn-started
+E         2026-10-10T03:49:39.540Z  agent:node-scope-1791604155464-3837292 turn-completed
+E         -- observer-liveness-paced  0/1 done  ACTIVE  waiting
+E         2026-10-10T03:49:39.596Z  agent:node-scope-1791604155464-3837292 graph-settled
+E         2026-10-10T03:49:39.604Z  graph:held                   node-settled done
+E         -- observer-liveness-paced  1/1 done  SETTLED  complete
+E         2026-10-10T03:49:40.176Z  agent:dag-scope-1791604155361-3836039 member-heartbeat
+E         2026-10-10T03:49:41.435Z  agent:dag-scope-1791604155361-3836039 cron-fired
+E         -- observer-liveness-paced  1/1 done  SETTLED  complete
+E         {"run_id":"observer-liveness-paced","settlement":"complete"}
+E         follow-ups: run observer-liveness-paced holds no follow-up drafts, no tickets and no budget overrun under /tmp/pytest-of-nick/pytest-790/popen-gw1/test_a_paced_monitor_keeps_the0/follow-ups, so there is nothing to verify and no follow-up run was launched
+E         
+E       assert not [Envelope(kind='member-died', at=datetime.datetime(2026, 10, 10, 3, 49, 41, 474000, tzinfo=datetime.timezone.utc), mem...ck.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv, got .venv"})]
+
+tests/e2e/test_observer_graph_liveness_e2e.py:798: AssertionError
+=========================== short test summary info ============================
+FAILED tests/e2e/test_observer_graph_liveness_e2e.py::test_a_paced_monitor_keeps_the_run_watched_between_its_turns@observer-graph-liveness
+1 failed, 1005 passed in 930.24s (0:15:30)
+Warning: command "rm -rf .telemetry/orchestrator-e2e/test && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/orchestrator-e2e/test NO_COLOR=1 COVERAGE_FILE=.coverage.e2e uv run pytest tests/e2e --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval -m 'not reads_docs and not reads_recipes and not reads_checkouts' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0" exited with non-zero status code
+
+
+ NX   Running target test for project orchestrator-e2e failed
+
+Failed tasks:
+
+- orchestrator-e2e:test
+
+Hint: run the command with --verbose for more details.
+
+  Run duration:      15m 21s
+  Critical path:     15m 21s (1 task)
+  Recoverable time:  <1ms
+
+  Recommendations:
+    - Speed up or split the longest tasks on the critical path:
+        orchestrator-e2e:test    15m 21s
