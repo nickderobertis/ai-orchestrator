@@ -15,25 +15,14 @@ for the file's shape. This page restates none of it beyond the keys a plan's bud
 
 - **Approved budgets are the requirement, no more and no less.** What the user approves is
   what must be met. Optimizing past an approved budget is not wanted.
-- **The measure of record is where the product owner feels the impact.** That is often the
-  user's experience, and not only that: API spend, quota headroom, gate time and change
-  cycle time all matter to the product owner. Measure as close to that impact as you can —
-  UI timing over API timing, API timing over the timing of one method, full cycle time over
-  a count of gate runs. Use an inner measure only when the outer one cannot be checked, and
-  say why.
-- **A budget is a product-owner-level outcome.** It is what the product owner tracks: a
-  quota's headroom on a realistic run, a latency someone waits through, the size of what
-  reaches a reader. Each budget carries the threshold the user approves, so a plan's
-  budgets read as a short list somebody can audit and adjust.
-- **Detailed figures are telemetry, not budgets.** Per-step, per-phase and per-operation
-  figures, and a second unit of the same concern (requests beside points), are still
-  recorded on every run. The budget's analysis reports them as the breakdown of its figure,
-  in the onebudgetspec SDK reporter's `detail`, so a failed budget says which part grew.
-- **A budget's command analyses telemetry the gate's tests already record**, and reports its
-  figure through the onebudgetspec SDK. It never runs a scenario of its own just to measure,
-  except under the standalone-measurement exception the onebudgetspec fragment's
-  `budgets_reuse_gate_telemetry` rule states: a behaviour no existing gate exercises, or one
-  whose recording there would cost more than measuring it on its own.
+- **Which figure a budget measures** is the plan checklist's
+  `plan_budget_inner_measure_has_reason`, read off the budget's `measure` and
+  `inner_measure_reason`.
+- **What a budget is and what its command runs are the onebudgetspec fragment's rules**:
+  `budgets_track_product_owner_outcomes`, `budgets_reuse_gate_telemetry`,
+  `budgets_scoped_to_minimal_tree` and `budget_commands_measure_directly`, which the plan
+  checklist re-declares for plans. A budget's command reports its figure through the
+  onebudgetspec SDK, with the breakdown that explains it in the SDK reporter's `detail`.
 - **Measure once.** A check runs its measurement once. It never re-samples until a result
   passes, and never runs the base and the branch side by side.
 - **Every result shows actual, budget and headroom**, so a passing result still says how
@@ -52,10 +41,10 @@ for the file's shape. This page restates none of it beyond the keys a plan's bud
 - **There are no baselines.** The approved budget is the line to stay within, so nothing
   stores a previous measurement to compare against.
 
-The rule of the three principles on a budget's level, its telemetry and its command is
-stated once, with worked examples, in dero-skills' create-repo reference: [When is a
-requirement a budget][budget-rule]. This page restates what a planner of this host needs
-from it.
+Those fragment rules are stated once, with worked examples, in dero-skills' create-repo
+reference: [When is a requirement a budget][budget-rule]. The rules a plan's budgets are judged by while the plan is reviewed are stated
+once, in the plan checklist, `config/plan-checklist.llmlint.yml`, and where this page
+touches one it names the rule rather than restating it.
 
 [budget-rule]: https://github.com/nickderobertis/dero-skills/blob/main/skills/bootstrap/create-repo/references/tools/onebudgetspec.md#when-is-a-requirement-a-budget
 
@@ -65,9 +54,9 @@ from it.
 A budgets file is named `budgets.yaml`. Of each budget in it, a plan's budget names the
 `id`, the `command`, the `unit`, the `direction` (`max` or `min`) and the
 `threshold`, and the convention below uses its `description`; onebudgetspec's documentation
-states the rest. **The command analyses the telemetry the gate's tests record**, so there
-is no workload field: the workload is the one those tests run at, and anyone who needs it
-reads the command and the tests whose records it reads.
+states the rest. There is no workload field: where a budget's figure comes from is
+`budgets_reuse_gate_telemetry`'s, and anyone who needs the workload reads the command and
+what it reads.
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 Files nest. A repository's **root** `budgets.yaml` holds the budgets that must always be
@@ -114,7 +103,7 @@ of both once.
   setup/reads, distinct from the target, unit and basis; evidence states its source.
   Never infer mode or runtime from basis or command text. A command analysing recorded
   telemetry is `telemetry`; `direct` is left for a standalone measurement under the
-  exception above.
+  exception `budgets_reuse_gate_telemetry` admits.
 - **The plan-level answers live in the plan's own description.** The project's
   `orchestrator.plan-budgets` metadata holds them, and the project's description is rendered
   from the `plan-description` template with the same answers: the plan's overview; what it
@@ -166,14 +155,16 @@ of both once.
   command analyses.
 - **The reason for an inner measure** goes in the budget's `description` and in the
   budget's `inner_measure_reason`.
-- **A feature budget lives in the budgets file of the project that owns what it
-  measures**, so it is scoped like the rest of the gate, and it stays there after its plan
-  lands to protect that code from later changes. Only a budget that must always be checked
-  goes in the root file.
+- **What a plan states about where a telemetry budget's figure comes from and how it is
+  taken** is the plan checklist's `plan_budget_names_its_telemetry_source` and
+  `plan_budget_measurement_is_decided`, because the fragment's
+  `expensive_tests_stay_behind_their_own_edge` and `budgets_reuse_gate_telemetry` judge
+  only what a plan states.
+- **Which budgets file a budget is registered in** is `budgets_scoped_to_minimal_tree`'s.
 - **A check's own cost counts toward the gate-time budget.**
-- **The task owning a budget names it in its criteria**, with the realistic workload it
-  holds at. Repo-wide budgets are enforced on the merge path and never written into a
-  task's criteria.
+- **What a task's criteria say about budgets** is the plan checklist's
+  `plan_budget_owner_criteria_name_budget_and_workload` and
+  `plan_criteria_omit_repo_wide_budgets`.
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 ## Plans that predate budgets

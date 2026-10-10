@@ -73,7 +73,9 @@ OWNED_STATEMENTS = (
     Owned(PLANNER.document, "Never split implementation and those tests"),
     Owned(PLANNER.document, "the decision driver that a diff cannot recover"),
     Owned(PLANNER.document, "there is no second place to state one"),
-    Owned(PLANNER.document, "satisfiable by that node's own worker inside its own dispatch"),
+    # Where a criterion may rest is the plan checklist's rule, which the persona names; what
+    # the planner owns is the one shape admitted where that rule has no answer.
+    Owned(PLANNER.document, "a criterion may take the **corresponding-content** shape"),
     Owned(PLANNER.document, "the criteria stop at *ready to publish*"),
     # Evidence a worker produces on the host — a demonstration change request, a check it
     # triggers — and the two carve-outs that let it: how the criteria state that evidence

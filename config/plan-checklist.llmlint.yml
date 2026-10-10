@@ -12,7 +12,9 @@
 # llmlint roots every glob at its working directory rather than at this file's, and drops
 # a passed path outside that directory without a word, so the script runs llmlint from the
 # plan-authoring root (the directory holding `projects/` and `tasks/`), names the
-# documents relative to it, and selects them with `**/*.md` here and on every rule.
+# documents relative to it, and selects them with `**/*.md` here. A rule about the plan's
+# description alone selects `projects/**/*.md`, and one about task documents alone
+# `tasks/**/*.md`, since that is where the store keeps each.
 #
 # The judge's oneharness routing is `oneharness.llmlint.toml`'s, the same as this
 # repository's judged tier: `oneharness.bin` resolves against llmlint's working
@@ -133,3 +135,123 @@ rules:
     files:
       include: ["**/*.md"]
     relevance: false
+
+  # The rules a plan alone answers to: what its tasks, its budgets and its description must
+  # state before any of its work exists. Each is worded here and nowhere else.
+  - name: plan_criteria_satisfiable_inside_the_dispatch
+    agent: plan
+    files:
+      include: ["tasks/**/*.md"]
+    relevance: the task document has an `## Acceptance criteria` section
+    description: |
+      true when every acceptance criterion can be met from inside the task's own dispatch,
+      from what its worker controls. false when one rests on something that happens only
+      after the dispatch settles or outside it: a change request merging, a release or
+      deploy, the merge path's or a host's required checks passing, a scheduled job, or a
+      third party acting. A criterion naming a later comparison while stating that its
+      result is not the task's bar, one about the dispatch's own judged lint, and one about
+      a draft or demonstration change request the task grants its worker rest on nothing
+      outside it.
+    require_line_attribution: true
+  - name: plan_criteria_require_realistic_tests
+    agent: plan
+    files:
+      include: ["tasks/**/*.md"]
+    relevance: the task's acceptance criteria ask for a test or other proof of behaviour
+    description: |
+      true when every criterion asking for proof of behaviour requires a test that drives
+      the real interface the behaviour is reached by, doubling at most a paid, external or
+      third-party boundary, and asserts the behaviour itself rather than internal state or
+      a snapshot of output.
+    require_line_attribution: true
+  - name: plan_workload_states_numbers
+    agent: plan
+    files:
+      include: ["**/*.md"]
+    relevance: the file states a realistic workload, in a plan description's workload or a budget's `workload`
+    description: |
+      true when every realistic workload the file states gives its scale in numbers: how
+      many of what, how often, how large. false when one is stated only in words such as
+      "typical", "a few" or "normal use".
+    require_line_attribution: true
+  - name: plan_ten_x_names_a_covering_budget
+    agent: plan
+    files:
+      include: ["projects/**/*.md"]
+    relevance: the description answers what the product owner notices getting worse first at 10x realistic usage
+    description: |
+      true when the 10x answer names, by id, a budget the plan registers or keeps whose
+      figure grows with the effect the answer names.
+    require_line_attribution: true
+  - name: plan_budget_command_measures_its_figure
+    agent: plan
+    files:
+      include: ["tasks/**/*.md"]
+    relevance: the task's budget record registers or changes a budget
+    description: |
+      true when every budget in the task's record names a `command` that, as the plan
+      describes it, produces that budget's `measure`, in its `unit`, at its `workload`.
+    require_line_attribution: true
+  - name: plan_budget_basis_matches_evidence
+    agent: plan
+    files:
+      include: ["tasks/**/*.md"]
+    relevance: the task's budget record holds a budget whose `basis` is `measured`
+    description: |
+      true when each such budget's `evidence` reports a measurement of its figure at its
+      `workload`.
+    require_line_attribution: true
+  - name: plan_budget_inner_measure_has_reason
+    agent: plan
+    files:
+      include: ["tasks/**/*.md"]
+    relevance: the task's budget record registers or changes a budget
+    description: |
+      true when every budget measures the outermost figure its concern is felt at, or,
+      where it measures one step, component or inner process of what the user waits on or
+      pays for, gives a non-empty `inner_measure_reason` saying why.
+    require_line_attribution: true
+  - name: plan_criteria_omit_repo_wide_budgets
+    agent: plan
+    files:
+      include: ["tasks/**/*.md"]
+    relevance: the task document has an `## Acceptance criteria` section
+    description: |
+      true when the task's acceptance criteria name only budgets the task itself registers
+      or changes. false when a criterion holds the task to a repository-wide budget it
+      does not own, such as the gate's own time or another root budget.
+    require_line_attribution: true
+  - name: plan_budget_owner_criteria_name_budget_and_workload
+    agent: plan
+    files:
+      include: ["tasks/**/*.md"]
+    relevance: the task's budget record registers or changes a budget
+    description: |
+      true when the task's acceptance criteria name, by id, every budget its record
+      registers or changes, each with the workload it is measured at.
+    require_line_attribution: true
+
+  # The facts a re-declared fragment rule judges, which a plan has to state before that
+  # rule has anything to read. Each demands a statement and never restates the fragment
+  # rule's invariant, whose one wording stays upstream.
+  - name: plan_budget_names_its_telemetry_source
+    agent: plan
+    files:
+      include: ["tasks/**/*.md"]
+    relevance: the task's budget record holds a budget whose figure is read from telemetry tests record, by a `source` of `telemetry` or a command that analyses recorded telemetry
+    description: |
+      true when the task names, for every such budget, the test target or targets whose
+      tests record what its command reads (the project and target, or the test tier, that
+      runs them, not only test files) and the project whose budgets file registers it.
+    require_line_attribution: true
+  - name: plan_budget_measurement_is_decided
+    agent: plan
+    files:
+      include: ["tasks/**/*.md"]
+    relevance: the task's budget record registers or changes a budget
+    description: |
+      true when the task states, for every budget it owns, one decided way its figure is
+      taken (read from telemetry its tests record, or measured fresh by its command)
+      together with any label the budget carries, such as `host`. false when it leaves the
+      way to the worker, as an either/or or a "say which".
+    require_line_attribution: true

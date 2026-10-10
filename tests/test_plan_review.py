@@ -2754,13 +2754,10 @@ def test_the_review_bar_holds_the_budget_question() -> None:
     for demand in (
         "Hold it to six things",
         "**Its budgets are what its work needs.**",
-        "The plan's own answers state a realistic workload with numbers",
-        "answers every concern of the checklist with a budget or a one-line reason it needs none",
         "Look for what is missing rather than whether each line was filled in",
-        "a basis the evidence does not support",
-        "a repo-wide budget written into a task's criteria",
+        "a concern the workload makes likely and the checklist dismissed",
+        "a budgets-file change the budgets imply and no budget states",
         "a requested target quietly loosened rather than escalated",
-        "A node that owns a budget names that budget and its workload in its criteria.",
     ):
         assert demand in bar, demand
 
@@ -2861,27 +2858,26 @@ def test_the_planner_is_told_how_to_state_its_budgets_in_general_terms() -> None
     stated = " ".join(section.split())
     for rule in (
         "**Workload first.**",
-        "Those numbers reach the acceptance criteria",
+        "`plan_workload_states_numbers` judges how you state it",
         "latency; quota and rate-limit headroom; how the work scales with data; spend; resource "
         "use",
         'Every concern gets a budget or a full "n/a because …"',
         "*at 10× realistic usage, what does the product owner notice getting worse first?*",
         "a set of general problem classes, never a closed list",
         "grows a new class each time a real miss",
-        "**Use the measure of record**",
-        "Take a measure further inward only when the outer one cannot be checked, and say why",
+        "**Use the measure of record.**",
+        "the `inner_measure_reason` a budget gives for an inner one, answer "
+        "`plan_budget_inner_measure_has_reason`",
         "the one at its root and every project's own",
         "Propose a change to any of them only through a budget of the task that owns it",
-        "**A budget's command analyses telemetry the gate's tests already record**",
-        "**A budget is a product-owner-level outcome**",
-        "**Detailed figures are telemetry, not budgets**",
-        "The node that implements a budget owns that command, the recording in the tests it "
-        "reads, and the budget's registration",
-        "its acceptance criteria name the budget and the realistic workload it holds at",
-        "A feature budget goes in the budgets file of the project that owns what it measures",
-        "Only a budget that must always be checked goes in the root file",
-        "**Repo-wide budgets are enforced on the merge path** and never written into a task's "
-        "criteria",
+        "**What a budget is, where its figure comes from and what its command may run are the "
+        "onebudgetspec fragment's rules**",
+        "**The node that implements a budget owns** its command, the recording in the tests "
+        "that command reads, and its registration in the right file",
+        "`plan_budget_owner_criteria_name_budget_and_workload`",
+        "Which file each budget is registered in answers `budgets_scoped_to_minimal_tree`",
+        "`plan_criteria_omit_repo_wide_budgets`",
+        "**Say where a telemetry budget's figure comes from, and decide how it is taken.**",
         "weigh realism (can real data be had at all), generation cost, fixture cost, and upkeep",
         "**A target the user asked for that the evidence says is infeasible is an escalated "
         "exception**",

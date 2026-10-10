@@ -47,7 +47,7 @@ import subprocess
 import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import plan_root_variable
 import pytest
@@ -84,6 +84,8 @@ FRAMING = "## You are reading a plan, not code"
 TASK = "tasks/feat-check-print-each-result-s-detail-under-its-line-in-text-output.md"
 DESCRIPTION = f"projects/{PLAN}.md"
 TASK_RULE = "tests_hold_no_nonfunctional_thresholds"
+#: The task whose budget leaves how `own-sessions-read-seconds` is taken to its worker.
+BUDGETS_TASK = "tasks/feat-budgets-move-the-cost-thresholds-tests-assert-into-budgets-yaml-files.md"
 PLAN_RULE = "budget_commands_measure_directly"
 #: The documents the plan store locates for the plan, relative to the authoring root.
 DOCUMENTS = {DESCRIPTION, *(f"tasks/{task.name}" for task in (FIXTURE / "tasks").iterdir())}
@@ -263,7 +265,85 @@ def test_the_review_form_judges_exactly_the_plans_documents_as_a_plan(
     ]
     assert sorted(argv[-len(DOCUMENTS) :]) == sorted(DOCUMENTS)
     # Judged rather than stopped at the pre-flight: every rule the plan agent holds answered.
-    assert json.loads(ran.stdout)["summary"]["passed"] == 6
+    assert json.loads(ran.stdout)["summary"]["passed"] == len(_judged_rules())
+
+
+def _declared_rules() -> list[dict[str, object]]:
+    rules: list[dict[str, object]] = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))["rules"]
+    return rules
+
+
+def _judged_rules() -> list[dict[str, object]]:
+    """Every rule the configuration has judged: all but the fragment rules turned off."""
+    return [rule for rule in _declared_rules() if rule.get("relevance") is not False]
+
+
+def _worded_rules() -> list[dict[str, object]]:
+    """The rules the configuration words itself, rather than re-declaring a fragment's."""
+    return [rule for rule in _declared_rules() if not rule.get("override")]
+
+
+def _in_scope(scope: str) -> set[str]:
+    """The plan's documents a judge prompt's `Scope:` line covers."""
+    if scope == "all target files":
+        return set(DOCUMENTS)
+    if scope.startswith("all target files except: "):
+        return DOCUMENTS - {part.strip() for part in scope.split(": ", 1)[1].split(",")}
+    return {part.strip() for part in scope.split(",")}
+
+
+def test_each_rule_the_checklist_words_is_judged_over_the_plans_documents(
+    checklist: Checklist,
+) -> None:
+    """Each of the checklist's own rules reaches the judge, scoped to the documents it reads.
+
+    A task rule selects the task documents and a description rule the description, each by
+    the path the store keeps it at, and its verdict reaches the report under its own name:
+    the two the stand-in judge is told to fail, on the either/or a budget leaves its worker
+    and on the description's 10x answer, fail there, and every other one passes.
+    """
+    worded = _worded_rules()
+    assert len(worded) == 11, [rule["name"] for rule in worded]
+    failing = {
+        "plan_budget_measurement_is_decided": {
+            "file": BUDGETS_TASK,
+            "line": 55,
+            "message": "leaves how own-sessions-read-seconds is taken to the worker",
+        },
+        "plan_ten_x_names_a_covering_budget": {
+            "file": DESCRIPTION,
+            "line": 232,
+            "message": "names no budget the effect grows",
+        },
+    }
+
+    ran = subprocess.run(
+        [str(SCRIPT), "review", PROJECT, "--format", "json"],
+        cwd=REPO_ROOT,
+        env=checklist.environment | {"FAKE_CODEX_LLMLINT_FAIL": json.dumps(failing)},
+        text=True,
+        capture_output=True,
+        timeout=RUN_TIMEOUT_SECONDS,
+        check=False,
+    )
+
+    assert ran.returncode == 1, ran.stdout + ran.stderr
+    (prompt,) = checklist.prompts()
+    assert FRAMING in prompt
+    outcomes = {rule["name"]: rule for rule in json.loads(ran.stdout)["rules"]}
+    for rule in worded:
+        name = str(rule["name"])
+        description = str(rule["description"]).split("\n", 1)[0].strip()
+        section = prompt.split(f"### {name}\n", 1)[1].split("\n### ", 1)[0]
+        assert description in section, f"{name} reached the judge without its own wording"
+        files = rule["files"]
+        assert isinstance(files, dict)
+        (glob,) = files["include"]
+        selected = {document for document in DOCUMENTS if PurePosixPath(document).full_match(glob)}
+        assert selected, f"{name}'s {glob} selects none of the plan's documents"
+        assert _in_scope(_scope(prompt, name)) == selected, name
+        expected = "fail" if name in failing else "pass"
+        assert outcomes[name]["outcome"] == expected, outcomes[name]
 
 
 def _graph_judges() -> list[dict[str, str]]:
