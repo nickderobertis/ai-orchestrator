@@ -42,14 +42,16 @@ catch. `tests/test_engine_contracts.py` carries the same directive for the same 
 
 from __future__ import annotations
 
+import importlib.metadata
 import json
 import re
 import tomllib
 from collections.abc import Mapping
+from pathlib import Path
 from typing import NamedTuple
 
 import pytest
-from test_engine_contracts import ONEHARNESS, ONEPIPELINE_DOCS, _source
+from test_engine_contracts import ONEHARNESS, ONEPIPELINE_DOCS, Engine, _source
 
 from orchestrator import labels
 from orchestrator.root import REPO_ROOT
@@ -350,4 +352,79 @@ def test_each_site_that_restates_one_of_these_names_still_carries_it(
         f"{relative_path} no longer names {name!r}, which the adopted engine still "
         "stamps or sets. Either the site stopped telling a reader how a run's sessions "
         "are found, or it was reworded to something this module is not holding"
+    )
+
+
+#: The sentence of `docs/telemetry.md`'s enriched-record continuity paragraph that names
+#: the adopted `oneharness-cli`, the core its wheel is compiled against, and the core
+#: before it, with the history and usage-report schema versions it states at both.
+ADOPTED_HARNESS_MOVE = re.compile(
+    r"`oneharness-cli` (?P<cli>\d+\.\d+\.\d+) is compiled against `oneharness-core` "
+    r"(?P<core>\d+\.\d+\.\d+), read off its wheel's own SBOM, and between "
+    r"`oneharness-core-v(?P<previous>\d+\.\d+\.\d+)` and `oneharness-core-v(?P=core)` "
+    r".*? that report's own `SCHEMA_VERSION` stays `(?P<usage>[\d.]+)` .*? the history "
+    r"format, whose `SCHEMA_VERSION` is `(?P<history>[\d.]+)` at both tags"
+)
+SCHEMA_VERSION = re.compile(r'^pub const SCHEMA_VERSION: &str = "(?P<value>[^"]+)";', re.M)
+
+
+def _cli_wheel_core() -> str:
+    """The `oneharness-core` the installed `oneharness-cli` wheel's own SBOM declares."""
+    installed = importlib.metadata.distribution("oneharness-cli")
+    (sbom,) = [entry for entry in installed.files or () if "sboms" in Path(entry).parts]
+    document = json.loads(Path(str(installed.locate_file(sbom))).read_text("utf-8"))
+    (core,) = {
+        component["version"]
+        for component in document["components"]
+        if component["name"] == "oneharness-core"
+    }
+    return str(core)
+
+
+def _core_source(core: str, relative: str) -> str:
+    """One file of `oneharness-core` at that core's own release tag."""
+    return _source(
+        Engine("oneharness", f"oneharness-core-v{core}", ONEHARNESS.source_root), relative
+    )
+
+
+def _schema_version(core: str, relative: str) -> str:
+    found = SCHEMA_VERSION.search(_core_source(core, relative))
+    assert found is not None, f"{relative} declares no SCHEMA_VERSION at oneharness-core-v{core}"
+    return found["value"]
+
+
+# `reads_docs` is withheld for the reason the test above states.
+def test_the_telemetry_upgrade_boundary_states_the_adopted_harness_move_truthfully() -> None:
+    """The continuity paragraph's newest oneharness move is what the wheel and tags say.
+
+    It argues enriched records stay comparable across the move from what changed in
+    `domain/usage.rs` and from the history schema at both cores, so each of those is
+    read again here: the CLI release from the pin, the core from the installed wheel's
+    SBOM, and both schema versions and the file's change from the two tags.
+    """
+    pin = (REPO_ROOT / "config" / "oneharness.version").read_text("utf-8").strip()
+    written = " ".join((REPO_ROOT / "docs" / "telemetry.md").read_text("utf-8").split())
+    stated = ADOPTED_HARNESS_MOVE.search(written)
+    assert stated is not None, (
+        "docs/telemetry.md no longer states which core the adopted oneharness-cli is "
+        "compiled against and the schema versions across its move"
+    )
+    assert stated["cli"] == pin, (
+        f"docs/telemetry.md states oneharness-cli {stated['cli']}; the pin is {pin}"
+    )
+    assert stated["core"] == _cli_wheel_core()
+
+    previous, core = stated["previous"], stated["core"]
+    for relative, key in (("domain/history.rs", "history"), ("domain/usage.rs", "usage")):
+        assert (
+            _schema_version(previous, relative) == _schema_version(core, relative) == stated[key]
+        ), (
+            f"{relative}'s SCHEMA_VERSION is not {stated[key]} at both "
+            f"oneharness-core-v{previous} and oneharness-core-v{core}"
+        )
+    before = _core_source(previous, "domain/usage.rs")
+    after = _core_source(core, "domain/usage.rs")
+    assert "reset_credits" not in before and "pub reset_credits: ResetCredits" in after, (
+        "docs/telemetry.md says domain/usage.rs gained `reset_credits` across this move"
     )

@@ -653,12 +653,13 @@ class LinkedCore(NamedTuple):
 
 
 #: The pin and the crate are separate artifacts on separate cadences, so no equality
-#: between them would mean anything. Re-measured 2026-10-08 on this host's installed
-#: wheels: `config/oneharness.version` reads 0.21.2 and names the `oneharness-cli`
+#: between them would mean anything. Re-measured 2026-10-09 on this host's installed
+#: wheels: `config/oneharness.version` reads 0.22.0 and names the `oneharness-cli`
 #: wheel, whose own CycloneDX SBOM declares the `oneharness-core` it is compiled
-#: against as 0.24.1, and the engine wheel links 0.24.2 for every dependent — while
-#: the sibling `oneagentgraph-cli` and `onejudge-cli` wheels still declare 0.24.0, which
-#: is the pairing
+#: against as 0.25.0 (`tests/test_engine_history_vocabulary.py` re-reads that pairing
+#: off the wheel for `docs/telemetry.md`), and the engine wheel links 0.24.2 for every
+#: dependent — while the sibling `oneagentgraph-cli` and `onejudge-cli` wheels still
+#: declare 0.24.0, which is the pairing
 #: `test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs`
 #: holds and a different artifact from the `oneharness-cli` this pin names. The pin's
 #: number and the crate's **differ on this adoption**, as they have on most adoptions

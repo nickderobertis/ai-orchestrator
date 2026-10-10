@@ -40,7 +40,7 @@ dev = [
 requires-dist = [
     { name = "oneagentgraph-cli", specifier = "==0.5.5" },
     { name = "onebudgetspec-cli", specifier = "==0.1.4" },
-    { name = "oneharness-cli", specifier = "==0.21.2" },
+    { name = "oneharness-cli", specifier = "==0.22.0" },
     { name = "onejudge", specifier = "==0.17.2" },
     { name = "onemessagebus-cli", specifier = "==0.9.0" },
     { name = "onepipeline-api-cli", specifier = "==0.26.4" },
@@ -367,14 +367,15 @@ wheels = [
 
 [[package]]
 name = "oneharness-cli"
-version = "0.21.2"
+version = "0.22.0"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e0/70/e377f41592e221ab209fe8f48265c118ce99db6dc6cde84fd637e0cb0479/oneharness_cli-0.21.2-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:550933c60d3af0f6c372d619158351cf2aeb6861f06cbaf3b32d90be5ebe7655", size = 3615012, upload-time = "2026-10-03T20:55:57.947Z" },
-    { url = "https://files.pythonhosted.org/packages/66/0c/6f52fb0ade9cdc1c29ae3f047b0692411b4263c79b5c8c683953bf06d241/oneharness_cli-0.21.2-py3-none-macosx_11_0_arm64.whl", hash = "sha256:9fd145839291e86f8968ae3e1dc802d9f1a527b18861be042c9baae303924679", size = 3436723, upload-time = "2026-10-03T20:55:59.894Z" },
-    { url = "https://files.pythonhosted.org/packages/4b/5e/804a76633137ebcfa15aa5ba7ff05104637c0f70ac57e782e3ca170e5f71/oneharness_cli-0.21.2-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:8f9d4a4c3daae1739085a6c4f537908a0d57b6c58d28cfa1ba19820f98894d5a", size = 3488166, upload-time = "2026-10-03T20:56:01.442Z" },
-    { url = "https://files.pythonhosted.org/packages/76/d9/24447b7602de89d763069ac056637e4f122ea3c431cdb2c2266e1ed27713/oneharness_cli-0.21.2-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:6eefce8711f06d245b742c5cf1ac5e223b81ca815607161c841a4de78cabacd6", size = 3740357, upload-time = "2026-10-03T20:56:02.926Z" },
-    { url = "https://files.pythonhosted.org/packages/05/af/e0135d90e53a81ff6b6460e2ab40b6ef16419bbe3fc6994165ebfdf306c8/oneharness_cli-0.21.2-py3-none-win_amd64.whl", hash = "sha256:61dc8563b239c2e5231c12892c2a17884507106739435d568d9b10cc7a08ec43", size = 3750892, upload-time = "2026-10-03T20:56:04.408Z" },
+    { url = "https://files.pythonhosted.org/packages/39/21/39e5d8a17189131a6c9be44d70327ee828120ebd468caa9a4661093e0fe6/oneharness_cli-0.22.0-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:571502c325ea9aab7306ba72d0bbb82a9ed57a62a5b472c4f8482eff647c2510", size = 3608578, upload-time = "2026-10-09T22:42:15.679Z" },
+    { url = "https://files.pythonhosted.org/packages/29/e4/53f601225b67eb09fd2f8df3840c40de4b2918b0013f22e5532beaa76fe4/oneharness_cli-0.22.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:1ec14db538dddcb1bcc1ba9fe3afa355d5f90a817cc1393dfd0d11c844a545ea", size = 3461107, upload-time = "2026-10-09T22:42:18.963Z" },
+    { url = "https://files.pythonhosted.org/packages/d7/b4/8e210371372de316dee130831606f81e8fd3b838501d76f4ebb70893c743/oneharness_cli-0.22.0-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:b7b50558486293232c721ce71a9e78f251fcfcc8a2ed9364e573781632b1e386", size = 3500743, upload-time = "2026-10-09T22:42:21.554Z" },
+    { url = "https://files.pythonhosted.org/packages/97/42/12ea19392b85bd48abf168df31c9ac0ee2020bdd1905811e976f704f3be4/oneharness_cli-0.22.0-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:7cc2b5cb84388d3de52e3f30a616cbf0664fa8959e2d185f9d68d5d87ab987ef", size = 3748297, upload-time = "2026-10-09T22:42:24.096Z" },
+    { url = "https://files.pythonhosted.org/packages/fc/af/c2da754d748fde3325a251a320c8c673a77a067ab10e4c06eb6e2cb0cd88/oneharness_cli-0.22.0-py3-none-win_amd64.whl", hash = "sha256:49a11d0e6751e61351a7b4f1699d66e744743b0d11aefe28e5c18795fc33af80", size = 3764625, upload-time = "2026-10-09T22:42:26.376Z" },
+    { url = "https://files.pythonhosted.org/packages/d1/e8/ff257441fc7cbc7626005c455e06e3970d616a04ef5625b9689cd6d1584a/oneharness_cli-0.22.0-py3-none-win_arm64.whl", hash = "sha256:d142dbc5fec605a6ab5d4d83261ec2ff658872b33e872042ed8672d6cad77db2", size = 3528543, upload-time = "2026-10-09T22:42:28.689Z" },
 ]
 
 [[package]]

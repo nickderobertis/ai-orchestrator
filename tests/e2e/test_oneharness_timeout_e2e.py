@@ -391,19 +391,33 @@ def test_timeout_kills_process_tree_and_preserves_real_partial_telemetry(
     assert result["usage"]["cost_usd"] == 0.01
     assert result["session_id"] == "ses-timeout"
     assert result["events_source"] == "json:opencode-parts"
+    # Since oneharness 0.21.3 an OpenCode text part is a `message` event of its own,
+    # ahead of the tool call it preceded in the transcript.
     assert result["events"] == [
         {
-            "kind": "tool_call",
-            "name": "bash",
-            "input": {"command": "echo hi"},
-            "output": "hi",
+            "kind": "message",
+            "name": None,
+            "input": None,
+            "output": "partial answer",
             "index": 0,
             "tool_call_id": None,
             "started_at": None,
             "finished_at": None,
             "duration_ms": None,
             "status": None,
-        }
+        },
+        {
+            "kind": "tool_call",
+            "name": "bash",
+            "input": {"command": "echo hi"},
+            "output": "hi",
+            "index": 1,
+            "tool_call_id": None,
+            "started_at": None,
+            "finished_at": None,
+            "duration_ms": None,
+            "status": None,
+        },
     ]
     assert "native child stderr" in result["stderr"]
     assert result["stdout"].endswith('{"type":"incomplete"')

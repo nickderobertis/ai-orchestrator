@@ -158,14 +158,14 @@ a schema version, not a field to discover.
 `input`, `output`, `cache_read`, `cache_write`, and `cost_usd`, and each field
 omitted rather than zeroed when it was never measured.
 Everything said here about those fields was measured on records this host wrote
-after the 0.21.2/0.17.2 upgrade (`config/oneharness.version` and
+after the 0.22.0/0.17.2 upgrade (`config/oneharness.version` and
 `config/onejudge.version`), which is the boundary the older per-party accounting
 sat behind. What a run recorded *before* that pair reports is **not established
 here** — re-measure rather than assuming the shape carries backwards, and re-check
 this paragraph whenever either pin moves, which
 `tests/test_onejudge_version.py::test_telemetry_upgrade_boundary_matches_authoritative_versions`
 forces by failing on the boundary sentence above until the pair it names is the adopted
-one. That re-check has now been made fourteen times
+one. That re-check has now been made fifteen times
 without the shape moving. For the 0.10.3/0.5.1 upgrade, one turn spent on each binary
 with everything else held differed by exactly two added keys — `results[].work` and
 `fallback.stopped_without_work`, both of which say something about a failure nothing
@@ -297,6 +297,19 @@ between `oneharness-core-v0.24.0` and `oneharness-core-v0.24.1`, the core `oneha
 0.17.1 and `oneagentgraph-cli` 0.5.5 link `oneharness-core` 0.24.0, while the engine wheel
 links 0.24.1 for itself, onejudge 0.17.1 and oneagentgraph 0.5.5, read off each wheel's own
 SBOM.
+The oneharness half then moved to 0.22.0, the first move across which `domain/usage.rs`
+is **not** byte-identical: `oneharness-cli` 0.22.0 is compiled against `oneharness-core`
+0.25.0, read off its wheel's own SBOM, and between `oneharness-core-v0.24.1` and
+`oneharness-core-v0.25.0` that file changes in one commit
+([oneharness#1437](https://github.com/nickderobertis/oneharness/pull/1437)), adding a
+`reset_credits` field to each identity of the `oneharness usage` subscription-headroom
+report, with its `ResetCredits` types and codex's `rateLimitResetCredits` parser, and
+rewording one doc comment. The change is additive — that report's own `SCHEMA_VERSION`
+stays `0.1` — and touches neither the per-turn token usage a history record carries nor
+the history format, whose `SCHEMA_VERSION` is `1.9` at both tags;
+`tests/test_engine_history_vocabulary.py` re-reads all of it off the wheel and the two
+tags. The engine pin did not move, so the cores a dispatch's members link are unchanged
+by it.
 `dispatches`,
 `settled_done`, `no_diff`, `surfaces_queued`, and `surfaces_read` are the run's own
 counters; `surfaces_read` is what resets the planner-update pacemaker.

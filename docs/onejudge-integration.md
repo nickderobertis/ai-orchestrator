@@ -337,9 +337,15 @@ release binary needs a newer glibc than the host provides, and the crates.io bui
 lags behind the 0.3.x releases that added `init`. The **PyPI `oneharness-cli`
 wheel** (a manylinux build) is the one that both runs on the host's glibc and
 carries `init`, so `scripts/session-setup.sh` installs the exact
-`config/oneharness.version` release and rejects a stale binary. Version 0.21.2 is
+`config/oneharness.version` release and rejects a stale binary. Version 0.22.0 is
 the adopted release. What the releases since 0.17.0 change is how a reader meets the
-CLI, and none of it moves what this host's configs select. `--config` is repeatable,
+CLI, and none of it moves what this host's configs select. The newest, 0.22.0, has
+`oneharness usage` report each Codex identity's banked rate-limit reset credits — how
+many are available and, when the listed credits cover that count, the soonest expiry —
+as `reset_credits` in its JSON and a `reset credits:` line in its text
+([oneharness#1437](https://github.com/nickderobertis/oneharness/pull/1437));
+`tests/e2e/test_oneharness_reset_credits_e2e.py` drives it against a stand-in
+`codex app-server`. `--config` is repeatable,
 each later file folding over the ones before it
 ([oneharness#1384](https://github.com/nickderobertis/oneharness/pull/1384), 0.18.0) —
 what lets the `llmlint` this pin admits hand its judge every configured oneharness
@@ -977,7 +983,7 @@ than quietly running something else.
 
 `ONEHARNESS_MODEL` is *not* the counterpart of `ONEHARNESS_HARNESSES`, and reading it
 as one is the trap this section exists for. Measured against the adopted oneharness
-0.21.2, a config's per-harness `model` **beats** the variable, while the `--model`
+0.22.0, a config's per-harness `model` **beats** the variable, while the `--model`
 flag on an invocation's own argv beats the config — a precedence that is a fact about
 one release, so the literal above is derived from `config/oneharness.version` by
 `tests/test_onejudge_version.py::test_the_model_precedence_claim_names_the_adopted_oneharness`
@@ -1114,7 +1120,7 @@ anything. A side that could prompt must keep a finite deadline, or pass
 
 oneharness passes `ONEHARNESS_HARNESSES` to the provider it spawns **verbatim**, and
 sets nothing when nothing selected one. It does *not* narrow the variable to the
-candidate it ended up running — through oneharness 0.21.2, confirmed against the binary:
+candidate it ended up running — through oneharness 0.22.0, confirmed against the binary:
 
 ```
 $ ONEHARNESS_HARNESSES=codex,claude-code oneharness run --prompt hi   # fell through to codex
@@ -1599,7 +1605,7 @@ the adopted release through the variant-to-base fallback every override layer ma
 candidates through `PATH`, where `tests/e2e/no-paid-provider/` hands a variant on to the
 very binary this variable names and refuses anything named outside this repository's
 tests. The two
-do not collide: re-measured against the adopted oneharness 0.21.2, a harness selected
+do not collide: re-measured against the adopted oneharness 0.22.0, a harness selected
 with `--mock-harness` keeps the mock binary and ignores `ONEHARNESS_BIN_<ID>` — the flag
 layer outranks the environment layer, and on this release a base-id `--mock-harness`
 covers a variant too — so the
