@@ -2613,16 +2613,17 @@ def test_a_real_review_hands_the_reviewer_the_compact_view_of_a_stored_plan(
     assert Path(design).is_file(), design
 
 
-def test_a_real_review_asks_the_budget_question_at_the_product_owners_level(
+def test_a_real_review_leaves_the_budget_checks_the_checklist_holds_to_the_checklist(
     tmp_path: Path,
 ) -> None:
     """The level rule, in what the reviewer is handed for a plan that owns a budget.
 
     Through the real recipe and the real store, with only the paid model scripted: the
     node's own turn is told a budget's command analyses the telemetry the gate's tests
-    record, and the plan-level turn is told to refuse a budget that is a part or a second
-    unit of another and a command that re-runs a scenario only to measure — judged by
-    meaning, so nothing deterministic refuses either shape before the turn.
+    record, and the plan-level turn asks what the plan's budgets are missing and leaves
+    every check the plan checklist holds to that checklist — the level rule, the reuse of
+    gate telemetry and the five budget rules the planner's judge gave up — rather than
+    wording any of them a second time.
     """
     project = _compact_view_project()
     log = tmp_path / "prompts.jsonl"
@@ -2636,17 +2637,28 @@ def test_a_real_review_asks_the_budget_question_at_the_product_owners_level(
     assert "the command that analyses the telemetry the gate's tests record" in task_turn
     assert "the command that performs the measurement" not in task_turn
     plan_turn = _plan_prompt_given(tmp_path)
+    flat = " ".join(plan_turn.split())
     for asked in (
-        "A budget is a product-owner-level outcome",
-        "are telemetry its analysis reports as its breakdown",
-        "judged by meaning rather than by a budget's name",
-        "a budget whose figure is a part of another of the plan's budgets' figures or that "
-        "budget's concern in a second unit",
-        "a budget's command that runs a scenario of its own only to measure, rather than "
-        "analysing telemetry the gate's tests already record, outside the "
-        "standalone-measurement exception",
+        "a concern the stated workload makes likely that the checklist dismissed or never lists",
+        "a change to a budgets file the budgets imply that no budget states",
+        "a target the evidence shows is infeasible, quietly loosened rather than escalated",
+        f"The plan checklist — the llmlint rules of `{plan_review.CHECKLIST_CONFIG}`",
+        "leave what those rules decide to it",
     ):
-        assert asked in plan_turn, asked
+        assert asked in flat, asked
+    instructions = " ".join(plan_turn.split("## The review bar", 1)[0].lower().split())
+    for restated in (
+        "no budget covers",
+        "no command to check",
+        "evidence does not support",
+        "inward",
+        "written into a task's criteria",
+        "second unit",
+        "part of another",
+        "scenario of its own",
+        "standalone-measurement",
+    ):
+        assert restated not in instructions, restated
     assert '"route-latency"' in plan_turn
 
 

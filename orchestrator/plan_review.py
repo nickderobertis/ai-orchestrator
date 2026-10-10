@@ -1181,22 +1181,12 @@ usage, each repository's expected effect on its repo-wide budgets, the realistic
 choices and the spike findings; each task states the budgets it owns, with the basis
 each number rests on. Read them against the goal and every node, and refuse what is
 missing: a concern the stated workload makes likely that the checklist dismissed or
-never lists; a 10x answer no budget covers; a budget with no command to check it; a
-measure taken further inward than where the product owner feels the impact with no
-reason given; a basis the evidence does not support; a repo-wide budget — one in a
-repository's root `budgets.yaml` — written into a task's criteria as a threshold the
-worker must meet; a change to a budgets file the budgets imply that no budget states;
-and a target the evidence shows is infeasible, quietly loosened rather than escalated.
-A budget is a product-owner-level outcome — a quota's headroom on a realistic run, a
-latency someone waits through, the size of what reaches a reader — and its per-step,
-per-phase and per-operation figures, and a second unit of the same concern, are
-telemetry its analysis reports as its breakdown. So refuse, judged by meaning rather
-than by a budget's name, a budget whose figure is a part of another of the plan's
-budgets' figures or that budget's concern in a second unit, which belongs in that
-budget's `measure` as its breakdown; and a budget's command that runs a scenario of its
-own only to measure, rather than analysing telemetry the gate's tests already record,
-outside the standalone-measurement exception — a behaviour no existing gate exercises,
-or one whose recording there would cost more than measuring it alone.
+never lists; a change to a budgets file the budgets imply that no budget states; and a
+target the evidence shows is infeasible, quietly loosened rather than escalated. The
+plan checklist — the llmlint rules of `config/plan-checklist.llmlint.yml`, not the plan's
+checklist of concerns — holds the plan's budgets and criteria to its own rules, and
+passed this plan before this turn: leave what those rules decide to it, and refuse
+nothing here on a ground one of them states.
 Modern records declare schema_version={budget_schema_version}. Read scope semantically:
 covered concerns are in scope and reference owned budgets; only explicitly in-scope omissions
 belong in Not budgeted. Gate time and change cycle time belong only to expected effects on existing

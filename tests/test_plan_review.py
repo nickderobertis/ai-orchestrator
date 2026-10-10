@@ -2684,24 +2684,51 @@ def test_a_task_key_covers_the_budgets_it_owns_and_nothing_when_it_owns_none() -
     assert plan_review.unreviewed([relieved], BAR) == [relieved], "a dropped budget is new"
 
 
-def test_the_plan_reviewer_is_asked_what_the_plan_is_missing_from_its_budgets() -> None:
+#: Each budget check the plan checklist holds, by the words only its wording in the
+#: plan-level prompt would use, keyed by the `config/plan-checklist.llmlint.yml` rule that
+#: holds it. Read against the prompt lower-cased with its whitespace collapsed: a check
+#: stated in both tiers drifts, and the two refuse each other's wording.
+HELD_BY_THE_CHECKLIST = {
+    "plan_ten_x_names_a_covering_budget": ("no budget covers",),
+    "plan_budget_command_measures_its_figure": ("no command to check", "no command checks"),
+    "plan_budget_basis_matches_evidence": ("evidence does not support",),
+    "plan_budget_inner_measure_has_reason": ("inward",),
+    "plan_criteria_omit_repo_wide_budgets": (
+        "written into a task's criteria",
+        "threshold the worker must meet",
+    ),
+    "budgets_track_product_owner_outcomes": ("second unit", "part of another"),
+    "budgets_reuse_gate_telemetry": (
+        "scenario of its own",
+        "only to measure",
+        "standalone-measurement",
+    ),
+}
+#: The budget judgments only the plan-level turn makes, which no checklist rule states.
+KEPT_BY_THE_PLAN_TURN = (
+    "On the budgets, ask what the plan is **missing**, not only whether each answer was filled in",
+    "a concern the stated workload makes likely that the checklist dismissed or never lists",
+    "a change to a budgets file the budgets imply that no budget states",
+    "a target the evidence shows is infeasible, quietly loosened rather than escalated",
+    "A plan that carries no plan-level answers is not asked this.",
+)
+
+
+@pytest.mark.parametrize("rule", sorted(HELD_BY_THE_CHECKLIST))
+def test_a_check_the_plan_checklist_holds_stays_out_of_the_plan_level_prompt(rule: str) -> None:
+    rules = yaml.safe_load((REPO_ROOT / plan_review.CHECKLIST_CONFIG).read_text("utf-8"))
+    assert rule in {one["name"] for one in rules["rules"] if one.get("relevance") is not False}
+    asked = " ".join(plan_review.PLAN_REVIEW_PROMPT.lower().split())
+    for phrase in HELD_BY_THE_CHECKLIST[rule]:
+        assert phrase not in asked, f"{rule} is restated in the plan-level prompt: {phrase!r}"
+
+
+def test_the_plan_reviewer_asks_what_budgets_miss_and_leaves_the_rest_to_the_checklist() -> None:
     asked = " ".join(plan_review.PLAN_REVIEW_PROMPT.split())
-    for question in (
-        "On the budgets, ask what the plan is **missing**, not only whether each answer was "
-        "filled in",
-        "a concern the stated workload makes likely that the checklist dismissed or never lists",
-        "a 10x answer no budget covers",
-        "a budget with no command to check it",
-        "a basis the evidence does not support",
-        "a measure taken further inward than where the product owner feels the impact with no "
-        "reason given",
-        "a repo-wide budget — one in a repository's root `budgets.yaml` — written into a task's "
-        "criteria",
-        "a change to a budgets file the budgets imply that no budget states",
-        "a target the evidence shows is infeasible, quietly loosened rather than escalated",
-        "A plan that carries no plan-level answers is not asked this.",
-    ):
+    for question in KEPT_BY_THE_PLAN_TURN:
         assert question in asked, question
+    assert f"`{plan_review.CHECKLIST_CONFIG}`" in asked
+    assert "leave what those rules decide to it" in asked
 
 
 def test_the_plan_reviewer_is_shown_the_plans_answers_and_every_tasks_budgets_and_keys_them() -> (
