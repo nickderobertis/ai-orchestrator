@@ -1,0 +1,24 @@
+{
+  "mode": "tier",
+  "label": "tier-narrow-doc-warm",
+  "base_commit": "3b6a1ef79ff3953763fcf644c496c5d6a9248e36",
+  "measured_head": "5ef794026f74b30fd1100c358e22548d4d67f24b",
+  "tree": "dcc61130e6969265df53fdb0ff83d95c7fb42bbd",
+  "edit": "narrow-doc",
+  "edit_spec": "docs/budgets.md:2",
+  "cache_state": "warm",
+  "nx_cache_dir": "/home/nick.guest/.cache/gate-profile-spike/xdg/ai-orchestrator/nx/756e79f93796751d",
+  "nx_cache_entries_before_seed": 50,
+  "nx_cache_entries_at_start": 50,
+  "uv": "uv 0.11.32 (aarch64-unknown-linux-gnu)",
+  "nx": "v23.1.0",
+  "llmlint": "llmlint 0.4.7",
+  "llmlint_fingerprint_sha256_16": "f8415a2fd16a02f4",
+  "start": 1791599724.4757843,
+  "end": 1791601386.6903386,
+  "exit_status": 0,
+  "cmd": [
+    "just",
+    "check"
+  ]
+}

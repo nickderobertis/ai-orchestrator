@@ -1,0 +1,21 @@
+{
+  "run": {
+    "command": "nx run-many -t format-check",
+    "startTime": "2026-10-10T02:35:55.732Z",
+    "endTime": "2026-10-10T02:35:55.857Z",
+    "inner": false
+  },
+  "tasks": [
+    {
+      "taskId": "orchestrator:format-check",
+      "target": "format-check",
+      "projectName": "orchestrator",
+      "hash": "14392782502148731667",
+      "startTime": "2026-10-10T02:35:55.746Z",
+      "endTime": "2026-10-10T02:35:55.854Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    }
+  ]
+}

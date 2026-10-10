@@ -1,0 +1,17 @@
+
+> nx run workspace:check-nx-cache  [existing outputs match the cache, left as is]
+
+> ./scripts/check-nx-cache.sh
+
+nx cache check: cross-worktree hit, broken-input miss, and preserved failure log verified
+
+
+
+ NX   Successfully ran target check-nx-cache for project workspace
+
+Nx read the output from the cache instead of running the command for 1 out of 1 tasks.
+
+  Run duration:      2ms
+  Cache:             1/1 hit (100%)
+  Critical path:     <1ms (1 task)
+  Recoverable time:  <1ms

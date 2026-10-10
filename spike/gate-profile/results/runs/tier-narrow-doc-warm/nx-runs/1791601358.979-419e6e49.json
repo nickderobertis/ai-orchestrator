@@ -1,0 +1,120 @@
+{
+  "run": {
+    "command": "nx affected --base origin/main -t format-check,lint,typecheck,test,test-docs,test-recipes,budgets",
+    "startTime": "2026-10-10T02:35:24.956Z",
+    "endTime": "2026-10-10T03:02:38.932Z",
+    "inner": false
+  },
+  "tasks": [
+    {
+      "taskId": "plan-tooling:test",
+      "target": "test",
+      "projectName": "plan-tooling",
+      "hash": "4828804398920901974",
+      "startTime": "2026-10-10T02:35:24.963Z",
+      "endTime": "2026-10-10T02:43:03.328Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "plan-tooling:test-docs",
+      "target": "test-docs",
+      "projectName": "plan-tooling",
+      "hash": "835014757491548000",
+      "startTime": "2026-10-10T02:43:03.416Z",
+      "endTime": "2026-10-10T02:46:46.242Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "orchestrator:test",
+      "target": "test",
+      "projectName": "orchestrator",
+      "hash": "18244032429471779671",
+      "startTime": "2026-10-10T02:46:46.254Z",
+      "endTime": "2026-10-10T02:48:10.156Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "orchestrator:lint",
+      "target": "lint",
+      "projectName": "orchestrator",
+      "hash": "14390703138311747990",
+      "startTime": "2026-10-10T02:48:10.205Z",
+      "endTime": "2026-10-10T02:48:28.393Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "orchestrator:test-recipes",
+      "target": "test-recipes",
+      "projectName": "orchestrator",
+      "hash": "15413383951129722463",
+      "startTime": "2026-10-10T02:48:28.402Z",
+      "endTime": "2026-10-10T02:48:33.274Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "orchestrator:typecheck",
+      "target": "typecheck",
+      "projectName": "orchestrator",
+      "hash": "3685181429846135616",
+      "startTime": "2026-10-10T02:48:33.307Z",
+      "endTime": "2026-10-10T02:48:33.982Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "orchestrator:format-check",
+      "target": "format-check",
+      "projectName": "orchestrator",
+      "hash": "16492600949345031076",
+      "startTime": "2026-10-10T02:48:33.992Z",
+      "endTime": "2026-10-10T02:48:34.075Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "orchestrator:test-docs",
+      "target": "test-docs",
+      "projectName": "orchestrator",
+      "hash": "18057700958981188760",
+      "startTime": "2026-10-10T02:35:24.963Z",
+      "endTime": "2026-10-10T02:48:50.792Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "orchestrator-e2e:test",
+      "target": "test",
+      "projectName": "orchestrator-e2e",
+      "hash": "10507947211226909321",
+      "startTime": "2026-10-10T02:35:24.963Z",
+      "endTime": "2026-10-10T03:02:38.853Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 0
+    },
+    {
+      "taskId": "orchestrator:budgets",
+      "target": "budgets",
+      "projectName": "orchestrator",
+      "hash": "9914471881753888926",
+      "startTime": "2026-10-10T03:02:38.931Z",
+      "endTime": "2026-10-10T03:02:38.931Z",
+      "params": "",
+      "cacheStatus": "local-cache-hit",
+      "status": 0
+    }
+  ]
+}
