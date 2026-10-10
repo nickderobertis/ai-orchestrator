@@ -128,24 +128,19 @@ def run(args: argparse.Namespace) -> int:
     seen_runs: set[str] = set()
 
     def snap_runs() -> None:
-        last = None
-        n = 0
+        # Content-compared on every poll: two runs' run.json can share size and mtime second.
         target = nx_cache / "run.json"
-        while not stop.is_set() or n == 0:
+        while True:
+            final = stop.is_set()
             try:
-                st = target.stat()
-                sig = (st.st_mtime_ns, st.st_size)
-                if sig != last:
-                    data = target.read_bytes()
-                    digest = hashlib.sha1(data).hexdigest()
-                    if digest not in seen_runs:
-                        seen_runs.add(digest)
-                        n += 1
-                        (out / "nx-runs" / f"{time.time():.3f}-{digest[:8]}.json").write_bytes(data)
-                    last = sig
+                data = target.read_bytes()
+                digest = hashlib.sha1(data).hexdigest()
+                if digest not in seen_runs:
+                    seen_runs.add(digest)
+                    (out / "nx-runs" / f"{time.time():.3f}-{digest[:8]}.json").write_bytes(data)
             except OSError:
                 pass
-            if stop.is_set():
+            if final:
                 break
             time.sleep(0.2)
 
