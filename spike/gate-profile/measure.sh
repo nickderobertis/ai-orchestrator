@@ -5,6 +5,9 @@
 #   measure.sh judge  --commit SHA [--edit EDIT] --label L          judge the tree once (one paid llmlint turn)
 #   measure.sh tier   --commit SHA [--edit EDIT] --cache cold|warm --label L   time `just check`
 #   measure.sh gate   --commit SHA [--edit EDIT] --cache cold|warm --label L   time `just gate origin main`
+#   measure.sh three  --commit SHA [--patch FILE] --cache cold|warm --label L  the three big tiers at once (three.sh)
+#
+# --patch FILE applies a diff (the prototype) to SHA and commits it, in place of an edit.
 #
 # EDIT is one of the representative edits below (by name or path). A measured tree is
 # SHA with that one edit committed on a detached HEAD in this checkout, so the tree is
@@ -98,12 +101,13 @@ if [[ $mode == offline ]]; then
   cd "$ROOT" && exec .venv/bin/python "$HERE/offline.py" --affected "${paths[@]}"
 fi
 
-[[ $mode == tier || $mode == gate || $mode == judge ]] || die "usage: measure.sh offline|judge|tier|gate ... (see header)"
-commit="" edit="" cache=warm label=""
+[[ $mode == tier || $mode == gate || $mode == judge || $mode == three ]] || die "usage: measure.sh offline|judge|tier|gate ... (see header)"
+commit="" edit="" cache=warm label="" patch=""
 while (( $# )); do
   case $1 in
     --commit) commit=$2; shift 2 ;;
     --edit) edit=$2; shift 2 ;;
+    --patch) patch=$(realpath "$2"); shift 2 ;;
     --cache) cache=$2; shift 2 ;;
     --label) label=$2; shift 2 ;;
     *) die "unknown argument $1" ;;
@@ -118,7 +122,7 @@ out=$HOME_DIR/runs/$label
 if [[ -z ${GATE_PROFILE_REEXEC:-} ]]; then
   copy=$HOME_DIR/harness/$label
   rm -rf "$copy"; mkdir -p "$copy"; cp -a "$HERE/." "$copy/"
-  GATE_PROFILE_REEXEC=1 exec "$copy/measure.sh" "$mode" --commit "$commit" ${edit:+--edit "$edit"} --cache "$cache" --label "$label"
+  GATE_PROFILE_REEXEC=1 exec "$copy/measure.sh" "$mode" --commit "$commit" ${edit:+--edit "$edit"} ${patch:+--patch "$patch"} --cache "$cache" --label "$label"
 fi
 
 cd "$ROOT"
@@ -140,6 +144,12 @@ if [[ -n $edit ]]; then
   GIT_AUTHOR_DATE="2026-10-09T00:00:00Z" GIT_COMMITTER_DATE="2026-10-09T00:00:00Z" \
     git commit --quiet -m "fix: gate-profile spike edit to $p" -m "Throwaway measurement tree; never published."
 fi
+if [[ -n $patch ]]; then
+  git apply "$patch"
+  git add -A
+  GIT_AUTHOR_DATE="2026-10-09T00:00:00Z" GIT_COMMITTER_DATE="2026-10-09T00:00:00Z" \
+    git commit --quiet -m "fix: gate-profile spike prototype ${patch##*/}" -m "Throwaway measurement tree; never published."
+fi
 tree=$(git rev-parse 'HEAD^{tree}')
 nxdir=$(nx_cache_dir)
 cache_entries_before=$(find "$nxdir" -mindepth 1 -maxdepth 1 -type d ! -name terminalOutputs 2>/dev/null | wc -l)
@@ -151,10 +161,11 @@ case $mode in
   judge) cmd=(just lint-llm-diff origin/main) ;;
   tier) cmd=(just check) ;;
   gate) cmd=(just gate origin main) ;;
+  three) cmd=("$HERE/three.sh") ;;
 esac
 mkdir -p "$out"
 jq -n --arg mode "$mode" --arg label "$label" --arg base "$base_sha" --arg head "$(git rev-parse HEAD)" \
-  --arg tree "$tree" --arg edit "${edit:-none}" --arg spec "$edit_spec" --arg cache "$cache" \
+  --arg tree "$tree" --arg edit "${edit:-none}" --arg spec "$edit_spec${patch:+ patch:${patch##*/}}" --arg cache "$cache" \
   --arg nxdir "$nxdir" --argjson before "$cache_entries_before" --argjson start "$cache_entries_start" \
   --arg uv "$(uv --version)" --arg nx "$(node_modules/.bin/nx --version 2>/dev/null | sed -n 's/.*Local: //p')" \
   --arg llmlint "$(llmlint --version 2>/dev/null)" --arg fp "$(./scripts/llmlint-fingerprint.sh 2>/dev/null | sha256sum | cut -c1-16)" \

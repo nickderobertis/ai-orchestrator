@@ -1,0 +1,147 @@
+
+> nx run workspace:lint-llm-diff  [existing outputs match the cache, left as is]
+
+> ./scripts/llmlint-judge.sh
+
+Plan: 1 judge call(s) across 1 agent(s), linting 1 file(s)
+  737 file(s) matched globs but excluded as unchanged/deleted vs base (--diff): .claude/settings.json, .codex/rules/oneharness.rules, .git, .githooks/commit-msg, .githooks/pre-push, .github/CODEOWNERS, .github/pull_request_template.md, .gitignore, …+729 more
+  agent "default" (batch_size 20)
+    batch 1: [changed_behavior_has_e2e, least_privilege_grants, new_projects_keep_the_graph_uniform, boundary_inputs_validated, comments_earn_their_place, names_match_behavior, suppressions_justified, no_hardcoded_secrets, tool_output_is_signal, new_code_lands_in_a_project, work_goes_through_command_surface, contracts_have_one_source_or_a_drift_gate, code_lands_in_the_domain_that_owns_it, robust_shell, portable_to_target_shell, budget_descriptions_durable_and_terse, budgets_scoped_to_minimal_tree, onebudgetspec_is_the_only_judge, budget_commands_measure_directly, budgets_reuse_gate_telemetry]
+      file: scripts/budget-dispatches.sh
+      grouped: shares scripts/budget-dispatches.sh with other rules in this batch (paid once)
+  not judged:
+    orchestration_contract_changes_update_docs — no files matched
+    description_yields_clear_verdict — no files matched
+    name_describes_what_the_rule_checks — no files matched
+    relevance_scopes_conditional_rules — no files matched
+    path_scoped_rules_use_files_not_relevance — no files matched
+    description_omits_already_excluded_situations — no files matched
+    relevance_scopes_without_deciding_the_verdict — no files matched
+    description_and_relevance_are_concise — no files matched
+    line_localizable_rules_require_attribution — no files matched
+    e2e_not_mocked — no files matched
+    tests_mirror_real_usage — no files matched
+    tests_assert_real_behavior — no files matched
+    diagnostics_error_or_absent — no files matched
+    agents_md_durable_and_terse — no files matched
+    no_redundant_instruction_pointers — no files matched
+    scripts_runtime_independent — no files matched
+    determinism_vs_judgment — no files matched
+    skill_description_trigger_and_compatibility_needs — no files matched
+    each_skill_is_its_own_project — no files matched
+    instruction_layer_localized — no files matched
+    expensive_tests_stay_behind_their_own_edge — no files matched
+    structural_pattern_matching — no files matched
+    modern_domain_modeling — no files matched
+    protocol_based_seams — no files matched
+    no_injection_from_untrusted_input — no files matched
+    projects_stay_in_one_uv_workspace — no files matched
+    test_tiers_split_by_project_not_by_marker — no files matched
+    shell_test_tiers_stay_split — no files matched
+    live_tier_compiles_and_requires_credential — no files matched
+    no_untrusted_interpolation_in_run — no files matched
+    ci_invokes_gate_recipe_not_inline_stages — no files matched
+    external_service_suite_stays_out_of_the_affected_tier — no files matched
+    no_second_broader_sweep_over_an_already_gated_commit — no files matched
+    tests_hold_no_nonfunctional_thresholds — no files matched
+    budgets_track_product_owner_outcomes — no files matched
+
+SKIP agents_md_durable_and_terse (no files matched)
+N/A async_typed_clients_at_boundaries (not relevant)
+     rationale: declared not relevant (relevance: false)
+PASS boundary_inputs_validated
+     rationale: The script reads the host view, but the added blank line changes no input handling or validation.
+N/A budget_commands_measure_directly (not relevant)
+     rationale: budgets.yaml names this script under conditions, not under a budget's command.
+N/A budget_descriptions_durable_and_terse (not relevant)
+     rationale: scripts/budget-dispatches.sh declares no budget description.
+N/A budgets_reuse_gate_telemetry (not relevant)
+     rationale: The script samples a host condition; it neither declares nor measures a budget.
+N/A budgets_scoped_to_minimal_tree (not relevant)
+     rationale: budgets.yaml names this script as a condition command, not a budget measurement command.
+SKIP budgets_track_product_owner_outcomes (no files matched)
+N/A changed_behavior_has_e2e (not relevant)
+     rationale: The added blank line in scripts/budget-dispatches.sh changes no observable behavior.
+SKIP ci_invokes_gate_recipe_not_inline_stages (no files matched)
+N/A code_lands_in_the_domain_that_owns_it (not relevant)
+     rationale: The blank line adds or moves no declaration, registration, or project dependency.
+PASS comments_earn_their_place
+     rationale: The script contains comments; none are added or modified.
+PASS contracts_have_one_source_or_a_drift_gate
+     rationale: The script recognizes host-output shapes; the change adds or modifies no contract restatement.
+SKIP description_and_relevance_are_concise (no files matched)
+SKIP description_omits_already_excluded_situations (no files matched)
+SKIP description_yields_clear_verdict (no files matched)
+SKIP determinism_vs_judgment (no files matched)
+SKIP diagnostics_error_or_absent (no files matched)
+SKIP e2e_not_mocked (no files matched)
+SKIP each_skill_is_its_own_project (no files matched)
+SKIP expensive_tests_stay_behind_their_own_edge (no files matched)
+SKIP external_service_suite_stays_out_of_the_affected_tier (no files matched)
+SKIP instruction_layer_localized (no files matched)
+N/A least_privilege_grants (not relevant)
+     rationale: scripts/budget-dispatches.sh grants no permissions or command allowlists.
+SKIP line_localizable_rules_require_attribution (no files matched)
+SKIP live_tier_compiles_and_requires_credential (no files matched)
+SKIP modern_domain_modeling (no files matched)
+SKIP name_describes_what_the_rule_checks (no files matched)
+PASS names_match_behavior
+     rationale: The script declares names, but the added blank line changes none of them or their behavior.
+N/A new_code_lands_in_a_project (not relevant)
+     rationale: scripts/budget-dispatches.sh is edited, not added.
+N/A new_projects_keep_the_graph_uniform (not relevant)
+     rationale: The change declares no project.
+N/A no_hardcoded_secrets (not relevant)
+     rationale: The script counts local dispatches and handles no credentials, service connections, or configuration.
+SKIP no_injection_from_untrusted_input (no files matched)
+SKIP no_redundant_instruction_pointers (no files matched)
+SKIP no_second_broader_sweep_over_an_already_gated_commit (no files matched)
+SKIP no_untrusted_interpolation_in_run (no files matched)
+N/A onebudgetspec_is_the_only_judge (not relevant)
+     rationale: The script produces a host condition rather than a budget's measured figure.
+SKIP orchestration_contract_changes_update_docs (no files matched)
+SKIP path_scoped_rules_use_files_not_relevance (no files matched)
+PASS portable_to_target_shell
+     rationale: The added blank line introduces no construct incompatible with the declared Bash shell.
+SKIP projects_stay_in_one_uv_workspace (no files matched)
+SKIP protocol_based_seams (no files matched)
+SKIP relevance_scopes_conditional_rules (no files matched)
+SKIP relevance_scopes_without_deciding_the_verdict (no files matched)
+PASS robust_shell
+     rationale: The blank line after set -euo pipefail changes no expansion or filesystem operation.
+SKIP scripts_runtime_independent (no files matched)
+SKIP shell_test_tiers_stay_split (no files matched)
+SKIP skill_description_trigger_and_compatibility_needs (no files matched)
+SKIP structural_pattern_matching (no files matched)
+PASS suppressions_justified
+     rationale: Existing llmlint directives explain their necessity; the change modifies no suppression.
+SKIP test_tiers_split_by_project_not_by_marker (no files matched)
+SKIP tests_assert_real_behavior (no files matched)
+SKIP tests_hold_no_nonfunctional_thresholds (no files matched)
+SKIP tests_mirror_real_usage (no files matched)
+PASS tool_output_is_signal
+     rationale: scripts/budget-dispatches.sh defines a script; the blank line changes no output or failure reporting.
+N/A work_goes_through_command_surface (not relevant)
+     rationale: The script reads through just host and runs no build, test, lint, format, or setup step.
+
+56 rules: 8 passed, 0 failed, 35 skipped, 13 not relevant
+
+# oneharness: agent default judge 1 [changed_behavior_has_e2e, least_privilege_grants, new_projects_keep_the_graph_uniform, boundary_inputs_validated, comments_earn_their_place, names_match_behavior, suppressions_justified, no_hardcoded_secrets, tool_output_is_signal, new_code_lands_in_a_project, work_goes_through_command_surface, contracts_have_one_source_or_a_drift_gate, code_lands_in_the_domain_that_owns_it, robust_shell, portable_to_target_shell, budget_descriptions_durable_and_terse, budgets_scoped_to_minimal_tree, onebudgetspec_is_the_only_judge, budget_commands_measure_directly, budgets_reuse_gate_telemetry]
+$ /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/scripts/llmlint-oneharness.sh run --system-file /tmp/llmlint-system-7J2Rey.txt --prompt 'Evaluate each rule against the target files and respond with the structured verdict object.' --schema /tmp/llmlint-schema-Cj9iXD.json --cwd /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree --timeout 600 --mode read-only --require-available --format json --compact
+exit: 0
+result:
+lint-llm-diff: elided a 106663-character serialized judge call; `llmlint history <id>` above has the full record
+See full results with `llmlint history 20261010T020439Z-72577`
+
+
+
+ NX   Successfully ran target lint-llm-diff for project workspace
+
+Nx read the output from the cache instead of running the command for 1 out of 1 tasks.
+
+  Run duration:      18ms
+  Cache:             1/1 hit (100%)
+  Critical path:     <1ms (1 task)
+  Recoverable time:  <1ms
+nx: requested targets succeeded
+lint-llm-diff: replayed the recorded verdict for base 3b6a1ef79ff3953763fcf644c496c5d6a9248e36 (Nx cache hit)
