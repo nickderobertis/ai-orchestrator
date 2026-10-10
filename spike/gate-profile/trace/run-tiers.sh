@@ -6,3 +6,4 @@ n orchestrator-e2e:test &
 ( n plan-tooling:test; n plan-tooling:test-docs ) &
 ( n orchestrator:test-docs; n orchestrator-e2e:test-recipes; n orchestrator-e2e:test-checkouts ) &
 wait
+touch "$TIERS_DONE"

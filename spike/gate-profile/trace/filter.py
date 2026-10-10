@@ -1,5 +1,6 @@
 """Streamed strace filter (spike-only): keep the process tree, each process's cwd, and the
-first time each process opened each tracked file (in this checkout or any copy of it)."""
+first time each process opened each tracked file (in this checkout or any copy of it), and
+every successful execve (pid, time, program, argv) to execs.jsonl as it arrives."""
 import json, os, re, sys
 out, root = sys.argv[1], sys.argv[2].rstrip("/") + "/"
 tracked = set(open(os.path.join(out, "tracked.txt")).read().split("\n")) - {""}
@@ -9,6 +10,10 @@ first = None
 line_re = re.compile(r"^(\d+) ([\d.]+) (.*)$")
 open_re = re.compile(r'openat\(AT_FDCWD, "((?:[^"\\]|\\.)*)"')
 child_re = re.compile(r"= (\d+)$")
+exec_re = re.compile(r'execve\("((?:[^"\\]|\\.)*)", \[(.*?)\](?:\.\.\.)?, ')
+argv_re = re.compile(r'"((?:[^"\\]|\\.)*)"')
+execs = open(os.path.join(out, "execs.jsonl"), "w")
+exec_count = 0
 chdir_re = re.compile(r'chdir\("((?:[^"\\]|\\.)*)"\) = 0')
 def rel(path):
     if path.startswith(root):
@@ -50,10 +55,25 @@ for raw in sys.stdin:
         c = child_re.search(rest)
         if c:
             child = int(c.group(1)); parent[child] = pid; cwd.setdefault(child, cwd.get(pid, root.rstrip("/")))
+    elif rest.startswith("execve("):
+        e = exec_re.match(rest)
+        if e and not rest.endswith("<unfinished ...>"):
+            exec_count += 1
+            execs.write(json.dumps({"pid": pid, "t": t, "parent": parent.get(pid), "cwd": cwd.get(pid),
+                                    "path": e.group(1), "argv": argv_re.findall(e.group(2))}) + "\n")
+        elif e:
+            pending[("exec", pid)] = (e.group(1), argv_re.findall(e.group(2)))
+    elif rest.startswith("<... execve resumed>"):
+        p = pending.pop(("exec", pid), None)
+        if p is not None and rest.rstrip().endswith("= 0"):
+            exec_count += 1
+            execs.write(json.dumps({"pid": pid, "t": t, "parent": parent.get(pid), "cwd": cwd.get(pid),
+                                    "path": p[0], "argv": p[1]}) + "\n")
     elif rest.startswith("chdir("):
         c = chdir_re.match(rest)
         if c:
             d = c.group(1)
             cwd[pid] = os.path.normpath(d if d.startswith("/") else os.path.join(cwd.get(pid, root), d))
+execs.close()
 with open(os.path.join(out, "reads.json"), "w") as fh:
-    json.dump({"root_pid": first, "parent": parent, "reads": reads}, fh)
+    json.dump({"root_pid": first, "parent": parent, "reads": reads, "exec_count": exec_count}, fh)
