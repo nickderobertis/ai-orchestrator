@@ -1,0 +1,200 @@
+{
+ "per_writer_module": {
+  "tests/dag_ui/test_dag_ui_serving_e2e.py": {
+   "isolation_steps": {},
+   "isolation_added_s": 0,
+   "added_kinds": [
+    "node_modules_cp_al"
+   ],
+   "tests_after": 19,
+   "test_s_after": 2.2,
+   "test_s_before_grouped": 2.9
+  },
+  "tests/e2e/test_budget_target_e2e.py": {
+   "isolation_steps": {
+    "node_modules_cp_al": {
+     "seconds": 3.69,
+     "count": 8
+    }
+   },
+   "isolation_added_s": 3.69,
+   "added_kinds": [
+    "node_modules_cp_al"
+   ],
+   "tests_after": 8,
+   "test_s_after": 310.2,
+   "test_s_before_grouped": 301.6
+  },
+  "tests/e2e/test_budget_telemetry_e2e.py": {
+   "isolation_steps": {
+    "node_modules_cp_al": {
+     "seconds": 1.36,
+     "count": 3
+    }
+   },
+   "isolation_added_s": 1.36,
+   "added_kinds": [
+    "node_modules_cp_al"
+   ],
+   "tests_after": 3,
+   "test_s_after": 310.6,
+   "test_s_before_grouped": 287.3
+  },
+  "tests/e2e/test_llmlint_cache_e2e.py": {
+   "isolation_steps": {
+    "copy_working_tree": {
+     "seconds": 1.96,
+     "count": 29
+    },
+    "node_modules_cp_al": {
+     "seconds": 9.19,
+     "count": 29
+    }
+   },
+   "isolation_added_s": 9.19,
+   "added_kinds": [
+    "node_modules_cp_al"
+   ],
+   "tests_after": 28,
+   "test_s_after": 41.3,
+   "test_s_before_grouped": 42.4
+  },
+  "tests/e2e/test_llmlint_two_path_verdict_e2e.py": {
+   "isolation_steps": {
+    "node_modules_cp_al": {
+     "seconds": 3.92,
+     "count": 10
+    }
+   },
+   "isolation_added_s": 3.92,
+   "added_kinds": [
+    "node_modules_cp_al"
+   ],
+   "tests_after": 5,
+   "test_s_after": 17.6,
+   "test_s_before_grouped": 11.4
+  },
+  "tests/e2e/test_nx_cache_scope_e2e.py": {
+   "isolation_steps": {
+    "copy_working_tree": {
+     "seconds": 2.65,
+     "count": 29
+    },
+    "node_modules_cp_al": {
+     "seconds": 11.75,
+     "count": 29
+    }
+   },
+   "isolation_added_s": 11.75,
+   "added_kinds": [
+    "node_modules_cp_al"
+   ],
+   "tests_after": 27,
+   "test_s_after": 788.2,
+   "test_s_before_grouped": 624.4
+  },
+  "tests/e2e/test_nx_wrapper_version_e2e.py": {
+   "isolation_steps": {
+    "copy_working_tree": {
+     "seconds": 0.05,
+     "count": 1
+    },
+    "node_modules_cp_al": {
+     "seconds": 0.22,
+     "count": 1
+    },
+    "git_init": {
+     "seconds": 0.0,
+     "count": 1
+    }
+   },
+   "isolation_added_s": 0.27,
+   "added_kinds": [
+    "node_modules_cp_al",
+    "copy_working_tree",
+    "git_init",
+    "venv_sync"
+   ],
+   "tests_after": 1,
+   "test_s_after": 0.3,
+   "test_s_before_grouped": 0.1
+  },
+  "tests/e2e/test_workspace_contract_e2e.py": {
+   "isolation_steps": {
+    "copy_working_tree": {
+     "seconds": 0.33,
+     "count": 4
+    },
+    "node_modules_cp_al": {
+     "seconds": 2.14,
+     "count": 4
+    }
+   },
+   "isolation_added_s": 2.14,
+   "added_kinds": [
+    "node_modules_cp_al"
+   ],
+   "tests_after": 96,
+   "test_s_after": 32.0,
+   "test_s_before_grouped": 320.0
+  },
+  "tests/session_setup/test_locked_plan_store_setup_e2e.py": {
+   "isolation_steps": {
+    "copy_working_tree": {
+     "seconds": 0.1,
+     "count": 2
+    },
+    "node_modules_cp_al": {
+     "seconds": 0.59,
+     "count": 2
+    },
+    "git_init": {
+     "seconds": 0.01,
+     "count": 2
+    },
+    "venv_sync": {
+     "seconds": 0.61,
+     "count": 2
+    }
+   },
+   "isolation_added_s": 1.31,
+   "added_kinds": [
+    "node_modules_cp_al",
+    "copy_working_tree",
+    "git_init",
+    "venv_sync"
+   ],
+   "tests_after": 5,
+   "test_s_after": 12.0,
+   "test_s_before_grouped": 0
+  },
+  "tests/test_project_boundaries.py": {
+   "isolation_steps": {
+    "copy_working_tree": {
+     "seconds": 0.05,
+     "count": 1
+    },
+    "node_modules_cp_al": {
+     "seconds": 0.37,
+     "count": 1
+    },
+    "git_init": {
+     "seconds": 0.0,
+     "count": 1
+    }
+   },
+   "isolation_added_s": 0.42,
+   "added_kinds": [
+    "node_modules_cp_al",
+    "copy_working_tree",
+    "git_init",
+    "venv_sync"
+   ],
+   "tests_after": 2,
+   "test_s_after": 0.9,
+   "test_s_before_grouped": 0.4
+  }
+ },
+ "isolation_added_total_s": 34.05,
+ "wall_clock_s": 494.4
+}

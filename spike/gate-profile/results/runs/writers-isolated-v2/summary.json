@@ -1,0 +1,137 @@
+{
+  "mode": "cmd",
+  "label": "writers-isolated-v2",
+  "base_commit": "3b6a1ef79ff3953763fcf644c496c5d6a9248e36",
+  "measured_head": "359c3c1efebf797e3ab70d664b443b57537dff39",
+  "tree": "63e0327ef49e866fec0e7d9e15f5df08f73cf7e3",
+  "edit": "none",
+  "edit_spec": " patch:prototype-isolated-writer-toolchains-v2.patch",
+  "cache_state": "warm",
+  "comparison_base": "origin/main@803859874cd324b065abba029263ac8fc121bf7b",
+  "nx_cache_dir": "/home/nick.guest/.cache/gate-profile-spike/xdg/ai-orchestrator/nx/756e79f93796751d",
+  "nx_cache_entries_before_seed": 36,
+  "nx_cache_entries_at_start": 36,
+  "uv": "uv 0.11.32 (aarch64-unknown-linux-gnu)",
+  "nx": "v23.1.0",
+  "llmlint": "llmlint 0.4.7",
+  "llmlint_fingerprint_sha256_16": "f8415a2fd16a02f4",
+  "exit_status": 1,
+  "cmd": [
+    "env",
+    "-u",
+    "FORCE_COLOR",
+    "NO_COLOR=1",
+    "uv",
+    "run",
+    "pytest",
+    "tests/e2e/test_nx_cache_scope_e2e.py",
+    "tests/e2e/test_llmlint_cache_e2e.py",
+    "tests/e2e/test_llmlint_two_path_verdict_e2e.py",
+    "tests/e2e/test_budget_target_e2e.py",
+    "tests/e2e/test_budget_telemetry_e2e.py",
+    "tests/e2e/test_workspace_contract_e2e.py",
+    "tests/e2e/test_nx_wrapper_version_e2e.py",
+    "tests/test_project_boundaries.py",
+    "tests/session_setup/test_locked_plan_store_setup_e2e.py",
+    "tests/dag_ui/test_dag_ui_serving_e2e.py",
+    "--no-cov",
+    "-n",
+    "4",
+    "--dist",
+    "loadgroup"
+  ],
+  "started_at": "2026-10-10T05:37:19.161936+00:00",
+  "wall_clock_s": 494.4,
+  "host": {
+    "load1_max": 8.14,
+    "load1_mean": 5.09,
+    "load1_samples": 96,
+    "dispatches_max": "unknown",
+    "dispatches_proven_max": 1,
+    "dispatches_samples": [
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      }
+    ]
+  },
+  "gate_phases": null,
+  "phases": [],
+  "lint_llm_diff_provenance": null,
+  "nx_runs": [],
+  "pytest_tiers": {
+    "?:?": {
+      "wall_clock_s": 493.1,
+      "exitstatus": 1,
+      "tests": 194,
+      "summed_test_s": 1515.4,
+      "group_s": {
+        "None": 1515.4
+      },
+      "group_tests": {
+        "None": 194
+      },
+      "failures": [
+        "tests/e2e/test_workspace_contract_e2e.py::test_a_worktree_provisioned_before_the_pin_moved_reinstalls_from_the_lockfile"
+      ],
+      "slowest_modules": [
+        [
+          "tests/e2e/test_nx_cache_scope_e2e.py",
+          788.2
+        ],
+        [
+          "tests/e2e/test_budget_telemetry_e2e.py",
+          310.6
+        ],
+        [
+          "tests/e2e/test_budget_target_e2e.py",
+          310.2
+        ],
+        [
+          "tests/e2e/test_llmlint_cache_e2e.py",
+          41.3
+        ],
+        [
+          "tests/e2e/test_workspace_contract_e2e.py",
+          32.0
+        ],
+        [
+          "tests/e2e/test_llmlint_two_path_verdict_e2e.py",
+          17.6
+        ],
+        [
+          "tests/session_setup/test_locked_plan_store_setup_e2e.py",
+          12.0
+        ],
+        [
+          "tests/dag_ui/test_dag_ui_serving_e2e.py",
+          2.2
+        ],
+        [
+          "tests/test_project_boundaries.py",
+          0.9
+        ],
+        [
+          "tests/e2e/test_nx_wrapper_version_e2e.py",
+          0.3
+        ]
+      ]
+    }
+  }
+}
