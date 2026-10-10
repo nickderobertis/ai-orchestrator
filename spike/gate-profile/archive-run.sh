@@ -7,11 +7,13 @@ label=$1
 src=${GATE_PROFILE_HOME:-$HOME/.cache/gate-profile-spike}/runs/$label
 dst=$(git rev-parse --show-toplevel)/spike/gate-profile/results/runs/$label
 rm -rf "$dst"; mkdir -p "$dst"
-for f in summary.json meta.json meta-in.json phases.json samples.jsonl procs.jsonl stdout.log stderr.log; do
+for f in summary.json meta.json meta-in.json phases.json samples.jsonl procs.jsonl stdout.log stderr.log isolation.jsonl isolation-summary.json; do
   [[ -f $src/$f ]] && cp "$src/$f" "$dst/"
 done
 [[ -d $src/nx-runs ]] && cp -r "$src/nx-runs" "$dst/"
 [[ -d $src/logs ]] && cp -r "$src/logs" "$dst/"
+[[ -d $src/tier-reads ]] && tar -C "$src" -czf "$dst/tier-reads.tar.gz" tier-reads
+[[ -f $src/tier-reads-summary.json ]] && cp "$src/tier-reads-summary.json" "$dst/"
 [[ -f $src/pytest-tests.json ]] && gzip -c "$src/pytest-tests.json" >"$dst/pytest-tests.json.gz"
 [[ -d $src/pytest ]] && tar -C "$src" -czf "$dst/pytest-raw.tar.gz" pytest
 du -sh "$dst"

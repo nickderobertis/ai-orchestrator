@@ -12,6 +12,9 @@
 # a harness fetch that moves origin/main mid-spike cannot move the measured base:
 #   GATE_PROFILE_REMOTE=spikebase measure.sh gate ...
 #   measure.sh three  --commit SHA [--patch FILE] --cache cold|warm --label L  the three big tiers at once (three.sh)
+#   measure.sh cmd    --commit SHA [--patch FILE] --cache cold|warm --label L -- COMMAND...  any command, profiled
+#                     the same way; GATE_PROFILE_ISOLATION_LOG=<out>/isolation.jsonl and GATE_PROFILE_RUN_OUT=<out>
+#                     are exported, so a patched tree's isolation steps and trace/tiers.sh write beside it
 #
 # --patch FILE applies a diff (the prototype) to SHA and commits it, in place of an edit.
 #
@@ -117,8 +120,8 @@ if [[ $mode == offline ]]; then
   cd "$ROOT" && exec .venv/bin/python "$HERE/offline.py" --affected "${paths[@]}"
 fi
 
-[[ $mode == tier || $mode == gate || $mode == judge || $mode == three ]] || die "usage: measure.sh offline|judge|tier|gate ... (see header)"
-commit="" edit="" cache=warm label="" patch=""
+[[ $mode == tier || $mode == gate || $mode == judge || $mode == three || $mode == cmd ]] || die "usage: measure.sh offline|judge|tier|gate ... (see header)"
+commit="" edit="" cache=warm label="" patch="" cmdargs=()
 while (( $# )); do
   case $1 in
     --commit) commit=$2; shift 2 ;;
@@ -126,6 +129,7 @@ while (( $# )); do
     --patch) patch=$(realpath "$2"); shift 2 ;;
     --cache) cache=$2; shift 2 ;;
     --label) label=$2; shift 2 ;;
+    --) shift; cmdargs=("$@"); break ;;
     *) die "unknown argument $1" ;;
   esac
 done
@@ -138,7 +142,7 @@ out=$HOME_DIR/runs/$label
 if [[ -z ${GATE_PROFILE_REEXEC:-} ]]; then
   copy=$HOME_DIR/harness/$label
   rm -rf "$copy"; mkdir -p "$copy"; cp -a "$HERE/." "$copy/"
-  GATE_PROFILE_REEXEC=1 exec "$copy/measure.sh" "$mode" --commit "$commit" ${edit:+--edit "$edit"} ${patch:+--patch "$patch"} --cache "$cache" --label "$label"
+  GATE_PROFILE_REEXEC=1 exec "$copy/measure.sh" "$mode" --commit "$commit" ${edit:+--edit "$edit"} ${patch:+--patch "$patch"} --cache "$cache" --label "$label" -- "${cmdargs[@]}"
 fi
 
 cd "$ROOT"
@@ -178,6 +182,7 @@ case $mode in
   tier) cmd=(just check) ;;
   gate) cmd=(just gate "$CMP_REMOTE" "$CMP_BASE") ;;
   three) cmd=("$HERE/three.sh") ;;
+  cmd) cmd=("${cmdargs[@]}"); export GATE_PROFILE_ISOLATION_LOG=$out/isolation.jsonl GATE_PROFILE_RUN_OUT=$out GATE_PROFILE_HARNESS=$HERE ;;
 esac
 mkdir -p "$out"
 jq -n --arg mode "$mode" --arg label "$label" --arg base "$base_sha" --arg head "$(git rev-parse HEAD)" \

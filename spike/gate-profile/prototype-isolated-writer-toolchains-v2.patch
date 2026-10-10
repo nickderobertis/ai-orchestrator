@@ -1,0 +1,312 @@
+diff --git a/tests/conftest.py b/tests/conftest.py
+index a028e621..23e669f4 100644
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -389,6 +389,28 @@ def _real_plan_store_roots(request: pytest.FixtureRequest) -> Iterator[None]:
+         yield
+ 
+ 
++@pytest.hookimpl(tryfirst=True)
++def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
++    """SPIKE PROTOTYPE: no test joins the shared-toolchain group any more.
++
++    Writers work on toolchains of their own (`nx_workspace.isolated_node_modules`), and an
++    in-sync `uv run` neither rewrites `.venv` nor holds its lock past the sync check, so
++    readers need no scheduling. Runs before xdist's own hook appends `@group` to node ids.
++    """
++    from nx_workspace import SHARED_TOOLCHAIN_GROUP
++
++    for item in items:
++        for node in item.listchain():
++            node.own_markers[:] = [
++                mark
++                for mark in node.own_markers
++                if not (
++                    mark.name == "xdist_group"
++                    and (mark.args[0] if mark.args else mark.kwargs.get("name")) == SHARED_TOOLCHAIN_GROUP
++                )
++            ]
++
++
+ @pytest.fixture(scope="session")
+ def workspace_install() -> None:
+     """Provision `node_modules` once per session, as `scripts/nx.sh` would.
+@@ -397,6 +419,11 @@ def workspace_install() -> None:
+     have happened here first; paying for it once per session is what keeps that from
+     being a per-journey cost.
+     """
++    # SPIKE PROTOTYPE: an in-sync `bun install` re-links every `.bin` entry, so a session
++    # fixture that runs it in a provisioned checkout is a writer racing every reader of
++    # `node_modules/.bin`. Provision only what is absent.
++    if (REPO_ROOT / "node_modules" / ".bin" / "nx").exists():
++        return
+     result = subprocess.run([str(WORKSPACE_INSTALL)], text=True, capture_output=True)
+     if result.returncode != 0:
+         pytest.fail(f"workspace-install failed: {result.stderr or result.stdout}")
+diff --git a/tests/e2e/nx_workspace.py b/tests/e2e/nx_workspace.py
+index 1c3599da..3b77e86f 100644
+--- a/tests/e2e/nx_workspace.py
++++ b/tests/e2e/nx_workspace.py
+@@ -111,10 +111,56 @@ def copy_working_tree(destination: Path) -> None:
+         shutil.copy2(REPO_ROOT / relative, target, follow_symlinks=False)
+ 
+ 
++def _isolation_log(kind: str, seconds: float) -> None:
++    """SPIKE PROTOTYPE: record one isolation step's cost, per test, when the harness asks."""
++    import json, os
++    log = os.environ.get("GATE_PROFILE_ISOLATION_LOG")
++    if log:
++        with open(log, "a", encoding="utf-8") as fh:
++            fh.write(json.dumps({"test": os.environ.get("PYTEST_CURRENT_TEST", ""), "kind": kind,
++                                 "seconds": round(seconds, 4), "pid": os.getpid()}) + "\n")
++
++
++def isolated_python_root(destination: Path) -> Path:
++    """SPIKE PROTOTYPE: a copy of this checkout with its own node_modules and its own `.venv`.
++
++    For writers that re-provision the Python toolchain (session setup's `uv sync`): the
++    copy's `.venv` is synced from the lockfile, so nothing they run reaches this checkout's.
++    """
++    import os, time
++    copy_checkout(destination)
++    started = time.monotonic()
++    subprocess.run(["git", "init", "-q", str(destination)], check=True)
++    _isolation_log("git_init", time.monotonic() - started)
++    env = {k: v for k, v in os.environ.items() if k not in ("UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV", "UV_NO_SYNC")}
++    started = time.monotonic()
++    subprocess.run(["uv", "sync", "--locked", "--project", str(destination)], check=True, env=env,
++                   capture_output=True)
++    _isolation_log("venv_sync", time.monotonic() - started)
++    return destination
++
++
++def isolated_node_modules(destination: Path) -> None:
++    """SPIKE PROTOTYPE (isolated writer toolchains): give a copy a node_modules of its own.
++
++    A hardlinked tree (`cp -al`): package files share inodes with this checkout's install,
++    but every directory — `.bin` included — is the copy's own, so the in-sync Bun install
++    `scripts/nx.sh` runs in the copy re-links the copy's `.bin` and never this checkout's.
++    Measured at 0.69 s per copy, and no data blocks.
++    """
++    import time
++    started = time.monotonic()
++    subprocess.run(["cp", "-al", str(NODE_MODULES), str(destination / "node_modules")], check=True)
++    _isolation_log("node_modules_cp_al", time.monotonic() - started)
++
++
+ def copy_checkout(destination: Path) -> None:
+-    """A copy of this checkout wired to this checkout's own workspace install."""
++    """A copy of this checkout with a private copy of this checkout's workspace install."""
++    import time
++    started = time.monotonic()
+     copy_working_tree(destination)
+-    (destination / "node_modules").symlink_to(NODE_MODULES, target_is_directory=True)
++    _isolation_log("copy_working_tree", time.monotonic() - started)
++    isolated_node_modules(destination)
+ 
+ 
+ def answering_this_checkouts_origin(destination: Path) -> None:
+diff --git a/tests/e2e/test_budget_target_e2e.py b/tests/e2e/test_budget_target_e2e.py
+index 996cbecc..1a42d308 100644
+--- a/tests/e2e/test_budget_target_e2e.py
++++ b/tests/e2e/test_budget_target_e2e.py
+@@ -207,7 +207,7 @@ def workspace(tmp_path: Path) -> Workspace:
+         (root / relative).parent.mkdir(parents=True, exist_ok=True)
+         shutil.copy2(REPO_ROOT / relative, root / relative)
+     (root / ".gitignore").write_text("node_modules\n.nx\n.logs\n", encoding="utf-8")
+-    (root / "node_modules").symlink_to(NODE_MODULES, target_is_directory=True)
++    __import__('nx_workspace').isolated_node_modules(root)
+     shutil.copytree(REPO_ROOT / "tests/fixtures/nx-cache", root / "tests/fixtures/nx-cache")
+     marker = tmp_path / "ran"
+     (root / DEPENDENCY).mkdir()
+diff --git a/tests/e2e/test_budget_telemetry_e2e.py b/tests/e2e/test_budget_telemetry_e2e.py
+index 8b889ba2..2f7cc1d3 100644
+--- a/tests/e2e/test_budget_telemetry_e2e.py
++++ b/tests/e2e/test_budget_telemetry_e2e.py
+@@ -237,7 +237,7 @@ def workspace(tmp_path: Path) -> Workspace:
+     (root / ".gitignore").write_text(
+         "node_modules\n.nx\n.logs\n.telemetry\n__pycache__\n", encoding="utf-8"
+     )
+-    (root / "node_modules").symlink_to(NODE_MODULES, target_is_directory=True)
++    __import__('nx_workspace').isolated_node_modules(root)
+     shutil.copytree(REPO_ROOT / "tests/fixtures/nx-cache", root / "tests/fixtures/nx-cache")
+     (root / PROJECT).mkdir()
+     (root / PROJECT / "project.json").write_text(json.dumps(_project(), indent=2), "utf-8")
+diff --git a/tests/e2e/test_llmlint_two_path_verdict_e2e.py b/tests/e2e/test_llmlint_two_path_verdict_e2e.py
+index d8dc4154..c89c6eeb 100644
+--- a/tests/e2e/test_llmlint_two_path_verdict_e2e.py
++++ b/tests/e2e/test_llmlint_two_path_verdict_e2e.py
+@@ -136,7 +136,7 @@ class TwoPaths:
+         self.rebuilt += 1
+         scratch = self.scratch_parent / f"orchestrator-merge-{self.rebuilt}" / "worktree"
+         git("worktree", "add", "--detach", str(scratch), f"origin/{BASE_BRANCH}", cwd=self.clone)
+-        (scratch / "node_modules").symlink_to(REPO_ROOT / "node_modules", target_is_directory=True)
++        __import__('nx_workspace').isolated_node_modules(scratch)
+         git("merge", "--squash", f"origin/{FEATURE_BRANCH}", cwd=scratch)
+         git("commit", "-m", "publication", cwd=scratch)
+         try:
+@@ -251,7 +251,7 @@ def two_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TwoPa
+     exclude.write_text("node_modules\n", encoding="utf-8")
+     worker = tmp_path / "run" / "worker"
+     git("worktree", "add", "-b", FEATURE_BRANCH, str(worker), f"origin/{BASE_BRANCH}", cwd=clone)
+-    (worker / "node_modules").symlink_to(REPO_ROOT / "node_modules", target_is_directory=True)
++    __import__('nx_workspace').isolated_node_modules(worker)
+ 
+     binaries = tmp_path / "bin"
+     real_llmlint = shutil.which("llmlint")
+diff --git a/tests/e2e/test_nx_wrapper_version_e2e.py b/tests/e2e/test_nx_wrapper_version_e2e.py
+index d94a9c2a..8bf32086 100644
+--- a/tests/e2e/test_nx_wrapper_version_e2e.py
++++ b/tests/e2e/test_nx_wrapper_version_e2e.py
+@@ -7,23 +7,40 @@ import os
+ import re
+ import subprocess
+ 
++import pytest
++
+ from nx_workspace import shares_workspace_install
+ 
+ from orchestrator.root import REPO_ROOT
+ 
++def _private_copy(tmp_path):  # noqa: ANN001, ANN202
++    """SPIKE PROTOTYPE: the wrapper heals the install it runs in, so it runs in a copy."""
++    from nx_workspace import copy_checkout
++
++    copy = tmp_path / "checkout"
++    copy_checkout(copy)
++    import time
++    from nx_workspace import _isolation_log
++    started = time.monotonic()
++    subprocess.run(["git", "init", "-q", str(copy)], check=True)
++    _isolation_log("git_init", time.monotonic() - started)
++    return copy
++
++
+ LOCAL_VERSION = re.compile(r"^- Local: v(?P<version>\S+)$", re.MULTILINE)
+ 
+ 
++@pytest.mark.reads_docs  # SPIKE PROTOTYPE: a full copy reads every tracked file
+ @shares_workspace_install
+-def test_nx_wrapper_runs_the_version_package_json_pins() -> None:
++def test_nx_wrapper_runs_the_version_package_json_pins(tmp_path) -> None:  # noqa: ANN001
+     """Read Nx's version through the real self-healing, logging wrapper."""
+     pinned = json.loads((REPO_ROOT / "package.json").read_text(encoding="utf-8"))[
+         "devDependencies"
+     ]["nx"]
+     result = subprocess.run(
+         ["./scripts/nx.sh", "--version"],
+-        cwd=REPO_ROOT,
+-        env={**os.environ, "AI_ORCHESTRATOR_NX_SHOW_OUTPUT": "1"},
++        cwd=_private_copy(tmp_path),
++        env={**os.environ, "AI_ORCHESTRATOR_NX_SHOW_OUTPUT": "1", "UV_NO_SYNC": "1"},
+         check=False,
+         text=True,
+         capture_output=True,
+diff --git a/tests/session_setup/test_locked_plan_store_setup_e2e.py b/tests/session_setup/test_locked_plan_store_setup_e2e.py
+index 6303e78b..3f7fd860 100644
+--- a/tests/session_setup/test_locked_plan_store_setup_e2e.py
++++ b/tests/session_setup/test_locked_plan_store_setup_e2e.py
+@@ -12,7 +12,7 @@ from pathlib import Path
+ from typing import Literal, TypeIs, get_args
+ 
+ from nx_workspace import shares_workspace_install
+-from published_tools import ONETASKGRAPH_BIN
++import pytest
+ from waits import until
+ 
+ from orchestrator.root import REPO_ROOT
+@@ -215,6 +215,21 @@ def _marks(marks: Path) -> list[str]:
+     return sorted(marks.read_text(encoding="utf-8").split()) if marks.exists() else []
+ 
+ 
++#: SPIKE PROTOTYPE (isolated writer toolchains): session setup re-provisions the `.venv` of
++#: the checkout it runs in, so every start below runs in a private copy with its own.
++SETUP_ROOT: Path = REPO_ROOT
++
++
++@pytest.fixture(autouse=True, scope="module")
++def _isolated_setup_root(tmp_path_factory: pytest.TempPathFactory):  # noqa: ANN202
++    from nx_workspace import isolated_python_root
++
++    global SETUP_ROOT
++    SETUP_ROOT = isolated_python_root(tmp_path_factory.mktemp("setup-root") / "checkout")
++    yield
++    SETUP_ROOT = REPO_ROOT
++
++
+ @shares_workspace_install
+ def test_session_setup_keeps_the_locked_plan_store_and_plan_root_in_force(
+     tmp_path: Path,
+@@ -223,7 +238,7 @@ def test_session_setup_keeps_the_locked_plan_store_and_plan_root_in_force(
+ 
+     Its own exit status stays the one its toolchain earned whatever the sibling jobs do.
+     """
+-    plans = REPO_ROOT / ".plans"
++    plans = SETUP_ROOT / ".plans"
+     marks = tmp_path / "marks"
+     release = tmp_path / "release"
+     held = _stand_in(tmp_path / "held-sibling", marks=marks, body=_held_body())
+@@ -246,8 +261,8 @@ def test_session_setup_keeps_the_locked_plan_store_and_plan_root_in_force(
+ 
+     def session_start() -> subprocess.CompletedProcess[str]:
+         started = subprocess.run(
+-            ["bash", str(REPO_ROOT / "scripts" / "session-setup.sh")],
+-            cwd=REPO_ROOT,
++            ["bash", str(SETUP_ROOT / "scripts" / "session-setup.sh")],
++            cwd=SETUP_ROOT,
+             text=True,
+             capture_output=True,
+             check=False,
+@@ -276,7 +291,7 @@ def test_session_setup_keeps_the_locked_plan_store_and_plan_root_in_force(
+ 
+         assert first.returncode == 0, first.stdout + first.stderr
+         adopted = (REPO_ROOT / "config" / "onetaskgraph.version").read_text().strip()
+-        assert f"ready (onetaskgraph: {adopted} at {ONETASKGRAPH_BIN})" in first.stderr
++        assert f"ready (onetaskgraph: {adopted} at {SETUP_ROOT / ".venv" / "bin" / "onetaskgraph"})" in first.stderr
+         assert (plans / "tasks").is_dir()
+         assert (plans / "projects").is_dir()
+ 
+@@ -384,8 +399,8 @@ class Session:
+ 
+     def start(self, sweeps: list[int]) -> subprocess.CompletedProcess[str]:
+         started = subprocess.run(
+-            ["bash", str(REPO_ROOT / "scripts" / "session-setup.sh")],
+-            cwd=REPO_ROOT,
++            ["bash", str(SETUP_ROOT / "scripts" / "session-setup.sh")],
++            cwd=SETUP_ROOT,
+             text=True,
+             capture_output=True,
+             check=False,
+diff --git a/tests/test_project_boundaries.py b/tests/test_project_boundaries.py
+index 00ec8e9f..029f2734 100644
+--- a/tests/test_project_boundaries.py
++++ b/tests/test_project_boundaries.py
+@@ -118,12 +118,26 @@ def violations(graph: Graph, stated: tuple[Rule, ...]) -> list[str]:
+     return found
+ 
+ 
++def _private_copy(parent: Path) -> Path:
++    """SPIKE PROTOTYPE: the wrapper heals the install it runs in, so it runs in a copy."""
++    from nx_workspace import copy_checkout
++
++    copy = parent / "checkout"
++    copy_checkout(copy)
++    import time
++    from nx_workspace import _isolation_log
++    started = time.monotonic()
++    subprocess.run(["git", "init", "-q", str(copy)], check=True)
++    _isolation_log("git_init", time.monotonic() - started)
++    return copy
++
++
+ def _nx_graph(written: Path) -> dict:
+     """The project graph this checkout's own Nx builds, through the repository's wrapper."""
+     result = subprocess.run(
+         ["./scripts/nx.sh", "graph", f"--file={written}"],
+-        cwd=REPO_ROOT,
+-        env={**os.environ, "NX_DAEMON": "false"},
++        cwd=_private_copy(written.parent),
++        env={**os.environ, "NX_DAEMON": "false", "UV_NO_SYNC": "1"},
+         check=False,
+         text=True,
+         capture_output=True,

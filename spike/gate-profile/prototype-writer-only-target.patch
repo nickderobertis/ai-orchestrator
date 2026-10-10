@@ -1,0 +1,40 @@
+diff --git a/orchestrator/project.json b/orchestrator/project.json
+index 1cdbd83c..e93ffffd 100644
+--- a/orchestrator/project.json
++++ b/orchestrator/project.json
+@@ -211,7 +211,15 @@
+     },
+     "budgets": {
+       "//": "llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The edge below is forced by the approved home of the board and lost-turn budgets, orchestrator/budgets.yaml, whose telemetry the orchestrator-e2e journeys record. It pulls that whole journeys tier into every check selecting this project: a cache replay when its key is unchanged, about thirteen minutes on a host with no cache entry for it. A drafted follow-up moves the measuring journeys into a test project of their own that this target depends on instead, and deletes this directive.",
+-      "dependsOn": ["test-docs", {"projects": ["orchestrator-e2e"], "target": "test"}],
++      "dependsOn": [
++        "test-docs",
++        {
++          "projects": [
++            "orchestrator-e2e"
++          ],
++          "target": "test"
++        }
++      ],
+       "options": {
+         "cwd": ".",
+         "env": {
+@@ -232,6 +240,17 @@
+         }
+       ]
+     },
+-    "budgets-host": {}
++    "budgets-host": {},
++    "test-toolchain-writers": {
++      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/e2e/test_nx_cache_scope_e2e.py tests/e2e/test_llmlint_cache_e2e.py tests/e2e/test_llmlint_two_path_verdict_e2e.py tests/e2e/test_budget_target_e2e.py tests/e2e/test_budget_telemetry_e2e.py tests/e2e/test_workspace_contract_e2e.py tests/e2e/test_nx_wrapper_version_e2e.py tests/test_project_boundaries.py tests/session_setup/test_locked_plan_store_setup_e2e.py tests/dag_ui/test_dag_ui_serving_e2e.py --no-cov -n 4 --dist loadgroup",
++      "options": {
++        "cwd": "."
++      },
++      "inputs": [
++        "wholeWorkspace"
++      ],
++      "cache": false,
++      "parallelism": false
++    }
+   }
+ }
