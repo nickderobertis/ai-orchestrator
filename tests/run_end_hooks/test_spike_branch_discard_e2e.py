@@ -27,7 +27,7 @@ from typing import NamedTuple
 
 import pytest
 from conftest import git
-from nx_workspace import SHARED_TOOLCHAIN_GROUP
+from nx_workspace import WORKSPACE_INSTALL_MARKS
 from project_fixtures import project_from_plan
 from scratch_identity import GIT_IDENTITY, Identity, seeded
 from test_run_end_hooks_e2e import (
@@ -46,8 +46,10 @@ from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
 
-#: A real launch holds this checkout's toolchain for as long as it runs.
-pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
+#: A reader of the toolchain this checkout provisioned: every step here runs its tool
+#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
+#: `tests/e2e/nx_workspace.py` asks no xdist group of it.
+pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 #: The pinned `onevcs`, which every spike branch here is cut, preserved and released by.
 ONEVCS = REPO_ROOT / ".venv" / "bin" / "onevcs"

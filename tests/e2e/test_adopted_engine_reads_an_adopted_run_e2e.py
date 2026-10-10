@@ -43,7 +43,7 @@ from typing import IO, NamedTuple
 
 import pytest
 from fake_backend import AGENT_DELAY_ENV
-from nx_workspace import SHARED_TOOLCHAIN_GROUP
+from nx_workspace import WORKSPACE_INSTALL_MARKS
 from project_fixtures import project_from_plan
 from test_orchestrate_launch_e2e import CandidatePlan, _node
 from test_orchestrate_launch_e2e import _environment as _launched_environment
@@ -53,9 +53,10 @@ from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
 
-#: `tests/e2e/nx_workspace.py`'s group: every step here is a `just` recipe blocking on
-#: `uv run`, which waits on the lock a journey re-provisioning this checkout holds.
-pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
+#: A reader of the toolchain this checkout provisioned: every step here runs its tool
+#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
+#: `tests/e2e/nx_workspace.py` asks no xdist group of it.
+pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 #: A launching session this journey states rather than inherits, so the run is one
 #: `just stop` and `just orchestrate --adopt` treat as this session's own.

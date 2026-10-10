@@ -37,7 +37,7 @@ from typing import NamedTuple, NewType, NotRequired, Protocol, TypedDict, cast
 
 import pytest
 import short_state
-from nx_workspace import SHARED_TOOLCHAIN_GROUP
+from nx_workspace import WORKSPACE_INSTALL_MARKS
 from planner_channel import (
     MANAGER_PATIENCE_SECONDS,
     Manager,
@@ -172,19 +172,10 @@ def _environment(tmp_path: Path) -> dict[str, str]:
     return environment
 
 
-#: Every journey in this module is pinned to one worker, because each is a shim process and
-#: a manager thread both waiting on `just` recipes, and several of those racing the rest of
-#: a full suite is what turned a several-second round trip into one that outlived the
-#: window it was given.
-#:
-#: `tests/e2e/nx_workspace.py`'s group, because every one of those `just` recipes reaches
-#: its tool through `uv run`, which waits on the exclusive lock a journey re-provisioning
-#: this checkout holds. A group of this module's own would co-locate these journeys with
-#: each other and leave that writer free to run beside them on another worker, which is not
-#: a constraint at all: `--dist loadgroup` serialises one group name, never two. One
-#: `pytestmark` rather than a decorator per test, so a journey added here cannot miss it;
-#: `tests/test_nx_cache_scope.py` holds the rule and records what an ungrouped one cost.
-pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
+#: A reader of the toolchain this checkout provisioned: every step here runs its tool
+#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
+#: `tests/e2e/nx_workspace.py` asks no xdist group of it.
+pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 
 @pytest.fixture

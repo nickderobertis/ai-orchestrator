@@ -1,16 +1,16 @@
 """`--dist loadgroup` really does serialise one xdist group, driven rather than assumed.
 
-Every journey carrying `WORKSPACE_INSTALL_MARKS` drives a real `bun install
---frozen-lockfile` into one shared `node_modules`, and the group half of that tuple is
-the only thing keeping two of them from doing it at once. The deadline-based channel
-journeys name that same group, because their every step is a `just` recipe waiting on
-the `<root>/.venv` lock those installs hold. That makes the scheduler's behaviour
+No group protects a toolchain any more — `tests/e2e/nx_workspace.py` says why — but a
+module whose autouse, module-scoped fixture writes one shared path still lands on one
+worker through a group of its own: `tests/ask_seam/launch/test_launch_ask_seam_e2e.py`
+creates this checkout's `.env` with `O_EXCL`, so two workers reaching that fixture at
+once is one of them erroring in setup. That makes the scheduler's behaviour
 load-bearing here rather than incidental, so it is measured: real pytest-xdist over real
 tests that report which worker took them and when.
 
-Non-overlap is asserted beside co-location because it is the property the shared install
+Non-overlap is asserted beside co-location because it is the property the shared path
 needs — a group pinned to one worker would still race if xdist ever ran a worker's tests
-concurrently, and it is that, not co-location, that the `EEXIST` failures came from.
+concurrently.
 """
 
 from __future__ import annotations
@@ -20,8 +20,10 @@ import sys
 from pathlib import Path
 from typing import NamedTuple
 
-from nx_workspace import SHARED_TOOLCHAIN_GROUP
 from waits import timeout as e2e_timeout
+
+#: A group named for one module alone, as every group left in the suite is.
+MODULE_GROUP = "ask-seam-launch"
 
 #: Enough tests that a load-balancing scheduler would split them across two workers,
 #: and few enough that the run stays about a second.
@@ -63,9 +65,7 @@ class Ran(NamedTuple):
 def _schedule(tmp_path: Path) -> list[Ran]:
     """Run the generated tests under real pytest-xdist and read back what happened."""
     generated = tmp_path / "test_generated.py"
-    generated.write_text(
-        GENERATED.format(group=SHARED_TOOLCHAIN_GROUP, count=GROUPED), encoding="utf-8"
-    )
+    generated.write_text(GENERATED.format(group=MODULE_GROUP, count=GROUPED), encoding="utf-8")
     log = tmp_path / "schedule.log"
     log.write_text("", encoding="utf-8")
 
@@ -104,20 +104,20 @@ def _schedule(tmp_path: Path) -> list[Ran]:
 
 
 def test_one_group_runs_on_one_worker_and_never_two_at_once(tmp_path: Path) -> None:
-    """The guarantee the shared install rests on, read off the run rather than restated."""
+    """The guarantee a module-named group rests on, read off the run rather than restated."""
     recorded = _schedule(tmp_path)
 
     assert len(recorded) == GROUPED, f"only {len(recorded)} of {GROUPED} tests reported"
     workers = {ran.worker for ran in recorded}
     assert len(workers) == 1, (
-        f"the {SHARED_TOOLCHAIN_GROUP!r} group ran across {sorted(workers)}; "
-        "`--dist loadgroup` is what keeps every journey sharing one `node_modules` off "
+        f"the {MODULE_GROUP!r} group ran across {sorted(workers)}; "
+        "`--dist loadgroup` is what keeps a module's tests sharing one fixture's path off "
         "each other, and it is not in force"
     )
 
     ordered = sorted(recorded, key=lambda ran: ran.started)
     for earlier, later in zip(ordered, ordered[1:], strict=False):
         assert earlier.ended <= later.started, (
-            f"{earlier} and {later} overlapped, so two journeys sharing one install "
-            "could run their `bun install` at the same time"
+            f"{earlier} and {later} overlapped, so two tests of one grouped module "
+            "could run its shared fixture's write at the same time"
         )

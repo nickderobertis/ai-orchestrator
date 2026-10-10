@@ -51,7 +51,7 @@ import monitor_conversation
 import pytest
 import short_state
 from monitor_conversation import Conversation, Taken
-from nx_workspace import SHARED_TOOLCHAIN_GROUP
+from nx_workspace import WORKSPACE_INSTALL_MARKS
 from planner_channel import BUS_CONFIG
 from project_fixtures import helper, project_from_plan
 from test_observer_judge_ops import judge_argv
@@ -133,9 +133,10 @@ Correlation = NewType("Correlation", str)
 SUITE = hashlib.sha256(f"{REPO_ROOT}\0{os.getpid()}".encode()).hexdigest()[:8]
 RUN = RunId(f"settled-ruling-{SUITE}")
 
-#: `tests/e2e/nx_workspace.py`'s group: every step here is a `just` recipe or a verb that
-#: waits on the exclusive lock a journey re-provisioning this checkout holds.
-pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
+#: A reader of the toolchain this checkout provisioned: every step here runs its tool
+#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
+#: `tests/e2e/nx_workspace.py` asks no xdist group of it.
+pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 
 class Settled(NamedTuple):

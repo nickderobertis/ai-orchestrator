@@ -43,7 +43,11 @@ import plan_fixture_source
 import plan_root_variable
 import pytest
 from fake_backend import PROMPT_LOG_ENV, RUN_ON_MARKER_ENV
-from nx_workspace import answering_this_checkouts_origin, copy_working_tree
+from nx_workspace import (
+    answering_this_checkouts_origin,
+    copy_working_tree,
+    rewrites_workspace_toolchain,
+)
 from published_tools import ONETASKGRAPH_BIN
 from test_finish_plan_recipe_e2e import (
     DESIGN_RUN_SUFFIX,
@@ -401,6 +405,7 @@ def _in(checkout: Path, bench: Bench, *argv: str) -> subprocess.CompletedProcess
 # tests/plan_tooling/AGENTS.md states this project's split: `reads_docs` routes a journey that
 # builds a copy of this checkout to `plan-tooling:test-docs`, keyed on the whole workspace because
 # copying the tracked tree reads all of it, and never out of this project.
+@rewrites_workspace_toolchain
 @pytest.mark.reads_docs
 @pytest.mark.xdist_group("finish-plan")
 def test_a_listed_plan_predating_budgets_is_documented_as_such_and_re_approved(

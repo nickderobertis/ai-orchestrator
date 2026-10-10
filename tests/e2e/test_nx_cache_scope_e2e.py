@@ -113,6 +113,8 @@ from nx_inputs import (
     SESSION_SETUP_PYPI_PROJECT,
     SESSION_SETUP_PYPI_SCOPED,
     SESSION_SETUP_SCOPED,
+    TOOLCHAIN_ISOLATION_PROJECT,
+    TOOLCHAIN_ISOLATION_SCOPED,
     UNFINISHED_PROJECT,
     UNFINISHED_SCOPED,
     UNIT_COVERAGE_DATA,
@@ -128,13 +130,15 @@ from nx_inputs import (
     repository_relative_globs,
     target_input_globs,
 )
-from nx_workspace import WORKSPACE_INSTALL_MARKS, copy_checkout
+from nx_workspace import TOOLCHAIN_WRITER_MARKS, WORKSPACE_INSTALL_MARKS, copy_checkout
 
 from orchestrator.root import REPO_ROOT
 
 # Copying the whole tree is this journey's premise, and the tree includes its
-# prose: these belong to the whole-workspace tier by construction.
-pytestmark = [*WORKSPACE_INSTALL_MARKS, pytest.mark.reads_docs]
+# prose: these belong to the whole-workspace tier by construction. A writer, because
+# `scripts/nx.sh` heals the install of the copy it runs in, which `copy_checkout` makes
+# the copy's own.
+pytestmark = [*WORKSPACE_INSTALL_MARKS, *TOOLCHAIN_WRITER_MARKS, pytest.mark.reads_docs]
 
 CACHE_HIT = "read the output from the cache"
 # The suite reads this file directly — tests/test_decomposition_guidance.py holds the
@@ -881,6 +885,13 @@ SKIPPABLE_TIERS = frozenset(
         # describes; the board-copy-approval entry sits beside the others' because the catalog is
         # the domain.
         (BOARD_COPY_APPROVAL_PROJECT, BOARD_COPY_APPROVAL_SCOPED),
+        # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+        # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
+        # catalog of test projects, where every project has its entry, and
+        # `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
+        # describes; the toolchain-isolation entry sits beside the others' because the catalog is
+        # the domain.
+        (TOOLCHAIN_ISOLATION_PROJECT, TOOLCHAIN_ISOLATION_SCOPED),
         # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
         # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
         # catalog of test projects, where every project has its entry, and

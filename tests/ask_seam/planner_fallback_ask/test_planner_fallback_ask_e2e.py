@@ -32,7 +32,7 @@ from typing import NamedTuple, TypedDict
 
 import pytest
 import short_state
-from nx_workspace import SHARED_TOOLCHAIN_GROUP
+from nx_workspace import WORKSPACE_INSTALL_MARKS
 from planner_channel import Surface, just, next_surface_record
 from planner_fallback import PLACEHOLDER_QUESTION, shortened_fallback
 from project_fixtures import helper, project_from_plan
@@ -134,11 +134,10 @@ def _environment(tmp_path: Path) -> dict[str, str]:
     return environment
 
 
-#: This module launches a real run through `just`, which reaches its tools through `uv
-#: run` and so waits on the exclusive lock a journey re-provisioning this checkout holds.
-#: `tests/e2e/nx_workspace.py`'s group, for the reason `tests/test_nx_cache_scope.py`
-#: records: `--dist loadgroup` co-locates only tests sharing one name.
-pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
+#: A reader of the toolchain this checkout provisioned: every step here runs its tool
+#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
+#: `tests/e2e/nx_workspace.py` asks no xdist group of it.
+pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 
 @pytest.fixture

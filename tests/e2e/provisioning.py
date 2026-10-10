@@ -153,6 +153,10 @@ def run_setup(
             "ONEVCS_HOME": str(tmp_path / ".onevcs"),
             "PATH": path or os.environ["PATH"],
             "TMPDIR": str(scratch_root),
+            # Where uv puts its tools under that home anyway, named so that no tool
+            # directory this process inherited sends setup's `llmlint` install elsewhere.
+            "UV_TOOL_DIR": str(tmp_path / ".local" / "share" / "uv" / "tools"),
+            "UV_TOOL_BIN_DIR": str(tmp_path / ".local" / "bin"),
             # A shared cache and a suite that corrupts what it installed cannot both
             # be hardlinks. uv installs by linking out of its cache, so the test
             # below that rewrites an installed `METADATA` to prove version drift is

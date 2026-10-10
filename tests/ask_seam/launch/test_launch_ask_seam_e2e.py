@@ -62,7 +62,7 @@ from fake_backend import (
     PROMPT_LOG_ENV,
     RUN_ON_MARKER_ENV,
 )
-from nx_workspace import SHARED_TOOLCHAIN_GROUP
+from nx_workspace import WORKSPACE_INSTALL_MARKS
 from planner_channel import PersistentManager, just, ruling
 from project_fixtures import helper, project_from_plan
 from published_tools import ONETASKGRAPH_BIN
@@ -287,17 +287,11 @@ ASK_WINDOW_SECONDS = int(e2e_timeout(ANSWERED_SECONDS * 2))
 #: to one xdist worker: several of these racing the rest of a full suite is what turns a
 #: round trip through real recipes into one that outlives the window it was given.
 #:
-#: `tests/ask_seam/ask_manager/test_ask_manager_e2e.py`'s group, deliberately, rather than
-#: one of this module's own. Two groups is two workers, and everything in both is a live planner
-#: channel with a manager thread driving real recipes at it — measured, a suite running
-#: the two beside each other left that module's wrapper waiting past its own deadline.
-#: What has to be serialized is driving a channel, not driving this file's channels.
-#:
-#: That group is now `tests/e2e/nx_workspace.py`'s, shared with the journeys that
-#: re-provision this checkout's toolchain, for the reason stated there: these recipes
-#: reach their tools through `uv run`, and `--dist loadgroup` serialises one group name
-#: rather than two.
-LAUNCH_GROUP = SHARED_TOOLCHAIN_GROUP
+#: This module's own group, named for it alone: it is what keeps the one fixture below
+#: that writes this checkout on one worker, and protects no toolchain — these journeys
+#: only read the toolchain this checkout provisioned, which `tests/e2e/nx_workspace.py`
+#: schedules nowhere.
+LAUNCH_GROUP = "ask-seam-launch"
 
 #: Every test in this module, rather than the launches alone. `repository_credentials_file`
 #: below is autouse and `scope="module"`, so it runs once per worker that receives *any*
@@ -310,6 +304,7 @@ LAUNCH_GROUP = SHARED_TOOLCHAIN_GROUP
 #: there is none, all four workers take the creating branch at once, and five tests error
 #: in setup and refuse the push. `tests/test_nx_cache_scope.py` holds the rule.
 pytestmark = [
+    *WORKSPACE_INSTALL_MARKS,
     pytest.mark.xdist_group(LAUNCH_GROUP),
     # Read this checkout's own plan store here, whatever launch this suite runs inside and
     # whatever root the suite's autouse isolation would otherwise state. This module both

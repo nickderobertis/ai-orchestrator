@@ -50,16 +50,15 @@ from typing import NamedTuple
 import pytest
 import short_state
 from harness_indirections import established_indirections
-from nx_workspace import SHARED_TOOLCHAIN_GROUP
+from nx_workspace import WORKSPACE_INSTALL_MARKS
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
 
-#: Every journey here reaches its tool through `uv run`, which waits on the exclusive
-#: lock `uv` holds on this checkout's `.venv` while another journey re-provisions it.
-#: The constant rather than a string, because `--dist loadgroup` co-locates only tests
-#: sharing one group *name*, and the writers name this one.
-pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
+#: A reader of the toolchain this checkout provisioned: every step here runs its tool
+#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
+#: `tests/e2e/nx_workspace.py` asks no xdist group of it.
+pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 #: The branch under test, in the shape a dispatch leaves behind.
 FINISHED_BRANCH = "claude/finished-work"

@@ -9,9 +9,14 @@ from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
+from nx_workspace import TOOLCHAIN_WRITER_MARKS
 from published_tools import PUBLISHED_TOOLS
 
 from orchestrator.root import REPO_ROOT
+
+#: Every test here but the two pin readers sources or runs `scripts/session-setup.sh`, in
+#: a fixture checkout of its own: a toolchain writer.
+pytestmark = list(TOOLCHAIN_WRITER_MARKS)
 
 ADOPTED_ONEJUDGE_VERSION = (
     (REPO_ROOT / "config" / "onejudge.version").read_text(encoding="utf-8").strip()
@@ -121,6 +126,27 @@ chmod +x "$TEST_REPO/.venv/bin/"*
     )
 
 
+def _setup_script(tmp_path: Path) -> Path:
+    """A copy of `scripts/session-setup.sh`, in a checkout of the journey's own.
+
+    The script provisions the checkout it sits in — a `uv sync` against it, its plan root —
+    so a journey sourcing one of its steps sources this copy, never this checkout's own,
+    whose toolchain every other worker's recipes read. It reads the adopted versions as
+    it loads, so the copy carries them.
+    """
+    checkout = tmp_path / "checkout"
+    script = checkout / "scripts" / "session-setup.sh"
+    if not script.exists():
+        script.parent.mkdir(parents=True)
+        (checkout / "config").mkdir()
+        _write_adopted_version_files(checkout / "config")
+        script.write_text(
+            (REPO_ROOT / "scripts" / "session-setup.sh").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+    return script
+
+
 def _run_project_install(tmp_path: Path, **extra_env: str) -> subprocess.CompletedProcess[str]:
     test_repo = tmp_path / "repo"
     (test_repo / "scripts").mkdir(parents=True)
@@ -151,7 +177,7 @@ def _run_project_install(tmp_path: Path, **extra_env: str) -> subprocess.Complet
 def _run_bun_install(
     tmp_path: Path, *, with_npm: bool = True, **extra_env: str
 ) -> subprocess.CompletedProcess[str]:
-    script = REPO_ROOT / "scripts" / "session-setup.sh"
+    script = _setup_script(tmp_path)
     tools = tmp_path / "tools"
     npm = tools / "npm"
     if with_npm:
@@ -205,7 +231,7 @@ def _run_cargo_sweep_install(
     to — the one thing doubled: it records the install request it was asked for and
     places the `cargo-sweep` the journey names into `$HOME/.cargo/bin`, where a real
     `cargo install` puts one."""
-    script = REPO_ROOT / "scripts" / "session-setup.sh"
+    script = _setup_script(tmp_path)
     tools = tmp_path / "tools"
     if with_cargo:
         _write_executable(
@@ -390,7 +416,14 @@ def _run_full_setup_without_bun(
         ["bash", str(session_setup)],
         text=True,
         capture_output=True,
-        env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin", **extra_env},
+        env={
+            "HOME": str(tmp_path),
+            "PATH": "/usr/bin:/bin",
+            # Where a `uv tool install` the whole setup reaches would land: the journey's own.
+            "UV_TOOL_DIR": str(tmp_path / "uv-tools"),
+            "UV_TOOL_BIN_DIR": str(tmp_path / "uv-tool-bin"),
+            **extra_env,
+        },
     )
 
 
@@ -672,7 +705,7 @@ def test_full_setup_reports_missing_bun_and_returns_failure(tmp_path: Path) -> N
 
 
 def test_ensure_codex_exposes_asdf_install_on_stable_worker_path(tmp_path: Path) -> None:
-    script = REPO_ROOT / "scripts" / "session-setup.sh"
+    script = _setup_script(tmp_path)
     asdf_bin = tmp_path / ".asdf" / "installs" / "nodejs" / "26.5.0" / "bin"
     codex = asdf_bin / "codex"
     _write_executable(codex, "#!/bin/sh\nprintf 'subscription codex\\n'\n")
@@ -699,7 +732,7 @@ def test_ensure_codex_exposes_asdf_install_on_stable_worker_path(tmp_path: Path)
 
 
 def test_ensure_codex_exposes_new_npm_install_on_stable_worker_path(tmp_path: Path) -> None:
-    script = REPO_ROOT / "scripts" / "session-setup.sh"
+    script = _setup_script(tmp_path)
     tools = tmp_path / "tools"
     npm = tools / "npm"
     installed_codex = tools / "codex"
@@ -730,7 +763,7 @@ def test_ensure_codex_exposes_new_npm_install_on_stable_worker_path(tmp_path: Pa
 
 
 def test_expose_codex_logs_stable_path_failure_without_blocking(tmp_path: Path) -> None:
-    script = REPO_ROOT / "scripts" / "session-setup.sh"
+    script = _setup_script(tmp_path)
     local_path_blocker = tmp_path / ".local"
     local_path_blocker.write_text("not a directory", encoding="utf-8")
 
@@ -753,7 +786,7 @@ def test_expose_codex_logs_stable_path_failure_without_blocking(tmp_path: Path) 
 
 def test_persist_session_env_writes_worker_sandbox_environment_once(tmp_path: Path) -> None:
     env_file = tmp_path / "claude-env"
-    script = REPO_ROOT / "scripts" / "session-setup.sh"
+    script = _setup_script(tmp_path)
     for live_path in ("/usr/bin:/bin", f"{tmp_path}/.local/node/bin:/usr/bin:/bin"):
         proc = subprocess.run(
             [
@@ -777,7 +810,10 @@ def test_persist_session_env_writes_worker_sandbox_environment_once(tmp_path: Pa
     assert len(lines) == 2
     assert lines[0].startswith("export PATH=")
     assert f"{tmp_path}/.local/node/bin" in lines[0]
-    assert lines[1] == f"export LLMLINT_ONEHARNESS_BIN={REPO_ROOT}/scripts/llmlint-oneharness.sh"
+    assert (
+        lines[1]
+        == f"export LLMLINT_ONEHARNESS_BIN={tmp_path / 'checkout'}/scripts/llmlint-oneharness.sh"
+    )
 
 
 def test_persist_session_env_creates_the_first_sessions_absent_parent(tmp_path: Path) -> None:
@@ -795,7 +831,7 @@ def test_persist_session_env_creates_the_first_sessions_absent_parent(tmp_path: 
             "-c",
             'source "$1"; persist_session_env',
             "test-persist",
-            str(REPO_ROOT / "scripts" / "session-setup.sh"),
+            str(_setup_script(tmp_path)),
         ],
         text=True,
         capture_output=True,
@@ -812,7 +848,10 @@ def test_persist_session_env_creates_the_first_sessions_absent_parent(tmp_path: 
     assert len(lines) == 2
     assert lines[0].startswith("export PATH=")
     assert f"{tmp_path}/.local/node/bin" in lines[0]
-    assert lines[1] == f"export LLMLINT_ONEHARNESS_BIN={REPO_ROOT}/scripts/llmlint-oneharness.sh"
+    assert (
+        lines[1]
+        == f"export LLMLINT_ONEHARNESS_BIN={tmp_path / 'checkout'}/scripts/llmlint-oneharness.sh"
+    )
 
 
 def test_persist_session_env_reports_an_unwritable_env_file_without_shell_noise(
@@ -830,7 +869,7 @@ def test_persist_session_env_reports_an_unwritable_env_file_without_shell_noise(
             "-c",
             'source "$1"; persist_session_env; echo "rc=$?"',
             "test-persist",
-            str(REPO_ROOT / "scripts" / "session-setup.sh"),
+            str(_setup_script(tmp_path)),
         ],
         text=True,
         capture_output=True,
@@ -863,7 +902,7 @@ def test_persist_session_env_reports_a_parent_it_cannot_create(tmp_path: Path) -
             "-c",
             'source "$1"; persist_session_env; echo "rc=$?"',
             "test-persist",
-            str(REPO_ROOT / "scripts" / "session-setup.sh"),
+            str(_setup_script(tmp_path)),
         ],
         text=True,
         capture_output=True,
@@ -886,7 +925,7 @@ def test_persist_session_env_adds_wrapper_when_path_was_already_saved(tmp_path: 
     env_file = tmp_path / "claude-env"
     saved_path = f"{tmp_path}/.local/node/bin:/usr/bin:/bin"
     env_file.write_text(f"export PATH={saved_path}\n", encoding="utf-8")
-    script = REPO_ROOT / "scripts" / "session-setup.sh"
+    script = _setup_script(tmp_path)
 
     proc = subprocess.run(
         ["bash", "-c", 'source "$1"; persist_session_env', "test-persist", str(script)],
@@ -902,5 +941,5 @@ def test_persist_session_env_adds_wrapper_when_path_was_already_saved(tmp_path: 
     assert proc.returncode == 0, proc.stderr
     assert env_file.read_text(encoding="utf-8").splitlines() == [
         f"export PATH={saved_path}",
-        f"export LLMLINT_ONEHARNESS_BIN={REPO_ROOT}/scripts/llmlint-oneharness.sh",
+        f"export LLMLINT_ONEHARNESS_BIN={tmp_path / 'checkout'}/scripts/llmlint-oneharness.sh",
     ]

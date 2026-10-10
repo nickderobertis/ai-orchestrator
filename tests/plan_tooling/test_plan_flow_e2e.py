@@ -68,7 +68,11 @@ from fake_backend import (
     PROMPT_LOG_ENV,
     RUN_ON_MARKER_ENV,
 )
-from nx_workspace import answering_this_checkouts_origin, copy_working_tree
+from nx_workspace import (
+    answering_this_checkouts_origin,
+    copy_working_tree,
+    rewrites_workspace_toolchain,
+)
 from project_fixtures import helper, no_budgets
 from published_tools import ONETASKGRAPH_BIN
 from scratch_identity import PLANNING_FLOW_ORIGIN, seeded
@@ -1210,6 +1214,7 @@ def default_board(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str)
             _just("stop", ended, environment=environment, seconds=60, checkout=checkout)
 
 
+@rewrites_workspace_toolchain
 @COPIES_THE_TRACKED_TREE
 @pytest.mark.xdist_group("plan-flow")
 def test_a_flow_that_names_no_destination_copies_into_the_board_this_repository_plans_against(
@@ -1233,6 +1238,7 @@ def test_a_flow_that_names_no_destination_copies_into_the_board_this_repository_
     ], f"the flow left {landed} on the board it copies into when it is told none"
 
 
+@rewrites_workspace_toolchain
 @COPIES_THE_TRACKED_TREE
 @pytest.mark.xdist_group("plan-flow")
 def test_a_flow_that_names_no_destination_reports_where_that_board_holds_both(

@@ -19,6 +19,7 @@ from pathlib import Path
 
 import onejudge_bundle
 import pytest
+from nx_workspace import TOOLCHAIN_WRITER_MARKS
 from onejudge_bundle import LoopbackOrigin
 from provisioning import (
     ONEHARNESS_VERSION,
@@ -28,6 +29,10 @@ from provisioning import (
     setup_repo,
 )
 from published_tools import PUBLISHED_TOOLS
+
+#: Every journey here runs the real session setup in a fixture repository, which syncs
+#: that repository's own `.venv` and installs `uv` tools under the journey's own home.
+pytestmark = list(TOOLCHAIN_WRITER_MARKS)
 
 
 def test_session_setup_syncs_real_pinned_clis_and_then_needs_no_uv(tmp_path: Path) -> None:

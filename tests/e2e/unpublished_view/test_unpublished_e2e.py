@@ -46,7 +46,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 import pytest
-from nx_workspace import SHARED_TOOLCHAIN_GROUP
+from nx_workspace import WORKSPACE_INSTALL_MARKS
 from unpublished_registry import ORPHAN_BRANCH, Registry, Session, commit_on, git, seeded
 from waits import timeout as e2e_timeout
 
@@ -59,10 +59,10 @@ from orchestrator.unpublished import (
     UNANSWERED,
 )
 
-#: The one worker this module runs on: the seeding below reaches `onevcs` through `uv run`,
-#: which waits on this checkout's exclusive project-environment lock, and `--dist loadgroup`
-#: would otherwise scatter these tests across four workers, seeding a whole registry on each.
-pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
+#: A reader of the toolchain this checkout provisioned: every step here runs its tool
+#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
+#: `tests/e2e/nx_workspace.py` asks no xdist group of it.
+pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 #: The manager session every acknowledgement here is keyed on, and a second one that must
 #: never see it: an acknowledgement is one session's record of what it deliberately left.

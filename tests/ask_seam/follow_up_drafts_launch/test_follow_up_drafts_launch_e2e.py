@@ -45,7 +45,7 @@ from fake_backend import (
     RUN_ON_MARKER_ENV,
     RecordedTurn,
 )
-from nx_workspace import SHARED_TOOLCHAIN_GROUP
+from nx_workspace import WORKSPACE_INSTALL_MARKS
 from onetaskgraph_sdk import TaskDetail
 from planner_channel import just
 from project_fixtures import helper, project_from_plan
@@ -57,9 +57,10 @@ from orchestrator import follow_up_drafts as drafts
 from orchestrator import plan_store
 from orchestrator.root import REPO_ROOT
 
-#: A real launch holds this checkout's toolchain for as long as it runs, so it is scheduled
-#: with every other journey that does.
-pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
+#: A reader of the toolchain this checkout provisioned: every step here runs its tool
+#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
+#: `tests/e2e/nx_workspace.py` asks no xdist group of it.
+pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 #: The stand-in for the paid model, and the provider beneath a single-sided member.
 FAKE_BACKEND = helper("fake_backend.py")

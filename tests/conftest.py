@@ -66,6 +66,8 @@ from nx_inputs import (
     SESSION_SETUP_PYPI_WORKSPACE,
     SESSION_SETUP_ROOT,
     SESSION_SETUP_WORKSPACE,
+    TOOLCHAIN_ISOLATION_ROOT,
+    TOOLCHAIN_ISOLATION_WORKSPACE,
     UNFINISHED_ROOT,
     UNFINISHED_WORKSPACE,
     UNIT_WORKSPACE,
@@ -198,6 +200,13 @@ OWNED_PROJECTS = {
     # describes; the board-copy-approval entry sits beside the others' because the catalog is
     # the domain.
     BOARD_COPY_APPROVAL_ROOT: OwnedProject(key=BOARD_COPY_APPROVAL_WORKSPACE, docs_tier=False),
+    # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+    # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
+    # catalog of test projects, where every project has its entry, and
+    # `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
+    # describes; the toolchain-isolation entry sits beside the others' because the catalog is
+    # the domain.
+    TOOLCHAIN_ISOLATION_ROOT: OwnedProject(key=TOOLCHAIN_ISOLATION_WORKSPACE, docs_tier=False),
     # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
     # catalog of test projects, where every project has its entry, and
@@ -389,14 +398,25 @@ def _real_plan_store_roots(request: pytest.FixtureRequest) -> Iterator[None]:
         yield
 
 
+#: What `scripts/nx.sh` needs of a provisioned install, and so what says this checkout's
+#: has one: the shim Bun writes for Nx.
+PROVISIONED_NX = REPO_ROOT / "node_modules" / ".bin" / "nx"
+
+
 @pytest.fixture(scope="session")
 def workspace_install() -> None:
-    """Provision `node_modules` once per session, as `scripts/nx.sh` would.
+    """Provision `node_modules` when it is absent, as `scripts/nx.sh` would.
 
     A journey that copies this checkout and runs Nx in the copy needs the install to
-    have happened here first; paying for it once per session is what keeps that from
-    being a per-journey cost.
+    have happened here first. Every tier already runs through `scripts/nx.sh`, which
+    heals the install before pytest starts, so the install is provisioned whenever this
+    runs under one and the fixture returns without an installer: even an in-sync `bun
+    install` re-links every `.bin` entry, which would make each worker a writer racing
+    every reader of `node_modules/.bin`. A bare `pytest` in a fresh worktree is what
+    finds it absent, and installs it once per worker.
     """
+    if PROVISIONED_NX.exists():
+        return
     result = subprocess.run([str(WORKSPACE_INSTALL)], text=True, capture_output=True)
     if result.returncode != 0:
         pytest.fail(f"workspace-install failed: {result.stderr or result.stdout}")

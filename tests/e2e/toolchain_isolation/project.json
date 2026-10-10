@@ -1,0 +1,46 @@
+{
+  "name": "toolchain-isolation",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/e2e/toolchain_isolation",
+  "tags": [
+    "scope:toolchain-isolation",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-nx-workspace",
+    "support-waits"
+  ],
+  "namedInputs": {
+    "toolchainIsolationWorkspace": [
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/package.json",
+      "{workspaceRoot}/bun.lock",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/scripts/nx.sh",
+      "{workspaceRoot}/scripts/workspace-install.sh",
+      "{workspaceRoot}/scripts/install-lock.sh",
+      "{workspaceRoot}/scripts/python-install.sh",
+      "{workspaceRoot}/scripts/preserved-log.sh",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/tests/e2e/toolchain_isolation/**/*"
+    ]
+  },
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/e2e/toolchain_isolation --no-cov -n 4 --dist loadgroup",
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "toolchainIsolationWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ]
+    }
+  }
+}

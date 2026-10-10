@@ -11,11 +11,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, TypeIs, get_args
 
-from nx_workspace import shares_workspace_install
-from published_tools import ONETASKGRAPH_BIN
+import pytest
+from nx_workspace import TOOLCHAIN_WRITER_MARKS, WORKSPACE_INSTALL_MARKS, isolated_python_root
 from waits import until
 
 from orchestrator.root import REPO_ROOT
+
+#: Every journey here runs the real session setup, which re-provisions the `.venv` of the
+#: checkout it runs in and installs `uv` tools: a writer, run in a copy of this checkout
+#: whose toolchain is its own, taking that copy's install from this checkout's.
+pytestmark = [*WORKSPACE_INSTALL_MARKS, *TOOLCHAIN_WRITER_MARKS]
 
 #: The variable session setup's last step reads its checkout list from, in place of the
 #: tracked one. Named here so a run of the real setup provisions the stand-ins below and
@@ -215,15 +220,48 @@ def _marks(marks: Path) -> list[str]:
     return sorted(marks.read_text(encoding="utf-8").split()) if marks.exists() else []
 
 
-@shares_workspace_install
+@pytest.fixture(scope="module")
+def setup_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A copy of this checkout, with a `.venv` and `node_modules` of its own, to set up.
+
+    Session setup provisions the checkout it runs in — `uv sync` when a pin is not met,
+    the plan root, the Bun install it verifies — so it runs here rather than in this
+    checkout, whose toolchain every other worker's recipes read. One per worker, because
+    the copy is the cost and the journeys on one worker run one after another.
+    """
+    return isolated_python_root(tmp_path_factory.mktemp("setup-root") / "checkout")
+
+
+def _private_tool_directories(root: Path) -> dict[str, str]:
+    """Where a `uv tool install` a journey's setup runs lands: under ``root``, its own."""
+    return {
+        "UV_TOOL_DIR": str(root / "uv-tools"),
+        "UV_TOOL_BIN_DIR": str(root / "uv-tool-bin"),
+    }
+
+
+def _uv_tool_dir(environment: dict[str, str], *flags: str) -> Path:
+    """Where `uv` itself says a tool lands, asked in ``environment``."""
+    answered = subprocess.run(
+        ["uv", "tool", "dir", *flags],
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return Path(answered.stdout.strip())
+
+
 def test_session_setup_keeps_the_locked_plan_store_and_plan_root_in_force(
-    tmp_path: Path,
+    tmp_path: Path, setup_root: Path
 ) -> None:
     """The real setup verifies the locked CLI, ensures the plan root, and detaches the siblings.
 
-    Its own exit status stays the one its toolchain earned whatever the sibling jobs do.
+    Its own exit status stays the one its toolchain earned whatever the sibling jobs do,
+    and the `llmlint` it installs lands in the tool directories the journey handed it,
+    never this host's shared ones, which every dispatch's pre-push gate runs.
     """
-    plans = REPO_ROOT / ".plans"
+    plans = setup_root / ".plans"
     marks = tmp_path / "marks"
     release = tmp_path / "release"
     held = _stand_in(tmp_path / "held-sibling", marks=marks, body=_held_body())
@@ -243,30 +281,35 @@ def test_session_setup_keeps_the_locked_plan_store_and_plan_root_in_force(
     graph_state = tmp_path / "oneagentgraph-state"
     graph_state.mkdir()
     sweeps: list[int] = []
+    tools = _private_tool_directories(tmp_path)
+    environment = {
+        **os.environ,
+        REGISTERED_CHECKOUTS_OVERRIDE: str(listing),
+        RELEASE_VARIABLE: str(release),
+        "XDG_CACHE_HOME": str(cache),
+        # A registry of the journey's own: it registers its stand-ins through the
+        # checkout list above and nothing in onevcs, so setup's workspace sweep has
+        # no identity to walk. The suite's copy of this host's registry names every
+        # real checkout, and sweeping their origins outlasts the held job's release.
+        "ONEVCS_HOME": str(tmp_path / "onevcs-home"),
+        # The families the sweep's second verb judges, the journey's own for the
+        # same reason: its detached job would otherwise reclaim this host's real
+        # oneagentgraph runs and scratch.
+        "ONEAGENTGRAPH_STATE_DIR": str(graph_state),
+        "TMPDIR": str(scratch),
+        # This journey keeps the real home, so without these setup's `llmlint` install
+        # would replace the one this host's other dispatches run.
+        **tools,
+    }
 
     def session_start() -> subprocess.CompletedProcess[str]:
         started = subprocess.run(
-            ["bash", str(REPO_ROOT / "scripts" / "session-setup.sh")],
-            cwd=REPO_ROOT,
+            ["bash", str(setup_root / "scripts" / "session-setup.sh")],
+            cwd=setup_root,
             text=True,
             capture_output=True,
             check=False,
-            env={
-                **os.environ,
-                REGISTERED_CHECKOUTS_OVERRIDE: str(listing),
-                RELEASE_VARIABLE: str(release),
-                "XDG_CACHE_HOME": str(cache),
-                # A registry of the journey's own: it registers its stand-ins through the
-                # checkout list above and nothing in onevcs, so setup's workspace sweep has
-                # no identity to walk. The suite's copy of this host's registry names every
-                # real checkout, and sweeping their origins outlasts the held job's release.
-                "ONEVCS_HOME": str(tmp_path / "onevcs-home"),
-                # The families the sweep's second verb judges, the journey's own for the
-                # same reason: its detached job would otherwise reclaim this host's real
-                # oneagentgraph runs and scratch.
-                "ONEAGENTGRAPH_STATE_DIR": str(graph_state),
-                "TMPDIR": str(scratch),
-            },
+            env=environment,
         )
         sweeps.extend(_host_sweep_jobs(started.stderr))
         return started
@@ -276,9 +319,17 @@ def test_session_setup_keeps_the_locked_plan_store_and_plan_root_in_force(
 
         assert first.returncode == 0, first.stdout + first.stderr
         adopted = (REPO_ROOT / "config" / "onetaskgraph.version").read_text().strip()
-        assert f"ready (onetaskgraph: {adopted} at {ONETASKGRAPH_BIN})" in first.stderr
+        located = setup_root / ".venv" / "bin" / "onetaskgraph"
+        assert f"ready (onetaskgraph: {adopted} at {located})" in first.stderr
         assert (plans / "tasks").is_dir()
         assert (plans / "projects").is_dir()
+
+        # The install landed where the journey said, by uv's own account of where that is.
+        tool_dir, tool_bin = (Path(tools[name]) for name in ("UV_TOOL_DIR", "UV_TOOL_BIN_DIR"))
+        assert _uv_tool_dir(environment) == tool_dir
+        assert _uv_tool_dir(environment, "--bin") == tool_bin
+        assert (tool_dir / "llmlint-cli" / "uv-receipt.toml").is_file(), first.stderr
+        assert (tool_bin / "llmlint").is_file(), first.stderr
 
         # Each stand-in's job was started and the absent one skipped the way the
         # registration recipe skips it; the setup returned with the held jobs still
@@ -376,16 +427,18 @@ def _path_lacking(shims: Path, *missing: str) -> str:
 
 @dataclass(frozen=True)
 class Session:
-    """A session start's environment, its persisted environment file, and its home."""
+    """A session start's environment, its persisted environment file, its home, and the
+    copy of this checkout it sets up."""
 
     env: dict[str, str]
     env_file: Path
     home: Path
+    root: Path
 
     def start(self, sweeps: list[int]) -> subprocess.CompletedProcess[str]:
         started = subprocess.run(
-            ["bash", str(REPO_ROOT / "scripts" / "session-setup.sh")],
-            cwd=REPO_ROOT,
+            ["bash", str(self.root / "scripts" / "session-setup.sh")],
+            cwd=self.root,
             text=True,
             capture_output=True,
             check=False,
@@ -405,9 +458,10 @@ class Session:
         )
 
 
-def _session(tmp_path: Path, *missing: str, **overrides: str) -> Session:
-    """A session with none of ``missing`` on its PATH, a home of its own, and this host's
-    uv cache and interpreters unless ``overrides`` names others."""
+def _session(root: Path, tmp_path: Path, *missing: str, **overrides: str) -> Session:
+    """A session setting up ``root``, with none of ``missing`` on its PATH, a home and `uv`
+    tool directories of its own, and this host's uv cache and interpreters unless
+    ``overrides`` names others."""
     home = tmp_path / "home"
     home.mkdir()
     listing = tmp_path / "checkouts"
@@ -438,20 +492,24 @@ def _session(tmp_path: Path, *missing: str, **overrides: str) -> Session:
         "ONEVCS_HOME": str(tmp_path / "onevcs-home"),
         "ONEAGENTGRAPH_STATE_DIR": str(tmp_path / "oneagentgraph-state"),
         "TMPDIR": str(tmp_path / "tmp"),
+        # Where uv would put them under this home anyway, stated so that no tool directory
+        # this process inherited can send a session's installs anywhere else.
+        "UV_TOOL_DIR": str(home / ".local" / "share" / "uv" / "tools"),
+        "UV_TOOL_BIN_DIR": str(home / ".local" / "bin"),
     }
-    for variable in ("UV_TOOL_DIR", "UV_TOOL_BIN_DIR", "UV_OFFLINE"):
-        env.pop(variable, None)
+    env.pop("UV_OFFLINE", None)
     env.update(overrides)
     for tool in missing:
         assert (
             subprocess.run(["bash", "-c", f"command -v {tool}"], env=env, check=False).returncode
             != 0
         ), f"the session under test must start without {tool}"
-    return Session(env=env, env_file=tmp_path / "session.env", home=home)
+    return Session(env=env, env_file=tmp_path / "session.env", home=home, root=root)
 
 
-@shares_workspace_install
-def test_session_setup_provisions_just_into_a_session_that_lacks_it(tmp_path: Path) -> None:
+def test_session_setup_provisions_just_into_a_session_that_lacks_it(
+    tmp_path: Path, setup_root: Path
+) -> None:
     """A session with no `just` anywhere ends the real setup with one on its persisted PATH.
 
     The session's home is the journey's own, so neither the `~/.cargo/bin` nor the
@@ -459,7 +517,7 @@ def test_session_setup_provisions_just_into_a_session_that_lacks_it(tmp_path: Pa
     and interpreters so the install reads the index rather than rebuilding them. The
     second start, with `just` now present, stays quiet about it.
     """
-    session = _session(tmp_path, "just")
+    session = _session(setup_root, tmp_path, "just")
     sweeps: list[int] = []
     try:
         first = session.start(sweeps)
@@ -480,11 +538,12 @@ def test_session_setup_provisions_just_into_a_session_that_lacks_it(tmp_path: Pa
         _await_host_sweeps(sweeps)
 
 
-@shares_workspace_install
-def test_session_setup_puts_a_moved_uv_tool_bin_on_the_persisted_path(tmp_path: Path) -> None:
+def test_session_setup_puts_a_moved_uv_tool_bin_on_the_persisted_path(
+    tmp_path: Path, setup_root: Path
+) -> None:
     """With `UV_TOOL_BIN_DIR` pointing elsewhere, the `just` installed there is the one found."""
     tool_bin = tmp_path / "tool-bin"
-    session = _session(tmp_path, "just", UV_TOOL_BIN_DIR=str(tool_bin))
+    session = _session(setup_root, tmp_path, "just", UV_TOOL_BIN_DIR=str(tool_bin))
     sweeps: list[int] = []
     try:
         started = session.start(sweeps)
@@ -497,13 +556,14 @@ def test_session_setup_puts_a_moved_uv_tool_bin_on_the_persisted_path(tmp_path: 
         _await_host_sweeps(sweeps)
 
 
-@shares_workspace_install
-def test_session_setup_continues_when_just_cannot_be_installed(tmp_path: Path) -> None:
+def test_session_setup_continues_when_just_cannot_be_installed(
+    tmp_path: Path, setup_root: Path
+) -> None:
     """An install uv cannot complete — offline, over an empty cache — is logged, and the rest
     of setup still runs to the exit status its required tools earn."""
     cache = tmp_path / "uv-cache"
     cache.mkdir()
-    session = _session(tmp_path, "just", UV_CACHE_DIR=str(cache), UV_OFFLINE="1")
+    session = _session(setup_root, tmp_path, "just", UV_CACHE_DIR=str(cache), UV_OFFLINE="1")
     sweeps: list[int] = []
     try:
         started = session.start(sweeps)
@@ -516,10 +576,11 @@ def test_session_setup_continues_when_just_cannot_be_installed(tmp_path: Path) -
         _await_host_sweeps(sweeps)
 
 
-@shares_workspace_install
-def test_session_setup_names_uv_when_it_cannot_install_just(tmp_path: Path) -> None:
+def test_session_setup_names_uv_when_it_cannot_install_just(
+    tmp_path: Path, setup_root: Path
+) -> None:
     """With neither `just` nor `uv` on PATH, setup says which is missing and goes on."""
-    session = _session(tmp_path, "just", "uv")
+    session = _session(setup_root, tmp_path, "just", "uv")
     sweeps: list[int] = []
     try:
         started = session.start(sweeps)

@@ -180,6 +180,19 @@ UNFINISHED_WORKSPACE = "unfinishedWorkspace"
 #: recipe is read from, which `just` reaches without an `openat` the trace records.
 BOARD_COPY_APPROVAL_WORKSPACE = "boardCopyApprovalWorkspace"
 # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+
+# llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
+# catalog of test projects, where every project has its entry, and
+# `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
+# describes; the toolchain-isolation entry sits beside the others' because the catalog is
+# the domain.
+#: The key `toolchain-isolation:test` is memoized on: what a copy of this checkout with a
+#: toolchain of its own is built and driven from — the lockfiles both installs read, and
+#: the wrapper and installer scripts the journeys run. The project graph Nx builds in the
+#: copy is the one it must build here before it runs this target at all, so no
+#: `project.json` is named, as no other project's key names one.
+TOOLCHAIN_ISOLATION_WORKSPACE = "toolchainIsolationWorkspace"
+# llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The reason above
 # `HOST_SWEEP_WORKSPACE`: this module holds one row per test project.
 #: The key `graceful-cancel:test` is memoized on. Files rather than trees, for the reason
@@ -603,6 +616,22 @@ BOARD_COPY_APPROVAL_PROJECT = "board-copy-approval"
 BOARD_COPY_APPROVAL_SCOPED = "test"
 #: The directory it owns, which every other project's tiers ignore.
 BOARD_COPY_APPROVAL_ROOT = "tests/e2e/board_copy_approval"
+# llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+
+# llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
+# catalog of test projects, where every project has its entry, and
+# `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
+# describes; the toolchain-isolation entry sits beside the others' because the catalog is
+# the domain.
+#: The project whose test target owns the journeys that build a copy of this checkout
+#: with a `.venv` and `node_modules` of its own — the writer-beside-reader proof of
+#: `tests/e2e/nx_workspace.py`'s contract, and the Nx wrapper's self-heal — so a `uv sync`
+#: and a real Nx per journey are a cost `nx affected` keeps off an unrelated edit.
+TOOLCHAIN_ISOLATION_PROJECT = "toolchain-isolation"
+#: That project's one test target: nothing here reads this repository's prose.
+TOOLCHAIN_ISOLATION_SCOPED = "test"
+#: The directory it owns, which every other project's tiers ignore.
+TOOLCHAIN_ISOLATION_ROOT = "tests/e2e/toolchain_isolation"
 # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The reason above

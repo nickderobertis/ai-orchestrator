@@ -45,7 +45,7 @@ from typing import NamedTuple
 
 import follow_up_variables
 import pytest
-from nx_workspace import SHARED_TOOLCHAIN_GROUP
+from nx_workspace import WORKSPACE_INSTALL_MARKS
 from published_tools import ONETASKGRAPH_BIN
 from test_follow_ups_recipe_e2e import (
     BOARD,
@@ -74,8 +74,16 @@ from orchestrator import follow_up_tickets as tickets
 from orchestrator.plan_store import QualifiedTaskId
 from orchestrator.root import REPO_ROOT
 
-#: A real launch holds this checkout's toolchain for as long as it runs.
-pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
+#: A reader of the toolchain this checkout provisioned: every step here runs its tool
+#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
+#: `tests/e2e/nx_workspace.py` asks no xdist group of it. The group is this module's own,
+#: for fixture sharing: `life` is module-scoped and drive the real recipe end to
+#: end, so spread across workers the module builds it once per worker — measured,
+#: 120 to 170 s on each of four workers against 151 s for the whole module on one.
+pytestmark = [
+    *WORKSPACE_INSTALL_MARKS,
+    pytest.mark.xdist_group("follow-ups-answer-comments-recipe"),
+]
 
 RECIPE = "follow-ups-answer-comments"
 UNANSWERED = 1

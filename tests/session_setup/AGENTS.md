@@ -20,6 +20,8 @@ releases and waits out every one it started before it ends; it signals none.
 - **The journeys that run the same script in a fixture repository and install the
   published tools from PyPI are not here.** They are `tests/session_setup_pypi/`, a
   project of their own, because an edit only they read would otherwise select this one.
-- **It holds the shared toolchain.** A run of the real setup takes `uv`'s exclusive lock
-  on this checkout's `.venv`, so the journey declares `shares_workspace_install` and is
-  scheduled beside every other journey that does.
+- **It is a toolchain writer, run in a copy.** The real setup syncs the `.venv` of the
+  checkout it runs in and installs `uv` tools, so the journey declares
+  `rewrites_workspace_toolchain`, runs the setup in an `isolated_python_root` copy whose
+  `.venv` and `node_modules` are its own, and names `UV_TOOL_DIR` and `UV_TOOL_BIN_DIR`
+  under its own directory, asserting `llmlint` landed there. No xdist group schedules it.

@@ -42,6 +42,7 @@ import json
 import subprocess
 from pathlib import Path
 
+from nx_workspace import TOOLCHAIN_WRITER_MARKS
 from provisioning import run_setup, setup_repo
 from test_linked_libraries import (
     DECLARED_DIVERGENCES,
@@ -52,6 +53,10 @@ from test_linked_libraries import (
 )
 
 from orchestrator.root import REPO_ROOT
+
+#: The journey runs the real session setup in a fixture repository, which syncs that
+#: repository's own `.venv` and installs `uv` tools under the journey's own home.
+pytestmark = list(TOOLCHAIN_WRITER_MARKS)
 
 #: Where PEP 770 puts a wheel's SBOMs, and the engine distribution that ships one.
 ENGINE_DISTRIBUTION = "onepipeline_cli"

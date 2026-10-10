@@ -22,17 +22,23 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from nx_workspace import WORKSPACE_INSTALL_MARKS
+from nx_workspace import (
+    OFFLINE_INSTALLS,
+    TOOLCHAIN_WRITER_MARKS,
+    WORKSPACE_INSTALL_MARKS,
+    isolated_python_root,
+)
 
 from orchestrator.root import REPO_ROOT
 
 # The rules are this repository's prose and the graph is read off the whole tree, so the
-# check belongs to the whole-workspace tier; Nx is this checkout's own install.
+# check belongs to the whole-workspace tier. The wrapper heals the installs of the checkout
+# it runs in, so it runs in a copy whose toolchain is its own: a writer.
 # llmlint: ignore[shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker] The
 # check's subject is every project's tags and edges, so it reads the whole tree and belongs to
 # the whole-workspace tier the marker names; its one host-tool call is a single `nx graph` read
 # through this checkout's wrapper, which is the graph the rules are about.
-pytestmark = [pytest.mark.reads_docs, *WORKSPACE_INSTALL_MARKS]
+pytestmark = [pytest.mark.reads_docs, *WORKSPACE_INSTALL_MARKS, *TOOLCHAIN_WRITER_MARKS]
 
 #: Where the rules are stated, and the heading their table sits under.
 RULES_DOCUMENT = REPO_ROOT / "tests" / "AGENTS.md"
@@ -118,12 +124,18 @@ def violations(graph: Graph, stated: tuple[Rule, ...]) -> list[str]:
     return found
 
 
-def _nx_graph(written: Path) -> dict:
-    """The project graph this checkout's own Nx builds, through the repository's wrapper."""
+def _nx_graph(checkout: Path, written: Path) -> dict:
+    """The project graph this tree's own Nx builds, through the repository's wrapper.
+
+    Run in ``checkout``, an `isolated_python_root` copy of this working tree whose
+    `node_modules` and `.venv` are both its own, because the wrapper heals both installs
+    of the checkout it runs in; the graph it builds there is this tree's. Both heals run
+    offline, against the lockfiles this checkout's own installs already resolved.
+    """
     result = subprocess.run(
         ["./scripts/nx.sh", "graph", f"--file={written}"],
-        cwd=REPO_ROOT,
-        env={**os.environ, "NX_DAEMON": "false"},
+        cwd=checkout,
+        env={**os.environ, **OFFLINE_INSTALLS, "NX_DAEMON": "false"},
         check=False,
         text=True,
         capture_output=True,
@@ -134,7 +146,8 @@ def _nx_graph(written: Path) -> dict:
 
 @pytest.fixture(scope="module")
 def graph(tmp_path_factory: pytest.TempPathFactory) -> dict:
-    return _nx_graph(tmp_path_factory.mktemp("nx-graph") / "graph.json")
+    checkout = isolated_python_root(tmp_path_factory.mktemp("nx-graph-checkout") / "checkout")
+    return _nx_graph(checkout, tmp_path_factory.mktemp("nx-graph") / "graph.json")
 
 
 @pytest.fixture(scope="module")

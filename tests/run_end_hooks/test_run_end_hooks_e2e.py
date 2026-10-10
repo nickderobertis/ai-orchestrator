@@ -43,16 +43,17 @@ import plan_root_variable
 import pytest
 import short_state
 from harness_indirections import established_indirections
-from nx_workspace import SHARED_TOOLCHAIN_GROUP
+from nx_workspace import WORKSPACE_INSTALL_MARKS
 from project_fixtures import helper, project_from_plan
 from waits import timeout as e2e_timeout
 
 from orchestrator.plan_store import WRITABLE_PLUGIN
 from orchestrator.root import REPO_ROOT
 
-#: A real launch holds this checkout's toolchain for as long as it runs, so this module is
-#: scheduled with every other journey that does, which also keeps its fixtures on one worker.
-pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
+#: A reader of the toolchain this checkout provisioned: every step here runs its tool
+#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
+#: `tests/e2e/nx_workspace.py` asks no xdist group of it.
+pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 #: The paid model's stand-ins, and the guard covering the identities neither seam reaches.
 FAKE_BACKEND = helper("fake_backend.py")

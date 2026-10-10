@@ -58,7 +58,7 @@ from driven_run import (
     quiet_projections,
     waited_for,
 )
-from nx_workspace import SHARED_TOOLCHAIN_GROUP
+from nx_workspace import WORKSPACE_INSTALL_MARKS
 
 #: The session these launches run under, stated rather than inherited: this suite runs
 #: inside a dispatch whose own harness session would otherwise own the run.
@@ -108,9 +108,10 @@ EDITED_TITLE = "retitled by a person on the board"
 #: scripted, and the reviewer, its schema and the engine's own criteria check run for real.
 PASSING_REVIEW = json.dumps([json.dumps({"passes": True, "findings": []})])
 
-#: `tests/e2e/nx_workspace.py`'s group: every step here is a `just` recipe blocking on
-#: `uv run`, which waits on the lock a journey re-provisioning this checkout holds.
-pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
+#: A reader of the toolchain this checkout provisioned: every step here runs its tool
+#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
+#: `tests/e2e/nx_workspace.py` asks no xdist group of it.
+pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 
 @pytest.fixture

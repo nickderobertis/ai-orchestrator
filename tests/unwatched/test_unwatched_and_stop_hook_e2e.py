@@ -49,19 +49,15 @@ from typing import NamedTuple, NewType, TypedDict
 
 import probe_run_root
 import pytest
-from nx_workspace import SHARED_TOOLCHAIN_GROUP
+from nx_workspace import WORKSPACE_INSTALL_MARKS
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
 
-#: This module is its own Nx project's, `unwatched`; see `tests/unwatched/project.json` and
-#: the guard in `tests/conftest.py`. No marker routes it: the directory decides.
-#:
-#: Journeys here reach a tool through `uv run` — `just unwatched` and `just watch` both
-#: do — and `uv` holds this checkout's project-environment lock exclusively, so they
-#: belong in the group AGENTS.md's four-worker invariant names: `--dist loadgroup`
-#: co-locates the tests sharing a group *name* and says nothing about two different ones.
-pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
+#: A reader of the toolchain this checkout provisioned: every step here runs its tool
+#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
+#: `tests/e2e/nx_workspace.py` asks no xdist group of it.
+pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 #: The engine this checkout installs from its own pin. Named as a path rather than
 #: resolved off `PATH`, because a journey that measured whichever copy some other

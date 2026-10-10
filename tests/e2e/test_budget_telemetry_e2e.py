@@ -37,12 +37,14 @@ from pathlib import Path
 
 import pytest
 import yaml
-from nx_workspace import NODE_MODULES, WORKSPACE_INSTALL_MARKS
+from nx_workspace import TOOLCHAIN_WRITER_MARKS, WORKSPACE_INSTALL_MARKS, private_node_modules
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
 
-pytestmark = [*WORKSPACE_INSTALL_MARKS]
+#: A writer: `scripts/nx.sh` heals the install of the scratch workspace it runs in, whose
+#: `node_modules` is that workspace's own.
+pytestmark = [*WORKSPACE_INSTALL_MARKS, *TOOLCHAIN_WRITER_MARKS]
 
 #: What the scratch workspace takes from this checkout: the Nx configuration and root
 #: project, the locked installs `scripts/nx.sh` heals from, the onebudgetspec pin, and the
@@ -237,7 +239,7 @@ def workspace(tmp_path: Path) -> Workspace:
     (root / ".gitignore").write_text(
         "node_modules\n.nx\n.logs\n.telemetry\n__pycache__\n", encoding="utf-8"
     )
-    (root / "node_modules").symlink_to(NODE_MODULES, target_is_directory=True)
+    private_node_modules(root)
     shutil.copytree(REPO_ROOT / "tests/fixtures/nx-cache", root / "tests/fixtures/nx-cache")
     (root / PROJECT).mkdir()
     (root / PROJECT / "project.json").write_text(json.dumps(_project(), indent=2), "utf-8")

@@ -54,7 +54,12 @@ from pathlib import Path
 
 import pytest
 from conftest import git
-from nx_workspace import WORKSPACE_INSTALL_MARKS, copy_working_tree
+from nx_workspace import (
+    TOOLCHAIN_WRITER_MARKS,
+    WORKSPACE_INSTALL_MARKS,
+    copy_working_tree,
+    private_node_modules,
+)
 
 from orchestrator.root import REPO_ROOT
 
@@ -90,6 +95,9 @@ pytestmark = [
         "run 'just setup-llmlint'",
     ),
     *WORKSPACE_INSTALL_MARKS,
+    # `just lint-llm-diff` reaches `scripts/nx.sh`, whose heal installs into the copy it
+    # runs in, which is the copy's own.
+    *TOOLCHAIN_WRITER_MARKS,
     # Copying the whole tree is this journey's premise, and the tree includes its
     # prose: this belongs to the whole-workspace tier by construction.
     pytest.mark.reads_docs,
@@ -136,7 +144,7 @@ class TwoPaths:
         self.rebuilt += 1
         scratch = self.scratch_parent / f"orchestrator-merge-{self.rebuilt}" / "worktree"
         git("worktree", "add", "--detach", str(scratch), f"origin/{BASE_BRANCH}", cwd=self.clone)
-        (scratch / "node_modules").symlink_to(REPO_ROOT / "node_modules", target_is_directory=True)
+        private_node_modules(scratch)
         git("merge", "--squash", f"origin/{FEATURE_BRANCH}", cwd=scratch)
         git("commit", "-m", "publication", cwd=scratch)
         try:
@@ -241,17 +249,17 @@ def two_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TwoPa
     # come out of this one, which is what makes them two views of one repository.
     clone = tmp_path / "clone"
     git("clone", "--shared", "-q", "--branch", BASE_BRANCH, str(origin), str(clone))
-    # Each worktree borrows this checkout's install through a symlink, and
-    # `.gitignore`'s `node_modules/` does not match one. Excluding it in the clone
-    # keeps that plumbing out of every commit, so the tree the merge path rebuilds
-    # is byte-identical to the tree the worker judged.
+    # Each worktree takes a private, hardlinked copy of this checkout's install.
+    # Excluding it in the clone keeps that plumbing out of every commit whatever shape
+    # it has, so the tree the merge path rebuilds is byte-identical to the tree the
+    # worker judged.
     common = Path(git("rev-parse", "--path-format=absolute", "--git-common-dir", cwd=clone).strip())
     exclude = common / "info" / "exclude"
     exclude.parent.mkdir(parents=True, exist_ok=True)
     exclude.write_text("node_modules\n", encoding="utf-8")
     worker = tmp_path / "run" / "worker"
     git("worktree", "add", "-b", FEATURE_BRANCH, str(worker), f"origin/{BASE_BRANCH}", cwd=clone)
-    (worker / "node_modules").symlink_to(REPO_ROOT / "node_modules", target_is_directory=True)
+    private_node_modules(worker)
 
     binaries = tmp_path / "bin"
     real_llmlint = shutil.which("llmlint")

@@ -46,7 +46,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from nx_workspace import WORKSPACE_INSTALL_MARKS, copy_checkout
+from nx_workspace import TOOLCHAIN_WRITER_MARKS, WORKSPACE_INSTALL_MARKS, copy_checkout
 
 ROOT = Path(__file__).resolve().parents[2]
 PASS_VERDICT = "fake-judge: 16 passed, 0 failed"
@@ -75,6 +75,9 @@ pytestmark = [
         "run 'just setup-llmlint'",
     ),
     *WORKSPACE_INSTALL_MARKS,
+    # `just lint-llm-diff` reaches `scripts/nx.sh`, whose heal installs into the copy it
+    # runs in, which is the copy's own.
+    *TOOLCHAIN_WRITER_MARKS,
     # Copying the whole tree is this journey's premise, and the tree includes
     # its prose: this belongs to the whole-workspace tier by construction.
     pytest.mark.reads_docs,

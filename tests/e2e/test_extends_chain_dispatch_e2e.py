@@ -60,7 +60,7 @@ from typing import NamedTuple
 
 import pytest
 from fake_backend import AGENT_DELAY_ENV
-from nx_workspace import SHARED_TOOLCHAIN_GROUP
+from nx_workspace import WORKSPACE_INSTALL_MARKS
 from project_fixtures import project_from_plan
 from served_recipe import serve, stop
 from test_orchestrate_launch_e2e import CandidatePlan, _node
@@ -70,10 +70,10 @@ from waits import until
 
 from orchestrator.root import REPO_ROOT
 
-#: Every launch here blocks on a `just` recipe that blocks on `uv run`, which waits on
-#: this checkout's `.venv` lock; `tests/e2e/nx_workspace.py` is where that constraint is
-#: named for the whole tier.
-pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
+#: A reader of the toolchain this checkout provisioned: every step here runs its tool
+#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
+#: `tests/e2e/nx_workspace.py` asks no xdist group of it.
+pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 WORK_NODE = "work"
 

@@ -27,16 +27,15 @@ Conventions for this repository's tests.
 - **A host-tool journey belongs to an Nx project of its own, selected by directory**, so
   an unrelated edit stops paying for it; `conftest.py` holds each project to its key, and
   `tests/nx_inputs.py` says what each key names and why.
-- **A journey that hangs waiting on a `just` recipe or on a channel reply is one of two
-  diagnosed things, and the channel queue tells them apart.** `uv run` waits on the
-  exclusive `<root>/.venv` lock for as long as a writer holds it, so
-  `SHARED_TOOLCHAIN_GROUP` in `tests/e2e/nx_workspace.py` keeps that lock's writers and
-  readers on one xdist worker — one name, because `--dist loadgroup` co-locates only
-  tests sharing a name, and nothing holds two Nx targets apart. A run's channel is a
-  directory of `onemessagebus` queues the bus owns, so read it through the bus —
-  `onemessagebus status --transport-dir runs/<run-id>/channel` — before re-diagnosing
-  the group, never by opening its files: a question waiting or pending there is a
-  waiter nobody answered, and nothing there is a lock. A waiter here looks through
+- **A journey that hangs waiting on a `just` recipe or on a channel reply is read
+  through its channel queue first, and not as a toolchain lock.** `uv run` holds the
+  `<root>/.venv` lock only while it checks or syncs the environment, and no test syncs
+  this checkout's: every writer installs into a copy of its own and every reader runs
+  ungrouped, as `tests/e2e/nx_workspace.py` states. A run's channel is a directory of
+  `onemessagebus` queues the bus owns, so read it through the bus —
+  `onemessagebus status --transport-dir runs/<run-id>/channel` — never by opening its
+  files: a question waiting or pending there is a waiter nobody answered, and nothing
+  there is a lock. A waiter here looks through
   `planner_channel.queue_may_hand_something_out`, which asks `status` and claims
   nothing, and reads through `channel-next` only once it holds something, because that
   verb claims what it hands out.

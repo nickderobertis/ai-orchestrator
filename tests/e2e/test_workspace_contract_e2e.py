@@ -30,7 +30,12 @@ from typing import NamedTuple
 
 import pytest
 from nx_inputs import SELECTED_TARGETS, UNCONDITIONAL_TARGETS
-from nx_workspace import copy_checkout, copy_working_tree, shares_workspace_install
+from nx_workspace import (
+    copy_checkout,
+    copy_working_tree,
+    rewrites_workspace_toolchain,
+    shares_workspace_install,
+)
 from waits import timeout as e2e_timeout
 from waits import until
 
@@ -571,6 +576,7 @@ def test_check_recipe_preserves_captured_nx_failure(tmp_path: Path) -> None:
     assert trace.read_text().splitlines() == _check_trace("run-many")
 
 
+@rewrites_workspace_toolchain
 @pytest.mark.reads_recipes
 def test_one_check_run_reports_every_phase_that_failed(tmp_path: Path) -> None:
     """A failure in the diff selection does not hide one in a later phase.
@@ -606,6 +612,7 @@ def test_one_check_run_reports_every_phase_that_failed(tmp_path: Path) -> None:
     assert f"{selected}: planted failure" in log and f"{cache_check}: planted failure" in log
 
 
+@rewrites_workspace_toolchain
 @pytest.mark.reads_recipes
 def test_a_check_run_failing_only_in_an_unconditional_phase_still_fails(tmp_path: Path) -> None:
     """The phase no diff selects decides the verdict too: a green selection is not a pass."""
@@ -641,6 +648,7 @@ def test_check_recipe_leaves_the_failing_run_readable_after_it_exits(tmp_path: P
     assert oct(log.stat().st_mode & 0o777) == "0o600"
 
 
+@rewrites_workspace_toolchain
 @pytest.mark.reads_recipes
 def test_check_recipe_log_is_readable_while_the_recipe_is_still_running(
     tmp_path: Path,
@@ -743,6 +751,7 @@ def _add_nx_wrapper_doubles(checkout: Path) -> None:
     _add_bun_double(checkout)
 
 
+@rewrites_workspace_toolchain
 @pytest.mark.reads_recipes
 def test_nx_wrapper_provisions_the_locked_workspace_when_nx_is_absent(tmp_path: Path) -> None:
     """A bare Nx invocation in a fresh worktree heals itself instead of failing.
@@ -772,6 +781,7 @@ def test_nx_wrapper_provisions_the_locked_workspace_when_nx_is_absent(tmp_path: 
     ]
 
 
+@rewrites_workspace_toolchain
 @pytest.mark.reads_recipes
 def test_nx_wrapper_installs_nothing_when_the_tree_already_matches_the_lockfile(
     tmp_path: Path,
@@ -801,6 +811,7 @@ def test_nx_wrapper_installs_nothing_when_the_tree_already_matches_the_lockfile(
     ]
 
 
+@rewrites_workspace_toolchain
 @pytest.mark.reads_recipes
 def test_nx_wrapper_names_the_provisioning_it_could_not_complete(tmp_path: Path) -> None:
     """A failed install stops before Nx and leaves its own reason on disk."""
@@ -827,6 +838,7 @@ def test_nx_wrapper_names_the_provisioning_it_could_not_complete(tmp_path: Path)
     assert trace.read_text().splitlines() == ["bun install --frozen-lockfile"]
 
 
+@rewrites_workspace_toolchain
 @pytest.mark.parametrize(
     ("arguments", "message"),
     [
@@ -896,6 +908,7 @@ def _sabotage_installer_state(checkout: Path, mode: str) -> None:
             raise AssertionError(f"unknown installer sabotage {mode!r}")
 
 
+@rewrites_workspace_toolchain
 @pytest.mark.parametrize(
     ("mode", "message"),
     [
@@ -1049,14 +1062,15 @@ def _await_installer_waiting(
 # and `recipeWorkspace`, which covers `scripts/**/*`, is the narrowest key that reads the
 # installer it exercises. Moving this module's recipe journeys into a project of their own
 # is a change to the tier layout, not to this journey.
+@rewrites_workspace_toolchain
 @pytest.mark.reads_recipes
 def test_a_copy_sharing_an_install_takes_the_owning_checkouts_lock(tmp_path: Path) -> None:
     """Two callers over one tree serialize on one lock, wherever each runs from.
 
-    Every journey `nx_workspace.copy_checkout` builds symlinks its `node_modules` at
-    this checkout's own install, so an installer run in the copy writes the tree the
-    owning checkout's installer writes — and a lock kept beside each caller serialized
-    nothing between them. That is not harmless on a tree already in agreement with the
+    A checkout whose `node_modules` is a symlink into another's — the shape a copy of
+    this checkout used to take — has an installer run in it write the tree the owning
+    checkout's installer writes, and a lock kept beside each caller serialized nothing
+    between them. That is not harmless on a tree already in agreement with the
     lockfile: measured on Bun 1.3.14, four `bun install --frozen-lockfile` at once over
     one in-sync shared tree fail with `Failed to link <pkg>: EEXIST`, because a
     no-change run still re-links every package carrying a `bin`. Two Nx targets running
@@ -1135,6 +1149,7 @@ def _plant_unenterable_install_tree(checkout: Path, shape: str) -> None:
             raise AssertionError(f"unknown install tree shape {shape!r}")
 
 
+@rewrites_workspace_toolchain
 @pytest.mark.parametrize("shape", ["dangling-symlink", "unreadable-directory"])
 @pytest.mark.reads_recipes
 def test_an_install_tree_that_cannot_be_entered_is_refused_rather_than_read_as_absent(
@@ -1172,6 +1187,7 @@ def test_an_install_tree_that_cannot_be_entered_is_refused_rather_than_read_as_a
     )
 
 
+@rewrites_workspace_toolchain
 @pytest.mark.reads_recipes
 def test_a_forced_install_discards_a_tree_it_cannot_enter(tmp_path: Path) -> None:
     """`--force` is the repair the refusal above names, so it must not meet the refusal.
@@ -1209,6 +1225,7 @@ def test_a_forced_install_discards_a_tree_it_cannot_enter(tmp_path: Path) -> Non
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Same site, same
 # reason: what it spends is the doubled installer's own processes held on the lock, and
 # the key that selects it is the narrowest one that reads the scripts it exercises.
+@rewrites_workspace_toolchain
 @pytest.mark.reads_recipes
 def test_a_forced_install_in_a_copy_sharing_an_install_holds_both_trees_locks(
     tmp_path: Path,
@@ -1362,6 +1379,7 @@ def _flockless_env(checkout: Path, tmp_path: Path, trace: Path, **overrides: str
 # reason: what each spends is the installer's own processes — three callers held behind
 # one install, and a forced run held behind each of two mutexes — and the key that
 # selects them is the narrowest one that reads the scripts they exercise.
+@rewrites_workspace_toolchain
 @pytest.mark.reads_recipes
 def test_the_workspace_installer_serializes_without_flock_through_the_shared_fallback(
     tmp_path: Path,
@@ -1426,6 +1444,7 @@ def test_the_workspace_installer_serializes_without_flock_through_the_shared_fal
     )
 
 
+@rewrites_workspace_toolchain
 @pytest.mark.reads_recipes
 def test_a_forced_install_in_a_copy_holds_both_trees_locks_without_flock_and_releases_both(
     tmp_path: Path,
@@ -1570,6 +1589,7 @@ def test_the_lock_helper_refuses_a_third_lock_rather_than_reusing_a_pair(
     )
 
 
+@rewrites_workspace_toolchain
 @pytest.mark.reads_recipes
 def test_a_forced_workspace_install_discards_the_installed_tree_first(tmp_path: Path) -> None:
     """`--force` is what distrusts the tree itself, now that the ordinary run reconciles.
@@ -1602,6 +1622,7 @@ def test_a_forced_workspace_install_discards_the_installed_tree_first(tmp_path: 
     assert (checkout / "node_modules/.bin/nx").is_file()
 
 
+@rewrites_workspace_toolchain
 @pytest.mark.reads_recipes
 def test_a_forced_install_that_cannot_discard_the_tree_stops_before_bun(tmp_path: Path) -> None:
     """Discarding is the whole of what `--force` adds, so failing at it is not a warning.
@@ -1644,6 +1665,7 @@ def test_a_forced_install_that_cannot_discard_the_tree_stops_before_bun(tmp_path
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Same site, same
 # reason: what it spends is the doubled installer's own processes held on the lock, and
 # the key that selects it is the narrowest one that reads the scripts it exercises.
+@rewrites_workspace_toolchain
 @pytest.mark.reads_recipes
 def test_concurrent_workspace_installs_install_once_and_both_succeed(tmp_path: Path) -> None:
     """Two Nx invocations in one fresh worktree must not install over each other.
@@ -1715,6 +1737,7 @@ FRESH_WORKTREE_JOURNEY = (
 )
 
 
+@rewrites_workspace_toolchain
 @pytest.mark.reads_docs
 def test_a_freshly_created_worktree_provisions_itself_for_nx_and_for_pytest(
     tmp_path: Path,
@@ -1765,6 +1788,7 @@ def test_a_freshly_created_worktree_provisions_itself_for_nx_and_for_pytest(
 STALENESS_WITNESS = "onepipeline-ui"
 
 
+@rewrites_workspace_toolchain
 @pytest.mark.reads_docs
 def test_a_worktree_provisioned_before_the_pin_moved_reinstalls_from_the_lockfile(
     tmp_path: Path,
@@ -1837,8 +1861,8 @@ def test_a_worktree_provisioned_before_the_pin_moved_reinstalls_from_the_lockfil
 def _provisioning_copy(tmp_path: Path, name: str) -> Path:
     """A throwaway copy of this checkout the real `scripts/nx.sh` runs in.
 
-    `node_modules` comes across as a symlink to this checkout's own install, so what
-    a Python-provisioning journey pays for here is the Python half alone.
+    `node_modules` comes across as a private hardlinked copy of this checkout's own
+    install, so what a Python-provisioning journey pays for here is the Python half alone.
     """
     checkout = tmp_path / name
     checkout.mkdir()
@@ -1863,6 +1887,7 @@ def _uv_provisioning_env(**overrides: str) -> dict[str, str]:
     return environment
 
 
+@rewrites_workspace_toolchain
 @pytest.mark.reads_docs
 def test_a_freshly_created_worktree_provisions_its_python_environment_from_the_lockfile(
     tmp_path: Path,
@@ -1933,6 +1958,7 @@ def _venv_python_version(checkout: Path) -> PythonVersion:
 # llmlint: ignore-block[shell_test_tiers_stay_split] uv is the host tool, and the sibling
 # provisioning journeys above and below drive the same real `uv sync` from this project;
 # moving one of them out would split one install contract across two projects.
+@rewrites_workspace_toolchain
 @shares_workspace_install
 @pytest.mark.reads_docs
 def test_an_environment_below_the_declared_floor_is_replaced_by_the_locked_install(
@@ -1971,6 +1997,7 @@ def test_an_environment_below_the_declared_floor_is_replaced_by_the_locked_insta
     assert (checkout / "uv.lock").read_bytes() == (ROOT / "uv.lock").read_bytes()
 
 
+@rewrites_workspace_toolchain
 @shares_workspace_install
 @pytest.mark.reads_docs
 def test_the_gate_path_refuses_a_lockfile_that_would_have_to_move(tmp_path: Path) -> None:
@@ -2004,6 +2031,7 @@ def test_the_gate_path_refuses_a_lockfile_that_would_have_to_move(tmp_path: Path
     assert lockfile.read_bytes() == before
 
 
+@rewrites_workspace_toolchain
 @shares_workspace_install
 @pytest.mark.reads_docs
 def test_a_caller_that_provides_the_python_environment_is_not_synced_over(
@@ -2035,6 +2063,7 @@ def test_a_caller_that_provides_the_python_environment_is_not_synced_over(
     assert not (checkout / ".venv").exists()
 
 
+@rewrites_workspace_toolchain
 @shares_workspace_install
 @pytest.mark.reads_docs
 def test_a_caller_that_asks_uv_to_sync_gets_the_environment_it_named(tmp_path: Path) -> None:
@@ -2116,6 +2145,7 @@ def _declared_no_sync_grammar() -> dict[str, bool]:
 DECLARED_NO_SYNC = _declared_no_sync_grammar()
 
 
+@rewrites_workspace_toolchain
 @pytest.mark.parametrize(("spelling", "skips"), sorted(DECLARED_NO_SYNC.items()))
 @pytest.mark.reads_recipes
 def test_uv_no_sync_skips_or_provisions_by_the_spelling_it_carries(
@@ -2208,6 +2238,7 @@ def test_the_no_sync_grammar_the_wrapper_declares_is_the_one_uv_reads(tmp_path: 
     assert refused == dict.fromkeys(refused)
 
 
+@rewrites_workspace_toolchain
 @pytest.mark.parametrize(("name", "value"), UNREADABLE_NO_SYNC)
 @pytest.mark.reads_recipes
 def test_uv_no_sync_refuses_a_value_uv_would_refuse(tmp_path: Path, name: str, value: str) -> None:
@@ -2231,6 +2262,7 @@ def test_uv_no_sync_refuses_a_value_uv_would_refuse(tmp_path: Path, name: str, v
     assert not trace.exists(), "a refused value must not have reached uv"
 
 
+@rewrites_workspace_toolchain
 @pytest.mark.reads_recipes
 def test_python_install_leaves_the_failing_provision_readable(tmp_path: Path) -> None:
     """A provision that failed on the way into the gate keeps its own reason on disk."""
@@ -2253,6 +2285,7 @@ def test_python_install_leaves_the_failing_provision_readable(tmp_path: Path) ->
     assert oct(log.stat().st_mode & 0o777) == "0o600"
 
 
+@rewrites_workspace_toolchain
 @pytest.mark.reads_recipes
 def test_python_install_log_records_the_credential_name_not_its_value(tmp_path: Path) -> None:
     """A preserved log outlives its terminal, so it must never durably hold a token."""
@@ -2279,6 +2312,7 @@ def test_python_install_log_records_the_credential_name_not_its_value(tmp_path: 
     assert token not in result.stderr
 
 
+@rewrites_workspace_toolchain
 @pytest.mark.reads_recipes
 def test_python_install_refuses_an_argument_and_names_the_call_that_works(
     tmp_path: Path,
@@ -2298,6 +2332,7 @@ def test_python_install_refuses_an_argument_and_names_the_call_that_works(
     assert "rerun it with none" in result.stderr
 
 
+@rewrites_workspace_toolchain
 @pytest.mark.reads_recipes
 def test_python_install_reports_a_host_that_cannot_provision_at_all(tmp_path: Path) -> None:
     """Missing uv is named where the repair is, not deep inside a target.
@@ -2331,6 +2366,7 @@ def test_python_install_reports_a_host_that_cannot_provision_at_all(tmp_path: Pa
     assert "just bootstrap" in result.stderr
 
 
+@rewrites_workspace_toolchain
 @pytest.mark.reads_recipes
 def test_a_nested_nx_run_cannot_erase_the_running_one_s_log(tmp_path: Path) -> None:
     """The running check's log survives a nested Nx invocation in the same checkout.

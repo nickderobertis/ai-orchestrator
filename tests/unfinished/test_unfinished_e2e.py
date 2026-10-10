@@ -51,16 +51,17 @@ from typing import Any, NamedTuple
 import budget_telemetry
 import probe_run_root
 import pytest
-from nx_workspace import SHARED_TOOLCHAIN_GROUP
+from nx_workspace import WORKSPACE_INSTALL_MARKS
 from unpublished_registry import BASE, Registry, Session, commit_on, git, seeded
 from waits import timeout as e2e_timeout
 
 from orchestrator import unpublished
 from orchestrator.root import REPO_ROOT
 
-#: The seeding reaches `onevcs` through `uv run`, which waits on this checkout's exclusive
-#: project-environment lock, so these journeys share the group that names it.
-pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
+#: A reader of the toolchain this checkout provisioned: every step here runs its tool
+#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
+#: `tests/e2e/nx_workspace.py` asks no xdist group of it.
+pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 ONEPIPELINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
 ONEVCS = REPO_ROOT / ".venv" / "bin" / "onevcs"

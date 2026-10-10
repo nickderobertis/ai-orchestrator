@@ -74,7 +74,7 @@ from typing import Any, NamedTuple, NewType, cast
 import pytest
 import short_state
 from fake_backend import TURN_GATE_ENV, TURN_GATE_REACHED, TURN_GATE_RELEASED
-from nx_workspace import SHARED_TOOLCHAIN_GROUP
+from nx_workspace import WORKSPACE_INSTALL_MARKS
 from planner_channel import BUS_CONFIG, next_surface_record, reply, ruling
 from project_fixtures import helper, project_from_plan
 from waits import deadline
@@ -147,11 +147,10 @@ REPLY_REFUSED = 2
 #: the shim never gives up first and reports the bus's `timeout` instead of the subject.
 ASK_WINDOW_SECONDS = int(e2e_timeout(300))
 
-#: `tests/e2e/nx_workspace.py`'s group, applied to the module rather than per journey.
-#: Every journey here spends a real `just orchestrate` through a fixture, and every step
-#: of the round trip is a `just` recipe blocking on `uv run`, which waits on the
-#: exclusive lock a journey re-provisioning this checkout holds.
-pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
+#: A reader of the toolchain this checkout provisioned: every step here runs its tool
+#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
+#: `tests/e2e/nx_workspace.py` asks no xdist group of it.
+pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 #: A onepipeline run id. Distinguished from the prose it is built out of, because what
 #: makes a string a run id is where it came from.

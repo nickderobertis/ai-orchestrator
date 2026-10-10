@@ -28,16 +28,17 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from nx_workspace import SHARED_TOOLCHAIN_GROUP
+from nx_workspace import WORKSPACE_INSTALL_MARKS
 from unpublished_registry import Registry, Session, seeded
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
 from orchestrator.unpublished import COUNTED, NOTHING_COUNTED
 
-#: One worker, for the reason `test_unpublished_e2e.py` gives: seeding reaches `onevcs`
-#: through `uv run`, which waits on this checkout's exclusive environment lock.
-pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
+#: A reader of the toolchain this checkout provisioned: every step here runs its tool
+#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
+#: `tests/e2e/nx_workspace.py` asks no xdist group of it.
+pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 #: The manager session whose run left the branch, and the one the stop verdict is asked for.
 MANAGER = "manager-session-held-publication"

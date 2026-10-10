@@ -29,16 +29,16 @@ from pathlib import Path
 import pytest
 import short_state
 from harness_indirections import established_indirections
-from nx_workspace import SHARED_TOOLCHAIN_GROUP
+from nx_workspace import WORKSPACE_INSTALL_MARKS
 from project_fixtures import helper, project_from_plan
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
 
-#: Every launch here reaches `onepipeline` through `uv run`, which waits on this
-#: checkout's project-environment lock, so these belong in the one group AGENTS.md's
-#: four-worker invariant names or a launch waits out the journey that holds it.
-pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
+#: A reader of the toolchain this checkout provisioned: every step here runs its tool
+#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
+#: `tests/e2e/nx_workspace.py` asks no xdist group of it.
+pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 #: The paid provider's stand-ins and the guard covering the identities `ONEHARNESS_BIN_*`
 #: cannot reach. Reached through `helper` rather than composed from this module's own

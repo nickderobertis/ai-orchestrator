@@ -9,8 +9,7 @@
   ],
   "implicitDependencies": [
     "support-conftest",
-    "support-nx-workspace",
-    "support-published-tools"
+    "support-nx-workspace"
   ],
   "namedInputs": {
     "sessionSetupWorkspace": [

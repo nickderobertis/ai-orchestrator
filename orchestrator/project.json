@@ -138,7 +138,7 @@
       ]
     },
     "test-docs": {
-      "command": "rm -rf .telemetry/orchestrator/test-docs && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/orchestrator/test-docs NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/host_sweep --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/plan_store_assets --ignore=tests/render_diagram --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval --ignore=tests/unfinished --ignore=tests/graceful_cancel --ignore=tests/session_open_conflict --ignore=tests/manager_allowlist -m reads_docs --no-cov -n 4 --dist loadgroup",
+      "command": "rm -rf .telemetry/orchestrator/test-docs && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/orchestrator/test-docs NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/host_sweep --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/plan_store_assets --ignore=tests/render_diagram --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval --ignore=tests/e2e/toolchain_isolation --ignore=tests/unfinished --ignore=tests/graceful_cancel --ignore=tests/session_open_conflict --ignore=tests/manager_allowlist -m reads_docs --no-cov -n 4 --dist loadgroup",
       "options": {
         "cwd": "."
       },

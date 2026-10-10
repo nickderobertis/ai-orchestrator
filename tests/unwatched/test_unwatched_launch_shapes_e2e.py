@@ -45,21 +45,16 @@ import pytest
 import short_state
 from fake_backend import AGENT_DELAY_ENV
 from harness_indirections import established_indirections
-from nx_workspace import SHARED_TOOLCHAIN_GROUP
+from nx_workspace import WORKSPACE_INSTALL_MARKS
 from project_fixtures import helper, project_from_plan
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
 
-#: This module is its own Nx project's, `unwatched`; see `tests/unwatched/project.json`
-#: and the guard in `tests/conftest.py`. No marker routes it: the directory decides.
-#:
-#: Every launch here reaches `onepipeline` through `uv run`, which waits on this
-#: checkout's project-environment lock — and the module beside it holds that lock
-#: outright to show the hook does not. `--dist loadgroup` co-locates the tests sharing
-#: a group *name* and says nothing about two different ones, so both belong in the one
-#: AGENTS.md's four-worker invariant names or a launch here waits out that journey.
-pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
+#: A reader of the toolchain this checkout provisioned: every step here runs its tool
+#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
+#: `tests/e2e/nx_workspace.py` asks no xdist group of it.
+pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 #: The engine this checkout installs from its own pin, asked directly. The recipe is what
 #: *launches*; what is read back has to be the engine, because the question is what a

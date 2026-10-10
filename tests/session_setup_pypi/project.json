@@ -9,6 +9,7 @@
   ],
   "implicitDependencies": [
     "support-conftest",
+    "support-nx-workspace",
     "support-onejudge-bundle",
     "support-provisioning",
     "support-published-tools"

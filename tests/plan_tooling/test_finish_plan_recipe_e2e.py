@@ -46,7 +46,11 @@ from fake_backend import (
     RUN_ON_MARKER_ENV,
     RecordedTurn,
 )
-from nx_workspace import answering_this_checkouts_origin, copy_working_tree
+from nx_workspace import (
+    answering_this_checkouts_origin,
+    copy_working_tree,
+    rewrites_workspace_toolchain,
+)
 from project_fixtures import (
     budget_section,
     budgeted,
@@ -1748,6 +1752,7 @@ def _provisioned_copy_listing_no_criterion(tmp_path: Path) -> Path:
 # builds a copy of this checkout to `plan-tooling:test-docs`, keyed on the whole workspace because
 # copying the tracked tree reads all of it, and never out of this project. `test_plan_flow_e2e.py`'s
 # default-board flow copies and provisions a checkout behind the same marker for the same reason.
+@rewrites_workspace_toolchain
 @pytest.mark.reads_docs
 @pytest.mark.xdist_group("finish-plan")
 def test_a_writer_task_that_lists_no_criterion_is_refused_before_anything_is_launched(

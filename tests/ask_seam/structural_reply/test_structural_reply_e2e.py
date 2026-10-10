@@ -28,16 +28,17 @@ from typing import NamedTuple
 
 import pytest
 import short_state
-from nx_workspace import SHARED_TOOLCHAIN_GROUP
+from nx_workspace import WORKSPACE_INSTALL_MARKS
 from project_fixtures import helper, project_from_plan
 from scratch_identity import registered
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
 
-#: Every journey here spends a real launch, and every step is a `just` recipe blocking
-#: on `uv run`; `tests/e2e/nx_workspace.py` says why that shares one worker.
-pytestmark = pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP)
+#: A reader of the toolchain this checkout provisioned: every step here runs its tool
+#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
+#: `tests/e2e/nx_workspace.py` asks no xdist group of it.
+pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 #: The stand-ins for the paid model, exactly as the channel-reply journeys use them.
 FAKE_BACKEND = helper("fake_backend.py")

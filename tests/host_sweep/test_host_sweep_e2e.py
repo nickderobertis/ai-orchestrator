@@ -25,11 +25,17 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from nx_workspace import TOOLCHAIN_WRITER_MARKS, WORKSPACE_INSTALL_MARKS, isolated_python_root
 from published_tools import PUBLISHED_TOOLS
 from waits import timeout as e2e_timeout
 from waits import until
 
 from orchestrator.root import REPO_ROOT
+
+#: Every session start here runs the real session setup, which provisions the `.venv` of
+#: the fixture repository it runs in and installs `uv` tools into the journey's own tool
+#: directories: a writer, whose fixture repository's toolchain is its own.
+pytestmark = [*WORKSPACE_INSTALL_MARKS, *TOOLCHAIN_WRITER_MARKS]
 
 ADOPTED_ONEJUDGE_VERSION = (
     (REPO_ROOT / "config" / "onejudge.version").read_text(encoding="utf-8").strip()
@@ -188,7 +194,9 @@ def _pid_alive(pid: int) -> bool:
 class SessionStart:
     """A fixture repository whose real session setup starts the host sweep."""
 
-    def __init__(self, tmp_path: Path, *, real_verbs: bool = False) -> None:
+    def __init__(self, tmp_path: Path, *, real_verbs: Path | None = None) -> None:
+        """``real_verbs`` is a project environment of the journey's own whose real verbs
+        the fixture repository runs, in place of the doubles."""
         self.root = tmp_path
         self.repo = tmp_path / "repo"
         scripts = self.repo / "scripts"
@@ -207,8 +215,8 @@ class SessionStart:
         for declared in (REPO_ROOT / "config").glob("*.version"):
             shutil.copy(declared, config / declared.name)
         venv_bin = self.repo / ".venv" / "bin"
-        if real_verbs:
-            (self.repo / ".venv").symlink_to(REPO_ROOT / ".venv")
+        if real_verbs is not None:
+            (self.repo / ".venv").symlink_to(real_verbs)
         else:
             # llmlint: ignore-block[e2e_not_mocked] Each double is a published CLI session
             # setup verifies or the recipe delegates to, at the PATH boundary
@@ -636,8 +644,21 @@ def test_a_failed_sweep_is_named_with_its_log_by_the_next_start_and_never_fails_
 # subject through real `just`, `flock` and `setsid`; the verbs this one runs for real are
 # the ones its siblings double, so another project would split one subject in two to save
 # about 1.4 s.
+@pytest.fixture(scope="module")
+def private_environment(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A project environment synced from this checkout's lock into a copy of its own.
+
+    The journey that runs the real verbs links its fixture repository's `.venv` here
+    rather than at this checkout's, because the session setup it runs syncs that
+    environment whenever a pin is not met, and this checkout's is the one every other
+    worker's recipes read.
+    """
+    root = isolated_python_root(tmp_path_factory.mktemp("host-sweep-environment") / "checkout")
+    return root / ".venv"
+
+
 def test_a_session_starts_job_runs_both_real_verbs_with_the_default_floor(
-    tmp_path: Path,
+    tmp_path: Path, private_environment: Path
 ) -> None:
     """The detached job is the only automatic caller of all three reclamations.
 
@@ -646,7 +667,7 @@ def test_a_session_starts_job_runs_both_real_verbs_with_the_default_floor(
     report — its workspaces and its session records — is a real pass, not a rehearsal,
     at that floor.
     """
-    session_start = SessionStart(tmp_path, real_verbs=True)
+    session_start = SessionStart(tmp_path, real_verbs=private_environment)
     temp = session_start.scratch.temp
     aged: dict[str, Path] = {}
     # llmlint: ignore-block[tests_mirror_real_usage] Scratch aged past the four-hour floor

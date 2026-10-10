@@ -40,7 +40,9 @@ import os
 import re
 import shlex
 import subprocess
+import tempfile
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 from conftest import (
@@ -103,6 +105,8 @@ from nx_inputs import (
     SESSION_SETUP_SCOPED,
     SUPPORT_ROOT,
     TEST_SUPPORT,
+    TOOLCHAIN_ISOLATION_ROOT,
+    TOOLCHAIN_ISOLATION_SCOPED,
     UNCONDITIONAL_TARGETS,
     UNFINISHED_HOST_SCOPED,
     UNFINISHED_ROOT,
@@ -124,6 +128,12 @@ from nx_inputs import (
     repository_relative_globs,
     resolve_input_globs,
     target_input_globs,
+)
+from nx_workspace import (
+    NODE_MODULES,
+    TOOLCHAIN_WRITER_MARKER,
+    TOOLCHAIN_WRITER_MARKS,
+    WORKSPACE_INSTALL_MARKS,
 )
 
 from orchestrator.root import REPO_ROOT
@@ -534,14 +544,547 @@ def test_every_parallel_declaration_names_the_same_worker_contract() -> None:
     assert len(contracts) == 1, f"the parallel worker contract has drifted apart: {found}"
 
 
-#: The expression a journey runs *this* checkout's own provisioning through, rather
-#: than the script's bare name, which appears in prose all over this suite and names a
-#: copy under `tmp_path` in every provisioning journey but one.
-OWN_PROVISIONING = 'REPO_ROOT / "scripts" / "session-setup.sh"'
+#: The scripts that install into or rewrite a `.venv`, `.venv/bin` or `node_modules`, by
+#: file name: `scripts/nx.sh` heals both installs before every invocation, and the two
+#: setup scripts provision the project environment and run `uv tool install`.
+TOOLCHAIN_WRITER_SCRIPTS = (
+    "nx.sh",
+    "workspace-install.sh",
+    "python-install.sh",
+    "session-setup.sh",
+    "setup-llmlint.sh",
+)
 
-#: The decorator that takes this checkout's install and joins the group serialising
-#: access to it, and the module-level tuple that spreads the same pair.
-SHARED_INSTALL_DECORATOR = "shares_workspace_install"
+#: The installers a test can run without any script. A no-change `bun install` still
+#: re-links every package carrying a `bin`, so it is a writer even over a tree in sync.
+TOOLCHAIN_WRITER_COMMANDS = (("uv", "sync"), ("bun", "install"))
+
+#: The writer scripts that run `uv tool install`, which lands in the host's shared tool
+#: directory and `~/.local/bin` unless the environment names others.
+TOOL_INSTALLING_SCRIPTS = ("session-setup.sh", "setup-llmlint.sh")
+
+#: The variables `uv` reads for where a `uv tool install` lands, both of which a test
+#: driving a tool-installing script states for itself.
+PRIVATE_TOOL_DIRECTORIES = ("UV_TOOL_DIR", "UV_TOOL_BIN_DIR")
+
+#: The fixture a reader requests. It provisions only what is absent, which its own gate
+#: holds it to, so the scan does not follow it into the installer it calls then.
+READER_FIXTURE = "workspace_install"
+
+#: Where a shell line starts a command: the start of the line or a `just` recipe line,
+#: after a separator or a keyword, behind any `NAME=value` assignments, and under `bash`,
+#: `exec` or a `source`.
+_SHELL_COMMAND = (
+    r"(?:^|[;&|(!{@]|\bthen\b|\bdo\b|\belse\b|\bif\b)\s*"
+    r"(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:bash\s+|exec\s+|\.\s+|source\s+)?"
+)
+
+
+def _invoking(
+    scripts: frozenset[str], commands: bool = True, recipes: frozenset[str] = frozenset()
+) -> re.Pattern[str]:
+    """A shell line that *runs* one of ``scripts``, never one that only names it.
+
+    Matched as the first word of a command, because the scripts name each other in
+    diagnostics all over this repository, and a scan counting those would call every
+    script a writer. With ``commands``, `uv sync` and `bun install` count as well, and
+    so does `just` running one of ``recipes``.
+    """
+    named = "|".join(re.escape(script) for script in sorted(scripts))
+    alternatives = [
+        rf"{_SHELL_COMMAND}\"?(?:\./scripts/|scripts/|\$\{{?\w+\}}?/)(?:{named})\"?(?=[\s;)|&]|$)"
+    ]
+    if commands:
+        alternatives += [
+            rf"{_SHELL_COMMAND}{tool}\s+{verb}\b" for tool, verb in TOOLCHAIN_WRITER_COMMANDS
+        ]
+    if recipes:
+        alternatives.append(
+            rf"{_SHELL_COMMAND}just\s+(?:{'|'.join(map(re.escape, sorted(recipes)))})"
+            r"(?=[\s;)|&\"]|$)"
+        )
+    return re.compile("|".join(alternatives))
+
+
+def _runs(pattern: re.Pattern[str], body: str) -> bool:
+    return any(
+        pattern.search(line) for line in body.splitlines() if not line.lstrip().startswith("#")
+    )
+
+
+@functools.cache
+def _writing_scripts(seeds: tuple[str, ...]) -> frozenset[str]:
+    """Every script under `scripts/` that runs one of ``seeds``, directly or through others."""
+    scripts = {
+        script.name: script.read_text(encoding="utf-8")
+        for script in sorted(REPO_ROOT.joinpath("scripts").glob("*.sh"))
+    }
+    found = frozenset(seeds)
+    while True:
+        pattern = _invoking(found, commands=seeds == TOOLCHAIN_WRITER_SCRIPTS)
+        reached = {
+            name for name, body in scripts.items() if name not in found and _runs(pattern, body)
+        }
+        if not reached:
+            return found
+        found |= reached
+
+
+@functools.cache
+def _writing_recipes(seeds: tuple[str, ...]) -> frozenset[str]:
+    """Every `just` recipe whose body runs one of ``seeds``, or a recipe that does."""
+    recipes = dict(JUST_RECIPE.findall((REPO_ROOT / "justfile").read_text(encoding="utf-8")))
+    pattern = _invoking(_writing_scripts(seeds), commands=seeds == TOOLCHAIN_WRITER_SCRIPTS)
+    found = {name for name, body in recipes.items() if _runs(pattern, body)}
+    while True:
+        calling = _invoking(frozenset(), commands=False, recipes=frozenset(found))
+        reached = {
+            name for name, body in recipes.items() if name not in found and _runs(calling, body)
+        }
+        if not reached:
+            return frozenset(found)
+        found |= reached
+
+
+#: The words that hand the rest of an argv to a shell rather than naming the command.
+_LAUNCHERS = ("bash", "sh", "exec")
+
+#: Calls whose positional arguments are an argv: `subprocess.run` and `Popen`, and the
+#: helpers this suite names `_run`, `_attached`, `_just`, `spawn` and the like. Matched on
+#: the whole called name so a path built with `Path(...)` or `joinpath(...)`, or a helper
+#: of this module, is never read as a command.
+_RUNNER = re.compile(
+    r"_*(?:run|just|popen|attached|spawn|call|check_call|check_output|exec\w*|\w+_run|run_\w+)",
+    re.IGNORECASE,
+)
+
+
+class _Run(NamedTuple):
+    """One writer an argv runs: what it runs, and whether it runs it in this checkout."""
+
+    command: str
+    here: bool
+    installs_tools: bool
+
+
+def _spelling(node: ast.AST, constants: dict[str, ast.AST], depth: int = 0) -> str:
+    """How an argv word is spelled, with the module's own constants written out."""
+    match node:
+        case ast.Constant(value=str(literal)):
+            return literal
+        case ast.Name(id=str(name)) if name in constants and depth < 4:
+            return _spelling(constants[name], constants, depth + 1)
+    text = ast.unparse(node)
+    for name, value in constants.items() if depth < 4 else ():
+        if re.search(rf"\b{re.escape(name)}\b", text):
+            text += " " + _spelling(value, constants, depth + 1)
+    return text
+
+
+class _Argv(NamedTuple):
+    """One argv a call in the suite runs, and the `cwd` that call names, if any."""
+
+    words: list[ast.expr]
+    cwd: ast.expr | None
+
+
+def _argvs(node: ast.AST) -> list[_Argv]:
+    """Every argv in this syntax, with the `cwd` the call running it names."""
+    found: list[_Argv] = []
+    for child in ast.walk(node):
+        match child:
+            case ast.Call(func=ast.Name(id=str(called)) | ast.Attribute(attr=str(called))) if (
+                _RUNNER.fullmatch(called)
+            ):
+                cwd = next((kw.value for kw in child.keywords if kw.arg == "cwd"), None)
+                match child.args:
+                    case [ast.List(elts=words) | ast.Tuple(elts=words), *_]:
+                        found.append(_Argv(list(words), cwd))
+                    case [_, *_] as words:
+                        found.append(_Argv(list(words), cwd))
+                        if called.lstrip("_").endswith("just"):
+                            found.append(_Argv([ast.Constant("just"), *words], cwd))
+    return found
+
+
+def _local_constants(node: ast.AST) -> dict[str, ast.AST]:
+    """The names a definition assigns once, as `script = REPO_ROOT / "scripts" / ...`."""
+    assigned: dict[str, list[ast.AST]] = {}
+    for child in ast.walk(node):
+        if isinstance(child, ast.Assign):
+            for target in child.targets:
+                if isinstance(target, ast.Name):
+                    assigned.setdefault(target.id, []).append(child.value)
+    return {name: values[0] for name, values in assigned.items() if len(values) == 1}
+
+
+def _in_this_checkout(spelling: str) -> bool:
+    """Whether a spelled path is rooted at this checkout: `REPO_ROOT`, or a module's own
+    `Path(__file__).resolve().parents[...]` standing for it."""
+    return "REPO_ROOT" in spelling or ("__file__" in spelling and "parents[" in spelling)
+
+
+class _WriterPatterns(NamedTuple):
+    """What a spelled argv is matched against, built once per definition."""
+
+    script: re.Pattern[str]
+    tool_script: re.Pattern[str]
+    shell: re.Pattern[str]
+    installing_shell: re.Pattern[str]
+    writing: frozenset[str]
+    installing: frozenset[str]
+
+
+def _script_named(scripts: tuple[str, ...]) -> re.Pattern[str]:
+    """A spelling ending in one of ``scripts`` as a whole path segment."""
+    return re.compile(rf"(?:^|['\"/])(?:{'|'.join(map(re.escape, scripts))})(?=['\"]|$)")
+
+
+def _script_name(spelling: str) -> str:
+    return re.findall(r"[\w.-]+\.sh", spelling)[-1]
+
+
+def _runs_of(spelled: list[str], rooted: bool, patterns: _WriterPatterns) -> set[_Run]:
+    """The writers one spelled argv runs; ``rooted`` when its `cwd` is this checkout."""
+    match spelled:
+        case [launcher, "-c", text, *arguments] if launcher in _LAUNCHERS:
+            found = {
+                _Run(
+                    f"source {_script_name(path)}",
+                    _in_this_checkout(path),
+                    bool(patterns.tool_script.search(path)) and "ensure_just" in text,
+                )
+                for path in arguments
+                if patterns.script.search(path)
+            }
+            if patterns.shell.search(text):
+                installs = bool(patterns.installing_shell.search(text))
+                found.add(_Run(f"bash -c {text!r}", rooted, installs))
+            return found
+        case [launcher, *command] if launcher in _LAUNCHERS:
+            return _runs_of(command, rooted, patterns)
+        case [command, *_] if patterns.script.search(command):
+            here = _in_this_checkout(command) or (rooted and command.startswith(("./", "scripts/")))
+            installs = bool(patterns.tool_script.search(command))
+            return {_Run(f"scripts/{_script_name(command)}", here, installs)}
+        case [tool, verb, *_] if (tool, verb) in TOOLCHAIN_WRITER_COMMANDS:
+            return {_Run(f"{tool} {verb}", rooted, False)}
+        case ["just", recipe, *_] if recipe in patterns.writing:
+            return {_Run(f"just {recipe}", rooted, recipe in patterns.installing)}
+    return set()
+
+
+def _writer_runs(
+    node: ast.AST,
+    constants: dict[str, ast.AST],
+    writing: frozenset[str],
+    installing: frozenset[str],
+) -> frozenset[_Run]:
+    """Every writer an argv in this syntax runs.
+
+    A script is run when it is the argv's command, behind `bash`/`sh`/`exec`, or the
+    file a `bash -c` string sources; a recipe when `just` runs it; `uv sync` and `bun
+    install` as the two leading words. It runs *here* — in this checkout — when the
+    script's spelling is rooted at `REPO_ROOT`, or a relative command or a `just` runs
+    with `cwd` there. A run installs `uv` tools when it runs a tool-installing script as
+    its entry point, sources one to call `ensure_just`, or runs a recipe that does.
+    """
+    patterns = _WriterPatterns(
+        script=_script_named(TOOLCHAIN_WRITER_SCRIPTS),
+        tool_script=_script_named(TOOL_INSTALLING_SCRIPTS),
+        shell=_invoking(frozenset(TOOLCHAIN_WRITER_SCRIPTS), recipes=writing),
+        installing_shell=_invoking(
+            frozenset(TOOL_INSTALLING_SCRIPTS), commands=False, recipes=installing
+        ),
+        writing=writing,
+        installing=installing,
+    )
+    constants = {**constants, **_local_constants(node)}
+    runs: set[_Run] = set()
+    for argv in _argvs(node):
+        rooted = argv.cwd is not None and _in_this_checkout(_spelling(argv.cwd, constants))
+        runs |= _runs_of([_spelling(word, constants) for word in argv.words], rooted, patterns)
+    return frozenset(runs)
+
+
+def _sets_variables(node: ast.AST) -> frozenset[str]:
+    """Every name this syntax *sets*: a dict key, a keyword argument, an item store."""
+    found: set[str] = set()
+    for child in ast.walk(node):
+        match child:
+            case ast.Dict(keys=keys):
+                found |= {
+                    key.value
+                    for key in keys
+                    if isinstance(key, ast.Constant) and isinstance(key.value, str)
+                }
+            case ast.keyword(arg=str(name)):
+                found.add(name)
+            case ast.Subscript(slice=ast.Constant(value=str(name)), ctx=ast.Store()):
+                found.add(name)
+    return frozenset(found)
+
+
+#: Where a test makes a symlink: `Path.symlink_to(target)` and `os.symlink(target, ...)`.
+_SYMLINKS = ("symlink_to", "symlink")
+
+
+def _shares_this_checkouts_toolchain(
+    node: ast.AST, constants: dict[str, ast.AST], module: str
+) -> frozenset[str]:
+    """Every place this syntax shares this checkout's `node_modules` or `.venv` with a copy.
+
+    A symlink to either, and a `UV_PROJECT_ENVIRONMENT` naming this checkout's `.venv`
+    without `UV_NO_SYNC` beside it in the same mapping — the one way a copy may read it,
+    since `UV_NO_SYNC` is what stops the copy's `scripts/python-install.sh` and `uv run`
+    syncing it. Only a writer is held to this: a reader symlinking a tool out of this
+    checkout's `.venv/bin` runs nothing that could write through the link.
+    """
+    constants = {**constants, **_local_constants(node)}
+    found: list[str] = []
+    for child in ast.walk(node):
+        site = f"{module}:{getattr(child, 'lineno', '?')}"
+        match child:
+            case ast.Call(func=ast.Attribute(attr=str(called)), args=[target, *_]) if (
+                called in _SYMLINKS
+            ):
+                spelled = _spelling(target, constants)
+                if _in_this_checkout(spelled) or "NODE_MODULES" in spelled:
+                    found.append(f"{site} symlinks {ast.unparse(target)}")
+            case ast.Dict(keys=keys, values=values):
+                entries = {
+                    key.value: value
+                    for key, value in zip(keys, values, strict=True)
+                    if isinstance(key, ast.Constant) and isinstance(key.value, str)
+                }
+                found += _unsynced_root_environment(site, entries, constants)
+            case ast.Call(keywords=keywords):
+                entries = {kw.arg: kw.value for kw in keywords if kw.arg}
+                found += _unsynced_root_environment(site, entries, constants)
+    return frozenset(found)
+
+
+def _unsynced_root_environment(
+    site: str, entries: dict[str, ast.expr], constants: dict[str, ast.AST]
+) -> list[str]:
+    environment = entries.get("UV_PROJECT_ENVIRONMENT")
+    if environment is None:
+        return []
+    spelled = _spelling(environment, constants)
+    if not (_in_this_checkout(spelled) and ".venv" in spelled):
+        return []
+    match entries.get("UV_NO_SYNC"):
+        case ast.Constant(value="1"):
+            return []
+    return [f"{site} points UV_PROJECT_ENVIRONMENT at this checkout's .venv without UV_NO_SYNC"]
+
+
+class _Definition(NamedTuple):
+    """One definition, in what the closure below needs of it."""
+
+    #: The writers it runs.
+    runs: frozenset[_Run]
+    #: The variables it sets.
+    sets: frozenset[str]
+    #: The bare names it uses, resolved where it is defined.
+    names: frozenset[str]
+    #: The definitions it reaches through an imported suite module's attribute.
+    qualified: frozenset[tuple[str, str]]
+    #: Where it shares this checkout's toolchain with a copy.
+    shares: frozenset[str]
+
+
+def _definition(
+    node: ast.AST, aliases: dict[str, str], runs: frozenset[_Run], shares: frozenset[str]
+) -> _Definition:
+    names: set[str] = set()
+    qualified: set[tuple[str, str]] = set()
+    for child in ast.walk(node):
+        match child:
+            case ast.Name(id=str(used)) | ast.arg(arg=str(used)):
+                names.add(used)
+            case ast.Attribute(value=ast.Name(id=str(owner)), attr=str(used)) if owner in aliases:
+                qualified.add((aliases[owner], used))
+            case ast.Call(func=ast.Attribute(attr="usefixtures"), args=fixtures):
+                names |= {
+                    fixture.value
+                    for fixture in fixtures
+                    if isinstance(fixture, ast.Constant) and isinstance(fixture.value, str)
+                }
+    return _Definition(runs, _sets_variables(node), frozenset(names), frozenset(qualified), shares)
+
+
+class _Reach(NamedTuple):
+    """Everything one test runs and sets, through every definition it reaches."""
+
+    runs: frozenset[_Run]
+    sets: frozenset[str]
+    shares: frozenset[str]
+
+
+class _SuiteScan:
+    """Every module under `tests/`, read as definitions a test reaches by name.
+
+    A test runs what its own body, the fixtures it requests, its module's and its
+    conftests' autouse fixtures, and the helpers and classes those name run — which is
+    where this suite's writers live: most of their bodies name only a fixture, a helper
+    or a `Session`. Followed by name within a module and through its imports of the
+    suite's own modules, and never into a script, which `_writing_scripts` reads instead.
+    It reads syntax, so it over-reaches rather than under-reaches: a definition a test
+    names but never calls still counts.
+    """
+
+    def __init__(self) -> None:
+        tests_root = REPO_ROOT / "tests"
+        importable = (tests_root, tests_root / "e2e")
+        trees = {
+            path: ast.parse(path.read_text(encoding="utf-8"))
+            for path in sorted(tests_root.rglob("*.py"))
+            if "fixtures" not in path.relative_to(tests_root).parts
+        }
+        stems = {path.stem: _relative(path) for path in trees if path.parent in importable}
+        writing = _writing_recipes(TOOLCHAIN_WRITER_SCRIPTS)
+        installing = _writing_recipes(TOOL_INSTALLING_SCRIPTS)
+        self.definitions: dict[tuple[str, str], _Definition] = {}
+        self.imports: dict[str, dict[str, tuple[str, str]]] = {}
+        self.conftests: dict[str, list[str]] = {}
+        self.autouse: dict[str, list[str]] = {}
+        #: Every test, as `<module>::<name>`, a method as `<module>::<Class>::<name>`.
+        self.tests: list[str] = []
+        for path, tree in trees.items():
+            module = _relative(path)
+            aliases = {
+                alias.asname or alias.name: stems[alias.name]
+                for node in tree.body
+                if isinstance(node, ast.Import)
+                for alias in node.names
+                if alias.name in stems
+            }
+            constants = {
+                name: node.value
+                for node in tree.body
+                if isinstance(node, ast.Assign | ast.AnnAssign) and node.value is not None
+                for name in _defined_names(node)
+            }
+            self.imports[module] = {
+                alias.asname or alias.name: (stems[node.module], alias.name)
+                for node in tree.body
+                if isinstance(node, ast.ImportFrom) and node.module in stems
+                for alias in node.names
+            }
+            self.conftests[module] = [
+                _relative(directory / "conftest.py")
+                for directory in (path.parent, *path.parent.parents)
+                if directory / "conftest.py" in trees and directory.is_relative_to(tests_root)
+            ]
+            for node in tree.body:
+                runs = _writer_runs(node, constants, writing, installing)
+                shares = _shares_this_checkouts_toolchain(node, constants, module)
+                for name in _defined_names(node):
+                    self.definitions[(module, name)] = _definition(node, aliases, runs, shares)
+                if isinstance(node, ast.FunctionDef) and _is_autouse(node):
+                    self.autouse.setdefault(module, []).append(node.name)
+                for name, function in _test_functions(node):
+                    self.tests.append(f"{module}::{name}")
+                    self.definitions[(module, f"::{name}")] = _definition(
+                        function,
+                        aliases,
+                        _writer_runs(function, constants, writing, installing),
+                        _shares_this_checkouts_toolchain(function, constants, module),
+                    )
+
+    def _resolve(self, module: str, name: str) -> tuple[str, str] | None:
+        if name == READER_FIXTURE:
+            return None
+        if (module, name) in self.definitions:
+            return (module, name)
+        if name in self.imports[module]:
+            return self.imports[module][name]
+        return next(
+            (
+                (conftest, name)
+                for conftest in self.conftests[module]
+                if (conftest, name) in self.definitions
+            ),
+            None,
+        )
+
+    def reach(self, test: str) -> _Reach:
+        """What ``test`` runs and sets, through everything it reaches."""
+        module, name = test.split("::", 1)
+        pending = [(module, f"::{name}")]
+        for owner in [module, *self.conftests[module]]:
+            pending += [(owner, fixture) for fixture in self.autouse.get(owner, [])]
+        seen: set[tuple[str, str]] = set()
+        runs: set[_Run] = set()
+        sets: set[str] = set()
+        shares: set[str] = set()
+        while pending:
+            key = pending.pop()
+            if key in seen or key not in self.definitions:
+                continue
+            seen.add(key)
+            definition = self.definitions[key]
+            runs |= definition.runs
+            sets |= definition.sets
+            shares |= definition.shares
+            pending += [
+                resolved
+                for used in definition.names
+                if (resolved := self._resolve(key[0], used)) is not None
+            ]
+            pending += definition.qualified
+        return _Reach(frozenset(runs), frozenset(sets), frozenset(shares))
+
+
+def _relative(path: Path) -> str:
+    return path.relative_to(REPO_ROOT).as_posix()
+
+
+def _defined_names(node: ast.stmt) -> list[str]:
+    match node:
+        case ast.FunctionDef(name=name) | ast.AsyncFunctionDef(name=name) | ast.ClassDef(name=name):
+            return [name]
+        case ast.Assign(targets=targets):
+            return [target.id for target in targets if isinstance(target, ast.Name)]
+        case ast.AnnAssign(target=ast.Name(id=name)):
+            return [name]
+    return []
+
+
+def _is_autouse(node: ast.FunctionDef) -> bool:
+    return any(
+        isinstance(decorator, ast.Call)
+        and any(
+            keyword.arg == "autouse"
+            and isinstance(keyword.value, ast.Constant)
+            and keyword.value.value is True
+            for keyword in decorator.keywords
+        )
+        for decorator in node.decorator_list
+    )
+
+
+def _test_functions(node: ast.stmt) -> list[tuple[str, ast.AST]]:
+    match node:
+        case ast.FunctionDef(name=name) | ast.AsyncFunctionDef(name=name) if name.startswith(
+            "test_"
+        ):
+            return [(name, node)]
+        case ast.ClassDef(name=name, body=body) if name.startswith("Test"):
+            return [
+                (f"{name}::{method.name}", method)
+                for method in body
+                if isinstance(method, ast.FunctionDef | ast.AsyncFunctionDef)
+                and method.name.startswith("test_")
+            ]
+    return []
+
+
+@functools.cache
+def _suite_scan() -> _SuiteScan:
+    return _SuiteScan()
+
 
 #: What begins driving a run: `onepipeline start` drives a DAG to settlement and
 #: `adopt` attaches a fresh driver to one. Written out here rather than parsed out of
@@ -577,10 +1120,9 @@ def _launching_recipes() -> frozenset[str]:
     follows: a recipe reaching a launch through a second script it does not itself name
     is not found here. That bound is what the scan can establish from the files it
     reads, and it is stated because the answer reads like a complete one. A module that
-    types one of these recipe names is a reader
-    of the toolchain the writers above rewrite: every step of the round trip it then
-    waits on is a `just` recipe blocking on `uv run`, which waits on the very lock a
-    journey re-provisioning this checkout holds.
+    types one of these recipe names is a reader of this checkout's provisioned toolchain:
+    every step of the round trip it then waits on is a `just` recipe running its tool
+    through `uv run`.
     """
     indirect = {
         f"scripts/{script.name}"
@@ -600,8 +1142,8 @@ def _names_a_launch(tree: ast.AST, recipes: frozenset[str]) -> bool:
     Named for what it can establish, which is that the verb is *written* in one of those
     shapes rather than that it is reached. It reads syntax, so it cannot tell an argv
     list that is executed from one that is only built — and it deliberately does not try:
-    a false positive pins one test to a worker that was already carrying the module,
-    and a false negative is the defect this whole check exists to catch.
+    a false positive asks one more module to declare itself a reader, and a false
+    negative is a reader nothing holds to its declaration.
 
     Read from the syntax rather than from a name, so that neither half is a convention
     a module can drift out of. Both spellings the journeys use are the same shape:
@@ -625,88 +1167,352 @@ def _names_a_launch(tree: ast.AST, recipes: frozenset[str]) -> bool:
 
 
 def _modules_naming_a_launch(root: str, recipes: frozenset[str]) -> list[str]:
-    """Every test module under `root` whose syntax names a launch, by file name.
+    """Every test module under `root` whose syntax names a launch, by repository path.
 
     Per module rather than per test, because a launch is not a property of the body that
     types it. `asked` in `tests/ask_seam/ask_manager/test_ask_manager_e2e.py` is
     function-scoped and spends a real `just orchestrate` for every test that names it,
     refusal journeys included; the launch fixtures in
     `tests/ask_seam/launch/test_launch_ask_seam_e2e.py` are module-scoped, so they run once
-    per worker that receives *any* test from there. In
-    both directions the module is what carries the cost, and a test that looks inert
-    beside them is scattered by `--dist loadgroup` onto a worker where it launches a run
-    anyway.
+    per worker that receives *any* test from there. In both directions the module is
+    what reads the toolchain, so the module is what declares it.
     """
     return [
-        module.name
+        _relative(module)
         for module in sorted(REPO_ROOT.joinpath(root).rglob("test_*.py"))
         if _names_a_launch(ast.parse(module.read_text(encoding="utf-8")), recipes)
     ]
 
 
-#: A pytest plugin that records the xdist group each *collected* test resolves to.
-#: Read from a collection rather than from the source, because the group is what an
-#: item carries rather than how it is spelled: a decorator, a module `pytestmark`, and
-#: a constant one file assigns from another all arrive here identically, and a scan for
-#: any one spelling would pass a suite that had drifted into the others.
-GROUP_DUMP_PLUGIN = """
+#: A pytest plugin that records, for each *collected* test, the xdist group it resolves
+#: to, whether it carries the writer marker, and whether it requests the reader fixture.
+#: Read from a collection rather than from the source, because these are what an item
+#: carries rather than how they are spelled: a decorator, a module `pytestmark`, and a
+#: constant one file assigns from another all arrive here identically, and a scan for any
+#: one spelling would pass a suite that had drifted into the others.
+COLLECTION_DUMP_PLUGIN = f"""
+import json
 import os
 
 
 def pytest_collection_modifyitems(session, config, items):
-    with open(os.environ["ORCHESTRATOR_GROUP_LOG"], "w", encoding="utf-8") as log:
+    with open(os.environ["ORCHESTRATOR_COLLECTION_LOG"], "w", encoding="utf-8") as log:
         for item in items:
             mark = item.get_closest_marker("xdist_group")
-            group = mark.args[0] if mark is not None and mark.args else ""
-            log.write(f"{item.nodeid}\\t{group}\\n")
+            log.write(json.dumps({{
+                "node": item.nodeid,
+                "group": mark.args[0] if mark is not None and mark.args else "",
+                "writer": item.get_closest_marker({TOOLCHAIN_WRITER_MARKER!r}) is not None,
+                "reader": {READER_FIXTURE!r} in getattr(item, "fixturenames", ()),
+            }}) + "\\n")
 """
 
 #: Where that plugin writes what it saw.
-GROUP_LOG_ENV = "ORCHESTRATOR_GROUP_LOG"
+COLLECTION_LOG_ENV = "ORCHESTRATOR_COLLECTION_LOG"
 
 
-def _collected_groups(tmp_path: Path) -> dict[str, str]:
-    """Every collected test id, and the xdist group it resolves to — from real pytest."""
-    plugins = tmp_path / "plugins"
-    plugins.mkdir(parents=True, exist_ok=True)
-    (plugins / "group_dump.py").write_text(GROUP_DUMP_PLUGIN, encoding="utf-8")
-    log = tmp_path / "groups.tsv"
-    collected = subprocess.run(
-        ["uv", "run", "pytest", "--collect-only", "--no-cov", "-p", "group_dump"],
+class _Collected(NamedTuple):
+    """One collected test, in what the toolchain contract asks of it."""
+
+    group: str
+    writer: bool
+    reader: bool
+
+
+@functools.cache
+def _collected_items() -> dict[str, _Collected]:
+    """Every collected test id, and what it carries — from one real collection."""
+    with tempfile.TemporaryDirectory() as scratch:
+        plugins = Path(scratch)
+        (plugins / "collection_dump.py").write_text(COLLECTION_DUMP_PLUGIN, encoding="utf-8")
+        log = plugins / "collected.jsonl"
+        collected = subprocess.run(
+            ["uv", "run", "pytest", "--collect-only", "--no-cov", "-p", "collection_dump"],
+            cwd=REPO_ROOT,
+            env={**os.environ, "PYTHONPATH": str(plugins), COLLECTION_LOG_ENV: str(log)},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert collected.returncode == 0, collected.stdout + collected.stderr
+        recorded = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    return {row["node"]: _Collected(row["group"], row["writer"], row["reader"]) for row in recorded}
+
+
+def _test_of(node: str) -> str:
+    """A collected node id as the scan names its test: no parameters."""
+    return node.split("[", 1)[0]
+
+
+def _module_of(node: str) -> str:
+    return node.split("::", 1)[0]
+
+
+def test_every_test_that_runs_a_toolchain_writer_declares_itself_one() -> None:
+    """A writer is declared, and a declaration names a module that writes.
+
+    The writers are found by `_SuiteScan` from what each test runs — a writer script, a
+    `just` recipe reaching one, `uv sync` or `bun install` — through its body, its
+    fixtures and every helper it names, and held to the `toolchain_writer` marker a real
+    collection reports. Followed through helpers because that is where writers live: most
+    run `scripts/nx.sh`, a `just` recipe or Bun from a fixture, or reach session setup
+    through a `Session` helper, and name no script in their own body.
+
+    The converse is held per module, because a module may declare every test at once by
+    spreading `TOOLCHAIN_WRITER_MARKS` into its `pytestmark`: a declaration in a module none
+    of whose tests runs a writer says falsely that something there rewrites a toolchain.
+    """
+    scan = _suite_scan()
+    writers = {test for test in scan.tests if scan.reach(test).runs}
+    assert writers, (
+        "the scan finds no test that runs a toolchain writer, and the suite has several "
+        f"(`scripts/nx.sh` journeys among them); it has stopped matching {TOOLCHAIN_WRITER_SCRIPTS}"
+    )
+
+    collected = _collected_items()
+    undeclared = sorted(
+        node for node, item in collected.items() if _test_of(node) in writers and not item.writer
+    )
+    running = {
+        node: sorted(run.command for run in scan.reach(_test_of(node)).runs) for node in undeclared
+    }
+    assert not undeclared, (
+        "these run a toolchain writer and do not declare it; declare "
+        "`rewrites_workspace_toolchain` (or spread `TOOLCHAIN_WRITER_MARKS`) from "
+        "tests/e2e/nx_workspace.py, and run the writer in a copy whose toolchain is its "
+        f"own: {running}"
+    )
+
+    writing_modules = {_module_of(test) for test in writers}
+    overdeclared = sorted(
+        node
+        for node, item in collected.items()
+        if item.writer and _module_of(node) not in writing_modules
+    )
+    assert not overdeclared, (
+        "these declare `toolchain_writer` in a module where no test runs a writer the scan "
+        f"can see, so the declaration is not true of them: {overdeclared}"
+    )
+
+
+def test_no_toolchain_writer_runs_against_this_checkout() -> None:
+    """Every writer runs in a copy, never against this checkout's own `.venv` or install.
+
+    A run here is a writer script spelled from `REPO_ROOT` — run, or sourced to call one
+    of its steps — or a relative script or a `just` recipe run with `cwd` at it. The
+    copy is `nx_workspace.copy_checkout` for `node_modules`, and
+    `nx_workspace.isolated_python_root` when the writer syncs `.venv` too.
+    """
+    scan = _suite_scan()
+    here = {
+        test: sorted(run.command for run in scan.reach(test).runs if run.here)
+        for test in scan.tests
+    }
+    offending = {test: commands for test, commands in here.items() if commands}
+    assert not offending, (
+        "these run a toolchain writer against this checkout, where every other worker's "
+        f"recipes read the same `.venv` and `node_modules`: {offending}"
+    )
+
+
+def test_every_tool_install_lands_in_directories_its_test_owns() -> None:
+    """A test driving a `uv tool install` names `UV_TOOL_DIR` and `UV_TOOL_BIN_DIR` itself.
+
+    `scripts/setup-llmlint.sh` runs `uv tool install --upgrade llmlint-cli`, and session
+    setup runs it and may run `uv tool install rust-just`. Left to their defaults those
+    land in the host's tool directory and `~/.local/bin` — the `llmlint` every
+    dispatch's pre-push gate on this host runs — which no copy of this checkout and no
+    scheduling constraint inside pytest or Nx isolates. So every test reaching one sets
+    both variables, to directories of its own.
+    """
+    scan = _suite_scan()
+    reaches = {test: scan.reach(test) for test in scan.tests}
+    installing = {
+        test: reach
+        for test, reach in reaches.items()
+        if any(run.installs_tools for run in reach.runs)
+    }
+    assert installing, (
+        "the scan finds no test that drives the setup recipes, and "
+        "tests/session_setup/test_locked_plan_store_setup_e2e.py does; it has stopped "
+        f"matching {TOOL_INSTALLING_SCRIPTS}"
+    )
+    unconfined = {
+        test: sorted(set(PRIVATE_TOOL_DIRECTORIES) - reach.sets)
+        for test, reach in installing.items()
+        if not set(PRIVATE_TOOL_DIRECTORIES) <= reach.sets
+    }
+    assert not unconfined, (
+        "these drive a `uv tool install` without naming where it lands, so it lands in "
+        f"this host's shared tool directory; set each missing variable: {unconfined}"
+    )
+
+
+def test_no_xdist_group_protects_a_toolchain() -> None:
+    """No group serialises toolchain access, because no writer touches a shared toolchain.
+
+    Two halves. The declarations carry no group, so declaring a reader or a writer
+    schedules nothing. And no group spans modules while carrying a declared reader:
+    `--dist loadgroup` co-locates one group *name*, so a group across modules is a
+    schedule across them, and one holding readers runs them on one worker per tier. A
+    group named for one module — fixture sharing, or a module-scoped fixture writing one
+    shared path — stays, and so does a group across modules that read no toolchain, which
+    serialises something else.
+    """
+    declared = [*WORKSPACE_INSTALL_MARKS, *TOOLCHAIN_WRITER_MARKS]
+    grouping = [mark.mark for mark in declared if mark.mark.name == "xdist_group"]
+    assert not grouping, f"a toolchain declaration carries an xdist group: {grouping}"
+
+    collected = _collected_items()
+    modules: dict[str, set[str]] = {}
+    for node, item in collected.items():
+        if item.group:
+            modules.setdefault(item.group, set()).add(_module_of(node))
+    readers = {
+        group: sorted(
+            {
+                _module_of(node)
+                for node, item in collected.items()
+                if item.group == group and item.reader
+            }
+        )
+        for group, owners in modules.items()
+        if len(owners) > 1
+    }
+    shared = {group: sorted(modules[group]) for group, held in readers.items() if held}
+    assert not shared, (
+        "these groups span modules and carry readers of this checkout's toolchain, so they "
+        f"schedule toolchain access across modules: {shared}"
+    )
+
+
+def test_no_writer_shares_this_checkouts_toolchain_with_the_copy_it_writes() -> None:
+    """A writer's copy is as private as the helpers make it only while nothing shares it.
+
+    Read through everything each writer reaches, `tests/e2e/nx_workspace.py`'s helpers
+    included: a symlink to this checkout's `node_modules` or `.venv`, or a
+    `UV_PROJECT_ENVIRONMENT` naming this checkout's `.venv` with no `UV_NO_SYNC` beside
+    it, is a copy whose installs land here. What a real install does in a
+    `copy_checkout` or `isolated_python_root` copy is driven by
+    `tests/e2e/toolchain_isolation/test_private_toolchain_e2e.py`.
+    """
+    scan = _suite_scan()
+    reaches = {test: scan.reach(test) for test in scan.tests}
+    shared = {
+        test: sorted(reach.shares) for test, reach in reaches.items() if reach.runs and reach.shares
+    }
+    assert not shared, (
+        "these toolchain writers share this checkout's toolchain with the copy they write "
+        f"in, so their writes reach it: {shared}"
+    )
+
+
+#: A `bun` that records being run and installs nothing, at the boundary the fixture
+#: reaches through `scripts/workspace-install.sh`.
+RECORDING_BUN = """#!/bin/sh
+echo "$0 $*" >> "$RECORDED_INSTALLS"
+"""
+
+#: A test that requests the reader fixture and nothing else.
+READER_ONLY = f"""
+import pytest
+
+
+@pytest.mark.usefixtures({READER_FIXTURE!r})
+def test_reads_the_provisioned_toolchain():
+    pass
+"""
+
+
+def test_the_reader_fixture_runs_no_installer_over_a_provisioned_toolchain(tmp_path: Path) -> None:
+    """`workspace_install` returns without an installer when this checkout is provisioned.
+
+    Its requesters are readers, which is only true while the fixture writes nothing: it
+    used to run `scripts/workspace-install.sh` once per worker unconditionally, and an
+    in-sync `bun install` re-links every `.bin` entry, which made each of its requesters
+    a writer of the tree every other worker reads. Driven through real pytest loading
+    `tests/conftest.py`, with `bun` recording at the boundary.
+    """
+    assert (NODE_MODULES / ".bin" / "nx").exists(), "run from a provisioned checkout"
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    bun = tools / "bun"
+    bun.write_text(RECORDING_BUN, encoding="utf-8")
+    bun.chmod(0o755)
+    recorded = tmp_path / "installs"
+    test = tmp_path / "test_reader.py"
+    test.write_text(READER_ONLY, encoding="utf-8")
+    ran = subprocess.run(
+        [
+            str(REPO_ROOT / ".venv" / "bin" / "python"),
+            "-m",
+            "pytest",
+            str(test),
+            "-p",
+            "conftest",
+            "--no-cov",
+            "-p",
+            "no:cacheprovider",
+            "-n",
+            "0",
+        ],
         cwd=REPO_ROOT,
         env={
             **os.environ,
-            "PYTHONPATH": str(plugins),
-            GROUP_LOG_ENV: str(log),
+            "PATH": f"{tools}{os.pathsep}{os.environ['PATH']}",
+            # Where `-p conftest` imports the suite's own conftest from, ahead of the
+            # `pythonpath` setting pytest applies only after its plugins load.
+            "PYTHONPATH": os.pathsep.join(
+                str(REPO_ROOT / directory) for directory in ("tests", "tests/e2e")
+            ),
+            "RECORDED_INSTALLS": str(recorded),
         },
         text=True,
         capture_output=True,
         check=False,
     )
-    assert collected.returncode == 0, collected.stdout + collected.stderr
-    recorded = log.read_text(encoding="utf-8").splitlines()
-    return dict(line.split("\t", 1) for line in recorded if line)
+    assert ran.returncode == 0, ran.stdout + ran.stderr
+    assert not recorded.exists(), (
+        "workspace_install ran an installer over this checkout's provisioned toolchain: "
+        f"{recorded.read_text(encoding='utf-8')}"
+    )
 
 
-def _reprovisioning_tests() -> list[str]:
-    """Every test whose body runs *this* checkout's own provisioning, as `<module>::<name>`."""
-    found: list[str] = []
-    # Every journey module of the suite, not one directory of them: a journey that
-    # re-provisions this checkout constrains scheduling wherever it lives, and the
-    # journeys now span three test projects. Plan-root resolution is the one host-tool
-    # journey whose established module name predates the `_e2e` suffix convention.
-    modules = set(REPO_ROOT.joinpath("tests").rglob("test_*_e2e.py"))
-    modules.add(REPO_ROOT / "tests" / "plan_tooling" / "test_plan_root_env.py")
-    for module in sorted(modules):
-        source = module.read_text(encoding="utf-8")
-        if OWN_PROVISIONING not in source:
-            continue
-        for function in ast.walk(ast.parse(source)):
-            if not isinstance(function, ast.FunctionDef) or not function.name.startswith("test_"):
-                continue
-            if OWN_PROVISIONING in (ast.get_source_segment(source, function) or ""):
-                found.append(f"{module.name}::{function.name}")
-    return found
+def test_every_module_that_launches_a_run_declares_itself_a_reader() -> None:
+    """A module naming a launching recipe reads this checkout's toolchain, and says so.
+
+    Its every step is a `just` recipe running its tool through `uv run` against this
+    checkout's provisioned `.venv`, which is what a reader is: declared with
+    `shares_workspace_install` or `WORKSPACE_INSTALL_MARKS`, ungrouped or in a group of
+    its own module. The readers are found the way the launch is — which modules name a
+    launching `just` recipe, over the recipes derived from the `justfile` — so what has
+    to declare is decided by something this check reads. Held where the ask-seam
+    journeys live, which is every module of theirs and the scope the rule it replaces
+    held.
+    """
+    recipes = _launching_recipes()
+    assert DOCUMENTED_LAUNCH_RECIPE in recipes, (
+        f"`just {DOCUMENTED_LAUNCH_RECIPE}` is the launch this repository documents, and "
+        f"this scan did not find it among {sorted(recipes)}: either the recipe stopped "
+        f"reaching /{REACHES_A_LAUNCH.pattern}/, or `JUST_RECIPE` has stopped reading "
+        "recipe bodies out of the justfile"
+    )
+    launching = _modules_naming_a_launch(ASK_SEAM_ROOT, recipes)
+    assert launching, (
+        f"no test module under {ASK_SEAM_ROOT} names {sorted(recipes)}; that is the whole "
+        "of what those journeys do, so finding none means this scan has stopped matching"
+    )
+    collected = _collected_items()
+    undeclared = sorted(
+        node
+        for node, item in collected.items()
+        if _module_of(node) in launching and not (item.reader or item.writer)
+    )
+    assert not undeclared, (
+        f"these are collected from modules that launch runs through `just "
+        f"{'`/`just '.join(sorted(recipes))}` and do not declare that they read this "
+        f"checkout's toolchain; declare `shares_workspace_install`: {undeclared}"
+    )
 
 
 #: A path every worker of the suite shares one copy of. A fixture that mutates one is
@@ -776,9 +1582,7 @@ def test_the_launch_verbs_this_scan_looks_for_are_the_launchers_own() -> None:
     )
 
 
-def test_a_module_whose_setup_writes_this_checkout_lands_on_one_worker(
-    tmp_path: Path,
-) -> None:
+def test_a_module_whose_setup_writes_this_checkout_lands_on_one_worker() -> None:
     """An autouse module-scoped fixture constrains its whole module, not its callers.
 
     `repository_credentials_file` in `tests/ask_seam/launch/test_launch_ask_seam_e2e.py`
@@ -796,6 +1600,9 @@ def test_a_module_whose_setup_writes_this_checkout_lands_on_one_worker(
     The rule the older reasoning got wrong was to ask what each test's *body* does:
     refusal journeys launch no run and wait on no deadline, so leaving them ungrouped
     read as free. Setup is what they share, and setup is not free.
+
+    The group is the module's own, named for it and carried by no other module: it
+    serialises one fixture's write to one path, and protects no toolchain.
     """
     writers = _module_scope_checkout_writers()
     assert writers, (
@@ -804,7 +1611,7 @@ def test_a_module_whose_setup_writes_this_checkout_lands_on_one_worker(
         "module onto one worker, and finding none means it has stopped matching"
     )
 
-    groups = _collected_groups(tmp_path)
+    groups = {node: item.group for node, item in _collected_items().items()}
     for module, fixture in sorted(writers.items()):
         collected = {node: group for node, group in groups.items() if f"/{module}::" in node}
         assert collected, f"{module} declares {fixture} but collected no tests"
@@ -822,98 +1629,13 @@ def test_a_module_whose_setup_writes_this_checkout_lands_on_one_worker(
             f"{module} resolves to {named}. `--dist loadgroup` serialises one group "
             f"name and never two, so {fixture} would still run on two workers at once"
         )
-
-
-def test_the_toolchain_writers_and_readers_are_collected_into_one_xdist_group(
-    tmp_path: Path,
-) -> None:
-    """One group name, or the constraint is not a constraint.
-
-    `uv` holds an **exclusive** lock on `<root>/.venv`, and every `just` recipe in this
-    suite reaches its tool through `uv run`, which waits on that lock for as long as a
-    holder keeps it. A journey running this checkout's own `session-setup.sh` takes that
-    lock and rewrites the `.venv/bin` other workers resolve their tools from; the
-    deadline-based channel journeys are what waits on it, one `just` recipe at a time.
-
-    `--dist loadgroup` co-locates the tests that share a group *name* and says nothing
-    about two different names — those run on two workers at once. So a writer in one
-    group and a reader in another are exactly as concurrent as if neither declared
-    anything, which is what this asserts against: not that each side declares *a*
-    group, but that every one of them resolves to the same one.
-
-    Read off a real collection, so the assertion is about the items the scheduler will
-    see rather than about how any of them happens to be spelled. The readers are found
-    the same way — which modules name a launching `just` recipe, over the recipes
-    derived from the `justfile` — so what may scatter is decided by something this check
-    reads.
-
-    Inside a module that names one, nothing may scatter, whatever its tests look like.
-    The premise this replaces allowed an ungrouped test there on the ground that the
-    refusal journeys launch no run: their bodies do not, and their fixtures do. Asking
-    what a test's *body* does is the same mistake
-    :func:`test_a_module_whose_setup_writes_this_checkout_lands_on_one_worker` records.
-    """
-    groups = _collected_groups(tmp_path)
-    recipes = _launching_recipes()
-    assert DOCUMENTED_LAUNCH_RECIPE in recipes, (
-        f"`just {DOCUMENTED_LAUNCH_RECIPE}` is the launch this repository documents, and "
-        f"this scan did not find it among {sorted(recipes)}: either the recipe stopped "
-        f"reaching /{REACHES_A_LAUNCH.pattern}/, or `JUST_RECIPE` has stopped reading "
-        "recipe bodies out of the justfile"
-    )
-
-    launching = _modules_naming_a_launch(ASK_SEAM_ROOT, recipes)
-    assert launching, (
-        f"no test module under {ASK_SEAM_ROOT} names {sorted(recipes)}; that is the whole "
-        "of what those journeys do, so finding none means this scan has stopped matching "
-        "rather than that the constraint has lifted"
-    )
-
-    readers = {
-        node: group
-        for node, group in groups.items()
-        if any(f"/{module}::" in node for module in launching)
-    }
-    assert readers, (
-        f"{launching} name a launch but collected no tests, so nothing there is "
-        "serialised against the journeys that re-provision this checkout"
-    )
-
-    scattered = sorted(node for node, group in readers.items() if not group)
-    assert not scattered, (
-        f"these are collected from {launching}, which launch runs through `just "
-        f"{'`/`just '.join(sorted(recipes))}`, and declare no xdist group — so "
-        f"`--dist loadgroup` scatters them across workers, where each spends a real "
-        f"launch beside the journeys that are polling `just` recipes through the `uv` "
-        f"lock it holds: {scattered}"
-    )
-
-    writers = {
-        node: group
-        for node, group in groups.items()
-        for named in _reprovisioning_tests()
-        if node.split("[", 1)[0].endswith(named)
-    }
-    assert writers, (
-        "no collected test provisions this checkout, so nothing here is holding the "
-        f"lock these journeys wait on; the scan looks for {OWN_PROVISIONING}"
-    )
-
-    unscheduled = sorted(node for node, group in writers.items() if not group)
-    assert not unscheduled, (
-        f"{unscheduled} re-provision this checkout and declare no xdist group at all, so "
-        f"they run wherever the scheduler puts them; declare @{SHARED_INSTALL_DECORATOR}"
-    )
-
-    named = set(readers.values()) | set(writers.values())
-    assert len(named) == 1, (
-        f"the journeys that re-provision this checkout and the journeys that wait on "
-        f"`uv run` while they do resolve to {sorted(named)}. `--dist loadgroup` "
-        "serialises one group name and never two, so more than one name here leaves a "
-        "writer free to run beside a reader on another worker — which is the state this "
-        "constraint was added to end. Readers: "
-        f"{sorted(set(readers.values()))}; writers: {sorted(set(writers.values()))}"
-    )
+        elsewhere = sorted(
+            node for node, group in groups.items() if group in named and f"/{module}::" not in node
+        )
+        assert not elsewhere, (
+            f"{module}'s group {named} is carried by other modules too, so it schedules "
+            f"them beside {fixture} rather than naming one module's fixture: {elsewhere}"
+        )
 
 
 #: The flags that decide how a tier *runs* rather than what it collects. Dropped before
@@ -1039,6 +1761,13 @@ SUITE_TIERS = (
     # describes; the board-copy-approval entry sits beside the others' because the catalog is
     # the domain.
     (f"{BOARD_COPY_APPROVAL_ROOT}/project.json", BOARD_COPY_APPROVAL_SCOPED),
+    # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+    # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
+    # catalog of test projects, where every project has its entry, and
+    # `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
+    # describes; the toolchain-isolation entry sits beside the others' because the catalog is
+    # the domain.
+    (f"{TOOLCHAIN_ISOLATION_ROOT}/project.json", TOOLCHAIN_ISOLATION_SCOPED),
     # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
     # catalog of test projects, where every project has its entry, and

@@ -67,7 +67,7 @@ from typing import NamedTuple
 
 import pytest
 from fake_backend import AGENT_DELAY_ENV, ASK_QUESTION_ENV, ASK_RECORD_ENV, ASK_TIMEOUT_ENV
-from nx_workspace import SHARED_TOOLCHAIN_GROUP
+from nx_workspace import WORKSPACE_INSTALL_MARKS
 from project_fixtures import project_from_plan
 
 # The launch environment and the shape of a candidate plan both have one source, and it
@@ -96,15 +96,12 @@ from watch_rule import rule
 
 ROOT = Path(__file__).resolve().parents[2]
 
-#: `reads_checkouts` for the reason the docstring gives, and one xdist group because the
-#: live journeys below launch a run and then poll `just` recipes while it holds — every
-#: one of those blocks on the `uv` lock that a journey re-provisioning this checkout
-#: takes. `--dist loadgroup` co-locates one group *name* and says nothing about two, so
-#: the module names the one the writers of that lock already name rather than a private
-#: one, which would be as concurrent with them as declaring nothing.
+#: `reads_checkouts` for the reason the docstring gives, and a reader of this checkout's
+#: provisioned toolchain because the live journeys below launch a run and then poll `just`
+#: recipes while it holds; `tests/e2e/nx_workspace.py` says why that needs no xdist group.
 pytestmark = [
     pytest.mark.reads_checkouts,
-    pytest.mark.xdist_group(SHARED_TOOLCHAIN_GROUP),
+    *WORKSPACE_INSTALL_MARKS,
 ]
 
 #: What the dispatched worker asks its manager, through the real
