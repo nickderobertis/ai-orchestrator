@@ -64,7 +64,7 @@ concerns (persona defaults, session), never harness/model selection.
 ### Where the identities are stated, and what a role file carries
 
 Every role config above extends a shared parent, so the six identities are written down
-once rather than eleven times:
+once rather than twelve times:
 
 | File | What it holds |
 | --- | --- |
@@ -72,9 +72,9 @@ once rather than eleven times:
 | `oneharness.dispatch.toml` | Extends the above and adds one thing: the `XDG_RUNTIME_DIR` repoint onto the node's own scratch, which `env_from`'s key-wise merge lands beside each variant's own indirection. |
 | `oneharness.<role>.toml` | What is really a decision about that role: its `harnesses` order, its `timeout`, its `history_labels`, its `stream` / `schema_file` / `schema_max_retries`, its `mode`, and its model tier where that differs. |
 
-`oneharness.toml`, `oneharness.judge.toml` and `oneharness.follow-up.toml` extend
-`oneharness.dispatch.toml`, because those are the sides the engine starts inside a
-node's dispatch and so the only ones with a node scratch directory to point at. The
+`oneharness.toml`, `oneharness.board-live.toml`, `oneharness.judge.toml` and
+`oneharness.follow-up.toml` extend `oneharness.dispatch.toml`, because those are the sides
+the engine starts inside a node's dispatch and so the only ones with a node scratch directory to point at. The
 other eight extend `oneharness.identities.toml` directly.
 
 Neither parent is named `oneharness.toml`, so oneharness's own project-config discovery
@@ -102,12 +102,21 @@ rather than two. That is the rule a real turn applies, and it shapes the layout 
 three roles that reach the plan store — the design-document pair and the follow-up agent
 — do to leave `GH_PROJECTS_TOKEN` and `HELLOPATIENT_LINEAR_API_KEY` travelling.
 
+`oneharness.board-live.toml` does the same for the board token alone. It is
+`oneharness.toml` verbatim — chain, models, mode, deadline, streaming and labels — for a
+plan node that must prove behaviour against the real GitHub Projects board, and differs
+only in that no identity masks `GH_PROJECTS_TOKEN`; the production Linear key and every
+other credential stay masked. No graph, recipe or launch default names it, so only a plan
+node naming it — `onepipeline.sets:
+["members.worker.agent.oneharness_config=<absolute path>"]` — holds the token, and every
+other dispatch keeps it masked.
+
 But `codex:primary`'s mask cannot live in a parent at all. That identity honours an
 ambient `CODEX_HOME` and masks nothing except the plan store's two credentials, so for those three
 roles its correct mask is *empty* — and empty is exactly what a child cannot say, since
 an empty list inherits. So `oneharness.identities.toml` and `oneharness.dispatch.toml`
-state no mask at that variant, and each of the eight roles that masks them says so
-itself. It is the one place the six-identity block is not the whole
+state no mask at that variant, and each of the nine roles that masks either says so
+itself — the board-live worker masking the Linear key alone. It is the one place the six-identity block is not the whole
 story, and both parents carry a note at that variant explaining why.
 
 Every variant also keeps its own `model` line even where it matches the harness-level
@@ -129,7 +138,7 @@ credential isolation true, which is what a reviewer and the equivalence record b
 both read. A follow-up against oneharness is what retires them.
 
 Both halves are held, and it takes both.
-`tests/e2e/test_oneharness_config_equivalence_e2e.py` holds all eleven roles' reported
+`tests/e2e/test_oneharness_config_equivalence_e2e.py` holds all twelve roles' reported
 configurations to a committed record under `tests/e2e/oneharness_resolved/`, so a
 deliberate routing change is a visible update to that record in the same commit.
 `tests/e2e/test_dispatch_environment_e2e.py` drives a **real turn** on every identity of

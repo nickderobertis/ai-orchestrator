@@ -58,7 +58,12 @@ CONNECTOR_ROLES = (
 CONNECTORS_OFF = ["-c", "features.apps=false"]
 
 #: The roles whose turn is a worker's, and the parents nothing runs against.
-WORKER_ROLES = ("oneharness.toml", "oneharness.follow-up.toml", "oneharness.design-doc.toml")
+WORKER_ROLES = (
+    "oneharness.toml",
+    "oneharness.board-live.toml",
+    "oneharness.follow-up.toml",
+    "oneharness.design-doc.toml",
+)
 SHARED_PARENTS = ("oneharness.identities.toml", "oneharness.dispatch.toml")
 
 

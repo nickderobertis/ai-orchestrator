@@ -285,6 +285,7 @@ RESTATING_SITES = (
     # Every harness config's `history_labels` comment says what its own keys add beside
     # the engine's, which is a restatement of the engine's prefix in each of them.
     RestatingSite("oneharness.toml", labels.ENGINE_LABEL_PREFIX),
+    RestatingSite("oneharness.board-live.toml", labels.ENGINE_LABEL_PREFIX),
     RestatingSite("oneharness.judge.toml", labels.ENGINE_LABEL_PREFIX),
     RestatingSite("oneharness.check-in.toml", labels.ENGINE_LABEL_PREFIX),
     RestatingSite("oneharness.design-doc.toml", labels.ENGINE_LABEL_PREFIX),

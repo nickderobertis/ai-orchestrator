@@ -63,16 +63,16 @@ model = "gpt-6.1-sol"
 # cannot.** Its only masks anywhere on this host are the plan store's credentials,
 # `GH_PROJECTS_TOKEN` and `HELLOPATIENT_LINEAR_API_KEY`, and that is a per-ROLE policy
 # rather than a property of the identity: eight roles never reach the plan store and
-# stop both here, while three exist to read and write the store and must let them
-# travel.
+# stop both here, three exist to read and write the store and must let them travel, and
+# one — the board-live worker — lets the board token alone travel.
 #
 # A child replaces `unset_env` only with a NON-EMPTY list — an empty or absent one
 # inherits the parent's, which is the documented merge rule and what a real turn
 # applies. So there is no spelling for "mask nothing", and a mask stated here would be
-# one those three roles could never remove: every other variant's mask is a longer list
+# one those four roles could never remove: every other variant's mask is a longer list
 # they can replace with a shorter one, and this one's would be the whole of it.
 #
-# Each of the eight roles that masks them therefore says so at its own
+# Each of the nine roles that masks either therefore says so at its own
 # `[harness.codex.variant.primary]`. `tests/e2e/test_dispatch_environment_e2e.py` drives
 # a real turn on every identity of every role and reads what the provider was handed,
 # which is what catches this rather than any reading of the resolved config.

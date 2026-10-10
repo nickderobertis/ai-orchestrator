@@ -1,6 +1,6 @@
 """Every role's effective oneharness configuration, held to a committed record.
 
-The eleven `oneharness.<role>.toml` files state their identities through `extends`, so
+The twelve `oneharness.<role>.toml` files state their identities through `extends`, so
 what each one resolves to is a claim about a chain rather than about a file. This
 module holds every role's resolved configuration to a committed record under
 `oneharness_resolved/`, and holds each variant's reported credential mask as a property
@@ -54,9 +54,15 @@ ROLE_CONFIGS = tuple(
 #: The shared parents, which declare no chain and are reached only through a role.
 SHARED_PARENTS = ("oneharness.identities.toml", "oneharness.dispatch.toml")
 
-#: The three sides the engine starts inside a node's dispatch, and so the only ones
-#: with a node scratch directory for `oneharness.dispatch.toml`'s repoint to name.
-DISPATCHED_ROLES = ("oneharness.toml", "oneharness.judge.toml", "oneharness.follow-up.toml")
+#: The sides the engine starts inside a node's dispatch, and so the only ones with a node
+#: scratch directory for `oneharness.dispatch.toml`'s repoint to name: the worker's agent
+#: side, its board-live copy a plan node may name instead, its judge, and the follow-up agent.
+DISPATCHED_ROLES = (
+    "oneharness.toml",
+    "oneharness.board-live.toml",
+    "oneharness.judge.toml",
+    "oneharness.follow-up.toml",
+)
 
 #: The plan store's credentials — the board token and the production Linear key — and
 #: the three roles whose turn must still carry them: the design-document pair, whose
@@ -84,6 +90,12 @@ ANTHROPIC_CREDENTIALS = (
     "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
 )
 CODEX_ALTERNATE_CREDENTIAL = "OPENAI_API_KEY"
+
+#: The worker's copy a plan node names to prove behaviour against the real board: it masks
+#: the production Linear key like every role that does not read the store, and lets the
+#: board token alone travel.
+BOARD_LIVE_CONFIG = "oneharness.board-live.toml"
+BOARD_TOKEN = "GH_PROJECTS_TOKEN"
 
 
 class ReportedMask(TypedDict):
@@ -282,7 +294,11 @@ def test_no_variant_lost_a_credential_it_must_mask(oneharness_bin: str, config: 
         if harness_id == "codex" and variant_id == "alternate":
             required.append(CODEX_ALTERNATE_CREDENTIAL)
         if masks_store:
-            required.extend(PLAN_STORE_CREDENTIALS)
+            required.extend(
+                name
+                for name in PLAN_STORE_CREDENTIALS
+                if not (config == BOARD_LIVE_CONFIG and name == BOARD_TOKEN)
+            )
         lost.extend(
             f"{harness_id}:{variant_id} no longer masks {name}"
             for name in required
@@ -312,7 +328,7 @@ def test_the_plan_store_roles_still_carry_the_plan_store_credentials(
     `codex:primary` is the variant this nearly broke. Its only masks anywhere here are the
     plan store's credentials, so for these three roles the correct mask is EMPTY — and an empty
     child list inherits rather than clears, so no child can say it. Both parents
-    therefore state no mask at that variant and the seven roles that mask it say so
+    therefore state no mask at that variant and the nine roles that mask it say so
     themselves.
     """
     still_masked = [
@@ -327,3 +343,27 @@ def test_the_plan_store_roles_still_carry_the_plan_store_credentials(
         f"{config}: {still_masked}, so this role's turn cannot reach the plan store it "
         f"exists to read and write."
     )
+
+
+def test_the_board_live_worker_carries_the_board_token_alone(oneharness_bin: str) -> None:
+    """No identity of the board-live worker masks the board token, and each masks the Linear key.
+
+    The other half of that config's mask property: its whole reason to exist is a turn that
+    holds `GH_PROJECTS_TOKEN`, so a mask on it anywhere in the chain is a role that cannot
+    reach the board it was named to prove against.
+    """
+    variants = _variants(_effective_config(oneharness_bin, REPO_ROOT / BOARD_LIVE_CONFIG))
+    assert variants, f"{BOARD_LIVE_CONFIG} resolves no identity"
+    still_masked = [
+        f"{harness_id}:{variant_id}"
+        for (harness_id, variant_id), masked in variants.items()
+        if BOARD_TOKEN in masked
+    ]
+    assert not still_masked, f"{BOARD_LIVE_CONFIG}'s {still_masked} still mask {BOARD_TOKEN}"
+    linear_key = next(name for name in PLAN_STORE_CREDENTIALS if name != BOARD_TOKEN)
+    unmasked = [
+        f"{harness_id}:{variant_id}"
+        for (harness_id, variant_id), masked in variants.items()
+        if linear_key not in masked
+    ]
+    assert not unmasked, f"{BOARD_LIVE_CONFIG}'s {unmasked} let {linear_key} travel"

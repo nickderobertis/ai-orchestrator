@@ -101,7 +101,17 @@ NAMED_AGENT_SIDE_CONFIG = re.compile(
 #: The configs a node dispatch's own conversation runs under — the two sides
 #: `graphs/node-scope.yaml` names. These are the sides that run a target repository's
 #: recipes, so these are the ones that repoint the runtime directory.
-DISPATCH_CONFIGS = _configs_named_by("graphs/node-scope.yaml")
+DISPATCH_CONFIGS = (
+    *_configs_named_by("graphs/node-scope.yaml"),
+    # The worker's agent side a plan node names per node in place of the graph's, to prove
+    # behaviour against the real board. No graph names it, which is the point of it, so it
+    # is named here; `tests/e2e/test_oneharness_timeout_e2e.py` holds that nothing else does.
+    "oneharness.board-live.toml",
+)
+
+#: That config, and the one credential of the two it lets travel.
+BOARD_LIVE_CONFIG = "oneharness.board-live.toml"
+BOARD_TOKEN = "GH_PROJECTS_TOKEN"
 
 #: The configs of the members whose dispatch reads the plan store, so these keep its
 #: credentials: the two sides `graphs/design-doc.yaml` names, because
@@ -124,8 +134,11 @@ PLAN_STORE_CONFIGS = (
 CREDENTIALS = ("GH_PROJECTS_TOKEN", "HELLOPATIENT_LINEAR_API_KEY")
 NOMINATION = ("GH_PROJECTS_OWNER", "GH_PROJECTS_NUMBER", "GH_PROJECTS_REPOSITORY")
 
-#: The configs whose role reaches no plan store, so the credentials stop at the config.
-MASKED_CONFIGS = tuple(name for name in ROLE_CONFIGS if name not in PLAN_STORE_CONFIGS)
+#: The configs whose role reaches no plan store, so the credentials stop at the config. The
+#: board-live worker is neither: it carries the board token alone, journeyed below.
+MASKED_CONFIGS = tuple(
+    name for name in ROLE_CONFIGS if name not in (*PLAN_STORE_CONFIGS, BOARD_LIVE_CONFIG)
+)
 
 #: A value per credential the stand-in would report if it reached it. Not a real token,
 #: and never asserted as one — what is asserted is that the name is absent.
@@ -174,6 +187,7 @@ def _identifiers(candidates: tuple[Candidate, ...]) -> list[str]:
 
 
 MASKED_CANDIDATES = _candidates(MASKED_CONFIGS)
+BOARD_LIVE_CANDIDATES = _candidates((BOARD_LIVE_CONFIG,))
 PLAN_STORE_CANDIDATES = _candidates(PLAN_STORE_CONFIGS)
 DISPATCH_CANDIDATES = _candidates(DISPATCH_CONFIGS)
 
@@ -198,6 +212,7 @@ def _agent_side_of(graph: str) -> tuple[str, ...]:
 
 WORKER_CONFIGS = (
     *_agent_side_of("graphs/node-scope.yaml"),
+    BOARD_LIVE_CONFIG,
     *_configs_named_by("graphs/follow-up.yaml"),
 )
 WORKER_CANDIDATES = _candidates(WORKER_CONFIGS)
@@ -264,8 +279,16 @@ def _indirections(tmp_path: Path) -> dict[str, str]:
     return indirections
 
 
-def _turn(tmp_path: Path, oneharness_bin: str, candidate: Candidate) -> dict[str, str]:
+def _turn(
+    tmp_path: Path,
+    oneharness_bin: str,
+    candidate: Candidate,
+    planted: dict[str, str] | None = None,
+) -> dict[str, str]:
     """Spend one real turn as `candidate`; answer what its provider got.
+
+    `planted` adds further names to the environment the turn arrives with, for a journey
+    whose subject is a credential beyond the plan store's.
 
     Only the provider process is a stand-in. The config is the committed one, the chain
     resolution is `oneharness`'s own, and the environment below is the one a dispatch
@@ -289,6 +312,7 @@ def _turn(tmp_path: Path, oneharness_bin: str, candidate: Candidate) -> dict[str
         **_provider(front, record),
         **PLANTED_NOMINATION,
         **PLANTED_CREDENTIALS,
+        **(planted or {}),
         # What the engine hands a dispatch, and what the repoint reads.
         "ONEPIPELINE_NODE_SCRATCH_DIR": str(scratch),
         # Somewhere that is emphatically not this dispatch's own scratch, standing in
@@ -345,6 +369,53 @@ def test_a_role_that_does_not_read_the_plan_store_is_handed_no_plan_store_creden
         f"role does reaches: a turn holding one can open a real credentialed session on "
         f"somebody's account"
     )
+
+
+def _worker_masks(identity: str) -> list[str]:
+    """What `oneharness.toml`'s committed record masks on `identity`."""
+    # llmlint: ignore[boundary_inputs_validated] The committed record beside this module,
+    # captured from `oneharness config`; the one list read out of it is narrowed here.
+    record = json.loads((RESOLVED_RECORDS / "oneharness.toml.json").read_text("utf-8"))
+    family, _, variant = identity.partition(":")
+    masked = record["harness"][family]["variant"][variant]["unset_env"]["value"]
+    assert isinstance(masked, list) and masked, (
+        f"oneharness.toml's committed record masks nothing on {identity}"
+    )
+    return [str(name) for name in masked]
+
+
+@pytest.mark.parametrize(
+    "candidate", BOARD_LIVE_CANDIDATES, ids=_identifiers(BOARD_LIVE_CANDIDATES)
+)
+def test_the_board_live_worker_is_handed_the_board_token_and_nothing_else_the_worker_masks(
+    tmp_path: Path, oneharness_bin: str, candidate: Candidate
+) -> None:
+    """Every identity of the board-live chain holds the board token and only that.
+
+    A plan node that must prove behaviour against the real board names this config, so its
+    turn must arrive holding `GH_PROJECTS_TOKEN` on whichever identity is reached — and
+    lacking the production Linear key and every other credential `oneharness.toml` masks on
+    that identity, because unmasking one token is all that config was written to do. Each
+    of those is planted in the environment the turn arrives with, so its absence is the mask.
+    """
+    expected_masked = [name for name in _worker_masks(candidate.identity) if name != BOARD_TOKEN]
+    assert "HELLOPATIENT_LINEAR_API_KEY" in expected_masked
+    planted = {
+        name: f"not-a-real-{name.lower()}-planted-by-this-journey" for name in expected_masked
+    }
+    recorded = _turn(tmp_path, oneharness_bin, candidate, planted)
+
+    assert recorded.get(BOARD_TOKEN) == PLANTED_CREDENTIALS[BOARD_TOKEN], (
+        f"{candidate.config} did not hand {candidate.identity} {BOARD_TOKEN}, the one "
+        "credential a node naming it is meant to hold"
+    )
+    handed = [name for name in expected_masked if name in recorded]
+    assert not handed, (
+        f"{candidate.config} handed {candidate.identity} {handed}, which oneharness.toml "
+        "masks there; only the board token was to travel"
+    )
+    missing = [name for name in NOMINATION if recorded.get(name) != PLANTED_NOMINATION[name]]
+    assert not missing, f"{candidate.config} stopped handing {candidate.identity} {missing}"
 
 
 @pytest.mark.parametrize("candidate", MASKED_CANDIDATES, ids=_identifiers(MASKED_CANDIDATES))

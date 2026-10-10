@@ -3,9 +3,10 @@
 #
 # A PARENT only, named so oneharness's discovery cannot find it. It is a layer of its
 # own because `env_from` merges KEY-WISE, so the repoint lands beside each variant's own
-# indirection rather than replacing it. `oneharness.toml`, `oneharness.judge.toml` and
-# `oneharness.follow-up.toml` extend it; every other role extends the identities
-# directly, having no node scratch directory to name.
+# indirection rather than replacing it. `oneharness.toml` and its board-live copy a plan
+# node may name in its place, `oneharness.judge.toml` and `oneharness.follow-up.toml`
+# extend it; every other role extends the identities directly, having no node scratch
+# directory to name.
 
 extends = "oneharness.identities.toml"
 
@@ -19,8 +20,8 @@ extends = "oneharness.identities.toml"
 # these go and the repoints stay. docs/onejudge-integration.md states the merge rule
 # and the defect.
 
-# No `unset_env`: its parent states none either, so the three roles that must keep the
-# plan-store credentials can. The note in `oneharness.identities.toml` says why.
+# No `unset_env`: its parent states none either, so the roles that must keep a
+# plan-store credential can. The note in `oneharness.identities.toml` says why.
 [harness.codex.variant.primary]
 env_from = { XDG_RUNTIME_DIR = "ONEPIPELINE_NODE_SCRATCH_DIR" }
 

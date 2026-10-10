@@ -146,12 +146,14 @@ DESIGN_DOC_REVIEWER_CHAIN = [
     "claude-code:primary",
 ]
 
-#: The identity order every side resolves. Two orders cover all eleven configs: the worker
-#: and the design-doc reviewer lead with the Claude subscriptions, every other side with
-#: Codex, and all of them name the same six identities with the primary-backup Claude
-#: subscription immediately before the primary one, which is last everywhere.
+#: The identity order every side resolves. Two orders cover all twelve configs: the worker,
+#: its board-live copy and the design-doc reviewer lead with the Claude subscriptions, every
+#: other side with Codex, and all of them name the same six identities with the
+#: primary-backup Claude subscription immediately before the primary one, which is last
+#: everywhere.
 INTENDED_CHAINS = {
     "worker": DESIGN_DOC_REVIEWER_CHAIN,
+    "board-live worker": DESIGN_DOC_REVIEWER_CHAIN,
     "judge": DESIGN_DOC_WRITER_CHAIN,
     "llmlint": DESIGN_DOC_WRITER_CHAIN,
     "monitor": DESIGN_DOC_WRITER_CHAIN,
@@ -198,6 +200,29 @@ FOLLOW_UP_DEADLINE_SECONDS = 7200
 #: the history labels that say which side ran.
 PLAN_STORE_CREDENTIALS = ["GH_PROJECTS_TOKEN", "HELLOPATIENT_LINEAR_API_KEY"]
 FOLLOW_UP_DIFFERENCES = {"timeout", "stream", "history_labels", "harness", "mode"}
+
+#: The worker's agent side for a plan node that must prove behaviour against the real
+#: board, which only a node naming it per node reaches — no graph names it, so it is named
+#: here. It is `oneharness.toml`'s routing verbatim, and unmasks one credential of the two:
+#: the board token, leaving the production Linear key masked on every identity.
+BOARD_LIVE_CONFIG = REPO_ROOT / "oneharness.board-live.toml"
+BOARD_TOKEN = "GH_PROJECTS_TOKEN"
+
+#: Where a turn's config can be named for every dispatch rather than by one plan node: the
+#: graphs, the recipes and the scripts they run, the launch configuration, the personas and
+#: templates a dispatch is rendered from, the manager's own settings, and the role configs.
+LAUNCH_SURFACES = (
+    "justfile",
+    "oneharness*.toml",
+    ".claude",
+    ".codex",
+    ".githooks",
+    "config",
+    "graphs",
+    "personas",
+    "scripts",
+    "templates",
+)
 
 
 def _member_fields(graph: Path) -> dict[str, dict[str, str]]:
@@ -448,7 +473,7 @@ def test_timeout_kills_process_tree_and_preserves_real_partial_telemetry(
 def test_every_side_resolves_its_intended_effective_deadline(
     oneharness_bin: str,
 ) -> None:
-    """Prove all eleven turn configs together from oneharness's effective values."""
+    """Prove all twelve turn configs together from oneharness's effective values."""
     monitor = _named_config(DAG_SCOPE_GRAPH, MONITOR_MEMBER, "agent.oneharness_config")
     pacemaker = _named_config(DAG_SCOPE_GRAPH, "check-in", "oneharness_config")
     drafter = _named_config(PR_AUTHOR_GRAPH, PR_AUTHOR_MEMBER, "oneharness_config")
@@ -479,6 +504,7 @@ def test_every_side_resolves_its_intended_effective_deadline(
 
     configs = {
         "worker": _named_config(NODE_SCOPE_GRAPH, "worker", "agent.oneharness_config"),
+        "board-live worker": BOARD_LIVE_CONFIG,
         "judge": _named_config(NODE_SCOPE_GRAPH, "worker", "judge.oneharness_config"),
         "llmlint": REPO_ROOT / "oneharness.llmlint.toml",
         "monitor": monitor,
@@ -533,6 +559,8 @@ def test_every_side_resolves_its_intended_effective_deadline(
             f"{config.name}'s primary does not read its directory from {PRIMARY_INDIRECTION}"
         )
         masked = ANTHROPIC_SELECTORS + ([] if side in PLAN_STORE_SIDES else PLAN_STORE_CREDENTIALS)
+        if side == "board-live worker":
+            masked = [name for name in masked if name != BOARD_TOKEN]
         assert primary["unset_env"]["value"] == masked, (
             f"{config.name}'s primary masks {primary['unset_env']['value']}, not {masked}"
         )
@@ -544,7 +572,7 @@ def test_every_side_resolves_its_intended_effective_deadline(
         ]
         assert not unsetting, f"{config.name} still unsets CLAUDE_CONFIG_DIR on {unsetting}"
 
-    for side in ("worker", "judge", "llmlint"):
+    for side in ("worker", "board-live worker", "judge", "llmlint"):
         assert effective[side]["timeout"] == {"value": None, "source": None}, (
             f"{side} must inherit oneharness 0.7's unbounded default"
         )
@@ -707,6 +735,40 @@ def test_every_side_resolves_its_intended_effective_deadline(
         "follow-up agent reads and writes the plan store with"
     )
 
+    # The board-live worker: `oneharness.toml`'s resolution field by field — chain, every
+    # identity's model, mode, deadline, streaming, labels and command ceiling — with one
+    # difference, that no identity masks the board token. Every other mask, the production
+    # Linear key's included, is held on every identity by the same comparison.
+    board_live_routing = _without_sources(effective["board-live worker"])
+    worker_routing = _without_sources(effective["worker"])
+    assert board_live_routing.keys() == worker_routing.keys()
+    for field in worker_routing:
+        if field == "config_files":
+            continue
+        intended = worker_routing[field]
+        if field == "harness":
+            intended = _unmasked(intended, [BOARD_TOKEN])
+        assert board_live_routing[field] == intended, (
+            f"oneharness.board-live.toml's `{field}` resolves {board_live_routing[field]}, not "
+            f"oneharness.toml's {intended}: it must be the worker's routing verbatim with only "
+            f"the {BOARD_TOKEN} mask removed"
+        )
+    board_live_masks = {
+        f"{harness}:{name}": variant["unset_env"]["value"] or []
+        for harness, routing in board_live_routing["harness"].items()
+        for name, variant in routing.get("variant", {}).items()
+    }
+    assert set(board_live_masks) >= set(INTENDED_CHAINS["board-live worker"])
+    for identity, masks in board_live_masks.items():
+        assert BOARD_TOKEN not in masks, (
+            f"oneharness.board-live.toml's {identity} still masks {BOARD_TOKEN}, the one "
+            "credential that config exists to let travel"
+        )
+        assert "HELLOPATIENT_LINEAR_API_KEY" in masks, (
+            f"oneharness.board-live.toml's {identity} no longer masks the production Linear "
+            "key, which only the board token was meant to be released from"
+        )
+
     # The split duplicated a routing, so hold the copy to one intended difference.
     # Anything else that drifts here is a pacemaker quietly authenticating, billing,
     # or reporting differently from the process it reports on.
@@ -720,6 +782,45 @@ def test_every_side_resolves_its_intended_effective_deadline(
     assert differing == {"timeout"}, (
         f"oneharness.check-in.toml must be oneharness.orchestrator.toml's routing with "
         f"only the deadline changed; these also differ: {sorted(differing - {'timeout'})}"
+    )
+
+
+def test_only_a_plan_node_naming_it_reaches_the_board_live_config() -> None:
+    """Prove nothing in the repository launches a turn under the board-live worker config.
+
+    The board token reaches a dispatch only when that dispatch's own plan node names the
+    config, so a graph, a recipe, a script, a launch default or another role config naming
+    it would hand the token to every turn it launches. Those are the surfaces read here:
+    every tracked file under them, and every other `oneharness*.toml`.
+    """
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z", "--", *LAUNCH_SURFACES],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+        timeout=e2e_timeout(30),
+    ).stdout.split("\0")
+    launching = [
+        path
+        for path in tracked
+        if path
+        and path != BOARD_LIVE_CONFIG.name
+        and not path.endswith(".md")
+        and (REPO_ROOT / path).is_file()
+    ]
+    assert "justfile" in launching
+    assert "graphs/node-scope.yaml" in launching
+    assert "oneharness.toml" in launching
+    naming = [
+        path
+        for path in launching
+        if BOARD_LIVE_CONFIG.name
+        in (REPO_ROOT / path).read_text(encoding="utf-8", errors="replace")
+    ]
+    assert not naming, (
+        f"{naming} name {BOARD_LIVE_CONFIG.name}, which hands the board token to every "
+        "turn they launch; only a plan node naming it per node may reach it"
     )
 
 

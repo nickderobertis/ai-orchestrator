@@ -1,0 +1,73 @@
+# The worker's agent side with the board token, `GH_PROJECTS_TOKEN`, left unmasked and
+# every other mask kept. Nothing names it by default, so only a plan node that names it
+# holds the token; docs/onejudge-integration.md says what it is for and how a node names it.
+#
+# `tests/e2e/test_oneharness_timeout_e2e.py` holds its routing to `oneharness.toml`'s
+# resolution field by field, `tests/e2e/test_dispatch_environment_e2e.py` reads the
+# token, and the absence of every other mask, out of a real turn on every identity, and
+# `tests/e2e/test_oneharness_config_equivalence_e2e.py` holds every mask below.
+extends = "oneharness.dispatch.toml"
+
+# The worker's label, as `oneharness.toml` states it: this is the same side of the same
+# conversation, so a session it records reads as the agent's. The engine's six
+# `onepipeline.*` keys a dispatch inherits say where in the graph it ran, never which side.
+history_labels = { role = "agent" }
+
+harnesses = [
+    "claude-code:alternate",
+    "claude-code:alternate2",
+    "codex:primary",
+    "codex:alternate",
+    "claude-code:primary-backup",
+    "claude-code:primary",
+]
+
+[harness.claude-code]
+env = { BASH_MAX_TIMEOUT_MS = "3600000" }
+
+[harness.codex]
+args = ["-c", "background_terminal_max_timeout=3600000"]
+
+# Each variant restates `oneharness.dispatch.toml`'s mask without `GH_PROJECTS_TOKEN`,
+# since a parent's mask is one no child can remove.
+[harness.codex.variant.primary]
+unset_env = ["HELLOPATIENT_LINEAR_API_KEY"]
+
+[harness.codex.variant.alternate]
+unset_env = ["OPENAI_API_KEY", "HELLOPATIENT_LINEAR_API_KEY"]
+
+[harness.claude-code.variant.alternate]
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+    "HELLOPATIENT_LINEAR_API_KEY",
+]
+
+[harness.claude-code.variant.alternate2]
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+    "HELLOPATIENT_LINEAR_API_KEY",
+]
+
+[harness.claude-code.variant.primary-backup]
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+    "HELLOPATIENT_LINEAR_API_KEY",
+]
+
+[harness.claude-code.variant.primary]
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+    "HELLOPATIENT_LINEAR_API_KEY",
+]
