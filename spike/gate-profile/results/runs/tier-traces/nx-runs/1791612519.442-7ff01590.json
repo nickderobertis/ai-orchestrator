@@ -1,0 +1,21 @@
+{
+  "run": {
+    "command": "nx run orchestrator:test-toolchain-writers --skip-nx-cache",
+    "startTime": "2026-10-10T05:46:45.284Z",
+    "endTime": "2026-10-10T06:06:47.175Z",
+    "inner": false
+  },
+  "tasks": [
+    {
+      "taskId": "orchestrator:test-toolchain-writers",
+      "target": "test-toolchain-writers",
+      "projectName": "orchestrator",
+      "hash": "14154068441238580292",
+      "startTime": "2026-10-10T05:46:45.290Z",
+      "endTime": "2026-10-10T06:06:47.142Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 1
+    }
+  ]
+}

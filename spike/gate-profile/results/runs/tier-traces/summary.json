@@ -1,0 +1,1077 @@
+{
+  "mode": "cmd",
+  "label": "tier-traces",
+  "base_commit": "3b6a1ef79ff3953763fcf644c496c5d6a9248e36",
+  "measured_head": "3b6a1ef79ff3953763fcf644c496c5d6a9248e36",
+  "tree": "3a2e8edb4850a17ffe0d98d6500ad7d6f02b2ca5",
+  "edit": "none",
+  "edit_spec": "",
+  "cache_state": "warm",
+  "comparison_base": "origin/main@803859874cd324b065abba029263ac8fc121bf7b",
+  "nx_cache_dir": "/home/nick.guest/.cache/gate-profile-spike/xdg/ai-orchestrator/nx/756e79f93796751d",
+  "nx_cache_entries_before_seed": 36,
+  "nx_cache_entries_at_start": 36,
+  "uv": "uv 0.11.32 (aarch64-unknown-linux-gnu)",
+  "nx": "v23.1.0",
+  "llmlint": "llmlint 0.4.7",
+  "llmlint_fingerprint_sha256_16": "f8415a2fd16a02f4",
+  "exit_status": 137,
+  "cmd": [
+    "bash",
+    "-c",
+    "\"$GATE_PROFILE_HARNESS\"/trace/tiers.sh"
+  ],
+  "started_at": "2026-10-10T06:08:39.440703+00:00",
+  "wall_clock_s": 7841.5,
+  "host": {
+    "load1_max": 23.61,
+    "load1_mean": 7.55,
+    "load1_samples": 1496,
+    "dispatches_max": "unknown",
+    "dispatches_proven_max": 2,
+    "dispatches_samples": [
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 2,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 2,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 2,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 2,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 2,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 2,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 2,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 2,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 2,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 2,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 2,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 2,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 2,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 2,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 2,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 2,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 2,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 2,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 2,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 2,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 2,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      },
+      {
+        "budget_script_equivalent": "unknown",
+        "proven": 1,
+        "unproven": 7
+      }
+    ]
+  },
+  "gate_phases": null,
+  "phases": [
+    {
+      "kind": "nx",
+      "label": "other run orchestrator-e2e:test --skip-nx-cache",
+      "start_offset_s": 0.5,
+      "duration_s": 2844.5
+    },
+    {
+      "kind": "nx",
+      "label": "other run plan-tooling:test --skip-nx-cache",
+      "start_offset_s": 0.5,
+      "duration_s": 2639.9
+    },
+    {
+      "kind": "nx",
+      "label": "other run orchestrator:test-docs --skip-nx-cache",
+      "start_offset_s": 0.5,
+      "duration_s": 5620.4
+    },
+    {
+      "kind": "nx",
+      "label": "other run orchestrator:test-docs --skip-nx-cache",
+      "start_offset_s": 1.4,
+      "duration_s": 5619.6
+    },
+    {
+      "kind": "nx",
+      "label": "other run orchestrator-e2e:test --skip-nx-cache",
+      "start_offset_s": 1.4,
+      "duration_s": 2843.7
+    },
+    {
+      "kind": "nx",
+      "label": "other run orchestrator-e2e:test --skip-nx-cache",
+      "start_offset_s": 1.4,
+      "duration_s": 0.0
+    },
+    {
+      "kind": "nx",
+      "label": "other run orchestrator-e2e:test --skip-nx-cache",
+      "start_offset_s": 1.4,
+      "duration_s": 0.0
+    },
+    {
+      "kind": "nx",
+      "label": "other run plan-tooling:test --skip-nx-cache",
+      "start_offset_s": 1.9,
+      "duration_s": 2638.5
+    },
+    {
+      "kind": "nx",
+      "label": "other run plan-tooling:test-docs --skip-nx-cache",
+      "start_offset_s": 2640.9,
+      "duration_s": 1050.4
+    },
+    {
+      "kind": "nx",
+      "label": "other run plan-tooling:test-docs --skip-nx-cache",
+      "start_offset_s": 2641.8,
+      "duration_s": 1049.6
+    },
+    {
+      "kind": "nx",
+      "label": "other run plan-tooling:test-docs --skip-nx-cache",
+      "start_offset_s": 2641.8,
+      "duration_s": 0.0
+    },
+    {
+      "kind": "nx",
+      "label": "other run plan-tooling:test-docs --skip-nx-cache",
+      "start_offset_s": 2641.8,
+      "duration_s": 0.0
+    },
+    {
+      "kind": "nx",
+      "label": "other run orchestrator-e2e:test-recipes --skip-nx-cache",
+      "start_offset_s": 5621.4,
+      "duration_s": 298.8
+    },
+    {
+      "kind": "nx",
+      "label": "other run orchestrator-e2e:test-recipes --skip-nx-cache",
+      "start_offset_s": 5621.9,
+      "duration_s": 298.3
+    },
+    {
+      "kind": "nx",
+      "label": "other run orchestrator-e2e:test-checkouts --skip-nx-cache",
+      "start_offset_s": 5920.7,
+      "duration_s": 63.3
+    },
+    {
+      "kind": "nx",
+      "label": "other run orchestrator-e2e:test-checkouts --skip-nx-cache",
+      "start_offset_s": 5921.2,
+      "duration_s": 62.8
+    }
+  ],
+  "lint_llm_diff_provenance": null,
+  "nx_runs": [
+    {
+      "invocation": "other run plan-tooling:test --skip-nx-cache",
+      "command": "nx run orchestrator:test-docs --skip-nx-cache",
+      "start_offset_s": 6.0,
+      "duration_s": 5614.9,
+      "tasks": [
+        {
+          "task": "orchestrator:test-docs",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 6.1,
+          "duration_s": 5614.8
+        }
+      ],
+      "snapshot": "1791618140.559-99c854ce.json"
+    },
+    {
+      "invocation": "other run orchestrator-e2e:test-recipes --skip-nx-cache",
+      "command": "nx run orchestrator-e2e:test-recipes --skip-nx-cache",
+      "start_offset_s": 5624.3,
+      "duration_s": 295.5,
+      "tasks": [
+        {
+          "task": "orchestrator-e2e:test-recipes",
+          "cache": "cache-miss",
+          "status": 1,
+          "start_offset_s": 5624.3,
+          "duration_s": 295.5
+        }
+      ],
+      "snapshot": "1791618439.276-646c64d4.json"
+    },
+    {
+      "invocation": "other run orchestrator-e2e:test-checkouts --skip-nx-cache",
+      "command": "nx run orchestrator-e2e:test-checkouts --skip-nx-cache",
+      "start_offset_s": 5923.2,
+      "duration_s": 60.8,
+      "tasks": [
+        {
+          "task": "orchestrator-e2e:test-checkouts",
+          "cache": "cache-miss",
+          "status": 0,
+          "start_offset_s": 5923.3,
+          "duration_s": 60.5
+        }
+      ],
+      "snapshot": "1791618503.538-bdf0f9be.json"
+    }
+  ],
+  "pytest_tiers": {
+    "orchestrator-e2e:test-checkouts": {
+      "wall_clock_s": 59.0,
+      "exitstatus": 0,
+      "tests": 62,
+      "summed_test_s": 193.3,
+      "group_s": {
+        "None": 113.2,
+        "redispatch-published-tip": 47.5,
+        "shared-checkout-toolchain": 22.9,
+        "lost-turn-wire-contract": 7.9,
+        "persona-review-bar": 1.8
+      },
+      "group_tests": {
+        "None": 52,
+        "redispatch-published-tip": 4,
+        "shared-checkout-toolchain": 4,
+        "lost-turn-wire-contract": 1,
+        "persona-review-bar": 1
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/e2e/test_merge_path_audit_e2e.py",
+          58.4
+        ],
+        [
+          "tests/e2e/test_redispatch_names_the_published_tip_e2e.py",
+          47.5
+        ],
+        [
+          "tests/e2e/test_watch_selector_e2e.py",
+          22.9
+        ],
+        [
+          "tests/e2e/test_adopted_cli_fixes_e2e.py",
+          21.9
+        ],
+        [
+          "tests/e2e/test_release_adoption_in_force_e2e.py",
+          20.4
+        ],
+        [
+          "tests/e2e/test_lost_turn_wire_contract_e2e.py",
+          7.9
+        ],
+        [
+          "tests/e2e/test_watch_recipe_e2e.py",
+          5.4
+        ],
+        [
+          "tests/e2e/test_controlled_turn_model_e2e.py",
+          3.2
+        ],
+        [
+          "tests/e2e/test_persona_review_bar_e2e.py",
+          1.8
+        ],
+        [
+          "tests/e2e/test_onetaskgraph_host_e2e.py",
+          1.5
+        ],
+        [
+          "tests/e2e/test_judge_panel_e2e.py",
+          1.4
+        ],
+        [
+          "tests/e2e/test_commit_msg_hook_e2e.py",
+          0.8
+        ],
+        [
+          "tests/e2e/test_template_layers_e2e.py",
+          0.1
+        ]
+      ]
+    },
+    "orchestrator-e2e:test-recipes": {
+      "wall_clock_s": 257.1,
+      "exitstatus": 1,
+      "tests": 377,
+      "summed_test_s": 816.7,
+      "group_s": {
+        "None": 816.7
+      },
+      "group_tests": {
+        "None": 377
+      },
+      "failures": [
+        "tests/e2e/test_workspace_contract_e2e.py::test_a_forced_install_in_a_copy_holds_both_trees_locks_without_flock_and_releases_both",
+        "tests/e2e/test_workspace_contract_e2e.py::test_gate_recipe_validates_first_then_judges_then_checks",
+        "tests/e2e/test_workspace_contract_e2e.py::test_the_workspace_installer_serializes_without_flock_through_the_shared_fallback"
+      ],
+      "slowest_modules": [
+        [
+          "tests/e2e/test_delegated_recipes_e2e.py",
+          377.5
+        ],
+        [
+          "tests/e2e/test_workspace_contract_e2e.py",
+          355.4
+        ],
+        [
+          "tests/e2e/test_repos_bootstrap_e2e.py",
+          72.1
+        ],
+        [
+          "tests/e2e/test_ask_manager_shim_e2e.py",
+          5.2
+        ],
+        [
+          "tests/e2e/test_base_freshness_e2e.py",
+          4.1
+        ],
+        [
+          "tests/e2e/test_setup_llmlint_e2e.py",
+          1.4
+        ],
+        [
+          "tests/e2e/test_just_tempdir_e2e.py",
+          1.0
+        ]
+      ]
+    },
+    "orchestrator-e2e:test": {
+      "wall_clock_s": 2825.2,
+      "exitstatus": 1,
+      "tests": 1007,
+      "summed_test_s": 8108.4,
+      "group_s": {
+        "None": 3357.2,
+        "shared-checkout-toolchain": 2855.4,
+        "session-reuse-retry": 229.9,
+        "repositories-field-dispatch": 191.0,
+        "budget-capabilities": 173.8,
+        "human-readable-branch": 169.0,
+        "worker-start-directory": 162.3,
+        "monitor-survives-the-channel": 118.1,
+        "orchestrate-launch": 114.8,
+        "live-note-busy-turn": 90.1,
+        "supervisory-prompts": 84.9,
+        "observer-graph-liveness": 63.7,
+        "cancellation": 63.0,
+        "verdict-recipes": 62.9,
+        "monitor-cursor": 59.7,
+        "observer-environment": 58.6,
+        "monitor-quiet-turn": 52.0,
+        "monitor-ops": 46.5,
+        "monitor-judge-side": 45.6,
+        "monitor-lost-turn": 41.1,
+        "plan-recipe": 40.4,
+        "monitor-scored-by-the-planner": 17.4,
+        "design-doc-graph": 4.6,
+        "path-dispatched-personas": 3.4,
+        "persona-review-bar": 3.2
+      },
+      "group_tests": {
+        "shared-checkout-toolchain": 57,
+        "orchestrate-launch": 21,
+        "monitor-survives-the-channel": 6,
+        "worker-start-directory": 4,
+        "live-note-busy-turn": 3,
+        "verdict-recipes": 3,
+        "cancellation": 2,
+        "None": 846,
+        "monitor-cursor": 1,
+        "monitor-quiet-turn": 1,
+        "monitor-lost-turn": 1,
+        "persona-review-bar": 1,
+        "supervisory-prompts": 13,
+        "plan-recipe": 7,
+        "session-reuse-retry": 4,
+        "human-readable-branch": 3,
+        "monitor-judge-side": 10,
+        "budget-capabilities": 8,
+        "repositories-field-dispatch": 4,
+        "monitor-ops": 3,
+        "observer-environment": 3,
+        "design-doc-graph": 2,
+        "path-dispatched-personas": 2,
+        "monitor-scored-by-the-planner": 1,
+        "observer-graph-liveness": 1
+      },
+      "failures": [
+        "tests/e2e/test_gate_time_budget_e2e.py::test_a_gate_within_budget_prints_its_result_and_is_admitted",
+        "tests/e2e/test_observer_graph_liveness_e2e.py::test_a_paced_monitor_keeps_the_run_watched_between_its_turns@observer-graph-liveness",
+        "tests/e2e/test_oneharness_history_segments_e2e.py::test_recording_a_run_reads_no_index_and_walks_no_store"
+      ],
+      "slowest_modules": [
+        [
+          "tests/e2e/test_publish_branch_e2e.py",
+          1327.5
+        ],
+        [
+          "tests/e2e/test_onetaskgraph_host_e2e.py",
+          865.1
+        ],
+        [
+          "tests/e2e/test_repo_registry_apply_e2e.py",
+          685.1
+        ],
+        [
+          "tests/e2e/test_budget_target_e2e.py",
+          664.8
+        ],
+        [
+          "tests/e2e/test_orchestrate_launch_e2e.py",
+          595.3
+        ],
+        [
+          "tests/e2e/test_plan_recipe_e2e.py",
+          570.2
+        ],
+        [
+          "tests/e2e/test_budget_telemetry_e2e.py",
+          266.0
+        ],
+        [
+          "tests/e2e/test_session_reuse_retry_e2e.py",
+          229.9
+        ],
+        [
+          "tests/e2e/test_repositories_field_dispatch_e2e.py",
+          191.0
+        ],
+        [
+          "tests/e2e/test_budget_capabilities_adopted_e2e.py",
+          173.8
+        ],
+        [
+          "tests/e2e/test_human_readable_branch_e2e.py",
+          169.0
+        ],
+        [
+          "tests/e2e/test_dispatch_environment_e2e.py",
+          167.8
+        ],
+        [
+          "tests/e2e/test_worker_start_directory_e2e.py",
+          162.3
+        ],
+        [
+          "tests/e2e/test_session_labels_e2e.py",
+          156.3
+        ],
+        [
+          "tests/e2e/test_extends_chain_dispatch_e2e.py",
+          139.2
+        ],
+        [
+          "tests/e2e/test_monitor_quiet_turn_e2e.py",
+          138.7
+        ],
+        [
+          "tests/e2e/test_gate_time_budget_e2e.py",
+          137.8
+        ],
+        [
+          "tests/e2e/test_monitor_survives_the_channel_e2e.py",
+          135.6
+        ],
+        [
+          "tests/e2e/test_adopted_engine_reads_an_adopted_run_e2e.py",
+          117.1
+        ],
+        [
+          "tests/e2e/test_parked_run_is_driven_e2e.py",
+          104.9
+        ],
+        [
+          "tests/e2e/test_work_status_and_import_e2e.py",
+          95.5
+        ],
+        [
+          "tests/e2e/test_live_note_leaves_the_run_journalling_e2e.py",
+          90.1
+        ],
+        [
+          "tests/e2e/test_adopted_engine_settles_and_logs_e2e.py",
+          88.8
+        ],
+        [
+          "tests/e2e/test_supervisory_prompt_discipline_e2e.py",
+          84.9
+        ],
+        [
+          "tests/e2e/test_worktree_pool_e2e.py",
+          66.5
+        ],
+        [
+          "tests/e2e/test_concurrency_interlock_e2e.py",
+          64.4
+        ],
+        [
+          "tests/e2e/test_observer_graph_liveness_e2e.py",
+          63.9
+        ],
+        [
+          "tests/e2e/test_monitor_cursor_e2e.py",
+          59.7
+        ],
+        [
+          "tests/e2e/test_run_snapshot.py",
+          52.9
+        ],
+        [
+          "tests/e2e/test_sweep_e2e.py",
+          51.1
+        ]
+      ]
+    },
+    "orchestrator:test-docs": {
+      "wall_clock_s": 5600.0,
+      "exitstatus": 0,
+      "tests": 507,
+      "summed_test_s": 11702.9,
+      "group_s": {
+        "None": 5900.9,
+        "shared-checkout-toolchain": 5678.7,
+        "orchestrate-launch": 54.2,
+        "dispatched-operational-notes": 37.0,
+        "plan-recipe": 32.1
+      },
+      "group_tests": {
+        "shared-checkout-toolchain": 72,
+        "dispatched-operational-notes": 13,
+        "None": 420,
+        "orchestrate-launch": 1,
+        "plan-recipe": 1
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/test_nx_cache_scope.py",
+          4466.9
+        ],
+        [
+          "tests/e2e/test_nx_cache_scope_e2e.py",
+          3855.2
+        ],
+        [
+          "tests/e2e/test_llmlint_cache_e2e.py",
+          1292.0
+        ],
+        [
+          "tests/e2e/test_workspace_contract_e2e.py",
+          843.0
+        ],
+        [
+          "tests/e2e/test_llmlint_two_path_verdict_e2e.py",
+          314.3
+        ],
+        [
+          "tests/e2e/test_orchestrate_launch_e2e.py",
+          283.1
+        ],
+        [
+          "tests/e2e/test_graph_overrides_dispatch_e2e.py",
+          196.3
+        ],
+        [
+          "tests/test_smoke_selector.py",
+          104.2
+        ],
+        [
+          "tests/e2e/test_plan_recipe_e2e.py",
+          85.9
+        ],
+        [
+          "tests/e2e/test_legacy_runs_root_e2e.py",
+          43.3
+        ],
+        [
+          "tests/e2e/test_driver_death_is_recoverable_e2e.py",
+          39.2
+        ],
+        [
+          "tests/e2e/test_dispatched_operational_notes_e2e.py",
+          37.0
+        ],
+        [
+          "tests/test_follow_up_tickets.py",
+          34.4
+        ],
+        [
+          "tests/test_cli_surface_drift.py",
+          33.2
+        ],
+        [
+          "tests/test_design_approval.py",
+          28.5
+        ],
+        [
+          "tests/e2e/test_commit_msg_hook_e2e.py",
+          11.1
+        ],
+        [
+          "tests/test_typed_sdks.py",
+          6.7
+        ],
+        [
+          "tests/test_plan_review.py",
+          6.5
+        ],
+        [
+          "tests/test_decomposition_guidance.py",
+          6.4
+        ],
+        [
+          "tests/test_project_boundaries.py",
+          4.0
+        ],
+        [
+          "tests/test_tracked_path_references.py",
+          2.0
+        ],
+        [
+          "tests/test_dispatch_appendix.py",
+          1.5
+        ],
+        [
+          "tests/test_follow_up_ticket_docs.py",
+          1.2
+        ],
+        [
+          "tests/test_upstream_workaround_rule.py",
+          1.0
+        ],
+        [
+          "tests/test_plan_store_guidance.py",
+          0.7
+        ],
+        [
+          "tests/test_plan_source_roots.py",
+          0.7
+        ],
+        [
+          "tests/test_claude_identity_docs_drift.py",
+          0.7
+        ],
+        [
+          "tests/test_plan_budgets_template.py",
+          0.5
+        ],
+        [
+          "tests/e2e/test_oneharness_history_segments_e2e.py",
+          0.5
+        ],
+        [
+          "tests/test_onejudge_version.py",
+          0.4
+        ]
+      ]
+    },
+    "plan-tooling:test-docs": {
+      "wall_clock_s": 1040.5,
+      "exitstatus": 0,
+      "tests": 85,
+      "summed_test_s": 2345.8,
+      "group_s": {
+        "plan-spike-flow": 1053.1,
+        "finish-plan": 315.5,
+        "shared-checkout-toolchain": 277.6,
+        "linear-follow-ups": 233.3,
+        "linear-routed": 231.8,
+        "None": 160.8,
+        "plan-flow": 37.2,
+        "finish-plan-diagram": 36.4
+      },
+      "group_tests": {
+        "plan-spike-flow": 30,
+        "finish-plan": 8,
+        "plan-flow": 2,
+        "None": 23,
+        "linear-follow-ups": 7,
+        "finish-plan-diagram": 4,
+        "shared-checkout-toolchain": 8,
+        "linear-routed": 3
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/plan_tooling/test_plan_spike_flow_e2e.py",
+          1053.1
+        ],
+        [
+          "tests/plan_tooling/test_finish_plan_budgets_e2e.py",
+          296.8
+        ],
+        [
+          "tests/plan_tooling/test_follow_ups_recipe_e2e.py",
+          277.6
+        ],
+        [
+          "tests/plan_tooling/test_linear_routed_follow_ups_e2e.py",
+          233.3
+        ],
+        [
+          "tests/plan_tooling/test_linear_routed_plans_e2e.py",
+          231.8
+        ],
+        [
+          "tests/plan_tooling/test_plan_review_e2e.py",
+          93.0
+        ],
+        [
+          "tests/plan_tooling/test_shipped_examples_check_plan_e2e.py",
+          64.1
+        ],
+        [
+          "tests/plan_tooling/test_plan_flow_e2e.py",
+          37.2
+        ],
+        [
+          "tests/plan_tooling/test_finish_plan_diagram_e2e.py",
+          36.4
+        ],
+        [
+          "tests/plan_tooling/test_finish_plan_recipe_e2e.py",
+          18.8
+        ],
+        [
+          "tests/plan_tooling/test_plan_write_refusals_e2e.py",
+          3.3
+        ],
+        [
+          "tests/plan_tooling/test_check_plan_budgets_e2e.py",
+          0.5
+        ]
+      ]
+    },
+    "plan-tooling:test": {
+      "wall_clock_s": 2627.2,
+      "exitstatus": 0,
+      "tests": 644,
+      "summed_test_s": 10575.7,
+      "group_s": {
+        "None": 5592.2,
+        "shared-checkout-toolchain": 2033.3,
+        "approve-design": 1167.6,
+        "finish-plan": 924.1,
+        "visual-plan-flow": 365.0,
+        "unwatched-planning": 148.3,
+        "finish-plan-visual": 116.8,
+        "plan-task-template": 107.2,
+        "plan-flow": 92.5,
+        "plan-store-record-shapes": 28.8
+      },
+      "group_tests": {
+        "shared-checkout-toolchain": 157,
+        "None": 375,
+        "approve-design": 50,
+        "finish-plan": 29,
+        "plan-flow": 8,
+        "unwatched-planning": 6,
+        "visual-plan-flow": 6,
+        "finish-plan-visual": 5,
+        "plan-task-template": 5,
+        "plan-store-record-shapes": 3
+      },
+      "failures": [],
+      "slowest_modules": [
+        [
+          "tests/plan_tooling/test_check_plan_recipe_e2e.py",
+          3481.5
+        ],
+        [
+          "tests/plan_tooling/test_approve_design_recipe_e2e.py",
+          1167.7
+        ],
+        [
+          "tests/plan_tooling/test_plan_review_e2e.py",
+          1008.1
+        ],
+        [
+          "tests/plan_tooling/test_follow_ups_recipe_e2e.py",
+          913.2
+        ],
+        [
+          "tests/plan_tooling/test_finish_plan_recipe_e2e.py",
+          887.7
+        ],
+        [
+          "tests/plan_tooling/test_follow_ups_answer_comments_recipe_e2e.py",
+          752.7
+        ],
+        [
+          "tests/plan_tooling/test_check_plan_budgets_e2e.py",
+          536.0
+        ],
+        [
+          "tests/plan_tooling/test_follow_ups_comment_answers_e2e.py",
+          367.4
+        ],
+        [
+          "tests/plan_tooling/test_visual_plan_flow_e2e.py",
+          365.0
+        ],
+        [
+          "tests/plan_tooling/test_copy_plan_recipe_e2e.py",
+          298.1
+        ],
+        [
+          "tests/plan_tooling/test_check_plan_spikes_e2e.py",
+          172.2
+        ],
+        [
+          "tests/plan_tooling/test_unwatched_planning_launches_e2e.py",
+          148.3
+        ],
+        [
+          "tests/plan_tooling/test_finish_plan_visual_e2e.py",
+          116.8
+        ],
+        [
+          "tests/plan_tooling/test_plan_task_template_e2e.py",
+          107.2
+        ],
+        [
+          "tests/plan_tooling/test_plan_flow_e2e.py",
+          92.5
+        ],
+        [
+          "tests/plan_tooling/test_follow_up_drafts_e2e.py",
+          44.0
+        ],
+        [
+          "tests/plan_tooling/test_finish_plan_budgets_e2e.py",
+          36.4
+        ],
+        [
+          "tests/plan_tooling/test_plan_store_record_shapes_e2e.py",
+          28.8
+        ],
+        [
+          "tests/plan_tooling/test_design_document_body_limit_e2e.py",
+          28.2
+        ],
+        [
+          "tests/plan_tooling/test_plan_root_env.py",
+          14.5
+        ],
+        [
+          "tests/plan_tooling/test_task_templates.py",
+          4.8
+        ],
+        [
+          "tests/plan_tooling/test_plan_copy_destination_ids_e2e.py",
+          4.7
+        ]
+      ]
+    }
+  }
+}

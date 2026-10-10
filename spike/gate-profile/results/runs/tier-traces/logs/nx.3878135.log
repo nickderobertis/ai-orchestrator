@@ -1,0 +1,25 @@
+
+> nx run orchestrator-e2e:test-checkouts
+
+> rm -rf .telemetry/orchestrator-e2e/test-checkouts && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/orchestrator-e2e/test-checkouts NO_COLOR=1 uv run pytest tests/e2e --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval -m reads_checkouts --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+..............................................................           [100%]
+62 passed in 59.73s
+
+
+
+ NX   Successfully ran target test-checkouts for project orchestrator-e2e
+
+
+  Run duration:      1m 0s
+  Cache:             Skipped (--skip-nx-cache)
+  Critical path:     1m 0s (1 task)
+  Recoverable time:  <1ms
+
+  Recommendations:
+    - Cache: drop --skip-nx-cache to restore unchanged tasks instantly.
+    - Speed up or split the longest tasks on the critical path:
+        orchestrator-e2e:test-checkouts    1m 0s

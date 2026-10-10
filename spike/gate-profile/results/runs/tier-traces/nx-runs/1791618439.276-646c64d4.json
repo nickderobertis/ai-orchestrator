@@ -1,0 +1,21 @@
+{
+  "run": {
+    "command": "nx run orchestrator-e2e:test-recipes --skip-nx-cache",
+    "startTime": "2026-10-10T07:42:23.700Z",
+    "endTime": "2026-10-10T07:47:19.202Z",
+    "inner": false
+  },
+  "tasks": [
+    {
+      "taskId": "orchestrator-e2e:test-recipes",
+      "target": "test-recipes",
+      "projectName": "orchestrator-e2e",
+      "hash": "7660405864084443689",
+      "startTime": "2026-10-10T07:42:23.728Z",
+      "endTime": "2026-10-10T07:47:19.189Z",
+      "params": "",
+      "cacheStatus": "cache-miss",
+      "status": 1
+    }
+  ]
+}

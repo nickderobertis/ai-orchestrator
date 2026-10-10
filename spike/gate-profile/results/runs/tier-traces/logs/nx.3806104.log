@@ -1,0 +1,243 @@
+
+> nx run orchestrator-e2e:test-recipes
+
+> env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/e2e --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval -m reads_recipes --no-cov -n 4 --dist loadgroup
+
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [ 19%]
+........................................................................ [ 38%]
+........................................................................ [ 57%]
+........................................................................ [ 76%]
+........................................................................ [ 95%]
+...F.........FF..                                                        [100%]
+=================================== FAILURES ===================================
+___________ test_gate_recipe_validates_first_then_judges_then_checks ___________
+[gw2] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-nick/pytest-887/popen-gw2/test_gate_recipe_validates_fir0')
+
+    @pytest.mark.reads_recipes
+    @pytest.mark.skipif(
+        shutil.which("llmlint") is None, reason="the gate's first stage is the installed llmlint"
+    )
+    def test_gate_recipe_validates_first_then_judges_then_checks(tmp_path: Path) -> None:
+        """A tree `validate` accepts goes on to the judge, and only then the deterministic tier.
+    
+        The one summary line comes after every stage, carrying the coverage the last stage
+        measured and the provenance the judged stage printed.
+        """
+        checkout, trace = _validating_gate_checkout(tmp_path, "robust_shell")
+        (checkout / ".coverage").write_text("")
+        base = subprocess.run(
+            ["git", "rev-parse", "origin/main"],
+            cwd=checkout,
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.strip()
+    
+        result = _recipe_run(
+            checkout,
+            trace,
+            "gate",
+            "origin",
+            "main",
+            REAL_LLMLINT=str(shutil.which("llmlint")),
+            FAKE_COVERAGE_TOTAL="96.41",
+        )
+    
+        assert result.returncode == 0, result.stdout + result.stderr
+        ran = trace.read_text(encoding="utf-8").splitlines()
+        assert ran[0] == "llmlint validate --diff-base origin/main", ran
+        assert ran[1] == "nx.sh run workspace:lint-llm-diff", ran
+        assert any(line.startswith("nx.sh ") and "-t format-check" in line for line in ran[2:]), ran
+        assert not any("-t format-check" in line for line in ran[:2]), ran
+>       assert [line for line in result.stdout.splitlines() if line.startswith("gate: ")] == [
+            "gate: complete gate passed (line coverage 96.41%); "
+            f"judged this diff against base {base} (Nx cache miss)"
+        ], result.stdout
+E       AssertionError: gate: complete gate passed (line coverage 96.41%); judged this diff against base 8caf45113030a343553512d4ef006b6f42866b1a (Nx cache miss) [ignored an ambient global Nx cache skip]
+E         
+E       assert ['gate: compl... cache skip]'] == ['gate: compl... cache miss)']
+E         
+E         At index 0 diff: 'gate: complete gate passed (line coverage 96.41%); judged this diff against base 8caf45113030a343553512d4ef006b6f42866b1a (Nx cache miss) [ignored an ambient global Nx cache skip]' != 'gate: complete gate passed (line coverage 96.41%); judged this diff against base 8caf45113030a343553512d4ef006b6f42866b1a (Nx cache miss)'
+E         Use -v to get more diff
+
+tests/e2e/test_workspace_contract_e2e.py:2730: AssertionError
+_ test_the_workspace_installer_serializes_without_flock_through_the_shared_fallback _
+[gw3] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-nick/pytest-887/popen-gw3/test_the_workspace_installer_s0')
+
+    @pytest.mark.reads_recipes
+    def test_the_workspace_installer_serializes_without_flock_through_the_shared_fallback(
+        tmp_path: Path,
+    ) -> None:
+        """The other installer through the same fallback, on a platform with no `flock`.
+    
+        `flock` is util-linux and a stock macOS has none, so `scripts/install-lock.sh`
+        falls back to a mutex directory — and only the plan-store installer used to be
+        driven through that path, while this one reached the fallback through the same
+        helper unproved. Every caller succeeds and exactly one installs: the rest arrive
+        at a tree the first already provisioned, and answer it as Bun does, `(no changes)`.
+        The first is held in Bun until each of the rest is seen polling for the mutex it
+        holds, so the callers overlap by construction rather than by how long Bun takes.
+        """
+        checkout = _nx_wrapper_checkout(tmp_path, "flockless")
+        _add_nx_wrapper_doubles(checkout)
+        trace = tmp_path / "trace"
+        release = tmp_path / "release-bun"
+        environment = _flockless_env(checkout, tmp_path, trace, BUN_HOLD_RELEASE=str(release))
+    
+        def start_caller() -> subprocess.Popen[str]:
+            return subprocess.Popen(
+                [str(checkout / "scripts" / "workspace-install.sh")],
+                cwd=checkout,
+                env=environment,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+    
+        racing = [start_caller()]
+        try:
+            _first_install_held(racing[0], release, trace)
+            racing.extend(start_caller() for _ in range(FLOCKLESS_RACERS - 1))
+            for waiter in racing[1:]:
+    
+                def polls(waiter: subprocess.Popen[str] = waiter) -> bool:
+                    assert _holding_installs(release) == 1, "a second install ran Bun beside the first"
+                    return _naps_between_polls(waiter.pid)
+    
+>               _await_installer_waiting(waiter, "first install's mutex", trace, polls)
+
+tests/e2e/test_workspace_contract_e2e.py:1405: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/e2e/test_workspace_contract_e2e.py:1033: in _await_installer_waiting
+    until(
+tests/e2e/waits.py:84: in until
+    if ready():
+       ^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+    def ready() -> bool:
+>       assert process.poll() is None, (
+            f"the installer exited {process.returncode} while the {held} was held, so it "
+            "never waited on it"
+        )
+E       AssertionError: the installer exited 1 while the first install's mutex was held, so it never waited on it
+E       assert 1 is None
+E        +  where 1 = poll()
+E        +    where poll = <Popen: returncode: 1 args: ['/tmp/pytest-of-nick/pytest-887/popen-gw3/test_...>.poll
+
+tests/e2e/test_workspace_contract_e2e.py:1027: AssertionError
+_ test_a_forced_install_in_a_copy_holds_both_trees_locks_without_flock_and_releases_both _
+[gw1] linux -- Python 3.14.6 /home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.venv/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-nick/pytest-887/popen-gw1/test_a_forced_install_in_a_cop0')
+
+    @pytest.mark.reads_recipes
+    def test_a_forced_install_in_a_copy_holds_both_trees_locks_without_flock_and_releases_both(
+        tmp_path: Path,
+    ) -> None:
+        """The two-lock forced run through the fallback, which has to release two mutexes.
+    
+        Under `flock` the kernel releases a lock when its holder exits; under the fallback
+        the sourcing shell's one EXIT trap does, and a forced run in a copy sharing an
+        install takes two locks in that shell — the owning tree's, then its own. A trap
+        re-armed for the second would have dropped the first, leaving a mutex behind that
+        every later install of the owner waits the whole budget out on. So this holds each
+        mutex in turn, the way the `flock` journey above holds each lock, reads that the run
+        is polling for it and neither ran Bun nor discarded the link while either was held,
+        and then reads that neither mutex outlived it.
+        """
+        owner = _nx_wrapper_checkout(tmp_path, "owner")
+        _add_nx_wrapper_doubles(owner)
+        _mark_nx_installed(owner)
+        copy = _nx_wrapper_checkout(tmp_path, "copy")
+        _add_nx_wrapper_doubles(copy)
+        modules = copy / "node_modules"
+        modules.symlink_to(owner / "node_modules", target_is_directory=True)
+        trace = tmp_path / "trace"
+        mutexes = []
+        for checkout in (owner, copy):
+            mutex = checkout / ".logs" / "workspace-install.lock.d"
+            mutex.parent.mkdir(mode=0o700)
+            mutex.mkdir()
+            mutexes.append(mutex)
+        owner_held, copy_held = mutexes
+    
+        process = subprocess.Popen(
+            [str(copy / "scripts" / "workspace-install.sh"), "--force"],
+            cwd=copy,
+            env=_flockless_env(copy, tmp_path, trace),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            for held, whose in ((owner_held, "owner's"), (copy_held, "copy's own")):
+                if held is copy_held:
+                    # The run re-makes the owner's mutex once this journey removes it, and
+                    # only after its last nap on it has ended, so a nap seen from here on is
+                    # one it took waiting on its own. One that exits here took the owner's
+                    # and never waited on its own.
+                    _await_installer_waiting(process, "copy's own mutex", trace, owner_held.is_dir)
+>               _await_installer_waiting(
+                    process, f"{whose} mutex", trace, lambda: _naps_between_polls(process.pid)
+                )
+
+tests/e2e/test_workspace_contract_e2e.py:1476: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/e2e/test_workspace_contract_e2e.py:1033: in _await_installer_waiting
+    until(
+tests/e2e/waits.py:84: in until
+    if ready():
+       ^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+    def ready() -> bool:
+>       assert process.poll() is None, (
+            f"the installer exited {process.returncode} while the {held} was held, so it "
+            "never waited on it"
+        )
+E       AssertionError: the installer exited 1 while the owner's mutex was held, so it never waited on it
+E       assert 1 is None
+E        +  where 1 = poll()
+E        +    where poll = <Popen: returncode: 1 args: ['/tmp/pytest-of-nick/pytest-887/popen-gw1/test_...>.poll
+
+tests/e2e/test_workspace_contract_e2e.py:1027: AssertionError
+=========================== short test summary info ============================
+FAILED tests/e2e/test_workspace_contract_e2e.py::test_gate_recipe_validates_first_then_judges_then_checks
+FAILED tests/e2e/test_workspace_contract_e2e.py::test_the_workspace_installer_serializes_without_flock_through_the_shared_fallback
+FAILED tests/e2e/test_workspace_contract_e2e.py::test_a_forced_install_in_a_copy_holds_both_trees_locks_without_flock_and_releases_both
+3 failed, 374 passed in 297.35s (0:04:57)
+Warning: command "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/e2e --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval -m reads_recipes --no-cov -n 4 --dist loadgroup" exited with non-zero status code
+
+
+ NX   Running target test-recipes for project orchestrator-e2e failed
+
+Failed tasks:
+
+- orchestrator-e2e:test-recipes
+
+Hint: run the command with --verbose for more details.
+
+
+ NX   Nx detected a flaky task
+
+  orchestrator-e2e:test-recipes
+
+Flaky tasks can disrupt your CI pipeline. Automatically retry them with Nx Cloud. Learn more at https://nx.dev/ci/features/flaky-tasks
+
+  Run duration:      4m 55s
+  Cache:             Skipped (--skip-nx-cache)
+  Critical path:     4m 55s (1 task)
+  Recoverable time:  <1ms
+
+  Recommendations:
+    - Cache: drop --skip-nx-cache to restore unchanged tasks instantly.
+    - Speed up or split the longest tasks on the critical path:
+        orchestrator-e2e:test-recipes    4m 55s
