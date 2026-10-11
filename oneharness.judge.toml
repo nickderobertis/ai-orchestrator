@@ -8,11 +8,12 @@
 # identities run on.
 extends = "oneharness.dispatch.toml"
 
-# mode: `default`, never `plan`, because this config also drives the simulated user and
-# a planning mode would frame its message to the worker as a plan. Here rather than in
-# `oneharness.dispatch.toml`, which is also the worker's parent. docs/onejudge-integration.md,
-# "The mode a judge runs in", says why, and why the enforcement below is per harness.
-mode = "default"
+# mode: `read-only`. onejudge frames every judge with one evidence contract, and this mode
+# is how oneharness enforces read-only. Never `plan`: this config also drives the simulated
+# user, whose message a planning mode would frame as a plan. Here rather than in
+# `oneharness.dispatch.toml`, the worker's parent too. docs/onejudge-integration.md,
+# "The mode a judge runs in", says why.
+mode = "read-only"
 
 # history_labels: the counterpart to the agent config's `role = "agent"` — this is
 # the side that supervises. Stamping it makes "show me the judge's view of this
@@ -45,16 +46,20 @@ harnesses = [
 # way `oneharness.llmlint.toml` passes its sandbox permissions: both Codex identities take
 # it, no Claude candidate can (`-c` is claude's `--continue`), and this role's variants —
 # with their credential masks — stay untouched. Only the supervisory Codex roles carry it;
-# a worker's own `args` would replace a parent's, so no shared parent does.
-#
-# `sandbox_mode=read-only`: `default` leaves a judge turn on the host's own sandbox.
+# a worker's own `args` would replace a parent's, so no shared parent does. No sandbox
+# setting: the `read-only` mode passes `--sandbox read-only` on a fresh turn and re-asserts
+# it on a resumed one.
 [harness.codex]
-args = ["-c", "features.apps=false", "-c", "sandbox_mode=read-only"]
+args = ["-c", "features.apps=false"]
 
-# Only reading tools and no MCP server: `default` is Claude Code's `dontAsk`, which still
-# runs what a worktree's or identity's settings allow.
+# The one remaining fill. The `read-only` mode hands Claude Code its own reading tool set
+# under `bypassPermissions` and still loads every MCP server the worktree or identity
+# configures, whose tools would then run unprompted, so `--strict-mcp-config` loads none.
+# Retired by the follow-up drafted for oneharness, "oneharness read-only mode for Claude
+# Code loads MCP servers under bypassPermissions": delete this arg once oneharness's
+# read-only mode loads no MCP server itself.
 [harness.claude-code]
-args = ["--tools", "Read,Grep,Glob", "--strict-mcp-config"]
+args = ["--strict-mcp-config"]
 
 # The cheaper supervisor tier, and the one thing this role changes about the
 # identities themselves. Codex matches the agent side's GPT-5.6 Sol, inherited

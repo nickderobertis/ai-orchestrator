@@ -15,6 +15,7 @@
       "{workspaceRoot}/tests/delegation_checkout.py",
       "{workspaceRoot}/justfile",
       "{workspaceRoot}/config/read-api.address",
+      "{workspaceRoot}/config/plan-checklist.llmlint.yml",
       "{workspaceRoot}/scripts/planner-surface.sh",
       "{workspaceRoot}/scripts/new-persona.sh",
       "{workspaceRoot}/scripts/telemetry-server.sh",

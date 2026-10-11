@@ -40,6 +40,7 @@ ONEJUDGE_VERSION_REFERENCE_COUNTS = {
     # measured against and joins this gate rather than quietly outliving it.
     Path("config/onejudge.base.yaml"): 1,
 }
+#: A link's tag is `onejudge-v<release>` from 0.18.0, and `v<release>` before it.
 ONEJUDGE_VERSION_REFERENCE = re.compile(
     r"(?:\bonejudge(?:-cli| SDK/CLI)?(?:'s)?(?: version)?[\s`*(=]+"
     r"|/onejudge/(?:blob/)?(?:onejudge-)?)"

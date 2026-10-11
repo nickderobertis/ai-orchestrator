@@ -231,6 +231,12 @@ def delegation_checkout(tmp_path: Path) -> tuple[Path, Path]:
     # The one source the wrappers read the read API's address from; a checkout
     # without it is not one these recipes can run in.
     shutil.copy2(ROOT / "config/read-api.address", checkout / "config/read-api.address")
+    # The plan checklist `just plan` resolves into its planners' tasks before it writes
+    # their projects: a checkout without it is refused at that resolution, before anything
+    # these journeys are about is delegated.
+    shutil.copy2(
+        ROOT / "config/plan-checklist.llmlint.yml", checkout / "config/plan-checklist.llmlint.yml"
+    )
     # The host root's registration, which the launch wrapper refuses a checkout without.
     # Written rather than copied: which names it registers is
     # `tests/test_task_templates.py`'s, and these journeys are about where a recipe lands

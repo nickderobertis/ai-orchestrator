@@ -248,7 +248,9 @@ def test_the_link_names_the_adopted_onejudge_release_and_the_protocol_it_speaks(
     publishes sits at its tag, and a consumer pins the protocol version that release
     speaks. A pin file moved without the link would leave the judge side validating
     frames against the release before it; a pin that disagreed with the protocol would be
-    refused on the first frame of every run.
+    refused on the first frame of every run. The tag is `onejudge-v<release>`, the form
+    onejudge's release tooling has cut since 0.18.0; its `docs/protocol.md` still spells
+    the older `v<release>`, under which every later bundle answers 404.
     """
     location, pin = _link()
     adopted = ONEJUDGE_VERSION.read_text(encoding="utf-8").strip()

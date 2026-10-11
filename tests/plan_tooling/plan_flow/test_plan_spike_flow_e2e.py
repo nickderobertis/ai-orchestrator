@@ -47,6 +47,7 @@ from typing import Any, NamedTuple, NewType, cast
 import plan_fixture_source
 import pytest
 import short_state
+import yaml
 from nx_workspace import TOOLCHAIN_WRITER_MARKS, answering_this_checkouts_origin, copy_working_tree
 from project_fixtures import no_budgets
 from scratch_identity import PLANNING_FLOW_ORIGIN, seeded
@@ -404,30 +405,202 @@ def test_the_finalize_planner_runs_after_the_spikes_and_its_closeout_before_the_
     assert "holds the plan at" in done.stdout + done.stderr
 
 
-def test_no_node_of_the_flow_launches_under_the_planner_panel(
+def _resolved_checklist(flow: Flow) -> dict[str, Any]:
+    """The plan checklist as llmlint resolves it in the copied checkout, plugins included."""
+    resolved = subprocess.run(
+        ["llmlint", "config", "-c", str(flow.checkout / "config" / "plan-checklist.llmlint.yml")],
+        cwd=flow.checkout,
+        env=flow.environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+    assert resolved.returncode == 0, resolved.stderr
+    config: dict[str, Any] = json.loads(resolved.stdout)["config"]
+    return config
+
+
+def _demoted(line: str) -> str:
+    """A framing or description line as a planner's task carries it, its heading demoted."""
+    return f"##{line}" if line.startswith("#") else line
+
+
+def test_only_the_draft_and_finalize_planners_run_under_the_panel_with_the_checklists_rules(
     spiked: tuple[Flow, subprocess.CompletedProcess[str]],
 ) -> None:
-    """The draft, finalize and spike nodes name no graph; the document keeps its own.
+    """The two planner nodes name `graphs/planner.yaml` and carry every checklist rule.
 
-    `graphs/planner.yaml` judges a planner with the plan checklist beside its reviewer, and
-    onejudge refuses that panel while this host's reviewer runs in a writable mode the
-    graph cannot accept on the split's behalf, so no node of the flow names it yet.
+    The panel judges a planner with the plan checklist beside its reviewer, so each planner's
+    task carries every rule llmlint resolves the checklist to — its plugins' included — with
+    its description and the framing its judge is given. The spikes name no graph and the
+    design document keeps its own, and none of them carries the rules.
     """
     flow, done = spiked
     assert done.returncode == 0, done.stdout + done.stderr
 
     graphs: dict[str, list[object]] = {}
+    tasks: dict[str, list[str]] = {}
     for start in _starts(flow):
         source, _, native = str(start["project"]).partition(":")
         listed = _items(_store(flow, "task", "list", "--source", source, "--project", native))
         graphs[str(start["run"])] = [
             item["item"]["metadata"].get("onepipeline.agent_graph") for item in listed
         ]
-    assert graphs[flow.run] == [None]
-    assert graphs[f"{flow.run}-finalize"] == [None]
+        tasks[str(start["run"])] = [str(item["item"]["content"]) for item in listed]
+    planners = (flow.run, f"{flow.run}-finalize")
+    assert graphs[flow.run] == ["graphs/planner.yaml"]
+    assert graphs[f"{flow.run}-finalize"] == ["graphs/planner.yaml"]
     assert graphs[f"{flow.run}-spikes"] == [None] * len(flow.spikes)
     assert graphs[f"{flow.run}-design"] == ["graphs/design-doc.yaml"]
-    assert not any("planner.yaml" in str(graph) for named in graphs.values() for graph in named)
+
+    checklist = _resolved_checklist(flow)
+    rules = checklist["rules"]
+    declared = yaml.safe_load(
+        (flow.checkout / "config" / "plan-checklist.llmlint.yml").read_text(encoding="utf-8")
+    )["rules"]
+    assert {rule["name"] for rule in declared} <= {rule["name"] for rule in rules}, rules
+    framing = str(checklist["agents"]["plan"]["prompt_template"]).strip().splitlines()
+    assert any(line.startswith("#") for line in framing), "the framing has no heading to demote"
+    assert any(rule.get("relevance") is False for rule in rules), "no rule is switched off"
+    assert any(isinstance(rule.get("relevance"), str) for rule in rules), "no rule is conditional"
+    headings = [f"#### `{rule['name']}`" for rule in rules]
+    for run in planners:
+        (task,) = tasks[run]
+        assert "## The plan checklist this plan is judged against" in task, run
+        # A heading inside the framing or a description is demoted two levels, below the
+        # section's own `###` and each rule's `####`, so none of them opens a section.
+        for line in framing:
+            assert _demoted(line) in task.splitlines(), f"{run}'s task frames it otherwise"
+        for rule, heading, following in zip(rules, headings, [*headings[1:], None], strict=True):
+            assert heading in task, f"{run}'s task lacks {rule['name']}"
+            section = task.split(heading, 1)[1]
+            section = section.split(following, 1)[0] if following else section
+            lines = section.splitlines()
+            for line in str(rule["description"]).strip().splitlines():
+                assert _demoted(line) in lines, f"{run}'s task words {rule['name']} otherwise"
+            match rule.get("relevance"):
+                case False:
+                    assert "Switched off in this checklist: never judged." in lines, rule["name"]
+                case str() as relevance:
+                    assert f"Judged when {relevance.strip()}." in section, rule["name"]
+                case _:
+                    assert "Judged when" not in section and "Switched off" not in section
+    others = [task for run, listed in tasks.items() if run not in planners for task in listed]
+    assert others, "the flow wrote no node beside its planners"
+    for task in others:
+        assert "## The plan checklist this plan is judged against" not in task
+        assert not any(f"#### `{rule['name']}`" in task for rule in rules)
+
+
+#: A stand-in for llmlint, the published CLI `just plan` resolves the checklist through: its
+#: `config` answers whatever document the journey puts on its environment, verbatim.
+MALFORMED_LLMLINT = """\
+#!{python}
+import os, sys
+assert sys.argv[1] == "config", sys.argv
+sys.stdout.write(os.environ["MALFORMED_ANSWER"])
+"""
+
+#: The checklist every refusal below is named for, as the recipe names it.
+CHECKLIST = "config/plan-checklist.llmlint.yml"
+
+
+def _resolution(*rules: dict[str, object], framing: object = "x") -> str:
+    """A resolved configuration in llmlint's shape, holding these rules and a `plan` agent."""
+    agents = {"plan": {"prompt_template": framing}}
+    return json.dumps({"config": {"rules": list(rules), "agents": agents}})
+
+
+#: A rule every refusal but its own would accept.
+SOUND_RULE = {"name": "sound_rule", "description": "A rule.", "agent": "plan"}
+
+
+@pytest.mark.parametrize(
+    ("key", "answer", "refusal"),
+    [
+        ("not-json", "not a document", f"llmlint answered no JSON document for {CHECKLIST} ("),
+        ("ruleless", _resolution(), f"llmlint resolved {CHECKLIST} to no rules and agents"),
+        (
+            "undescribed",
+            _resolution({**SOUND_RULE, "description": " "}),
+            f"llmlint resolved a rule of {CHECKLIST} with no name or description",
+        ),
+        (
+            "agentless",
+            _resolution({**SOUND_RULE, "agent": "nowhere"}),
+            f"llmlint resolved the rule 'sound_rule' of {CHECKLIST} to no agent it declares: "
+            "'nowhere'",
+        ),
+        (
+            "numeric-relevance",
+            _resolution({**SOUND_RULE, "relevance": 0}),
+            f"llmlint resolved the rule 'sound_rule' of {CHECKLIST} to a relevance it never "
+            "writes: 0",
+        ),
+        (
+            "unframed",
+            _resolution(SOUND_RULE, framing=""),
+            f"llmlint resolved the agent 'plan' of {CHECKLIST} with no framing",
+        ),
+    ],
+)
+def test_a_checklist_the_task_would_misstate_stops_before_the_planner_launches(
+    workspace: Workspace, tmp_path: Path, key: str, answer: str, refusal: str
+) -> None:
+    """A resolution the planner's task could not state faithfully is refused, launching nothing.
+
+    A rule with no description, or naming no declared agent, or an agent with no framing
+    would reach the planner without what its judge reads it by; a relevance llmlint never
+    writes would be stated as always judged; and an answer that is no resolution at all
+    holds no rule to state. The refusal has to stop the launch, not leave a planner task
+    written with no checklist at all.
+    """
+    flow = _flow(workspace, tmp_path, key)
+    stand_ins = tmp_path / "stand-ins"
+    stand_ins.mkdir()
+    llmlint = stand_ins / "llmlint"
+    llmlint.write_text(MALFORMED_LLMLINT.format(python=sys.executable), encoding="utf-8")
+    llmlint.chmod(0o755)
+    flow.environment["PATH"] = f"{stand_ins}{os.pathsep}{flow.environment['PATH']}"
+    flow.environment["MALFORMED_ANSWER"] = answer
+
+    stopped = _plan(flow)
+
+    assert stopped.returncode == 2, stopped.stdout + stopped.stderr
+    assert refusal in stopped.stderr, stopped.stderr
+    assert "could not resolve the plan checklist" in stopped.stderr, stopped.stderr
+    assert _starts(flow) == []
+
+
+def test_a_host_without_llmlint_stops_before_the_planner_launches(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    """With no llmlint to resolve the checklist, no planner is launched without its rules."""
+    flow = _flow(workspace, tmp_path, "no-llmlint")
+    installed = shutil.which("llmlint", path=flow.environment["PATH"])
+    assert installed is not None, "llmlint is not installed, so its absence proves nothing"
+    # The directory llmlint is installed in, every other tool in it kept: `just` and `uv`
+    # sit beside it on this host, and the journey needs them.
+    home = Path(installed).parent
+    beside = tmp_path / "without-llmlint"
+    beside.mkdir()
+    for tool in home.iterdir():
+        if tool.name != "llmlint":
+            (beside / tool.name).symlink_to(tool)
+    flow.environment["PATH"] = os.pathsep.join(
+        str(beside) if Path(entry) == home else entry
+        for entry in flow.environment["PATH"].split(os.pathsep)
+    )
+    assert shutil.which("llmlint", path=flow.environment["PATH"]) is None
+
+    stopped = _plan(flow)
+
+    assert stopped.returncode == 2, stopped.stdout + stopped.stderr
+    assert "llmlint is not installed on PATH, so the plan checklist's rules cannot be resolved" in (
+        stopped.stderr
+    )
+    assert _starts(flow) == []
 
 
 def test_the_tail_reports_what_the_plan_checklist_cost_the_flow(

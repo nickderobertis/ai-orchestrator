@@ -199,6 +199,87 @@ PLAN_SOURCE="authoring"
 #: The persona ref the planner node carries. A path, deliberately — see the header.
 PLANNER_PERSONA="../personas/planner.yaml"
 
+#: The agent graph the draft and finalize planner nodes run under, and no other node this
+#: launch writes: the planner's reviewer beside the plan checklist, so a rule the plan's
+#: code would first meet on its merge path refuses the plan inside the dispatch that can
+#: still fix it. Relative to the directory a run is launched from, this checkout's root, as
+#: every `agent_graph` a plan names is. The spikes and the design-document node keep their
+#: own graphs.
+PLANNER_GRAPH="graphs/planner.yaml"
+
+#: The plan checklist those two planners are judged by, relative to this checkout's root.
+#: Its rules are written into each planner's task as llmlint resolves them — plugins
+#: included — at the moment the task is written, so the planner writes against them on its
+#: first draft rather than learning them from the checklist judge's refusals, and no copy of
+#: them is kept here to drift.
+PLAN_CHECKLIST_CONFIG="config/plan-checklist.llmlint.yml"
+
+#: Renders `llmlint config`'s JSON, read on stdin, as the section a planner's task carries:
+#: the framing of every agent the rules are judged under, then each rule with its name and
+#: description and when it applies. A heading in a framing or a description is demoted
+#: below the section's own, so it cannot open a section of the task. Refuses a document that is not llmlint's
+#: resolved configuration, one resolving no rule, or a rule naming no declared agent or a
+#: relevance llmlint never writes, rather than writing a checklist that drops or misstates one.
+# shellcheck disable=SC2016 # A Python program: its backticks are Markdown in the task it writes, never shell.
+CHECKLIST_PROGRAM='
+import json, sys
+
+(config_path,) = sys.argv[1:2]
+try:
+    resolved = json.load(sys.stdin)
+except ValueError as exc:
+    sys.exit(f"llmlint answered no JSON document for {config_path} ({exc})")
+config = resolved.get("config") if isinstance(resolved, dict) else None
+rules = config.get("rules") if isinstance(config, dict) else None
+agents = config.get("agents") if isinstance(config, dict) else None
+if not isinstance(rules, list) or not rules or not isinstance(agents, dict):
+    sys.exit(f"llmlint resolved {config_path} to no rules and agents")
+named = []
+for rule in rules:
+    fields = (rule.get(key) if isinstance(rule, dict) else None for key in ("name", "description"))
+    name, description = fields
+    if not isinstance(name, str) or not name or not isinstance(description, str) or not description.strip():
+        sys.exit(f"llmlint resolved a rule of {config_path} with no name or description: {rule!r}")
+    agent = rule.get("agent")
+    if not isinstance(agent, str) or agent not in agents:
+        sys.exit(f"llmlint resolved the rule {name!r} of {config_path} to no agent it declares: {agent!r}")
+    relevance = rule.get("relevance")
+    if not (relevance is None or isinstance(relevance, bool) or (isinstance(relevance, str) and relevance.strip())):
+        sys.exit(f"llmlint resolved the rule {name!r} of {config_path} to a relevance it never writes: {relevance!r}")
+    named.append(rule)
+used = sorted({rule["agent"] for rule in named})
+
+def demoted(text):
+    return "\n".join("##" + line if line.startswith("#") else line for line in text.strip().splitlines())
+
+out = [
+    "## The plan checklist this plan is judged against",
+    "",
+    f"This dispatch has a second judge beside its reviewer: the plan checklist, `{config_path}`,",
+    "which llmlint runs over the description of the plan and every task document each time",
+    "the reviewer decides. The panel is not done while any rule below fails, so write the",
+    "description and every task against these rules on the first draft. They are listed as",
+    "llmlint resolved them when this task was written, the rules of its plugins included, and",
+    "are read against a plan rather than code, under the framing the checklist judge is given.",
+]
+for agent in used:
+    template = agents.get(agent, {}).get("prompt_template") if isinstance(agents.get(agent), dict) else None
+    if not isinstance(template, str) or not template.strip():
+        sys.exit(f"llmlint resolved the agent {agent!r} of {config_path} with no framing")
+    out += ["", f"### How the `{agent}` judge reads the plan", "", demoted(template)]
+out += ["", "### The rules", ""]
+for rule in named:
+    name = rule["name"]
+    out += [f"#### `{name}`", "", demoted(rule["description"])]
+    relevance = rule.get("relevance")
+    if relevance is False:
+        out += ["", "Switched off in this checklist: never judged."]
+    elif isinstance(relevance, str) and relevance.strip():
+        out += ["", f"Judged when {relevance.strip()}."]
+    out.append("")
+sys.stdout.write("\n".join(out).rstrip() + "\n")
+'
+
 #: The observer this launch attaches when the caller names none: nothing — see the
 #: header for why a planning run in particular is the wrong run to watch that way.
 #: Named rather than left to `onepipeline start`'s own default of `off`, so the
@@ -239,17 +320,19 @@ FINALIZE_NODE_ID="finalize"
 PLAN_PROGRAM='
 import json, pathlib, sys
 
-(name, brief, persona, node_id, turns, direct_note, note, goal) = sys.argv[1:9]
+(name, brief, persona, node_id, turns, direct_note, note, goal, graph, checklist) = sys.argv[1:11]
 task = pathlib.Path(brief).read_text(encoding="utf-8")
 
 # A direct node works in the launch directory, and the shared completion bar demands
 # every change committed. Saying so in the task is the only place the dispatch and its
 # judge both read it. A note of the stage itself, which is what the finalize planner is
-# told, sits between the brief and that placement note, so the words of the manager still
-# precede everything else.
-node = {"id": node_id, "persona": persona}
+# told, sits between the brief and that placement note, then the rules of the plan
+# checklist, so the words of the manager still precede everything else.
+node = {"id": node_id, "persona": persona, "agent_graph": graph}
 staged = "\n\n" + note.strip() if note.strip() else ""
-node["task"] = task.rstrip() + staged + "\n\n" + direct_note.strip() + "\n"
+node["task"] = (
+    task.rstrip() + staged + "\n\n" + checklist.strip() + "\n\n" + direct_note.strip() + "\n"
+)
 if turns:
     node["max_turns"] = int(turns)
 plan = {
@@ -459,16 +542,34 @@ snapshot=$(mktemp) || fail "the review snapshot could not be opened" \
 # reader of a full temporary filesystem should know what put a file there.
 trap 'rm -f "$snapshot" || echo "plan: the review snapshot at $snapshot could not be removed; delete it by hand once this launch has finished" >&2' EXIT
 
-# Write one planner's project — `$PLAN_SOURCE:$1`, holding the one node ``$2`` — whose task
-# is the brief, then the note ``$3`` (empty for the draft), then the placement note, under
-# the goal ``$4``. Echoes where the project record was written.
+# The plan checklist's rules as llmlint resolves `PLAN_CHECKLIST_CONFIG` now, rendered as the
+# section a planner's task carries. The llmlint on PATH is the one the checklist judge runs
+# (`scripts/plan-checklist.sh`), so the rules a planner reads are the rules it is judged by.
+checklist_rules() {
+    local rendered
+    command -v llmlint >/dev/null 2>&1 || fail "llmlint is not installed on PATH, so the plan checklist's rules cannot be resolved for the planner's task" \
+        "run 'just setup-llmlint', then retry"
+    rendered=$(llmlint config --cwd "$script_dir/.." -c "$script_dir/../$PLAN_CHECKLIST_CONFIG" |
+        "$python" -c "$CHECKLIST_PROGRAM" "$PLAN_CHECKLIST_CONFIG") || fail \
+        "llmlint could not resolve the plan checklist $PLAN_CHECKLIST_CONFIG into rules for the planner's task; the reason is above" \
+        "repair what it names — 'llmlint config -c $PLAN_CHECKLIST_CONFIG' reproduces it — then retry"
+    printf '%s' "$rendered"
+}
+
+# Write one planner's project — `$PLAN_SOURCE:$1`, holding the one node ``$2`` under the
+# planner's panel — whose task is the brief, then the note ``$3`` (empty for the draft),
+# then the plan checklist's rules, then the placement note, under the goal ``$4``. Echoes
+# where the project record was written.
 write_planner() {
-    local run_name=$1 node_id=$2 note=$3 goal=$4 written records metadata
+    local run_name=$1 node_id=$2 note=$3 goal=$4 written records metadata checklist
     written="$plan_directory/$run_name.md"
     records="$plan_root/$PLAN_TASKS/$run_name"
     metadata="${PLANNING_PROJECT_METADATA//@NODES@/[\"$node_id\"]}"
+    # Checked rather than left to `set -e`: this function runs inside its callers' `$(…)`,
+    # where errexit is off, so a failed resolution would otherwise write an empty checklist.
+    checklist=$(checklist_rules) || return
     "$python" -c "$PLAN_PROGRAM" "$run_name" "$brief" "$PLANNER_PERSONA" "$node_id" "$PLAN_OPT_MAX_TURNS" \
-        "$PLAN_DIRECT_PLACEMENT_NOTE" "$note" "$goal" \
+        "$PLAN_DIRECT_PLACEMENT_NOTE" "$note" "$goal" "$PLANNER_GRAPH" "$checklist" \
         | "$python" -m orchestrator.project_store "$plan_root" "$metadata" >/dev/null || {
         # Reported rather than swallowed, and reported without ending the launch here: what
         # the operator has to act on is the write that failed, which the diagnostic below

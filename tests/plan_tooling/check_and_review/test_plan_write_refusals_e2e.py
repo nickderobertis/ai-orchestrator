@@ -185,6 +185,11 @@ def _detached_recipe(tmp_path: Path) -> Path:
         ignore=shutil.ignore_patterns("*.md"),
     )
     shutil.copy(REPO_ROOT / "onetaskgraph.yaml", checkout)
+    # The plan checklist the recipe resolves into its planner's task before it writes the
+    # project: a copy without it is refused at that resolution, before the write these
+    # journeys are about.
+    (checkout / "config").mkdir()
+    shutil.copy(REPO_ROOT / "config" / "plan-checklist.llmlint.yml", checkout / "config")
     return scripts / "plan.sh"
 
 

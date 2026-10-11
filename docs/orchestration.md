@@ -149,8 +149,9 @@ suppresses nothing, and the design document lists every departure for the user t
 The review keeps the checklist's oneharness history through a pointer file of its own,
 under the runs root at `plan-reviews/<project>/<started>/oneharness-sessions.jsonl`.
 `graphs/planner.yaml` makes the checklist a second judge of the planner's own dispatch
-beside its reviewer, and no node names it yet — `docs/onejudge-integration.md`'s "The
-judge side may be a list of judges" says why.
+beside its reviewer, and `scripts/plan.sh` names it on the draft and finalize planner nodes,
+whose tasks carry the checklist's rules as llmlint resolves them —
+`docs/onejudge-integration.md`'s "The judge side may be a list of judges" says how.
 
 **What the checklist costs a flow is measured once the flow ends**, the way a landed
 change's cycle time is: `orchestrator/budgets.yaml`'s `plan-checklist-added-seconds` and

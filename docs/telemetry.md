@@ -167,7 +167,7 @@ here** — re-measure rather than assuming the shape carries backwards, and re-c
 this paragraph whenever either pin moves, which
 `tests/release_pins/test_onejudge_version.py::test_telemetry_upgrade_boundary_matches_authoritative_versions`
 forces by failing on the boundary sentence above until the pair it names is the adopted
-one. That re-check has now been made fifteen times
+one. That re-check has now been made sixteen times
 without the shape moving. For the 0.10.3/0.5.1 upgrade, one turn spent on each binary
 with everything else held differed by exactly two added keys — `results[].work` and
 `fallback.stopped_without_work`, both of which say something about a failure nothing
@@ -312,6 +312,13 @@ the history format, whose `SCHEMA_VERSION` is `1.9` at both tags;
 `tests/test_engine_history_vocabulary.py` re-reads all of it off the wheel and the two
 tags. The engine pin did not move, so the cores a dispatch's members link are unchanged
 by it.
+The onejudge half then moved to 0.19.0 with the engine, on the same terms:
+`crates/onejudge/src/report.rs` and `crates/onejudge/src/usage.rs` are
+unchanged between `v0.17.2` and `onejudge-v0.19.0`, and the engine wheel links
+`oneharness-core` 0.24.2 for itself, onejudge 0.19.0 and oneagentgraph 0.5.6, read off its
+own SBOM. It was re-taken on four real judge turns the adopted onejudge ran through
+`oneharness.judge.toml` and `oneharness.design-doc-judge.toml`, two on Codex and two on
+Claude Code: each record's `usage` block is the same five keys and nothing else.
 `dispatches`,
 `settled_done`, `no_diff`, `surfaces_queued`, and `surfaces_read` are the run's own
 counters; `surfaces_read` is what resets the planner-update pacemaker.

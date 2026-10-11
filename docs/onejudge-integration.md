@@ -164,46 +164,40 @@ pacemaker turn from a two-party agent turn, and a judge turn from either.
 
 ### The mode a judge runs in, and the tools a supervisory Codex turn is offered
 
-onejudge frames every evaluator call by the oneharness mode its judge resolves, and how
-that mode is resolved and recorded is onejudge's to state, in its
-`crates/onejudge/src/oneharness/posture.rs`. Both judge sides onejudge frames here,
-`oneharness.judge.toml` and `oneharness.design-doc-judge.toml`, state **`mode =
-"default"`** at their own top level, and each carries its own read-only enforcement per
-harness:
+Both judge sides onejudge frames here, `oneharness.judge.toml` and
+`oneharness.design-doc-judge.toml`, state **`mode = "read-only"`** at their own top level.
+onejudge frames every judge with **one evidence contract, whatever its mode**: each
+evaluator call is told to inspect the worktree's files, its git state and the full history,
+and to verify the work itself, so the mode no longer decides whether a judge is pointed at
+the work (onejudge states the contract in `evidence_prompt`, in its
+`crates/onejudge/src/provider.rs`, and says nothing there about what a judge may change).
+What a judge may *do* to the tree is the oneharness mode's to enforce, per harness, and the
+argv each builds is oneharness's own (`crates/oneharness-core/src/domain/harness.rs`):
 
-- `[harness.codex] args` ends `-c sandbox_mode=read-only`;
-- `[harness.claude-code] args` is `--tools Read,Grep,Glob --strict-mcp-config`.
+- **Codex** gets `--sandbox read-only` on a fresh `codex exec` turn, re-asserted on a
+  resumed one, so no judge file pins a sandbox of its own.
+- **Claude Code** runs under `--permission-mode bypassPermissions` offered only
+  oneharness's read-only tool set — `--tools Read Grep Glob WebFetch WebSearch` at the
+  pinned oneharness, the web reads included — so no shell and no writer.
 
-**Not `read-only`**: its framing leaves a Codex judge, which has no file-reading tool
-beside its shell, nothing to read the worktree with, so it fails correct work it cannot
-see. **Not `plan`**, though `plan` also reads: one judge config drives both judge-side
-calls, the verdict and the **simulated user**, whose message is the worker's next turn.
-A planning mode frames that message as a plan — oneharness prepends its planning
+**`--strict-mcp-config` is the one remaining fill.** oneharness's read-only mode still
+loads every MCP server the worktree or identity configures, and under `bypassPermissions`
+their tools would run unprompted, so each judge file's `[harness.claude-code] args` carries
+that flag and nothing else. The follow-up drafted for oneharness, "oneharness read-only
+mode for Claude Code loads MCP servers under bypassPermissions", retires it: once
+oneharness's read-only mode loads no MCP server itself, the arg is deleted.
+
+**Not `plan`**, though `plan` also reads: one judge config drives both judge-side calls,
+the verdict and the **simulated user**, whose message is the worker's next turn. A
+planning mode frames that message as a plan — oneharness prepends its planning
 instruction to a Codex prompt, and Claude Code runs in its own plan mode — so a
 supervisor that found work incomplete told the worker to stop and plan instead of
 finishing it. Measured through the engine's dispatch path on the same inputs, a Codex
-simulated user under `plan` asked for a plan and no changes, and under `default` asked
-for the remaining work.
-
-**Why the enforcement is pinned in the role files rather than left to the mode.**
-`default` withholds nothing by itself, on either harness:
-
-- A judge-side Codex turn is a `codex exec` turn — onejudge reaches it through the
-  `oneharness` CLI, not the app-server thread a worker runs on — and `default` asks it
-  for no sandbox, so it takes the host's own, which on this host is
-  `danger-full-access`. With the pin removed, a dispatched judge turn's `touch` and
-  `apply_patch` both landed; with it, the turn ran read-only and both were refused.
-- Claude Code's `default` is `dontAsk`, which still runs anything the worktree's or the
-  identity's settings allow in a trusted workspace. With `--tools` removed, a checkout
-  allowing `Bash(touch:*)` had its `touch` run by a dispatched judge turn; with it, the
-  turn was offered `Glob`, `Grep` and `Read` and nothing else. Naming what is permitted
-  rather than what is denied keeps a tool the CLI adds later out, and
-  `--strict-mcp-config` loads no MCP server.
+simulated user under `plan` asked for a plan and no changes, and under a non-planning
+mode asked for the remaining work.
 
 Neither setting is in a shared parent, because `oneharness.dispatch.toml` is also the
-worker's. Under this configuration ten Codex verdict-judge turns per file, each asked a
-question only a file in the worktree could answer, read it with a shell command, and
-three Claude turns per file read it with `Read`.
+worker's.
 
 Every supervisory Codex role — both judges, the monitor, the pacemaker, the plan
 reviewer, the drafter and the judged lint tier — also passes `-c features.apps=false` in
@@ -211,8 +205,9 @@ its `[harness.codex]` args, which removes the ChatGPT-app connector tools
 (`mcp__codex_apps__…`, some 260 of a judge turn's 275) and leaves the shell. The worker
 roles and the shared parents carry none of these settings.
 `tests/e2e/launch_monitor_observer/test_supervisory_codex_posture_e2e.py` holds them to what the real CLI
-resolves and to the argv a dry run builds per identity, and fails on a planning mode, a
-lost sandbox pin, or a lost or widened Claude Code tool set.
+resolves and to the argv a dry run builds per identity, and fails on a mode other than
+`read-only`, a sandbox pinned by hand or missing from Codex's argv, a Claude Code tool
+set other than the read-only one, or a lost `--strict-mcp-config`.
 
 ### The judge side may be a list of judges
 
@@ -252,21 +247,20 @@ from the plan-authoring root, rather than over the worktree onejudge names. The 
 the llmlint side's `config` to its own directory and hands its `bin` over as written, so
 the script is named relative to the directory a run is launched from, this checkout's root.
 
-**No planning node names that graph yet, and the reason is this host's judge mode.**
-onejudge refuses a panel of two or more judges holding one whose mode is writable
-(`refuse_writable_panels` in its `cli/config.rs`), and `oneharness.judge.toml` runs in
-`default`, with its read-only enforcement pinned per harness, for the reason the section
-above gives. The one lever that accepts it is the split's `allow_writable_judges`, which
-the pinned oneagentgraph composes no field for, so a member judged by that panel dies
-`unstartable` before its first turn. Until a release carries the flag from a member's judge
-list to the split and the engine linking it is adopted, `scripts/plan.sh` names the graph on
-no node, `config/onejudge.base.yaml`'s `provider:` names the one `oneharness.judge.toml`,
-and every dispatch keeps its single simulated user; the plan checklist reaches a plan
-through `just review-plan` instead. The shape is stated in [onejudge v0.19.0's
+**The planner's draft and finalize nodes run under that panel**: `scripts/plan.sh` names
+the graph as the `agent_graph` of exactly those two nodes, and each one's task carries the
+checklist's rules as llmlint resolves them when the task is written, so the planner writes
+against them on its first draft. The spikes and the design-document node keep their own
+graphs, and every other dispatch keeps its single simulated user,
+`config/onejudge.base.yaml`'s `provider:` naming the one `oneharness.judge.toml`. **The panel
+starts without the writable escape hatch**: onejudge refuses a panel of two or more judges
+holding one whose mode is writable (`refuse_writable_panels` in its `cli/config.rs`), and
+the reviewer is `read-only` for the reason the section above gives, so the graph sets no
+`allow_writable_judges`. The shape is stated in [onejudge v0.19.0's
 `judges.md`](https://github.com/nickderobertis/onejudge/blob/onejudge-v0.19.0/docs/judges.md)
 — the config, how a panel decides, and what each surface carries per judge — and, for a
-graph member, in [oneagentgraph v0.5.5's
-`contract.md`](https://github.com/nickderobertis/oneagentgraph/blob/v0.5.5/docs/contract.md).
+graph member, in [oneagentgraph v0.5.6's
+`contract.md`](https://github.com/nickderobertis/oneagentgraph/blob/v0.5.6/docs/contract.md).
 `tests/e2e/registry_and_recipes/test_plan_checklist_e2e.py` drives the pinned oneagentgraph's composition of
 the graph and the pinned `onejudge run` under its two judges, with the script as the
 llmlint side's `bin`; `tests/e2e/launch_monitor_observer/test_judge_panel_e2e.py` drives it over a two-judge

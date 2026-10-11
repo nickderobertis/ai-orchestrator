@@ -63,6 +63,7 @@
       "{workspaceRoot}/.puppeteerrc.json",
       "{workspaceRoot}/scripts/**/*",
       "{workspaceRoot}/config/read-api.address",
+      "{workspaceRoot}/config/plan-checklist.llmlint.yml",
       "{workspaceRoot}/tests/fixtures/**/*",
       "!{workspaceRoot}/tests/fixtures/design-doc-why/**/*",
       "!{workspaceRoot}/tests/fixtures/plan-checklist-plans/**/*",

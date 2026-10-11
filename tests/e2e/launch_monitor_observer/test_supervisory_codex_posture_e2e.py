@@ -1,12 +1,20 @@
 """Real-CLI coverage for the settings this host makes about its supervisory turns.
 
-Both onejudge judge sides state a mode at their own top level that is not a planning
-mode, pin Codex's read-only sandbox, and hand Claude Code only reading tools; every
-supervisory Codex role switches the ChatGPT-app connector tools off; no worker role or
-shared parent carries any of it. Why is `docs/onejudge-integration.md`'s, "The mode a
-judge runs in". The role files are the one source of each setting: this module asks the
-real `oneharness` what each resolves to, attributed to that file, and what argv a dry run
-of each identity would build — never a paid turn.
+Both onejudge judge sides state `read-only` at their own top level, never a planning mode,
+and leave what that mode withholds to oneharness: Codex is handed its read-only sandbox by
+the mode and by no judge file, and Claude Code is handed the mode's own reading tool set,
+beside the one remaining fill, `--strict-mcp-config`. Every supervisory Codex role switches
+the ChatGPT-app connector tools off; no worker role or shared parent carries any of it. Why
+is `docs/onejudge-integration.md`'s, "The mode a judge runs in". The role files are the one
+source of each setting: this module asks the real `oneharness` what each resolves to,
+attributed to that file, and what argv a dry run of each identity would build — never a
+paid turn. The argv a mode builds is oneharness's, so it is read off the CLI rather than
+restated here, and a release that changes it shows up as a changed argv below.
+
+llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] Not expensive: the
+module's 22 journeys each ask the installed `oneharness` for a resolved config or a dry-run
+argv — no provider turn, no launch, no network — and the slowest takes 0.17 s
+(`pytest --durations`), so a project of its own would buy no skipped work.
 """
 
 from __future__ import annotations
@@ -25,22 +33,25 @@ from orchestrator.root import REPO_ROOT
 #: The judge sides onejudge frames, each named by the wiring that dispatches it.
 JUDGE_ROLES = ("oneharness.judge.toml", "oneharness.design-doc-judge.toml")
 
-#: The mode a judge runs in: one onejudge frames with the tool-using evidence contract,
-#: and not a planning mode, since this config also drives the simulated user.
-JUDGE_MODES = {"default"}
+#: The mode each judge file states for itself, never inherits, and oneharness enforces per
+#: harness: a sandbox on a Codex turn, a reading tool set on a Claude Code one.
+JUDGE_MODE = "read-only"
 
 #: The modes that put a planning instruction or a planning mode in front of every turn.
 PLANNING_MODES = {"plan"}
 
-#: Codex's read-only sandbox, as the argv pair codex reads; `default` asks for none.
-READ_ONLY_SANDBOX = ["-c", "sandbox_mode=read-only"]
+#: Codex's read-only sandbox as the mode passes it.
+MODE_SANDBOX = "--sandbox read-only"
 
-#: The only Claude Code built-in tools a judge turn has, and the switch that loads no MCP
-#: server: `--tools` is the set a turn may use, so no inherited allow rule restores a
-#: shell or a writer.
-JUDGE_CLAUDE_TOOLS = ["--tools", "Read,Grep,Glob"]
+#: The one switch a judge file adds to the Claude Code turn the mode builds: it loads no
+#: MCP server, which the mode itself still loads under `bypassPermissions`.
 NO_MCP_SERVERS = "--strict-mcp-config"
-READING_TOOLS = {"Read", "Grep", "Glob"}
+
+#: The read-only mode's Claude Code tool set at the pinned oneharness, web reads included
+#: by the manager's ruling. Each judge's dry-run argv is read for the tools it is offered
+#: and compared with this, so a oneharness release that widens or narrows the set fails
+#: here rather than reaching every judge unread.
+READ_ONLY_TOOLS = ["Read", "Grep", "Glob", "WebFetch", "WebSearch"]
 
 #: The Codex roles whose turn is not a worker's.
 CONNECTOR_ROLES = (
@@ -151,86 +162,86 @@ def test_the_judge_roles_are_the_judges_the_wiring_names() -> None:
     assert "judge_config: oneharness.judge.toml" in base
 
 
+def _offered_tools(command: str) -> list[str]:
+    """The tools a planned Claude Code argv names after its one `--tools` flag."""
+    words = command.split()
+    assert words.count("--tools") == 1, f"expected exactly one --tools in: {command}"
+    offered: list[str] = []
+    for word in words[words.index("--tools") + 1 :]:
+        if word.startswith("-"):
+            break
+        offered.append(word)
+    return offered
+
+
 @pytest.mark.parametrize("config", JUDGE_ROLES)
-def test_every_judge_runs_in_the_non_planning_mode_its_own_file_states(
-    oneharness_bin: str, config: str
-) -> None:
-    """The mode is the judge file's, resolves as that file's, and reaches each harness."""
+def test_every_judge_runs_read_only_from_its_own_file(oneharness_bin: str, config: str) -> None:
+    """The mode is the judge file's, resolves as that file's, and is never a planning mode."""
     declared = tomllib.loads((REPO_ROOT / config).read_text(encoding="utf-8")).get("mode")
     assert declared not in PLANNING_MODES, (
         f"{config} states the planning mode {declared!r}; this config also drives the "
         "simulated user, which would then frame the worker's next turn as a plan"
     )
-    assert declared in JUDGE_MODES, (
-        f"{config} must state its judge's mode at its own top level, one of "
-        f"{sorted(JUDGE_MODES)}; it states {declared!r}, so onejudge frames that judge "
-        "by its read-only default"
+    assert declared == JUDGE_MODE, (
+        f"{config} must state mode = {JUDGE_MODE!r} at its own top level; it states {declared!r}"
     )
 
     mode = _resolved(oneharness_bin, config)["mode"]
-    assert mode == {"value": declared, "source": config}, (
+    assert mode == {"value": JUDGE_MODE, "source": config}, (
         f"{config} declares mode {declared!r} but oneharness resolves {mode}"
     )
 
-    for codex in _identities(oneharness_bin, config, "codex"):
-        command = _planned_command(oneharness_bin, config, codex)
-        assert "--dangerously-bypass-approvals-and-sandbox" not in command, command
-        assert "workspace-write" not in command, command
-        assert "danger-full-access" not in command, command
-    for claude in _identities(oneharness_bin, config, "claude-code"):
-        command = _planned_command(oneharness_bin, config, claude)
-        assert "--permission-mode dontAsk" in command, command
-
 
 @pytest.mark.parametrize("config", JUDGE_ROLES)
-def test_every_judge_pins_codex_to_its_read_only_sandbox(oneharness_bin: str, config: str) -> None:
-    """`default` asks Codex for no sandbox, so each judge file pins the read-only one.
-
-    Without the pin a Codex judge turn takes the host's own codex sandbox, which may
-    grant full access.
-    """
+def test_every_codex_judge_takes_its_read_only_sandbox_from_the_mode(
+    oneharness_bin: str, config: str
+) -> None:
+    """Codex's argv carries the mode's sandbox, once, and the judge file pins none of its own."""
     args = _resolved(oneharness_bin, config)["harness"]["codex"]["args"]
-    assert _carries_pair(args["value"], READ_ONLY_SANDBOX) and args["source"] == config, (
-        f"{config} must pass {READ_ONLY_SANDBOX} in its own [harness.codex] args; "
-        f"oneharness resolves {args}"
+    own: list[str] = args["value"] or []
+    assert not any("sandbox" in word or word == "-s" for word in own), (
+        f"{config} pins a sandbox by hand in its [harness.codex] args: {own}"
     )
+
     codex = _identities(oneharness_bin, config, "codex")
     assert codex, f"{config} names no Codex identity to hold to the sandbox"
     for identity in codex:
         command = _planned_command(oneharness_bin, config, identity)
-        assert " ".join(READ_ONLY_SANDBOX) in command, f"{identity} under {config}: {command}"
-        assert command.count("sandbox_mode=") == 1, f"{identity} under {config}: {command}"
-        assert "--sandbox" not in command, f"{identity} under {config}: {command}"
+        assert MODE_SANDBOX in command, f"{identity} under {config}: {command}"
+        assert command.count("--sandbox") == 1, f"{identity} under {config}: {command}"
+        assert "sandbox_mode=" not in command, f"{identity} under {config}: {command}"
+        assert "--dangerously-bypass-approvals-and-sandbox" not in command, command
+        assert "workspace-write" not in command, command
+        assert "danger-full-access" not in command, command
 
 
 @pytest.mark.parametrize("config", JUDGE_ROLES)
-def test_every_judge_hands_claude_code_only_reading_tools(oneharness_bin: str, config: str) -> None:
-    """A Claude Code judge turn has no shell, no writer and no MCP server.
+def test_every_claude_judge_is_offered_the_read_only_tool_set_and_no_mcp_server(
+    oneharness_bin: str, config: str
+) -> None:
+    """Claude Code gets the mode's reading tools, nothing more, and no MCP server.
 
-    `default` runs Claude Code in `dontAsk`, which still runs whatever the worktree's or
-    the identity's settings allow, so the judge file names the tools a turn has.
+    The judge file states only `--strict-mcp-config`, because the mode still loads MCP
+    servers under `bypassPermissions` and their tools would run unprompted.
     """
     args = _resolved(oneharness_bin, config)["harness"]["claude-code"]["args"]
-    values: list[str] = args["value"] or []
-    assert args["source"] == config, f"{config} must state its own Claude Code args: {args}"
-    assert _carries_pair(values, JUDGE_CLAUDE_TOOLS), (
-        f"{config} must pass {JUDGE_CLAUDE_TOOLS} in its own [harness.claude-code] args; "
-        f"oneharness resolves {values}"
+    assert args == {"value": [NO_MCP_SERVERS], "source": config}, (
+        f"{config} must state exactly [{NO_MCP_SERVERS!r}] in its own [harness.claude-code] "
+        f"args; oneharness resolves {args}"
     )
-    assert NO_MCP_SERVERS in values, f"{config} must pass {NO_MCP_SERVERS}: {values}"
-    granted = set(values[values.index("--tools") + 1].split(","))
-    assert granted <= READING_TOOLS, f"{config} grants {sorted(granted - READING_TOOLS)}"
 
     claude = _identities(oneharness_bin, config, "claude-code")
     assert claude, f"{config} names no Claude Code identity to hold to its tools"
     for identity in claude:
         command = _planned_command(oneharness_bin, config, identity)
-        assert " ".join(JUDGE_CLAUDE_TOOLS) in command, f"{identity} under {config}: {command}"
-        assert command.count("--tools") == 1, f"{identity} under {config}: {command}"
-        assert NO_MCP_SERVERS in command, f"{identity} under {config}: {command}"
+        assert _offered_tools(command) == READ_ONLY_TOOLS, f"{identity} under {config}: {command}"
+        assert "--permission-mode bypassPermissions" in command, command
+        assert command.count(NO_MCP_SERVERS) == 1, f"{identity} under {config}: {command}"
+        assert "--allowedTools" not in command, f"{identity} under {config}: {command}"
     for identity in _identities(oneharness_bin, config, "codex"):
         command = _planned_command(oneharness_bin, config, identity)
         assert "--tools" not in command, f"{identity} under {config}: {command}"
+        assert NO_MCP_SERVERS not in command, f"{identity} under {config}: {command}"
 
 
 @pytest.mark.parametrize("config", CONNECTOR_ROLES)
@@ -276,19 +287,15 @@ def test_no_worker_role_or_shared_parent_carries_any_judge_setting(
     own = tomllib.loads((REPO_ROOT / config).read_text(encoding="utf-8"))
     if config in SHARED_PARENTS:
         assert "mode" not in own, f"{config} states a mode: {own['mode']!r}"
-    assert own.get("mode") not in JUDGE_MODES, f"{config} states a judge's mode: {own['mode']!r}"
+    assert own.get("mode") != JUDGE_MODE, f"{config} states a judge's mode: {own['mode']!r}"
     codex_args = own.get("harness", {}).get("codex", {}).get("args")
-    claude_args = own.get("harness", {}).get("claude-code", {}).get("args")
-    for pair in (CONNECTORS_OFF, READ_ONLY_SANDBOX):
-        assert not _carries_pair(codex_args, pair), f"{config} carries {codex_args}"
-    assert not _carries_pair(claude_args, JUDGE_CLAUDE_TOOLS), f"{config} carries {claude_args}"
+    claude_args = own.get("harness", {}).get("claude-code", {}).get("args") or []
+    assert not _carries_pair(codex_args, CONNECTORS_OFF), f"{config} carries {codex_args}"
+    assert NO_MCP_SERVERS not in claude_args, f"{config} carries {claude_args}"
 
     resolved = _resolved(oneharness_bin, config)
-    assert resolved["mode"]["value"] not in JUDGE_MODES, f"{config} resolves {resolved['mode']}"
+    assert resolved["mode"]["value"] != JUDGE_MODE, f"{config} resolves {resolved['mode']}"
     resolved_args = resolved["harness"]["codex"]["args"]["value"]
-    for pair in (CONNECTORS_OFF, READ_ONLY_SANDBOX):
-        assert not _carries_pair(resolved_args, pair), f"{config} resolves {resolved_args}"
-    resolved_claude = resolved["harness"]["claude-code"]["args"]["value"]
-    assert not _carries_pair(resolved_claude, JUDGE_CLAUDE_TOOLS), (
-        f"{config} resolves {resolved_claude}"
-    )
+    assert not _carries_pair(resolved_args, CONNECTORS_OFF), f"{config} resolves {resolved_args}"
+    resolved_claude = resolved["harness"]["claude-code"]["args"]["value"] or []
+    assert NO_MCP_SERVERS not in resolved_claude, f"{config} resolves {resolved_claude}"

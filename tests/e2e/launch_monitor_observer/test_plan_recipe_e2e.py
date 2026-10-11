@@ -58,6 +58,7 @@ from fake_backend import (
     ENVIRONMENT_KEYS_ENV,
     JUDGE_CONFIG_NAME,
     MEMBER_OF_CONFIG,
+    PANEL_JUDGE_CONFIG,
     PROMPT_LOG_ENV,
 )
 from project_fixtures import helper, read_project_plan
@@ -618,8 +619,14 @@ def test_the_persona_path_resolves_to_this_repositorys_planner_file(planned: Pla
 
     worker = _worker_turns(planned)
     assert worker, "the run dispatched no worker"
-    agent_side = [turn for turn in worker if _side(turn) != JUDGE_CONFIG_NAME]
-    judge_side = [turn for turn in worker if _side(turn) == JUDGE_CONFIG_NAME]
+    # The planner runs under `graphs/planner.yaml`, whose reviewer is a panel judge, so its
+    # judge side's config is the panel's `judge-<label>.toml` rather than the single name.
+    judge_side = [
+        turn
+        for turn in worker
+        if _side(turn) == JUDGE_CONFIG_NAME or PANEL_JUDGE_CONFIG.fullmatch(_side(turn))
+    ]
+    agent_side = [turn for turn in worker if turn not in judge_side]
     assert agent_side and judge_side, f"the dispatch was one-sided: {[_side(t) for t in worker]}"
 
     assert any(AGENT_ROLE in _flattened(turn["system"]) for turn in agent_side), (
@@ -984,7 +991,10 @@ def test_the_shipped_example_plan_is_what_the_shipped_brief_produces(tmp_path: P
 
     An example plan is the document an operator copies, so one that has drifted from
     what the recipe writes teaches a shape the recipe would never produce. Regenerating
-    it here from the shipped brief is what keeps the two the same artifact — including
+    it here from the shipped brief is what keeps the two the same artifact — the planner
+    task `examples/tasks/planner-brief-example/plan.md` included, whose plan-checklist
+    section the recipe writes from llmlint's live resolution of
+    `config/plan-checklist.llmlint.yml`, so a rule that changes there fails here — including
     the run id, which `onepipeline` normalizes on the way (a `.` becomes a `-`), so the
     example's `name` is also the run `just plan` would tell a manager to watch.
 

@@ -356,13 +356,12 @@ def _graph_judges() -> list[dict[str, str]]:
 def test_the_planner_graph_validates_and_composes_its_reviewer_then_the_plan_checklist(
     tmp_path: Path, oneharness_bin: str
 ) -> None:
-    """The pinned oneagentgraph composes the panel; onejudge then refuses to start it.
+    """The pinned oneagentgraph composes the panel, and the pinned onejudge runs it through.
 
     The composition is read off the onejudge configuration the pinned oneagentgraph hands
-    its member. The refusal is the reason no planning node names this graph yet: onejudge
-    refuses a panel holding this host's writable-mode reviewer, and the graph has no field
-    that carries `allow_writable_judges` to the split. A release that adds one makes this
-    journey fail here, which is the signal to set it and name the graph in `scripts/plan.sh`.
+    its member. The reviewer runs `read-only`, so the panel starts with no writable escape
+    hatch: the graph sets no `allow_writable_judges`, and the member is asserted to settle
+    completed, each judge deciding on the one turn the stand-in worker takes.
     """
     validated = subprocess.run(
         [str(PINNED_ONEAGENTGRAPH), "validate", str(GRAPH)],
@@ -372,8 +371,20 @@ def test_the_planner_graph_validates_and_composes_its_reviewer_then_the_plan_che
         check=False,
     )
     assert validated.returncode == 0, validated.stderr
-    environment = probe_environment(tmp_path, oneharness_bin, "plan-checklist journey")
+    # llmlint: ignore-block[e2e_not_mocked] Only the paid provider process is substituted:
+    # the graph, onejudge, the panel, the checklist script and llmlint all run for real.
+    environment = {
+        name: value
+        for name, value in probe_environment(
+            tmp_path, oneharness_bin, "plan-checklist journey"
+        ).items()
+        if not name.startswith("ONEPIPELINE_")
+    }
+    # llmlint: ignore-end[e2e_not_mocked]
     environment["ONEAGENTGRAPH_STATE_DIR"] = str(tmp_path / "graph-state")
+    # A planning run of its own whose brief names no plan yet, so the checklist side judges
+    # nothing and this journey reads the panel starting and settling, not a verdict.
+    environment |= _planning_run(tmp_path, None)
 
     ran = subprocess.run(
         [str(PINNED_ONEAGENTGRAPH), "run", str(GRAPH), "--task", "Plan the work."],
@@ -390,6 +401,9 @@ def test_the_planner_graph_validates_and_composes_its_reviewer_then_the_plan_che
     composed = yaml.safe_load(Path(started["payload"]["config"]).read_text(encoding="utf-8"))
     provider = composed["provider"]
     assert provider["kind"] == "split"
+    worker = yaml.safe_load(GRAPH.read_text(encoding="utf-8"))["members"]["worker"]
+    assert "allow_writable_judges" not in json.dumps(worker), worker
+    assert "allow_writable_judges" not in provider, provider
     judges = provider["judges"]
     assert [(judge["label"], judge["kind"]) for judge in judges] == [
         ("reviewer", "oneharness"),
@@ -400,8 +414,17 @@ def test_the_planner_graph_validates_and_composes_its_reviewer_then_the_plan_che
     assert PANEL_JUDGE_CONFIG.fullmatch(Path(judges[0]["judge_config"]).name), judges[0]
     assert judges[1]["bin"] == "scripts/plan-checklist.sh"
     assert Path(judges[1]["config"]).resolve() == CONFIG
-    (died,) = [envelope for envelope in envelopes if envelope["kind"] == "member-died"]
-    assert "allow_writable_judges" in died["payload"]["detail"], died
+    died = [envelope["payload"] for envelope in envelopes if envelope["kind"] == "member-died"]
+    assert not died, f"the panel did not run to completion: {died}"
+    assert ran.returncode == 0, ran.stdout + ran.stderr
+    decided = [
+        (envelope["payload"]["judge"], envelope["payload"]["decision"])
+        for envelope in envelopes
+        if envelope["kind"] == "judge-decided"
+    ]
+    assert decided == [("reviewer", "done"), ("plan-checklist", "done")], decided
+    (settled,) = [envelope for envelope in envelopes if envelope["kind"] == "member-settled"]
+    assert settled["payload"]["completed"] is True, settled
 
 
 # A real planning run would launch the engine and dispatch a paid planner; what the
@@ -645,8 +668,8 @@ def test_the_budgets_read_the_reviewers_turns_off_a_report_the_pinned_onejudge_w
     """A real harness reviewer beside the checklist: its attributed turns are what is read.
 
     The reviewer is the real `oneharness` over this host's `oneharness.judge.toml`, labelled
-    as the planner's panel labels it, with only its provider stood in; onejudge's own
-    `allow_writable_judges` accepts its writable mode here, which the graph cannot yet say.
+    as the planner's panel labels it, with only its provider stood in, and runs `read-only`
+    as that file states, so the panel starts with no writable escape hatch.
     The report onejudge writes is then read by the plan-checklist budgets as a dispatch's
     report is, so a change to how onejudge attributes a panel judge's turns fails here.
     """
@@ -671,7 +694,6 @@ def test_the_budgets_read_the_reviewers_turns_off_a_report_the_pinned_onejudge_w
                 kind="command", command=[sys.executable, str(DOUBLE), "worker", "0"]
             ),
             "judges": [reviewer, plan_checklist],
-            "allow_writable_judges": True,
         },
         user=UserConfig(
             persona="A reviewer holding a plan to its brief.",

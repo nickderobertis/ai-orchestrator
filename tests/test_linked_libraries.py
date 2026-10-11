@@ -331,6 +331,15 @@ LINKED_VERSION_CLAIMS: dict[str, dict[str, tuple[str, ...]]] = {
         ),
         # Why an empty transcript surface is an engine-pin question and not a reader one.
         "docs/dag-ui.md": ("the adopted release that is **oneagentgraph {version}**",),
+        # The telemetry record's continuity across the latest onejudge move names what the
+        # engine it was re-taken under links.
+        "docs/telemetry.md": ("and oneagentgraph {version}, read off its own SBOM",),
+    },
+    "onejudge": {
+        "docs/telemetry.md": ("for itself, onejudge {version} and oneagentgraph",),
+    },
+    "oneharness-core": {
+        "docs/telemetry.md": ("the engine wheel links `oneharness-core` {version} for itself",),
     },
     "onevcs": {
         # Which onevcs the lifecycle page's engine-behaviour claims were read at. Every

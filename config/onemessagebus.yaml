@@ -31,8 +31,9 @@ profile: planner-channel
 # adopts, so this host's bus reads and writes the channel directory the dispatching
 # engine does; `@1` admits the `1.0.0` that bundle declares. The second is onejudge's
 # command-provider frames the codec below serves, published at the release tag
-# config/onejudge.version adopts and pinned to the protocol version that release speaks
-# — `@8` admits every bundle declaring `8`, `8.x` or `8.x.y` and refuses `9` by name.
+# config/onejudge.version adopts — spelled `onejudge-v<release>` since 0.18.0 — and
+# pinned to the protocol version that release speaks — `@8` admits every bundle
+# declaring `8`, `8.x` or `8.x.y` and refuses `9` by name.
 # A pinned remote link resolves through the schema cache, which scripts/session-setup.sh
 # warms with `onemessagebus schemas fetch`, so a serving session never waits on the
 # network when the cache holds the bundle; a bundle whose declared version the pin does
