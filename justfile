@@ -16,7 +16,7 @@ set positional-arguments
 # from, a bare copy of the file included; a tracked placeholder reached only checkouts.
 # `/.logs/` is ignored, so a body in flight never dirties the tree. The
 # `XDG_RUNTIME_DIR` mappings in the `oneharness.*.toml` files protect provider turns,
-# not recipe execution, and stay. `tests/e2e/test_just_tempdir_e2e.py` drives it.
+# not recipe execution, and stay. `tests/e2e/registry_and_recipes/test_just_tempdir_e2e.py` drives it.
 set tempdir := ".logs/just"
 # Tolerated when it fails so a plain recipe still runs in a tree that cannot be
 # written; a shebang recipe there fails with `just`'s own message naming the path.
@@ -100,7 +100,7 @@ check:
 # because that line is what carries the provenance to the summary: `just` runs each
 # line in its own shell, and the log the judged stage wrote can be a diverted path
 # (`scripts/preserved-log.sh`) that no later line could re-derive.
-# llmlint: ignore[changed_behavior_has_e2e] Running the complete gate from a test would recursively run this same suite; the stage order, refusals and summary are driven through traced Nx and llmlint doubles in tests/e2e/test_workspace_contract_e2e.py, and the tier whose provenance is passed through here is proven end to end in tests/e2e/test_llmlint_cache_e2e.py.
+# llmlint: ignore[changed_behavior_has_e2e] Running the complete gate from a test would recursively run this same suite; the stage order, refusals and summary are driven through traced Nx and llmlint doubles in tests/e2e/workspace_copies/test_workspace_contract_e2e.py, and the tier whose provenance is passed through here is proven end to end in tests/e2e/workspace_copies/test_llmlint_cache_e2e.py.
 # Both arguments default to empty and are passed straight through, because
 # `scripts/comparison-base.sh` is the one source of which remote and base the gate
 # judges against — including the environment chain the lifecycle exports it under.
@@ -1029,7 +1029,7 @@ lint-llm-validate *args:
 # summary line it prints, only when it replayed a task instead of running it. Both
 # are matched because only the first is safe at any size — Nx replays a hit as one
 # burst and exits, so a replay larger than a pipe buffer arrives here truncated and
-# its summary never does. `tests/e2e/test_llmlint_cache_e2e.py` asserts both the
+# its summary never does. `tests/e2e/workspace_copies/test_llmlint_cache_e2e.py` asserts both the
 # judged and the replayed wording, so an Nx upgrade that renames them fails the suite
 # rather than quietly reporting every run as freshly judged. Nx's full output is
 # shown because it *is* the report now — except a refusal Nx dropped before relaying

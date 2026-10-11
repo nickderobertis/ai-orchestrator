@@ -15,8 +15,8 @@ under a bare `env -i`: the tables are the one place the list is stated, every en
 carries the reason it is there, and the Python-environment class is refused whatever a
 family would otherwise admit.
 
-`tests/e2e/test_orchestrate_launch_e2e.py` reads the other half — what a real dispatched
-turn's provider is handed — off the turn rather than off the table.
+`tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` reads the other half —
+what a real dispatched turn's provider is handed — off the turn rather than off the table.
 """
 
 from __future__ import annotations

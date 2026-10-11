@@ -94,7 +94,7 @@ for name in ${dispatch_environment_names[@]+"${dispatch_environment_names[@]}"};
     store_json_string_in_encoded "${!name-}"
     members+=("\"$name\": $encoded")
 done
-# llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The source of this document's shape is the engine that reads it, onepipeline's docs/contract.md (**Dispatch-env hook**), and the installed engine does not carry it yet: there is no released copy to reconcile against until that adoption, whose journeys in tests/e2e/test_orchestrate_launch_e2e.py drive the real reader.
+# llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The source of this document's shape is the engine that reads it, onepipeline's docs/contract.md (**Dispatch-env hook**), and the installed engine does not carry it yet: there is no released copy to reconcile against until that adoption, whose journeys in tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py drive the real reader.
 document='{"version": 1, "env": {'
 separator=
 for member in ${members[@]+"${members[@]}"}; do

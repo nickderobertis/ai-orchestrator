@@ -67,6 +67,7 @@
       "{workspaceRoot}/orchestrator/plan_check.py",
       "{workspaceRoot}/orchestrator/plan_review.py",
       "{workspaceRoot}/orchestrator/plan_store.py",
+      "{workspaceRoot}/orchestrator/plan_units.py",
       "{workspaceRoot}/orchestrator/project_store.py",
       "{workspaceRoot}/orchestrator/publication_guard.py",
       "{workspaceRoot}/orchestrator/root.py",

@@ -10,7 +10,9 @@
   ],
   "namedInputs": {
     "testSupport": [
-      "{workspaceRoot}/tests/persona_identifiers.py"
+      "{workspaceRoot}/tests/persona_identifiers.py",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{projectRoot}/project.json"
     ]
   },
   "targets": {

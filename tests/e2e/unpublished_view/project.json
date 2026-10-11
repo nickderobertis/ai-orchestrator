@@ -13,6 +13,7 @@
     "support-onejudge-bundle",
     "support-probe-run-root",
     "support-run-snapshot",
+    "support-test-linked-libraries",
     "support-unpublished-registry",
     "support-waits"
   ],
@@ -34,6 +35,10 @@
       "{workspaceRoot}/orchestrator/unpublished.py",
       "{workspaceRoot}/orchestrator/root.py",
       "{workspaceRoot}/orchestrator/follow_up_drafts.py",
+      "{workspaceRoot}/orchestrator/envelope_review.py",
+      "{workspaceRoot}/orchestrator/spike_branches.py",
+      "{workspaceRoot}/orchestrator/spike_flow.py",
+      "{workspaceRoot}/orchestrator/workspaces_overlay.py",
       "{workspaceRoot}/tests/test_engine_contracts.py",
       "{workspaceRoot}/tests/test_linked_libraries.py",
       "{workspaceRoot}/tests/e2e/unpublished_view/**/*"

@@ -27,8 +27,8 @@ MEMBER_KEY = re.compile(r"^  ([a-z0-9-]+):$", re.MULTILINE)
 #: side is `skill` or `user`. Stated here rather than derived, because the producer
 #: publishes no surface that answers it without running a graph — so it is reconciled
 #: against the producer instead, by
-#: `tests/e2e/test_orchestrate_launch_e2e.py`, which measures this overhead off the names
-#: a real launch's controlled turns were really addressed by.
+#: `tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py`, which measures this
+#: overhead off the names a real launch's controlled turns were really addressed by.
 EPOCH_MILLIS_DIGITS = 13
 LONGEST_SIDE = "skill"
 SEPARATORS = 4

@@ -230,7 +230,7 @@ MAPPED_OPTIONS = {
 #: states no mapping for because the shipped defaults are already these. Held here so the
 #: distinctness below is a comparison rather than an assumption; the wire half — that each
 #: word really reaches its own option — is
-#: `tests/e2e/test_onetaskgraph_host_e2e.py`'s.
+#: `tests/e2e/launch_monitor_observer/test_onetaskgraph_host_e2e.py`'s.
 UNMAPPED_OPTIONS = {"todo": "Todo", "in-progress": "In Progress"}
 
 

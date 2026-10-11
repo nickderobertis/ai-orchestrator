@@ -9,7 +9,9 @@
   "namedInputs": {
     "testSupport": [
       "{workspaceRoot}/tests/plan_root_variable.py",
-      "{workspaceRoot}/scripts/plan-root-env.sh"
+      "{workspaceRoot}/scripts/plan-root-env.sh",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{projectRoot}/project.json"
     ]
   },
   "targets": {

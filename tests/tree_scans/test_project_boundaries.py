@@ -174,7 +174,7 @@ def test_a_forbidden_edge_is_refused_naming_the_project_the_edge_and_the_rule(
     """One edge added to the real graph — a unit depending on the journeys' project — and
     one project carrying no tag a rule names, each refused by name."""
     read = Graph.read(graph)
-    unit, journeys = "support-waits", "orchestrator-e2e"
+    unit, journeys = "support-waits", "launch-monitor-observer"
     assert "type:test-support" in read.tags[unit] and "type:tests" in read.tags[journeys]
     forbidden = Graph(
         tags={**read.tags, "untagged-probe": frozenset({"lang:python"})},

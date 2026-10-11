@@ -8,7 +8,8 @@
   "implicitDependencies": [],
   "namedInputs": {
     "testSupport": [
-      "{workspaceRoot}/tests/e2e/older-plan-store/**/*"
+      "{workspaceRoot}/tests/e2e/older-plan-store/**/*",
+      "{projectRoot}/project.json"
     ]
   },
   "targets": {

@@ -17,11 +17,11 @@
 #   * one shell command may run for an hour on either harness, because this is a
 #     dispatched worker that runs checks and a judge runs none.
 #
-# `tests/e2e/test_oneharness_timeout_e2e.py` holds the chain, the pins, the deadline, the
+# `tests/e2e/launch_monitor_observer/test_oneharness_timeout_e2e.py` holds the chain, the pins, the deadline, the
 # streaming and the mode against the judge file's effective values,
-# `tests/e2e/test_dispatch_environment_e2e.py` reads the unmasked token and each
+# `tests/e2e/launch_monitor_observer/test_dispatch_environment_e2e.py` reads the unmasked token and each
 # identity's bypass argument out of a real turn on every identity, and
-# `tests/e2e/test_oneharness_config_equivalence_e2e.py` holds every mask below.
+# `tests/e2e/launch_monitor_observer/test_oneharness_config_equivalence_e2e.py` holds every mask below.
 extends = "oneharness.dispatch.toml"
 
 # Bypass, because the member's working directory is its agent graph's scratch directory
@@ -64,7 +64,7 @@ harnesses = [
 
 # The worker's one-hour shell-command ceiling, as `oneharness.toml` states and explains
 # it: this role runs checks like a worker, where the judge whose routing it otherwise
-# mirrors runs none, so `tests/e2e/test_oneharness_timeout_e2e.py` names it an intended
+# mirrors runs none, so `tests/e2e/launch_monitor_observer/test_oneharness_timeout_e2e.py` names it an intended
 # difference from that file.
 [harness.claude-code]
 env = { BASH_MAX_TIMEOUT_MS = "3600000" }

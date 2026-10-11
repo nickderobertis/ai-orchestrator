@@ -20,6 +20,7 @@
   ],
   "namedInputs": {
     "askSeamStructuralReply": [
+      "{projectRoot}/project.json",
       "{workspaceRoot}/.gitignore",
       "{workspaceRoot}/templates/design-doc.md.j2",
       "{workspaceRoot}/config/onejudge.base.yaml",
@@ -39,6 +40,7 @@
       "{workspaceRoot}/orchestrator/host_installs.py",
       "{workspaceRoot}/orchestrator/plan_review.py",
       "{workspaceRoot}/orchestrator/plan_store.py",
+      "{workspaceRoot}/orchestrator/plan_units.py",
       "{workspaceRoot}/orchestrator/project_store.py",
       "{workspaceRoot}/orchestrator/publication_guard.py",
       "{workspaceRoot}/orchestrator/root.py",

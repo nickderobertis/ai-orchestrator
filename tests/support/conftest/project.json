@@ -22,7 +22,24 @@
       "{workspaceRoot}/config/oneagentgraph.version",
       "{workspaceRoot}/config/oneharness.version",
       "{workspaceRoot}/config/onejudge.version",
-      "{workspaceRoot}/scripts/workspace-install.sh"
+      "{workspaceRoot}/scripts/workspace-install.sh",
+      "{workspaceRoot}/orchestrator/adoption_guard.py",
+      "{workspaceRoot}/orchestrator/criteria_guard.py",
+      "{workspaceRoot}/orchestrator/design_approval.py",
+      "{workspaceRoot}/orchestrator/design_chain.py",
+      "{workspaceRoot}/orchestrator/host_installs.py",
+      "{workspaceRoot}/orchestrator/plan_budgets.py",
+      "{workspaceRoot}/orchestrator/plan_check.py",
+      "{workspaceRoot}/orchestrator/plan_review.py",
+      "{workspaceRoot}/orchestrator/plan_store.py",
+      "{workspaceRoot}/orchestrator/plan_units.py",
+      "{workspaceRoot}/orchestrator/project_store.py",
+      "{workspaceRoot}/orchestrator/publication_guard.py",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/orchestrator/spike_plan.py",
+      "{workspaceRoot}/orchestrator/structural_guard.py",
+      "{workspaceRoot}/orchestrator/task_body.py",
+      "{projectRoot}/project.json"
     ]
   },
   "targets": {

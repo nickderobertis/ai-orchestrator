@@ -101,7 +101,13 @@ INCREMENTAL_JOURNEY = (
 #: holds a targeted attempt to an allow-list of the engine's store operations.
 DRIVEN_RUN = REPO_ROOT / "tests" / "writeback_budget" / "driven_run.py"
 #: The journey that waits on an idle sweep, and so states the engine's load variable.
-SWEEP_JOURNEY = REPO_ROOT / "tests" / "e2e" / "test_launch_walks_no_host_identity_e2e.py"
+SWEEP_JOURNEY = (
+    REPO_ROOT
+    / "tests"
+    / "e2e"
+    / "launch_monitor_observer"
+    / "test_launch_walks_no_host_identity_e2e.py"
+)
 #: The journey that holds a settlement's targeted update to the engine-owned keys a
 #: settlement writes, and so has to name every one the engine declares.
 TARGETED_JOURNEY = REPO_ROOT / "tests" / "writeback_budget" / "test_targeted_writeback_e2e.py"
@@ -3013,7 +3019,7 @@ STAGING_DECLARATIONS = {
 THREAD_ID_RENDERING = "ThreadId({})"
 # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
-#: Where `tests/e2e/test_run_snapshot.py` performs each shape itself, to race the
+#: Where `tests/e2e/suite_helpers/test_run_snapshot.py` performs each shape itself, to race the
 #: snapshot against a real writer: the suffix its `rename_into_place` swaps in with
 #: `with_suffix`, which takes the dot `with_extension` adds, and the tail its
 #: `link_into_place` appends to the record's name. Each is read back to the engine's
@@ -3026,13 +3032,13 @@ STAGING_WRITERS = {
         r'record\.with_name\(f"\{record\.name\}(\.tmp\.\{os\.getpid\(\)\}\.\{nonce\})"\)'
     ),
 }
-RUN_SNAPSHOT_TEST = REPO_ROOT / "tests" / "e2e" / "test_run_snapshot.py"
+RUN_SNAPSHOT_TEST = REPO_ROOT / "tests" / "e2e" / "suite_helpers" / "test_run_snapshot.py"
 
 
 def test_the_staging_names_a_snapshot_leaves_out_are_the_ones_the_engine_writes() -> None:
     """`tests/e2e/run_snapshot.py` copies a live run without its atomic writers' staging
     files, recognising them by a name grammar restated from the engine, and
-    `tests/e2e/test_run_snapshot.py` races it against a writer performing the same two
+    `tests/e2e/suite_helpers/test_run_snapshot.py` races it against a writer performing the same two
     shapes. Both restatements are inert if the engine changes the name: the snapshot
     starts copying — and racing — a staging file it no longer recognises, and the test's
     writer goes on proving the copy against a shape nothing writes. So each is held to
@@ -3921,7 +3927,7 @@ GRAPH_OVERRIDES_FIXTURE = re.compile(r'```json\n(\{\n  "graph_overrides".*?)\n``
 #: compared with their whitespace collapsed, so reflowing a paragraph moves nothing.
 #: What the rules *do* on a real dispatch — precedence, clearing, next-dispatch scope,
 #: in-flight retention — is held separately, against the installed engine, by
-#: `tests/e2e/test_graph_overrides_dispatch_e2e.py`.
+#: `tests/e2e/launch_monitor_observer/test_graph_overrides_dispatch_e2e.py`.
 GRAPH_OVERRIDE_RULES = (
     (
         "task metadata `onepipeline.sets`",
@@ -4027,9 +4033,10 @@ def test_the_graph_override_method_is_spelled_as_the_pinned_engine_publishes_it(
     """Every field, op, variable and precedence the host's method names is the engine's.
 
     `docs/onejudge-integration.md` restates the released contract's graph overrides so a
-    manager can follow them, and `tests/e2e/test_graph_overrides_dispatch_e2e.py` drives
-    its examples through the installed engine. This holds the restatement to its source:
-    a rename or a precedence change at the next engine pin fails here, naming what moved.
+    manager can follow them, and
+    `tests/e2e/launch_monitor_observer/test_graph_overrides_dispatch_e2e.py` drives its
+    examples through the installed engine. This holds the restatement to its source: a
+    rename or a precedence change at the next engine pin fails here, naming what moved.
     """
     contract = _source(ONEPIPELINE_DOCS, "contract.md")
     guide = ONEJUDGE_INTEGRATION.read_text(encoding="utf-8")
@@ -4079,9 +4086,13 @@ def test_the_graph_override_method_is_spelled_as_the_pinned_engine_publishes_it(
 
 
 #: The launch interlock's journey, which matches the refusal and reads both journal kinds.
-INTERLOCK_JOURNEY = REPO_ROOT / "tests" / "e2e" / "test_concurrency_interlock_e2e.py"
+INTERLOCK_JOURNEY = (
+    REPO_ROOT / "tests" / "e2e" / "launch_monitor_observer" / "test_concurrency_interlock_e2e.py"
+)
 #: The launch journey whose plan check accepts a plan refused at the interlock.
-LAUNCH_JOURNEY = REPO_ROOT / "tests" / "e2e" / "test_orchestrate_launch_e2e.py"
+LAUNCH_JOURNEY = (
+    REPO_ROOT / "tests" / "e2e" / "launch_monitor_observer" / "test_orchestrate_launch_e2e.py"
+)
 
 
 class InterlockWord(NamedTuple):

@@ -70,7 +70,7 @@ history_labels = { role = "agent" }
 # alternate Claude subscriptions in the same relative order the worker uses, with the
 # primary Claude identity last. A drafter must not queue ahead of the workers whose
 # branches it is drafting for.
-# llmlint: ignore[changed_behavior_has_e2e] tests/e2e/test_oneharness_timeout_e2e.py proves this list against the real CLI's effective configuration; paid-provider quota rejection cannot be deterministic.
+# llmlint: ignore[changed_behavior_has_e2e] tests/e2e/launch_monitor_observer/test_oneharness_timeout_e2e.py proves this list against the real CLI's effective configuration; paid-provider quota rejection cannot be deterministic.
 harnesses = [
     "codex:primary",
     "codex:alternate",

@@ -1,0 +1,2904 @@
+"""E2E coverage for this repository's own command surface.
+
+Two kinds of journey live here. The quality recipes — `bootstrap`, `check`, `test`,
+`gate`, `upgrade` — are proven for the sequencing, capture, and stop behaviour they
+own. The delegated recipes are proven for the one thing a wrapper is: that the
+published CLI it names is reached, with the arguments the recipe promised.
+
+llmlint: ignore-file[e2e_not_mocked,tests_mirror_real_usage] Recipe tests own shell
+sequencing, capture, and stop behavior, so the uv/Nx/CLI subprocesses they wrap are
+deterministic command doubles; the real Bun upgrade and the cross-worktree Nx cache
+boundary run separately.
+"""
+
+from __future__ import annotations
+
+import fcntl
+import functools
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+import tomllib
+from collections.abc import Callable
+from pathlib import Path
+from typing import NamedTuple
+
+import pytest
+from nx_inputs import SELECTED_TARGETS, UNCONDITIONAL_TARGETS
+from nx_workspace import (
+    copy_checkout,
+    copy_working_tree,
+    rewrites_workspace_toolchain,
+    shares_workspace_install,
+)
+from waits import timeout as e2e_timeout
+from waits import until
+
+# Deliberately no module-level tier mark. Most of this file drives `just` recipes
+# and shell scripts that never open this repository's prose, and a blanket
+# declaration would charge every documentation edit for all of them. Each test
+# declares what it actually reads, and `tests/conftest.py` fails one that declares
+# wrong.
+ROOT = Path(__file__).resolve().parents[3]
+#: The two selections `just check` makes, spelled as Nx receives them. Which tiers
+#: belong to each is declared once in `tests/nx_inputs.py`, and
+#: `tests/tree_scans/test_nx_cache_scope.py` holds the recipe to that split; what these
+#: journeys add is that the recipe really hands Nx two invocations rather than one.
+CHECK_SELECTED = ",".join(SELECTED_TARGETS)
+CHECK_UNCONDITIONAL = ",".join(UNCONDITIONAL_TARGETS)
+#: The Nx target lists the other root quality recipes route through, restated here
+#: rather than read from the `justfile` — this suite exists to catch one of them
+#: drifting. `coverage` is last in each: it waits on the measuring tier and enforces
+#: the floor on what that tier wrote.
+TEST_TARGETS = "test,test-docs,test-recipes,test-checkouts,test-pypi,coverage"
+UPGRADE_TARGETS = f"build,lint,typecheck,{TEST_TARGETS}"
+
+
+#: The status `scripts/nx-selection.sh` reads as "nothing to narrow against", taken from
+#: that script rather than restated, so the journey below reconciles the selector's own
+#: constant against what `scripts/comparison-base.sh` really exits with.
+NO_BASE_AVAILABLE = int(
+    re.search(
+        r"^readonly NO_BASE_AVAILABLE=(\d+)$",
+        (ROOT / "scripts/nx-selection.sh").read_text(encoding="utf-8"),
+        re.MULTILINE,
+    ).group(1)
+)
+
+
+def _check_trace(selection: str) -> list[str]:
+    """What `just check` hands Nx: the projects a diff chose, then the tiers it cannot."""
+    return [
+        f"nx.sh {selection} -t {CHECK_SELECTED}",
+        f"nx.sh run-many -t {CHECK_UNCONDITIONAL}",
+        "nx.sh run workspace:check-nx-cache",
+    ]
+
+
+def _run(
+    *args: str, cwd: Path = ROOT, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        args,
+        cwd=cwd,
+        env=env,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("recipe", "target"),
+    [
+        ("bootstrap", "run-many -t bootstrap"),
+        ("test", f"run-many -t {TEST_TARGETS}"),
+        ("lint", "affected -t lint"),
+        ("typecheck", "affected -t typecheck"),
+        ("format", "affected -t format"),
+        ("format-check", "run-many -t format-check"),
+        (
+            "upgrade",
+            f"run-many -t {UPGRADE_TARGETS}",
+        ),
+        ("lint-llm-diff", "run workspace:lint-llm-diff"),
+    ],
+)
+def test_root_recipe_routes_through_nx(recipe: str, target: str) -> None:
+    result = _run("just", "--dry-run", recipe)
+
+    assert result.returncode == 0, result.stderr
+    assert f"./scripts/nx.sh {target}" in result.stderr
+
+
+def test_test_recipe_forces_one_tier_to_re_run_through_the_command_surface() -> None:
+    """The documented way to re-run a memoized tier is a flag on one invocation.
+
+    A cached test verdict is a recorded answer. When an operator has reason to
+    distrust one, the supported lever has to reach Nx from the `just` surface —
+    otherwise the only way out is an exported global cache skip, which re-rolls
+    every tier from every unrelated command and breaks the checks whose contract
+    is cache replay.
+    """
+    forwarded = f"./scripts/nx.sh run-many -t {TEST_TARGETS} --skip-nx-cache"
+
+    result = _run("just", "--dry-run", "test", "--skip-nx-cache")
+
+    assert result.returncode == 0, result.stderr
+    assert forwarded in result.stderr
+
+
+def test_test_e2e_recipe_names_the_real_tier_without_recursing_into_itself() -> None:
+    """The e2e tier cannot launch itself from inside itself, but its entry point is exact."""
+    result = _run("just", "--dry-run", "test-e2e")
+
+    assert result.returncode == 0, result.stderr
+    assert (
+        "uv run pytest tests/e2e tests/plan_tooling tests/ask_seam -n 4 --dist loadgroup"
+        in result.stderr
+    ), result.stderr
+
+
+def test_orchestrator_lint_target_reports_missing_shellcheck(tmp_path: Path) -> None:
+    command = json.loads((ROOT / "orchestrator/project.json").read_text())["targets"]["lint"][
+        "command"
+    ]
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    uv = binaries / "uv"
+    uv.write_text("#!/bin/bash\nexit 0\n")
+    uv.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = str(binaries)
+
+    result = _run("/bin/bash", "-c", command, env=env)
+
+    assert result.returncode != 0
+    assert "shellcheck" in result.stderr
+    assert "just bootstrap" in result.stderr
+
+
+def _recipe_checkout(tmp_path: Path) -> tuple[Path, Path]:
+    checkout = tmp_path / "recipes"
+    scripts = checkout / "scripts"
+    binaries = checkout / "bin"
+    scripts.mkdir(parents=True)
+    binaries.mkdir()
+    shutil.copy2(ROOT / "justfile", checkout / "justfile")
+    trace = checkout / "trace"
+    command = """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s %s\\n' "$(basename "$0")" "$*" >>"$TRACE_FILE"
+if [[ "$*" == "run coverage report --format=total" ]]; then
+  printf '%s\\n' "${FAKE_COVERAGE_TOTAL:-}"
+  exit "${FAKE_COVERAGE_EXIT:-0}"
+fi
+if [[ "${ECHO_COMMAND:-}" == "$(basename "$0")" ]]; then echo "$ECHO_LINE"; fi
+if [[ "${BLOCK_COMMAND:-}" == "$(basename "$0")" ]]; then
+  while [[ ! -e "$BLOCK_UNTIL" ]]; do sleep 0.05; done
+fi
+invocation="$(basename "$0") $*"
+if [[ "${FAIL_COMMAND:-}" == "$(basename "$0")" || "${FAIL_INVOCATION:-}" == "$invocation" ]]; then
+  echo "$(basename "$0"): captured failure detail" >&2
+  exit 9
+fi
+if [[ -n "${FAIL_INVOCATIONS:-}" ]] && grep -Fxq -- "$invocation" <<<"$FAIL_INVOCATIONS"; then
+  echo "$invocation: planted failure" >&2
+  exit 9
+fi
+"""
+    uv = binaries / "uv"
+    uv.write_text(command)
+    uv.chmod(0o755)
+    nx = scripts / "nx.sh"
+    nx.write_text(command)
+    nx.chmod(0o755)
+    check_nx_cache = scripts / "check-nx-cache.sh"
+    check_nx_cache.write_text(command)
+    check_nx_cache.chmod(0o755)
+    session_setup = scripts / "session-setup.sh"
+    session_setup.write_text(command)
+    session_setup.chmod(0o755)
+    # The log preservation, coverage readout, and workspace provisioning under test
+    # are the real ones; only the checkers and package managers they wrap are doubled.
+    for name in (
+        "preserved-log.sh",
+        "coverage-total.sh",
+        "workspace-install.sh",
+        # The lock that provisioning takes, which `workspace-install.sh` and its plan-store
+        # sibling both source rather than each preparing `.logs` their own way.
+        "install-lock.sh",
+        # The two that decide which projects `just check` runs over: real, because
+        # deciding that is the behaviour these journeys are about.
+        "nx-selection.sh",
+        "comparison-base.sh",
+        # Beside the base a tier is judged against, whether that base's own origin ref
+        # has moved past it: doubling either would let a recipe that stopped consulting
+        # it pass here.
+        "base-freshness.sh",
+    ):
+        shutil.copy2(ROOT / "scripts" / name, scripts / name)
+    return checkout, trace
+
+
+def _recipe_env(checkout: Path, trace: Path, **overrides: str) -> dict[str, str]:
+    env = os.environ.copy()
+    env["PATH"] = f"{checkout / 'bin'}:{env['PATH']}"
+    env["TRACE_FILE"] = str(trace)
+    env.update(overrides)
+    return env
+
+
+def _recipe_run(
+    checkout: Path,
+    trace: Path,
+    recipe: str,
+    *args: str,
+    fail_command: str | None = None,
+    **overrides: str,
+) -> subprocess.CompletedProcess[str]:
+    if fail_command is not None:
+        overrides["FAIL_COMMAND"] = fail_command
+    return _run("just", recipe, *args, cwd=checkout, env=_recipe_env(checkout, trace, **overrides))
+
+
+def _gate_checkout(tmp_path: Path) -> tuple[Path, Path]:
+    """A recipe checkout `just gate` can run in: a real repo with `origin/main`."""
+    checkout, trace = _recipe_checkout(tmp_path)
+    # The recipe only checks that llmlint is installed before handing the tier to
+    # Nx; the traced `scripts/nx.sh` double above is what stands in for the run.
+    llmlint = checkout / "bin/llmlint"
+    llmlint.write_text((checkout / "scripts/nx.sh").read_text())
+    llmlint.chmod(0o755)
+    for args in (
+        ("init", "-q", "-b", "main"),
+        ("config", "user.name", "test"),
+        ("config", "user.email", "test.invalid"),
+        ("remote", "add", "origin", "https://example.invalid/gate-recipe.git"),
+        ("add", "-A"),
+        ("-c", "commit.gpgsign=false", "commit", "-qm", "fixture"),
+    ):
+        subprocess.run(["git", *args], cwd=checkout, check=True, capture_output=True)
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=checkout, check=True, text=True, capture_output=True
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "update-ref", "refs/remotes/origin/main", head],
+        cwd=checkout,
+        check=True,
+        capture_output=True,
+    )
+    return checkout, trace
+
+
+def _add_bun_double(checkout: Path) -> None:
+    """Trace Bun, and let it provision what the real one would.
+
+    It answers a tree it has already installed the way the real one does — the
+    measured `Checked 122 installs across 132 packages (no changes)` — because the
+    installer no longer decides that itself. Which invocations *installed* is the
+    whole question the traces below ask, so a double that installed on every call
+    would answer it wrong.
+    """
+    bun = checkout / "bin/bun"
+    bun.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ -x node_modules/.bin/nx ]]; then
+  printf 'bun %s (no changes)\\n' "$*" >>"$TRACE_FILE"
+  exit 0
+fi
+printf 'bun %s\\n' "$*" >>"$TRACE_FILE"
+if [[ "${FAIL_COMMAND:-}" == "bun" ]]; then
+  echo "bun: captured failure detail" >&2
+  exit 9
+fi
+# An install held until the journey releases it, where a journey asks for one, so the
+# callers it races provably arrive while this one holds the lock. Each held install records
+# itself first, which is how a journey reads that one is in Bun and that no second joined
+# it; the bound only ends a hold whose journey died.
+if [[ -n "${BUN_HOLD_RELEASE:-}" ]]; then
+  printf 'held\n' >>"$BUN_HOLD_RELEASE.holding"
+  waited=0
+  until [[ -e "$BUN_HOLD_RELEASE" ]] || ((waited >= 6000)); do
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+fi
+mkdir -p node_modules/.bin
+cat >node_modules/.bin/nx <<'NX'
+#!/usr/bin/env bash
+printf 'nx %s\n' "$*" >>"$TRACE_FILE"
+NX
+chmod +x node_modules/.bin/nx
+cat >node_modules/.bin/playwright <<'PLAYWRIGHT'
+#!/usr/bin/env bash
+printf 'playwright %s\n' "$*" >>"$TRACE_FILE"
+PLAYWRIGHT
+chmod +x node_modules/.bin/playwright
+"""
+    )
+    bun.chmod(0o755)
+
+
+def _mark_nx_installed(checkout: Path) -> None:
+    nx = checkout / "node_modules/.bin/nx"
+    nx.parent.mkdir(parents=True, exist_ok=True)
+    nx.write_text(
+        '#!/usr/bin/env bash\nprintf \'nx %s\\n\' "$*" >>"$TRACE_FILE"\n',
+        encoding="utf-8",
+    )
+    nx.chmod(0o755)
+
+
+def _init_repository(checkout: Path) -> None:
+    for args in (
+        ("init", "-q", "-b", "main"),
+        ("config", "user.name", "test"),
+        ("config", "user.email", "test.invalid"),
+        ("remote", "add", "origin", "https://example.invalid/workspace-recipe.git"),
+    ):
+        subprocess.run(["git", *args], cwd=checkout, check=True, capture_output=True)
+
+
+def test_bootstrap_recipe_reinstalls_the_locked_workspace_from_a_clean_clone(
+    tmp_path: Path,
+) -> None:
+    """Bootstrap forces the install rather than heals it: the lockfile may have moved."""
+    checkout, trace = _recipe_checkout(tmp_path)
+    _add_bun_double(checkout)
+    _mark_nx_installed(checkout)
+    _init_repository(checkout)
+
+    result = _recipe_run(checkout, trace, "bootstrap")
+
+    assert result.returncode == 0, result.stderr
+    assert trace.read_text().splitlines() == [
+        "session-setup.sh ",
+        "bun install --frozen-lockfile",
+        "playwright install chromium",
+        "nx.sh run-many -t bootstrap",
+    ]
+
+
+def test_bootstrap_recipe_leaves_the_failing_workspace_install_readable(
+    tmp_path: Path,
+) -> None:
+    """A bootstrap that cannot install must not take the reason with it."""
+    checkout, trace = _recipe_checkout(tmp_path)
+    _add_bun_double(checkout)
+    _init_repository(checkout)
+
+    result = _recipe_run(checkout, trace, "bootstrap", fail_command="bun")
+
+    assert result.returncode != 0
+    log = checkout / ".logs/workspace-install.log"
+    assert "bun: captured failure detail" in result.stderr
+    assert "install locked workspace dependencies and retry" in result.stderr
+    assert f"full output: {log}" in result.stderr
+    assert "bun: captured failure detail" in log.read_text()
+    assert oct(log.stat().st_mode & 0o777) == "0o600"
+    assert trace.read_text().splitlines() == [
+        "session-setup.sh ",
+        "bun install --frozen-lockfile",
+    ]
+
+
+def test_check_recipe_runs_every_project_when_no_comparison_base_resolves(
+    tmp_path: Path,
+) -> None:
+    """No base is not an empty diff, so a checkout with none narrows nothing.
+
+    This is the state a fresh copy of the tree is in, and the direction a selector
+    that cannot prove what changed has to fail in.
+    """
+    checkout, trace = _recipe_checkout(tmp_path)
+
+    result = _recipe_run(checkout, trace, "check")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == (
+        "check: all deterministic checks passed; project selection: run-many\n"
+    )
+    assert trace.read_text().splitlines() == _check_trace("run-many")
+
+
+def test_check_recipe_narrows_to_the_diff_the_gate_judges(tmp_path: Path) -> None:
+    """The base the judged tier and the publishing push use is the base this narrows on.
+
+    Nx's own default base is the local branch, which in a publication clone is the
+    commit being pushed — an empty diff, and a gate that would select nothing at the
+    one moment it decides whether work reaches a remote.
+    """
+    checkout, trace = _gate_checkout(tmp_path)
+
+    result = _recipe_run(checkout, trace, "check")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == (
+        "check: all deterministic checks passed; project selection: affected --base origin/main\n"
+    )
+    assert trace.read_text().splitlines() == _check_trace("affected --base origin/main")
+
+
+def test_check_recipe_says_what_failed_when_it_cannot_decide_the_selection(
+    tmp_path: Path,
+) -> None:
+    """The selection is resolved before the log opens, so it needs its own diagnostic.
+
+    A gate that died on the shell's own error here would say nothing about what it was
+    doing, and would leave a reader looking for a failure among the checks — where
+    nothing had run yet.
+    """
+    checkout, trace = _recipe_checkout(tmp_path)
+    (checkout / "scripts/nx-selection.sh").chmod(0o644)
+
+    result = _recipe_run(checkout, trace, "check")
+
+    assert result.returncode != 0
+    assert "check: could not decide which projects to run over" in result.stderr
+    assert not trace.exists(), "nothing may reach Nx before the selection is decided"
+
+
+def test_the_selector_falls_back_only_on_the_status_the_base_helper_refuses_with(
+    tmp_path: Path,
+) -> None:
+    """The status that parts the two branches is a contract between two scripts.
+
+    It parts them in both directions. A refusal for the state this fixture is in —
+    nothing to narrow against — that started exiting with anything else would be read as
+    the helper having failed to run, and `just check` would stop where it should run
+    every project. A refusal about a base somebody named that collapsed back onto it
+    would be answered by that same silent fallback, which is how a misconfigured
+    comparison identity comes to look like a fresh copy of the tree.
+    """
+    checkout, _ = _recipe_checkout(tmp_path)
+    named = _gate_checkout(tmp_path / "named")[0]
+
+    refused = _run(str(checkout / "scripts/comparison-base.sh"), cwd=checkout)
+    unusable = _run(str(named / "scripts/comparison-base.sh"), "origin", "absent-base", cwd=named)
+
+    assert refused.returncode == NO_BASE_AVAILABLE
+    assert "comparison-base:" in refused.stderr
+    assert unusable.returncode not in (0, NO_BASE_AVAILABLE), (
+        "a base that was named and is not there must not reach the fallback branch, "
+        "which selects every project and says nothing"
+    )
+    assert "comparison-base:" in unusable.stderr
+
+
+def test_the_selector_selects_every_project_without_explaining_itself(
+    tmp_path: Path,
+) -> None:
+    """The tree having no base is the ordinary state, and a state needs no report.
+
+    `just check` already prints the selection it made, so a line here would only add a
+    second account of a run that went right — which is the noise that hides the one the
+    journey below prints when something actually has to be repaired.
+    """
+    checkout, _ = _recipe_checkout(tmp_path)
+
+    result = _run(str(checkout / "scripts/nx-selection.sh"), cwd=checkout)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "run-many\n"
+    assert result.stderr == "", "a selection that went as designed says nothing of its own"
+
+
+@pytest.mark.parametrize(
+    ("base", "cause"),
+    [
+        (
+            "absent-base",
+            "'origin/absent-base' is missing; fetch 'origin' or choose an existing base",
+        ),
+        ("invalid..base", "'invalid..base' is not a valid branch name"),
+    ],
+)
+def test_the_selector_refuses_a_base_that_was_named_and_cannot_be_used(
+    tmp_path: Path, base: str, cause: str
+) -> None:
+    """A named base nothing can resolve is not the fresh-copy state and must not read as it.
+
+    The comparison identity a lifecycle exports here is the one `just gate` resolves and
+    the publishing push judges against, and the gate already refuses this value outright.
+    Selecting every project instead would answer a misconfiguration with a green run over
+    a base nobody has, with the helper's report — which names the repair — dropped.
+    """
+    checkout, _ = _gate_checkout(tmp_path)
+    env = os.environ | {
+        "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
+        "ORCHESTRATOR_COMPARISON_BASE": base,
+    }
+
+    result = _run(str(checkout / "scripts/nx-selection.sh"), cwd=checkout, env=env)
+
+    assert result.returncode != 0
+    assert result.stdout == "", "nothing may reach Nx as a selection here"
+    assert f"comparison-base: {cause}" in result.stderr, (
+        "the helper's own report is the only account of which base was refused and how to repair it"
+    )
+    assert (
+        "nx-selection: scripts/comparison-base.sh named no base to narrow against" in result.stderr
+    )
+
+
+def test_check_recipe_parts_an_unresolvable_base_from_a_helper_that_could_not_run(
+    tmp_path: Path,
+) -> None:
+    """A base nothing can resolve is ordinary; a helper that cannot run decides nothing.
+
+    Collapsing the two would answer a broken checkout with a green gate over every
+    project, which reads as the deliberate fallback rather than as the failure it is.
+    """
+    checkout, trace = _recipe_checkout(tmp_path)
+    (checkout / "scripts/comparison-base.sh").unlink()
+
+    result = _recipe_run(checkout, trace, "check")
+
+    assert result.returncode != 0
+    assert "comparison-base.sh: No such file or directory" in result.stderr, (
+        "the helper's own report is the only account of why nothing was decided"
+    )
+    assert (
+        "nx-selection: scripts/comparison-base.sh named no base to narrow against" in result.stderr
+    )
+    assert "check: could not decide which projects to run over" in result.stderr
+    assert not trace.exists(), "a selection nothing decided may not reach Nx"
+
+
+def test_check_recipe_preserves_captured_nx_failure(tmp_path: Path) -> None:
+    checkout, trace = _recipe_checkout(tmp_path)
+
+    result = _recipe_run(checkout, trace, "check", fail_command="nx.sh")
+
+    assert result.returncode != 0
+    assert "nx.sh: captured failure detail" in result.stderr
+    assert "check: deterministic checks failed in 3 of 3 phases" in result.stderr
+    assert trace.read_text().splitlines() == _check_trace("run-many")
+
+
+@rewrites_workspace_toolchain
+def test_one_check_run_reports_every_phase_that_failed(tmp_path: Path) -> None:
+    """A failure in the diff selection does not hide one in a later phase.
+
+    Failures are planted in two different phases — a target of the diff selection and
+    the cross-worktree cache check — and the phase between them passes. One run of the
+    recipe has to run all three, report both failures and name both phases, and exit
+    non-zero; a recipe that stopped at the first failure would leave the second to be
+    discovered by another full gate after the first was fixed.
+    """
+    checkout, trace = _recipe_checkout(tmp_path)
+    selected, unconditional, cache_check = _check_trace("run-many")
+    planted = "\n".join((selected, cache_check))
+
+    result = _run(
+        "just",
+        "check",
+        cwd=checkout,
+        env=_recipe_env(checkout, trace, FAIL_INVOCATIONS=planted),
+    )
+
+    assert result.returncode != 0
+    assert trace.read_text().splitlines() == [selected, unconditional, cache_check]
+    assert f"{selected}: planted failure" in result.stderr
+    assert f"{cache_check}: planted failure" in result.stderr
+    assert f"{unconditional}: planted failure" not in result.stderr
+    assert (
+        "check: deterministic checks failed in 2 of 3 phases "
+        "(the diff selection; workspace:check-nx-cache)"
+    ) in result.stderr
+    assert "all deterministic checks passed" not in result.stdout
+    log = (checkout / ".logs/check.log").read_text()
+    assert f"{selected}: planted failure" in log and f"{cache_check}: planted failure" in log
+
+
+@rewrites_workspace_toolchain
+def test_a_check_run_failing_only_in_an_unconditional_phase_still_fails(tmp_path: Path) -> None:
+    """The phase no diff selects decides the verdict too: a green selection is not a pass."""
+    checkout, trace = _recipe_checkout(tmp_path)
+    _, unconditional, _ = _check_trace("run-many")
+
+    result = _run(
+        "just",
+        "check",
+        cwd=checkout,
+        env=_recipe_env(checkout, trace, FAIL_INVOCATIONS=unconditional),
+    )
+
+    assert result.returncode != 0
+    assert trace.read_text().splitlines() == _check_trace("run-many")
+    assert (
+        f"check: deterministic checks failed in 1 of 3 phases ({','.join(UNCONDITIONAL_TARGETS)})"
+        in result.stderr
+    )
+
+
+def test_check_recipe_leaves_the_failing_run_readable_after_it_exits(tmp_path: Path) -> None:
+    """The diagnosis outlives the process: `cat .logs/check.log` still answers."""
+    checkout, trace = _recipe_checkout(tmp_path)
+
+    result = _recipe_run(checkout, trace, "check", fail_command="nx.sh")
+
+    assert result.returncode != 0
+    log = checkout / ".logs/check.log"
+    assert f"full output: {log}" in result.stderr
+    assert "nx.sh: captured failure detail" in log.read_text()
+    assert oct(log.stat().st_mode & 0o777) == "0o600"
+
+
+@rewrites_workspace_toolchain
+def test_check_recipe_log_is_readable_while_the_recipe_is_still_running(
+    tmp_path: Path,
+) -> None:
+    """A stalled run is diagnosable by reading its log, not its file descriptors."""
+    checkout, trace = _recipe_checkout(tmp_path)
+    release = tmp_path / "release"
+    env = _recipe_env(
+        checkout,
+        trace,
+        ECHO_COMMAND="nx.sh",
+        ECHO_LINE="running the deterministic tier",
+        BLOCK_COMMAND="nx.sh",
+        BLOCK_UNTIL=str(release),
+    )
+    log = checkout / ".logs/check.log"
+
+    process = subprocess.Popen(
+        ["just", "check"], cwd=checkout, env=env, text=True, stdout=subprocess.PIPE
+    )
+    try:
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            if log.exists() and "running the deterministic tier" in log.read_text():
+                break
+            time.sleep(0.05)
+        else:  # pragma: no cover - only reached when the log never materializes
+            pytest.fail("the running recipe's log never became readable")
+        assert process.poll() is None
+    finally:
+        release.touch()
+        process.communicate(timeout=60)
+
+    assert process.returncode == 0
+
+
+def _nx_wrapper_checkout(tmp_path: Path, name: str) -> Path:
+    """A checkout the *real* `scripts/nx.sh` runs in, with Nx doubled.
+
+    Only Nx itself is replaced. `nx.sh`, `preserved-log.sh`, `workspace-install.sh`,
+    and `python-install.sh` are the real files, because what
+    they choose to do — which log to write, and whether to provision the workspace
+    first — is what is under test. This checkout declares no adopted release, which is
+    the case the plan-store heal is written to no-op in: `tests/fixtures/nx-cache` is
+    the other one, and a wrapper that fetched here would put a network crossing in
+    front of every Nx target in a tree that has no plan store to read.
+    """
+    checkout = tmp_path / name
+    (checkout / "scripts").mkdir(parents=True)
+    (checkout / "bin").mkdir()
+    for script in (
+        "nx.sh",
+        "preserved-log.sh",
+        "install-lock.sh",
+        "workspace-install.sh",
+        "python-install.sh",
+    ):
+        shutil.copy2(ROOT / "scripts" / script, checkout / "scripts" / script)
+        (checkout / "scripts" / script).chmod(0o755)
+    # `nx.sh` derives its shared cache key from the repository identity.
+    subprocess.run(["git", "init", "-q"], cwd=checkout, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "remote", "add", "origin", f"https://example.invalid/{name}.git"],
+        cwd=checkout,
+        check=True,
+        capture_output=True,
+    )
+    return checkout
+
+
+def _nx_nesting_checkout(tmp_path: Path) -> Path:
+    """The wrapper checkout with its workspace already provisioned.
+
+    Bun is doubled here even though this checkout is provisioned, because every
+    `scripts/nx.sh` now asks Bun whether the tree still matches the lockfile — and
+    a checkout with no `package.json` is one the real Bun refuses.
+    """
+    checkout = _nx_wrapper_checkout(tmp_path, "nesting")
+    _add_bun_double(checkout)
+    _mark_nx_installed(checkout)
+    return checkout
+
+
+def _nx_wrapper_env(
+    checkout: Path, tmp_path: Path, trace: Path, **overrides: str
+) -> dict[str, str]:
+    environment = os.environ.copy()
+    environment["PATH"] = f"{checkout / 'bin'}:{environment['PATH']}"
+    environment["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    environment["TRACE_FILE"] = str(trace)
+    # Claims inherited from an enclosing run belong to other checkouts and must not
+    # divert the log this checkout is about to write.
+    environment.pop("ORCHESTRATOR_PRESERVED_LOGS", None)
+    environment.update(overrides)
+    return environment
+
+
+def _add_nx_wrapper_doubles(checkout: Path) -> None:
+    """Trace Bun and Nx without installing or running either."""
+    _add_bun_double(checkout)
+
+
+@rewrites_workspace_toolchain
+def test_nx_wrapper_provisions_the_locked_workspace_when_nx_is_absent(tmp_path: Path) -> None:
+    """A bare Nx invocation in a fresh worktree heals itself instead of failing.
+
+    `just check` used to repair this inline, so the same missing install produced
+    two different stories: one recipe named the provisioning and fixed it, and
+    every other one failed with Nx's own "Could not find Nx modules" under advice
+    to fix project findings it had never reached.
+    """
+    checkout = _nx_wrapper_checkout(tmp_path, "provisioning")
+    _add_nx_wrapper_doubles(checkout)
+    trace = tmp_path / "trace"
+
+    result = _run(
+        str(checkout / "scripts" / "nx.sh"),
+        "run-many",
+        "-t",
+        "test",
+        cwd=checkout,
+        env=_nx_wrapper_env(checkout, tmp_path, trace),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert trace.read_text().splitlines() == [
+        "bun install --frozen-lockfile",
+        "nx run-many -t test",
+    ]
+
+
+@rewrites_workspace_toolchain
+def test_nx_wrapper_installs_nothing_when_the_tree_already_matches_the_lockfile(
+    tmp_path: Path,
+) -> None:
+    """The heal is a no-op on every ordinary invocation, which is most of them.
+
+    A no-op decided by Bun rather than by the installer, though: the ordinary
+    invocation asks, and what it must not do is spend an install on the answer.
+    """
+    checkout = _nx_wrapper_checkout(tmp_path, "provisioned")
+    _add_nx_wrapper_doubles(checkout)
+    _mark_nx_installed(checkout)
+    trace = tmp_path / "trace"
+
+    result = _run(
+        str(checkout / "scripts" / "nx.sh"),
+        "run",
+        "cached",
+        cwd=checkout,
+        env=_nx_wrapper_env(checkout, tmp_path, trace),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert trace.read_text().splitlines() == [
+        "bun install --frozen-lockfile (no changes)",
+        "nx run cached",
+    ]
+
+
+@rewrites_workspace_toolchain
+def test_nx_wrapper_names_the_provisioning_it_could_not_complete(tmp_path: Path) -> None:
+    """A failed install stops before Nx and leaves its own reason on disk."""
+    checkout = _nx_wrapper_checkout(tmp_path, "unprovisionable")
+    _add_nx_wrapper_doubles(checkout)
+    trace = tmp_path / "trace"
+
+    result = _run(
+        str(checkout / "scripts" / "nx.sh"),
+        "run",
+        "anything",
+        cwd=checkout,
+        env=_nx_wrapper_env(checkout, tmp_path, trace, FAIL_COMMAND="bun"),
+    )
+
+    assert result.returncode != 0
+    log = checkout / ".logs" / "workspace-install.log"
+    assert "workspace-install: install locked workspace dependencies and retry" in result.stderr
+    assert f"full output: {log}" in result.stderr
+    assert "bun: captured failure detail" in log.read_text(encoding="utf-8")
+    assert oct(log.stat().st_mode & 0o777) == "0o600"
+    # Nx is never reached: running it without its modules is what produced the
+    # misleading diagnosis this replaces.
+    assert trace.read_text().splitlines() == ["bun install --frozen-lockfile"]
+
+
+@rewrites_workspace_toolchain
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        (["--reinstall"], "unknown argument '--reinstall'"),
+        (["--force", "unexpected"], "expected at most one argument"),
+    ],
+)
+def test_workspace_install_rejects_arguments_it_does_not_define(
+    tmp_path: Path, arguments: list[str], message: str
+) -> None:
+    """An installer that ran on a misread argument would install the wrong thing."""
+    checkout = _nx_wrapper_checkout(tmp_path, "arguments")
+    _add_nx_wrapper_doubles(checkout)
+    trace = tmp_path / "trace"
+
+    result = _run(
+        str(checkout / "scripts" / "workspace-install.sh"),
+        *arguments,
+        cwd=checkout,
+        env=_nx_wrapper_env(checkout, tmp_path, trace),
+    )
+
+    assert result.returncode == 2
+    assert message in result.stderr
+    # And what the one accepted flag *does*, which is no longer "reinstall an
+    # already provisioned workspace": the ordinary run reinstalls whenever the tree
+    # and the lockfile disagree, so a refusal that still advertised the old meaning
+    # would send an operator to `--force` for a heal they already get.
+    assert "discard the installed tree and reinstall it from the lockfile" in result.stderr
+    assert not trace.exists(), "a rejected invocation must not have run Bun"
+
+
+def _sabotage_installer_state(checkout: Path, mode: str) -> None:
+    """Break one of the pieces of its own state the installer has to open."""
+    logs = checkout / ".logs"
+    match mode:
+        case "lock-directory":
+            # A regular file where the directory belongs: `mkdir` refuses it outright.
+            logs.write_text("not a directory\n", encoding="utf-8")
+        case "linked-lock-directory":
+            # The property this installer did not have while it prepared `.logs` itself:
+            # a link is followed by `chmod`, so a bare create-and-secure took permissions
+            # away from whatever the link pointed at, outside the checkout entirely.
+            # `mkdir` refuses an existing path — a link included rather than followed —
+            # so what the shared helper meets here is the link, not its target.
+            elsewhere = checkout.parent / "elsewhere-linked-lock-directory"
+            elsewhere.mkdir(mode=0o755)
+            logs.symlink_to(elsewhere)
+        case "unreadable-lock" | "write-only-lock":
+            logs.mkdir()
+            lock = logs / "workspace-install.lock"
+            lock.touch()
+            lock.chmod(0o000 if mode == "unreadable-lock" else 0o200)
+        case "unacquirable-lock":
+            # The one refusal no permission can produce: `flock` itself failing.
+            flock = checkout / "bin" / "flock"
+            flock.write_text(
+                '#!/usr/bin/env bash\necho "flock: cannot lock this file" >&2\nexit 1\n',
+                encoding="utf-8",
+            )
+            flock.chmod(0o755)
+        case "unopenable-log":
+            logs.mkdir()
+            (logs / "workspace-install.log").mkdir()
+        case _:  # pragma: no cover - guards the parametrization above
+            raise AssertionError(f"unknown installer sabotage {mode!r}")
+
+
+@rewrites_workspace_toolchain
+@pytest.mark.parametrize(
+    ("mode", "message"),
+    [
+        ("lock-directory", "cannot prepare"),
+        ("linked-lock-directory", "is a symbolic link"),
+        ("unreadable-lock", "cannot open the install lock at"),
+        ("write-only-lock", "cannot open the install lock at"),
+        ("unacquirable-lock", "cannot serialize the locked install"),
+        ("unopenable-log", "preserved-log: cannot open"),
+    ],
+)
+def test_workspace_install_names_every_piece_of_its_own_state_that_refuses(
+    tmp_path: Path, mode: str, message: str
+) -> None:
+    """Each way the installer's own state can refuse arrives as a diagnostic.
+
+    The descriptor its lock is held on is opened with `exec`, whose redirection
+    failures are exactly the kind a script dies on without a word — and the lock
+    directory, the lock acquisition, and the preserved log can each refuse too.
+    Every one of them has to name what could not be opened and stop before Bun,
+    because an installer that ran anyway would be installing unserialized.
+    """
+    checkout = _nx_wrapper_checkout(tmp_path, f"refusing-{mode}")
+    _add_nx_wrapper_doubles(checkout)
+    _sabotage_installer_state(checkout, mode)
+    trace = tmp_path / "trace"
+
+    result = _run(
+        str(checkout / "scripts" / "workspace-install.sh"),
+        cwd=checkout,
+        env=_nx_wrapper_env(checkout, tmp_path, trace),
+    )
+
+    assert result.returncode == 1
+    assert message in result.stderr
+    assert not trace.exists(), "an installer that never took its lock must not have run Bun"
+
+
+def _parent_of(pid: int) -> int | None:
+    """The parent `pid` has now, read from the process table; None once it is gone."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    # The command name is parenthesized and may hold spaces, so the fields after it are
+    # read from its closing parenthesis: state, then the parent.
+    return int(stat.rpartition(")")[2].split()[1])
+
+
+def _descends_from(pid: int, ancestor: int) -> bool:
+    current: int | None = pid
+    while current is not None and current > 1:
+        if current == ancestor:
+            return True
+        current = _parent_of(current)
+    return False
+
+
+def _waits_on_flock(lock: Path, installer: int) -> bool:
+    """Whether a process of `installer`'s tree is asleep in the kernel waiting on `lock`.
+
+    The waiter's own evidence: its wait channel is the kernel's file-lock wait, and it holds
+    a descriptor open on `lock`, so this is the wait itself rather than an inference from
+    how long the installer has been running. `/proc/locks` would say it more directly, but
+    the kernel leaves out a lock whose taker has exited — as `flock(1)` always has once
+    it took one — and every waiter queued behind it with it.
+    """
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit() or not _descends_from(int(entry.name), installer):
+            continue
+        try:
+            asleep_on_a_lock = "lock" in (entry / "wchan").read_text(encoding="utf-8")
+            if asleep_on_a_lock and any(
+                os.readlink(descriptor) == os.path.realpath(lock)
+                for descriptor in (entry / "fd").iterdir()
+            ):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _naps_between_polls(installer: int) -> bool:
+    """Whether the `flock`-less installer is napping between two tries at a held mutex.
+
+    The fallback's wait is a loop of a failed `mkdir` and a `sleep`, and that nap is the
+    only child it starts there, so a `sleep` child of the installer is the loop waiting.
+    """
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            stat = (entry / "stat").read_text(encoding="utf-8")
+        except OSError:
+            continue
+        name = stat.partition("(")[2].rpartition(")")[0]
+        if name == "sleep" and _parent_of(int(entry.name)) == installer:
+            return True
+    return False
+
+
+def _holding_installs(release: Path) -> int:
+    """How many installs reached the Bun double held on `release`."""
+    holding = release.with_name(f"{release.name}.holding")
+    return len(holding.read_text(encoding="utf-8").splitlines()) if holding.exists() else 0
+
+
+def _first_install_held(install: subprocess.Popen[str], release: Path, trace: Path) -> None:
+    """Until the first caller holds the lock from inside the held Bun double."""
+    until(
+        "the first install to reach Bun",
+        lambda: _holding_installs(release) >= 1,
+        seconds=60,
+        state=lambda: f"exit {install.poll()}, Bun ran {trace.exists()}",
+    )
+
+
+def _await_installer_waiting(
+    process: subprocess.Popen[str], held: str, trace: Path, waiting: Callable[[], bool]
+) -> None:
+    """Until the installer is seen waiting on what this journey holds.
+
+    An installer that does not wait on it runs the doubled Bun and exits, which fails
+    this at once rather than at the hang guard.
+    """
+
+    def ready() -> bool:
+        assert process.poll() is None, (
+            f"the installer exited {process.returncode} while the {held} was held, so it "
+            "never waited on it"
+        )
+        return waiting()
+
+    until(
+        f"the installer to wait on the {held}",
+        ready,
+        seconds=60,
+        state=lambda: f"exit {process.poll()}, Bun ran {trace.exists()}",
+    )
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] What it spends is two
+# doubled installer processes and the lock it holds them on, and the `workspace-copies`
+# project's narrow key names the installer it exercises.
+@rewrites_workspace_toolchain
+def test_a_copy_sharing_an_install_takes_the_owning_checkouts_lock(tmp_path: Path) -> None:
+    """Two callers over one tree serialize on one lock, wherever each runs from.
+
+    A checkout whose `node_modules` is a symlink into another's — the shape a copy of
+    this checkout used to take — has an installer run in it write the tree the owning
+    checkout's installer writes, and a lock kept beside each caller serialized nothing
+    between them. That is not harmless on a tree already in agreement with the
+    lockfile: measured on Bun 1.3.14, four `bun install --frozen-lockfile` at once over
+    one in-sync shared tree fail with `Failed to link <pkg>: EEXIST`, because a
+    no-change run still re-links every package carrying a `bin`. Two Nx targets running
+    two pytest processes is where the gate met it, past the reach of any xdist group.
+
+    Proven by holding the owner's lock rather than by racing: a copy that takes the
+    owner's lock is recorded by the kernel as waiting on it, and one that takes its own
+    would run Bun and exit while the owner's is still held.
+    """
+    owner = _nx_wrapper_checkout(tmp_path, "owner")
+    _add_nx_wrapper_doubles(owner)
+    _mark_nx_installed(owner)
+    copy = _nx_wrapper_checkout(tmp_path, "copy")
+    _add_nx_wrapper_doubles(copy)
+    (copy / "node_modules").symlink_to(owner / "node_modules", target_is_directory=True)
+    trace = tmp_path / "trace"
+    owner_lock = owner / ".logs" / "workspace-install.lock"
+    owner_lock.parent.mkdir()
+    owner_lock.touch()
+
+    with owner_lock.open() as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        process = subprocess.Popen(
+            [str(copy / "scripts" / "workspace-install.sh")],
+            cwd=copy,
+            env=_nx_wrapper_env(copy, tmp_path, trace),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            _await_installer_waiting(
+                process,
+                "owning checkout's lock",
+                trace,
+                lambda: _waits_on_flock(owner_lock, process.pid),
+            )
+            assert not trace.exists(), (
+                "the copy's installer ran Bun while the owning checkout's lock was held"
+            )
+        except BaseException:
+            process.kill()
+            process.communicate()
+            raise
+        fcntl.flock(held, fcntl.LOCK_UN)
+    _, stderr = process.communicate(timeout=e2e_timeout(30))
+
+    assert process.returncode == 0, stderr
+    # The `(no changes)` line: the tree the copy shares is the owner's provisioned one,
+    # which is the in-sync case the race above fails in.
+    assert trace.read_text().splitlines() == ["bun install --frozen-lockfile (no changes)"]
+    assert not (copy / ".logs" / "workspace-install.lock").exists(), (
+        "the copy took a lock of its own beside the owner's"
+    )
+    # The log stays the caller's: it records this run, and this run was the copy's.
+    assert (copy / ".logs" / "workspace-install.log").is_file()
+    assert not (owner / ".logs" / "workspace-install.log").exists()
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+def _plant_unenterable_install_tree(checkout: Path, shape: str) -> None:
+    """A `node_modules` that exists and cannot be entered, in one of two shapes."""
+    modules = checkout / "node_modules"
+    match shape:
+        case "dangling-symlink":
+            # What a copy sharing an install is left with once the install it shared
+            # is gone: the link is there and the tree is not.
+            modules.symlink_to(checkout / "nowhere" / "node_modules", target_is_directory=True)
+        case "unreadable-directory":
+            modules.mkdir()
+            modules.chmod(0o000)
+        case _:  # pragma: no cover - guards the parametrization below
+            raise AssertionError(f"unknown install tree shape {shape!r}")
+
+
+@rewrites_workspace_toolchain
+@pytest.mark.parametrize("shape", ["dangling-symlink", "unreadable-directory"])
+def test_an_install_tree_that_cannot_be_entered_is_refused_rather_than_read_as_absent(
+    tmp_path: Path, shape: str
+) -> None:
+    """A tree that exists and cannot be entered is not a tree that does not exist.
+
+    The lock is the tree's, found by entering `node_modules` and asking where it is.
+    Read as absent, a dangling symlink or an unreadable directory would take this
+    checkout's own lock while whatever it points at is still the tree Bun writes —
+    losing the one property the lock exists for exactly where the tree is already
+    broken. So the installer stops before Bun and says what to do about it.
+    """
+    checkout = _nx_wrapper_checkout(tmp_path, f"unenterable-{shape}")
+    _add_nx_wrapper_doubles(checkout)
+    _plant_unenterable_install_tree(checkout, shape)
+    trace = tmp_path / "trace"
+
+    try:
+        result = _run(
+            str(checkout / "scripts" / "workspace-install.sh"),
+            cwd=checkout,
+            env=_nx_wrapper_env(checkout, tmp_path, trace),
+        )
+    finally:
+        if shape == "unreadable-directory":
+            (checkout / "node_modules").chmod(0o700)
+
+    assert result.returncode == 1
+    assert f"'{checkout / 'node_modules'}' exists but cannot be entered" in result.stderr
+    assert "just bootstrap" in result.stderr
+    assert not trace.exists(), "an installer that could not find the tree's lock ran Bun anyway"
+    assert not (checkout / ".logs" / "workspace-install.lock").exists(), (
+        "the installer took this checkout's lock over a tree it could not enter"
+    )
+
+
+@rewrites_workspace_toolchain
+def test_a_forced_install_discards_a_tree_it_cannot_enter(tmp_path: Path) -> None:
+    """`--force` is the repair the refusal above names, so it must not meet the refusal.
+
+    A forced run discards the tree before it installs, so the tree it then writes is
+    this checkout's own, and this checkout's lock is the right one — a dangling
+    symlink is removed like any other `node_modules` and the install lands beside it.
+    """
+    checkout = _nx_wrapper_checkout(tmp_path, "forced-unenterable")
+    _add_nx_wrapper_doubles(checkout)
+    _plant_unenterable_install_tree(checkout, "dangling-symlink")
+    trace = tmp_path / "trace"
+
+    result = _run(
+        str(checkout / "scripts" / "workspace-install.sh"),
+        "--force",
+        cwd=checkout,
+        env=_nx_wrapper_env(checkout, tmp_path, trace),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert trace.read_text().splitlines() == ["bun install --frozen-lockfile"]
+    modules = checkout / "node_modules"
+    assert not modules.is_symlink(), "the forced run installed through the dangling link"
+    assert (modules / ".bin" / "nx").is_file()
+    assert (checkout / ".logs" / "workspace-install.lock").is_file()
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] What it spends is the
+# doubled installer's own processes held on the lock, and the key that selects it is the
+# `workspace-copies` project's narrow one, naming the scripts it exercises.
+@rewrites_workspace_toolchain
+def test_a_forced_install_in_a_copy_sharing_an_install_holds_both_trees_locks(
+    tmp_path: Path,
+) -> None:
+    """`--force` in a copy sharing an install changes which tree its path names mid-run.
+
+    Before it, `node_modules` is a link into the owning checkout's tree; after it, a
+    tree of the copy's own. So one lock cannot cover it. Taking the owner's alone — the
+    lock the ordinary run over that link takes — lets a caller arriving in the copy
+    once the link is gone pick the copy's lock and install beside it; taking the copy's
+    alone lets a caller already writing through the link collide with the link being
+    pulled out from under it. The forced run holds the owner's first, so writers
+    through the link finish, then its own, so later arrivals wait — and only then
+    discards the link. The owner's tree itself is never written or removed.
+
+    Proven the way the shared-lock journey above is: by holding each lock in turn,
+    reading that the kernel records the run waiting on it, and that the run neither ran
+    Bun nor discarded the link while either was held.
+    """
+    owner = _nx_wrapper_checkout(tmp_path, "owner")
+    _add_nx_wrapper_doubles(owner)
+    _mark_nx_installed(owner)
+    copy = _nx_wrapper_checkout(tmp_path, "copy")
+    _add_nx_wrapper_doubles(copy)
+    modules = copy / "node_modules"
+    modules.symlink_to(owner / "node_modules", target_is_directory=True)
+    trace = tmp_path / "trace"
+    locks = []
+    for checkout in (owner, copy):
+        lock = checkout / ".logs" / "workspace-install.lock"
+        lock.parent.mkdir()
+        lock.touch()
+        locks.append(lock.open())
+    owner_held, copy_held = locks
+    owner_lock = owner / ".logs" / "workspace-install.lock"
+    lock_of = {owner_held: owner_lock, copy_held: copy / ".logs" / "workspace-install.lock"}
+
+    try:
+        for held in (owner_held, copy_held):
+            fcntl.flock(held, fcntl.LOCK_EX)
+        process = subprocess.Popen(
+            [str(copy / "scripts" / "workspace-install.sh"), "--force"],
+            cwd=copy,
+            env=_nx_wrapper_env(copy, tmp_path, trace),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            for held, whose in ((owner_held, "owner's"), (copy_held, "copy's own")):
+                _await_installer_waiting(
+                    process,
+                    f"{whose} lock",
+                    trace,
+                    functools.partial(_waits_on_flock, lock_of[held], process.pid),
+                )
+                assert not trace.exists(), f"the forced run ran Bun while the {whose} lock was held"
+                assert modules.is_symlink(), (
+                    f"the forced run discarded the link while the {whose} lock was held"
+                )
+                if held is copy_held:
+                    # Waiting on its own lock, the run must still be holding the
+                    # owner's: the two are held at once, and a helper that opened the
+                    # second on the first one's descriptors would have released the
+                    # first by closing them. `flock` conflicts across opens of one
+                    # process, so a fresh open here answers who holds it.
+                    with owner_lock.open() as probe, pytest.raises(BlockingIOError):
+                        fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(held, fcntl.LOCK_UN)
+        except BaseException:
+            process.kill()
+            # Released before the pipes are drained: the `flock` the run forks waits
+            # on the lock this journey holds, keeps the run's pipes open while it
+            # does, and is not the process the kill above reached.
+            for held in locks:
+                fcntl.flock(held, fcntl.LOCK_UN)
+            process.communicate()
+            raise
+    finally:
+        for held in locks:
+            held.close()
+    _, stderr = process.communicate(timeout=e2e_timeout(30))
+
+    assert process.returncode == 0, stderr
+    # It installed rather than reconciling: the link is gone before Bun runs, so the
+    # tree Bun meets is the copy's own and empty.
+    assert trace.read_text().splitlines() == ["bun install --frozen-lockfile"]
+    assert not modules.is_symlink() and (modules / ".bin" / "nx").is_file(), (
+        "the forced run left the copy sharing the owner's tree"
+    )
+    assert (owner / "node_modules" / ".bin" / "nx").is_file(), (
+        "the forced run in the copy reached the owning checkout's tree"
+    )
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+#: How many callers race one flock-less install below: enough that an unserialized
+#: fallback would show as more than one install, and no more, because each is a process.
+FLOCKLESS_RACERS = 3
+
+
+def _path_without(root: Path, tool: str) -> Path:
+    """A PATH directory containing the host's executables except ``tool``."""
+    directory = root / "no-tool"
+    directory.mkdir(parents=True, exist_ok=True)
+    for entry in os.environ["PATH"].split(os.pathsep):
+        source = Path(entry)
+        if not source.is_dir():
+            continue
+        for candidate in sorted(source.iterdir()):
+            destination = directory / candidate.name
+            if candidate.name == tool or destination.is_symlink() or destination.exists():
+                continue
+            destination.symlink_to(candidate)
+    return directory
+
+
+def _flockless_env(checkout: Path, tmp_path: Path, trace: Path, **overrides: str) -> dict[str, str]:
+    """The wrapper environment on a platform that ships no `flock`.
+
+    Stated rather than assumed: every journey below passes under `flock` too, so
+    without establishing it is gone each would prove the `flock` path a second time.
+    """
+    stripped = os.pathsep.join((str(checkout / "bin"), str(_path_without(tmp_path, "flock"))))
+    resolves = subprocess.run(
+        ["bash", "-c", "command -v flock"],
+        env={"PATH": stripped},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert resolves.returncode != 0, (
+        f"this journey's PATH still resolves flock at {resolves.stdout.strip()!r}, so it "
+        "would prove the `flock` path a second time rather than the fallback"
+    )
+    return _nx_wrapper_env(checkout, tmp_path, trace, PATH=stripped, **overrides)
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] What each spends is
+# the installer's own processes — three callers held behind one install, and a forced run
+# held behind each of two mutexes — and the `workspace-copies` key that selects them is
+# the narrowest one that reads the scripts they exercise.
+@rewrites_workspace_toolchain
+def test_the_workspace_installer_serializes_without_flock_through_the_shared_fallback(
+    tmp_path: Path,
+) -> None:
+    """The other installer through the same fallback, on a platform with no `flock`.
+
+    `flock` is util-linux and a stock macOS has none, so `scripts/install-lock.sh`
+    falls back to a mutex directory — and only the plan-store installer used to be
+    driven through that path, while this one reached the fallback through the same
+    helper unproved. Every caller succeeds and exactly one installs: the rest arrive
+    at a tree the first already provisioned, and answer it as Bun does, `(no changes)`.
+    The first is held in Bun until each of the rest is seen polling for the mutex it
+    holds, so the callers overlap by construction rather than by how long Bun takes.
+    """
+    checkout = _nx_wrapper_checkout(tmp_path, "flockless")
+    _add_nx_wrapper_doubles(checkout)
+    trace = tmp_path / "trace"
+    release = tmp_path / "release-bun"
+    environment = _flockless_env(checkout, tmp_path, trace, BUN_HOLD_RELEASE=str(release))
+
+    def start_caller() -> subprocess.Popen[str]:
+        return subprocess.Popen(
+            [str(checkout / "scripts" / "workspace-install.sh")],
+            cwd=checkout,
+            env=environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    racing = [start_caller()]
+    try:
+        _first_install_held(racing[0], release, trace)
+        racing.extend(start_caller() for _ in range(FLOCKLESS_RACERS - 1))
+        for waiter in racing[1:]:
+
+            def polls(waiter: subprocess.Popen[str] = waiter) -> bool:
+                assert _holding_installs(release) == 1, "a second install ran Bun beside the first"
+                return _naps_between_polls(waiter.pid)
+
+            _await_installer_waiting(waiter, "first install's mutex", trace, polls)
+    finally:
+        release.touch()
+    outcomes = [caller.communicate(timeout=e2e_timeout(180)) for caller in racing]
+
+    assert [caller.returncode for caller in racing] == [0] * FLOCKLESS_RACERS, (
+        f"a caller racing {FLOCKLESS_RACERS - 1} others with no `flock` on its PATH was "
+        f"refused rather than waiting for the directory the fallback locks with:\n{outcomes}"
+    )
+    installs = trace.read_text(encoding="utf-8").splitlines()
+    assert sorted(installs) == sorted(
+        ["bun install --frozen-lockfile"]
+        + ["bun install --frozen-lockfile (no changes)"] * (FLOCKLESS_RACERS - 1)
+    ), (
+        f"{FLOCKLESS_RACERS} concurrent callers with no `flock` recorded {installs}; one "
+        f"install and the rest finding it is what a serialized fallback leaves"
+    )
+    assert not (checkout / ".logs" / "workspace-install.lock.d").exists(), (
+        "the fallback's own lock directory outlived every caller that took it; nothing "
+        "releases a directory but the shell that made it, so one left behind is what a "
+        "later install inherits and waits out"
+    )
+
+
+@rewrites_workspace_toolchain
+def test_a_forced_install_in_a_copy_holds_both_trees_locks_without_flock_and_releases_both(
+    tmp_path: Path,
+) -> None:
+    """The two-lock forced run through the fallback, which has to release two mutexes.
+
+    Under `flock` the kernel releases a lock when its holder exits; under the fallback
+    the sourcing shell's one EXIT trap does, and a forced run in a copy sharing an
+    install takes two locks in that shell — the owning tree's, then its own. A trap
+    re-armed for the second would have dropped the first, leaving a mutex behind that
+    every later install of the owner waits the whole budget out on. So this holds each
+    mutex in turn, the way the `flock` journey above holds each lock, reads that the run
+    is polling for it and neither ran Bun nor discarded the link while either was held,
+    and then reads that neither mutex outlived it.
+    """
+    owner = _nx_wrapper_checkout(tmp_path, "owner")
+    _add_nx_wrapper_doubles(owner)
+    _mark_nx_installed(owner)
+    copy = _nx_wrapper_checkout(tmp_path, "copy")
+    _add_nx_wrapper_doubles(copy)
+    modules = copy / "node_modules"
+    modules.symlink_to(owner / "node_modules", target_is_directory=True)
+    trace = tmp_path / "trace"
+    mutexes = []
+    for checkout in (owner, copy):
+        mutex = checkout / ".logs" / "workspace-install.lock.d"
+        mutex.parent.mkdir(mode=0o700)
+        mutex.mkdir()
+        mutexes.append(mutex)
+    owner_held, copy_held = mutexes
+
+    process = subprocess.Popen(
+        [str(copy / "scripts" / "workspace-install.sh"), "--force"],
+        cwd=copy,
+        env=_flockless_env(copy, tmp_path, trace),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        for held, whose in ((owner_held, "owner's"), (copy_held, "copy's own")):
+            if held is copy_held:
+                # The run re-makes the owner's mutex once this journey removes it, and
+                # only after its last nap on it has ended, so a nap seen from here on is
+                # one it took waiting on its own. One that exits here took the owner's
+                # and never waited on its own.
+                _await_installer_waiting(process, "copy's own mutex", trace, owner_held.is_dir)
+            _await_installer_waiting(
+                process, f"{whose} mutex", trace, lambda: _naps_between_polls(process.pid)
+            )
+            assert not trace.exists(), f"the forced run ran Bun while the {whose} mutex was held"
+            assert modules.is_symlink(), (
+                f"the forced run discarded the link while the {whose} mutex was held"
+            )
+            if held is copy_held:
+                # Waiting on its own mutex, the run must still be holding the owner's,
+                # which under the fallback is the directory it re-made once this
+                # journey released it.
+                assert owner_held.is_dir(), (
+                    "the forced run let go of the owner's mutex when it took its own"
+                )
+            held.rmdir()
+    except BaseException:
+        process.kill()
+        process.communicate()
+        raise
+    _, stderr = process.communicate(timeout=e2e_timeout(30))
+
+    assert process.returncode == 0, stderr
+    assert trace.read_text().splitlines() == ["bun install --frozen-lockfile"]
+    assert not modules.is_symlink() and (modules / ".bin" / "nx").is_file(), (
+        "the forced run left the copy sharing the owner's tree"
+    )
+    assert (owner / "node_modules" / ".bin" / "nx").is_file(), (
+        "the forced run in the copy reached the owning checkout's tree"
+    )
+    left = [str(mutex) for mutex in mutexes if mutex.exists()]
+    assert not left, (
+        f"{left} outlived the forced run that took both; the one EXIT trap has to "
+        "release every mutex the shell took, or the next install of that checkout "
+        "waits the whole budget out on a lock nothing holds"
+    )
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+def _install_lock_limit() -> int:
+    """How many locks `scripts/install-lock.sh` lets one shell hold, off its own declaration.
+
+    Each is a spelled-out descriptor pair, so the bound is the number of pairs.
+    """
+    declared = re.search(
+        r"^INSTALL_LOCK_LIMIT=(\d+)$",
+        (ROOT / "scripts" / "install-lock.sh").read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+    assert declared is not None, "scripts/install-lock.sh no longer declares INSTALL_LOCK_LIMIT"
+    return int(declared.group(1))
+
+
+INSTALL_LOCK_LIMIT = _install_lock_limit()
+
+
+def test_the_lock_helper_refuses_a_third_lock_rather_than_reusing_a_pair(
+    tmp_path: Path,
+) -> None:
+    """A lock past the helper's pairs is refused before it touches anything.
+
+    Each lock is held on its own descriptor pair, because taking one on a pair already
+    held would close it and release the `flock` on it. The pairs are spelled out, so a
+    caller asking for one more than there are is a defect in the caller, and the helper
+    says so and prepares nothing — the checkouts it already holds stay held, and the
+    one it refused gains no lock directory.
+    """
+    checkouts = [tmp_path / f"held-{index}" for index in range(INSTALL_LOCK_LIMIT + 1)]
+    for checkout in checkouts:
+        checkout.mkdir()
+    takes = " && ".join(
+        f"install_lock_take probe '{checkout}' probe.lock" for checkout in checkouts
+    )
+
+    result = _run(
+        "bash",
+        "-c",
+        f". '{ROOT / 'scripts' / 'install-lock.sh'}' && {takes}",
+        cwd=tmp_path,
+        env=os.environ.copy(),
+    )
+
+    assert result.returncode == 1, result.stderr
+    assert f"holds at most {INSTALL_LOCK_LIMIT}" in result.stderr
+    assert "defect in the caller" in result.stderr
+    for checkout in checkouts[:INSTALL_LOCK_LIMIT]:
+        assert (checkout / ".logs" / "probe.lock").is_file(), (
+            f"the helper refused the lock past its bound and the one at {checkout} was never taken"
+        )
+    assert not (checkouts[INSTALL_LOCK_LIMIT] / ".logs").exists(), (
+        "the helper prepared a lock directory for the lock it refused"
+    )
+
+
+@rewrites_workspace_toolchain
+def test_a_forced_workspace_install_discards_the_installed_tree_first(tmp_path: Path) -> None:
+    """`--force` is what distrusts the tree itself, now that the ordinary run reconciles.
+
+    Reconciling against the lockfile leaves whatever the lockfile does not describe
+    — measured: Bun keeps a package no committed dependency names. A clean-clone
+    bootstrap is the caller that cannot afford that, so its forced run installs
+    from nothing rather than on top of what is there.
+    """
+    checkout = _nx_wrapper_checkout(tmp_path, "forced")
+    _add_nx_wrapper_doubles(checkout)
+    _mark_nx_installed(checkout)
+    leftover = checkout / "node_modules" / "leftover-package"
+    leftover.mkdir(parents=True)
+    (leftover / "package.json").write_text('{"name": "leftover-package"}\n', encoding="utf-8")
+    trace = tmp_path / "trace"
+
+    result = _run(
+        str(checkout / "scripts" / "workspace-install.sh"),
+        "--force",
+        cwd=checkout,
+        env=_nx_wrapper_env(checkout, tmp_path, trace),
+    )
+
+    assert result.returncode == 0, result.stderr
+    # The plain line, not the `(no changes)` one an ordinary run against this same
+    # provisioned tree records: a forced run installs unconditionally.
+    assert trace.read_text().splitlines() == ["bun install --frozen-lockfile"]
+    assert not leftover.exists(), "a forced install left a package no lockfile describes"
+    assert (checkout / "node_modules/.bin/nx").is_file()
+
+
+@rewrites_workspace_toolchain
+def test_a_forced_install_that_cannot_discard_the_tree_stops_before_bun(tmp_path: Path) -> None:
+    """Discarding is the whole of what `--force` adds, so failing at it is not a warning.
+
+    A forced run that installed over a tree it could not remove would report success
+    for the one thing the caller asked for and did not get — and `just bootstrap` is
+    that caller, on a clone whose `node_modules` is exactly what it distrusts.
+    """
+    checkout = _nx_wrapper_checkout(tmp_path, "unremovable")
+    _add_nx_wrapper_doubles(checkout)
+    _mark_nx_installed(checkout)
+    modules = checkout / "node_modules"
+    # Children that cannot be unlinked: `rm -rf` refuses, while the checkout itself
+    # stays writable so the install lock and its log are not what refuses instead.
+    modules.chmod(0o500)
+    trace = tmp_path / "trace"
+
+    try:
+        result = _run(
+            str(checkout / "scripts" / "workspace-install.sh"),
+            "--force",
+            cwd=checkout,
+            env=_nx_wrapper_env(checkout, tmp_path, trace),
+        )
+    finally:
+        modules.chmod(0o700)
+
+    assert result.returncode == 1
+    assert f"cannot remove '{modules}'" in result.stderr
+    assert "permissions" in result.stderr
+    assert not trace.exists(), "a forced install that kept the tree must not have run Bun"
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] What it spends is the
+# doubled installer's own processes held on the lock, and the key that selects it is the
+# `workspace-copies` project's narrow one, naming the scripts it exercises.
+@rewrites_workspace_toolchain
+def test_concurrent_workspace_installs_install_once_and_both_succeed(tmp_path: Path) -> None:
+    """Two Nx invocations in one fresh worktree must not install over each other.
+
+    The lock is what makes the self-heal safe to put in front of *every* Nx
+    invocation: `just check` and the suite's own nested `just lint-llm-diff` reach
+    it from the same checkout at once. The loser must wait, see the workspace the
+    winner provisioned, and go on rather than reinstalling on top of it.
+
+    The interleaving is held rather than hoped for: the first caller's Bun is held until
+    this journey releases it, and the second is read off the kernel's lock table as
+    waiting on the lock — with no second caller in Bun — before it is.
+    """
+    checkout = _nx_wrapper_checkout(tmp_path, "concurrent")
+    _add_nx_wrapper_doubles(checkout)
+    trace = tmp_path / "trace"
+    release = tmp_path / "release-bun"
+    environment = _nx_wrapper_env(checkout, tmp_path, trace, BUN_HOLD_RELEASE=str(release))
+    lock = checkout / ".logs" / "workspace-install.lock"
+
+    def start_install() -> subprocess.Popen[str]:
+        return subprocess.Popen(
+            [str(checkout / "scripts" / "workspace-install.sh")],
+            cwd=checkout,
+            env=environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    installs = [start_install()]
+    try:
+        _first_install_held(installs[0], release, trace)
+        installs.append(start_install())
+        second = installs[1]
+
+        def second_waits() -> bool:
+            assert _holding_installs(release) == 1, "a second install ran Bun beside the first"
+            return _waits_on_flock(lock, second.pid)
+
+        _await_installer_waiting(second, "first install's lock", trace, second_waits)
+    finally:
+        release.touch()
+    outcomes = [install.communicate(timeout=e2e_timeout(60)) for install in installs]
+
+    assert [install.returncode for install in installs] == [0, 0], outcomes
+    # Both asked; only the first installed. The second ran after the lock was
+    # released, against the tree the first had just provisioned, and found nothing
+    # left to do — which is what "serialized" has to mean now that the ordinary
+    # path reconciles instead of checking for a binary.
+    assert trace.read_text().splitlines() == [
+        "bun install --frozen-lockfile",
+        "bun install --frozen-lockfile (no changes)",
+    ]
+    assert (checkout / "node_modules/.bin/nx").is_file()
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+#: One real journey carrying `shares_workspace_install`, run inside the fresh
+#: worktree below. It reaches Nx through the real `just` recipes, so it is exactly
+#: the shape that used to skip there — and a skip is what made a worker's own
+#: `pytest` say something different from the gate's.
+FRESH_WORKTREE_JOURNEY = (
+    "tests/e2e/workspace_copies/test_llmlint_cache_e2e.py::"
+    "test_an_unresolvable_base_is_rejected_before_the_judge_is_paid"
+)
+
+
+@rewrites_workspace_toolchain
+@pytest.mark.reads_docs
+def test_a_freshly_created_worktree_provisions_itself_for_nx_and_for_pytest(
+    tmp_path: Path,
+) -> None:
+    """The situation every dispatched worker starts in, driven end to end.
+
+    `node_modules` is ignored state that no checkout shares, so a new worktree has
+    none. Both entry points into Nx are exercised here in a real linked worktree
+    carrying this working tree's own changes: a bare `./scripts/nx.sh`, and a bare
+    `pytest` on a journey that drives real Nx. Neither may ask an operator to run
+    Bun by hand, which is what a worker had to do.
+    """
+    worktree = tmp_path / "fresh-worktree"
+    # `--no-checkout`, so what lands here is this working tree exactly rather than
+    # HEAD with the change laid over it — a file this change deletes would
+    # otherwise survive into the tree that is supposed to be proving the change.
+    _run("git", "worktree", "add", "--no-checkout", "--detach", str(worktree), "HEAD")
+    try:
+        copy_working_tree(worktree)
+        assert not (worktree / "node_modules").exists()
+
+        wrapper = _run("./scripts/nx.sh", "show", "projects", cwd=worktree)
+
+        assert wrapper.returncode == 0, wrapper.stderr
+        assert (worktree / "node_modules/.bin/nx").is_file()
+
+        # Again from the other entry point, with the install withdrawn: the suite
+        # provisions rather than skipping, so a green run here means what the gate
+        # means. `uv run` builds this worktree's own environment on the way in.
+        shutil.rmtree(worktree / "node_modules")
+        suite = _run(
+            "uv", "run", "pytest", FRESH_WORKTREE_JOURNEY, "-q", "-p", "no:randomly", cwd=worktree
+        )
+
+        assert suite.returncode == 0, suite.stdout + suite.stderr
+        assert "skipped" not in suite.stdout
+        assert (worktree / "node_modules/.bin/nx").is_file()
+    finally:
+        # Removed here rather than left to teardown: a linked worktree surviving a
+        # test is a leak the guard reports, and rightly. `remove` deregisters this
+        # one on its own; `prune` would reach across a registry other live
+        # orchestrator runs share.
+        _run("git", "worktree", "remove", "--force", str(worktree))
+
+
+#: The dependency this journey moves the pin of, chosen because a stale
+#: `node_modules` really did go on serving an older copy of it under a current pin.
+STALENESS_WITNESS = "onepipeline-ui"
+
+
+@rewrites_workspace_toolchain
+@pytest.mark.reads_docs
+def test_a_worktree_provisioned_before_the_pin_moved_reinstalls_from_the_lockfile(
+    tmp_path: Path,
+) -> None:
+    """A moved pin heals itself, the way a missing `node_modules` already did.
+
+    Every checkout that already had a `node_modules` used to be exempt from the
+    lockfile: the installer asked whether Nx was there, which answers for *an*
+    install rather than *the locked* one. So the pin moved, nothing reinstalled,
+    and an operator reading the served view had no way to tell a stale install
+    from a broken feature.
+
+    Driven against real Bun and a lockfile that really moved, because the whole
+    defect was an install nobody could see: both entry points into the wrapper
+    chain are exercised — the script every recipe routes through, and a `just`
+    recipe on top of it.
+    """
+    worktree = tmp_path / "moved-pin-worktree"
+    # `--no-checkout`, so this working tree's own change is what provisions here.
+    _run("git", "worktree", "add", "--no-checkout", "--detach", str(worktree), "HEAD")
+    try:
+        copy_working_tree(worktree)
+        manifest = worktree / "package.json"
+        lockfile = worktree / "bun.lock"
+        committed_manifest = manifest.read_bytes()
+        committed_lock = lockfile.read_bytes()
+        pinned = json.loads(committed_manifest)["dependencies"][STALENESS_WITNESS]
+
+        # Provisioned from the lockfile as it was before the bump, for real: the
+        # tree a checkout carries when the pin moves under it.
+        before_the_bump = json.loads(committed_manifest)
+        del before_the_bump["dependencies"][STALENESS_WITNESS]
+        manifest.write_text(json.dumps(before_the_bump, indent=2) + "\n", encoding="utf-8")
+        provision = _run("bun", "install", cwd=worktree)
+        assert provision.returncode == 0, provision.stderr
+        assert (worktree / "node_modules/.bin/nx").is_file()
+        assert not (worktree / "node_modules" / STALENESS_WITNESS).exists()
+
+        # The bump lands: the committed manifest and lockfile move, and nothing
+        # else does.
+        manifest.write_bytes(committed_manifest)
+        lockfile.write_bytes(committed_lock)
+
+        wrapper = _run("./scripts/nx.sh", "show", "projects", cwd=worktree)
+
+        assert wrapper.returncode == 0, wrapper.stderr
+        bundle = worktree / "node_modules" / STALENESS_WITNESS / "package.json"
+        assert bundle.is_file(), (
+            f"the wrapper left {STALENESS_WITNESS} uninstalled under a {pinned} pin: a tree "
+            f"provisioned before the bump stayed exempt from the lockfile"
+        )
+        installed = json.loads(bundle.read_text(encoding="utf-8"))
+        assert installed["version"] == pinned, (
+            f"the wrapper left {STALENESS_WITNESS} {installed['version']} installed under a "
+            f"{pinned} pin"
+        )
+        assert lockfile.read_bytes() == committed_lock, "the committed lockfile decides"
+
+        # Again from the recipe an operator runs, against a tree that disagrees with
+        # the lockfile the other way: a package the lockfile names, gone.
+        shutil.rmtree(worktree / "node_modules" / STALENESS_WITNESS)
+        recipe = _run("just", "format-check", cwd=worktree)
+
+        assert recipe.returncode == 0, recipe.stdout + recipe.stderr
+        assert (worktree / "node_modules" / STALENESS_WITNESS / "package.json").is_file()
+    finally:
+        _run("git", "worktree", "remove", "--force", str(worktree))
+
+
+def _provisioning_copy(tmp_path: Path, name: str) -> Path:
+    """A throwaway copy of this checkout the real `scripts/nx.sh` runs in.
+
+    `node_modules` comes across as a private hardlinked copy of this checkout's own
+    install, so what a Python-provisioning journey pays for here is the Python half alone.
+    """
+    checkout = tmp_path / name
+    checkout.mkdir()
+    copy_checkout(checkout)
+    # Nx resolves its workspace from git, and `scripts/nx.sh` derives its shared
+    # cache key from the repository identity.
+    subprocess.run(["git", "init", "-q"], cwd=checkout, check=True, capture_output=True)
+    return checkout
+
+
+def _uv_provisioning_env(**overrides: str) -> dict[str, str]:
+    """The environment a Python-provisioning journey states for itself.
+
+    Every one of these names decides where uv installs, and this suite runs from
+    inside a dispatch that has already set some of them for its own checkout — so a
+    journey about a fresh tree would otherwise be answering about the enclosing one.
+    """
+    environment = os.environ.copy()
+    for provided in ("UV_NO_SYNC", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
+        environment.pop(provided, None)
+    environment.update(overrides)
+    return environment
+
+
+@rewrites_workspace_toolchain
+@pytest.mark.reads_docs
+def test_a_freshly_created_worktree_provisions_its_python_environment_from_the_lockfile(
+    tmp_path: Path,
+) -> None:
+    """A worktree cut for a dispatch arrives without `.venv`, and must not stay that way.
+
+    A missing environment does not fail loudly: every reader of `<root>/.venv/bin`
+    falls through to whichever other checkout is on PATH.
+    """
+    worktree = tmp_path / "fresh-python-worktree"
+    _run("git", "worktree", "add", "--no-checkout", "--detach", str(worktree), "HEAD")
+    try:
+        copy_working_tree(worktree)
+        assert not (worktree / ".venv").exists()
+
+        # `show projects` reaches no project target, so the wrapper's own provisioning
+        # is the only thing that could have built an environment here. A target would
+        # have made one through `uv run` on its way in and proved nothing.
+        wrapper = _run(
+            "./scripts/nx.sh", "show", "projects", cwd=worktree, env=_uv_provisioning_env()
+        )
+
+        assert wrapper.returncode == 0, wrapper.stderr
+        # Installed, not merely created: an empty virtualenv satisfies a check for the
+        # directory while every console script in it still resolves somewhere else.
+        assert (worktree / ".venv/bin/oneharness").is_file()
+        assert (worktree / "uv.lock").read_bytes() == (ROOT / "uv.lock").read_bytes()
+    finally:
+        _run("git", "worktree", "remove", "--force", str(worktree))
+
+
+class PythonVersion(NamedTuple):
+    """A `major.minor` interpreter version, ordered as Python orders versions."""
+
+    major: int
+    minor: int
+
+
+def _declared_python_floor(checkout: Path) -> PythonVersion:
+    """The `major.minor` lower bound a checkout's `requires-python` declares."""
+    declared = tomllib.loads((checkout / "pyproject.toml").read_text(encoding="utf-8"))
+    floor = re.fullmatch(r">=(\d+)\.(\d+)", declared["project"]["requires-python"])
+    assert floor, f"requires-python is not a bare lower bound: {declared['project']!r}"
+    return PythonVersion(int(floor.group(1)), int(floor.group(2)))
+
+
+def _venv_python_version(checkout: Path) -> PythonVersion:
+    probe = _run(
+        str(checkout / ".venv/bin/python"),
+        "-c",
+        "import sys; print(*sys.version_info[:2])",
+        cwd=checkout,
+    )
+    assert probe.returncode == 0, probe.stderr
+    major, minor = probe.stdout.split()
+    return PythonVersion(int(major), int(minor))
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The subject is the whole
+# checkout's install: `python-install.sh` syncs `pyproject.toml`, `uv.lock` and the editable
+# `orchestrator` package of a copy of every tracked file, so the whole-workspace key is the
+# edge that covers what it reads, as it is for this module's other real-`uv sync` journeys
+# beside it. It costs about two seconds on a warm uv cache.
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_docs` routes a test
+# to this project's own `test-docs` target, the one keyed on the whole workspace, and
+# `tests/tree_scans/test_nx_cache_scope.py` holds the marker to that routing; a separate Nx
+# project would need a key over the same whole tree.
+# llmlint: ignore-block[shell_test_tiers_stay_split] uv is the host tool, and the sibling
+# provisioning journeys above and below drive the same real `uv sync` from this project;
+# moving one of them out would split one install contract across two projects.
+@rewrites_workspace_toolchain
+@shares_workspace_install
+@pytest.mark.reads_docs
+def test_an_environment_below_the_declared_floor_is_replaced_by_the_locked_install(
+    tmp_path: Path,
+) -> None:
+    # llmlint: ignore-end[shell_test_tiers_stay_split]
+    # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+    # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+    """A `.venv` made before the floor moved must not survive the install that follows.
+
+    Every reader of `.venv/bin` would otherwise run this package under an interpreter
+    its own `requires-python` excludes. The stale environment is built for real and
+    measured below the floor first, so an environment that already satisfied it cannot
+    pass for provisioning.
+    """
+    checkout = _provisioning_copy(tmp_path, "below-floor-python")
+    floor = _declared_python_floor(checkout)
+    older = f"{floor.major}.{floor.minor - 1}"
+    environment = _uv_provisioning_env()
+
+    created = _run("uv", "venv", "--python", older, ".venv", cwd=checkout, env=environment)
+    assert created.returncode == 0, created.stderr
+    assert _venv_python_version(checkout) < floor
+
+    install = _run(str(checkout / "scripts/python-install.sh"), cwd=checkout, env=environment)
+
+    assert install.returncode == 0, install.stderr
+    assert _venv_python_version(checkout) >= floor
+    imported = _run(
+        str(checkout / ".venv/bin/python"),
+        "-c",
+        "import jsonschema, mypy, orchestrator, pytest, xdist",
+        cwd=checkout,
+    )
+    assert imported.returncode == 0, imported.stderr
+    assert (checkout / "uv.lock").read_bytes() == (ROOT / "uv.lock").read_bytes()
+
+
+@rewrites_workspace_toolchain
+@shares_workspace_install
+@pytest.mark.reads_docs
+def test_the_gate_path_refuses_a_lockfile_that_would_have_to_move(tmp_path: Path) -> None:
+    """A committed lockfile decides, and one that has to move stops the run.
+
+    `uv run` would instead re-resolve and write the new answer back, so a branch
+    whose subject *is* a pin would be verified against a tree it does not contain.
+    """
+    checkout = _provisioning_copy(tmp_path, "stale-lock")
+    lockfile = checkout / "uv.lock"
+    before = lockfile.read_bytes()
+    pyproject = checkout / "pyproject.toml"
+    # Stale by exactly one field the lockfile carries, with no dependency to resolve,
+    # so what this journey drives is the refusal rather than a resolver's reachability.
+    pyproject.write_text(
+        pyproject.read_text(encoding="utf-8").replace('version = "0.1.0"', 'version = "0.1.1"', 1),
+        encoding="utf-8",
+    )
+
+    wrapper = _run(
+        "./scripts/nx.sh",
+        "show",
+        "projects",
+        cwd=checkout,
+        env=_uv_provisioning_env(XDG_CACHE_HOME=str(tmp_path / "cache")),
+    )
+
+    assert wrapper.returncode != 0
+    assert "python-install: provision the locked Python environment" in wrapper.stderr
+    assert "uv lock" in wrapper.stderr
+    assert lockfile.read_bytes() == before
+
+
+@rewrites_workspace_toolchain
+@shares_workspace_install
+@pytest.mark.reads_docs
+def test_a_caller_that_provides_the_python_environment_is_not_synced_over(
+    tmp_path: Path,
+) -> None:
+    """`UV_NO_SYNC` is honored, because the journeys that copy this checkout rely on it.
+
+    The environment named is an empty path rather than this checkout's own: what
+    fires this journey red is an install into whatever the caller provided, and it
+    must not be able to land on the environment the rest of the suite runs in.
+    """
+    checkout = _provisioning_copy(tmp_path, "provided-environment")
+    provided = tmp_path / "provided-venv"
+
+    wrapper = _run(
+        "./scripts/nx.sh",
+        "show",
+        "projects",
+        cwd=checkout,
+        env=_uv_provisioning_env(
+            UV_NO_SYNC="1",
+            UV_PROJECT_ENVIRONMENT=str(provided),
+            XDG_CACHE_HOME=str(tmp_path / "cache"),
+        ),
+    )
+
+    assert wrapper.returncode == 0, wrapper.stderr
+    assert not provided.exists(), "the provided environment was synced over"
+    assert not (checkout / ".venv").exists()
+
+
+@rewrites_workspace_toolchain
+@shares_workspace_install
+@pytest.mark.reads_docs
+def test_a_caller_that_asks_uv_to_sync_gets_the_environment_it_named(tmp_path: Path) -> None:
+    """`UV_NO_SYNC=0` is how uv is asked to sync, so it must not skip provisioning.
+
+    Read as a presence, the escape hatch fires on the spelling that means the
+    opposite of firing — and the environment the caller named is left empty for
+    every later reader of it to fall through.
+    """
+    checkout = _provisioning_copy(tmp_path, "requested-sync")
+    named = tmp_path / "requested-venv"
+
+    wrapper = _run(
+        "./scripts/nx.sh",
+        "show",
+        "projects",
+        cwd=checkout,
+        env=_uv_provisioning_env(UV_NO_SYNC="0", UV_PROJECT_ENVIRONMENT=str(named)),
+    )
+
+    assert wrapper.returncode == 0, wrapper.stderr
+    assert (named / "bin/oneharness").is_file()
+
+
+def _add_uv_double(checkout: Path) -> None:
+    """Trace what the wrapper asks of uv, and fail on request, provisioning nothing.
+
+    uv is the tool this wrapper delegates to; what the wrapper decides — whether to
+    call it at all, and what it leaves readable when the call fails — is under test.
+    """
+    uv = checkout / "bin" / "uv"
+    uv.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf 'uv %s\\n' "$*" >>"$TRACE_FILE"
+if [[ -n ${UV_DOUBLE_FAILURE:-} ]]; then
+    echo "$UV_DOUBLE_FAILURE" >&2
+    exit 1
+fi
+""",
+        encoding="utf-8",
+    )
+    uv.chmod(0o755)
+
+
+def _python_install_checkout(tmp_path: Path, name: str) -> Path:
+    """A wrapper checkout with a lockfile to provision and uv doubled."""
+    checkout = _nx_wrapper_checkout(tmp_path, name)
+    (checkout / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+    _add_uv_double(checkout)
+    return checkout
+
+
+PYTHON_INSTALL = ROOT / "scripts" / "python-install.sh"
+
+#: One `UV_NO_SYNC` value per way of being unreadable, for the wrapper and for uv.
+UNREADABLE_NO_SYNC = (("empty", ""), ("blank", " "), ("numeric", "2"), ("word", "banana"))
+
+_NO_SYNC_ARM = re.compile(r"^\s*(?P<spellings>[a-z0-9]+(?: \| [a-z0-9]+)*)\)(?P<body>.*);;\s*$")
+
+
+def _declared_no_sync_grammar() -> dict[str, bool]:
+    """Each `UV_NO_SYNC` spelling the wrapper accepts, mapped to whether it skips.
+
+    Read out of the script rather than restated, so the journeys below and the gate
+    that measures uv both speak about the one list that decides.
+    """
+    grammar = {
+        spelling: "exit 0" in arm["body"]
+        for line in PYTHON_INSTALL.read_text(encoding="utf-8").splitlines()
+        if (arm := _NO_SYNC_ARM.match(line)) is not None
+        for spelling in arm["spellings"].split(" | ")
+    }
+    if not grammar:
+        raise AssertionError("scripts/python-install.sh no longer names its UV_NO_SYNC grammar")
+    return grammar
+
+
+DECLARED_NO_SYNC = _declared_no_sync_grammar()
+
+
+@rewrites_workspace_toolchain
+@pytest.mark.parametrize(("spelling", "skips"), sorted(DECLARED_NO_SYNC.items()))
+def test_uv_no_sync_skips_or_provisions_by_the_spelling_it_carries(
+    tmp_path: Path, spelling: str, skips: bool
+) -> None:
+    """Read as a presence, every one of these skipped — uv's false spellings included.
+
+    Each runs in both cases, because an operator's `UV_NO_SYNC=FALSE` has to mean
+    what uv means by `false`.
+    """
+    checkout = _python_install_checkout(tmp_path, f"no-sync-{spelling}")
+    trace = tmp_path / "trace"
+
+    for value in (spelling, spelling.upper()):
+        result = _run(
+            str(checkout / "scripts" / "python-install.sh"),
+            cwd=checkout,
+            env=_nx_wrapper_env(checkout, tmp_path, trace, UV_NO_SYNC=value),
+        )
+        assert result.returncode == 0, result.stderr
+
+    assert trace.exists() is not skips
+    if not skips:
+        assert trace.read_text(encoding="utf-8").splitlines() == ["uv sync --locked"] * 2
+
+
+def _uv_no_sync_probe(root: Path) -> Path:
+    """A project the installed uv can decide about without reaching an index.
+
+    Its one dependency is on no index at all, and the probe runs offline: a uv that
+    chose to sync fails to, and a uv that skipped runs the command instead.
+    """
+    project = root / "no-sync-probe"
+    project.mkdir()
+    # The probe runs under this suite's interpreter, so it states the floor that
+    # interpreter was provisioned against rather than a copy of it.
+    floor = _declared_python_floor(ROOT)
+    (project / "pyproject.toml").write_text(
+        '[project]\nname = "no-sync-probe"\nversion = "0.1.0"\n'
+        f'requires-python = ">={floor.major}.{floor.minor}"\n'
+        'dependencies = ["a-distribution-no-index-supplies-0000"]\n',
+        encoding="utf-8",
+    )
+    return project
+
+
+def _uv_reads_no_sync(project: Path, environment: Path, value: str) -> bool | None:
+    """Whether the installed uv skips the sync on one value, syncs on it, or refuses it."""
+    probe = _run(
+        "uv",
+        "run",
+        "--offline",
+        "--python",
+        sys.executable,
+        "--",
+        "python",
+        "-c",
+        "pass",
+        cwd=project,
+        env=_uv_provisioning_env(
+            UV_NO_SYNC=value,
+            UV_PYTHON_DOWNLOADS="never",
+            UV_PROJECT_ENVIRONMENT=str(environment),
+        ),
+    )
+    if "expected a boolish value" in probe.stderr:
+        return None
+    return probe.returncode == 0
+
+
+def test_the_no_sync_grammar_the_wrapper_declares_is_the_one_uv_reads(tmp_path: Path) -> None:
+    """uv owns this grammar, so the wrapper's copy is measured against it, not asserted.
+
+    A spelling uv stops accepting, or starts reading the other way round, would leave
+    the wrapper deciding the opposite of what the caller's own `uv run` decides.
+    """
+    project = _uv_no_sync_probe(tmp_path)
+
+    measured = {
+        spelling: _uv_reads_no_sync(project, tmp_path / f"env-{spelling}", spelling)
+        for spelling in DECLARED_NO_SYNC
+    }
+    refused = {
+        name: _uv_reads_no_sync(project, tmp_path / f"env-refused-{name}", value)
+        for name, value in UNREADABLE_NO_SYNC
+    }
+
+    assert measured == DECLARED_NO_SYNC
+    assert refused == dict.fromkeys(refused)
+
+
+@rewrites_workspace_toolchain
+@pytest.mark.parametrize(("name", "value"), UNREADABLE_NO_SYNC)
+def test_uv_no_sync_refuses_a_value_uv_would_refuse(tmp_path: Path, name: str, value: str) -> None:
+    """A value neither side can read is named here, not left to surface as uv's error.
+
+    Guessing either way is the defect: skip and provisioning silently does not
+    happen, sync and the caller's stated intent is silently overridden.
+    """
+    checkout = _python_install_checkout(tmp_path, f"no-sync-invalid-{name}")
+    trace = tmp_path / "trace"
+
+    result = _run(
+        str(checkout / "scripts" / "python-install.sh"),
+        cwd=checkout,
+        env=_nx_wrapper_env(checkout, tmp_path, trace, UV_NO_SYNC=value),
+    )
+
+    assert result.returncode == 2
+    assert f"UV_NO_SYNC='{value}' is not a value uv reads" in result.stderr
+    assert "or leave it unset" in result.stderr
+    assert not trace.exists(), "a refused value must not have reached uv"
+
+
+@rewrites_workspace_toolchain
+def test_python_install_leaves_the_failing_provision_readable(tmp_path: Path) -> None:
+    """A provision that failed on the way into the gate keeps its own reason on disk."""
+    checkout = _python_install_checkout(tmp_path, "unprovisionable-python")
+    trace = tmp_path / "trace"
+
+    result = _run(
+        str(checkout / "scripts" / "python-install.sh"),
+        cwd=checkout,
+        env=_nx_wrapper_env(
+            checkout, tmp_path, trace, UV_DOUBLE_FAILURE="uv: captured failure detail"
+        ),
+    )
+
+    assert result.returncode == 1
+    log = checkout / ".logs" / "python-install.log"
+    assert "python-install: provision the locked Python environment" in result.stderr
+    assert f"full output: {log}" in result.stderr
+    assert "uv: captured failure detail" in log.read_text(encoding="utf-8")
+    assert oct(log.stat().st_mode & 0o777) == "0o600"
+
+
+@rewrites_workspace_toolchain
+def test_python_install_log_records_the_credential_name_not_its_value(tmp_path: Path) -> None:
+    """A preserved log outlives its terminal, so it must never durably hold a token."""
+    checkout = _python_install_checkout(tmp_path, "python-install-credentials")
+    trace = tmp_path / "trace"
+    token = "sk-ant-oat01-not-a-real-credential"
+
+    result = _run(
+        str(checkout / "scripts" / "python-install.sh"),
+        cwd=checkout,
+        env=_nx_wrapper_env(
+            checkout,
+            tmp_path,
+            trace,
+            CLAUDE_CODE_OAUTH_TOKEN=token,
+            UV_DOUBLE_FAILURE=f"uv: refused with CLAUDE_CODE_OAUTH_TOKEN={token}",
+        ),
+    )
+
+    assert result.returncode == 1
+    log = (checkout / ".logs" / "python-install.log").read_text(encoding="utf-8")
+    assert token not in log
+    assert "CLAUDE_CODE_OAUTH_TOKEN=<redacted:CLAUDE_CODE_OAUTH_TOKEN>" in log
+    assert token not in result.stderr
+
+
+@rewrites_workspace_toolchain
+def test_python_install_refuses_an_argument_and_names_the_call_that_works(
+    tmp_path: Path,
+) -> None:
+    """A flag this script has no meaning for is refused rather than dropped.
+
+    Its sibling takes `--force`, so reaching for one here is the natural mistake —
+    and silently ignoring it would leave an operator believing they had forced
+    something. There is nothing to force: the locked sync is already idempotent.
+    """
+    checkout = _nx_wrapper_checkout(tmp_path, "python-install-arguments")
+
+    result = _run(str(checkout / "scripts" / "python-install.sh"), "--force", cwd=checkout)
+
+    assert result.returncode == 2
+    assert "expected no arguments, got '--force'" in result.stderr
+    assert "rerun it with none" in result.stderr
+
+
+@rewrites_workspace_toolchain
+def test_python_install_reports_a_host_that_cannot_provision_at_all(tmp_path: Path) -> None:
+    """Missing uv is named where the repair is, not deep inside a target.
+
+    This runs in front of every Nx invocation, so on a host that never bootstrapped
+    it is the first thing to notice — and what it says is the whole diagnosis. Left
+    to fall through, the same host fails much later with a bare `uv: command not
+    found` from whichever target happened to run first.
+    """
+    checkout = _nx_wrapper_checkout(tmp_path, "python-install-without-uv")
+    # A lockfile, because a workspace without one has no environment to provision
+    # and would exit before reaching the check under test.
+    (checkout / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+    # A PATH holding what this script runs and nothing else, so what is withdrawn
+    # here is uv alone rather than whatever this host keeps beside it.
+    binaries = tmp_path / "path-without-uv"
+    binaries.mkdir()
+    for tool in ("bash", "dirname", "mkdir", "chmod", "cat", "rm", "sort"):
+        located = shutil.which(tool)
+        assert located is not None, f"this host has no {tool} for the journey to keep"
+        (binaries / tool).symlink_to(located)
+
+    result = _run(
+        str(checkout / "scripts" / "python-install.sh"),
+        cwd=checkout,
+        env={**os.environ, "PATH": str(binaries)},
+    )
+
+    assert result.returncode == 1
+    assert "'uv' is not installed" in result.stderr
+    assert "just bootstrap" in result.stderr
+
+
+@rewrites_workspace_toolchain
+def test_a_nested_nx_run_cannot_erase_the_running_one_s_log(tmp_path: Path) -> None:
+    """The running check's log survives a nested Nx invocation in the same checkout.
+
+    This is the exact shape that made the deterministic path unsafe in this
+    repository: `just check` runs the suite, and the suite runs `just lint-llm-diff`
+    against this same checkout, so a second `scripts/nx.sh` resolved the very
+    `.logs/nx.log` the outer one was still writing and truncated it — leaving a
+    running check uninspectable at the moment a reader needs it.
+
+    So the doubled workspace Nx here does what pytest does to its parent: it invokes
+    `scripts/nx.sh` again, in the same checkout, from inside the outer run's own
+    process tree. The outer log has to still hold what it wrote *before* the nested
+    run, and go on to hold what it writes after.
+    """
+    checkout = _nx_nesting_checkout(tmp_path)
+    nested_started = tmp_path / "nested.started"
+    release = tmp_path / "release"
+    nx = checkout / "node_modules/.bin/nx"
+    nx.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        # The nested run fails, so it also has to *name* where its own evidence
+        # went — a diverted log nobody can find would be no better than a lost one.
+        'if [[ -n "${NX_NESTING_INNER:-}" ]]; then\n'
+        '  echo "inner nx ran" >&2\n'
+        "  exit 1\n"
+        "fi\n"
+        'echo "outer line before the nested run"\n'
+        # The nested invocation, inheriting this process tree's environment
+        # exactly as the suite's own `just lint-llm-diff` does.
+        f'NX_NESTING_INNER=1 "{checkout}/scripts/nx.sh" run inner >"{tmp_path}/inner.out" 2>&1'
+        " || true\n"
+        f'touch "{nested_started}"\n'
+        f'while [[ ! -e "{release}" ]]; do sleep 0.05; done\n'
+        'echo "outer line after the nested run"\n',
+        encoding="utf-8",
+    )
+    nx.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{checkout / 'bin'}:{env['PATH']}"
+    env["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    env["TRACE_FILE"] = str(tmp_path / "trace")
+    # Whatever claims this process already inherited belong to other checkouts and
+    # must not divert anything here; the outer run below is the first claim on it.
+    env.pop("ORCHESTRATOR_PRESERVED_LOGS", None)
+    outer_log = checkout / ".logs" / "nx.log"
+
+    process = subprocess.Popen(
+        [str(checkout / "scripts" / "nx.sh"), "run", "outer"],
+        cwd=checkout,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and not nested_started.exists():
+            assert process.poll() is None, "the outer run exited before nesting"
+            time.sleep(0.05)
+        assert nested_started.exists(), "the nested run never completed"
+        # The moment that used to lose the evidence: the nested run has been and
+        # gone while the outer one is still going.
+        assert "outer line before the nested run" in outer_log.read_text(encoding="utf-8")
+    finally:
+        release.touch()
+        process.communicate(timeout=60)
+
+    assert process.returncode == 0
+    preserved = outer_log.read_text(encoding="utf-8")
+    assert "outer line before the nested run" in preserved
+    assert "outer line after the nested run" in preserved
+    # The nested run is not silenced to achieve that — it gets a log of its own,
+    # owner-only like every other, and its failure names where that log went.
+    (diverted,) = [path for path in (checkout / ".logs").glob("nx.*.log") if path.name != "nx.log"]
+    assert "inner nx ran" in diverted.read_text(encoding="utf-8")
+    assert oct(diverted.stat().st_mode & 0o777) == "0o600"
+    assert f"full output: {diverted}" in (tmp_path / "inner.out").read_text(encoding="utf-8")
+    # And the outer run's evidence never held the nested run's.
+    assert "inner nx ran" not in preserved
+
+
+def test_check_recipe_log_records_the_credential_name_not_its_value(tmp_path: Path) -> None:
+    """A preserved log outlives its terminal, so it must never durably hold a token."""
+    checkout, trace = _recipe_checkout(tmp_path)
+    token = "sk-ant-oat01-not-a-real-credential"
+
+    result = _recipe_run(
+        checkout,
+        trace,
+        "check",
+        fail_command="nx.sh",
+        CLAUDE_CODE_OAUTH_TOKEN=token,
+        ECHO_COMMAND="nx.sh",
+        ECHO_LINE=f"CLAUDE_CODE_OAUTH_TOKEN={token}",
+    )
+
+    assert result.returncode != 0
+    log = (checkout / ".logs/check.log").read_text()
+    assert token not in log
+    assert "CLAUDE_CODE_OAUTH_TOKEN=<redacted:CLAUDE_CODE_OAUTH_TOKEN>" in log
+    assert token not in result.stderr
+
+
+def test_check_recipe_reports_the_coverage_total_it_measured(tmp_path: Path) -> None:
+    checkout, trace = _recipe_checkout(tmp_path)
+    (checkout / ".coverage").write_text("")
+
+    result = _recipe_run(checkout, trace, "check", FAKE_COVERAGE_TOTAL="96.42")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == (
+        "check: all deterministic checks passed (line coverage 96.42%); "
+        "project selection: run-many\n"
+    )
+
+
+def test_check_recipe_stays_green_when_no_coverage_artifact_exists(tmp_path: Path) -> None:
+    """A missing artifact reports nothing; it must never turn a green tier red."""
+    checkout, trace = _recipe_checkout(tmp_path)
+
+    result = _recipe_run(checkout, trace, "check")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == (
+        "check: all deterministic checks passed; project selection: run-many\n"
+    )
+    assert not (checkout / ".coverage").exists()
+
+
+def test_check_recipe_stays_green_when_the_coverage_total_is_unusable(tmp_path: Path) -> None:
+    """An unavailable or malformed total is dropped, not reported and not fatal."""
+    checkout, trace = _recipe_checkout(tmp_path)
+    (checkout / ".coverage").write_text("")
+
+    result = _recipe_run(checkout, trace, "check", FAKE_COVERAGE_TOTAL="No data to report.")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == (
+        "check: all deterministic checks passed; project selection: run-many\n"
+    )
+    assert "uv run coverage report --format=total" in trace.read_text()
+
+
+def test_check_recipe_reports_a_total_that_coverage_exited_nonzero_to_report(
+    tmp_path: Path,
+) -> None:
+    """`coverage report` exits 2 below the floor and still prints the number.
+
+    Dropping it there would hide the total in exactly the situation an operator
+    most wants it; the floor is the `coverage` target's to enforce, not this
+    readout's.
+    """
+    checkout, trace = _recipe_checkout(tmp_path)
+    (checkout / ".coverage").write_text("")
+
+    result = _recipe_run(
+        checkout, trace, "check", FAKE_COVERAGE_TOTAL="94.13", FAKE_COVERAGE_EXIT="2"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == (
+        "check: all deterministic checks passed (line coverage 94.13%); "
+        "project selection: run-many\n"
+    )
+
+
+def test_gate_recipe_reports_the_coverage_total_it_measured(tmp_path: Path) -> None:
+    checkout, trace = _gate_checkout(tmp_path)
+    (checkout / ".coverage").write_text("")
+
+    result = _recipe_run(checkout, trace, "gate", "origin", "main", FAKE_COVERAGE_TOTAL="95.07")
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    # One success line, carrying both things a passing gate measured: the coverage
+    # total, and which llmlint verdict the "green" is a claim about.
+    (success,) = [line for line in result.stdout.splitlines() if line.startswith("gate: ")]
+    assert success.startswith("gate: complete gate passed (line coverage 95.07%); ")
+    assert not [line for line in result.stderr.splitlines() if line.startswith("gate: ")]
+
+
+def test_gate_recipe_leaves_the_failing_llmlint_run_readable(tmp_path: Path) -> None:
+    checkout, trace = _gate_checkout(tmp_path)
+
+    # The llmlint tier alone, not the deterministic stages `just check` runs
+    # through the same Nx double: this asserts the judged stage's log, the stage
+    # after `validate` and before the deterministic tier.
+    result = _recipe_run(
+        checkout,
+        trace,
+        "gate",
+        "origin",
+        "main",
+        FAIL_INVOCATION="nx.sh run workspace:lint-llm-diff",
+    )
+
+    assert result.returncode != 0
+    log = checkout / ".logs/gate-llmlint.log"
+    assert f"full output: {log}" in result.stderr
+    assert "nx.sh: captured failure detail" in log.read_text()
+
+
+def test_gate_recipe_ends_on_a_judged_refusal_before_the_deterministic_tier(
+    tmp_path: Path,
+) -> None:
+    """A judged refusal is learned in the judge's minute, not after the whole suite.
+
+    The refusal names the one command to iterate with and the gate rerun against the
+    same remote and base, and no deterministic-tier Nx invocation is ever started.
+    """
+    checkout, trace = _gate_checkout(tmp_path)
+
+    result = _recipe_run(
+        checkout,
+        trace,
+        "gate",
+        "origin",
+        "main",
+        FAIL_INVOCATION="nx.sh run workspace:lint-llm-diff",
+    )
+
+    assert result.returncode != 0, result.stdout
+    log = checkout / ".logs/gate-llmlint.log"
+    assert (
+        "gate: llmlint failed; clear the reported findings against "
+        "'just lint-llm-diff origin/main' alone, then rerun 'just gate origin main' "
+        f"once to confirm (full output: {log})"
+    ) in result.stderr, result.stderr
+    assert not [line for line in result.stdout.splitlines() if line.startswith("gate: ")]
+    assert not (checkout / ".logs/gate-check.log").exists()
+    ran = trace.read_text(encoding="utf-8").splitlines()
+    assert ran == [
+        "llmlint validate --diff-base origin/main",
+        "nx.sh run workspace:lint-llm-diff",
+    ], ran
+
+
+def test_gate_recipe_reports_a_deterministic_failure_after_a_green_judge(
+    tmp_path: Path,
+) -> None:
+    """The last stage's refusal keeps its own message and log, and claims no pass."""
+    checkout, trace = _gate_checkout(tmp_path)
+
+    result = _recipe_run(
+        checkout,
+        trace,
+        "gate",
+        "origin",
+        "main",
+        FAIL_INVOCATION=f"nx.sh run-many -t {CHECK_UNCONDITIONAL}",
+    )
+
+    assert result.returncode != 0, result.stdout
+    log = checkout / ".logs/gate-check.log"
+    assert "gate: deterministic checks failed; fix the reported findings against " in (
+        result.stderr
+    )
+    assert f"rerun 'just gate origin main' (full output: {log})" in result.stderr
+    assert not [line for line in result.stdout.splitlines() if line.startswith("gate: ")]
+    ran = trace.read_text(encoding="utf-8").splitlines()
+    assert ran.index("nx.sh run workspace:lint-llm-diff") < ran.index(
+        f"nx.sh run-many -t {CHECK_UNCONDITIONAL}"
+    ), ran
+
+
+# llmlint: ignore-block[shell_test_tiers_stay_split] These two drive the gate recipe through the
+# installed llmlint's `validate`, the published CLI whose refusal is the behaviour under test, and
+# sit in this project's narrow `test` target beside this module's other gate journeys, keyed on
+# what they drive.
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] They run in about a second
+# against a copied justfile and scripts, in the narrow target keyed on what they drive rather than
+# in a project of their own.
+#: The ignore-directive marker, spelled so this file never holds one itself.
+DIRECTIVE = "llmlint" + ": ignore"
+
+
+def _validating_gate_checkout(tmp_path: Path, directive_rule: str) -> tuple[Path, Path]:
+    """A gate checkout whose `llmlint validate` is the real one, over a real config.
+
+    Every other `llmlint` call stays the traced double, so a judged turn the gate reached
+    would be counted rather than paid for; `validate` is traced and then handed to the
+    installed llmlint, which reads this repository's own config over the copied
+    `justfile`'s directives and the one planted in its scripts, naming ``directive_rule``.
+    """
+    checkout, trace = _gate_checkout(tmp_path)
+    llmlint = checkout / "bin/llmlint"
+    traced = llmlint.read_text(encoding="utf-8")
+    llmlint.write_text(
+        traced.replace(
+            'invocation="$(basename "$0") $*"\n',
+            'invocation="$(basename "$0") $*"\n'
+            'if [[ ${1:-} == validate ]]; then exec "$REAL_LLMLINT" "$@"; fi\n',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    shutil.copy2(ROOT / "llmlint.yml", checkout / "llmlint.yml")
+    (checkout / "scripts" / "planted.sh").write_text(
+        # Composed, so this module's own source carries no directive for `validate` to read.
+        f"#!/bin/sh\n# {DIRECTIVE}[{directive_rule}] planted by the journey\necho planted\n",
+        encoding="utf-8",
+    )
+    # Committed and made the base, so the planted directive is part of the tree the
+    # gate compares rather than an uncommitted edit.
+    for args in (("add", "-A"), ("-c", "commit.gpgsign=false", "commit", "-qm", "planted")):
+        subprocess.run(["git", *args], cwd=checkout, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "update-ref", "refs/remotes/origin/main", "HEAD"],
+        cwd=checkout,
+        check=True,
+        capture_output=True,
+    )
+    return checkout, trace
+
+
+@pytest.mark.skipif(
+    shutil.which("llmlint") is None, reason="the gate's first stage is the installed llmlint"
+)
+def test_gate_recipe_refuses_an_invalid_ignore_directive_before_any_judged_turn(
+    tmp_path: Path,
+) -> None:
+    """A directive naming no configured rule stops the gate at `validate`, judging nothing.
+
+    `validate` runs against the gate's own comparison base, and its refusal names the
+    fix; neither the deterministic tier nor the judged diff — both reached through the
+    traced Nx double — is started.
+    """
+    checkout, trace = _validating_gate_checkout(tmp_path, "no_such_rule")
+
+    result = _recipe_run(
+        checkout, trace, "gate", "origin", "main", REAL_LLMLINT=str(shutil.which("llmlint"))
+    )
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    log = checkout / ".logs/gate-llmlint-validate.log"
+    assert 'unknown rule "no_such_rule"' in log.read_text(encoding="utf-8")
+    assert (
+        "gate: llmlint validate failed; fix the llmlint config or ignore directive it names"
+        in result.stderr
+    ), result.stderr
+    assert "'just lint-llm-validate --diff-base origin/main' alone" in result.stderr
+    assert f"full output: {log}" in result.stderr
+    ran = trace.read_text(encoding="utf-8").splitlines()
+    assert ran == ["llmlint validate --diff-base origin/main"], ran
+
+
+@pytest.mark.skipif(
+    shutil.which("llmlint") is None, reason="the gate's first stage is the installed llmlint"
+)
+def test_gate_recipe_validates_first_then_judges_then_checks(tmp_path: Path) -> None:
+    """A tree `validate` accepts goes on to the judge, and only then the deterministic tier.
+
+    The one summary line comes after every stage, carrying the coverage the last stage
+    measured and the provenance the judged stage printed.
+    """
+    checkout, trace = _validating_gate_checkout(tmp_path, "robust_shell")
+    (checkout / ".coverage").write_text("")
+    base = subprocess.run(
+        ["git", "rev-parse", "origin/main"],
+        cwd=checkout,
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.strip()
+
+    result = _recipe_run(
+        checkout,
+        trace,
+        "gate",
+        "origin",
+        "main",
+        REAL_LLMLINT=str(shutil.which("llmlint")),
+        FAKE_COVERAGE_TOTAL="96.41",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    ran = trace.read_text(encoding="utf-8").splitlines()
+    assert ran[0] == "llmlint validate --diff-base origin/main", ran
+    assert ran[1] == "nx.sh run workspace:lint-llm-diff", ran
+    assert any(line.startswith("nx.sh ") and "-t format-check" in line for line in ran[2:]), ran
+    assert not any("-t format-check" in line for line in ran[:2]), ran
+    assert [line for line in result.stdout.splitlines() if line.startswith("gate: ")] == [
+        "gate: complete gate passed (line coverage 96.41%); "
+        f"judged this diff against base {base} (Nx cache miss)"
+    ], result.stdout
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+# llmlint: ignore-end[shell_test_tiers_stay_split]
+
+
+UPGRADE_MANIFEST = ("package.json", "bun.lock")
+UPGRADE_INSTALL_CONFIG = ".puppeteerrc.json"
+
+
+def _upgrade_manifest_cache() -> Path:
+    """Where this host keeps the resolution `bun update --latest` last produced.
+
+    Alongside the shared fixture lockfile `scripts/check-nx-cache.sh` publishes,
+    and for the same reason: what costs real time against this registry is
+    resolving a dependency tree, not installing one.
+    """
+    root = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    seed = b"".join((ROOT / name).read_bytes() for name in UPGRADE_MANIFEST)
+    key = hashlib.sha256(seed).hexdigest()[:16]
+    return Path(root) / "ai-orchestrator" / "upgrade-manifest" / key
+
+
+def _seed_upgrade_manifest(checkout: Path, cache: Path) -> None:
+    """Give the checkout a real manifest, already resolved if this host has one.
+
+    `bun update --latest` re-resolves the whole tree from the registry whenever it
+    finds something to move, and ~380 serialized manifest round-trips is where the
+    140 seconds this journey charged every commit went — the install itself
+    hardlinks out of a warm package cache in about two seconds. Seeding the
+    resolution the last successful run produced leaves Bun with nothing to move and
+    nothing to ask, so the real recipe still runs the real `bun update --latest`
+    into a real `node_modules`, against a manifest that is this repository's own.
+    """
+    for name in UPGRADE_MANIFEST:
+        source = cache / name if (cache / name).is_file() else ROOT / name
+        shutil.copy2(source, checkout / name)
+    # What a clone carries beside the manifest that Bun's install reads: mermaid-cli's
+    # Puppeteer downloads a browser in its postinstall unless this tells it not to.
+    shutil.copy2(ROOT / UPGRADE_INSTALL_CONFIG, checkout / UPGRADE_INSTALL_CONFIG)
+
+
+def _publish_upgrade_manifest(checkout: Path, cache: Path) -> None:
+    """Record what Bun just resolved, so the next run has nothing left to resolve.
+
+    Published per file by rename rather than as a pair, because the pair only ever
+    costs time: a reader that catches a new manifest beside an older lockfile hands
+    Bun something to move and pays one resolution, which is exactly what it would
+    have paid without this cache at all. That is what keeps the cache self-healing
+    once upstream publishes a release the recorded resolution predates.
+    """
+    cache.mkdir(parents=True, exist_ok=True)
+    for name in UPGRADE_MANIFEST:
+        resolved = (checkout / name).read_bytes()
+        if (cache / name).is_file() and (cache / name).read_bytes() == resolved:
+            continue
+        staged = cache / f"{name}.{os.getpid()}"
+        staged.write_bytes(resolved)
+        staged.replace(cache / name)
+
+
+def test_upgrade_recipe_runs_bun_and_reports_one_success_line(tmp_path: Path) -> None:
+    checkout, trace = _recipe_checkout(tmp_path)
+    cache = _upgrade_manifest_cache()
+    _seed_upgrade_manifest(checkout, cache)
+
+    result = _recipe_run(checkout, trace, "upgrade")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "upgrade: dependencies refreshed and targets passed\n"
+    assert trace.read_text().splitlines() == [
+        "uv lock --upgrade",
+        "uv sync",
+        f"nx.sh run-many -t {UPGRADE_TARGETS}",
+    ]
+    # Bun really ran: it is the only thing in this recipe that is not a double, and
+    # a `node_modules` it linked is the evidence the doubles cannot manufacture.
+    assert (checkout / "node_modules" / ".bin" / "nx").exists()
+    _publish_upgrade_manifest(checkout, cache)
+
+
+def test_upgrade_recipe_preserves_bun_failure_and_stops(tmp_path: Path) -> None:
+    """A real Bun failure, and the log that outlives the process which reported it.
+
+    `upgrade` swallows the whole of uv's and Bun's output, so that log is the only
+    account of which constraint could not be solved — and it used to be a `mktemp`
+    file an EXIT trap removed, leaving a failed upgrade with nothing to read.
+    """
+    checkout, trace = _recipe_checkout(tmp_path)
+    (checkout / "package.json").write_text("{invalid")
+
+    result = _recipe_run(checkout, trace, "upgrade")
+
+    assert result.returncode != 0
+    log = checkout / ".logs/upgrade.log"
+    assert "package.json" in result.stderr
+    assert "upgrade: repair dependency constraints or target findings" in result.stderr
+    assert f"full output: {log}" in result.stderr
+    assert "package.json" in log.read_text()
+    assert oct(log.stat().st_mode & 0o777) == "0o600"
+    assert trace.read_text().splitlines() == [
+        "uv lock --upgrade",
+        "uv sync",
+    ]
+
+
+def test_real_cache_check_drives_both_linked_worktrees() -> None:
+    """Two real worktrees, a real cache hit and miss, and the failing run's own log.
+
+    The miss half of this check makes the real `scripts/nx.sh` fail, which is the
+    only place a genuine `nx.sh` failure happens under the gate — so it is also
+    where the preserved log is asserted. That log used to be a `mktemp` file an
+    EXIT trap removed.
+    """
+    result = _run("bash", "scripts/check-nx-cache.sh")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == (
+        "nx cache check: cross-worktree hit, broken-input miss, "
+        "and preserved failure log verified\n"
+    )
+
+
+def _shared_resolution_entry() -> tuple[str, str]:
+    """The cache entry name this host's check would use, and the manifest behind it.
+
+    Deliberately restated from `scripts/check-nx-cache.sh` rather than imported:
+    the association between a cached resolution and the manifest it came from is
+    the contract under test, so a test that asked the script for the answer could
+    not detect the script agreeing with itself. If the derivation there changes,
+    the accepted case below stops being accepted and says so.
+    """
+    root = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+    fixture = json.loads(
+        (ROOT / "tests/fixtures/nx-cache/package.json").read_text(encoding="utf-8")
+    )
+    fixture["devDependencies"] = {
+        "nx": root["devDependencies"]["nx"],
+        "typescript": root["devDependencies"]["typescript"],
+    }
+    manifest = json.dumps(fixture, indent=2) + "\n"
+    bun_version = _run("bun", "--version").stdout.strip()
+    key = hashlib.sha256(manifest.encode() + bun_version.encode()).hexdigest()[:16]
+    return key, manifest
+
+
+#: A real, complete Bun lockfile. This repository's own is the honest fixture: it
+#: is a different tree, but the check's question is whether the file parses whole
+#: and carries what Bun needs, not which packages it resolved.
+COMPLETE_LOCKFILE = (ROOT / "bun.lock").read_text(encoding="utf-8")
+#: The same file cut off mid-write, which is what a publish interrupted by a kill
+#: or a full disk leaves behind. It keeps its opening bytes, so it is exactly the
+#: entry a prefix check would wave through.
+TRUNCATED_LOCKFILE = COMPLETE_LOCKFILE[:400]
+RESOLUTION_REFUSED = "resolve the fixture dependency tree"
+
+
+@pytest.mark.parametrize(
+    ("stored_lockfile", "stored_manifest", "resolves_again"),
+    [
+        pytest.param(COMPLETE_LOCKFILE, None, True, id="no-manifest-beside-it"),
+        pytest.param(
+            COMPLETE_LOCKFILE, '{"name": "something-else"}\n', True, id="manifest-of-another-tree"
+        ),
+        pytest.param(TRUNCATED_LOCKFILE, "", True, id="lockfile-cut-off-mid-write"),
+        pytest.param(COMPLETE_LOCKFILE, "", False, id="complete-and-vouched-for"),
+    ],
+)
+def test_cache_check_seeds_only_a_resolution_it_can_vouch_for(
+    tmp_path: Path, stored_lockfile: str, stored_manifest: str | None, resolves_again: bool
+) -> None:
+    """A shared resolution is trusted for its provenance, not for being readable.
+
+    The cache lives outside the repository under a key any process can write to,
+    so an entry in it is an untrusted input however it got there — a truncated
+    publish, a restored backup, an entry left by an older layout. Seeding one
+    unchecked would not fail here; it would surface much later as an unrelated
+    `--frozen-lockfile` error inside a worktree the check builds.
+
+    The registry is pointed somewhere nothing is listening, which makes the
+    decision observable in a second rather than the two minutes a real resolution
+    costs: re-resolving at all is the proof the entry was refused, and getting
+    past resolution is the proof it was accepted. Everything here is real — the
+    script, `bun`, and a connection that genuinely cannot be made.
+    """
+    key, manifest = _shared_resolution_entry()
+    entries = tmp_path / "cache" / "ai-orchestrator" / "nx-cache-fixture"
+    entries.mkdir(parents=True)
+    (entries / f"{key}.lock").write_text(stored_lockfile, encoding="utf-8")
+    if stored_manifest is not None:
+        (entries / f"{key}.manifest").write_text(stored_manifest or manifest, encoding="utf-8")
+
+    env = os.environ.copy()
+    env["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    env["npm_config_registry"] = "http://127.0.0.1:1/"
+
+    result = _run("bash", "scripts/check-nx-cache.sh", env=env)
+
+    assert result.returncode != 0, "an unreachable registry must not produce a passing check"
+    assert (RESOLUTION_REFUSED in result.stderr) is resolves_again, result.stderr
+
+
+@pytest.mark.parametrize(
+    "cache_home", ["", "relative/cache", "."], ids=["empty", "relative", "current-directory"]
+)
+def test_cache_check_refuses_a_cache_directory_it_cannot_place(cache_home: str) -> None:
+    """Where the shared cache lives is an input too, and a relative one is not usable.
+
+    This is the failure that would not announce itself: a relative or empty value
+    resolves against whatever directory the check happens to run in, so entries
+    land somewhere no later run looks. Nothing errors — every commit just quietly
+    pays a full resolution again while the cache appears to be working.
+    """
+    env = os.environ.copy()
+    env["XDG_CACHE_HOME"] = cache_home
+    env.pop("HOME", None)
+
+    result = _run("bash", "scripts/check-nx-cache.sh", env=env)
+
+    assert result.returncode != 0
+    assert "must name an absolute directory" in result.stderr

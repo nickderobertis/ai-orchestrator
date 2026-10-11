@@ -23,7 +23,7 @@ files:
     # it inline would break the bytes the test holds. Excluded on the manager's ruling.
     - "tests/fixtures/design-doc-why/**"
     # A real plan's documents preserved as the plan checklist's journey reads them
-    # (tests/e2e/test_plan_checklist_e2e.py). Every task body quotes this host's dispatch
+    # (tests/e2e/registry_and_recipes/test_plan_checklist_e2e.py). Every task body quotes this host's dispatch
     # appendix, so an `llmlint: ignore` inside one is quoted text rather than a
     # suppression, and the documents are a plan's rather than code this tier judges.
     - "tests/fixtures/plan-checklist-plans/**"

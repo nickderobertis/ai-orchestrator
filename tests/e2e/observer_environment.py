@@ -10,9 +10,9 @@ long as it did.
 
 So this stands where this host's monitor binding stands — as the `judge.command` of a
 `kind: onejudge` observer member — and writes its own whole environment out for
-`tests/e2e/test_orchestrate_launch_e2e.py` to read. It is the same measurement a
-maintainer would take by hand, kept in the suite so a release that moves the export
-fails a check rather than a paragraph.
+`tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` to read. It is the same
+measurement a maintainer would take by hand, kept in the suite so a release that moves the
+export fails a check rather than a paragraph.
 
 It answers with a real ruling rather than exiting non-zero, because a judge command
 that fails kills the member: onejudge reads this process's stdout as the planner's,

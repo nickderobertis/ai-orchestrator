@@ -8,7 +8,8 @@
   "implicitDependencies": [],
   "namedInputs": {
     "testSupport": [
-      "{workspaceRoot}/tests/e2e/fake_backend.py"
+      "{workspaceRoot}/tests/e2e/fake_backend.py",
+      "{projectRoot}/project.json"
     ]
   },
   "targets": {

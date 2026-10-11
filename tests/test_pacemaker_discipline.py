@@ -4,9 +4,10 @@
 label alone: a single-sided `kind: oneharness` member has no onejudge base config to
 layer a persona delta over, so neither that file's `system_prompt` nor its
 `user.persona` reaches the turn — the member's own `task` is the whole of what the
-model is given. `tests/e2e/test_path_dispatched_personas_e2e.py` is what measures that
-arrangement, and `tests/e2e/test_supervisory_prompt_discipline_e2e.py` reads the `task`
-out of a real run of the shipped member.
+model is given. `tests/e2e/launch_monitor_observer/test_path_dispatched_personas_e2e.py` is
+what measures that arrangement, and
+`tests/e2e/launch_monitor_observer/test_supervisory_prompt_discipline_e2e.py` reads the
+`task` out of a real run of the shipped member.
 
 Which leaves the persona a document nothing reads at dispatch and everything reads as
 the role. Both failure modes are silent and this gate exists for the pair of them: an

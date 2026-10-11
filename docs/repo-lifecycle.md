@@ -173,7 +173,7 @@ attempt's session recorded it — `onevcs` committing, at close, a worktree the 
 dirty — while a worker that committed its own work is told the branch was published at a
 commit the engine does not know; after a refused push it is the commit the remote still
 holds, never the one that push failed to deliver.
-`tests/e2e/test_redispatch_names_the_published_tip_e2e.py` drives both kinds of worker
+`tests/e2e/publish_and_landing/test_redispatch_names_the_published_tip_e2e.py` drives both kinds of worker
 through `just orchestrate`. The
 budget is `ONEPIPELINE_PUBLICATION_ATTEMPTS`, **3** by default and the whole budget
 rather than the retries beside it. Only when it is spent does the node settle
@@ -486,7 +486,7 @@ progress from another process.
 **Which pin governs each half.** A dispatched session is placed, returned and
 maintained by the `onevcs` the engine links, so `config/onepipeline.version` governs
 where a node works and what sweeps its slots; `config/onevcs.version` governs the
-`onevcs pool` verbs a manager runs and the CLI `tests/e2e/test_worktree_pool_e2e.py`
+`onevcs pool` verbs a manager runs and the CLI `tests/e2e/publish_and_landing/test_worktree_pool_e2e.py`
 drives through a pooled scratch identity, while `tests/test_linked_libraries.py` holds
 the linked copy to a release carrying the pool.
 
@@ -634,7 +634,7 @@ whenever a sibling renamed a check, every branch here failed a whole gate to lea
 after the suite had run, on a defect no retry could fix; two siblings drifted in one
 evening and two publications paid a full gate each within the hour. With the tool
 reporting the checks itself there is nothing to go stale, and
-`tests/e2e/test_merge_path_audit_e2e.py` drives the recipe against the real
+`tests/e2e/publish_and_landing/test_merge_path_audit_e2e.py` drives the recipe against the real
 repositories' branch protection instead.
 `test_the_resolved_policy_is_publication_and_approvals_and_nothing_else` reads the
 policy back off `onevcs` so a gate reintroduced into the rules file fails here; it lives
@@ -918,7 +918,7 @@ input that exits non-zero as *no contribution* rather than as an error, so a
 fingerprint the caller can break does not fail the tier — it silently shrinks the
 key to the tree and the base. That is the worse half: a re-roll only costs a judge
 call, while a degraded key replays a verdict the judge configuration has since
-moved on from. Both directions are held by `tests/e2e/test_llmlint_cache_e2e.py`,
+moved on from. Both directions are held by `tests/e2e/workspace_copies/test_llmlint_cache_e2e.py`,
 and a cache hit alone is not the proof — a failing fingerprint produces one too,
 so the ambient-`PATH` journey reads the fingerprint itself and requires it to
 resolve, and to the same digest, under either caller llmlint.
@@ -1031,8 +1031,8 @@ journeys below assert both wordings, so an Nx upgrade that renames the line fail
 the suite instead of quietly calling every run freshly judged.
 
 None of that is provable from one checkout, which is where this went wrong once:
-`tests/e2e/test_llmlint_cache_e2e.py` asks twice from the same tree, and
-production never does. `tests/e2e/test_llmlint_two_path_verdict_e2e.py` runs the
+`tests/e2e/workspace_copies/test_llmlint_cache_e2e.py` asks twice from the same tree, and
+production never does. `tests/e2e/workspace_copies/test_llmlint_two_path_verdict_e2e.py` runs the
 tier's recipe from both callers instead — a worker worktree carrying the
 `LLMLINT_ONEHARNESS_BIN` a dispatch inherits, and a detached scratch worktree
 rebuilt by a squash merge carrying only the comparison identity a publishing push
@@ -1045,7 +1045,7 @@ the trade is stated by the suite rather than assumed. The three invalidations ar
 asserted across the two paths for the same reason, because a fix that made them
 agree by hashing less would replay a verdict for a tree nobody judged. The
 publishing push those verdicts decide is not restaged there;
-`tests/e2e/test_publish_branch_e2e.py` drives it through the real verb against a
+`tests/e2e/publish_and_landing/test_publish_branch_e2e.py` drives it through the real verb against a
 real `pre-push` hook, which since onevcs 0.11.0 is the only verifier in that path.
 
 Forcing a real re-judge is deliberately **per tier and per invocation**:
@@ -1104,9 +1104,9 @@ split at those seams rather than at convenient ones:
 
 - **`orchestrator:test-docs`** runs the tests marked `@pytest.mark.reads_docs` that no
   project of their own owns — `tests/test_dispatch_appendix.py`, for the reason at its
-  declaration, and the journeys' prose readers directly under `tests/e2e/` — and keeps
-  the `wholeWorkspace` key, because a target keyed on the whole workspace selects its
-  project for every diff and the orchestrator project already is.
+  declaration — and keeps the `wholeWorkspace` key, because a target keyed on the whole
+  workspace selects its project for every diff and the orchestrator project already is.
+  It collects no journey: each journey project under `tests/e2e/` routes its own.
 - **The plan-tooling subjects** — `plan-tooling-check-and-review`,
   `plan-tooling-follow-ups`, `plan-tooling-plan-flow` and `plan-tooling-plan-copy` under
   `tests/plan_tooling/` — are projects of their own, each keyed on what its journeys read,
@@ -1119,30 +1119,45 @@ split at those seams rather than at convenient ones:
   so an edit to one document re-runs only the gates that read it. `tree-scans` holds the
   gates that copy this checkout or scan every tracked document, keyed on the whole
   workspace; `tests/nx_inputs.py`'s `DRIFT_GATE_PROJECTS` says what each key names.
-- **`orchestrator:test-recipes`** and **`orchestrator-e2e:test-recipes`** run the tests
-  marked `@pytest.mark.reads_recipes`
-  — the journeys that build real worktrees and run real package installs to drive
-  `just` recipes and shell scripts — each keyed on its own project's recipe key
-  (`recipeWorkspace`, `e2eRecipeWorkspace`): the `justfile`, `scripts/**`, the root
-  manifests, the fixtures, and the modules that define those tests, plus the
-  test-support units their modules import. They read no prose and no `orchestrator/`
-  at all, and most commits here touch nothing else, so most commits replay them.
-- **`orchestrator:test-checkouts`** and **`orchestrator-e2e:test-checkouts`** run the tests marked
-  `@pytest.mark.reads_checkouts` and is **uncached**, because there is no key that
+- **`orchestrator:test-recipes`** runs the unit-tier tests marked
+  `@pytest.mark.reads_recipes`
+  — the tests that build real worktrees and run real package installs to drive
+  `just` recipes and shell scripts — collecting by path only the modules that hold
+  them, so that what it imports is what its key carries. It is keyed on
+  `recipeWorkspace`: the `justfile`, `scripts/**`, the root manifests and lock, the
+  fixtures, and the modules that define those tests, plus its own `project.json` and the
+  test-support units their modules import. They read no prose, and of `orchestrator/`
+  only the modules they and `tests/conftest.py` import, which those units carry; most
+  commits here touch nothing else, so most commits replay them.
+- **`orchestrator:test-checkouts`**, and the `test-checkouts` target of each journey
+  project holding such a journey, run the tests marked
+  `@pytest.mark.reads_checkouts` and are **uncached**, because there is no key that
   would be right. Its subject is the *other* repositories this host routes — their
   registered checkouts, and the required checks each merge path really declares,
   which `just repos --audit-gate-coverage` reads off GitHub — and those live outside
   the workspace, so no `nx.json` glob could name one and a memo would describe
-  whatever they required when it was recorded.
+  whatever they required when it was recorded. What those tests read of *this*
+  checkout is still declared as each target's `inputs` — the whole workspace for
+  `orchestrator`'s, whose tests reconcile prose against other repositories, and the
+  project's own key plus the fixtures and scripts its checkout journeys run for each
+  journey project's — and the read guard and drift gates hold them to it as they hold a
+  memoized tier.
 - **`orchestrator:test`** runs the rest of the unit and drift-gate modules, keyed on
   `unitWorkspace` — `codeWorkspace`, the whole workspace with `docs/**` and `**/*.md`
   removed, less the journeys under `tests/e2e/`, taking back by a `projects` input the
   few its own gates open by path.
-- **`orchestrator-e2e:test`** runs the rest of the journeys directly under `tests/e2e/`,
-  keyed on `e2eWorkspace` — every tracked path outside `tests/` but prose, the fixtures,
-  and its own modules — plus the units its modules import, so an edit to a unit test
-  neither selects nor re-runs the journeys. It is a project of its own because Nx keys
-  and `nx affected` are per project.
+- **The journey projects under `tests/e2e/`** — `publish-and-landing`,
+  `launch-monitor-observer`, `budget-gate`, `registry-and-recipes`, `workspace-copies`
+  and `suite-helpers`, beside the narrower ones that predate them — each own one
+  directory of journeys, and `e2e-root` the few modules left directly under
+  `tests/e2e/`, and each `test` target is keyed on what that family reads,
+  child processes included, plus the units its modules import. So an edit to one
+  script, persona or document re-runs only the families that read it, and an edit to a
+  unit test neither selects nor re-runs any of them. The journeys that copy this
+  checkout read every tracked file, so they are marked `reads_docs` and run in
+  `workspace-copies:test-docs`, the one journey target keyed on the whole workspace.
+  Each family is a project of its own because Nx keys and `nx affected` are per
+  project; `E2E_JOURNEYS` in `tests/nx_inputs.py` says how each key was derived.
 
 `just check` runs these in three phases, because Nx takes one selection per invocation,
 with budgets labelled `host` running on every check and the others running when a
@@ -1210,16 +1225,16 @@ repository file the browser tier's fixture stack imports or names is part of
 `dagUiServerSurface`. That last one is the browser tier's `conftest.py`: a runtime
 guard cannot see an import, so the reads are reconciled from the fixture's own
 import closure, and a fixture that starts loading Python outside the surface fails
-with the named input it has to widen. `tests/e2e/test_nx_cache_scope_e2e.py` then
+with the named input it has to widen. `tests/e2e/workspace_copies/test_nx_cache_scope_e2e.py` then
 proves each one against real Nx over a copy of this checkout: for every key, an
 edit inside it must miss and an edit outside it must replay.
 
 One more thing has to hold for a replayed test verdict to be usable, and it is
 proved in the same place: the measuring tiers declare their coverage data files as
-Nx `outputs`, so a cache hit **restores** `.coverage.parallel`, `.coverage.e2e` and
-each test project's `.coverage.<project name>` rather than leaving the uncached combine
-with nothing. Delete `.coverage.parallel` and `.coverage.e2e`, replay the two tiers
-that wrote them, and `orchestrator:coverage` still combines and reports — a dropped `outputs`
+Nx `outputs`, so a cache hit **restores** `.coverage.parallel` and each test project's
+`.coverage.<project name>` — each journey project's among them — rather than leaving the
+uncached combine with nothing. Delete them, replay the tiers, and `orchestrator:coverage`
+still combines and reports — a dropped `outputs`
 declaration turns every replayed commit's gate into a failure instead of a saving.
 
 Three tiers, one answer, and none of them lenient: a recorded llmlint **failure**
@@ -1230,8 +1245,8 @@ replays as a failure, and a tree the suite would fail can no longer replay a pas
 The suite waits on subprocesses rather than on compute — a serial run holds one
 core at about 3.5% for a quarter of an hour — so its wall clock is latency and
 workers are nearly free. `orchestrator:test`, `orchestrator:test-docs`,
-`orchestrator:test-recipes`, `orchestrator:test-checkouts`, the three tiers of
-`orchestrator-e2e`, every target of each `plan-tooling-*` and drift-gate subject
+`orchestrator:test-recipes`, `orchestrator:test-checkouts`, every tier of the journey
+projects under `tests/e2e/`, every target of each `plan-tooling-*` and drift-gate subject
 project, `session-setup-pypi:test-pypi`, each ask-seam journey's `test` target, and `just
 test-e2e` all run `-n 4 --dist loadgroup`.
 
@@ -1261,12 +1276,13 @@ merely slow, or that races something it does not own, is a test to fix.
 
 #### One tier measures, another judges
 
-`orchestrator:test` and `orchestrator-e2e:test` measure under pytest-cov — which is what
-carries coverage into the xdist workers — into `.coverage.parallel` and `.coverage.e2e`,
-as does each plan-tooling subject and drift-gate project whose tests exercise
-`orchestrator/` in process, into `.coverage.<project name>`, and all of them **judge
-nothing**. The uncached `orchestrator:coverage` waits on every one, combines their files,
-and reports.
+`orchestrator:test`, the `test` target of every journey project that runs
+`orchestrator/` in process, and each plan-tooling subject and drift-gate project whose
+tests exercise `orchestrator/` in process measure under pytest-cov — which is what carries
+coverage into the xdist workers — into `.coverage.parallel` and `.coverage.<project
+name>`, and **judge nothing**. The uncached `orchestrator:coverage` waits on each of them,
+combines their files, and reports; `tests/tree_scans/test_nx_cache_scope.py` reads that
+set off the project declarations.
 
 `coverage report` is what compares the total to the declared floor, so the floor
 has exactly one source and is evaluated exactly once. The measuring tier carries a
@@ -1305,7 +1321,7 @@ The policy names are the published `merge_policy` vocabulary — `local-direct`,
 `direct` / `none` / `auto` spellings is refused by name at launch. That
 vocabulary is `onepipeline`'s and this list is a copy of it: the launcher
 enumerates what it accepts in the refusal it writes for what it does not, and
-`tests/e2e/test_orchestrate_launch_e2e.py` holds every copy of the list in this
+`tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` holds every copy of the list in this
 repository — here, in `AGENTS.md`, and in `docs/orchestration.md` — to that
 enumeration.
 
@@ -1526,7 +1542,7 @@ the complete stack, but the PR diff against its stack base is child-only.
 
 ### Diff-derived PR descriptions
 
-<!-- llmlint: ignore[changed_behavior_has_e2e] Every behaviour this section describes past the graph run belongs to `onepipeline` and `onevcs` — when drafting is invoked, what the plan's own `body` bypasses, and what a publication does when a draft cannot start — and each is proven in its repository. This suite doubles the published CLIs at the recipe boundary precisely because driving one for real would open a pull request on a real repository. What this repository owns is the graph and its response contract, and `tests/e2e/test_orchestrate_launch_e2e.py` drives that for real: the launch record's `pr_author_graph`, a drafting turn answering `{body}`, and a non-conforming answer being re-prompted. -->
+<!-- llmlint: ignore[changed_behavior_has_e2e] Every behaviour this section describes past the graph run belongs to `onepipeline` and `onevcs` — when drafting is invoked, what the plan's own `body` bypasses, and what a publication does when a draft cannot start — and each is proven in its repository. This suite doubles the published CLIs at the recipe boundary precisely because driving one for real would open a pull request on a real repository. What this repository owns is the graph and its response contract, and `tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` drives that for real: the launch record's `pr_author_graph`, a drafting turn answering `{body}`, and a non-conforming answer being re-prompted. -->
 
 **One drafter, reached two ways.** A change request's body is drafted by an **agent
 graph a command names** — [`graphs/pr-author.yaml`](../graphs/pr-author.yaml) — and the
@@ -1551,7 +1567,7 @@ with that.
 
 The landing verbs are the engine's, so what an operator's landing publishes is what the
 run path would have published for that branch. Their contract, which the recipes rely
-on and `tests/e2e/test_publish_branch_e2e.py` drives through them: the branch, `--repo`
+on and `tests/e2e/publish_and_landing/test_publish_branch_e2e.py` drives through them: the branch, `--repo`
 — a path or an alias `just repos` lists — and every other argument reach the linked
 `onevcs` verb unchanged; a caller's own `--body` or `--body-file` is forwarded untouched
 and spends no turn; `--no-draft` spends none either, and is the escape for a bulk
@@ -1826,7 +1842,7 @@ the `session` that opened it and that session's `labels` — the `run`, `node` a
 `launcher` the engine stamps on every session a node opens — and the listing takes
 `--session <token>` and `--label KEY=VALUE` to answer only the matching rows; a label
 nothing carries is an empty report, not a refusal.
-`tests/e2e/test_session_labels_e2e.py` drives both filters on the pinned `onevcs`.
+`tests/e2e/publish_and_landing/test_session_labels_e2e.py` drives both filters on the pinned `onevcs`.
 
 ## Adapting a running graph
 
@@ -1973,7 +1989,7 @@ the row read *"the identity publishes `local-direct`"*, this repository's own id
 met it exactly, and the verb refused it. onevcs 0.21.0
 (https://github.com/nickderobertis/onevcs/pull/136) removed the two fields and reads
 the rules, which is what
-`tests/e2e/test_integrate_local_direct_e2e.py` drives: a hosted scratch identity whose
+`tests/e2e/publish_and_landing/test_integrate_local_direct_e2e.py` drives: a hosted scratch identity whose
 rules resolve `local-direct`, landed by the train through the recipe.
 
 `just recoverable` is how you find out which row a branch is on: it lists every
@@ -2065,7 +2081,7 @@ with a `publish-branch` command beside it. Read that as *no record*, confirm aga
 change request, and do not run the command. A `local-direct` branch in the same state
 still answers from its trailer. The tiers and their order are `crates/onevcs/src/landed.rs`
 at the tag `config/onevcs.version` names, which is the one source of this table, and
-`tests/e2e/test_work_status_and_import_e2e.py` is the gate that holds the table to it:
+`tests/e2e/publish_and_landing/test_work_status_and_import_e2e.py` is the gate that holds the table to it:
 it lands one branch through `publish-branch` and one the way a host squashes — a base
 commit carrying the number in its subject and no trailer — then asks both through a
 registry holding no session record, and asks the stamped one again under another
@@ -2266,7 +2282,7 @@ a github.com URL written back as `owner/name#N` — each issue once, as `<Keywor
 <reference>`, in the order the commits first named it. GitHub closes an issue only from
 the commit that reaches the default branch, so the squash that dropped those lines
 left every issue a landing delivered open until a person closed it.
-`tests/e2e/test_publish_branch_e2e.py` lands such a branch through `just
+`tests/e2e/publish_and_landing/test_publish_branch_e2e.py` lands such a branch through `just
 publish-branch` and reads the lines off the origin's base. Its type and breaking marker still
 describe the whole branch — they are its release semantics — and its scope is kept
 only when every usable commit shares one, since a narrower scope would misdescribe

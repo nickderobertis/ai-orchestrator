@@ -117,7 +117,7 @@ user:
   # nothing else at all. Dropping it would move a real obligation onto planners who may not
   # write it, which is a different failure from the one this reduction fixed.
   #
-  # `tests/e2e/test_orchestrate_launch_e2e.py` holds that this clause reaches a real judge;
+  # `tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` holds that this clause reaches a real judge;
   # `tests/test_shared_dispatch_bar.py` holds what it says and what it may not say again.
   #
   # Phrasing it against the task works because onejudge hands it to the judge verbatim

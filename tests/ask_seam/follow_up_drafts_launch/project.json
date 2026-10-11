@@ -22,6 +22,7 @@
   ],
   "namedInputs": {
     "askSeamFollowUpDraftsLaunch": [
+      "{projectRoot}/project.json",
       "{workspaceRoot}/.gitignore",
       "{workspaceRoot}/templates/design-doc.md.j2",
       "{workspaceRoot}/config/oneharness.version",
@@ -43,6 +44,7 @@
       "{workspaceRoot}/orchestrator/follow_up_drafts.py",
       "{workspaceRoot}/orchestrator/host_installs.py",
       "{workspaceRoot}/orchestrator/plan_store.py",
+      "{workspaceRoot}/orchestrator/plan_units.py",
       "{workspaceRoot}/orchestrator/project_store.py",
       "{workspaceRoot}/orchestrator/root.py",
       "{workspaceRoot}/personas/check-in.yaml",

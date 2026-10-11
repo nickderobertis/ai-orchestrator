@@ -12,7 +12,9 @@
   "namedInputs": {
     "testSupport": [
       "{workspaceRoot}/tests/e2e/example_records.py",
-      "{workspaceRoot}/onetaskgraph.yaml"
+      "{workspaceRoot}/onetaskgraph.yaml",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{projectRoot}/project.json"
     ]
   },
   "targets": {

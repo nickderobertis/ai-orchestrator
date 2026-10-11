@@ -180,8 +180,8 @@ def frontmatter(fields: Mapping[str, object], body: str) -> str:
 # an argument this repository composes itself: the one production caller is
 # `scripts/plan.sh`, which passes the literal `PLANNING_PROJECT_METADATA` and nothing else,
 # so a journey could only reach it by calling this module rather than the recipe — and the
-# recipe is what `tests/e2e/test_plan_recipe_e2e.py` already drives, asserting that the
-# marker it does pass reaches the record.
+# recipe is what `tests/e2e/launch_monitor_observer/test_plan_recipe_e2e.py` already drives,
+# asserting that the marker it does pass reaches the record.
 def render_plan_project(
     plan: Mapping[str, Any],
     *,
@@ -366,11 +366,11 @@ def publish_record(destination: Path, content: str) -> None:
     `task status set` and the `delivered_by:` write that keeps a delivered task in step
     each write a hidden sibling and rename it — the last two since
     https://github.com/nickderobertis/onetaskgraph/issues/1836, which
-    `tests/e2e/test_adopted_cli_fixes_e2e.py` drives — while `project copy`, the verb the
-    engine's settlement write-back projects a run's settlements through, and
-    `task comment add` still open the destination record truncating, in place. So a
-    record an engine run is projecting into a shared root can still be caught empty by a
-    peer's read, which is onetaskgraph's to close.
+    `tests/e2e/launch_monitor_observer/test_adopted_cli_fixes_e2e.py` drives — while
+    `project copy`, the verb the engine's settlement write-back projects a run's settlements
+    through, and `task comment add` still open the destination record truncating, in place.
+    So a record an engine run is projecting into a shared root can still be caught empty by
+    a peer's read, which is onetaskgraph's to close.
     """
     global _staged
     _staged += 1
@@ -458,7 +458,7 @@ def write_plan_project(
 # `scripts/plan.sh` cannot produce — it pipes a plan it generated and passes one literal
 # metadata constant — so reaching one means driving this module instead of the recipe.
 # `tests/test_project_store.py` drives them there, and the recipe's own path is driven end
-# to end in `tests/e2e/test_plan_recipe_e2e.py`.
+# to end in `tests/e2e/launch_monitor_observer/test_plan_recipe_e2e.py`.
 def main() -> int:
     """Read one generated plan on stdin and write its local-md project below ROOT.
 

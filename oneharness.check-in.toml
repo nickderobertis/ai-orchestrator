@@ -8,7 +8,7 @@
 # docs/onejudge-integration.md#choosing-a-deadline-per-side. It is
 # `oneharness.orchestrator.toml`'s routing with one field changed: both extend
 # `oneharness.identities.toml` and name the same chain, and only the `timeout`
-# differs. tests/e2e/test_oneharness_timeout_e2e.py holds that to exactly one field.
+# differs. tests/e2e/launch_monitor_observer/test_oneharness_timeout_e2e.py holds that to exactly one field.
 extends = "oneharness.identities.toml"
 
 # timeout: the per-turn deadline in seconds. Stated rather than inherited, because a
@@ -43,7 +43,7 @@ history_labels = { role = "agent" }
 # worker uses, with the primary Claude identity last. This member runs beside the
 # supervisory process it reports on, so it queues where that process queues rather
 # than ahead of the workers it is reporting about.
-# llmlint: ignore[changed_behavior_has_e2e] tests/e2e/test_oneharness_timeout_e2e.py proves this list against the real CLI's effective configuration; paid-provider quota rejection cannot be deterministic.
+# llmlint: ignore[changed_behavior_has_e2e] tests/e2e/launch_monitor_observer/test_oneharness_timeout_e2e.py proves this list against the real CLI's effective configuration; paid-provider quota rejection cannot be deterministic.
 harnesses = [
     "codex:primary",
     "codex:alternate",

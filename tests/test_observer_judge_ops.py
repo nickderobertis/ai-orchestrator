@@ -13,8 +13,8 @@ ends. So that bar is closed by being **served**, and what serves it is
 bus states in its `docs/codecs.md`.
 
 What the binding answers each frame is proven by the journeys that drive it
-(`tests/e2e/test_monitor_quiet_turn_e2e.py`). What is proven here is the wiring, and the
-wiring has three seams each of which fails silently:
+(`tests/e2e/launch_monitor_observer/test_monitor_quiet_turn_e2e.py`). What is proven here is
+the wiring, and the wiring has three seams each of which fails silently:
 
 - **The command is the binding, and nothing stands between it and onejudge.** The graph
   names an argv, and a wrapper that swallowed the serving session's exit status would keep
@@ -31,8 +31,8 @@ wiring has three seams each of which fails silently:
   every score degrades to `false`.
 
 The launched journeys prove the three reach a real run
-(`tests/e2e/test_monitor_survives_the_channel_e2e.py` for the score); this is the cheap
-gate that says which file to fix.
+(`tests/e2e/launch_monitor_observer/test_monitor_survives_the_channel_e2e.py` for the
+score); this is the cheap gate that says which file to fix.
 """
 
 from __future__ import annotations

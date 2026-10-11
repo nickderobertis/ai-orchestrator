@@ -12,7 +12,9 @@
   "namedInputs": {
     "testSupport": [
       "{workspaceRoot}/tests/linear_stand_in.py",
-      "{workspaceRoot}/onetaskgraph.yaml"
+      "{workspaceRoot}/onetaskgraph.yaml",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{projectRoot}/project.json"
     ]
   },
   "targets": {

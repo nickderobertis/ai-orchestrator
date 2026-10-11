@@ -10,7 +10,7 @@
 # It extends `oneharness.identities.toml` rather than `oneharness.dispatch.toml`: the
 # design-document pair is launched by `just plan` rather than inside a node's dispatch,
 # so there is no node scratch directory for the runtime-directory repoint to point at.
-# tests/e2e/test_oneharness_timeout_e2e.py reads both sides back from the real CLI.
+# tests/e2e/launch_monitor_observer/test_oneharness_timeout_e2e.py reads both sides back from the real CLI.
 extends = "oneharness.identities.toml"
 
 # timeout: the per-turn deadline in seconds. Stated rather than inherited, because this
@@ -37,7 +37,7 @@ history_labels = { role = "agent" }
 # reaches the workers' alternate Claude subscriptions in the worker's own relative order,
 # with the primary Claude identity last — every role names all six, so no quota is lost
 # once everything ahead of it is exhausted.
-# llmlint: ignore[changed_behavior_has_e2e] tests/e2e/test_oneharness_timeout_e2e.py proves this list against the real CLI's effective configuration; paid-provider quota rejection cannot be deterministic.
+# llmlint: ignore[changed_behavior_has_e2e] tests/e2e/launch_monitor_observer/test_oneharness_timeout_e2e.py proves this list against the real CLI's effective configuration; paid-provider quota rejection cannot be deterministic.
 harnesses = [
     "codex:primary",
     "codex:alternate",

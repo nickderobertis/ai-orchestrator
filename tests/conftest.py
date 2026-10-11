@@ -33,12 +33,13 @@ from nx_inputs import (
     ASK_SEAM_JOURNEYS,
     BOARD_COPY_APPROVAL_ROOT,
     BOARD_COPY_APPROVAL_WORKSPACE,
+    CHECKOUT_SCOPED,
     CODE_SCOPED,
     DAG_UI_ROOT,
     DAG_UI_WORKSPACE,
     DRIFT_GATE_PROJECTS,
+    E2E_JOURNEYS,
     E2E_ROOT,
-    E2E_WORKSPACE,
     GRACEFUL_CANCEL_ROOT,
     GRACEFUL_CANCEL_WORKSPACE,
     HOST_SWEEP_ROOT,
@@ -47,6 +48,7 @@ from nx_inputs import (
     HOST_VIEWS_WORKSPACE,
     MANAGER_ALLOWLIST_ROOT,
     MANAGER_ALLOWLIST_WORKSPACE,
+    MARKER_TIER_ROOT,
     MERGE_POLICY_ROOT,
     MERGE_POLICY_WORKSPACE,
     PLAN_STORE_ASSETS_ROOT,
@@ -75,11 +77,11 @@ from nx_inputs import (
     UNPUBLISHED_VIEW_WORKSPACE,
     UNWATCHED_ROOT,
     UNWATCHED_WORKSPACE,
+    WORKSPACE_COPIES_PROJECT,
     WRITEBACK_BUDGET_ROOT,
     WRITEBACK_BUDGET_WORKSPACE,
     covers,
-    marker_tier_root,
-    project_declarations,
+    project_declaration,
     repository_relative,
     target_input_globs,
 )
@@ -138,10 +140,8 @@ UNHASHED_DIRECTORIES = frozenset({".venv", "node_modules", ".git", ".nx", ".tele
 #: repository's prose; in a directory-owned project it marks only a test that copies this
 #: checkout or scans every tracked document, and a test there that reads named prose
 #: carries no marker, its project's key naming what it reads. It routes between the
-#: targets of one project and never between projects, save one exception: a journey directly
-#: under `tests/e2e/` carrying it leaves `orchestrator-e2e`, which has no whole-workspace
-#: target, for `orchestrator:test-docs`. Otherwise which project owns a test is decided by
-#: where the test lives.
+#: targets of one project and never between projects: which project owns a test is decided
+#: by where the test lives.
 READS_DOCS_MARKER = "reads_docs"
 DOCUMENTATION_DIRECTORY = "docs"
 #: The marker that moves a test into the narrow recipe-scoped key.
@@ -245,6 +245,16 @@ OWNED_PROJECTS = {
     # beside its siblings' rather than in its own directory.
     SESSION_OPEN_CONFLICT_ROOT: OwnedProject(key=SESSION_OPEN_CONFLICT_WORKSPACE, docs_tier=False),
     # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+    # Each journey project under `tests/e2e/`. Only the journeys that copy this checkout have
+    # a whole-workspace tier, stated here rather than read off every journey's declaration,
+    # which every test process would then open outside its key;
+    # `tests/tree_scans/test_nx_cache_scope.py` holds it to the declarations.
+    **{
+        journey.root: OwnedProject(
+            key=journey.key, docs_tier=journey.project == WORKSPACE_COPIES_PROJECT
+        )
+        for journey in E2E_JOURNEYS
+    },
 }
 #: The marker that moves a test out of every memoized tier and into the uncached one.
 #: Its subject is another repository — its checkout, or the merge path it publishes
@@ -517,7 +527,7 @@ def _outside_the_code_key(file: object, globs: list[str]) -> str | None:
         named = named.decode("utf-8", "replace")
     # Every open in the suite passes through here, so decide on a substring before
     # paying for a syscall. The unit key drops exactly two things: this repository's
-    # prose, and the journeys the `orchestrator-e2e` project owns.
+    # prose, and the journey modules the projects under `tests/e2e/` own.
     if not (named.endswith(".md") or DOCUMENTATION_DIRECTORY in named or E2E_ROOT in named):
         return None
     relative = repository_relative(named)
@@ -550,10 +560,9 @@ def _code_key_reads_are_declared(
 ) -> None:
     """Hold a test to the cache key its tier is memoized on.
 
-    `orchestrator:test` and `orchestrator-e2e:test` are keyed on less than the workspace
-    — the first without prose or the journeys, the second without prose or any other
-    test project's files — so that editing what a tier cannot read stops charging for a
-    suite that would return the same verdict. That key is only sound while the tests it
+    `orchestrator:test` is keyed on less than the workspace — without prose or the
+    journeys — so that editing what it cannot read stops charging for a suite that would
+    return the same verdict. That key is only sound while the tests it
     covers genuinely ignore what it drops, and "genuinely"
     cannot be a reviewer's recollection: a test that quietly starts asserting on
     `AGENTS.md` would replay a green verdict for a tree whose tests would have failed.
@@ -566,33 +575,32 @@ def _code_key_reads_are_declared(
     a child process is out of reach — but a journey that hands a real tool the whole
     tree copies it first, and copying is itself a read.
 
-    `reads_checkouts` satisfies this too, and for the reason the rule is about rather
-    than by exception: that marker puts a test in the *uncached* tier, so there is no
-    memoized verdict for a dropped input to make stale. Demanding `reads_docs` beside
-    it would put the same test back into a whole-workspace tier that memoizes a
-    verdict depending on another repository's checkout — which is the false green the
-    checkout guard below exists to prevent. A test reconciling this repository's prose
-    against an engine's own source needs exactly one of these markers, and it is that
-    one.
+    `reads_checkouts` moves a test to the *uncached* `test-checkouts` tier instead, so
+    there is no memoized verdict for a dropped input to make stale — but that tier still
+    declares the tracked files of this checkout its tests read, and the test is held to
+    that declaration here rather than to this one. Demanding `reads_docs` beside it
+    would put the same test back into a whole-workspace tier that memoizes a verdict
+    depending on another repository's checkout — which is the false green the checkout
+    guard below exists to prevent. A test reconciling this repository's prose against an
+    engine's own source needs exactly one of these markers, and it is that one.
     """
     if request.node.get_closest_marker(READS_DOCS_MARKER) is not None:
-        return
-    if request.node.get_closest_marker(READS_CHECKOUTS_MARKER) is not None:
         return
     # A test of a directory-owned project is keyed on that project's own input rather
     # than on this one; the guard below this one is what holds it to that key.
     if _owned_project(request) is not None:
         return
-    root = _marker_tier_root(request)
+    root = MARKER_TIER_ROOT
+    if request.node.get_closest_marker(READS_CHECKOUTS_MARKER) is not None:
+        _hold_to_target(request, monkeypatch, root, CHECKOUT_SCOPED)
+        return
     # Resolved before the wrapper is installed: reading the declaration through the
     # guard that consults it is a loop waiting for its first prose-shaped path.
     globs = target_input_globs(root, CODE_SCOPED)
-    # The journeys' key leaves out far more than prose — every other test project's
-    # files — so a journey's every read is held to it; the unit key drops only what the
-    # substring test in `_outside_the_code_key` names.
-    outside = _outside_a_key if root == E2E_ROOT else _outside_the_code_key
-    key = E2E_WORKSPACE if root == E2E_ROOT else UNIT_WORKSPACE
-    project = project_declarations()[root]["name"]
+    # The unit key drops only what the substring test in `_outside_the_code_key` names.
+    outside = _outside_the_code_key
+    key = UNIT_WORKSPACE
+    project = project_declaration(root)["name"]
     opener = builtins.open
 
     # `Any` throughout because this stands in for `open` itself: its signature is a
@@ -619,20 +627,15 @@ def _code_key_reads_are_declared(
     monkeypatch.setattr(io, "open", guarded)
 
 
-def _marker_tier_root(request: pytest.FixtureRequest) -> str:
-    """The root of the marker-routed project this test belongs to: the journeys' or the
-    orchestrator project's, by where its module lives."""
-    module = repository_relative(request.node.path)
-    return "orchestrator" if module is None else marker_tier_root(module)
-
-
 def _owned_directory(request: pytest.FixtureRequest) -> str | None:
     """The directory of the project this test belongs to, or `None` for a marker tier."""
     module = repository_relative(request.node.path)
     if module is None:
         return None
-    owning = (directory for directory in OWNED_PROJECTS if module.startswith(f"{directory}/"))
-    return next(owning, None)
+    # The deepest directory holding the module: `tests/e2e/` is a project of its own and the
+    # journey families are projects nested inside it.
+    owning = [directory for directory in OWNED_PROJECTS if module.startswith(f"{directory}/")]
+    return max(owning, key=len, default=None)
 
 
 def _owned_project(request: pytest.FixtureRequest) -> OwnedProject | None:
@@ -669,7 +672,24 @@ def _owned_project_reads_are_declared(
     if directory is None:
         return
     owned = OWNED_PROJECTS[directory]
+    # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] A journey that copies this
+    # checkout shares its module with tests that do not, so the marker routes it between its own
+    # project's two keys — the whole-workspace `test-docs` the copy reads and the narrow `test` —
+    # rather than to another project; this is that routing's one enforcement site.
     if owned.docs_tier and request.node.get_closest_marker(READS_DOCS_MARKER):
+        return
+    # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+    # A test reading another repository's checkout runs in its project's `test-checkouts`
+    # target where the project declares one. That target is uncached, so there is no
+    # memoized verdict for a read outside a key to make stale, but it still declares what
+    # its tests read of this checkout, and the test is held to that declaration. Where the
+    # project declares none, the test runs in its cached `test` target and is held to that
+    # key like any other.
+    if (
+        request.node.get_closest_marker(READS_CHECKOUTS_MARKER) is not None
+        and CHECKOUT_SCOPED in project_declaration(directory)["targets"]
+    ):
+        _hold_to_target(request, monkeypatch, directory, CHECKOUT_SCOPED)
         return
     # The whole key, through the project graph: the project's own named input and the
     # `testSupport` of every unit it depends on, exactly as Nx hashes the target.
@@ -695,20 +715,47 @@ def _owned_project_reads_are_declared(
     monkeypatch.setattr(io, "open", guarded)
 
 
+def _hold_to_target(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, root: str, target: str
+) -> None:
+    """Fail any read of this checkout that ``root``'s ``target`` does not declare.
+
+    For an uncached tier: no memo can go stale, but the declaration is still the one
+    record of what the tier reads, so a read outside it is drift the day it is cached.
+    """
+    globs = target_input_globs(root, target)
+    opener = builtins.open
+
+    # `Any` for the reason the guards around it use it: this stands in for `open`, whose
+    # return type is chosen by arguments it forwards untouched.
+    def guarded(file: Any, *args: Any, **kwargs: Any) -> Any:
+        uncovered = _outside_a_key(file, globs)
+        if uncovered is not None:
+            raise AssertionError(
+                f"{request.node.name} reads {uncovered}, which {root}:{target}'s declared "
+                f"inputs do not cover; add the path to that target's inputs in "
+                f"{root}/project.json, or depend on the test-support unit that carries it"
+            )
+        return opener(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", guarded)
+    monkeypatch.setattr(io, "open", guarded)
+
+
 @pytest.fixture(autouse=True)
 def _recipe_reads_are_declared(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Hold the recipe tier to the narrow key its verdict is memoized on.
 
-    `orchestrator:test-recipes` and `orchestrator-e2e:test-recipes` exist because the
-    costliest tests in this suite drive `just` recipes and shell scripts and read nothing
-    else of this repository —
+    `orchestrator:test-recipes` exists because the costliest tests of the unit and
+    drift-gate modules drive `just` recipes and shell scripts and read nothing else of
+    this repository —
     so a commit that touches neither may replay their verdict instead of paying for
     them again. That is a much narrower claim than the code-only key makes, and a
     narrower claim needs stricter enforcement, not looser: any read outside the
-    project's own recipe key — `recipeWorkspace` or `e2eRecipeWorkspace` — is a file
-    that can change this tier's answer without changing its hash.
+    project's own recipe key, `recipeWorkspace`, is a file that can change this tier's
+    answer without changing its hash.
 
     So the same enforcement `reads_docs` gets, against the same declaration Nx
     hashes rather than a restatement of it — a marked test that opens anything else
@@ -718,9 +765,9 @@ def _recipe_reads_are_declared(
     """
     if request.node.get_closest_marker(READS_RECIPES_MARKER) is None:
         return
-    root = _marker_tier_root(request)
+    root = MARKER_TIER_ROOT
     globs = target_input_globs(root, RECIPE_SCOPED)
-    key = project_declarations()[root]["targets"][RECIPE_SCOPED]["inputs"][0]
+    key = project_declaration(root)["targets"][RECIPE_SCOPED]["inputs"][0]
     module = repository_relative(request.node.path)
     assert module is not None and covers(globs, module), (
         f"{request.node.name} is declared @pytest.mark.{READS_RECIPES_MARKER} from {module}, "

@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# llmlint: ignore-file[changed_behavior_has_e2e] `just smoke`, the one caller outside a dispatch, is driven through the inherited, made and refused paths by tests/e2e/test_delegated_recipes_e2e.py; the branches left are `mktemp` and `chmod` failing, which no journey can produce without racing the filesystem it runs on.
+# llmlint: ignore-file[changed_behavior_has_e2e] `just smoke`, the one caller outside a dispatch, is driven through the inherited, made and refused paths by tests/e2e/registry_and_recipes/test_delegated_recipes_e2e.py; the branches left are `mktemp` and `chmod` failing, which no journey can produce without racing the filesystem it runs on.
 # The ONE source of ONEPIPELINE_NODE_SCRATCH_DIR for a caller that is not a dispatch.
 #
 # Inside a dispatch this variable is the **engine's**, and it names that node's own

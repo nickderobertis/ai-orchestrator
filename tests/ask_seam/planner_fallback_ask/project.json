@@ -20,6 +20,7 @@
   ],
   "namedInputs": {
     "askSeamPlannerFallbackAsk": [
+      "{projectRoot}/project.json",
       "{workspaceRoot}/templates/design-doc.md.j2",
       "{workspaceRoot}/config/onemessagebus.yaml",
       "{workspaceRoot}/config/onevcs.checkouts",
@@ -30,6 +31,7 @@
       "{workspaceRoot}/onetaskgraph.yaml",
       "{workspaceRoot}/orchestrator/design_approval.py",
       "{workspaceRoot}/orchestrator/plan_store.py",
+      "{workspaceRoot}/orchestrator/plan_units.py",
       "{workspaceRoot}/orchestrator/project_store.py",
       "{workspaceRoot}/orchestrator/root.py",
       "{workspaceRoot}/personas/planner.yaml",

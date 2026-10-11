@@ -1126,9 +1126,9 @@ def _judge_turns(bench: Bench, drafted: Drafted) -> list[RecordedTurn]:
 
     The prompt log is the only record of it: the published stream reports that a
     supervisor turn happened and what it ruled, never the prompt it ruled on — which is why
-    `tests/e2e/test_design_doc_graph_e2e.py` reads the same record. The review's judged
-    turn goes through the codex stand-in and never reaches this log, so every judge-side
-    turn here is the design run's.
+    `tests/e2e/launch_monitor_observer/test_design_doc_graph_e2e.py` reads the same record.
+    The review's judged turn goes through the codex stand-in and never reaches this log, so
+    every judge-side turn here is the design run's.
     """
     log = bench.tmp_path / f"turns-{drafted.project}.jsonl"
     lines = log.read_text(encoding="utf-8").splitlines() if log.is_file() else []

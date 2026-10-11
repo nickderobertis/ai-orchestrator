@@ -165,8 +165,8 @@ def _spans(document: Path) -> list[str]:
 
     For the justfile that means the spans inside its *comments*: a recipe body is a
     real invocation held to its published command line by
-    `tests/e2e/test_delegated_recipes_e2e.py`, and the comments are the prose an
-    operator reads.
+    `tests/e2e/registry_and_recipes/test_delegated_recipes_e2e.py`, and the comments are the
+    prose an operator reads.
     """
     text = document.read_text(encoding="utf-8")
     if document.name == "justfile":

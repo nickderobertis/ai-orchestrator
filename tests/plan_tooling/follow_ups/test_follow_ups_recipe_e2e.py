@@ -38,7 +38,7 @@ the recipe writes and the command lines it delegates, which is `just follow-ups`
 the delegation table. Its double traces every engine call and hands the two `template`
 verbs — no launch, and what the node's task is created from and checked by — to the pinned
 engine, so the task it reads back is the real rendering. It is here rather than in
-`tests/e2e/test_delegated_recipes_e2e.py` because its answer moves with
+`tests/e2e/registry_and_recipes/test_delegated_recipes_e2e.py` because its answer moves with
 `orchestrator/follow_up_tickets.py`, which this project's key carries and the recipe tier's
 does not.
 """
@@ -347,7 +347,7 @@ def _bench(tmp: Path) -> Bench:
     # `XDG_STATE_HOME`. Without it a completed launch here left
     # `~/.local/state/oneagentgraph/runs/follow-up-*/members/worker/` on the host, which
     # nothing reclaims and no journey can read as its own.
-    # `tests/e2e/test_orchestrate_launch_e2e.py` states it the same way.
+    # `tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` states it the same way.
     environment["ONEAGENTGRAPH_STATE_DIR"] = str(graph_state)
     return Bench(environment, tmp, drafts_root, plans, board, runs, graph_state)
 

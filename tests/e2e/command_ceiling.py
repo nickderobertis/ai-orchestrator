@@ -2,10 +2,11 @@
 
 `oneharness.toml` and `oneharness.follow-up.toml` raise it and every other role leaves
 its provider's default; those files say why. Stated here once so the journey reading it
-off a real turn (`tests/e2e/test_dispatch_environment_e2e.py`) and the one holding the
-follow-up role to the judge's routing (`tests/e2e/test_oneharness_timeout_e2e.py`) read
-the same values. Every name below is the provider's own, and
-`tests/test_command_ceiling_providers.py` holds each to the installed provider.
+off a real turn (`tests/e2e/launch_monitor_observer/test_dispatch_environment_e2e.py`) and
+the one holding the follow-up role to the judge's routing
+(`tests/e2e/launch_monitor_observer/test_oneharness_timeout_e2e.py`) read the same values.
+Every name below is the provider's own, and `tests/test_command_ceiling_providers.py` holds
+each to the installed provider.
 """
 
 from __future__ import annotations

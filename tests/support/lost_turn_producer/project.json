@@ -10,7 +10,8 @@
   ],
   "namedInputs": {
     "testSupport": [
-      "{workspaceRoot}/tests/lost_turn_producer.py"
+      "{workspaceRoot}/tests/lost_turn_producer.py",
+      "{projectRoot}/project.json"
     ]
   },
   "targets": {

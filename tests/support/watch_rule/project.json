@@ -8,7 +8,9 @@
   "implicitDependencies": [],
   "namedInputs": {
     "testSupport": [
-      "{workspaceRoot}/tests/watch_rule.py"
+      "{workspaceRoot}/tests/watch_rule.py",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{projectRoot}/project.json"
     ]
   },
   "targets": {

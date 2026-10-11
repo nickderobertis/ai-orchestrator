@@ -18,9 +18,10 @@ makes. A turn it does not refuse is handed to `fake_codex.py` unchanged, in the 
 image, so every variable that stand-in reads keeps its meaning.
 
 The refusal text and the trust arguments are restated from codex, so
-`tests/e2e/test_fake_codex_untrusted_directory_e2e.py` reconciles both against the pinned
-`oneharness`: that it classifies this refusal as an untrusted directory, and that the command
-it builds for a `bypass` turn carries one of these arguments.
+`tests/e2e/launch_monitor_observer/test_fake_codex_untrusted_directory_e2e.py` reconciles
+both against the pinned `oneharness`: that it classifies this refusal as an untrusted
+directory, and that the command it builds for a `bypass` turn carries one of these
+arguments.
 
 Keep this deterministic and stdlib-only — this file *is* the provider binary.
 """

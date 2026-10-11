@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 import pytest
-from nx_workspace import answering_this_checkouts_origin, copy_checkout
+from nx_workspace import TOOLCHAIN_WRITER_MARKS, answering_this_checkouts_origin, copy_checkout
 from test_finish_plan_recipe_e2e import (
     COPIES_THE_ROWS,
     DESIGN_RUN_SUFFIX,
@@ -66,7 +66,13 @@ from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
 
-pytestmark = [pytest.mark.reads_docs, pytest.mark.xdist_group("finish-plan-diagram")]
+# A writer: its module fixture provisions the copied checkout with `uv sync --locked`
+# (`test_plan_flow_e2e._provisioned`), into the copy's own `.venv` and never this one's.
+pytestmark = [
+    *TOOLCHAIN_WRITER_MARKS,
+    pytest.mark.reads_docs,
+    pytest.mark.xdist_group("finish-plan-diagram"),
+]
 
 #: The stand-in `start` the copied checkout's engine hands that one verb to.
 STAND_IN = Path(__file__).resolve().parent / "finish_plan_writer_engine.py"

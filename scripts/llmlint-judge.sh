@@ -48,7 +48,7 @@
 # llmlint: ignore-file[changed_behavior_has_e2e] Every journey this script has —
 # a judged and a replayed clean run, findings and a broken toolchain re-judging,
 # each invalidation case, a refused base, and unusable labels — runs end to end in
-# tests/e2e/test_llmlint_cache_e2e.py. What remains are host-failure guards on the
+# tests/e2e/workspace_copies/test_llmlint_cache_e2e.py. What remains are host-failure guards on the
 # checkout layout; simulating a broken filesystem is the guard's job, not a journey's.
 set -euo pipefail
 

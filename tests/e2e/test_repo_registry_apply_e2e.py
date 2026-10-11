@@ -1460,8 +1460,9 @@ def test_the_tracked_registration_routes_onebudgetspec_and_names_the_wheel_its_r
     assert answer["adoption"] == GLOBAL_RUNG, answer
     declared = {target["name"]: target["probe"]["args"][0] for target in answer["targets"]}
     assert declared[ONEBUDGETSPEC_TARGET] == ONEBUDGETSPEC_ARTIFACT, declared
-    # The resolution `tests/e2e/test_release_adoption_in_force_e2e.py` reads off this
-    # host, taken here off a real one: the resolved default target is the row's.
+    # The resolution `tests/e2e/publish_and_landing/test_release_adoption_in_force_e2e.py`
+    # reads off this host, taken here off a real one: the resolved default target is the
+    # row's.
     assert (
         default_target_complaint(
             ONEBUDGETSPEC,

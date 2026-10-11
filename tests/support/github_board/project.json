@@ -14,7 +14,21 @@
   "namedInputs": {
     "testSupport": [
       "{workspaceRoot}/tests/github_board.py",
-      "{workspaceRoot}/onetaskgraph.yaml"
+      "{workspaceRoot}/onetaskgraph.yaml",
+      "{workspaceRoot}/orchestrator/design_approval.py",
+      "{workspaceRoot}/orchestrator/design_chain.py",
+      "{workspaceRoot}/orchestrator/follow_up_comments.py",
+      "{workspaceRoot}/orchestrator/follow_up_drafts.py",
+      "{workspaceRoot}/orchestrator/follow_up_tickets.py",
+      "{workspaceRoot}/orchestrator/plan_budgets.py",
+      "{workspaceRoot}/orchestrator/plan_store.py",
+      "{workspaceRoot}/orchestrator/plan_units.py",
+      "{workspaceRoot}/orchestrator/project_store.py",
+      "{workspaceRoot}/orchestrator/publication_guard.py",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/orchestrator/spike_plan.py",
+      "{workspaceRoot}/orchestrator/task_body.py",
+      "{projectRoot}/project.json"
     ]
   },
   "targets": {

@@ -18,6 +18,7 @@
     "support-plan-sources",
     "support-registered-checkouts",
     "support-short-state",
+    "support-test-linked-libraries",
     "support-waits"
   ],
   "namedInputs": {
@@ -39,7 +40,7 @@
       "{workspaceRoot}/scripts/repos-bootstrap.sh",
       "{workspaceRoot}/orchestrator/**/*",
       "{workspaceRoot}/tests/dag_ui/test_dag_ui_serving_e2e.py",
-      "{workspaceRoot}/tests/e2e/test_repos_bootstrap_e2e.py",
+      "{workspaceRoot}/tests/e2e/registry_and_recipes/test_repos_bootstrap_e2e.py",
       "{workspaceRoot}/tests/session_setup/test_locked_plan_store_setup_e2e.py",
       "{workspaceRoot}/tests/test_planner_channel_personas.py",
       "{workspaceRoot}/tests/test_linked_libraries.py",

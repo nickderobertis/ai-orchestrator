@@ -70,9 +70,9 @@ third is new to both — a process must finish inside the turn that started it.
 
 `tests/test_criteria_guard.py` proves the guard that reads this file; here the subject
 is the file itself, which is why these belong to the tier keyed on this repository's
-prose. `tests/e2e/test_dispatched_operational_notes_e2e.py` is the other half and reads
-the same rules out of the prompt a really dispatched worker was handed, which is where
-they either arrive or do not.
+prose. `tests/e2e/launch_monitor_observer/test_dispatched_operational_notes_e2e.py` is the
+other half and reads the same rules out of the prompt a really dispatched worker was handed,
+which is where they either arrive or do not.
 """
 
 from __future__ import annotations
@@ -1282,8 +1282,9 @@ def test_the_appendix_states_the_drafting_rule_once_beside_the_blocking_route(
 
     A read of the file, and deliberately no more: whether a model drafts or asks is the
     paid model's, which nothing here drives. That this paragraph reaches a real worker
-    intact is `tests/e2e/test_dispatched_operational_notes_e2e.py`'s, and that the command
-    it names works from inside a real dispatch is
+    intact is
+    `tests/e2e/launch_monitor_observer/test_dispatched_operational_notes_e2e.py`'s, and that
+    the command it names works from inside a real dispatch is
     `tests/ask_seam/follow_up_drafts_launch/test_follow_up_drafts_launch_e2e.py`'s.
     """
     paragraphs = [block for block in appendix.split("\n\n") if DRAFT_COMMAND.search(block)]

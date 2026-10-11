@@ -1130,7 +1130,7 @@ def test_no_run_served_here_carries_a_release(served_recorded: Served) -> None:
     **This is a statement about these runs, not about this host.** They are checked-in
     fixtures and can never grow a release event, so declaring a release target here
     would not move it. The gate that fires on *that* is
-    `tests/e2e/test_release_adoption_in_force_e2e.py::test_which_registered_repositories_declare_a_release_target`,
+    `tests/e2e/publish_and_landing/test_release_adoption_in_force_e2e.py::test_which_registered_repositories_declare_a_release_target`,
     which asks every registered identity rather than reading a frozen tree.
     """
     for run in (RECORDED_RUN, SETTLED_RUN, MERGED_RUN, REPORTED_RUN):

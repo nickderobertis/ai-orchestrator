@@ -8,7 +8,9 @@
   "implicitDependencies": [],
   "namedInputs": {
     "testSupport": [
-      "{workspaceRoot}/tests/e2e/nx_workspace.py"
+      "{workspaceRoot}/tests/e2e/nx_workspace.py",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{projectRoot}/project.json"
     ]
   },
   "targets": {

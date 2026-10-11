@@ -53,9 +53,9 @@ asserted to be exactly those four — and `run-changed` is then driven here anyw
 copy of a recorded run that the engine's own `surface` verb moves while a watch waits.
 
 What *does* drive them is a run rather than a fixture:
-`tests/e2e/test_watch_selector_e2e.py` launches one, holds it live, and takes the live
-ones against the installed engine through the recipe — which is where they belong, since a
-static runs root is this module's subject and a launch is not.
+`tests/e2e/launch_monitor_observer/test_watch_selector_e2e.py` launches one, holds it live,
+and takes the live ones against the installed engine through the recipe — which is where
+they belong, since a static runs root is this module's subject and a launch is not.
 
 llmlint: ignore-file[test_tiers_split_by_project_not_by_marker,shell_test_tiers_stay_split] The
 marker is this repository's tier mechanism rather than a shortcut around one: it runs
@@ -155,7 +155,8 @@ class Terminal(NamedTuple):
 #: The conditions no recorded run, as it stands, can produce — the module docstring says
 #: why. Each is reconciled where it can be driven instead: `run-changed` below, by moving a
 #: copy of a recorded run while a watch waits on it; the other three by
-#: `tests/e2e/test_watch_selector_e2e.py`, over a run it launches and holds live.
+#: `tests/e2e/launch_monitor_observer/test_watch_selector_e2e.py`, over a run it launches
+#: and holds live.
 #:
 #: They are declared here so the set cannot quietly grow.
 UNDRIVABLE_CONDITIONS = frozenset(

@@ -2,10 +2,12 @@
 # every other mask kept. Nothing names it by default, so only a plan node that names it
 # holds the token; docs/onejudge-integration.md says what it is for and how a node names it.
 #
-# `tests/e2e/test_oneharness_timeout_e2e.py` holds its routing to `oneharness.toml`'s
-# resolution field by field, `tests/e2e/test_dispatch_environment_e2e.py` reads the
-# token, and the absence of every other mask, out of a real turn on every identity, and
-# `tests/e2e/test_oneharness_config_equivalence_e2e.py` holds every mask below.
+# `tests/e2e/launch_monitor_observer/test_oneharness_timeout_e2e.py` holds its routing to
+# `oneharness.toml`'s resolution field by field,
+# `tests/e2e/launch_monitor_observer/test_dispatch_environment_e2e.py` reads the token, and
+# the absence of every other mask, out of a real turn on every identity, and
+# `tests/e2e/launch_monitor_observer/test_oneharness_config_equivalence_e2e.py` holds every
+# mask below.
 extends = "oneharness.dispatch.toml"
 
 # The worker's label, as `oneharness.toml` states it: this is the same side of the same

@@ -51,7 +51,7 @@ from typing import Any, NamedTuple, TypedDict
 
 import plan_fixture_source
 import pytest
-from nx_workspace import answering_this_checkouts_origin, copy_checkout
+from nx_workspace import TOOLCHAIN_WRITER_MARKS, answering_this_checkouts_origin, copy_checkout
 from project_fixtures import budgeted, no_budgets
 from test_finish_plan_recipe_e2e import (
     COPIES_THE_ROWS,
@@ -75,7 +75,9 @@ from orchestrator.plan_store import NodeId, QualifiedProjectId
 from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
 
-pytestmark = [pytest.mark.reads_docs]
+# A writer: its module fixture provisions the copied checkout with `uv sync --locked`
+# (`test_plan_flow_e2e._provisioned`), into the copy's own `.venv` and never this one's.
+pytestmark = [*TOOLCHAIN_WRITER_MARKS, pytest.mark.reads_docs]
 
 #: The stand-in `start` the copied checkout's engine hands that one verb to.
 STAND_IN = Path(__file__).resolve().parent / "finish_plan_writer_engine.py"

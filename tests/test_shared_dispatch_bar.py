@@ -36,10 +36,10 @@ its judge read together. So what is held below is that policy's absence, the one
 that stays and the scope that makes it sayable, the pointer that keeps "states nothing"
 from reading as "nothing is owed", and that no statement of it stands in both files.
 
-`tests/e2e/test_orchestrate_launch_e2e.py` proves what this file cannot — that these
-clauses are what a real launch hands a real worker and its real judge — from a launch
-with only the paid model doubled. This file reads the file itself, because what is under
-test here is what the words demand, not whether they arrive.
+`tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` proves what this file
+cannot — that these clauses are what a real launch hands a real worker and its real judge —
+from a launch with only the paid model doubled. This file reads the file itself, because
+what is under test here is what the words demand, not whether they arrive.
 """
 
 from __future__ import annotations
@@ -344,7 +344,8 @@ def test_the_preamble_sends_follow_ups_to_the_drafting_command_and_blockers_to_t
 
     A structural read, and a deliberate one: which route a model then takes is the paid
     model's, which no journey here drives. That the preamble carrying this sentence reaches
-    a real worker verbatim is `tests/e2e/test_orchestrate_launch_e2e.py`'s, and that the
+    a real worker verbatim is
+    `tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py`'s, and that the
     command it names works from inside a real dispatch is
     `tests/ask_seam/follow_up_drafts_launch/test_follow_up_drafts_launch_e2e.py`'s.
     """
@@ -374,7 +375,7 @@ def test_the_base_config_asks_no_judge_for_an_assessment_and_cites_only_real_fil
     drafts replaced it. The file-scoped directive that excused it cited three journeys
     that did not exist, so every path a remaining directive cites is held to existing.
     That no real dispatch's judge is asked one is read off the merged config a real launch
-    wrote, by `tests/e2e/test_orchestrate_launch_e2e.py`.
+    wrote, by `tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py`.
     """
     document = (REPO_ROOT / BASE_CONFIG).read_text(encoding="utf-8")
     assert re.search(r"^assessment:", document, re.MULTILINE) is None, (
@@ -414,8 +415,9 @@ def test_the_preamble_scopes_its_one_completion_clause_to_the_change() -> None:
 #: A project-wide verification demanded of every dispatch, in the wordings a re-added one
 #: would take. Held as phrases rather than as stems because a preamble that named checks
 #: at all used every stem inside them; kept as a constant because
-#: `tests/e2e/test_persona_review_bar_e2e.py` reads a *persona's* delivered bar for the
-#: same demand, and one vocabulary in two files is how those two answers stay one answer.
+#: `tests/e2e/launch_monitor_observer/test_persona_review_bar_e2e.py` reads a *persona's*
+#: delivered bar for the same demand, and one vocabulary in two files is how those two
+#: answers stay one answer.
 NO_PROJECT_WIDE_DEMAND = (
     "complete verification",
     "full verification",

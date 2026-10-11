@@ -8,7 +8,8 @@
   "implicitDependencies": [],
   "namedInputs": {
     "testSupport": [
-      "{workspaceRoot}/tests/e2e/waits.py"
+      "{workspaceRoot}/tests/e2e/waits.py",
+      "{projectRoot}/project.json"
     ]
   },
   "targets": {

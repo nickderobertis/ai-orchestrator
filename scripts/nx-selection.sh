@@ -19,7 +19,7 @@ if [[ $script_dir == "$0" ]]; then script_dir=.; fi
 # be used, and reaches the branch below with its own report — checking everything in
 # silence there would leave a misconfigured comparison identity looking like a fresh copy.
 # This status is a contract between the two scripts, and
-# `tests/e2e/test_workspace_contract_e2e.py` reconciles it against what that one exits with.
+# `tests/e2e/workspace_copies/test_workspace_contract_e2e.py` reconciles it against what that one exits with.
 readonly NO_BASE_AVAILABLE=2
 
 status=0

@@ -1,0 +1,175 @@
+{
+  "//": "llmlint: ignore-file[external_service_suite_stays_out_of_the_affected_tier] These journeys were split out of orchestrator-e2e, whose file carried this suppression for them: the session-reuse journey whose prior_binary fixture installs a released onepipeline-cli from PyPI (test_session_reuse_retry_e2e.py) and the merge-path audit that reads real branch protection in the uncached test-checkouts target ran in the gate before this split as well, and moving them into a project outside the affected gate is a change of its own. JSON has no comment to scope this to the targets it is about.",
+  "name": "publish-and-landing",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/e2e/publish_and_landing",
+  "tags": [
+    "scope:publish-and-landing",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-example-records",
+    "support-fake-backend",
+    "support-fake-codex",
+    "support-fake-gh",
+    "support-follow-up-variables",
+    "support-harness-configs",
+    "support-harness-indirections",
+    "support-no-paid-provider",
+    "support-nx-inputs",
+    "support-nx-workspace",
+    "support-onejudge-bundle",
+    "support-onevcs-state-snapshot",
+    "support-plan-fixture-source",
+    "support-plan-root-variable",
+    "support-plan-sources",
+    "support-project-fixtures",
+    "support-published-tools",
+    "support-registered-checkouts",
+    "support-run-snapshot",
+    "support-scratch-identity",
+    "support-short-state",
+    "support-sibling-facts",
+    "support-test-linked-libraries",
+    "support-waits"
+  ],
+  "namedInputs": {
+    "publishAndLandingWorkspace": [
+      "{workspaceRoot}/.githooks/**/*",
+      "{workspaceRoot}/.github/pull_request_template.md",
+      "{workspaceRoot}/.gitignore",
+      "{workspaceRoot}/AGENTS.md",
+      "{workspaceRoot}/config/**/*",
+      "{workspaceRoot}/examples/**/*",
+      "{workspaceRoot}/graphs/**/*",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/oneharness.check-in.toml",
+      "{workspaceRoot}/oneharness.dispatch.toml",
+      "{workspaceRoot}/oneharness.identities.toml",
+      "{workspaceRoot}/oneharness.judge.toml",
+      "{workspaceRoot}/oneharness.orchestrator.toml",
+      "{workspaceRoot}/oneharness.pr-author.toml",
+      "{workspaceRoot}/oneharness.toml",
+      "{workspaceRoot}/onetaskgraph.yaml",
+      "{workspaceRoot}/orchestrator/**/*",
+      "{workspaceRoot}/package.json",
+      "{workspaceRoot}/personas/check-in.yaml",
+      "{workspaceRoot}/personas/orchestrator.yaml",
+      "{workspaceRoot}/personas/pr-author.yaml",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/scripts/apply-repo-registry.sh",
+      "{workspaceRoot}/scripts/ask-manager-env.sh",
+      "{workspaceRoot}/scripts/base-freshness.sh",
+      "{workspaceRoot}/scripts/claude-alt-config-dir.sh",
+      "{workspaceRoot}/scripts/codex-alt-home.sh",
+      "{workspaceRoot}/scripts/credentials-env.sh",
+      "{workspaceRoot}/scripts/dispatch-env-hook.sh",
+      "{workspaceRoot}/scripts/dispatch-env.sh",
+      "{workspaceRoot}/scripts/follow-up-env.sh",
+      "{workspaceRoot}/scripts/follow-ups.sh",
+      "{workspaceRoot}/scripts/host-sweep.sh",
+      "{workspaceRoot}/scripts/launcher-session.sh",
+      "{workspaceRoot}/scripts/lock-timeout.sh",
+      "{workspaceRoot}/scripts/onepipeline.sh",
+      "{workspaceRoot}/scripts/orchestrate.sh",
+      "{workspaceRoot}/scripts/plan-brief.sh",
+      "{workspaceRoot}/scripts/plan-store.sh",
+      "{workspaceRoot}/scripts/recoverable.sh",
+      "{workspaceRoot}/scripts/registered-checkouts.sh",
+      "{workspaceRoot}/scripts/repos.sh",
+      "{workspaceRoot}/scripts/run-ended.sh",
+      "{workspaceRoot}/scripts/template-env.sh",
+      "{workspaceRoot}/templates/**/*",
+      "{workspaceRoot}/tests/fixtures/legacy-runs/**/*",
+      "{workspaceRoot}/uv.lock",
+      "!{workspaceRoot}/orchestrator/**/*.md",
+      "{projectRoot}/**/*"
+    ]
+  },
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 COVERAGE_FILE=.coverage.publish-and-landing uv run pytest tests/e2e/publish_and_landing -m 'not reads_checkouts' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0",
+      "options": {
+        "cwd": "."
+      },
+      "outputs": [
+        "{workspaceRoot}/.coverage.publish-and-landing"
+      ],
+      "inputs": [
+        "publishAndLandingWorkspace",
+        {
+          "input": "testSupport",
+          "projects": [
+            "support-conftest",
+            "support-example-records",
+            "support-fake-backend",
+            "support-fake-codex",
+            "support-fake-gh",
+            "support-follow-up-variables",
+            "support-harness-configs",
+            "support-harness-indirections",
+            "support-no-paid-provider",
+            "support-nx-inputs",
+            "support-nx-workspace",
+            "support-onejudge-bundle",
+            "support-onevcs-state-snapshot",
+            "support-plan-fixture-source",
+            "support-plan-root-variable",
+            "support-plan-sources",
+            "support-project-fixtures",
+            "support-published-tools",
+            "support-registered-checkouts",
+            "support-run-snapshot",
+            "support-scratch-identity",
+            "support-short-state",
+            "support-sibling-facts",
+            "support-test-linked-libraries",
+            "support-waits"
+          ]
+        }
+      ]
+    },
+    "test-checkouts": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/e2e/publish_and_landing -m reads_checkouts --no-cov -n 4 --dist loadgroup",
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "publishAndLandingWorkspace",
+        {
+          "input": "testSupport",
+          "projects": [
+            "support-conftest",
+            "support-example-records",
+            "support-fake-backend",
+            "support-fake-codex",
+            "support-fake-gh",
+            "support-follow-up-variables",
+            "support-harness-configs",
+            "support-harness-indirections",
+            "support-no-paid-provider",
+            "support-nx-inputs",
+            "support-nx-workspace",
+            "support-onejudge-bundle",
+            "support-onevcs-state-snapshot",
+            "support-plan-fixture-source",
+            "support-plan-root-variable",
+            "support-plan-sources",
+            "support-project-fixtures",
+            "support-published-tools",
+            "support-registered-checkouts",
+            "support-run-snapshot",
+            "support-scratch-identity",
+            "support-short-state",
+            "support-sibling-facts",
+            "support-test-linked-libraries",
+            "support-waits"
+          ]
+        }
+      ]
+    }
+  }
+}

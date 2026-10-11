@@ -2,9 +2,9 @@
 
 Shared by the drift gate over this host's install (`tests/test_llmlint_release_pin.py`)
 and the journey that drives the installer against a throwaway tool directory
-(`tests/e2e/test_setup_llmlint_e2e.py`): both read the same thing — the installed
-distribution's own `Requires-Dist` — from a tool directory `uv` names, so a reading
-the gate takes on the host is the reading the journey proves the installer produces.
+(`tests/e2e/registry_and_recipes/test_setup_llmlint_e2e.py`): both read the same thing — the
+installed distribution's own `Requires-Dist` — from a tool directory `uv` names, so a
+reading the gate takes on the host is the reading the journey proves the installer produces.
 """
 
 from __future__ import annotations

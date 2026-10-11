@@ -11,7 +11,9 @@
       "{workspaceRoot}/tests/onejudge_bundle.py",
       "{workspaceRoot}/config/onejudge.version",
       "{workspaceRoot}/config/onemessagebus.yaml",
-      "{workspaceRoot}/tests/fixtures/planner-channel.json"
+      "{workspaceRoot}/tests/fixtures/planner-channel.json",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{projectRoot}/project.json"
     ]
   },
   "targets": {

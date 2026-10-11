@@ -292,7 +292,7 @@ and a browser in a check tier here would be a browser on every publication's mer
 which nothing on this host provisions. The
 runs behind all of it are checked-in fixtures and cannot grow a release event, so what
 fails the day a repository here declares a target is
-`tests/e2e/test_release_adoption_in_force_e2e.py`, which asks every registered
+`tests/e2e/publish_and_landing/test_release_adoption_in_force_e2e.py`, which asks every registered
 identity — and that is when this page comes due.
 
 ### Which release *writes* what it reads
@@ -346,7 +346,7 @@ the pre-adoption shape — a `schema_version: 3` record with `channel_id`, `goal
 `plan_name`, which the reader refuses with a `404 run_not_found` by id. **It reports
 none of that**: those 141, and the 69 roots holding no `launch.json` at all, are absent
 from the listing rather than named in it with a reason, so a run an operator cannot see
-is indistinguishable from one the reader lost. `tests/e2e/test_legacy_runs_root_e2e.py`
+is indistinguishable from one the reader lost. `tests/e2e/publish_and_landing/test_legacy_runs_root_e2e.py`
 is where that family's reader behaviour is held, and it holds the older shape — the one
 with no `launch.json` — rather than this one.
 

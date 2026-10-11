@@ -23,7 +23,7 @@
 # template guidance can hand it.
 #
 # What this file decides is what reaches each side, and
-# tests/e2e/test_design_doc_graph_e2e.py drives the whole of each half to the side it is
+# tests/e2e/launch_monitor_observer/test_design_doc_graph_e2e.py drives the whole of each half to the side it is
 # for; what a model then writes from it — the departures it lists included — is a model's
 # output, which no journey can hold deterministically.
 # llmlint: ignore-file[changed_behavior_has_e2e] see above

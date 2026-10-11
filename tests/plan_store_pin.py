@@ -7,10 +7,10 @@ through the `onetaskgraph-*` crates it links, and `tests/test_linked_libraries.p
 this pin to the one release those crates carry, so the two readers are one release.
 
 Declared here so the pin decides what the journeys in
-`tests/e2e/test_onetaskgraph_host_e2e.py` assert instead of a reader deciding it: at or
-past :data:`PACING_FLOOR` they assert the behaviour, below it the burst and the misreport
-that release ended. Neither answer is set anywhere, so a pin that moves in either
-direction moves both readers with it.
+`tests/e2e/launch_monitor_observer/test_onetaskgraph_host_e2e.py` assert instead of a reader
+deciding it: at or past :data:`PACING_FLOOR` they assert the behaviour, below it the burst
+and the misreport that release ended. Neither answer is set anywhere, so a pin that moves in
+either direction moves both readers with it.
 """
 
 from __future__ import annotations

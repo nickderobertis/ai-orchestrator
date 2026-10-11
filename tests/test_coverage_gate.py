@@ -36,7 +36,13 @@ import tomllib
 from pathlib import Path
 
 import pytest
-from nx_inputs import CODE_SCOPED, COVERAGE_SCOPED, E2E_ROOT
+from nx_inputs import (
+    CODE_SCOPED,
+    COVERAGE_SCOPED,
+    DRIFT_GATE_PROJECTS,
+    E2E_JOURNEYS,
+    PLAN_TOOLING_PROJECTS,
+)
 
 from orchestrator.root import REPO_ROOT
 
@@ -106,12 +112,31 @@ def targets() -> dict[str, dict]:
 @pytest.fixture(scope="module")
 def measuring() -> dict[str, dict]:
     """Every tier that measures into the data the floor is judged on, by `project:target`:
-    the unit and drift-gate tier, and the journeys' code tier."""
+    the unit and drift-gate tier, then each journey and subject project's tier that
+    measures, in the order of their names, which is the order the combine reads them in."""
+    tiers = [("orchestrator", CODE_SCOPED)] + sorted(
+        [
+            *((journey.root, CODE_SCOPED) for journey in E2E_JOURNEYS),
+            *(
+                (subject.root, subject.target)
+                for subject in (*PLAN_TOOLING_PROJECTS, *DRIFT_GATE_PROJECTS)
+            ),
+        ],
+        key=lambda tier: _project_name(tier[0]),
+    )
     found = {}
-    for root in ("orchestrator", E2E_ROOT):
+    for root, name in tiers:
         project = json.loads((REPO_ROOT / root / "project.json").read_text(encoding="utf-8"))
-        found[f"{project['name']}:{CODE_SCOPED}"] = project["targets"][CODE_SCOPED]
+        target = project["targets"][name]
+        if root == "orchestrator" or "--cov=orchestrator" in target["command"].split():
+            found[f"{project['name']}:{name}"] = target
+    assert len(found) > 1, f"no journey project measures beside orchestrator: {sorted(found)}"
     return found
+
+
+def _project_name(root: str) -> str:
+    """The name the `project.json` at ``root`` gives its Nx project."""
+    return str(json.loads((REPO_ROOT / root / "project.json").read_text(encoding="utf-8"))["name"])
 
 
 def _uncalled_for_band(floor: float) -> int:

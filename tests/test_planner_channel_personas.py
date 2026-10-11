@@ -37,11 +37,12 @@ reconciled below against the installed releases instead of restated, which is wh
 of this file runs in the uncached tier: a claim about an installed release belongs
 outside every cache key over this workspace.
 
-`tests/e2e/test_monitor_survives_the_channel_e2e.py` is the other half of the seam,
-reading the merged configuration out of a real launch — the only thing that proves the
-delta merge honours an unset key at all. This file is the cheap gate that stops one
-being declared in the first place, and it holds the two halves to the same keys and the
-same spellings, so a persona following the advice in one cannot be failed by the other.
+`tests/e2e/launch_monitor_observer/test_monitor_survives_the_channel_e2e.py` is the other
+half of the seam, reading the merged configuration out of a real launch — the only thing
+that proves the delta merge honours an unset key at all. This file is the cheap gate that
+stops one being declared in the first place, and it holds the two halves to the same keys
+and the same spellings, so a persona following the advice in one cannot be failed by the
+other.
 """
 
 from __future__ import annotations
@@ -100,7 +101,13 @@ ONEAGENTGRAPH = REPO_ROOT / ".venv" / "bin" / "oneagentgraph"
 #: The real-launch half of this seam, and how it names the keys it refuses to see in a
 #: merged config. Read out of that file rather than restated, because the point of the
 #: assertion below is that the two agree and a restatement would agree with itself.
-JOURNEY = REPO_ROOT / "tests" / "e2e" / "test_monitor_survives_the_channel_e2e.py"
+JOURNEY = (
+    REPO_ROOT
+    / "tests"
+    / "e2e"
+    / "launch_monitor_observer"
+    / "test_monitor_survives_the_channel_e2e.py"
+)
 JOURNEY_DECLINED = re.compile(r"^DECLINED = (?P<mapping>\{[^}]*\})", re.MULTILINE)
 
 

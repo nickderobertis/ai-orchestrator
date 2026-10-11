@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# llmlint: ignore-file[changed_behavior_has_e2e] tests/e2e/test_orchestrate_launch_e2e.py drives a real launch and its planner verbs through this wrapper; tests/e2e/test_delegated_recipes_e2e.py holds the command line each recipe renders through it.
+# llmlint: ignore-file[changed_behavior_has_e2e] tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py drives a real launch and its planner verbs through this wrapper; tests/e2e/registry_and_recipes/test_delegated_recipes_e2e.py holds the command line each recipe renders through it.
 # The one entry point every `onepipeline` recipe goes through, so a planner's
 # identity and a launch's environment are established in one place.
 #

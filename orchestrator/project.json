@@ -13,22 +13,16 @@
     "support-conftest",
     "support-credential-dialect",
     "support-criteria-examples",
-    "support-example-records",
-    "support-fake-backend",
     "support-fake-codex",
     "support-follow-up-ticket-shape",
     "support-follow-up-variables",
     "support-github-board",
-    "support-harness-configs",
-    "support-harness-indirections",
     "support-llmlint-install",
     "support-manager-invocations",
-    "support-mock-oneharness",
     "support-monitor-conversation",
     "support-no-paid-provider",
     "support-nx-inputs",
     "support-nx-workspace",
-    "support-observer-environment",
     "support-older-plan-store",
     "support-onejudge-bundle",
     "support-onevcs-stand-in",
@@ -40,7 +34,6 @@
     "support-plan-root-variable",
     "support-plan-sources",
     "support-plan-store-pin",
-    "support-planner-channel",
     "support-planner-fallback",
     "support-probe-run-root",
     "support-project-fixtures",
@@ -53,8 +46,7 @@
     "support-short-state",
     "support-sibling-facts",
     "support-test-dispatch-appendix",
-    "support-test-observer-judge-ops",
-    "support-test-short-state-budget",
+    "support-test-linked-libraries",
     "support-unpublished-registry",
     "support-waits",
     "support-watch-rule"
@@ -63,6 +55,7 @@
     "recipeWorkspace": [
       "{workspaceRoot}/nx.json",
       "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/uv.lock",
       "{workspaceRoot}/justfile",
       "{workspaceRoot}/.gitignore",
       "{workspaceRoot}/package.json",
@@ -82,7 +75,13 @@
     "unitWorkspace": [
       "codeWorkspace",
       "!{workspaceRoot}/tests/e2e/test_*.py",
-      "!{workspaceRoot}/tests/e2e/oneharness_resolved/**/*"
+      "!{workspaceRoot}/tests/e2e/budget_gate/test_*.py",
+      "!{workspaceRoot}/tests/e2e/launch_monitor_observer/test_*.py",
+      "!{workspaceRoot}/tests/e2e/publish_and_landing/test_*.py",
+      "!{workspaceRoot}/tests/e2e/registry_and_recipes/test_*.py",
+      "!{workspaceRoot}/tests/e2e/suite_helpers/test_*.py",
+      "!{workspaceRoot}/tests/e2e/workspace_copies/test_*.py",
+      "!{workspaceRoot}/tests/e2e/launch_monitor_observer/oneharness_resolved/**/*"
     ]
   },
   "targets": {
@@ -117,49 +116,40 @@
         {
           "input": "journeysTheUnitGatesRead",
           "projects": [
-            "orchestrator-e2e"
+            "budget-gate",
+            "launch-monitor-observer"
           ]
         }
       ]
     },
     "coverage": {
-      "//": "llmlint: ignore[expensive_tests_stay_behind_their_own_edge] These edges are what keeps the floor whole: the plan-tooling and drift-gate tests moved out of orchestrator:test-docs into projects of their own measure orchestrator/ into .coverage.<project name>, and this combine is the floor's one enforcement, so each file it names has to exist when it runs. Each edge is a cache replay whenever that project's own key is unchanged, so its suite re-runs on exactly the edits the affected selection would run it for anyway; a host with no cache entry pays it, as it pays the orchestrator-e2e edge beside it. Letting the combine skip a missing file instead would report a floor over lines nobody measured. JSON has no comment to scope this to the keys it is about.",
-      "command": "rm -f .coverage && env -u FORCE_COLOR NO_COLOR=1 uv run coverage combine --keep .coverage.parallel .coverage.e2e .coverage.plan-tooling-check-and-review .coverage.plan-tooling-follow-ups .coverage.plan-tooling-plan-flow .coverage.plan-tooling-plan-copy .coverage.dispatch-bar .coverage.family-scans .coverage.manager-guidance .coverage.plan-guidance .coverage.release-pins .coverage.tree-scans && env -u FORCE_COLOR NO_COLOR=1 uv run coverage report",
+      "command": "rm -f .coverage && env -u FORCE_COLOR NO_COLOR=1 uv run coverage combine --keep .coverage.parallel .coverage.budget-gate .coverage.dispatch-bar .coverage.e2e-root .coverage.family-scans .coverage.launch-monitor-observer .coverage.manager-guidance .coverage.plan-guidance .coverage.plan-tooling-check-and-review .coverage.plan-tooling-follow-ups .coverage.plan-tooling-plan-copy .coverage.plan-tooling-plan-flow .coverage.publish-and-landing .coverage.registry-and-recipes .coverage.release-pins .coverage.tree-scans .coverage.workspace-copies && env -u FORCE_COLOR NO_COLOR=1 uv run coverage report",
       "options": {
         "cwd": "."
       },
+      "//": "llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier, expensive_tests_stay_behind_their_own_edge] The floor is judged on every tier that measures orchestrator/, which tests/tree_scans/test_nx_cache_scope.py holds this list to, so it waits on each journey, plan-tooling and drift-gate project that measures into its own .coverage.<project name>: this combine is the floor's one enforcement, so each file it names has to exist when it runs. Each edge is a cache replay when that project's key is unchanged, and a run only when its key changed, which the diff selection already runs it for. That includes publish-and-landing:test and the session-reuse journey there that installs a released engine from PyPI. The same edge ran to the whole of orchestrator-e2e before the journeys were split, and moving the costly and external-service journeys out of the measuring tiers is a change of its own. Letting the combine skip a missing file instead would report a floor over lines nobody measured. JSON has no comment to scope this to the keys it is about.",
       "dependsOn": [
         "test",
-        {
-          "projects": [
-            "orchestrator-e2e"
-          ],
-          "target": "test"
-        },
-        {
-          "projects": [
-            "plan-tooling-check-and-review",
-            "plan-tooling-follow-ups",
-            "plan-tooling-plan-flow",
-            "plan-tooling-plan-copy",
-            "dispatch-bar",
-            "family-scans",
-            "manager-guidance",
-            "plan-guidance",
-            "release-pins"
-          ],
-          "target": "test"
-        },
-        {
-          "projects": [
-            "tree-scans"
-          ],
-          "target": "test-docs"
-        }
+        {"projects": ["budget-gate"], "target": "test"},
+        {"projects": ["dispatch-bar"], "target": "test"},
+        {"projects": ["e2e-root"], "target": "test"},
+        {"projects": ["family-scans"], "target": "test"},
+        {"projects": ["launch-monitor-observer"], "target": "test"},
+        {"projects": ["manager-guidance"], "target": "test"},
+        {"projects": ["plan-guidance"], "target": "test"},
+        {"projects": ["plan-tooling-check-and-review"], "target": "test"},
+        {"projects": ["plan-tooling-follow-ups"], "target": "test"},
+        {"projects": ["plan-tooling-plan-copy"], "target": "test"},
+        {"projects": ["plan-tooling-plan-flow"], "target": "test"},
+        {"projects": ["publish-and-landing"], "target": "test"},
+        {"projects": ["registry-and-recipes"], "target": "test"},
+        {"projects": ["release-pins"], "target": "test"},
+        {"projects": ["tree-scans"], "target": "test-docs"},
+        {"projects": ["workspace-copies"], "target": "test"}
       ]
     },
     "test-docs": {
-      "command": "rm -rf .telemetry/orchestrator/test-docs && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/orchestrator/test-docs NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/host_sweep --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/plan_store_assets --ignore=tests/render_diagram --ignore=tests/e2e/unpublished_view --ignore=tests/e2e/board_copy_approval --ignore=tests/e2e/toolchain_isolation --ignore=tests/unfinished --ignore=tests/graceful_cancel --ignore=tests/session_open_conflict --ignore=tests/manager_allowlist --ignore=tests/dispatch_bar --ignore=tests/family_scans --ignore=tests/manager_guidance --ignore=tests/plan_guidance --ignore=tests/release_pins --ignore=tests/tree_scans -m reads_docs --no-cov -n 4 --dist loadgroup",
+      "command": "rm -rf .telemetry/orchestrator/test-docs && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/orchestrator/test-docs NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/host_sweep --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/plan_store_assets --ignore=tests/render_diagram --ignore=tests/e2e --ignore=tests/unfinished --ignore=tests/graceful_cancel --ignore=tests/session_open_conflict --ignore=tests/manager_allowlist --ignore=tests/dispatch_bar --ignore=tests/family_scans --ignore=tests/manager_guidance --ignore=tests/plan_guidance --ignore=tests/release_pins --ignore=tests/tree_scans -m reads_docs --no-cov -n 4 --dist loadgroup",
       "options": {
         "cwd": "."
       },
@@ -171,12 +161,13 @@
       ]
     },
     "test-recipes": {
-      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/host_sweep --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/plan_store_assets --ignore=tests/render_diagram --ignore=tests/e2e --ignore=tests/unfinished --ignore=tests/graceful_cancel --ignore=tests/session_open_conflict --ignore=tests/manager_allowlist --ignore=tests/dispatch_bar --ignore=tests/family_scans --ignore=tests/manager_guidance --ignore=tests/plan_guidance --ignore=tests/release_pins --ignore=tests/tree_scans -m reads_recipes --no-cov -n 4 --dist loadgroup",
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/test_launcher_session.py -m reads_recipes --no-cov -n 4 --dist loadgroup",
       "options": {
         "cwd": "."
       },
       "inputs": [
         "recipeWorkspace",
+        "{projectRoot}/project.json",
         {
           "input": "testSupport",
           "projects": [
@@ -199,7 +190,10 @@
       "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/host_sweep --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/plan_store_assets --ignore=tests/render_diagram --ignore=tests/e2e --ignore=tests/unfinished --ignore=tests/graceful_cancel --ignore=tests/session_open_conflict --ignore=tests/manager_allowlist --ignore=tests/dispatch_bar --ignore=tests/family_scans --ignore=tests/manager_guidance --ignore=tests/plan_guidance --ignore=tests/release_pins --ignore=tests/tree_scans -m reads_checkouts --no-cov -n 4 --dist loadgroup",
       "options": {
         "cwd": "."
-      }
+      },
+      "inputs": [
+        "wholeWorkspace"
+      ]
     },
     "typecheck": {
       "command": "uv run mypy",
@@ -232,12 +226,12 @@
       }
     },
     "budgets": {
-      "//": "llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The edge below is forced by the approved home of the board and lost-turn budgets, orchestrator/budgets.yaml, whose telemetry the orchestrator-e2e journeys record. It pulls that whole journeys tier into every check selecting this project: a cache replay when its key is unchanged, about thirteen minutes on a host with no cache entry for it. A drafted follow-up moves the measuring journeys into a test project of their own that this target depends on instead, and deletes this directive. The dispatch-bar edge beside it is already that shape: the plan-review drift gates recording the plan-level prompt budgets are a project of their own, a few seconds of tests behind their own key.",
-      "dependsOn": ["test-docs", {"projects": ["orchestrator-e2e"], "target": "test"}, {"projects": ["dispatch-bar"], "target": "test"}],
+      "//": "llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The launch-monitor-observer edge below is forced by the approved home of the board and lost-turn budgets, orchestrator/budgets.yaml, whose telemetry the launch-monitor-observer journeys record. It pulls that journey project into every check selecting this project: a cache replay when its key is unchanged, a full run of its launch journeys on a host with no cache entry for it. The measuring journeys import that project's launch journey, so they cannot move into a project of their own without the code they share. The dispatch-bar edge beside it is already that shape: the plan-review drift gates recording the plan-level prompt budgets are a project of their own, a few seconds of tests behind their own key.",
+      "dependsOn": ["test-docs", {"projects": ["launch-monitor-observer"], "target": "test"}, {"projects": ["dispatch-bar"], "target": "test"}],
       "options": {
         "cwd": ".",
         "env": {
-          "BUDGET_TELEMETRY_SOURCES": ".telemetry/orchestrator-e2e/test .telemetry/orchestrator/test-docs .telemetry/dispatch-bar/test"
+          "BUDGET_TELEMETRY_SOURCES": ".telemetry/launch-monitor-observer/test .telemetry/orchestrator/test-docs .telemetry/dispatch-bar/test"
         }
       },
       "inputs": [

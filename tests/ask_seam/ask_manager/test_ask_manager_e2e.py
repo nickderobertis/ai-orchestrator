@@ -14,11 +14,12 @@ ruling `just channel-reply --correlation` sends is the answer the adapter prints
 nothing else is; an unanswered question ends in the bus's named `timeout`; and a process
 that was never given a run is refused before anything is asked. That the adapter passes
 its argv, stdin, answer and status through untouched is held by
-`tests/e2e/test_ask_manager_shim_e2e.py`.
+`tests/e2e/registry_and_recipes/test_ask_manager_shim_e2e.py`.
 
 Only the paid model is doubled, at the `oneharness` seam, exactly as
-`tests/e2e/test_orchestrate_launch_e2e.py` doubles it — and the runs the question journeys
-launch reach it only in principle: their frontier is a human gate, so nothing is dispatched.
+`tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` doubles it — and the runs
+the question journeys launch reach it only in principle: their frontier is a human gate, so
+nothing is dispatched.
 """
 
 from __future__ import annotations
@@ -833,8 +834,9 @@ def test_an_observer_member_cannot_tell_its_run_from_an_enclosing_one_by_that_va
     Worth pinning because the obvious reading of the fact above is the wrong one. The driver
     exports `ONEPIPELINE_RUN_ID` and the observer graph inherits it — which is also what
     `graphs/dag-scope.yaml`'s monitor judge side composes its `onemessagebus serve
-    --transport-dir` from, and what `tests/e2e/test_orchestrate_launch_e2e.py` measures on
-    that judge side.
+    --transport-dir` from, and what
+    `tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` measures on that
+    judge side.
 
     What that costs is precision, not correctness: reading the variable tells a process
     which run it is *under*, never whether it is the dispatch of a node. So the shim may

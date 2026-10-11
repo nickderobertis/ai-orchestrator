@@ -8,7 +8,8 @@
   "implicitDependencies": [],
   "namedInputs": {
     "testSupport": [
-      "{workspaceRoot}/tests/e2e/timeout_harness.py"
+      "{workspaceRoot}/tests/e2e/timeout_harness.py",
+      "{projectRoot}/project.json"
     ]
   },
   "targets": {

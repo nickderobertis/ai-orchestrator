@@ -2,8 +2,8 @@
 
 The monitor's judge side — `onemessagebus serve --codec monitor`, as `graphs/dag-scope.yaml`
 declares it — reads a lost turn off the `turn` object onejudge reports, and
-`tests/e2e/test_lost_turn_wire_contract_e2e.py` proves the producer this host installs still
-reaches it that way. Arranging the loss lives here.
+`tests/e2e/launch_monitor_observer/test_lost_turn_wire_contract_e2e.py` proves the producer
+this host installs still reaches it that way. Arranging the loss lives here.
 
 Nothing about the producer is stood in for. A real `oneharness` runs the real `codex`
 binary, and the only thing arranged is that the model endpoint refuses every turn it is

@@ -7,9 +7,10 @@ over every severity, frequency and count; the occurrence count recounted off a b
 comments at every computation; the lockstep rule `board-status` applies before every copy,
 with each person's change made through the store's own `task priority set`; the narrow
 `re-estimate` a run makes on another run's item; and what `validate`, `check-dispositions`
-and `check-responses` refuse. `tests/e2e/test_onetaskgraph_host_e2e.py` takes the same
-writes to a GitHub Projects board's `Priority` field, and the follow-ups recipe journeys
-under `tests/plan_tooling/` take them through a dispatched run.
+and `check-responses` refuse.
+`tests/e2e/launch_monitor_observer/test_onetaskgraph_host_e2e.py` takes the same writes to a
+GitHub Projects board's `Priority` field, and the follow-ups recipe journeys under
+`tests/plan_tooling/` take them through a dispatched run.
 
 llmlint: ignore-file[test_tiers_split_by_project_not_by_marker] The module under test decides
 through the installed plan store, which it reaches through the typed SDK its own package

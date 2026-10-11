@@ -583,11 +583,11 @@ STEPS = "onepipeline.steps"
 #: a `consumes` is one its publication can ever satisfy; a record granted while any of
 #: them read differently is a pass over a node that now adopts something else. Spelled
 #: here the way :data:`PERSONA` is, as the engine's `onepipeline.<field>` metadata keys,
-#: and held to the engine rather than trusted: `tests/e2e/test_release_adoption_in_force_e2e.py`
-#: drives the installed loader refusing a bad `adoption` and a mis-keyed `consumes`
-#: written under exactly these keys,
-#: `tests/plan_tooling/check_and_review/test_check_plan_recipe_e2e.py` drives it reading a
-#: node's stated `merge_policy`, and the store-versus-loaded journey in
+#: and held to the engine rather than trusted:
+#: `tests/e2e/publish_and_landing/test_release_adoption_in_force_e2e.py` drives the
+#: installed loader refusing a bad `adoption` and a mis-keyed `consumes` written under
+#: exactly these keys, `tests/plan_tooling/check_and_review/test_check_plan_recipe_e2e.py`
+#: drives it reading a node's stated `merge_policy`, and the store-versus-loaded journey in
 #: `tests/plan_tooling/check_and_review/test_plan_review_e2e.py` holds the record written
 #: from the store's spelling to the document the loader hands the check.
 ADOPTION = "onepipeline.adoption"

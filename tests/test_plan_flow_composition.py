@@ -7,12 +7,12 @@ check, launch the document, copy, report — because two copies drift, and the d
 invisible from either side until an operator gets a different answer depending on which
 command they typed.
 
-`tests/e2e/test_delegated_recipes_e2e.py` proves the positive half by driving both entry
-points and reading the command lines each reaches, in order. What that cannot see is a
-*second* implementation appearing beside the first: a `just plan` that reached the right
-verbs by running them itself would satisfy every one of those rows. So this reads the
-launcher's own source for the verbs it must not name, which is the half a behavioural
-journey is structurally unable to answer.
+`tests/e2e/registry_and_recipes/test_delegated_recipes_e2e.py` proves the positive half by
+driving both entry points and reading the command lines each reaches, in order. What that
+cannot see is a *second* implementation appearing beside the first: a `just plan` that
+reached the right verbs by running them itself would satisfy every one of those rows. So
+this reads the launcher's own source for the verbs it must not name, which is the half a
+behavioural journey is structurally unable to answer.
 
 It is deterministic and reads shell rather than prose, so it stays in the code tier: what
 it holds is which file implements a step, and every one of those files is a tracked script

@@ -10,7 +10,8 @@
   ],
   "namedInputs": {
     "testSupport": [
-      "{workspaceRoot}/tests/e2e/mock_oneharness.py"
+      "{workspaceRoot}/tests/e2e/mock_oneharness.py",
+      "{projectRoot}/project.json"
     ]
   },
   "targets": {

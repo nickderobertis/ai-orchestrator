@@ -18,7 +18,7 @@ Nothing here is wrong about them; they simply never arrive, and a journey that
 assumed otherwise would spend real provider quota rather than fail. The seam that
 still covers those members is one layer lower, at the provider binary:
 `ONEHARNESS_BIN_CODEX` pointed at `fake_codex.py`, which
-`tests/e2e/test_orchestrate_launch_e2e.py` sets for exactly this reason. The
+`tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` sets for exactly this reason. The
 classification below keeps its single-sided branch because a graph run through an
 *older* pinned oneagentgraph still lands one here.
 
@@ -58,7 +58,7 @@ continuously to settlement now — there is no verb that advances a run, and
 advances, or ends one. So the branch that drove is gone rather than kept as a
 no-op: left in place it would have gone on claiming that a launch needs a
 driver, and the round verbs it called are not in the adopted CLI's surface at all —
-`tests/e2e/test_orchestrate_launch_e2e.py` reads that surface and holds it.
+`tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` reads that surface and holds it.
 """
 
 # llmlint: ignore-file[boundary_inputs_validated] this deterministic test backend
@@ -705,7 +705,7 @@ def _answer(
     # <prompt>`) with only the executable substituted, so config resolution,
     # identity selection, the fallback chain, the history record and the report are
     # the real ones. It is the seam `tests/e2e/mock_oneharness.py` and
-    # `tests/e2e/test_quota_fallthrough_e2e.py` already fake at.
+    # `tests/e2e/launch_monitor_observer/test_quota_fallthrough_e2e.py` already fake at.
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     completed = subprocess.run(
         [real, argv[0], "--harness", MOCK_HARNESS, "--mock-harness", MOCK_HARNESS, *argv[1:]],

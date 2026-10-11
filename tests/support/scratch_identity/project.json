@@ -11,7 +11,11 @@
   ],
   "namedInputs": {
     "testSupport": [
-      "{workspaceRoot}/tests/e2e/scratch_identity.py"
+      "{workspaceRoot}/tests/e2e/scratch_identity.py",
+      "{workspaceRoot}/orchestrator/plan_units.py",
+      "{workspaceRoot}/orchestrator/project_store.py",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{projectRoot}/project.json"
     ]
   },
   "targets": {

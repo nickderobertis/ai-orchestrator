@@ -1,0 +1,48 @@
+{
+  "name": "suite-helpers",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/e2e/suite_helpers",
+  "tags": [
+    "scope:suite-helpers",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-follow-up-variables",
+    "support-nx-inputs",
+    "support-onejudge-bundle",
+    "support-onevcs-state-snapshot",
+    "support-plan-fixture-source",
+    "support-plan-root-variable",
+    "support-plan-sources",
+    "support-registered-checkouts",
+    "support-run-snapshot",
+    "support-short-state",
+    "support-waits"
+  ],
+  "namedInputs": {
+    "suiteHelpersWorkspace": [
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/uv.lock",
+      "{projectRoot}/**/*"
+    ]
+  },
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/e2e/suite_helpers -n 4 --dist loadgroup --no-cov",
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "suiteHelpersWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ]
+    }
+  }
+}

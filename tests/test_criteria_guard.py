@@ -75,9 +75,9 @@ from orchestrator.root import REPO_ROOT
 NO_BUDGETS = no_budgets([])
 
 #: The five names `oneagentgraph` compiles in, which `personas/README.md` and
-#: `tests/e2e/test_shipped_persona_catalog_e2e.py` both state. Named here as the
-#: input to the resolution under test rather than as the claim: what these journeys
-#: assert is that each one resolves to a bar with content, and a name that stops
+#: `tests/e2e/launch_monitor_observer/test_shipped_persona_catalog_e2e.py` both state. Named
+#: here as the input to the resolution under test rather than as the claim: what these
+#: journeys assert is that each one resolves to a bar with content, and a name that stops
 #: being shipped fails by resolving to a path instead.
 SHIPPED_ROLES = ("docs-writer", "engineer", "planner", "researcher", "reviewer")
 

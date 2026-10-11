@@ -10,7 +10,9 @@
     "testSupport": [
       "{workspaceRoot}/tests/llmlint_install.py",
       "{workspaceRoot}/config/oneharness.version",
-      "{workspaceRoot}/scripts/setup-llmlint.sh"
+      "{workspaceRoot}/scripts/setup-llmlint.sh",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{projectRoot}/project.json"
     ]
   },
   "targets": {

@@ -1,4 +1,4 @@
-# llmlint: ignore-file[changed_behavior_has_e2e] The `check-in` member's `task` is prose given to a paid model, and whether a model then refrains from a verb it was told not to send cannot be driven by a deterministic double. What is provable is driven: tests/e2e/test_orchestrate_launch_e2e.py launches a run whose pacemaker comes due mid-flight and asserts the prohibition reached the prompt it was actually given.
+# llmlint: ignore-file[changed_behavior_has_e2e] The `check-in` member's `task` is prose given to a paid model, and whether a model then refrains from a verb it was told not to send cannot be driven by a deterministic double. What is provable is driven: tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py launches a run whose pacemaker comes due mid-flight and asserts the prohibition reached the prompt it was actually given.
 # The dag-scope agent graph `just orchestrate` attaches to every run it launches.
 #
 # `onepipeline start --dag-graph <REF>` names it and hands it to `oneagentgraph
@@ -24,7 +24,7 @@
 # 8, and a `schedule` on a two-party member requires 9. None of it is remembered:
 # `tests/e2e/`'s launch suite runs a member at the version declared below on every
 # gate run and fails if `{task}` reached it literally,
-# tests/e2e/test_observer_graph_liveness_e2e.py reads the paced fields back off a real
+# tests/e2e/launch_monitor_observer/test_observer_graph_liveness_e2e.py reads the paced fields back off a real
 # launch, and the range is re-read off the pinned binary at each adoption, which
 # refuses 0 and 10 by naming it. oneagentgraph 0.5.6 reads 1 through 9.
 version: 9
@@ -56,7 +56,7 @@ members:
     #
     # The channel directory is the run's own, and an argv cannot name a run it is not
     # told: the engine exports `ONEPIPELINE_RUNS_DIR` and `ONEPIPELINE_RUN_ID` to both
-    # sides of an observer member (tests/e2e/test_orchestrate_launch_e2e.py measures
+    # sides of an observer member (tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py measures
     # it), so the command composes the directory from those and nothing else.
     #
     # This is the one ref in this file NOT resolved against this file's directory:
@@ -95,7 +95,7 @@ members:
     # run settles once only background members survive — so without this the graph
     # would take its initial wave and settle, and the pacemaker below would have
     # nothing to fire inside. Liveness is a property this document declares;
-    # tests/e2e/test_observer_graph_liveness_e2e.py reads it back off a real launch.
+    # tests/e2e/launch_monitor_observer/test_observer_graph_liveness_e2e.py reads it back off a real launch.
     background: false
   # The durable planner-update pacemaker: a single-sided member that comes due on a
   # schedule, reports the run's progress from durable evidence, and exits. It is what
@@ -118,8 +118,8 @@ members:
   # this member is held to — the heredoc the update travels in, the bound an
   # elapsed time is compared against before anything is called a hang, and the command
   # and output a liveness verdict is shown from — is stated
-  # here and not only there. `tests/e2e/test_path_dispatched_personas_e2e.py` holds
-  # the label-only arrangement and `tests/e2e/test_supervisory_prompt_discipline_e2e.py`
+  # here and not only there. `tests/e2e/launch_monitor_observer/test_path_dispatched_personas_e2e.py` holds
+  # the label-only arrangement and `tests/e2e/launch_monitor_observer/test_supervisory_prompt_discipline_e2e.py`
   # reads this task out of a real launch.
   #
   # The environment names the run too. `onepipeline` exports `ONEPIPELINE_RUN_ID`,
@@ -129,9 +129,9 @@ members:
   # each one's whole environment on a real launch. `{task}` is still what this member
   # is written against: it is this graph's own contract rather than a per-release
   # export, and it carries the run's goal as well as its id.
-  # `tests/e2e/test_orchestrate_launch_e2e.py` re-takes that measurement on the judge
+  # `tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` re-takes that measurement on the judge
   # side of a real observer member every gate run, and
-  # `tests/e2e/test_monitor_cursor_e2e.py` on this member's agent side, so a release
+  # `tests/e2e/launch_monitor_observer/test_monitor_cursor_e2e.py` on this member's agent side, so a release
   # that moved the export fails there rather than here.
   #
   # Its task scopes it to reporting and away from editing, which is load-bearing
@@ -144,7 +144,7 @@ members:
   # read, the drafts listing, one surface, exit — and forbids command discovery,
   # host-wide run listings and recursive searches by name, because that deadline is
   # finite and two recorded turns spent all of it on exactly those, raising nothing.
-  # `tests/e2e/test_supervisory_prompt_discipline_e2e.py` reads the sequence off a
+  # `tests/e2e/launch_monitor_observer/test_supervisory_prompt_discipline_e2e.py` reads the sequence off a
   # real turn's prompt and `tests/test_pacemaker_discipline.py` reconciles it against
   # the persona's copy.
   #

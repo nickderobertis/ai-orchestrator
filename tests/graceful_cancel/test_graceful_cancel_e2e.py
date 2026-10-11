@@ -2,9 +2,9 @@
 
 A planner `cancel` interrupts the dispatch's running turn and, if the dispatch has not
 exited when the engine's grace deadline passes, kills it and raises `dispatch-killed`.
-`tests/e2e/test_orchestrate_launch_e2e.py` holds that arm under a five-second grace. This
-module holds the other: a dispatch that ends before the deadline, which a supervisor must
-not be told lost its uncommitted work.
+`tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` holds that arm under a
+five-second grace. This module holds the other: a dispatch that ends before the deadline,
+which a supervisor must not be told lost its uncommitted work.
 
 Everything between the recipe and the model is real: `just orchestrate`, `just
 channel-reply`, `just monitor`, the installed `onepipeline` driver and the

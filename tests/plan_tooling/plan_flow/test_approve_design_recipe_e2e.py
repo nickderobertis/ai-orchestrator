@@ -986,11 +986,11 @@ def test_a_planning_project_launches_with_no_design_document_at_all(
     somebody else's journey.** What this isolates is the gate's own reading — that a
     project stating it, and nothing else about it, launches without a document — against a
     project held identical to the one refused above. That a *planning launch* reaches that
-    state is `tests/e2e/test_plan_recipe_e2e.py`'s, which reads the marker off the project
-    a real `just plan` wrote and whose launch reaching a dispatch at all is the gate
-    letting it through. Driving `just plan` here would re-prove that at the cost of a whole
-    planning run, and it would stop this being a comparison between two projects that
-    differ by one field.
+    state is `tests/e2e/launch_monitor_observer/test_plan_recipe_e2e.py`'s, which reads the
+    marker off the project a real `just plan` wrote and whose launch reaching a dispatch at
+    all is the gate letting it through. Driving `just plan` here would re-prove that at the
+    cost of a whole planning run, and it would stop this being a comparison between two
+    projects that differ by one field.
 
     **The exemption is said rather than passed over**, which is the second claim here: a
     launch that dispatched because nobody had to approve anything reads differently from

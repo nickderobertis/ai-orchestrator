@@ -188,7 +188,7 @@ model the harness itself reported a controlled turn would run under — or class
 `model_mismatch` declares history schema **1.8**
 (https://github.com/nickderobertis/oneharness/pull/1284), and the `usage` block is
 untouched between the two tags. That one was re-taken without a paid turn, because the
-turn that shows the field is the one `tests/e2e/test_controlled_turn_model_e2e.py`
+turn that shows the field is the one `tests/e2e/launch_monitor_observer/test_controlled_turn_model_e2e.py`
 drives offline: a controlled codex turn against the refusing loopback endpoint, whose
 result carries `observed_model` beside the same five-key `usage` block. The oneharness
 half of the bump before this one, 0.12.1 to 0.14.0, was re-taken without a paid turn, off
@@ -347,7 +347,7 @@ which a budget is read against these:
 
 `onepipeline`'s own `docs/contract.md` is the field-by-field statement, an older run's
 reading among it. `tests/test_engine_contracts.py` holds the field list and the segment
-table to the engine; `tests/e2e/test_budget_capabilities_adopted_e2e.py` reads the
+table to the engine; `tests/e2e/launch_monitor_observer/test_budget_capabilities_adopted_e2e.py` reads the
 document over a run whose `pre-push` gate it timed.
 
 ## Finding an optimization target
@@ -542,7 +542,7 @@ served them.
    opens a node and finds no release row is looking at an undeclared target, not an
    unadopted release. `tests/dag_ui/test_dag_ui_serving_e2e.py` holds the rendering half —
    a browser opened on a real recorded run draws no release row from data that has
-   none — and `tests/e2e/test_release_adoption_in_force_e2e.py` holds the half about
+   none — and `tests/e2e/publish_and_landing/test_release_adoption_in_force_e2e.py` holds the half about
    this host, by asking every registered identity whether it declares a target.
    **0.6.5 — an earlier release, and one of the two whose whole delta is on the other
    route — leaves the timeline route alone and repairs the conversation route**, and the two halves of that were

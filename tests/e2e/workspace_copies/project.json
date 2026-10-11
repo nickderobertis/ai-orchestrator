@@ -1,0 +1,97 @@
+{
+  "//": "llmlint: ignore-file[external_service_suite_stays_out_of_the_affected_tier, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker] These are the journeys that copy this checkout, split out of orchestrator-e2e, whose file carried the same three suppressions for the same journeys. Their copy reads every tracked file, so each one that copies is marked reads_docs and runs in this project's test-docs target keyed on the whole workspace, while its module's other tests stay in test, keyed on what they read: a module holds both kinds, so the marker routes between this one project's two keys rather than out of it, which is the split the task that created this project prescribes. The recipe journey that resolves packages from Bun's registry (test_upgrade_recipe_runs_bun_and_reports_one_success_line) and the fresh-worktree provisioning journeys ran in the affected gate before this split as well; moving them, and the installed-tool journeys, into projects of their own outside the affected tier is a change of its own. JSON has no comment to scope this to the targets it is about.",
+  "name": "workspace-copies",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/e2e/workspace_copies",
+  "tags": [
+    "scope:workspace-copies",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-follow-up-variables",
+    "support-nx-inputs",
+    "support-nx-workspace",
+    "support-onejudge-bundle",
+    "support-onevcs-state-snapshot",
+    "support-plan-fixture-source",
+    "support-plan-root-variable",
+    "support-plan-sources",
+    "support-registered-checkouts",
+    "support-short-state",
+    "support-waits"
+  ],
+  "namedInputs": {
+    "workspaceCopiesWorkspace": [
+      "{workspaceRoot}/.githooks/pre-push",
+      "{workspaceRoot}/.gitignore",
+      "{workspaceRoot}/.puppeteerrc.json",
+      "{workspaceRoot}/bun.lock",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/llmlint.yml",
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/orchestrator/**/*",
+      "{workspaceRoot}/package.json",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/scripts/base-freshness.sh",
+      "{workspaceRoot}/scripts/check-nx-cache.sh",
+      "{workspaceRoot}/scripts/comparison-base.sh",
+      "{workspaceRoot}/scripts/coverage-total.sh",
+      "{workspaceRoot}/scripts/install-lock.sh",
+      "{workspaceRoot}/scripts/nx-selection.sh",
+      "{workspaceRoot}/scripts/nx.sh",
+      "{workspaceRoot}/scripts/preserved-log.sh",
+      "{workspaceRoot}/scripts/python-install.sh",
+      "{workspaceRoot}/scripts/session-setup.sh",
+      "{workspaceRoot}/scripts/workspace-install.sh",
+      "{workspaceRoot}/tests/fixtures/nx-cache/**/*",
+      "{workspaceRoot}/tests/dispatch_bar/project.json",
+      "{workspaceRoot}/tests/e2e/budget_gate/project.json",
+      "{workspaceRoot}/tests/e2e/launch_monitor_observer/project.json",
+      "{workspaceRoot}/tests/e2e/project.json",
+      "{workspaceRoot}/tests/e2e/publish_and_landing/project.json",
+      "{workspaceRoot}/tests/e2e/registry_and_recipes/project.json",
+      "{workspaceRoot}/tests/e2e/suite_helpers/project.json",
+      "{workspaceRoot}/tests/family_scans/project.json",
+      "{workspaceRoot}/tests/manager_guidance/project.json",
+      "{workspaceRoot}/tests/plan_guidance/project.json",
+      "{workspaceRoot}/tests/plan_tooling/check_and_review/project.json",
+      "{workspaceRoot}/tests/plan_tooling/follow_ups/project.json",
+      "{workspaceRoot}/tests/plan_tooling/plan_copy/project.json",
+      "{workspaceRoot}/tests/plan_tooling/plan_flow/project.json",
+      "{workspaceRoot}/tests/release_pins/project.json",
+      "{workspaceRoot}/tests/tree_scans/project.json",
+      "{workspaceRoot}/uv.lock",
+      "!{workspaceRoot}/orchestrator/**/*.md",
+      "{projectRoot}/**/*"
+    ]
+  },
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 COVERAGE_FILE=.coverage.workspace-copies uv run pytest tests/e2e/workspace_copies -m 'not reads_docs' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0",
+      "options": {
+        "cwd": "."
+      },
+      "outputs": [
+        "{workspaceRoot}/.coverage.workspace-copies"
+      ],
+      "inputs": [
+        "workspaceCopiesWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ]
+    },
+    "test-docs": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/e2e/workspace_copies -m reads_docs --no-cov -n 4 --dist loadgroup",
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "wholeWorkspace"
+      ]
+    }
+  }
+}

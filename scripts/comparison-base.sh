@@ -19,7 +19,7 @@ set -euo pipefail
 # project. A base that was *named* and is not usable is not that state: nothing narrows,
 # and checking everything in silence would leave a misconfigured comparison identity
 # looking like a fresh copy while the gate it is exported for refuses the same value.
-# `tests/e2e/test_workspace_contract_e2e.py` and `tests/e2e/test_gate_selection_e2e.py`
+# `tests/e2e/workspace_copies/test_workspace_contract_e2e.py` and `tests/e2e/workspace_copies/test_gate_selection_e2e.py`
 # reconcile both against the callers that branch on them. Neither is named after the
 # comparison identity they are about: `tests/test_dispatch_environment_contract.py`
 # discovers a third *published* spelling of that identity by scanning this file for

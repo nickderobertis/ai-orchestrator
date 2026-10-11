@@ -15,7 +15,9 @@
       "{workspaceRoot}/graphs/follow-up.yaml",
       "{workspaceRoot}/graphs/node-scope.yaml",
       "{workspaceRoot}/graphs/planner.yaml",
-      "{workspaceRoot}/graphs/pr-author.yaml"
+      "{workspaceRoot}/graphs/pr-author.yaml",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{projectRoot}/project.json"
     ]
   },
   "targets": {

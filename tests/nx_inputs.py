@@ -36,34 +36,21 @@ from orchestrator.root import REPO_ROOT
 
 #: The workspace minus its prose, which both code tiers narrow from.
 CODE_WORKSPACE = "codeWorkspace"
-#: The key `orchestrator:test` is memoized on: `codeWorkspace` without the journeys the
-#: `orchestrator-e2e` project owns, so editing one of them replays the unit and drift-gate
-#: verdict. The journeys that tier's own gates read by path come back through
-#: `JOURNEYS_THE_UNIT_GATES_READ`, taken from that project rather than restated here.
+#: The key `orchestrator:test` is memoized on: `codeWorkspace` without the journey modules
+#: the projects in `E2E_JOURNEYS` own, so editing one of them replays the unit and
+#: drift-gate verdict. The journeys that tier's own gates read by path come back through
+#: `JOURNEYS_THE_UNIT_GATES_READ`, taken from the projects that own them rather than
+#: restated here.
 UNIT_WORKSPACE = "unitWorkspace"
-#: The named input of `orchestrator-e2e` listing the journey modules `orchestrator:test`'s
+#: The named input, declared by each journey project whose modules `orchestrator:test`'s
 #: drift gates open by path — the ones holding a value to the journey that exercises it —
-#: which that tier takes with `{"input": ..., "projects": "orchestrator-e2e"}`. Taken from
-#: the project that owns the files because Nx applies a target's own negations to every
-#: file its own inputs name, so the journeys excluded above could not be named back in
-#: beside them. No dependency edge carries it: `orchestrator` holds whole-workspace
-#: targets, so every change already selects it, and the key is what this input moves.
+#: listing those modules, which that tier takes with `{"input": ..., "projects": [...]}`.
+#: Taken from the projects that own the files because Nx applies a target's own negations
+#: to every file its own inputs name, so the journeys excluded above could not be named
+#: back in beside them. No dependency edge carries it: `orchestrator` holds
+#: whole-workspace targets, so every change already selects it, and the key is what this
+#: input moves.
 JOURNEYS_THE_UNIT_GATES_READ = "journeysTheUnitGatesRead"
-#: The key `orchestrator-e2e:test` is memoized on: every tracked path outside `tests/` but
-#: prose, the fixtures under `tests/fixtures/`, and the journeys' own modules and data.
-#: Written as what to keep rather than as `codeWorkspace` less what to drop, because Nx
-#: selects a project by the positive `{workspaceRoot}` filesets its targets declare and
-#: never subtracts an exclusion: a key starting from the whole tree would select the
-#: journeys for every edit to a unit test, which is the cost this project exists to keep
-#: off them. `tests/tree_scans/test_nx_cache_scope.py` fails when a tracked path outside
-#: `tests/` that is not prose falls out of it, so a directory added at the root is added
-#: here. The shared helpers, and the four unit and drift-gate modules a journey imports,
-#: reach it as test-support units — through an edge, because that is what selects the
-#: journeys when one of them changes.
-E2E_WORKSPACE = "e2eWorkspace"
-#: The key `orchestrator-e2e:test-recipes` is memoized on: what its recipe journeys drive,
-#: as `recipeWorkspace` is the orchestrator project's.
-E2E_RECIPE_WORKSPACE = "e2eRecipeWorkspace"
 #: The orchestrator project's own named input `orchestrator:test-recipes` is keyed on:
 #: what the recipe journeys drive, plus the modules that define them. The helpers those
 #: modules import reach the key as the project's test-support dependencies.
@@ -76,9 +63,10 @@ RECIPE_WORKSPACE = "recipeWorkspace"
 #: last step that script runs — `just repos-bootstrap`, over the tracked checkout list —
 #: is in the key as its script, the list reader it sources and the list itself, because
 #: what the journey asserts about the siblings is decided by those three files. The one
-#: module of `orchestrator/` in it is `orchestrator/root.py`, which the journey imports
-#: `REPO_ROOT` from, directly and through `tests/conftest.py`: session setup runs no
-#: other orchestrator code, so no other edit there starts a real provisioning.
+#: module of `orchestrator/` it names is `orchestrator/root.py`, which the journey imports
+#: `REPO_ROOT` from: session setup runs no other orchestrator code. The modules
+#: `tests/conftest.py` imports reach the key through the `support-conftest` unit, as they
+#: reach every tier's, so an edit to any other module there starts no real provisioning.
 SESSION_SETUP_WORKSPACE = "sessionSetupWorkspace"
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This module is the domain
 # that owns tier names, one row per test project, as the block over the ask-seam
@@ -267,10 +255,9 @@ HOST_VIEWS_WORKSPACE = "hostViewsWorkspace"
 #: Named file by file rather than by directory, and deliberately not `config/**/*`,
 #: `scripts/**/*` or `orchestrator/**/*`: these journeys start a real server per test,
 #: so every glob wider than what they actually open makes an unrelated edit pay
-#: for that. `orchestrator/root.py` is deliberately *not* in it, though the
-#: module imports `REPO_ROOT` from there: it is a path helper nearly everything imports,
-#: so covering it would start those servers for edits that cannot change what these
-#: journeys observe, and `codeWorkspace` already reruns the rest of the suite over it.
+#: for that. No module of `orchestrator/` is named in it: the one the journeys import,
+#: `orchestrator/root.py`, reaches the key with every module `tests/conftest.py` imports
+#: through the `support-conftest` unit, because an import is part of every tier's verdict.
 #: Its own prose is excluded, as
 #: `codeWorkspace` excludes the workspace's: nothing here reads this project's
 #: `AGENTS.md`, so an instruction-only edit must not start them.
@@ -772,47 +759,82 @@ MANAGER_ALLOWLIST_ROOT = "tests/manager_allowlist"
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This module holds one row per
 # test project, as the block over the ask-seam journeys says: the read guard,
 # `tests/tree_scans/test_nx_cache_scope.py` and the real-Nx selection journeys resolve every
-# project's name, directory and key from here, so the journey project's rows sit beside its
-# siblings' rather than in `tests/e2e/`.
-#: The project whose three marker-routed targets own the journeys directly under
-#: `tests/e2e/` — every module there but the two subdirectories that are projects of their
-#: own — beside the orchestrator project's four over the unit and drift-gate modules. A
-#: project rather than the orchestrator project's tiers, because Nx keys and `nx affected`
-#: are per project: while the journeys shared `orchestrator:test` with the unit suite, every
-#: edit to a unit test re-ran about a hundred journeys and every journey edit re-ran the
-#: unit suite. The `reads_recipes` and `reads_checkouts` markers route a journey between
-#: this project's targets as they route a unit test between the orchestrator project's, so
-#: a tier keeps the same name across the two. `reads_docs` is the exception: a journey that
-#: reads prose or copies this checkout is keyed on the whole workspace, a target keyed on
-#: it makes its project selected by every diff, and `orchestrator:test-docs` already is —
-#: so that tier collects the journeys' prose readers too, and this project is never selected
-#: by an edit it cannot read. Like every test project here, it declares no Python
-#: distribution.
-E2E_PROJECT = "orchestrator-e2e"
-#: The directory it owns. The shared helpers that also live there are test-support units'
-#: and stay where pytest's `pythonpath` imports them from; this project's own files are its
-#: `test_*.py` modules and the data they read.
+# project's name, directory and key from here, so the journey projects' rows sit beside
+# their siblings' rather than in `tests/e2e/`.
+#: The directory the journeys over this repository's launches, landings, recipes, budgets
+#: and workspace live under. The shared helpers there are test-support units' and stay where
+#: pytest's `pythonpath` imports them from; every journey module is a directory-owned
+#: project's, one directory per family of journeys keyed on what that family reads, beside
+#: the three nested projects named above, and the root's own `e2e-root` project collects
+#: the few modules directly under it.
 E2E_ROOT = "tests/e2e"
-#: The data file `orchestrator-e2e:test` measures into, beside `orchestrator:test`'s, and
-#: declares as its output so a replayed verdict restores it for the floor.
-E2E_COVERAGE_DATA = ".coverage.e2e"
+#: The project at that root, which collects the journey modules directly under it.
+E2E_ROOT_PROJECT = "e2e-root"
+
+
+class JourneyProject(NamedTuple):
+    """One directory-owned journey project under `tests/e2e/`, as the guards name it."""
+
+    #: The Nx project, which is how `nx affected` charges a journey to what selects it.
+    project: str
+    #: The directory it owns: its modules, the data they read, and its `project.json`.
+    root: str
+    #: The named input its `project.json` declares, which its `test` target is memoized on
+    #: with the `testSupport` of every unit it depends on.
+    key: str
+
+
+#: One project per family of journeys, each keyed on what that family reads. These were
+#: one project, `orchestrator-e2e`, keyed on every tracked path outside `tests/` but prose,
+#: so almost any change re-ran all of them; the families and their reads come from the
+#: `spike-gate-profile` tier trace (`strace -f -e trace=openat,execve` over the old tiers,
+#: each read attributed to the test whose xdist worker made it and intersected with what
+#: git tracks), and each key is the union of its narrow tests' traced reads with the paths
+#: their modules name. Imports come from the project graph, as every key's do. A family is
+#: kept as a tree where a journey can name a path in it rather than only read a fixed one —
+#: `personas/` for the launch journeys whose subject is a persona, `scripts/` for the budget
+#: journeys, which copy it whole, and for the launch journeys, one of which reads every
+#: file a launch surface tracks — and `orchestrator/` is a tree in every key here but
+#: `suite-helpers`', because the scripts these journeys run invoke the package's modules,
+#: which Python reads as bytecode a trace of tracked files cannot see. A test marked
+#: `reads_checkouts` runs in its project's uncached `test-checkouts` target and a
+#: `reads_docs` one — a journey that copies this checkout — in its project's `test-docs`
+#: target keyed on the whole workspace, which only `workspace-copies` declares.
+E2E_JOURNEYS: tuple[JourneyProject, ...] = (
+    JourneyProject(
+        "publish-and-landing", f"{E2E_ROOT}/publish_and_landing", "publishAndLandingWorkspace"
+    ),
+    JourneyProject(
+        "launch-monitor-observer",
+        f"{E2E_ROOT}/launch_monitor_observer",
+        "launchMonitorObserverWorkspace",
+    ),
+    JourneyProject("budget-gate", f"{E2E_ROOT}/budget_gate", "budgetGateWorkspace"),
+    JourneyProject(
+        "registry-and-recipes", f"{E2E_ROOT}/registry_and_recipes", "registryAndRecipesWorkspace"
+    ),
+    JourneyProject("workspace-copies", f"{E2E_ROOT}/workspace_copies", "workspaceCopiesWorkspace"),
+    JourneyProject("suite-helpers", f"{E2E_ROOT}/suite_helpers", "suiteHelpersWorkspace"),
+    # The journey modules left directly under `tests/e2e/`, which the families above leave
+    # alone: today the registry installer's, kept at its path because the rules file
+    # `config/onevcs.rules.yml` names it there, and a change to that file is one a sibling's
+    # drift refuses. The nested projects own their own directories, so this one collects
+    # its modules by name and keys on them alone.
+    JourneyProject(E2E_ROOT_PROJECT, E2E_ROOT, "e2eRootWorkspace"),
+)
+#: The journey project whose journeys copy this checkout — and so read every file it tracks
+#: — which is why it is the one with a `test-docs` target keyed on the whole workspace.
+WORKSPACE_COPIES_PROJECT = "workspace-copies"
 #: The data file `orchestrator:test` measures into.
 UNIT_COVERAGE_DATA = ".coverage.parallel"
-#: The two projects whose targets a marker routes a test between, by root: a test module
-#: under `tests/e2e/` that no directory-owned project claims is the journey project's, and
-#: every other one outside those projects is the orchestrator project's — `reads_docs` aside,
-#: which sends a test under either root to `orchestrator:test-docs`.
-MARKER_TIER_ROOTS = ("orchestrator", E2E_ROOT)
+#: The one project whose targets a marker routes a unit or drift-gate test between: every
+#: test module outside a directory-owned project is the orchestrator project's.
+MARKER_TIER_ROOT = "orchestrator"
 
 
-def marker_tier_root(module: str) -> str:
-    """The root of the marker-routed project a test module belongs to.
-
-    Called only for a module no directory-owned project claims, which is every caller in
-    this suite: those are asked first, and the two nested projects under `tests/e2e/` are
-    among them.
-    """
-    return E2E_ROOT if module.startswith(f"{E2E_ROOT}/") else "orchestrator"
+def coverage_data(project: str) -> str:
+    """The data file a journey project's `test` target measures `orchestrator/` into."""
+    return f".coverage.{project}"
 
 
 # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
@@ -883,13 +905,35 @@ FROM_DEPENDENCIES = {"input": TEST_SUPPORT, "dependencies": True}
 SUPPORT_ROOT = "tests/support"
 
 
+def declaration_path(root: str) -> str:
+    """The repository-relative path of the `project.json` declaring the project at ``root``."""
+    return f"{root}/project.json" if root else "project.json"
+
+
+@functools.cache
+def project_declaration(root: str) -> dict:
+    """The declaration of the project at ``root``, read from its own `project.json` alone.
+
+    The one loader every reader of the graph goes through. The read guard asks it only for
+    the declarations its owning project's key resolution reaches — that project's own, and
+    each one an input of its key names — so a tier's key can declare exactly the
+    `project.json` files its tests open, which a listing of every project would defeat. A
+    root with no declaration answers an empty one, as a project Nx does not know.
+    """
+    declared = REPO_ROOT / declaration_path(root)
+    return json.loads(declared.read_text(encoding="utf-8")) if declared.is_file() else {}
+
+
 @functools.cache
 def project_declarations() -> dict[str, dict]:
     """Every project Nx reads here, keyed by the root its `project.json` sits at.
 
     Derived from what git would commit — tracked or not yet added — rather than listed,
     so a project added, moved, or dropped reaches every reader of the graph by existing.
-    The workspace root's own project is keyed by the empty string.
+    The workspace root's own project is keyed by the empty string. Only a reader whose key
+    covers every declaration may ask for this — the whole-workspace drift gates that hold
+    the static catalog to it; the read guard and the key resolution go through
+    :func:`project_declaration` and :func:`project_root` instead.
     """
     listing = subprocess.run(
         ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--"]
@@ -901,20 +945,85 @@ def project_declarations() -> dict[str, dict]:
     ).stdout
     declarations: dict[str, dict] = {}
     for relative in sorted(filter(None, listing.split("\0"))):
-        declared = REPO_ROOT / relative
-        if declared.is_file():
+        if (REPO_ROOT / relative).is_file():
             parent = str(Path(relative).parent)
-            declarations["" if parent == "." else parent] = json.loads(
-                declared.read_text(encoding="utf-8")
-            )
+            root = "" if parent == "." else parent
+            declarations[root] = project_declaration(root)
     return declarations
 
 
+#: The name of the project at the workspace root, which declares the workspace-wide targets.
+WORKSPACE_PROJECT = "workspace"
+#: The prefix every test-support unit's project name carries, ahead of its directory under
+#: :data:`SUPPORT_ROOT` spelled with hyphens.
+SUPPORT_PREFIX = "support-"
+
+
+# llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This module is the domain that
+# owns the test-project catalog, one row per project, as the blocks over those rows say; the
+# read guard resolves a project's root from here rather than by listing every declaration,
+# which is what keeps each tier's key to the declarations its tests open.
+def catalogued_roots() -> dict[str, str]:
+    """Every project the static catalog names, by its Nx name, other than the units.
+
+    The workspace root's project, the orchestrator project, and every directory-owned test
+    project whose row sits above. A unit's root follows from its name, so the units are not
+    rows. `tests/tree_scans/test_nx_cache_scope.py` holds this, with the
+    unit rule, to the projects git lists.
+    """
+    return {
+        # The workspace root's own project, which holds the workspace-wide targets.
+        WORKSPACE_PROJECT: "",
+        MARKER_TIER_ROOT: MARKER_TIER_ROOT,
+        BOARD_COPY_APPROVAL_PROJECT: BOARD_COPY_APPROVAL_ROOT,
+        DAG_UI_PROJECT: DAG_UI_ROOT,
+        GRACEFUL_CANCEL_PROJECT: GRACEFUL_CANCEL_ROOT,
+        HOST_SWEEP_PROJECT: HOST_SWEEP_ROOT,
+        HOST_VIEWS_PROJECT: HOST_VIEWS_ROOT,
+        MANAGER_ALLOWLIST_PROJECT: MANAGER_ALLOWLIST_ROOT,
+        MERGE_POLICY_PROJECT: MERGE_POLICY_ROOT,
+        PLAN_STORE_ASSETS_PROJECT: PLAN_STORE_ASSETS_ROOT,
+        PROJECT_STORE_RACE_PROJECT: PROJECT_STORE_RACE_ROOT,
+        RENDER_DIAGRAM_PROJECT: RENDER_DIAGRAM_ROOT,
+        RUN_END_HOOKS_PROJECT: RUN_END_HOOKS_ROOT,
+        SESSION_OPEN_CONFLICT_PROJECT: SESSION_OPEN_CONFLICT_ROOT,
+        SESSION_SETUP_PROJECT: SESSION_SETUP_ROOT,
+        SESSION_SETUP_PYPI_PROJECT: SESSION_SETUP_PYPI_ROOT,
+        TOOLCHAIN_ISOLATION_PROJECT: TOOLCHAIN_ISOLATION_ROOT,
+        UNFINISHED_PROJECT: UNFINISHED_ROOT,
+        UNPUBLISHED_VIEW_PROJECT: UNPUBLISHED_VIEW_ROOT,
+        UNWATCHED_PROJECT: UNWATCHED_ROOT,
+        WRITEBACK_BUDGET_PROJECT: WRITEBACK_BUDGET_ROOT,
+        **{
+            row.project: row.root
+            for row in (
+                *E2E_JOURNEYS,
+                *PLAN_TOOLING_PROJECTS,
+                *DRIFT_GATE_PROJECTS,
+                *ASK_SEAM_JOURNEYS,
+            )
+        },
+    }
+
+
+# llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+
+
 def project_root(name: str) -> str:
-    """The root of the project Nx knows as ``name``."""
-    roots = [root for root, declared in project_declarations().items() if declared["name"] == name]
-    assert len(roots) == 1, f"{len(roots)} projects are named {name!r}: {roots}"
-    return roots[0]
+    """The root of the project Nx knows as ``name``, from the static catalog alone.
+
+    A unit's root is its name's directory under :data:`SUPPORT_ROOT`; any other project an
+    input or an edge names is a row of :func:`catalogued_roots`. Resolved without listing
+    the graph, so resolving a key opens no declaration it does not then read.
+    """
+    if name.startswith(SUPPORT_PREFIX):
+        return f"{SUPPORT_ROOT}/{name.removeprefix(SUPPORT_PREFIX).replace('-', '_')}"
+    roots = catalogued_roots()
+    assert name in roots, (
+        f"{name!r} is named by an input or an edge but is no row of the static catalog in "
+        "tests/nx_inputs.py; add its row there"
+    )
+    return roots[name]
 
 
 def dependency_roots(root: str) -> list[str]:
@@ -924,14 +1033,14 @@ def dependency_roots(root: str) -> list[str]:
     is the whole of the graph a `dependencies` input walks.
     """
     reached: set[str] = set()
-    pending = list(project_declarations()[root].get("implicitDependencies", []))
+    pending = list(project_declaration(root).get("implicitDependencies", []))
     while pending:
         name = pending.pop()
         dependency = project_root(name)
         if dependency in reached:
             continue
         reached.add(dependency)
-        pending.extend(project_declarations()[dependency].get("implicitDependencies", []))
+        pending.extend(project_declaration(dependency).get("implicitDependencies", []))
     return sorted(reached)
 
 
@@ -941,7 +1050,7 @@ def named_inputs(root: str = "") -> dict[str, list]:
     A project's own `namedInputs` override `nx.json`'s of the same name, which is how a
     unit's `testSupport` replaces the empty one and how a tier's key is its own.
     """
-    declared = project_declarations().get(root, {}).get("namedInputs", {})
+    declared = project_declaration(root).get("namedInputs", {})
     return {**nx_config()["namedInputs"], **declared}
 
 
@@ -1013,7 +1122,7 @@ def target_input_globs(root: str, target: str) -> Key:
 def _target_input_globs(root: str, target: str) -> Key:
     # Cached because every test's read guard asks for one, and the answer is a property
     # of the declarations this process started with.
-    declared = project_declarations()[root]["targets"][target].get("inputs") or nx_config()[
+    declared = project_declaration(root)["targets"][target].get("inputs") or nx_config()[
         "targetDefaults"
     ].get(target, {}).get("inputs", ["default"])
     return Key(project_input_filesets(declared, root))

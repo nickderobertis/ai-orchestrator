@@ -138,10 +138,10 @@ credential isolation true, which is what a reviewer and the equivalence record b
 both read. A follow-up against oneharness is what retires them.
 
 Both halves are held, and it takes both.
-`tests/e2e/test_oneharness_config_equivalence_e2e.py` holds all twelve roles' reported
-configurations to a committed record under `tests/e2e/oneharness_resolved/`, so a
+`tests/e2e/launch_monitor_observer/test_oneharness_config_equivalence_e2e.py` holds all twelve roles' reported
+configurations to a committed record under `tests/e2e/launch_monitor_observer/oneharness_resolved/`, so a
 deliberate routing change is a visible update to that record in the same commit.
-`tests/e2e/test_dispatch_environment_e2e.py` drives a **real turn** on every identity of
+`tests/e2e/launch_monitor_observer/test_dispatch_environment_e2e.py` drives a **real turn** on every identity of
 every role and reads what the provider was actually handed. The second is not a
 duplicate of the first: during this refactor the record called every role identical
 while three roles had in fact stopped handing the board credential to `codex:primary`,
@@ -210,7 +210,7 @@ reviewer, the drafter and the judged lint tier — also passes `-c features.apps
 its `[harness.codex]` args, which removes the ChatGPT-app connector tools
 (`mcp__codex_apps__…`, some 260 of a judge turn's 275) and leaves the shell. The worker
 roles and the shared parents carry none of these settings.
-`tests/e2e/test_supervisory_codex_posture_e2e.py` holds them to what the real CLI
+`tests/e2e/launch_monitor_observer/test_supervisory_codex_posture_e2e.py` holds them to what the real CLI
 resolves and to the argv a dry run builds per identity, and fails on a planning mode, a
 lost sandbox pin, or a lost or widened Claude Code tool set.
 
@@ -267,9 +267,9 @@ through `just review-plan` instead. The shape is stated in [onejudge v0.19.0's
 — the config, how a panel decides, and what each surface carries per judge — and, for a
 graph member, in [oneagentgraph v0.5.5's
 `contract.md`](https://github.com/nickderobertis/oneagentgraph/blob/v0.5.5/docs/contract.md).
-`tests/e2e/test_plan_checklist_e2e.py` drives the pinned oneagentgraph's composition of
+`tests/e2e/registry_and_recipes/test_plan_checklist_e2e.py` drives the pinned oneagentgraph's composition of
 the graph and the pinned `onejudge run` under its two judges, with the script as the
-llmlint side's `bin`; `tests/e2e/test_judge_panel_e2e.py` drives it over a two-judge
+llmlint side's `bin`; `tests/e2e/launch_monitor_observer/test_judge_panel_e2e.py` drives it over a two-judge
 list, a single `judge:`, and a single provider, offline.
 
 ## Provider wiring
@@ -371,7 +371,7 @@ CLI, and none of it moves what this host's configs select. The newest, 0.22.0, h
 many are available and, when the listed credits cover that count, the soonest expiry —
 as `reset_credits` in its JSON and a `reset credits:` line in its text
 ([oneharness#1437](https://github.com/nickderobertis/oneharness/pull/1437));
-`tests/e2e/test_oneharness_reset_credits_e2e.py` drives it against a stand-in
+`tests/e2e/launch_monitor_observer/test_oneharness_reset_credits_e2e.py` drives it against a stand-in
 `codex app-server`. `--config` is repeatable,
 each later file folding over the ones before it
 ([oneharness#1384](https://github.com/nickderobertis/oneharness/pull/1384), 0.18.0) —
@@ -411,7 +411,7 @@ reaches every variant of that harness, as `ONEHARNESS_BIN_<ID>` and a config-fil
 already did, with an override naming the exact variant winning; a one-candidate
 selection that cannot run exits `1` whether it carries a plain prompt, a batch or a
 continuation; and a verb refusing `--format text --compact` prints its own usage rather
-than the root's. `tests/e2e/test_oneharness_bin_override_e2e.py` drives all three
+than the root's. `tests/e2e/launch_monitor_observer/test_oneharness_bin_override_e2e.py` drives all three
 through the pinned CLI over this repository's `oneharness.toml`. Nothing this host
 passes the CLI exercised the first when that adoption was made — no wrapper passes
 `--bin`, and the suite passed it with base ids only — so it was currency rather than a
@@ -636,7 +636,7 @@ other entry point's candidate reports `auth` and falls through to the primary.
 `ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR` (by default `$HOME/.claude`), rather than
 unsetting `CLAUDE_CONFIG_DIR`. That is what lets a host whose `~/.claude` is logged in as
 another account point both identities at the right directories in its identities file
-instead of in a config every host shares. `tests/e2e/test_claude_identity_routing_e2e.py`
+instead of in a config every host shares. `tests/e2e/launch_monitor_observer/test_claude_identity_routing_e2e.py`
 drives the refusal a missing indirection meets and the existing-host fall-through.
 
 ### The second Codex identity
@@ -726,8 +726,8 @@ the cheaper-supervisor trade every other judged tier makes is the wrong one here
 their leading pair each reaches
 the other provider's two identities and then `claude-code:primary-backup` and
 `claude-code:primary`, so both name all six and neither loses a quota once everything ahead of it is exhausted.
-`tests/e2e/test_design_doc_graph_e2e.py` reads both orders back through the graph that
-routes them, and `tests/e2e/test_oneharness_timeout_e2e.py` reads them beside every other
+`tests/e2e/launch_monitor_observer/test_design_doc_graph_e2e.py` reads both orders back through the graph that
+routes them, and `tests/e2e/launch_monitor_observer/test_oneharness_timeout_e2e.py` reads them beside every other
 config's from the real CLI.
 
 **llmlint** uses `oneharness.llmlint.toml` through
@@ -771,7 +771,7 @@ harness level, never on a variant, for the reporting reason [`unset_env`'s merge
 rule](#how-unset_env-merges-and-the-one-mask-a-parent-cannot-hold) gives. `env` merges
 key by key, so `IS_SANDBOX` stands beside the ceiling. `args` replaces an inherited list
 whole, and neither shared parent declares one.
-`tests/e2e/test_dispatch_environment_e2e.py` reads both settings off a real turn on every
+`tests/e2e/launch_monitor_observer/test_dispatch_environment_e2e.py` reads both settings off a real turn on every
 identity of both worker roles, and their absence on every other role's.
 
 **No release adoption was needed.** Both providers already read these settings in the
@@ -789,7 +789,7 @@ turn below ran under the same override. Each had the dispatch environment
 `ONEPIPELINE_NODE_SCRATCH_DIR`, and history recorded with `--history`. Both ran on
 oneharness 0.21.1, one shell command each, and the command was
 `start=$(date +%s); sleep 660; end=$(date +%s); echo "<marker> elapsed=$((end-start))s"`.
-<!-- dated-claim: incident the two smoke turns that proved the raised ceilings on 2026-10-04, kept as evidence of what those releases did rather than as a claim about later ones; tests/e2e/test_dispatch_environment_e2e.py is what re-takes the configuration on every run -->
+<!-- dated-claim: incident the two smoke turns that proved the raised ceilings on 2026-10-04, kept as evidence of what those releases did rather than as a claim about later ones; tests/e2e/launch_monitor_observer/test_dispatch_environment_e2e.py is what re-takes the configuration on every run -->
 
 **Claude Code** (`claude-code:alternate`, Claude Code 2.1.286, `claude-opus-5-5`) relied
 on `BASH_MAX_TIMEOUT_MS`. It made one Bash tool call with `timeout: 900000` that blocked
@@ -845,7 +845,7 @@ graph-native `model` field. Both reach a dispatch as node-scope graph overrides 
 another run also reads. The engine's released `docs/contract.md` (onepipeline, at the tag
 `config/onepipeline.version` names) is the one source of every field, edit and precedence
 rule below; `tests/test_engine_contracts.py` reconciles this section's spellings against
-it, and `tests/e2e/test_graph_overrides_dispatch_e2e.py` drives each example here through
+it, and `tests/e2e/launch_monitor_observer/test_graph_overrides_dispatch_e2e.py` drives each example here through
 the installed engine.
 
 #### 1. Write a short `extends` child, never a copy
@@ -1036,7 +1036,7 @@ adopted CLI, and on the `oneharness-core` the adopted engine links, the controll
 runs under the same model the precedence above resolves, the server's own answer is
 recorded beside it as `observed_model`, and a thread the server would run under
 another model is refused before any turn is sent as `model_mismatch`, falling through
-a chain as `model-mismatch`. `tests/e2e/test_controlled_turn_model_e2e.py` re-takes
+a chain as `model-mismatch`. `tests/e2e/launch_monitor_observer/test_controlled_turn_model_e2e.py` re-takes
 that against the installed `codex app-server` offline: a config naming
 `[harness.codex].model` and no run-level model, read off the request that reaches the
 model endpoint and off the report.
@@ -1081,7 +1081,7 @@ also means no deadline, preserving the explicit spelling used by the orchestrato
 
 <!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The per-side values
 below are read from each config by the real CLI in
-tests/e2e/test_oneharness_timeout_e2e.py; this table is the operator-facing summary
+tests/e2e/launch_monitor_observer/test_oneharness_timeout_e2e.py; this table is the operator-facing summary
 of that check, not a second declaration of it. -->
 
 | Side | Config | Deadline |
@@ -1165,7 +1165,7 @@ fixture over it drops both.
 The two are told apart by **provenance, not by value**. Every selection is dropped at
 each process boundary the suite owns — `tests/conftest.py` for its own environment,
 and a journey that launches oneharness builds that launch's environment from nothing
-rather than inheriting one (`tests/e2e/test_quota_fallthrough_e2e.py`'s `_chain_turn`
+rather than inheriting one (`tests/e2e/launch_monitor_observer/test_quota_fallthrough_e2e.py`'s `_chain_turn`
 passes `PATH`, `HOME`, and the values it is asserting on, and no more) — and each
 journey then states the value it wants; so a selection a recorded turn observes is one
 that journey put there, and an inherited one reaches nothing.
@@ -1273,7 +1273,7 @@ fails, a recorded turn that violates the contract above fails on the first attem
 without paying for a second, and a passing run reports how many launches it took.
 The bounded relaunch itself is `oneagentgraph
 smoke`'s own policy and is proven in that repository; what this repository's suite
-drives is the recipe that spawns it — `tests/e2e/test_delegated_recipes_e2e.py` runs
+drives is the recipe that spawns it — `tests/e2e/registry_and_recipes/test_delegated_recipes_e2e.py` runs
 `just smoke` through the real recipe and holds it to naming this repository's own
 agent config, since the published verb runs `oneharness run` in a throwaway directory
 where no project config is discovered.
@@ -1314,7 +1314,7 @@ task: `failure_kind` of `quota` or `auth`, or a `skipped` status, which
 carries no exit code, no duration, and no accounting at all. `rate_limit` is
 deliberately not in that set — oneharness stops the chain on one, because that
 record carries work the provider already billed for (see
-`tests/e2e/test_quota_fallthrough_e2e.py`) — so a `rate_limit` record ahead of
+`tests/e2e/launch_monitor_observer/test_quota_fallthrough_e2e.py`) — so a `rate_limit` record ahead of
 another describes something the chain does not do, and fails the smoke as an
 unclassified candidate failure. A chain whose *every* candidate refused fails too,
 naming each identity and its reason so the operator knows which subscription to
@@ -1348,7 +1348,7 @@ smoke: passed via claude-code:alternate2 (recorded cost: $0.063882)
 Both lines name the *identity* rather than the harness, because a chain's two
 Claude subscriptions are one harness and differ only by variant.
 
-`tests/e2e/test_quota_fallthrough_e2e.py` drives that path for real — the agent
+`tests/e2e/launch_monitor_observer/test_quota_fallthrough_e2e.py` drives that path for real — the agent
 config's chain, the classifier, and the record the verdict is read back out of — with
 both candidates replaced at oneharness's own `ONEHARNESS_BIN_*` seam. Two things
 make a journey of that shape possible to write safely, and both are easy to get
@@ -1367,7 +1367,7 @@ wrong:
   gained that fallback only in 0.16.1
   ([oneharness#1329](https://github.com/nickderobertis/oneharness/issues/1329)); before
   it a base-id flag left the variant resolving to the real `claude`, which is why
-  `tests/e2e/test_oneharness_bin_override_e2e.py` asserts no `claude` is reachable on
+  `tests/e2e/launch_monitor_observer/test_oneharness_bin_override_e2e.py` asserts no `claude` is reachable on
   its launch `PATH` before it relies on the override.
 
 Together they are a money hazard rather than a style point: a journey that misses
@@ -1414,8 +1414,8 @@ path. A member's `stream` is `oneagentgraph`'s default of `true` —
 streamed NDJSON itself (`provider.stream`, tolerant of a bare report). Each tool event
 reaches the run's journal as oneagentgraph's `turn-activity` as it happens, which is
 what `just monitor --all`, `just transcript` and the views read.
-`tests/e2e/test_orchestrate_launch_e2e.py` reads `turn-activity` off a real launch, and
-`tests/e2e/test_transcript_recipe_e2e.py` renders a journal's `turn-activity` through
+`tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` reads `turn-activity` off a real launch, and
+`tests/e2e/registry_and_recipes/test_transcript_recipe_e2e.py` renders a journal's `turn-activity` through
 the transcript recipe.
 
 #### Streaming and turn control are independent concerns
@@ -1479,7 +1479,7 @@ is exactly the 108 the platform allows. So the margin is nil rather than comfort
 a longer member session name is the thing that would take turn control away again,
 and it would report `control_unavailable` rather than fail loudly.
 
-`tests/e2e/test_oneharness_control_e2e.py` holds all four claims against the real
+`tests/e2e/launch_monitor_observer/test_oneharness_control_e2e.py` holds all four claims against the real
 CLI — the committed mixed-family chain taking control with each candidate on its own
 mechanism, a multi-identity chain carrying control and streaming at once, streaming
 alone opening no channel, and no graph member declaring `stream`. Every case plans with `--print-command`, so the
@@ -1526,7 +1526,7 @@ from its process table.
   naming the directory it started that node's `worker` member in; measured on
   onepipeline 0.3.1 the two are the same path, and the `--cwd` oneharness
   is handed for that member's agent turns is that path again — and
-  `tests/e2e/test_worker_start_directory_e2e.py` re-takes that on every gate run
+  `tests/e2e/launch_monitor_observer/test_worker_start_directory_e2e.py` re-takes that on every gate run
   against whatever release is adopted, so the number dates the first reading rather
   than naming the copy in force. Measured, not
   inferred: a lifecycle dispatch of this repository ran `pwd` as its first action
@@ -1536,7 +1536,7 @@ from its process table.
   twice reported fixed and never measured — once in a wheel this dispatch path never
   called, once in a crate release that could not be adopted — which is why a task
   template here still told every worker where to commit. It is also why the check is
-  now `tests/e2e/test_worker_start_directory_e2e.py` rather than a report: it
+  now `tests/e2e/launch_monitor_observer/test_worker_start_directory_e2e.py` rather than a report: it
   launches one lifecycle node for real and compares those two journal records and
   the served `--cwd`. What the measurement does *not* cover is a node dispatched
   with no worktree at all — a direct agent node has none to be placed in, and its

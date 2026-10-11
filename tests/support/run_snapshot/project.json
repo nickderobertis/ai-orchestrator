@@ -10,7 +10,8 @@
   ],
   "namedInputs": {
     "testSupport": [
-      "{workspaceRoot}/tests/e2e/run_snapshot.py"
+      "{workspaceRoot}/tests/e2e/run_snapshot.py",
+      "{projectRoot}/project.json"
     ]
   },
   "targets": {

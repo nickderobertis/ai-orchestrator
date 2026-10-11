@@ -317,8 +317,9 @@ def test_the_seeded_ledger_collides_with_every_minted_run_id(
 
     # llmlint: ignore-block[tests_mirror_real_usage] The documented surface is a
     # pass-through: `just plan` and `just finish-plan` are `@./scripts/<name>.sh "$@"`, a
-    # delegation `tests/e2e/test_delegated_recipes_e2e.py` drives as a real recipe, and
-    # these copies are deliberately outside any checkout carrying a `justfile`.
+    # delegation `tests/e2e/registry_and_recipes/test_delegated_recipes_e2e.py` drives as a
+    # real recipe, and these copies are deliberately outside any checkout carrying a
+    # `justfile`.
     refused = subprocess.run(  # noqa: S603 - the real script, over a ledger already holding its run id
         [str(recipe), str(brief), *minted.arguments],
         cwd=working,

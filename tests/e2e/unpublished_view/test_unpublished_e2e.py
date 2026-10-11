@@ -17,15 +17,16 @@ and that the status `just` returns is the module's own.
 
 Everything is real — the recipe, the wrapper, the interpreter, `onevcs`, git and the
 sessions. What makes it safe is isolation rather than substitution, exactly as
-`tests/e2e/test_recoverable_resume_commands_e2e.py` is safe: `ONEVCS_HOME` points at a
-scratch registry over a throwaway bare origin, so nothing this host has registered is
-read or moved, and `XDG_STATE_HOME` points at a scratch tree, so no acknowledgement this
-host holds is read or written.
+`tests/e2e/publish_and_landing/test_recoverable_resume_commands_e2e.py` is safe:
+`ONEVCS_HOME` points at a scratch registry over a throwaway bare origin, so nothing this
+host has registered is read or moved, and `XDG_STATE_HOME` points at a scratch tree, so no
+acknowledgement this host holds is read or written.
 
-The recipe is deliberately **not** a row of `tests/e2e/test_delegated_recipes_e2e.py`:
-that table holds a wrapper that reaches one published verb with a promised argv, and this
-one reaches a module of this repository which then asks `onevcs` several things and joins
-the answers. There is no argv to promise, so the proof is what the view answers.
+The recipe is deliberately **not** a row of
+`tests/e2e/registry_and_recipes/test_delegated_recipes_e2e.py`: that table holds a wrapper
+that reaches one published verb with a promised argv, and this one reaches a module of this
+repository which then asks `onevcs` several things and joins the answers. There is no argv
+to promise, so the proof is what the view answers.
 
 It lives in the `unpublished-view` project, behind an edge of its own: every test spends
 real `onevcs` session verbs, real `git` and a real `just`, so `nx affected` should charge

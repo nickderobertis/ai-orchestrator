@@ -59,8 +59,8 @@ MEASURING = (
     "scripts/budget-gate-time.sh",
     "scripts/budget-dispatches.sh",
     "scripts/lock-timeout.sh",
-    "tests/e2e/test_gate_time_budget_e2e.py",
-    "tests/e2e/test_budget_target_e2e.py",
+    "tests/e2e/budget_gate/test_gate_time_budget_e2e.py",
+    "tests/e2e/budget_gate/test_budget_target_e2e.py",
 )
 
 

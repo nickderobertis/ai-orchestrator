@@ -1,0 +1,1793 @@
+"""E2E proof that a cached test verdict is keyed on the tree it judged.
+
+The llmlint tier is not the only one whose verdict is memoized: every cached Nx
+target replays a recorded answer, and `orchestrator:test` — the tier the coverage
+and correctness invariants rest on — is one of them. A memo is only sound when its
+key covers everything the check reads, and this suite reads far beyond
+`orchestrator/` and `tests/`: it asserts on `AGENTS.md`, `docs/`, the `justfile`,
+`llmlint.yml`, `scripts/`, and `.githooks/pre-push`. Keyed on a hand-listed
+subset, a change to any of those replayed a green verdict for a tree whose tests
+would have failed had they run.
+
+The orchestrator project's unit modules answer at three scopes, so it is keyed at
+three. Only a handful of its tests assert on this repository's prose, and charging every
+documentation edit eight minutes for the rest bought nothing: `orchestrator:test-docs`
+runs those and keeps the whole-workspace key, while the drift gates, the plan-tooling
+journeys and each family of journeys under `tests/e2e/` are projects of their own
+(`tests/e2e/workspace_copies/test_split_tier_selection_e2e.py` proves the first two's
+keys, and the journeys below the last's). Narrower again, the unit tests that drive `just`
+recipes and shell scripts and read no prose and no `orchestrator/` at all are collected by
+`orchestrator:test-recipes` under a key of exactly what they drive. `orchestrator:test`
+runs the remaining unit modules, keyed on the workspace minus its documentation and the
+journeys. Every half of that claim is load bearing — each key must still invalidate on what its
+tier reads, and must still replay on what it does not — so each is proved here, along
+with the cross-worktree cache check `just check` now replays through Nx as well, and
+the uncached `orchestrator:coverage` step that turns what every measuring tier measured
+into the one comparison against the floor.
+
+These journeys drive the real `nx.json`, the real `orchestrator/project.json`
+declarations, and the real `scripts/nx.sh` against a throwaway copy of this
+checkout, and assert on Nx's own cache accounting.
+
+`PYTEST_ADDOPTS` shortens the suite the target runs to collection only. That is
+faithful rather than convenient: the claim under test is about the *key*, which is
+computed from the declared inputs before the command runs and deliberately does
+not include ambient environment. Running the whole suite three times would prove
+the same thing about the same hashes, twenty-two minutes more slowly.
+
+llmlint: ignore-file[e2e_not_mocked] Nothing is faked here. The only substitution
+shortens what a real target *runs* without touching the declared inputs these
+journeys are about: `PYTEST_ADDOPTS` for the Python tiers.
+
+llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] Every journey here
+copies the tracked tree, so no key narrower than the whole workspace could describe
+one: a project of their own would carry `wholeWorkspace` too and be selected by every
+diff exactly as this file's tier already is, leaving no edge to stay behind.
+
+llmlint: ignore-file[shell_test_tiers_stay_split] The same claim as above about the
+same journeys: a project scoped to the scripts these drive would still have to hash the
+tree they copy.
+
+llmlint: ignore-file[test_tiers_split_by_project_not_by_marker] A marker tier keyed on
+the whole workspace is this repository's own answer for a cost no project boundary can
+narrow, and it is what collects every journey in this file rather than only the ones
+this change adds.
+
+llmlint: ignore-file[tests_mirror_real_usage] The user-facing surface over these is
+`just check`, which cannot be driven from inside the suite it runs; the real recipe,
+the real `scripts/nx-selection.sh`, and the invocations it hands Nx are driven in
+`tests/e2e/workspace_copies/test_workspace_contract_e2e.py`. These journeys take the other half —
+what real Nx selects for that same selection string — and take it through the same
+script rather than restating its arguments.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+
+import pytest
+from nx_inputs import (
+    ASK_SEAM_JOURNEYS,
+    ASK_SEAM_SCOPED,
+    BOARD_COPY_APPROVAL_PROJECT,
+    BOARD_COPY_APPROVAL_SCOPED,
+    BUDGET_SCOPED,
+    CHECKOUT_SCOPED,
+    CODE_SCOPED,
+    COVERAGE_SCOPED,
+    DAG_UI_PROJECT,
+    DAG_UI_SCOPED,
+    DOCS_SCOPED,
+    DRIFT_GATE_PROJECTS,
+    E2E_JOURNEYS,
+    E2E_ROOT_PROJECT,
+    GRACEFUL_CANCEL_PROJECT,
+    GRACEFUL_CANCEL_SCOPED,
+    HOST_SWEEP_PROJECT,
+    HOST_SWEEP_SCOPED,
+    HOST_VIEWS_PROJECT,
+    HOST_VIEWS_SCOPED,
+    MANAGER_ALLOWLIST_PROJECT,
+    MANAGER_ALLOWLIST_SCOPED,
+    PLAN_STORE_ASSETS_PROJECT,
+    PLAN_STORE_ASSETS_SCOPED,
+    PLAN_TOOLING_PROJECTS,
+    PROJECT_STORE_RACE_PROJECT,
+    PROJECT_STORE_RACE_SCOPED,
+    RECIPE_SCOPED,
+    RENDER_DIAGRAM_PROJECT,
+    RENDER_DIAGRAM_SCOPED,
+    RUN_END_HOOKS_PROJECT,
+    RUN_END_HOOKS_SCOPED,
+    SELECTED_TARGETS,
+    SESSION_OPEN_CONFLICT_PROJECT,
+    SESSION_OPEN_CONFLICT_SCOPED,
+    SESSION_SETUP_PROJECT,
+    SESSION_SETUP_PYPI_PROJECT,
+    SESSION_SETUP_PYPI_SCOPED,
+    SESSION_SETUP_SCOPED,
+    TOOLCHAIN_ISOLATION_PROJECT,
+    TOOLCHAIN_ISOLATION_SCOPED,
+    UNFINISHED_PROJECT,
+    UNFINISHED_SCOPED,
+    UNIT_COVERAGE_DATA,
+    UNPUBLISHED_VIEW_PROJECT,
+    UNPUBLISHED_VIEW_SCOPED,
+    UNWATCHED_PROJECT,
+    UNWATCHED_SCOPED,
+    WORKSPACE_COPIES_PROJECT,
+    WRITEBACK_BUDGET_PROJECT,
+    WRITEBACK_BUDGET_SCOPED,
+    coverage_data,
+    covers,
+    matches,
+    project_declaration,
+    project_root,
+    repository_relative_globs,
+    target_input_globs,
+)
+from nx_workspace import TOOLCHAIN_WRITER_MARKS, WORKSPACE_INSTALL_MARKS, copy_checkout
+
+from orchestrator.root import REPO_ROOT
+
+# Copying the whole tree is this journey's premise, and the tree includes its
+# prose: these belong to the whole-workspace tier by construction. A writer, because
+# `scripts/nx.sh` heals the install of the copy it runs in, which `copy_checkout` makes
+# the copy's own.
+pytestmark = [*WORKSPACE_INSTALL_MARKS, *TOOLCHAIN_WRITER_MARKS, pytest.mark.reads_docs]
+
+CACHE_HIT = "read the output from the cache"
+# The suite reads this file directly — tests/manager_guidance/test_decomposition_guidance.py
+# holds the manager's half of the doctrine to it — and it lives outside every project root.
+PROSE_WITNESS = "AGENTS.md"
+PROSE_TEXT = "Skip busywork."
+PROSE_EDIT = "Skip busywork, and say which you skipped."
+# Also read directly, also outside every project root, and deliberately not prose:
+# this is what proves the narrowed key was narrowed by documentation alone. It is
+# also the recipe tier's own witness, since driving it is what that tier is for.
+CODE_WITNESS = "justfile"
+CODE_TEXT = "# List available recipes."
+CODE_EDIT = "# List the available recipes."
+#: Python the code tier reads and the recipe tier does not: editing it must re-run
+#: one and replay the other, which is the whole reason the recipe key is narrow.
+PYTHON_WITNESS = "orchestrator/labels.py"
+#: The module the replacement race is over, and the one path of `orchestrator/` its
+#: tier is keyed on; `PYTHON_WITNESS` is the control, a module the store never imports.
+STORE_WITNESS = "orchestrator/project_store.py"
+#: The wrapper `just unpublished` runs, which only the view's own tier reads; and a script
+#: in the recipe tier's `scripts/**` the view never reaches, the control.
+UNPUBLISHED_WITNESS = "scripts/unpublished.sh"
+UNREACHED_SCRIPT_WITNESS = "scripts/new-persona.sh"
+#: The fixture `scripts/check-nx-cache.sh` builds its two linked worktrees from.
+FIXTURE_WITNESS = "tests/fixtures/nx-cache/src/index.ts"
+#: The project every Python tier belongs to, and the tier the code suite runs in.
+PROJECT = "orchestrator"
+CODE_TIER = f"{PROJECT}:{CODE_SCOPED}"
+#: The journey projects whose `test` targets measure `orchestrator/` beside it, read off
+#: their declarations: every one whose command does.
+MEASURING_JOURNEYS = tuple(
+    journey.project
+    for journey in E2E_JOURNEYS
+    if "--cov=orchestrator" in project_declaration(journey.root)["targets"][CODE_SCOPED]["command"]
+)
+#: The uncached tier that reads what those measured and judges the floor.
+COVERAGE_TIER = f"{PROJECT}:{COVERAGE_SCOPED}"
+#: What each measuring tier writes for the floor to combine: the unit tier's, each journey
+#: project's, and each subject project whose narrow target measures into a file named for
+#: it — read off its own declaration, as `tests/tree_scans/test_nx_cache_scope.py` reads it.
+MEASURED = {
+    CODE_TIER: UNIT_COVERAGE_DATA,
+    **{f"{project}:{CODE_SCOPED}": coverage_data(project) for project in MEASURING_JOURNEYS},
+    **{
+        f"{subject.project}:{subject.target}": coverage_data(subject.project)
+        for subject in (*PLAN_TOOLING_PROJECTS, *DRIFT_GATE_PROJECTS)
+        if "--cov=orchestrator"
+        in project_declaration(subject.root)["targets"][subject.target]["command"]
+    },
+}
+#: The tiers a copy of this checkout runs for real: the unit tier and every measuring
+#: journey project's, whose modules need nothing a copy does not install.
+LOCAL_MEASURED = (CODE_TIER, *(f"{project}:{CODE_SCOPED}" for project in MEASURING_JOURNEYS))
+#: What every journey below shortens the Python suite to. The claim under test is
+#: the *key*, computed from the declared inputs before the command runs.
+COLLECT_ONLY = "--collect-only --no-cov -q"
+#: The coverage journey keeps measurement on, because a restored data file is what
+#: it is about; only the selection is shortened.
+COLLECT_ONLY_MEASURED = "--collect-only -q"
+#: Where this host publishes the resolved fixture lockfile that check shares. The
+#: journeys below run under an isolated `XDG_CACHE_HOME`, so the resolution is
+#: carried across rather than paid again — sharing a cache is what it is for.
+SHARED_FIXTURE_RESOLUTIONS = Path("ai-orchestrator") / "nx-cache-fixture"
+
+
+@dataclass(frozen=True)
+class Checkout:
+    """A copy of this repository wired to its own isolated Nx cache."""
+
+    root: Path
+    cache: Path
+
+    def run(
+        self,
+        target: str,
+        *nx_args: str,
+        addopts: str = COLLECT_ONLY,
+        environment: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        """Run ``target`` through the real wrapper and hand back what Nx reported."""
+        # Cache replay is this journey's whole claim, so an ambient global cache skip
+        # is dropped for the same reason scripts/check-nx-cache.sh drops it:
+        # `--skip-nx-cache` on one invocation is the supported way to force one tier
+        # to re-run, and a global export would silently answer a different question.
+        skips = {"NX_SKIP_NX_CACHE", "NX_DISABLE_NX_CACHE"}
+        ambient = {key: value for key, value in os.environ.items() if key not in skips}
+        return subprocess.run(
+            ["./scripts/nx.sh", "run", target, *nx_args],
+            cwd=self.root,
+            env={
+                **ambient,
+                "XDG_CACHE_HOME": str(self.cache),
+                "AI_ORCHESTRATOR_NX_SHOW_OUTPUT": "1",
+                # Reuse this checkout's already-synced environment rather than
+                # building the copy as a distinct project.
+                "UV_NO_SYNC": "1",
+                "UV_PROJECT_ENVIRONMENT": str(REPO_ROOT / ".venv"),
+                "PYTEST_ADDOPTS": addopts,
+                **(environment or {}),
+            },
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+
+    def ran_the_command(self, target: str, *nx_args: str, addopts: str = COLLECT_ONLY) -> bool:
+        """Run ``target`` through the real wrapper; False when Nx replayed a verdict."""
+        result = self.run(target, *nx_args, addopts=addopts)
+        assert result.returncode == 0, result.stdout + result.stderr
+        return CACHE_HIT not in result.stdout
+
+    def resolved_project(self, project: str = PROJECT) -> dict:
+        """Ask Nx itself how one project resolves, `targetDefaults` merged in."""
+        result = subprocess.run(
+            ["./scripts/nx.sh", "show", "project", project, "--json"],
+            cwd=self.root,
+            env={
+                **os.environ,
+                "XDG_CACHE_HOME": str(self.cache),
+                "AI_ORCHESTRATOR_NX_SHOW_OUTPUT": "1",
+            },
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        rendered = next(line for line in result.stdout.splitlines() if line.startswith("{"))
+        return json.loads(rendered)
+
+    def graph(self) -> dict:
+        """The project graph Nx builds here: every project's resolved configuration, and
+        every edge between them, from one read of Nx itself."""
+        written = self.root / ".nx-graph.json"
+        result = subprocess.run(
+            ["./scripts/nx.sh", "graph", f"--file={written}"],
+            cwd=self.root,
+            env={**os.environ, "XDG_CACHE_HOME": str(self.cache)},
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        try:
+            return json.loads(written.read_text(encoding="utf-8"))["graph"]
+        finally:
+            written.unlink()
+
+    def resolved_target(self, target: str) -> dict:
+        """Ask Nx itself how one target resolves, defaults and all.
+
+        `project.json` states part of a target and `nx.json`'s `targetDefaults`
+        states the rest, and only Nx merges them. A `targetDefaults` key that no
+        longer matches a target name is silently inert — the target simply falls
+        back to Nx's own defaults, which for `cache` means *not caching*, and for a
+        tier meant to be cached that is a quiet loss rather than an error.
+        """
+        return self.resolved_project()["targets"][target]
+
+    def edit(self, relative: str, old: str, new: str) -> None:
+        path = self.root / relative
+        text = path.read_text(encoding="utf-8")
+        assert old in text, f"{relative} no longer contains the text this journey edits"
+        path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+    def append(self, relative: str, line: str) -> None:
+        """Change a file's content without changing what it means.
+
+        Some witnesses are read by the very checks these journeys run — the Nx
+        cache fixture is typechecked — so the edit has to move the hash and nothing
+        else.
+        """
+        path = self.root / relative
+        assert path.is_file(), f"{relative} is no longer a file this journey can witness"
+        path.write_text(f"{path.read_text(encoding='utf-8')}{line}\n", encoding="utf-8")
+
+
+def copied_checkout(tmp_path: Path) -> Checkout:
+    """A copy of this checkout under ``tmp_path``, wired to a cache of its own."""
+    root = tmp_path / "checkout"
+    copy_checkout(root)
+    # Nx resolves its workspace and its ignore rules from git, and scripts/nx.sh
+    # derives the shared cache key from the repository identity.
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    cache = tmp_path / "cache"
+    host = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    if (host / SHARED_FIXTURE_RESOLUTIONS).is_dir():
+        shutil.copytree(host / SHARED_FIXTURE_RESOLUTIONS, cache / SHARED_FIXTURE_RESOLUTIONS)
+    return Checkout(root=root, cache=cache)
+
+
+@pytest.fixture
+def checkout(tmp_path: Path) -> Checkout:
+    return copied_checkout(tmp_path)
+
+
+def test_a_workspace_file_the_suite_reads_invalidates_the_cached_test_verdict(
+    checkout: Checkout,
+) -> None:
+    """A tree the suite would judge differently cannot replay the recorded verdict."""
+    assert checkout.ran_the_command("orchestrator:test")
+    assert not checkout.ran_the_command("orchestrator:test"), (
+        "an unchanged tree must replay its recorded verdict rather than re-run"
+    )
+
+    checkout.edit(CODE_WITNESS, CODE_TEXT, CODE_EDIT)
+
+    assert checkout.ran_the_command("orchestrator:test"), (
+        f"changing {CODE_WITNESS} must re-run the suite that reads it"
+    )
+
+
+def test_an_originless_checkout_does_not_mint_an_unused_cache_directory(
+    checkout: Checkout,
+) -> None:
+    """A metadata-only Nx query must not leave an empty cache key behind."""
+    repo_key = hashlib.sha256(str(checkout.root).encode()).hexdigest()[:16]
+    cache_directory = checkout.cache / "ai-orchestrator" / "nx" / repo_key
+
+    checkout.resolved_target("test")
+
+    assert not cache_directory.exists(), (
+        "the wrapper created a repository-key directory even though Nx stored no result"
+    )
+
+
+def test_editing_prose_re_runs_only_the_tier_that_reads_prose(checkout: Checkout) -> None:
+    """The whole point of the split: prose invalidates the prose tier and nothing else."""
+    assert checkout.ran_the_command("orchestrator:test")
+    assert checkout.ran_the_command("orchestrator:test-docs")
+
+    checkout.edit(PROSE_WITNESS, PROSE_TEXT, PROSE_EDIT)
+
+    assert checkout.ran_the_command("orchestrator:test-docs"), (
+        f"changing {PROSE_WITNESS} must re-run the tests that assert on it"
+    )
+    assert not checkout.ran_the_command("orchestrator:test"), (
+        f"changing {PROSE_WITNESS} must not re-run a tier whose tests cannot read it"
+    )
+
+
+def test_editing_code_re_runs_both_tiers(checkout: Checkout) -> None:
+    """Narrowing one key by documentation must not narrow it by anything else."""
+    assert checkout.ran_the_command("orchestrator:test")
+    assert checkout.ran_the_command("orchestrator:test-docs")
+
+    checkout.edit(CODE_WITNESS, CODE_TEXT, CODE_EDIT)
+
+    assert checkout.ran_the_command("orchestrator:test")
+    assert checkout.ran_the_command("orchestrator:test-docs")
+
+
+def test_skip_nx_cache_forces_one_tier_to_re_run_an_unchanged_tree(checkout: Checkout) -> None:
+    """The documented lever for a suspect verdict is per tier and per invocation."""
+    assert checkout.ran_the_command("orchestrator:test")
+    assert not checkout.ran_the_command("orchestrator:test")
+
+    assert checkout.ran_the_command("orchestrator:test", "--skip-nx-cache")
+
+    # And only that invocation: the next one replays again, so nothing an operator
+    # does to re-run one tier leaves the rest of the workspace re-running forever.
+    assert not checkout.ran_the_command("orchestrator:test")
+
+
+def test_the_coverage_tier_resolves_as_an_unmemoized_step_after_the_tier_that_measures(
+    checkout: Checkout,
+) -> None:
+    """The floor is enforced by a task Nx will never replay.
+
+    Its input is a file on disk rather than the tree, so a cached verdict here would
+    be a claim about coverage data Nx does not hash. It is seconds of work; it
+    re-runs. And it must wait on the tier that measures, or the total it judges is a
+    total this suite never produced.
+    """
+    resolved = checkout.resolved_target(COVERAGE_SCOPED)
+
+    assert resolved.get("cache") is False, resolved
+    assert MEASURING_JOURNEYS, "no journey project measures, so the floor reads the unit tier alone"
+    assert resolved["dependsOn"][0] == CODE_SCOPED, resolved
+    waited = {
+        f"{project}:{entry['target']}"
+        for entry in resolved["dependsOn"][1:]
+        for project in entry["projects"]
+    }
+    assert waited == set(MEASURED) - {CODE_TIER}, resolved
+    for tier in MEASURED:
+        project, target = tier.split(":")
+        measuring = checkout.resolved_project(project)["targets"][target]
+        assert measuring.get("cache") is True, (
+            f"{tier} measures into a file the coverage tier needs restored on a cache "
+            f"hit, so it has to be cached with that file as its output: {measuring}"
+        )
+        data_file = measuring["outputs"][0].removeprefix("{workspaceRoot}/")
+        assert data_file == MEASURED[tier], measuring
+        assert data_file in resolved["options"]["command"], (
+            f"{tier} writes {data_file} and the coverage tier never reads it: {resolved}"
+        )
+
+
+def test_the_checkout_tier_re_runs_even_when_nothing_in_the_tree_moved(
+    checkout: Checkout,
+) -> None:
+    """The tier that reads other repositories' checkouts is never replayed.
+
+    Every other memoized tier here is sound because its key covers what it reads.
+    This one reads registered checkouts of *other* repositories, which live outside
+    the workspace entirely — no `nx.json` glob can name one — so there is no key that
+    would be right and it is declared uncached instead. Proven the way the property
+    matters: run it twice against a tree nothing touched, and it has to run twice.
+    A replay here would report on those repositories as they were when it was
+    recorded, which is exactly the drift it exists to catch.
+    """
+    resolved = checkout.resolved_target(CHECKOUT_SCOPED)
+    assert resolved.get("cache") is False, resolved
+
+    assert checkout.ran_the_command(f"orchestrator:{CHECKOUT_SCOPED}")
+    assert checkout.ran_the_command(f"orchestrator:{CHECKOUT_SCOPED}"), (
+        "an unchanged tree replayed the checkout-reconciliation tier, so its verdict "
+        "is a memo about repositories that have gone on changing since"
+    )
+
+
+def test_editing_a_recipe_input_re_runs_the_recipe_tier(checkout: Checkout) -> None:
+    """The narrow key must still notice everything the recipe journeys drive."""
+    assert checkout.ran_the_command("orchestrator:test-recipes")
+    assert not checkout.ran_the_command("orchestrator:test-recipes"), (
+        "an unchanged tree must replay its recorded verdict rather than re-run"
+    )
+
+    checkout.edit(CODE_WITNESS, CODE_TEXT, CODE_EDIT)
+
+    assert checkout.ran_the_command("orchestrator:test-recipes"), (
+        f"changing {CODE_WITNESS} must re-run the journeys that drive it"
+    )
+
+
+def test_editing_orchestrator_code_replays_only_the_recipe_tier(checkout: Checkout) -> None:
+    """The whole point of the third tier: Python churn stops paying for Bun and Nx.
+
+    The two costliest journeys in this suite build real worktrees and run real
+    package installs, and neither reads a line of `orchestrator/`. Most commits
+    here touch nothing else, so this is the case that has to replay.
+    """
+    assert checkout.ran_the_command("orchestrator:test")
+    assert checkout.ran_the_command("orchestrator:test-recipes")
+
+    checkout.append(PYTHON_WITNESS, "# nx cache scope journey")
+
+    assert checkout.ran_the_command("orchestrator:test"), (
+        f"changing {PYTHON_WITNESS} must re-run the tier keyed on the code"
+    )
+    assert not checkout.ran_the_command("orchestrator:test-recipes"), (
+        f"changing {PYTHON_WITNESS} must not re-run journeys that cannot read it"
+    )
+
+
+def test_a_replayed_test_verdict_restores_the_coverage_data_the_floor_needs(
+    checkout: Checkout,
+) -> None:
+    """A cache hit has to hand the floor the measurement it stood in for.
+
+    The measuring tier is cached and the tier that judges the floor is not, so on
+    every replayed commit the combine runs against data no run in this checkout
+    produced. That only works because the measuring tier declares its data file as
+    an Nx output and Nx restores it — an `outputs` declaration that fell off, or a
+    tier that stopped writing the file it names, would leave the combine with
+    nothing and turn a saving into a failed gate.
+
+    `PYTEST_ADDOPTS` shortens the selection but, unlike every journey above, leaves
+    measurement on: a restored data file is the whole subject. The floor itself is
+    lowered in this copy for the same reason — a collect-only selection covers a
+    fraction of the package, and `tests/test_coverage_gate.py` is where the declared
+    floor's own value is proven at the real boundary.
+    """
+    checkout.edit("pyproject.toml", "fail_under = 100", "fail_under = 0")
+    # The unit and journey tiers: every measuring tier restores its data file through the
+    # same `outputs` declaration, which the static gate holds for each.
+    measured = {tier: MEASURED[tier] for tier in LOCAL_MEASURED}
+    for tier in measured:
+        assert checkout.ran_the_command(tier, addopts=COLLECT_ONLY_MEASURED)
+    for tier, data_file in measured.items():
+        assert (checkout.root / data_file).is_file(), f"{tier} measured nothing to combine"
+        (checkout.root / data_file).unlink()
+
+    for tier, data_file in measured.items():
+        assert not checkout.ran_the_command(tier, addopts=COLLECT_ONLY_MEASURED), (
+            f"{tier} re-ran on an unchanged tree, so this proves nothing about replay"
+        )
+        assert (checkout.root / data_file).is_file(), (
+            f"{tier} replayed its verdict without restoring {data_file}, so the floor "
+            "is combined from data the cache dropped"
+        )
+
+    combined = checkout.run(COVERAGE_TIER, addopts=COLLECT_ONLY_MEASURED)
+
+    assert combined.returncode == 0, combined.stdout + combined.stderr
+    assert CACHE_HIT in combined.stdout, (
+        f"{COVERAGE_TIER} re-ran a measuring tier, so the combine never saw a replay"
+    )
+    assert "TOTAL" in combined.stdout, combined.stdout + combined.stderr
+
+
+#: A unit module no journey imports or reads: an edit to it is the unit tier's alone.
+UNIT_WITNESS = "tests/test_labels.py"
+#: A journey no unit or drift-gate test reads by path, and the tier that runs it: an edit to
+#: it is that journey project's alone.
+JOURNEY_WITNESS = "tests/e2e/publish_and_landing/test_sweep_e2e.py"
+JOURNEY_TIER = f"publish-and-landing:{CODE_SCOPED}"
+#: A journey a drift gate of the unit tier opens by path, which that tier's key takes back,
+#: and the tier that runs it.
+GATE_READ_JOURNEY_WITNESS = "tests/e2e/budget_gate/test_budget_target_e2e.py"
+GATE_READ_JOURNEY_TIER = f"budget-gate:{CODE_SCOPED}"
+#: A unit module a journey imports, which reaches that journey project's key as a
+#: test-support unit, and the tier of the journeys importing it.
+JOURNEY_IMPORTED_UNIT_WITNESS = "tests/test_dispatch_appendix.py"
+IMPORTING_JOURNEY_TIER = f"launch-monitor-observer:{CODE_SCOPED}"
+#: Every journey project's code tier: the tiers an edit to a unit module leaves alone.
+JOURNEY_TIERS = tuple(f"{journey.project}:{CODE_SCOPED}" for journey in E2E_JOURNEYS)
+
+
+def test_the_unit_and_journey_tiers_are_each_charged_only_for_what_they_read(
+    selector: Selector,
+) -> None:
+    """The split the project boundaries are for, asked of the real selector and the cache.
+
+    `orchestrator:test` holds the unit and drift-gate modules and each journey project a
+    family of the journeys. An edit to a unit module leaves every journey project out of
+    the selection `just check` makes and replays their verdicts; an edit to a journey
+    re-runs its own project's tier and replays the unit verdict; an edit to the package
+    selects and re-runs both. The two exceptions each key states are asked too: a journey
+    a unit gate reads re-runs that tier, and a unit module a journey imports selects and
+    re-runs the journey project importing it.
+    """
+    for tier in (CODE_TIER, *JOURNEY_TIERS):
+        assert selector.ran_the_command(tier)
+    journeys = {tier.split(":")[0] for tier in JOURNEY_TIERS}
+    assert {PROJECT, *journeys} <= selector.owners(CODE_SCOPED), (
+        "`just test` runs every owner of the code tier and `just check` the selected ones; "
+        "every journey project has to be one of them"
+    )
+
+    # The project of the journeys that copy this checkout declares a `test-docs` target keyed
+    # on the whole workspace, so every diff selects it by design; what an edit it does not
+    # read must still buy is the replay of its narrow `test` tier, asked below with the rest.
+    narrow_journeys = journeys - {WORKSPACE_COPIES_PROJECT}
+    with selector.planted(UNIT_WITNESS) as reported_by_git:
+        assert reported_by_git
+        assert not narrow_journeys & selector.selected(CODE_SCOPED), (
+            f"a diff of {UNIT_WITNESS} alone selected journey projects, which never read it"
+        )
+        for tier in JOURNEY_TIERS:
+            assert not selector.ran_the_command(tier), (
+                f"{tier} re-ran for an edit to {UNIT_WITNESS}, which its key leaves out"
+            )
+        assert selector.ran_the_command(CODE_TIER), (
+            f"{CODE_TIER} replayed a verdict for an edit to {UNIT_WITNESS}, a module it runs"
+        )
+
+    with selector.planted(JOURNEY_WITNESS) as reported_by_git:
+        assert reported_by_git
+        assert JOURNEY_TIER.split(":")[0] in selector.selected(CODE_SCOPED), (
+            f"a diff of {JOURNEY_WITNESS} must select the tier that runs it"
+        )
+        assert selector.ran_the_command(JOURNEY_TIER), (
+            f"{JOURNEY_TIER} replayed a verdict for an edit to {JOURNEY_WITNESS}, a journey it runs"
+        )
+        assert not selector.ran_the_command(CODE_TIER), (
+            f"{CODE_TIER} re-ran for an edit to {JOURNEY_WITNESS}, which its key leaves out"
+        )
+
+    with selector.planted(GATE_READ_JOURNEY_WITNESS) as reported_by_git:
+        assert reported_by_git
+        assert selector.ran_the_command(CODE_TIER), (
+            f"{CODE_TIER} replayed a verdict for an edit to {GATE_READ_JOURNEY_WITNESS}, "
+            "which a gate of that tier reads"
+        )
+        assert selector.ran_the_command(GATE_READ_JOURNEY_TIER)
+
+    with selector.planted(JOURNEY_IMPORTED_UNIT_WITNESS) as reported_by_git:
+        assert reported_by_git
+        assert IMPORTING_JOURNEY_TIER.split(":")[0] in selector.selected(CODE_SCOPED), (
+            f"a diff of {JOURNEY_IMPORTED_UNIT_WITNESS} must select the journeys importing it"
+        )
+        assert selector.ran_the_command(IMPORTING_JOURNEY_TIER)
+        assert selector.ran_the_command(CODE_TIER)
+
+    with selector.planted(PYTHON_WITNESS) as reported_by_git:
+        assert reported_by_git
+        assert {PROJECT, IMPORTING_JOURNEY_TIER.split(":")[0]} <= selector.selected(CODE_SCOPED), (
+            f"a diff of {PYTHON_WITNESS} must select the tiers that run over the package"
+        )
+        assert selector.ran_the_command(CODE_TIER)
+        assert selector.ran_the_command(IMPORTING_JOURNEY_TIER)
+
+
+#: A small real run of each measuring tier, one fast module or test apiece, so the floor is
+#: judged below on lines that ran: a collection-only run measures nothing a probe could lower.
+#: Every measuring project has to select one, or its run collects nothing and fails.
+SMALL_MEASURED = (
+    "-q -k 'test_labels.py or test_recoverable_resume_commands_e2e.py or "
+    "test_every_role_has_a_committed_record or test_lock_timeout_bound_e2e.py or "
+    "test_credential_file_ignored_e2e.py or test_comparison_base_takes_the_base_the_lifecycle or "
+    "test_the_tracked_checkout_list_holds_every_pre_adoption_checkout'"
+)
+#: Every other measuring tier: the subject projects, whose modules drive tools a copy of this
+#: checkout does not install, so their data is a collection's, replayed from the cache.
+SUBJECT_MEASURED = tuple(tier for tier in MEASURED if tier not in LOCAL_MEASURED)
+#: How many uncovered functions the probe module adds: enough statements that the total
+#: falls below a floor stated at two decimals.
+PROBE_FUNCTIONS = 400
+#: What `coverage combine` reports reading: the files it combined, and those it skipped
+#: because another already carried the same data.
+COMBINED = re.compile(r"^Combined (\d+) files?(?:, skipped (\d+))?", re.MULTILINE)
+#: The last figure on `coverage report`'s total row, at the declared precision.
+REPORTED_TOTAL = re.compile(r"^TOTAL\s.*?(\d+\.\d+)%\s*$", re.MULTILINE)
+
+
+def test_the_floor_is_judged_on_what_both_tiers_measured(checkout: Checkout) -> None:
+    """`orchestrator:coverage` combines every measuring tier's data and fails below the floor.
+
+    Measured with the unit and journey tiers shortened to one fast module apiece and every
+    subject tier replaying a verdict recorded from its collection, so the total is what those
+    ran; the floor is then set to exactly that total, which passes, and an untested module
+    added to the package — which the unit and journey tiers' keys carry, so each re-measures
+    — takes the total under it, which fails. `tests/test_coverage_gate.py` holds the real
+    floor's value and rounding at the boundary; this is the combine across the tiers.
+    """
+    checkout.edit("pyproject.toml", "fail_under = 100", "fail_under = 0")
+    # The copy runs this checkout's environment, whose editable install of the package
+    # points here; the copy's own package has to come first for its lines to be the ones
+    # that run and are measured.
+    own_package = {"PYTHONPATH": str(checkout.root)}
+
+    def recorded_subjects() -> None:
+        # Nx keys no tier on `PYTEST_ADDOPTS`, so a subject tier recorded from its
+        # collection is replayed, data file and all, when the coverage tier runs below; a
+        # tree edit that reaches its key is recorded again before the floor is judged.
+        for tier in SUBJECT_MEASURED:
+            recorded = checkout.run(tier, addopts=COLLECT_ONLY_MEASURED, environment=own_package)
+            assert recorded.returncode == 0, recorded.stdout + recorded.stderr
+
+    recorded_subjects()
+    measured = checkout.run(COVERAGE_TIER, addopts=SMALL_MEASURED, environment=own_package)
+
+    assert measured.returncode == 0, measured.stdout + measured.stderr
+    # Every measuring tier's file is named on the combine's command line, which refuses a
+    # path that is not there; what it read is what it reports combining, a file whose data
+    # another
+    # already carried counted as skipped rather than combined.
+    read = COMBINED.search(measured.stdout)
+    assert read is not None, measured.stdout
+    assert int(read.group(1)) + int(read.group(2) or 0) == len(MEASURED), (
+        f"the floor was not judged on what {sorted(MEASURED)} measured: {measured.stdout}"
+    )
+    total = REPORTED_TOTAL.search(measured.stdout)
+    assert total is not None, measured.stdout
+
+    checkout.edit("pyproject.toml", "fail_under = 0", f"fail_under = {total.group(1)}")
+    assert float(total.group(1)) > 0, measured.stdout
+    recorded_subjects()
+    at_floor = checkout.run(COVERAGE_TIER, addopts=SMALL_MEASURED, environment=own_package)
+    assert at_floor.returncode == 0, at_floor.stdout + at_floor.stderr
+
+    (checkout.root / "orchestrator" / "uncovered_probe.py").write_text(
+        "".join(f"def probe_{n}() -> int:\n    return {n}\n\n\n" for n in range(PROBE_FUNCTIONS)),
+        encoding="utf-8",
+    )
+    recorded_subjects()
+    below = checkout.run(COVERAGE_TIER, addopts=SMALL_MEASURED, environment=own_package)
+
+    reported = below.stdout + below.stderr
+    assert below.returncode != 0, reported
+    assert "orchestrator/uncovered_probe.py" in reported, reported
+    assert f"is less than fail-under={total.group(1)}" in reported, reported
+
+
+def test_the_cross_worktree_cache_check_replays_until_its_own_fixture_moves(
+    checkout: Checkout,
+) -> None:
+    """`just check` runs this through Nx, so it must replay and it must still miss.
+
+    Two real linked worktrees and two real installs is around forty seconds cold,
+    charged to every commit while it ran as a plain shell line. It reads its
+    fixture, three scripts, and the root manifest — nothing else — so prose has to
+    replay and the fixture has to miss.
+    """
+    assert checkout.ran_the_command("workspace:check-nx-cache")
+    assert not checkout.ran_the_command("workspace:check-nx-cache"), (
+        "an unchanged tree must replay this check rather than rebuild both worktrees"
+    )
+
+    checkout.edit(PROSE_WITNESS, PROSE_TEXT, PROSE_EDIT)
+
+    assert not checkout.ran_the_command("workspace:check-nx-cache"), (
+        f"changing {PROSE_WITNESS} must not rebuild a check that cannot read it"
+    )
+
+    checkout.append(FIXTURE_WITNESS, "// nx cache scope journey")
+
+    assert checkout.ran_the_command("workspace:check-nx-cache"), (
+        f"changing {FIXTURE_WITNESS} must re-run the check built out of it"
+    )
+
+
+#: Where the wrapper keys the native cache, under whatever `XDG_CACHE_HOME` names.
+#: Restated from `scripts/nx.sh` because it is shell; the journeys below also assert
+#: `$TMPDIR` holds no per-root directory, so a wrapper that set nothing still fails.
+NATIVE_CACHE = Path("ai-orchestrator") / "nx-native"
+#: What Nx names a native cache directory when nothing redirects it: one per workspace
+#: root, which on this host is one per dispatch. Its absence is the point.
+PER_ROOT_NATIVE_CACHE = "nx-native-file-cache-*"
+#: An origin two distinct worktrees can share. Any URL; the wrapper hashes it.
+SHARED_ORIGIN = "https://example.invalid/nickderobertis/ai-orchestrator.git"
+
+
+def _native_cache_keys(cache: Path) -> list[str]:
+    """Every per-origin native cache directory holding a copied Nx native module."""
+    root = cache / NATIVE_CACHE
+    if not root.is_dir():
+        return []
+    return sorted(entry.name for entry in root.iterdir() if any(entry.glob("*.node")))
+
+
+@pytest.fixture
+def scratch() -> Iterator[Path]:
+    """A `$TMPDIR` of this journey's own, and a deliberately short one.
+
+    Short because Nx opens plugin sockets under it and a Unix socket address is capped
+    at 108 bytes on Linux: a scratch root under `tmp_path` is long enough on its own to
+    fail every Nx invocation with *"Attempted to open socket that exceeds the maximum
+    socket length"*, which says nothing about the caches these journeys are for.
+    """
+    root = Path(tempfile.mkdtemp(prefix="nxs-"))
+    try:
+        yield root
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _nx_metadata_query(root: Path, cache: Path, scratch: Path) -> subprocess.CompletedProcess[str]:
+    """One real Nx invocation, with both cache roots and `$TMPDIR` of this journey's own.
+
+    A metadata query is enough and is the point: loading the native module is what
+    mints a native cache directory, and it happens on every invocation whether or not
+    a task runs.
+    """
+    scratch.mkdir(parents=True, exist_ok=True)
+    return subprocess.run(
+        ["./scripts/nx.sh", "show", "project", PROJECT, "--json"],
+        cwd=root,
+        env={
+            **os.environ,
+            "XDG_CACHE_HOME": str(cache),
+            "TMPDIR": str(scratch),
+            "UV_NO_SYNC": "1",
+            "UV_PROJECT_ENVIRONMENT": str(REPO_ROOT / ".venv"),
+        },
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+
+def _worktree_of(origin: str, root: Path) -> Path:
+    """A copy of this checkout that reports ``origin`` as its own repository identity."""
+    copy_checkout(root)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "remote", "add", "origin", origin], cwd=root, check=True)
+    return root
+
+
+def test_two_worktrees_of_one_origin_share_one_native_cache_directory(
+    tmp_path: Path, scratch: Path
+) -> None:
+    """The 22 MB native module is copied once per origin, not once per workspace root.
+
+    Nx names that directory from the hash of the workspace root, so on a host where
+    every dispatch works in a fresh worktree it mints a new one — 22 MB — per dispatch,
+    under `$TMPDIR`, and removes none: 617 of them at 12.8 GiB were measured here with
+    not one older than a day. Neither published sweeper owns that family, so `just
+    sweep` reclaimed 0 B while the device filled and a driver died mid-supervision.
+
+    Both halves are asserted because either alone passes for the wrong reason. That the
+    two worktrees share one directory is not enough on its own — a wrapper that failed
+    to set the variable and left Nx to its own default would still put both under
+    `$TMPDIR` — so the scratch root each invocation ran with is read back and required
+    to hold no per-root directory at all.
+    """
+    cache = tmp_path / "cache"
+    first = _worktree_of(SHARED_ORIGIN, tmp_path / "first")
+    second = _worktree_of(SHARED_ORIGIN, tmp_path / "second")
+
+    for root in (first, second):
+        queried = _nx_metadata_query(root, cache, scratch)
+        assert queried.returncode == 0, queried.stdout + queried.stderr
+
+    assert len(_native_cache_keys(cache)) == 1, (
+        "two worktrees of one origin left "
+        f"{_native_cache_keys(cache)} native cache directories; the whole point of "
+        "keying this on the repository identity is that they share one"
+    )
+    assert not list(scratch.glob(PER_ROOT_NATIVE_CACHE)), (
+        "Nx minted its own per-workspace-root native cache under the scratch root "
+        f"anyway: {sorted(entry.name for entry in scratch.glob(PER_ROOT_NATIVE_CACHE))}. "
+        "That is the unbounded family this redirection exists to end"
+    )
+
+
+def test_two_originless_checkouts_do_not_share_a_native_cache_directory(
+    tmp_path: Path, scratch: Path
+) -> None:
+    """An originless copy is not a repository identity, and must not be grouped as one.
+
+    The same guarantee the computation cache already gives: copies belonging to e2e
+    journeys have no origin, they fall back to their own top-level path, and two of
+    them are two different trees rather than one repository measured twice.
+    """
+    cache = tmp_path / "cache"
+    for name in ("first", "second"):
+        root = tmp_path / name
+        copy_checkout(root)
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        queried = _nx_metadata_query(root, cache, scratch)
+        assert queried.returncode == 0, queried.stdout + queried.stderr
+
+    assert len(_native_cache_keys(cache)) == 2, (
+        "two originless checkouts resolved to "
+        f"{_native_cache_keys(cache)}; a checkout with no origin is not a repository "
+        "identity and must not be silently grouped with another"
+    )
+
+
+#: A script the recipe journeys drive and neither the prose nor the code tier reads, so
+#: a diff of it is the "scripts" half of a scripts-and-recipes change.
+SCRIPT_WITNESS = "scripts/nx-selection.sh"
+#: The remote each copy publishes its base to. Never fetched — `scripts/comparison-base.sh`
+#: reads the remote-tracking ref this fixture writes — so it only has to be a remote.
+SELECTOR_ORIGIN = "https://example.invalid/nx-selection.git"
+#: The name a planted witness wears: a stem this repository has nowhere, so a probe
+#: file changes exactly the fileset it was planted for and nothing that already exists.
+PROBE_STEM = "nx-selection-probe"
+PROBE = f"{PROBE_STEM}.txt"
+#: The filesets a diff-selected tier is keyed on that no diff can carry: git ignores
+#: everything under them, and a change git does not report is one `nx affected` never
+#: sees. Named rather than skipped in silence, so a key that starts covering an ignored
+#: directory arrives as a failure here instead of as a hole in the measurement below.
+UNDIFFABLE_GLOBS = frozenset({"{workspaceRoot}/scratch/personas/**/*"})
+
+
+def _comparison_overrides() -> frozenset[str]:
+    """The environment names `scripts/comparison-base.sh` resolves its base through.
+
+    The copy each journey narrows resolves its own base, so whatever the enclosing
+    dispatch exported for *this* checkout is dropped: `onevcs` names one for the gate a
+    lifecycle runs, and a copy asked to narrow against a branch it holds no
+    remote-tracking ref for refuses — which would leave these journeys answering to
+    their environment rather than to the selector. Read out of that script rather than
+    restated here, because it owns which spellings win and a copy would go stale
+    exactly when a new one was added.
+    """
+    source = (REPO_ROOT / "scripts/comparison-base.sh").read_text(encoding="utf-8")
+    names = frozenset(re.findall(r"\b([A-Z][A-Z_]*_COMPARISON_(?:REMOTE|BASE))\b", source))
+    assert len(names) >= 2, (
+        f"scripts/comparison-base.sh names {sorted(names)} as its base overrides, which "
+        "is too few to be the contract it documents; these journeys would then inherit "
+        "one and narrow against a ref their copy does not have"
+    )
+    return names
+
+
+#: Every tier a prose-only diff leaves out, which is the saving stated rather than
+#: implied: each belongs to a project whose key carries no prose at all, which is why
+#: it is skippable and why skipping it is equivalent to replaying it. The journey
+#: derives the same set from the graph, so a target added to one of these projects
+#: fails here instead of quietly joining what a documentation push stops running.
+SKIPPABLE_TIERS = frozenset(
+    {
+        *((journey.project, ASK_SEAM_SCOPED) for journey in ASK_SEAM_JOURNEYS),
+        (DAG_UI_PROJECT, DAG_UI_SCOPED),
+        (UNWATCHED_PROJECT, UNWATCHED_SCOPED),
+        (WRITEBACK_BUDGET_PROJECT, WRITEBACK_BUDGET_SCOPED),
+        (RUN_END_HOOKS_PROJECT, RUN_END_HOOKS_SCOPED),
+        (HOST_VIEWS_PROJECT, HOST_VIEWS_SCOPED),
+        (SESSION_SETUP_PROJECT, SESSION_SETUP_SCOPED),
+        # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
+        # catalog of test projects, where every project has its entry, and
+        # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall
+        # outside the tiers it describes; the host-sweep entry sits beside the others'
+        # because the catalog is the domain.
+        (HOST_SWEEP_PROJECT, HOST_SWEEP_SCOPED),
+        # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+        (PROJECT_STORE_RACE_PROJECT, PROJECT_STORE_RACE_SCOPED),
+        # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
+        # catalog of test projects, where every project has its entry, and
+        # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall
+        # outside the tiers it describes; the plan-store-assets and render-diagram entries
+        # sit beside the others' rather than in a domain of their own because the catalog is
+        # the domain.
+        (PLAN_STORE_ASSETS_PROJECT, PLAN_STORE_ASSETS_SCOPED),
+        (RENDER_DIAGRAM_PROJECT, RENDER_DIAGRAM_SCOPED),
+        # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+        (UNPUBLISHED_VIEW_PROJECT, UNPUBLISHED_VIEW_SCOPED),
+        (UNFINISHED_PROJECT, UNFINISHED_SCOPED),
+        # The journeys left at the `tests/e2e` root read configuration and scripts, no prose.
+        (E2E_ROOT_PROJECT, CODE_SCOPED),
+        # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's
+        # one catalog of test projects, where every project has its entry, and
+        # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall
+        # outside the tiers it describes; the unfinished project's budgets entry sits beside
+        # its test tier's because the catalog is the domain.
+        (UNFINISHED_PROJECT, BUDGET_SCOPED),
+        # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+        # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
+        # catalog of test projects, where every project has its entry, and
+        # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall
+        # outside the tiers it describes; the board-copy-approval entry sits beside the
+        # others' because the catalog is the domain.
+        (BOARD_COPY_APPROVAL_PROJECT, BOARD_COPY_APPROVAL_SCOPED),
+        # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+        # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
+        # catalog of test projects, where every project has its entry, and
+        # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall
+        # outside the tiers it describes; the toolchain-isolation entry sits beside the
+        # others' because the catalog is the domain.
+        (TOOLCHAIN_ISOLATION_PROJECT, TOOLCHAIN_ISOLATION_SCOPED),
+        # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+        # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
+        # catalog of test projects, where every project has its entry, and
+        # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall
+        # outside the tiers it describes; the graceful-cancel entry sits beside the others'
+        # because the catalog is the domain.
+        (GRACEFUL_CANCEL_PROJECT, GRACEFUL_CANCEL_SCOPED),
+        # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+        # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
+        # catalog of test projects, where every project has its entry, and
+        # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall
+        # outside the tiers it describes; the manager-allowlist entry sits beside the
+        # others' rather than in a domain of its own because the catalog is the domain.
+        (MANAGER_ALLOWLIST_PROJECT, MANAGER_ALLOWLIST_SCOPED),
+        # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+        # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This set is the catalog of
+        # tiers a documentation push may skip, derived again from the graph by this journey, so
+        # every project's entry sits here; the session-open-conflict entry is one row of it.
+        (SESSION_OPEN_CONFLICT_PROJECT, SESSION_OPEN_CONFLICT_SCOPED),
+        # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+        # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This set is the catalog of
+        # tiers a documentation push may skip, derived again from the graph by this journey, so
+        # every project's entry sits here; the journey projects whose keys carry no prose are rows.
+        ("budget-gate", CODE_SCOPED),
+        ("registry-and-recipes", CODE_SCOPED),
+        ("suite-helpers", CODE_SCOPED),
+        # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+        # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This set is the catalog of
+        # tiers a documentation push may skip, derived again from the graph by this journey, so
+        # every project's entry sits here; the plan-copy journeys, whose key reads no prose and
+        # which have no whole-workspace target, are one row of it.
+        ("plan-tooling-plan-copy", CODE_SCOPED),
+        # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+    }
+)
+
+
+@dataclass(frozen=True)
+class Selector(Checkout):
+    """A checkout `just check`'s own selector can narrow, and a diff for it to narrow."""
+
+    def _show(self, *args: str) -> set[str]:
+        result = subprocess.run(
+            ["./scripts/nx.sh", "show", "projects", "--json", *args],
+            cwd=self.root,
+            env={
+                **os.environ,
+                "XDG_CACHE_HOME": str(self.cache),
+                "AI_ORCHESTRATOR_NX_SHOW_OUTPUT": "1",
+                "UV_NO_SYNC": "1",
+                "UV_PROJECT_ENVIRONMENT": str(REPO_ROOT / ".venv"),
+            },
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        rendered = next(line for line in result.stdout.splitlines() if line.startswith("["))
+        return set(json.loads(rendered))
+
+    def projects(self) -> set[str]:
+        return self._show()
+
+    def owners(self, target: str) -> set[str]:
+        """Every project declaring ``target``, read from the graph rather than listed."""
+        return self._show("--with-target", target)
+
+    def deterministic_tiers(self, projects: set[str]) -> set[tuple[str, str]]:
+        """Which of the deterministic tier's diff-selected targets ``projects`` declare."""
+        nodes = self.graph()["nodes"]
+        return {
+            (project, target)
+            for project in projects
+            for target in nodes[project]["data"]["targets"]
+            if target in SELECTED_TARGETS
+        }
+
+    def selection(self) -> list[str]:
+        """The Nx arguments `just check` would narrow with, from the script that decides.
+
+        Reading them here rather than restating them is what keeps these journeys about
+        the selection the recipe makes: a `scripts/nx-selection.sh` that stopped
+        narrowing, or narrowed against a different ref, moves every answer below.
+        """
+        result = subprocess.run(
+            ["./scripts/nx-selection.sh"],
+            cwd=self.root,
+            env={
+                key: value
+                for key, value in os.environ.items()
+                if key not in _comparison_overrides()
+            },
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        return result.stdout.split()
+
+    def keyed_filesets(self) -> dict[str, set[tuple[str, str]]]:
+        """Every fileset the diff-selected tiers are keyed on, and which tiers declare it.
+
+        The inputs and the edges are Nx's own graph, so a fileset a `targetDefaults` entry
+        supplies is read exactly as one a `project.json` states, and a unit's files reach
+        the tiers that take them through the edges Nx built. Only the named-input
+        expansion happens here: a project's own `namedInputs` over the `nx.json` Nx just
+        read, a `dependencies` input over every transitive dependency, and a `projects`
+        input over each project it names.
+        """
+        graph = self.graph()
+        shared = json.loads((self.root / "nx.json").read_text(encoding="utf-8"))["namedInputs"]
+        nodes = {name: node["data"] for name, node in graph["nodes"].items()}
+
+        def dependencies(project: str) -> set[str]:
+            reached: set[str] = set()
+            pending = [edge["target"] for edge in graph["dependencies"].get(project, [])]
+            while pending:
+                name = pending.pop()
+                if name not in reached:
+                    reached.add(name)
+                    pending.extend(edge["target"] for edge in graph["dependencies"].get(name, []))
+            return reached
+
+        def expand(entries: list, project: str) -> list[str]:
+            data = nodes[project]
+            owned = "" if data["root"] in ("", ".") else f"{data['root']}/"
+            named = {**shared, **data.get("namedInputs", {})}
+            globs: list[str] = []
+            for entry in entries:
+                match entry:
+                    case {"input": str() as name, "dependencies": True}:
+                        for dependency in sorted(dependencies(project)):
+                            globs.extend(expand([name], dependency))
+                    case {"input": str() as name, "projects": str() | list() as listed}:
+                        for named_project in [listed] if isinstance(listed, str) else listed:
+                            globs.extend(expand([name], named_project))
+                    case dict():
+                        pass  # an env or runtime input contributes no file coverage
+                    case str() if entry in named:
+                        globs.extend(expand(named[entry], project))
+                    case str():
+                        globs.append(entry.replace("{projectRoot}/", owned))
+            return globs
+
+        keyed: dict[str, set[tuple[str, str]]] = {}
+        for project, data in sorted(nodes.items()):
+            for target, declared in data["targets"].items():
+                if target not in SELECTED_TARGETS:
+                    continue
+                for glob in expand(declared.get("inputs") or ["default"], project):
+                    keyed.setdefault(glob, set()).add((project, target))
+        return keyed
+
+    def project_roots(self) -> set[str]:
+        """The directory each project owns, less the workspace root every path is under.
+
+        Derived rather than listed: a project declared after this was written is one a
+        diff has to be able to reach, and listing them is how it would stop being one.
+        The root project is left out because the edit beside these already sits there.
+        """
+        roots = {self.resolved_project(project)["root"] for project in self.projects()}
+        return {root for root in roots if root not in ("", ".")}
+
+    def tracked(self) -> list[str]:
+        """Every path git tracks here, in one stable order, so a witness is not a choice."""
+        result = subprocess.run(
+            ["git", "ls-files"],
+            cwd=self.root,
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+        return sorted(result.stdout.splitlines())
+
+    def pending(self) -> set[str]:
+        """Every path git reports as changed here, which is what `nx affected` reads."""
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "-uall"],
+            cwd=self.root,
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+        return {line[3:] for line in result.stdout.splitlines()}
+
+    @contextmanager
+    def planted(self, witness: str) -> Iterator[bool]:
+        """Make ``witness`` a change in this tree, and say whether git reports it.
+
+        A file already there is changed rather than replaced, by one trailing newline:
+        that moves its hash and leaves its content valid, which matters because Nx
+        parses several of these while it answers. A symlink is changed as git records
+        it, by its target: respelt through `./` it still resolves to the same file,
+        while a newline written through it would change the file it names and leave
+        the link git tracks as it was.
+        """
+        path = self.root / witness
+        if path.is_symlink():
+            target = os.readlink(path)
+            path.unlink()
+            path.symlink_to(f"./{target}")
+            try:
+                yield witness in self.pending()
+            finally:
+                path.unlink()
+                path.symlink_to(target)
+            return
+        original = path.read_bytes() if path.is_file() else None
+        if original is None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("probe\n", encoding="utf-8")
+        else:
+            path.write_bytes(original + b"\n")
+        try:
+            yield witness in self.pending()
+        finally:
+            if original is None:
+                path.unlink()
+            else:
+                path.write_bytes(original)
+
+    def selected(self, target: str | None = None) -> set[str]:
+        """Which projects that selection picks for the working tree as it now stands.
+
+        `nx affected` runs targets and `nx show projects` answers which projects it
+        would run them for, spelling the same narrowing `--affected`; the base comes
+        from the selection above rather than from this journey.
+        """
+        verb, *flags = self.selection()
+        assert verb == "affected", (
+            f"scripts/nx-selection.sh narrowed nothing here, answering {verb!r}; these "
+            "journeys are about what it narrows to"
+        )
+        return self._show("--affected", *flags, *(("-t", target) if target else ()))
+
+
+def published(checkout: Checkout) -> Selector:
+    """`checkout` with its tree committed and published, which is what a diff is against.
+
+    Published because the ref the selector resolves is the one the judged tier and the
+    publishing push already use, so a copy with no remote-tracking base is a copy it
+    correctly declines to narrow. The edits each journey then makes stay uncommitted,
+    which is the state a worker's own gate runs in.
+    """
+    for args in (
+        ("config", "user.name", "test"),
+        ("config", "user.email", "test.invalid"),
+        ("remote", "add", "origin", SELECTOR_ORIGIN),
+        ("add", "-A"),
+        ("-c", "commit.gpgsign=false", "commit", "-qm", "base"),
+    ):
+        subprocess.run(["git", *args], cwd=checkout.root, check=True, capture_output=True)
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=checkout.root,
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "update-ref", "refs/remotes/origin/main", base],
+        cwd=checkout.root,
+        check=True,
+        capture_output=True,
+    )
+    return Selector(root=checkout.root, cache=checkout.cache)
+
+
+@pytest.fixture
+def selector(checkout: Checkout) -> Selector:
+    return published(checkout)
+
+
+def test_a_prose_only_diff_still_selects_every_tier_whose_subject_is_prose(
+    selector: Selector,
+) -> None:
+    """The case the selector is least obviously safe in, and so the one to take first.
+
+    Nothing that reads this repository's prose belongs to a project the prose sits in —
+    `AGENTS.md` is in no project root at all — so a selector that picked projects by
+    ownership would leave the prose tiers out of a documentation-only push and the gate
+    would stop checking the very thing that changed.
+    """
+    selector.edit(PROSE_WITNESS, PROSE_TEXT, PROSE_EDIT)
+
+    assert selector.selected(DOCS_SCOPED) == selector.owners(DOCS_SCOPED), (
+        f"editing {PROSE_WITNESS} must select every project that runs a {DOCS_SCOPED} tier"
+    )
+
+
+def test_a_scripts_and_recipes_only_diff_still_selects_the_tier_that_drives_them(
+    selector: Selector,
+) -> None:
+    """Neither witness is in a project root either, and the journeys that drive them are."""
+    selector.edit(CODE_WITNESS, CODE_TEXT, CODE_EDIT)
+    selector.append(SCRIPT_WITNESS, "# probe")
+
+    assert selector.selected(RECIPE_SCOPED) == selector.owners(RECIPE_SCOPED), (
+        f"editing {CODE_WITNESS} and {SCRIPT_WITNESS} must select every project that "
+        f"runs a {RECIPE_SCOPED} tier"
+    )
+
+
+def test_a_code_only_diff_still_selects_the_code_tier_and_the_coverage_read(
+    selector: Selector,
+) -> None:
+    """The floor is only enforceable where the tier that measures it was selected too."""
+    selector.append(PYTHON_WITNESS, "# probe")
+
+    assert PROJECT in selector.selected(CODE_SCOPED), (
+        f"editing {PYTHON_WITNESS} must select the tier that runs over it"
+    )
+    assert selector.selected(COVERAGE_SCOPED) == selector.owners(COVERAGE_SCOPED), (
+        "the read that judges the floor must be selected by a diff of the code it measures"
+    )
+
+
+def test_a_diff_of_the_record_store_alone_selects_its_race_tier(selector: Selector) -> None:
+    """The race over `orchestrator/project_store.py` is charged to that module and not to
+    every change of `orchestrator/`.
+
+    The race is bounded by the clock rather than by a count, so it costs the same two
+    seconds however little changed; a project of its own keyed on the store is what turns
+    that into a cost only a change of the store pays. Both halves are asked of the real
+    selector: a change to the store selects the tier, and a change to a module of
+    `orchestrator/` the store never imports leaves it out — while still selecting the
+    code tier, where the store's own unit tests run.
+    """
+    with selector.planted(STORE_WITNESS) as reported_by_git:
+        assert reported_by_git
+        assert PROJECT_STORE_RACE_PROJECT in selector.selected(PROJECT_STORE_RACE_SCOPED), (
+            f"a diff of {STORE_WITNESS} must select the tier that races it"
+        )
+
+    with selector.planted(PYTHON_WITNESS) as reported_by_git:
+        assert reported_by_git
+        assert PROJECT_STORE_RACE_PROJECT not in selector.selected(PROJECT_STORE_RACE_SCOPED), (
+            f"a diff of {PYTHON_WITNESS} reaches nothing the race reads, so charging the "
+            "race to it is the cost the project boundary exists to keep off"
+        )
+        assert PROJECT in selector.selected(CODE_SCOPED), (
+            f"a diff of {PYTHON_WITNESS} must still select the code tier that reads it"
+        )
+
+
+def test_a_diff_of_the_unpublished_view_alone_selects_its_journey_tier(
+    selector: Selector,
+) -> None:
+    """The journey over `just unpublished` is charged to what it drives, not to `scripts/**`.
+
+    Each of its tests spends real `onevcs` sessions, real `git` and a real `just`, so a
+    project of its own keyed file by file is what keeps that cost off an edit to a script
+    the view never reaches. Both halves are asked of the real selector: a change to the
+    wrapper selects the tier, and a change to another script leaves it out — while still
+    selecting the recipe tier, whose key does cover every script.
+    """
+    with selector.planted(UNPUBLISHED_WITNESS) as reported_by_git:
+        assert reported_by_git
+        assert UNPUBLISHED_VIEW_PROJECT in selector.selected(UNPUBLISHED_VIEW_SCOPED), (
+            f"a diff of {UNPUBLISHED_WITNESS} must select the tier that drives it"
+        )
+
+    with selector.planted(UNREACHED_SCRIPT_WITNESS) as reported_by_git:
+        assert reported_by_git
+        assert UNPUBLISHED_VIEW_PROJECT not in selector.selected(UNPUBLISHED_VIEW_SCOPED), (
+            f"a diff of {UNREACHED_SCRIPT_WITNESS} reaches nothing the view reads, so "
+            "charging its real sessions to it is the cost the project boundary keeps off"
+        )
+        assert PROJECT in selector.selected(RECIPE_SCOPED), (
+            f"a diff of {UNREACHED_SCRIPT_WITNESS} must still select the recipe tier"
+        )
+
+
+def test_a_prose_only_diff_leaves_out_only_tiers_that_would_have_replayed(
+    selector: Selector,
+) -> None:
+    """The narrowing this change is for, and the argument that makes it sound.
+
+    The tiers that stop running are named rather than counted — derived from the graph
+    and reconciled against the list above — and each is then driven against the edited
+    tree: it replays, so not running it checks nothing less than running it would have.
+    Recording both together is what separates a selector that is cheaper from one that
+    merely checks less.
+    """
+    for project, target in SKIPPABLE_TIERS:
+        assert selector.ran_the_command(f"{project}:{target}")
+
+    selector.edit(PROSE_WITNESS, PROSE_TEXT, PROSE_EDIT)
+
+    skipped = selector.projects() - selector.selected()
+    assert selector.deterministic_tiers(skipped) == SKIPPABLE_TIERS, (
+        f"a diff of {PROSE_WITNESS} alone stopped running "
+        f"{sorted(selector.deterministic_tiers(skipped))}; the tiers that may stop "
+        "running are the ones whose keys carry no prose"
+    )
+    for project, target in sorted(SKIPPABLE_TIERS):
+        assert not selector.ran_the_command(f"{project}:{target}"), (
+            f"{project}:{target} is left out of this diff's selection, and the licence "
+            "for that is that it would have replayed a verdict recorded for this tree"
+        )
+
+
+def test_a_diff_reaching_every_project_leaves_none_of_them_out(selector: Selector) -> None:
+    """Narrowing must never become skipping: touch them all and the tier runs them all."""
+    selector.edit(CODE_WITNESS, CODE_TEXT, CODE_EDIT)
+    for root in selector.project_roots():
+        (selector.root / root / PROBE).write_text("probe\n", encoding="utf-8")
+
+    assert selector.selected() == selector.projects(), (
+        "a diff that reaches every project must leave the deterministic tier nothing to skip"
+    )
+
+
+def _witness_for(fileset: str) -> str:
+    """The repository-relative path a change matching ``fileset`` would sit at.
+
+    Three shapes, and a fourth fails rather than being guessed at: a literal path, a
+    `**/` glob whose tail names what the file is called, and a one-directory glob such as
+    `oneharness*.toml` whose one `*` sits in the file's name. Guessing wrong would plant a
+    witness the fileset does not cover, and the journey below would then report a tier
+    as reachable on the strength of a path that never reaches it.
+    """
+    relative = fileset.removeprefix("!").replace("{workspaceRoot}/", "")
+    if "*" not in relative:
+        return relative
+    prefix, separator, tail = relative.rpartition("**/")
+    if not separator:
+        prefix, _, tail = relative.rpartition("/")
+        prefix = f"{prefix}/" if prefix else ""
+    assert "*" not in prefix and "**" not in tail and tail.count("*") == 1, (
+        f"{fileset} is a shape these journeys cannot plant a witness for; teach "
+        "_witness_for its shape rather than leaving the paths it covers unmeasured"
+    )
+    return f"{prefix}{tail.replace('*', PROBE_STEM)}"
+
+
+def test_every_fileset_a_diff_selected_tier_is_keyed_on_still_selects_that_tier(
+    selector: Selector,
+) -> None:
+    """The general form of the three journeys above: every fileset, not three shapes.
+
+    Which projects Nx picks is decided by two locators at once — one reading the roots
+    projects own, one reading the `{workspaceRoot}` filesets their targets declare —
+    and no Nx contract promises either. So what this narrowing rests on is measured
+    rather than argued: plant a change at each fileset a diff-selected tier is keyed
+    on, ask the real selector, and require every tier that reads that path to be among
+    the projects it picked. A release that stopped reading one of those locators drops
+    a tier a diff reaches, and fails here.
+
+    A `!` fileset is asked the same question, because Nx never extracts one: an
+    exclusion cannot narrow what selects a project, and the journey after this one is
+    what says the exclusion still buys the replay it was written for.
+    """
+    keyed = selector.keyed_filesets()
+    # A tier keyed on nothing would be measured by nothing, and this journey would
+    # then pass by asking about a graph it never read.
+    assert {project for tiers in keyed.values() for project, _ in tiers} == {
+        project for target in SELECTED_TARGETS for project in selector.owners(target)
+    }, f"some project running a diff-selected target declared no fileset: {sorted(keyed)}"
+
+    undiffable: set[str] = set()
+    for fileset, tiers in sorted(keyed.items()):
+        witness = _witness_for(fileset)
+        with selector.planted(witness) as reported_by_git:
+            if not reported_by_git:
+                undiffable.add(fileset)
+                continue
+            selected = selector.selected()
+        dropped = {project for project, _ in tiers} - selected
+        assert not dropped, (
+            f"a diff of {witness} alone left {sorted(dropped)} out of the selection, "
+            f"and {sorted(tiers)} is keyed on {fileset} — so the deterministic tier "
+            "would stop checking a path that changed"
+        )
+
+    assert undiffable == UNDIFFABLE_GLOBS, (
+        f"{sorted(undiffable)} could not be measured because git reports no change "
+        "under them; a fileset that leaves the measurement has to be one no diff can "
+        "carry, and has to say so here"
+    )
+
+
+def test_a_path_a_tier_excludes_from_its_key_is_one_that_tier_replays_for(
+    selector: Selector,
+) -> None:
+    """What a `!` fileset buys, given that it buys nothing from the selector.
+
+    Nx extracts only the positive `{workspaceRoot}` filesets, so an exclusion cannot
+    keep a project out of a selection — the journey above asks the excluded paths the
+    same question every other path is asked, and they answer the same way. What an
+    exclusion does buy is the other half, and it is the half this narrowing needs: the
+    tier replays for a change at that path. So whether the selector picks that project
+    or drops it, the verdict is the one already recorded for this tree either way, and
+    an Nx that started honouring exclusions in its selection would take nothing away.
+
+    Each tier is asked about a path its key *includes* first. That control is what
+    makes the answer worth having: a tier that replayed for both would be one nothing
+    had reached, and would report an exclusion working when the instrument was dead.
+    """
+    per_tier: dict[tuple[str, str], list[str]] = {}
+    for fileset, tiers in selector.keyed_filesets().items():
+        for tier in tiers:
+            per_tier.setdefault(tier, []).append(fileset)
+    excluding = {
+        tier: repository_relative_globs(filesets)
+        for tier, filesets in per_tier.items()
+        if any(fileset.startswith("!") for fileset in filesets)
+    }
+    assert excluding, "no tier excludes anything from its key, so this journey proves nothing"
+
+    tracked = selector.tracked()
+    for (project, target), globs in sorted(excluding.items()):
+        tier = f"{project}:{target}"
+        # The whole key, filesets apart: a path one of the tier's own exclusions names can
+        # still be one another of its inputs takes back, as `orchestrator:test` does the
+        # journeys its gates read, and planting that one would prove nothing about the
+        # exclusion.
+        key = target_input_globs(project_root(project), target)
+        included = next((path for path in tracked if covers(globs, path)), None)
+        assert included, f"{tier} is keyed on nothing this tree contains: {globs}"
+
+        assert selector.ran_the_command(tier)
+        with selector.planted(included):
+            assert selector.ran_the_command(tier), (
+                f"{tier} replayed for a change to {included}, which its key covers, so "
+                "nothing below would tell an honoured exclusion from an unread tree"
+            )
+
+        for negated in sorted(glob for glob in globs if glob.startswith("!")):
+            excluded = next(
+                (path for path in tracked if matches(negated[1:], path) and not covers(key, path)),
+                None,
+            )
+            assert excluded, (
+                f"{tier} excludes {negated} from its key, and this tree holds no path "
+                "that fileset names, so the exclusion cannot be measured — and buys "
+                "nothing until it can"
+            )
+            with selector.planted(excluded):
+                assert not selector.ran_the_command(tier), (
+                    f"{tier} re-ran for a change to {excluded}, which its key excludes "
+                    f"through {negated}; an exclusion that does not buy the replay buys "
+                    "nothing at all"
+                )
+
+
+def test_a_diff_of_the_workspace_configuration_selects_every_project(
+    selector: Selector,
+) -> None:
+    """`nx.json` is the one path the selector treats as reaching everything.
+
+    It is where the filesets themselves are declared, so a change to it can move what
+    every other path selects — and Nx answers a change to it with the whole workspace
+    rather than with the projects that happen to name it. Measured because the
+    narrowing would be unsound without it: the recipe hands Nx a base and no exception
+    list, so a tier whose key moved has to be re-run by the selection itself.
+    """
+    selector.append("nx.json", "")
+
+    assert selector.selected() == selector.projects(), (
+        "a diff of nx.json must leave the deterministic tier nothing to skip: it is "
+        "where every other tier's key is declared"
+    )
+
+
+#: A test-support module several graph-keyed tiers reach — through `dependencies` edges
+#: and through a journey project's `projects` list alike — and one only a
+#: single tier reaches: the pair the project graph has to tell apart, where a hand-kept
+#: list per tier could only be right by being kept right.
+SHARED_HELPER = "tests/e2e/probe_run_root.py"
+SINGLE_TIER_HELPER = "tests/llmlint_install.py"
+#: The ask-seam journey among them, by the row `tests/nx_inputs.py` keeps for it.
+BUS_RESOLUTION = next(
+    journey for journey in ASK_SEAM_JOURNEYS if journey.project == "ask-seam-bus-resolution"
+)
+#: The graph-keyed tiers whose modules reach `SHARED_HELPER`, and the one whose modules
+#: reach `SINGLE_TIER_HELPER`.
+REACHES_SHARED = frozenset(
+    {
+        f"budget-gate:{CODE_SCOPED}",
+        f"launch-monitor-observer:{CODE_SCOPED}",
+        f"registry-and-recipes:{CODE_SCOPED}",
+        f"{BUS_RESOLUTION.project}:{ASK_SEAM_SCOPED}",
+        f"{HOST_VIEWS_PROJECT}:{HOST_VIEWS_SCOPED}",
+        f"{UNWATCHED_PROJECT}:{UNWATCHED_SCOPED}",
+    }
+)
+REACHES_SINGLE = frozenset({f"registry-and-recipes:{CODE_SCOPED}"})
+#: Graph-keyed tiers that reach neither helper: the controls, without which a tier that
+#: re-ran for everything would pass the half above.
+REACHES_NEITHER = frozenset(
+    {
+        f"{DAG_UI_PROJECT}:{DAG_UI_SCOPED}",
+        f"{SESSION_SETUP_PROJECT}:{SESSION_SETUP_SCOPED}",
+        f"{PROJECT_STORE_RACE_PROJECT}:{PROJECT_STORE_RACE_SCOPED}",
+    }
+)
+
+
+def test_a_test_support_edit_selects_and_re_runs_exactly_the_tiers_whose_modules_reach_it(
+    selector: Selector,
+) -> None:
+    """A shared helper's edit selects and invalidates every tier that imports it and no
+    tier that does not, through the edges the project graph declares.
+
+    Both halves are asked of real Nx for each helper: the selection `just check` narrows
+    to, which reaches a tier through the reverse edge from the helper's unit, and the
+    cache, which re-runs a tier only when its key moved. Every tier here is keyed through
+    the graph rather than on a whole tree, and each is its project's one tier the helpers
+    reach differently — the orchestrator project is selected by every edit through its
+    whole-workspace targets, so none of its tiers is what this is about. The expected sets
+    are reconciled against the declared keys first, so what real Nx is asked is the claim
+    `tests/tree_scans/test_nx_cache_scope.py` holds statically.
+    """
+    tiers = REACHES_SHARED | REACHES_NEITHER
+    for tier in sorted(tiers):
+        project, target = tier.split(":")
+        root = project_root(project)
+        assert covers(target_input_globs(root, target), SHARED_HELPER) == (
+            tier in REACHES_SHARED
+        ), tier
+        assert covers(target_input_globs(root, target), SINGLE_TIER_HELPER) == (
+            tier in REACHES_SINGLE
+        ), tier
+        assert selector.ran_the_command(tier)
+
+    for helper, reaches in ((SHARED_HELPER, REACHES_SHARED), (SINGLE_TIER_HELPER, REACHES_SINGLE)):
+        with selector.planted(helper) as reported_by_git:
+            assert reported_by_git
+            selected = selector.selected()
+            chosen = {tier for tier in tiers if tier.split(":")[0] in selected}
+            assert chosen == reaches, (
+                f"a diff of {helper} alone selected the projects of {sorted(chosen)}; the "
+                f"tiers whose modules reach it are {sorted(reaches)}"
+            )
+            re_ran = {tier for tier in tiers if selector.ran_the_command(tier)}
+            assert re_ran == reaches, (
+                f"an edit to {helper} re-ran {sorted(re_ran)}; the tiers whose modules "
+                f"reach it are {sorted(reaches)}"
+            )
+
+
+#: The script both session-setup targets run, and what their keys are there to notice.
+SESSION_SETUP_WITNESS = "scripts/session-setup.sh"
+#: The one module of `orchestrator/` the session-setup journeys import.
+ROOT_WITNESS = "orchestrator/root.py"
+
+
+def test_the_session_setup_journeys_are_charged_to_session_setup_alone(
+    selector: Selector,
+) -> None:
+    """Real provisioning and PyPI installs are paid for by an edit that can move them.
+
+    An edit to `orchestrator/` code these journeys do not import selects neither
+    session-setup project and invalidates neither target; an edit to
+    `orchestrator/root.py`, which every one of their modules imports, re-runs both; and an
+    edit to the setup script selects the target `just check` runs and invalidates both —
+    the PyPI journeys' included, which `just check` never runs and `just test` then
+    re-runs rather than replays.
+    """
+    tiers = (
+        f"{SESSION_SETUP_PROJECT}:{SESSION_SETUP_SCOPED}",
+        f"{SESSION_SETUP_PYPI_PROJECT}:{SESSION_SETUP_PYPI_SCOPED}",
+    )
+    for tier in tiers:
+        assert selector.ran_the_command(tier)
+
+    with selector.planted(PYTHON_WITNESS) as reported_by_git:
+        assert reported_by_git
+        selected = selector.selected()
+        for project in (SESSION_SETUP_PROJECT, SESSION_SETUP_PYPI_PROJECT):
+            assert project not in selected, f"a diff of {PYTHON_WITNESS} alone selected {project}"
+        for tier in tiers:
+            assert not selector.ran_the_command(tier), (
+                f"{tier} re-ran for an edit to {PYTHON_WITNESS}, which it never reads"
+            )
+
+    with selector.planted(ROOT_WITNESS) as reported_by_git:
+        assert reported_by_git
+        for tier in tiers:
+            assert selector.ran_the_command(tier), (
+                f"{tier} replayed a verdict for an edit to {ROOT_WITNESS}, which its modules import"
+            )
+
+    with selector.planted(SESSION_SETUP_WITNESS) as reported_by_git:
+        assert reported_by_git
+        assert SESSION_SETUP_PROJECT in selector.selected(SESSION_SETUP_SCOPED), (
+            f"a diff of {SESSION_SETUP_WITNESS} must select the setup journey `just check` runs"
+        )
+        for tier in tiers:
+            assert selector.ran_the_command(tier), (
+                f"{tier} replayed a verdict for an edit to {SESSION_SETUP_WITNESS}, which it runs"
+            )
+
+
+#: The narrow edits the `spike-gate-profile` measured the gate under — one script, one
+#: persona, one document — and a journey module only its own project reads: the edits the
+#: split of `tests/e2e` into journey projects is for.
+NARROW_SCRIPT = "scripts/budget-dispatches.sh"
+NARROW_PERSONA = "personas/researcher.yaml"
+NARROW_DOC = "docs/budgets.md"
+SPLIT_EDITS = (NARROW_SCRIPT, NARROW_PERSONA, NARROW_DOC, JOURNEY_WITNESS)
+#: What Nx records for a task it answered from the cache rather than by running it.
+REPLAYED = frozenset({"local-cache-hit", "local-cache-kept-existing"})
+
+
+def _journey_targets(selector: Selector) -> dict[str, bool]:
+    """Every test target of every journey project, and whether Nx caches it, from Nx's own
+    resolution of the declarations rather than from a list kept here."""
+    nodes = selector.graph()["nodes"]
+    return {
+        f"{journey.project}:{target}": declared.get("cache") is not False
+        for journey in E2E_JOURNEYS
+        for target, declared in nodes[journey.project]["data"]["targets"].items()
+        if target.startswith("test") and target != "test-support"
+    }
+
+
+def _ran(selector: Selector, tasks: list[str]) -> dict[str, str]:
+    """Run ``tasks`` in one real Nx invocation, collection only, and read back what Nx
+    recorded for each: the `cacheStatus` of its own run summary, `run.json` in the cache
+    directory the wrapper derives."""
+    targets = sorted({task.split(":")[1] for task in tasks})
+    projects = sorted({task.split(":")[0] for task in tasks})
+    result = subprocess.run(
+        ["./scripts/nx.sh", "run-many", "-t", *targets, "-p", *projects],
+        cwd=selector.root,
+        env={
+            **{
+                key: value
+                for key, value in os.environ.items()
+                if key not in {"NX_SKIP_NX_CACHE", "NX_DISABLE_NX_CACHE"}
+            },
+            "XDG_CACHE_HOME": str(selector.cache),
+            "UV_NO_SYNC": "1",
+            "UV_PROJECT_ENVIRONMENT": str(REPO_ROOT / ".venv"),
+            "PYTEST_ADDOPTS": COLLECT_ONLY,
+        },
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    (summary,) = (selector.cache / "ai-orchestrator" / "nx").glob("*/run.json")
+    recorded = {
+        task["taskId"]: task["cacheStatus"]
+        for task in json.loads(summary.read_text(encoding="utf-8"))["tasks"]
+    }
+    assert set(tasks) <= set(recorded), (set(tasks) - set(recorded), result.stdout)
+    return recorded
+
+
+def test_a_narrow_edit_selects_and_re_runs_only_the_journey_projects_that_read_it(
+    selector: Selector,
+) -> None:
+    """The `tests/e2e` split, asked of real Nx: each journey project is selected and re-run
+    for an edit its key covers, and replayed for one it does not.
+
+    The journey projects' targets run once to warm the cache, collection only; then each of
+    the spike's narrow edits, and an edit to one project's own module, is planted in turn.
+    For each, the selection `scripts/nx-selection.sh` makes selects exactly the journey
+    projects a target of which is keyed on the edit — an uncached `test-checkouts` target's
+    declared inputs included, which Nx's selection reads as it reads any target's — and one
+    real run of every journey target reports from Nx's own run summary a miss for each
+    keyed cached target, a replay for every other cached one, and a miss for every uncached
+    `test-checkouts` target on every invocation — the tier that reads other repositories'
+    checkouts has no memo to replay.
+    """
+    targets = _journey_targets(selector)
+    uncached = {task for task, cached in targets.items() if not cached}
+    assert uncached, "no journey project declares an uncached checkouts target any more"
+    assert all(task.endswith(f":{CHECKOUT_SCOPED}") for task in uncached), uncached
+    warmed = _ran(selector, list(targets))
+    assert {task: warmed[task] for task in targets} == dict.fromkeys(targets, "cache-miss")
+
+    keyed_by_edit: dict[str, set[str]] = {}
+    for edit in SPLIT_EDITS:
+        declaring = {
+            task
+            for task in targets
+            if covers(
+                target_input_globs(project_root(task.split(":")[0]), task.split(":")[1]), edit
+            )
+        }
+        keyed = {task for task in declaring if targets[task]}
+        keyed_by_edit[edit] = keyed
+        with selector.planted(edit) as reported_by_git:
+            assert reported_by_git
+            selected = selector.selected() & {journey.project for journey in E2E_JOURNEYS}
+            assert selected == {task.split(":")[0] for task in declaring}, (
+                f"a diff of {edit} alone selected journey projects {sorted(selected)}; the "
+                f"targets keyed on it are {sorted(declaring)}"
+            )
+            recorded = _ran(selector, list(targets))
+        for task, cached in targets.items():
+            if not cached:
+                assert recorded[task] == "cache-miss", (
+                    f"{task} answered {recorded[task]} for an edit to {edit}; it is uncached"
+                )
+            elif task in keyed:
+                assert recorded[task] == "cache-miss", (
+                    f"{task} replayed a verdict for an edit to {edit}, which its key covers"
+                )
+            else:
+                assert recorded[task] in REPLAYED, (
+                    f"{task} answered {recorded[task]} for an edit to {edit}, which its key "
+                    "leaves out, so it had to replay"
+                )
+
+    # The edits are the ones the split was measured on, so each has to reach what it did:
+    # the script the budget journeys run and the launch journeys read with every launch
+    # surface, the persona only the launch journeys name, a document no journey project
+    # but the checkout copies reads, and one project's module.
+    copies = f"{WORKSPACE_COPIES_PROJECT}:{DOCS_SCOPED}"
+    assert keyed_by_edit[NARROW_DOC] == {copies}
+    assert keyed_by_edit[NARROW_SCRIPT] == {
+        copies,
+        f"budget-gate:{CODE_SCOPED}",
+        f"launch-monitor-observer:{CODE_SCOPED}",
+    }
+    assert keyed_by_edit[NARROW_PERSONA] == {copies, f"launch-monitor-observer:{CODE_SCOPED}"}
+    assert keyed_by_edit[JOURNEY_WITNESS] == {copies, JOURNEY_TIER}

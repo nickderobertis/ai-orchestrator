@@ -10,7 +10,8 @@
     "testSupport": [
       "{workspaceRoot}/tests/e2e/no_paid_provider.py",
       "{workspaceRoot}/tests/e2e/no-paid-provider/claude",
-      "{workspaceRoot}/tests/e2e/no-paid-provider/codex"
+      "{workspaceRoot}/tests/e2e/no-paid-provider/codex",
+      "{projectRoot}/project.json"
     ]
   },
   "targets": {

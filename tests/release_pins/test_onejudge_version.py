@@ -250,9 +250,9 @@ ADOPTED_ONEPIPELINE_CLAIMS = {
     # different arguments: why the pacemaker interpolates `{task}`, why the observer
     # graph's judge command can compose the run's channel directory, and what an operator
     # should write a member against.
-    # `tests/e2e/test_orchestrate_launch_e2e.py` re-takes that measurement on a real
-    # launch, and this gate holds each restatement to the release it was taken
-    # against, so a bump fails at both halves at once.
+    # `tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` re-takes that
+    # measurement on a real launch, and this gate holds each restatement to the release it
+    # was taken against, so a bump fails at both halves at once.
     #
     # Each site gets its OWN sentence rather than sharing one phrase, because
     # `docs/orchestration.md` carries two of them in sections a reader reaches

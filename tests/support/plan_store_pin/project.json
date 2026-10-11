@@ -9,7 +9,9 @@
   "namedInputs": {
     "testSupport": [
       "{workspaceRoot}/tests/plan_store_pin.py",
-      "{workspaceRoot}/config/onetaskgraph.version"
+      "{workspaceRoot}/config/onetaskgraph.version",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{projectRoot}/project.json"
     ]
   },
   "targets": {

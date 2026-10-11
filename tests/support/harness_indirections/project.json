@@ -13,7 +13,10 @@
     "testSupport": [
       "{workspaceRoot}/tests/e2e/harness_indirections.py",
       "{workspaceRoot}/oneharness.check-in.toml",
-      "{workspaceRoot}/oneharness.pr-author.toml"
+      "{workspaceRoot}/oneharness.identities.toml",
+      "{workspaceRoot}/oneharness.pr-author.toml",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{projectRoot}/project.json"
     ]
   },
   "targets": {

@@ -3,8 +3,8 @@
 `tests/persona_recipes.py` states the failure this reconciles away. What is checked
 here is the tracked prose: for each persona that names a repository, `just --dump` in
 that repository's registered checkout decides whether every recipe the file names
-exists. `tests/e2e/test_persona_review_bar_e2e.py` is the other half — it asks the same
-question of the bar a real supervisor was actually handed.
+exists. `tests/e2e/launch_monitor_observer/test_persona_review_bar_e2e.py` is the other half
+— it asks the same question of the bar a real supervisor was actually handed.
 
 This is why the reconciliation belongs to the uncached tier. Its input is a registered
 checkout outside this workspace, which no `nx.json` key covers, so a memoized green

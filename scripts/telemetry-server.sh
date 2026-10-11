@@ -112,7 +112,7 @@ done
 supplied=()
 # llmlint: ignore[boundary_inputs_validated] A default from this host's own `ONEPIPELINE_RUNS_DIR`, not a caller's input; `onepipeline-api serve` refuses a runs root it cannot read, naming it.
 [ "$runs_root_named" -eq 1 ] || supplied+=(--runs-root "${ONEPIPELINE_RUNS_DIR:-runs}")
-# llmlint: ignore-block[boundary_inputs_validated] `scripts/launcher-session.sh` already validated this session and deliberately keeps a malformed inherited one, so the server acts as its parent does; `tests/e2e/test_delegated_recipes_e2e.py` drives this path.
+# llmlint: ignore-block[boundary_inputs_validated] `scripts/launcher-session.sh` already validated this session and deliberately keeps a malformed inherited one, so the server acts as its parent does; `tests/e2e/registry_and_recipes/test_delegated_recipes_e2e.py` drives this path.
 if [ "$session_named" -eq 0 ] && [ -n "${ONEPIPELINE_LAUNCHER_SESSION:-}" ]; then
     supplied+=(--session "$ONEPIPELINE_LAUNCHER_SESSION")
 fi

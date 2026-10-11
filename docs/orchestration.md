@@ -54,7 +54,7 @@ https://github.com/nickderobertis/onetaskgraph/pull/56, which is the change requ
 made a board a container of projects, and a release before it refuses that field as
 unknown while every release since refuses the write without it. Reads never need
 it, which is why a board can still be listed by a checkout that names none.
-`tests/e2e/test_onetaskgraph_host_e2e.py` drives both halves against a board fixture —
+`tests/e2e/launch_monitor_observer/test_onetaskgraph_host_e2e.py` drives both halves against a board fixture —
 a copy of a local project files its issues in the configured repository, and a
 repository the credential cannot reach refuses the copy before anything is created.
 
@@ -488,7 +488,7 @@ empty string and the copy is a total replacement by contract, so every destinati
 faithfully propagated the deletion, on a local Markdown project and a GitHub Projects
 board alike. Task bodies survived and only the project description was lost, which is
 what let it reach a release.
-`tests/e2e/test_onetaskgraph_host_e2e.py` is what holds it here, and it holds it as a
+`tests/e2e/launch_monitor_observer/test_onetaskgraph_host_e2e.py` is what holds it here, and it holds it as a
 *comparison* — the description read back through `just plans` against the one read
 before the run — because an assertion that the description is merely present cannot
 fail on a deletion.
@@ -1041,9 +1041,9 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   must interpolate it back in to learn which run it is on. `onepipeline` does also
   export `ONEPIPELINE_RUN_ID`, set to the run id, to an observer member — measured
   against onepipeline 0.65.0 by dumping both sides of a monitor member's whole
-  environment on a real launch. `tests/e2e/test_orchestrate_launch_e2e.py` re-takes
+  environment on a real launch. `tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` re-takes
   that measurement on the judge side of a real observer member every gate run, and
-  `tests/e2e/test_monitor_cursor_e2e.py` on a monitor member's agent side, so a
+  `tests/e2e/launch_monitor_observer/test_monitor_cursor_e2e.py` on a monitor member's agent side, so a
   release that moved the export fails there rather than here. Write the member
   against `{task}` anyway: it is this graph's own contract rather than a per-release
   export, and it carries the run's goal as well as its id. Give a scheduled member
@@ -1085,7 +1085,7 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
 All three paths are resolved **relative to the directory the run is launched from**,
 which is why `just orchestrate` is run from the repository root; every ref *inside*
 a graph is resolved relative to that graph file instead.
-`tests/e2e/test_orchestrate_launch_e2e.py` proves the refusal a missing observer
+`tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` proves the refusal a missing observer
 graph gets by passing `--dag-graph` at a path that is not there. That suite's real
 launch uses these files: the paid model is what it stands in for, through
 `ONEAGENTGRAPH_ONEHARNESS_BIN`.
@@ -1216,7 +1216,7 @@ changes, and both are in force on this host:
   watching a live run and records why one ended, which is what `OBSERVER DEAD` and
   `OBSERVER NOT RESTARTED` in `just status` are the two halves of.
 
-`tests/e2e/test_observer_graph_liveness_e2e.py` holds all of it against the installed
+`tests/e2e/launch_monitor_observer/test_observer_graph_liveness_e2e.py` holds all of it against the installed
 engine and the pinned reader: that the shipped document validates and declares the
 monitor paced and foreground and the pacemaker neither; that a real launch under the
 shipped document, with both periods overridden small through `just orchestrate --set
@@ -1430,7 +1430,7 @@ The channel directory is the run's own, and the judge command composes it from
 `ONEPIPELINE_RUNS_DIR` and `ONEPIPELINE_RUN_ID`, which the engine exports to both sides
 of an observer member — `ONEPIPELINE_RUN_ID` set to the run id, measured against
 onepipeline 0.65.0 in the judge command's own environment on a real launch, and re-taken
-on every gate run by `tests/e2e/test_orchestrate_launch_e2e.py`.
+on every gate run by `tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py`.
 
 | Frame | What the binding does |
 | --- | --- |
@@ -1464,8 +1464,8 @@ monitor may issue: … Surface it to the planner instead`). An author the file d
 declare is refused before anything is appended; the engine applies what the bus admits
 and surfaces each edit a non-planner author applied as `edit-applied`.
 
-`tests/e2e/test_monitor_quiet_turn_e2e.py`, `tests/e2e/test_lost_turn_wire_contract_e2e.py`
-and `tests/e2e/test_monitor_survives_the_channel_e2e.py` are this seam's journeys on a
+`tests/e2e/launch_monitor_observer/test_monitor_quiet_turn_e2e.py`, `tests/e2e/launch_monitor_observer/test_lost_turn_wire_contract_e2e.py`
+and `tests/e2e/launch_monitor_observer/test_monitor_survives_the_channel_e2e.py` are this seam's journeys on a
 real run's channel, with every frame written by a real onejudge, and
 `tests/test_onemessagebus_config.py` holds the binding, the author and the schema link
 to their sources. Why each rule is what it is was measured on the filter the retired
@@ -1489,7 +1489,7 @@ not sent back has reported it to nobody.
 **The periodic `check-in` member is untouched by all of this.** It is a single-sided
 `kind: oneharness` member with no judge side at all: it raises its own surface with
 `onepipeline surface --kind check-in`, and its report reaches the queue under its own
-kind and source. `tests/e2e/test_monitor_quiet_turn_e2e.py` reads the pacemaker's
+kind and source. `tests/e2e/launch_monitor_observer/test_monitor_quiet_turn_e2e.py` reads the pacemaker's
 surface off the queue in the same run whose monitor prose raises none.
 
 Structured output would be the heavier way to draw the same line, and one constraint
@@ -1530,7 +1530,7 @@ This is a **workaround for an upstream gap**, and it is written down as one so i
 be retired rather than maintained: a member whose judge side is not a harness still
 gets a scored bar it cannot answer, and neither `done_when: null` nor
 `done_when_replaces_base` can remove it.
-`tests/e2e/test_monitor_survives_the_channel_e2e.py` asserts on a real launch that the
+`tests/e2e/launch_monitor_observer/test_monitor_survives_the_channel_e2e.py` asserts on a real launch that the
 member still carries a bar at all — so the day a release lets one decline it, that
 check fails and the score path can go.
 
@@ -1572,7 +1572,7 @@ manager's reply verbs read; `ONEPIPELINE_CHANNEL_ASKER` names the asker where on
 `--about <node>` names the node the question is about, and `--timeout <seconds>` moves
 the reply window for one ask. It refuses at exit 2, raising nothing, a blank question, a
 NUL byte, an unset run id, and a run whose launch record cannot be read.
-`tests/e2e/test_ask_manager_shim_e2e.py` holds the adapter to that transparency and reads
+`tests/e2e/registry_and_recipes/test_ask_manager_shim_e2e.py` holds the adapter to that transparency and reads
 a `--file` and a stdin question back off a real channel unaltered, and `tests/ask_seam/`
 drives it over runs `just orchestrate` really launched.
 
@@ -1947,10 +1947,10 @@ short turn and exits, so an edit issued from it would be answered by the reconci
 after the member that issued it had stopped watching — nobody left to read the
 outcome, and nobody who saw the state that justified it. Its own task is what makes
 that impossible whatever the run-level task happens to say.
-`tests/e2e/test_supervisory_prompt_discipline_e2e.py` launches the shipped member on
+`tests/e2e/launch_monitor_observer/test_supervisory_prompt_discipline_e2e.py` launches the shipped member on
 its own and reads the prompt it was actually given — the sequence, the prohibitions
 and the edit ban — so a task that is present in the file but not reaching the model
-fails there; `tests/e2e/test_orchestrate_launch_e2e.py` holds the same on the
+fails there; `tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` holds the same on the
 document, and `tests/test_pacemaker_discipline.py` reconciles the persona's copy
 against it.
 
@@ -2475,7 +2475,7 @@ message`, and an `id` the run does not have with `cannot raise a finding about n
 monitor's escalation path is exactly what it is meant to reach for. That bound is
 stated to the model in [`personas/orchestrator.yaml`](../personas/orchestrator.yaml)
 and enforced by the channel, and
-`tests/e2e/test_orchestrate_launch_e2e.py` holds both halves — that the four
+`tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` holds both halves — that the four
 refusals are refusals, and that an in-allowlist op is judged on the graph's state
 rather than on who asked.
 
@@ -3044,7 +3044,7 @@ the preserved unpublished branches that hold run roots from reclamation, which
 sweeper because none is provably dead: a warm slot is waiting, and whether a preserved
 branch should land is a judgement about work rather than about liveness. That
 provable-or-nothing property is what makes both verbs safe to run unattended, so the
-answer is an owner rather than a wider sweeper. `tests/e2e/test_sweep_e2e.py` holds
+answer is an owner rather than a wider sweeper. `tests/e2e/publish_and_landing/test_sweep_e2e.py` holds
 both installed verbs' `--format json` to that swept-or-owned invariant over a state
 root holding a pool slot and a preserved branch.
 
@@ -3255,7 +3255,7 @@ refuses it as it refuses an `ACTIVE` run, naming the live pid; `watch` never end
 names the pid and how long the journal has been quiet and offers `stop` for a driver
 judged wedged, never `adopt`. The threshold is 1800 seconds by default and
 `ONEPIPELINE_PARKED_AFTER_SECONDS` moves it in the reader's environment;
-`tests/e2e/test_parked_run_is_driven_e2e.py` drives all three readers through the
+`tests/e2e/launch_monitor_observer/test_parked_run_is_driven_e2e.py` drives all three readers through the
 recipes. A run with a decision outstanding — a waiting human action, or a blocking
 surface nobody has answered — is never `PARKED`, because its next move is sitting in a
 planner's queue rather than with its driver.
@@ -3290,7 +3290,7 @@ The same attribution reaches the branches a run leaves: every `onevcs` session a
 opens is labelled with its `run`, its `node` and the `launcher` — the launching session
 id, omitted for a launch nothing attributed — so `onevcs recoverable` and `onevcs session
 holders` name whose each preserved branch is, and filter on it with `--label`.
-`tests/e2e/test_repositories_field_dispatch_e2e.py` reads the three off a real dispatch.
+`tests/e2e/launch_monitor_observer/test_repositories_field_dispatch_e2e.py` reads the three off a real dispatch.
 
 ### Stopping a run
 
@@ -3323,7 +3323,7 @@ unwatched run the hook is told about — and a run stopped and never adopted sti
 as stopped. Before it every view went on reading the stop: `just status` said
 `DRIVER DEAD` over a driver that was dispatching, and the watch a manager armed on the
 adopted run returned at once.
-`tests/e2e/test_adopted_engine_reads_an_adopted_run_e2e.py` drives a stop and an adoption
+`tests/e2e/launch_monitor_observer/test_adopted_engine_reads_an_adopted_run_e2e.py` drives a stop and an adoption
 through the real recipes and reads all three views.
 
 ### Shutting a host down
@@ -3454,7 +3454,7 @@ diagnosed. It
 is a host-wide reading on a host several managers share, so read it and leave clearing
 space to whoever owns what is filling it.
 
-`tests/e2e/test_driver_death_is_recoverable_e2e.py` is what compares this statement
+`tests/e2e/launch_monitor_observer/test_driver_death_is_recoverable_e2e.py` is what compares this statement
 against the installed engine rather than leaving it standing on its own: it drives both
 views over a run whose launch process is gone and whose dispatched process is alive, and
 fails when the engine stops answering the way this reads.
@@ -4132,7 +4132,7 @@ be steered mid-turn takes a live note only as its current turn ends, and the eng
 delivers it off the run's single writer: heartbeats and turn activity keep reaching the
 journal and `just status` keeps reporting the run live for as long as the turn runs, and
 once it ends the run records the delivery — the note's `edit-committed` — and then its
-`note-shown`. `tests/e2e/test_live_note_leaves_the_run_journalling_e2e.py` drives it
+`note-shown`. `tests/e2e/launch_monitor_observer/test_live_note_leaves_the_run_journalling_e2e.py` drives it
 through `just channel-reply`.
 
 **A `cancel` does not wait behind a note its node never answers.** An envelope naming a

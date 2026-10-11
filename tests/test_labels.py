@@ -153,10 +153,11 @@ def test_history_labels_main_reports_invalid_inherited_value(
 #: How `scripts/llmlint-judge.sh` writes the second opinion of this contract that it
 #: applies to the rendered value before exporting it. That opinion exists because the
 #: renderer is reached through `PATH` and can be replaced — which is what
-#: `tests/e2e/test_llmlint_cache_e2e.py::test_the_recipe_refuses_unusable_harness_history_labels`
-#: drives — so the recipe cannot simply trust what came back. Lifting the guard out of
-#: the script instead of restating it here is what makes the sweeps below a gate on the
-#: shell that actually runs rather than on a copy of it.
+#: `test_the_recipe_refuses_unusable_harness_history_labels`, in
+#: `tests/e2e/workspace_copies/test_llmlint_cache_e2e.py`, drives — so the recipe cannot
+#: simply trust what came back. Lifting the guard out of the
+#: script instead of restating it here is what makes the sweeps below a gate on the shell
+#: that actually runs rather than on a copy of it.
 _RECIPE_GUARD = re.compile(
     r"key='(?P<key>[^']*)'\nvalue='(?P<value>[^']*)'\n(?P<condition>\[\[ .*?\]\])"
 )

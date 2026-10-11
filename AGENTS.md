@@ -65,7 +65,7 @@ shows the resolved policy. `just repos` only lists identities and checkouts: the
 `workflow`, `repo_type`, and `gate` columns it prints are the registration's derivation,
 not the routing. The four published `merge_policy` names are `local-direct`,
 `change-open`, `change-auto`, and `change-direct`
-(`tests/e2e/test_orchestrate_launch_e2e.py` holds this list to the launcher's own); team
+(`tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` holds this list to the launcher's own); team
 identities cannot use local workflow or direct integration, and `change-open` forces
 remote open-PR publication for one run without changing stored workflow.
 
@@ -228,7 +228,7 @@ answers for its whole identity: an identity-wide read reports it as a finding na
 clone and goes on across the rest, a release answer it leaves undecided reads *not
 answered* naming it, and a landed session over it closes from its landing record.
 
-<!-- llmlint: ignore-block[changed_behavior_has_e2e] The onevcs half — a hook's marker line read as the `host-prerequisite` kind, with the remediation as its reason — is driven here through `just publish-branch` in `tests/e2e/test_publish_branch_e2e.py`. The engine half — settling a lifecycle node on that kind once, as `infrastructure-failure`, with no re-dispatch — is a lifecycle publication's routing, which onepipeline drives through its real binary and a rejecting hook in its own `tests/e2e/lifecycle.rs` (PR 394); here `tests/test_adopted_engine_carries_this_plan.py` holds that the adopted release contains that landing and `tests/test_engine_contracts.py` holds the settlement pairing and the marker's name to the linked crates. A journey here would need a lifecycle dispatch against a registered identity whose hook prints the marker — a worker dispatch this suite does not double below the paid model — to re-prove what the producer's journey already does. -->
+<!-- llmlint: ignore-block[changed_behavior_has_e2e] The onevcs half — a hook's marker line read as the `host-prerequisite` kind, with the remediation as its reason — is driven here through `just publish-branch` in `tests/e2e/publish_and_landing/test_publish_branch_e2e.py`. The engine half — settling a lifecycle node on that kind once, as `infrastructure-failure`, with no re-dispatch — is a lifecycle publication's routing, which onepipeline drives through its real binary and a rejecting hook in its own `tests/e2e/lifecycle.rs` (PR 394); here `tests/test_adopted_engine_carries_this_plan.py` holds that the adopted release contains that landing and `tests/test_engine_contracts.py` holds the settlement pairing and the marker's name to the linked crates. A journey here would need a lifecycle dispatch against a registered identity whose hook prints the marker — a worker dispatch this suite does not double below the paid model — to re-prove what the producer's journey already does. -->
 **A merge path refused because this host lacks a tool or a credential one of its hooks
 needs** — said by the hook itself, on the one line beginning with `onevcs`'s
 host-prerequisite marker — is not retried onto the branch at all, since no edit to the
@@ -240,7 +240,7 @@ host, then `retry` the node onto the branch that settlement names.
 
 **How a landing is read.** A node's landing is read fresh when a view renders, and a
 landing the run recorded is never overturned. `just work-status` is where the evidence
-is read (`tests/e2e/test_work_status_and_import_e2e.py` drives it before and after a
+is read (`tests/e2e/publish_and_landing/test_work_status_and_import_e2e.py` drives it before and after a
 landing): read its `decided by:` line before its `landed:` line, because every tier but
 `content comparison` is a record and answers `yes`, while `content comparison` alone
 answers `no` or `unknown`, and `no` is the dangerous one, since it closes the question
@@ -274,7 +274,7 @@ stands regardless.
 `$ONEVCS_HOME/branches.yml` — host state outside every checkout, which no tracked file
 here writes — and the rest is the name `onepipeline` renders from its branch-name
 template. This host configures no template because it takes the default, which
-`tests/e2e/test_human_readable_branch_e2e.py` drives for a plan whose tasks carry no key:
+`tests/e2e/publish_and_landing/test_human_readable_branch_e2e.py` drives for a plan whose tasks carry no key:
 the plan's name, then the node's id.
 
 **Where a session is placed, and what a close returns.** A session worktree is cut on a
@@ -450,7 +450,7 @@ re-provision every checkout onto it — session setup, or `just bootstrap`, ther
 that is the remedy; restoring the older schema by hand is the stop-gap for a live run
 you cannot yet re-provision, and holds only until the next contact. The suite reads a
 per-process copy (`tests/conftest.py` exports `ONEVCS_HOME`), so a test that sandboxes
-`HOME` names `ONEVCS_HOME` beside it; `tests/e2e/test_onevcs_state_snapshot_e2e.py`
+`HOME` names `ONEVCS_HOME` beside it; `tests/e2e/publish_and_landing/test_onevcs_state_snapshot_e2e.py`
 re-takes the migration.
 
 ## Sequencing a node behind a release
@@ -496,7 +496,7 @@ waiting, flip it to `fast` by live edit, stop the run — is yours. A wait surfa
 hold has since ended — the node unheld, adopted or dispatched at or after the surface was
 queued — is withheld when the queue is read, and stderr names the record that ended it,
 so a wait you are handed is about a hold still on.
-<!-- llmlint: ignore-block[changed_behavior_has_e2e] Both readings need a producer repository declaring a release target with a probe and a consumer held on it, which onepipeline's own `tests/e2e/adoption.rs` builds and drives through the real binary — `status_names_the_release_a_held_node_awaits_rather_than_calling_it_queued` for the first (PR 390), and the unreadable-, renamed- and same-pass-dependency journeys for the second (PR 386). Nothing on this host declares a release target a journey here could hold a node on without rebuilding that world; `tests/test_adopted_engine_carries_this_plan.py` holds that the adopted release contains both landings, and `tests/e2e/test_release_adoption_in_force_e2e.py` holds that the installed artifacts resolve the `published` rung at all. -->
+<!-- llmlint: ignore-block[changed_behavior_has_e2e] Both readings need a producer repository declaring a release target with a probe and a consumer held on it, which onepipeline's own `tests/e2e/adoption.rs` builds and drives through the real binary — `status_names_the_release_a_held_node_awaits_rather_than_calling_it_queued` for the first (PR 390), and the unreadable-, renamed- and same-pass-dependency journeys for the second (PR 386). Nothing on this host declares a release target a journey here could hold a node on without rebuilding that world; `tests/test_adopted_engine_carries_this_plan.py` holds that the adopted release contains both landings, and `tests/e2e/publish_and_landing/test_release_adoption_in_force_e2e.py` holds that the installed artifacts resolve the `published` rung at all. -->
 `just status` reads such a node as `held — awaiting the published release of
 <dependency>, waited <duration>`, off the `node-held` the driver journalled, and never as
 `ready — queued for dispatch`. A `published` node whose dependency the driver could not
@@ -510,7 +510,7 @@ reading that surface is the person who has to act, or find who will. **A probe i
 gate**: it answers what version is out and never refuses a publication; "not answered"
 is not "not released", and a held node stays held on it; a human step awaited is a
 third answer, folded into neither.
-<!-- llmlint: ignore-block[changed_behavior_has_e2e] The reconciliation is `onevcs release status`'s over a `change-auto` landing the host performed after the publishing process ended, which onevcs drives in its own `tests/e2e/releases.rs` and `lifecycle.rs` (PR 163) and onepipeline's `tests/e2e/adoption.rs` drives through to a waiting consumer's release (PR 394). A journey here would need a host double that merges after the publication has returned and a producer declaring a probed target; `tests/test_linked_libraries.py` holds the linked onevcs at the release carrying it, and the acknowledgement half is driven here in `tests/e2e/test_adopted_cli_fixes_e2e.py`. -->
+<!-- llmlint: ignore-block[changed_behavior_has_e2e] The reconciliation is `onevcs release status`'s over a `change-auto` landing the host performed after the publishing process ended, which onevcs drives in its own `tests/e2e/releases.rs` and `lifecycle.rs` (PR 163) and onepipeline's `tests/e2e/adoption.rs` drives through to a waiting consumer's release (PR 394). A journey here would need a host double that merges after the publication has returned and a producer declaring a probed target; `tests/test_linked_libraries.py` holds the linked onevcs at the release carrying it, and the acknowledgement half is driven here in `tests/e2e/launch_monitor_observer/test_adopted_cli_fixes_e2e.py`. -->
 **A landing `onevcs` did not witness is reconciled where it is next read, and a hold on
 one it cannot reconcile never releases on its own.** A `change-auto` publication captures its baselines in the call that watches for
 the merge, so a merge the host performs after that process died — or a `change-open`
@@ -891,7 +891,7 @@ an intact ledger is adopted with `just orchestrate --adopt <run-id>`, never rela
 under a new id — and so is one you stopped: a recorded stop is evidence about the
 driver it ended, cleared at `driver-adopted`, so a stopped-then-adopted run is judged
 by the driver driving it now — `ACTIVE` in `just status`, a watch that stays armed, a
-run `just unwatched` names (`tests/e2e/test_adopted_engine_reads_an_adopted_run_e2e.py` drives all
+run `just unwatched` names (`tests/e2e/launch_monitor_observer/test_adopted_engine_reads_an_adopted_run_e2e.py` drives all
 three). **Runs are owned**: act only on runs you launched — `just runs` shows `[mine]`, the
 owning session, or `[unknown]`, and `unknown` is never yours — and never derive a
 process list from `ps` and signal it, which has interrupted another manager
@@ -1356,7 +1356,7 @@ reasoned escape hatch, mirroring `just unpublished --acknowledge`.
   graph down) once stood behind the inference. A hold is not a death: the heartbeat
   continues through it, `just status` reports neither verdict above during one, and a
   `note` to the monitor ends the hold rather than waiting it out.
-  `tests/e2e/test_observer_graph_liveness_e2e.py` holds it.
+  `tests/e2e/launch_monitor_observer/test_observer_graph_liveness_e2e.py` holds it.
 <!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 - **A surface's text reaches the engine as bytes**, never as a command-line word,
   because bash substitutes backticks and `$(...)` inside double quotes and a finding
@@ -1415,7 +1415,7 @@ in the four configs it loads, the engine pin links the core that resolves a disp
 member's config, and the read API's own copy of that engine does the same for a run
 adopted from the browser. A parent that cannot be read settles the node
 `infrastructure-failure` naming both files, before anything is dispatched.
-`tests/e2e/test_extends_chain_dispatch_e2e.py` drives a chain down both dispatch roads
+`tests/e2e/launch_monitor_observer/test_extends_chain_dispatch_e2e.py` drives a chain down both dispatch roads
 and the CLI's own, and holds that refusal down each dispatch road.
 
 **So the identities are stated once and a role file is short.** Two shared parents at
@@ -1436,7 +1436,7 @@ config`.
 **Every role names the same six identities**, differing only in order, because a role
 that omitted one would lose that quota once everything ahead of it was exhausted; the
 primary Claude identity is last everywhere with `claude-code:primary-backup` immediately
-before it, and `tests/e2e/test_oneharness_timeout_e2e.py` holds every config's chain to
+before it, and `tests/e2e/launch_monitor_observer/test_oneharness_timeout_e2e.py` holds every config's chain to
 its intended order. **Every identity in every chain is spelled as a variant**, the first Codex one as
 `codex:primary` rather than a bare `codex`, because `unset_env`, `env_from` and
 `env_file` are declarable on a variant only, so a bare harness id in a chain is one
@@ -1445,7 +1445,7 @@ candidate no per-identity environment rule reaches — the credential masks and 
 plan-store credential mask is the one no parent may hold, so each of the nine roles that
 masks either declares it. That variant deliberately declares no `unset_env` for `CODEX_HOME`,
 which is ambient configuration a developer may export and this is the identity that
-honours it; `tests/e2e/test_dispatch_environment_e2e.py` reads what a turn is handed
+honours it; `tests/e2e/launch_monitor_observer/test_dispatch_environment_e2e.py` reads what a turn is handed
 off the turn's own provider rather than off the configs. Each side's order is a
 decision:
 
@@ -1486,7 +1486,7 @@ codex-first supervisory side here is a controlled turn, and it runs under the
 under another model as a classified failure the chain falls through at no cost; the
 host-level `model` default in `~/.codex/config.toml` that stood in while the per-harness
 model did not reach the server is host state to remove, because it cannot express the
-per-side choice that key exists for. `tests/e2e/test_controlled_turn_model_e2e.py`
+per-side choice that key exists for. `tests/e2e/launch_monitor_observer/test_controlled_turn_model_e2e.py`
 drives that turn through the pinned CLI, and `tests/test_linked_libraries.py` holds the
 linked core at or past the release that carries it.
 
@@ -1851,9 +1851,9 @@ pre-push because there is no CI.
 - **Coverage is enforced at 100% line coverage on `orchestrator/`**, because what is
   left of the package is all trust boundary. `[tool.coverage.report]` in
   `pyproject.toml` is the floor's one source, and the uncached `orchestrator:coverage`
-  read compares what `orchestrator:test`, `orchestrator-e2e:test` and each test project
-  measuring into its own `.coverage.<project name>` measured to it, so nothing else may
-  name one.
+  read compares what `orchestrator:test` and each test project measuring into its own
+  `.coverage.<project name>` — the journey projects under `tests/e2e/` among them —
+  measured to it, so nothing else may name one.
 - **The suite runs across four xdist workers**, from measurement rather than `auto`:
   it is latency-bound and the curve is flat past four on a host also running
   dispatches. A test whose subject is a process- or machine-wide resource declares
@@ -1868,10 +1868,11 @@ pre-push because there is no CI.
   holding a lock and a wait that merely lengthens as load.
   <!-- llmlint: ignore-block[agents_md_durable_and_terse] The task that ended the shared toolchain group requires this invariant to carry the tier figures it measured and their host conditions: they are the evidence the ungrouped four-worker schedule rests on, as "from measurement" above is for the worker count. -->
   Measured with the three slowest tiers together (Nx `parallel` 3, cache skipped) on this
-  14-core host beside other dispatches: ending the group took `orchestrator-e2e:test`
-  from 2392 s to 1122 s and `orchestrator:test-docs` from 844 s to 528 s, while
-  `plan-tooling:test`, since split into the `plan-tooling-*` subject projects, rose from
-  464 s to 708 s (load1 peaks 38.5 and 27.5).
+  14-core host beside other dispatches: ending the group took `orchestrator-e2e:test`,
+  then the one project of every journey, from 2392 s to 1122 s and
+  `orchestrator:test-docs` from 844 s to 528 s, while `plan-tooling:test`, since split
+  into the `plan-tooling-*` subject projects, rose from 464 s to 708 s (load1 peaks 38.5
+  and 27.5).
   <!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 - **Tests are realistic, not mocked.** The suite drives the real `just` recipes, the
   real wrapper scripts, the real `oneharness` CLI, and real Nx; only the paid model and
@@ -1947,7 +1948,7 @@ under another prefix is refused publication rather than read). A `local-direct` 
 also keeps every issue-closing line the branch's commits carried — each issue once, as
 `<Keyword> <reference>`, between the subject and the trailers — because GitHub closes an
 issue only from the commit that reaches the default branch
-(`tests/e2e/test_publish_branch_e2e.py` lands one such branch). So a commit body here
+(`tests/e2e/publish_and_landing/test_publish_branch_e2e.py` lands one such branch). So a commit body here
 that merely *mentions* an issue after a closing keyword closes it: name an issue you are
 not closing without one. Provenance commits
 already on `main` stay where they are: base history is never rewritten.

@@ -20,7 +20,7 @@ message_file=${1:?commit-msg: the message file is the one argument this hook tak
 # engine. `onevcs` is what authors them, so a reword there would make every
 # `repo-recover` in this repository a refused commit; the drift gate that catches it
 # drives both constants, read from a registered checkout of onevcs, through this hook
-# — tests/e2e/test_commit_msg_hook_e2e.py's
+# — tests/e2e/registry_and_recipes/test_commit_msg_hook_e2e.py's
 # `test_the_provenance_subjects_the_hook_exempts_are_the_ones_onevcs_writes`.
 EXEMPT='^(fixup!|squash!|amend!|Merge |Revert ")|\(incomplete step\)$|^chore: attest verified recovery of preserved work$'
 

@@ -8,7 +8,8 @@
   "implicitDependencies": [],
   "namedInputs": {
     "testSupport": [
-      "{workspaceRoot}/tests/e2e/command_ceiling.py"
+      "{workspaceRoot}/tests/e2e/command_ceiling.py",
+      "{projectRoot}/project.json"
     ]
   },
   "targets": {

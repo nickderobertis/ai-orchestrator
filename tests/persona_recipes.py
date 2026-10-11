@@ -12,8 +12,8 @@ resolves for crozier's merge path.
 Which recipes a repository defines is a fact no file here decides, so the only way to
 hold the prose to it is to ask that repository. Two callers do, at the two places the
 demand exists: `tests/test_persona_recipe_drift.py` reads it out of the tracked file,
-and `tests/e2e/test_persona_review_bar_e2e.py` reads it out of the bar a real
-supervisor was handed on a real graph run.
+and `tests/e2e/launch_monitor_observer/test_persona_review_bar_e2e.py` reads it out of the
+bar a real supervisor was handed on a real graph run.
 """
 
 from __future__ import annotations

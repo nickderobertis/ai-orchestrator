@@ -213,8 +213,9 @@ def _identities(harness: str) -> list[Identity]:
     """The chain's identities of one harness, in the chain's order."""
     # llmlint: ignore-block[changed_behavior_has_e2e] These refusals answer for this checkout's
     # tracked `oneharness.toml`, read through the pinned CLI; no journey can make it malformed
-    # without changing it for every other test, and `tests/e2e/test_oneharness_timeout_e2e.py`
-    # already holds its chain to the intended identities in order.
+    # without changing it for every other test, and
+    # `tests/e2e/launch_monitor_observer/test_oneharness_timeout_e2e.py` already holds its
+    # chain to the intended identities in order.
     resolved = _resolved(CHAIN)
     chain = _value(resolved, "harnesses")
     if not isinstance(chain, list) or not all(
@@ -249,8 +250,9 @@ def _model(config: Path, harness: str, variant: str) -> str:
         resolved, "harness", harness, "model"
     )
     # llmlint: ignore-block[changed_behavior_has_e2e] Answers for a tracked config every
-    # identity of which pins a model, which `tests/e2e/test_oneharness_timeout_e2e.py` reads
-    # identity by identity; no journey can unpin one without changing it for every other test.
+    # identity of which pins a model, which
+    # `tests/e2e/launch_monitor_observer/test_oneharness_timeout_e2e.py` reads identity by
+    # identity; no journey can unpin one without changing it for every other test.
     if not isinstance(model, str) or not model:
         fail(f"{config.name} names no model for {harness}:{variant}; name one, then retry")
     # llmlint: ignore-end[changed_behavior_has_e2e]

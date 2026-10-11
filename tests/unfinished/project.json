@@ -57,6 +57,13 @@
       "options": {
         "cwd": "."
       },
+      "inputs": [
+        "unfinishedWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ],
       "cache": false,
       "outputs": [
         "{workspaceRoot}/.telemetry/unfinished/test-host"

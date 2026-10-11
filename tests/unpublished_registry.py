@@ -5,9 +5,10 @@ need the same thing: a registered identity, made from nothing, on which the real
 `onevcs` has preserved a branch each way a run can leave one — a session that committed
 and closed, a session still held by a live process, and a branch no session record names
 — under a scratch `ONEVCS_HOME`, so nothing this host has registered is read or moved.
-This module seeds it once, the way `tests/e2e/test_recoverable_resume_commands_e2e.py`
-seeds its own, and every step is the real verb: `just register-repo`, `onevcs session
-open`, a real commit in the session's worktree, `onevcs session close`.
+This module seeds it once, the way
+`tests/e2e/publish_and_landing/test_recoverable_resume_commands_e2e.py` seeds its own, and
+every step is the real verb: `just register-repo`, `onevcs session open`, a real commit in
+the session's worktree, `onevcs session close`.
 
 **The one thing arranged rather than observed is a live session's owner**:
 `onevcs session open` records the

@@ -4,9 +4,9 @@ The adapter execs the engine's `onepipeline ask`, and the engine is the one this
 lock installed beside its interpreter — `.venv/bin/onepipeline` — resolved from the
 script's location, because the engine links the bus a run's channel is written by and a
 different release on the caller's PATH is a different bus. `AGENTS.md` states the same rule
-for the plan-store CLI; `tests/e2e/test_ask_manager_shim_e2e.py` holds that the adapter
-passes everything through untouched, and what this journey holds is the *resolution*,
-against this checkout's real engine.
+for the plan-store CLI; `tests/e2e/registry_and_recipes/test_ask_manager_shim_e2e.py` holds
+that the adapter passes everything through untouched, and what this journey holds is the
+*resolution*, against this checkout's real engine.
 
 A stand-in `onepipeline` that records its every invocation is put first on PATH, and the
 real adapter — from a directory that is not this checkout, as a worker asks — never runs

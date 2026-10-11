@@ -187,9 +187,9 @@ ROOT_CAUSES_LANDINGS = (
 
 #: The engine half of turn provenance: a manager note told from a supervisor turn by the
 #: engine, and carried across a publication-failure re-dispatch. Held here because the
-#: producer's half — the `origin` stamp `tests/e2e/test_worker_start_directory_e2e.py`
-#: observes on a real dispatch — reads as the whole repair while the engine that acts on
-#: it is missing.
+#: producer's half — the `origin` stamp
+#: `tests/e2e/launch_monitor_observer/test_worker_start_directory_e2e.py` observes on a real
+#: dispatch — reads as the whole repair while the engine that acts on it is missing.
 NOTE_PROVENANCE_LANDINGS = (
     Landing(
         node="op-note-provenance",
@@ -309,9 +309,9 @@ LINEAGE_ITEM_LANDINGS = (
 #: (#389), is test and CI hygiene that releases nothing a host runs, so it earns no row.
 #: `op-views` and `op-release-hold` were delivered by their retries, `op-views-3` and
 #: `op-release-hold-4`, and are recorded under the node id for the reason
-#: `Landing.node` gives. `tests/e2e/test_adopted_cli_fixes_e2e.py` drives the two of
-#: these this host's recipes lean on hardest — the stop-then-adopt read and the closing
-#: line a `local-direct` squash keeps.
+#: `Landing.node` gives. `tests/e2e/launch_monitor_observer/test_adopted_cli_fixes_e2e.py`
+#: drives the two of these this host's recipes lean on hardest — the stop-then-adopt read
+#: and the closing line a `local-direct` squash keeps.
 ACCEPTED_FOLLOW_UPS_LANDINGS = (
     Landing(
         node="op-views",
@@ -404,8 +404,8 @@ AGENT_VISIBILITY_LANDINGS = (
 #: `op-node-surfaces-r4`, and are recorded under the node id for the reason `Landing.node`
 #: gives. `tests/run_end_hooks/test_run_end_hooks_e2e.py` drives the settle that fires the
 #: success hook through `just orchestrate`, and
-#: `tests/e2e/test_onemessagebus_cli_e2e.py` drives `just channel-reply` over the linked
-#: layout.
+#: `tests/e2e/launch_monitor_observer/test_onemessagebus_cli_e2e.py` drives `just
+#: channel-reply` over the linked layout.
 CHANNEL_AND_RECORDS_LANDINGS = (
     Landing(
         node="op-own-channel",
@@ -449,8 +449,9 @@ CHANNEL_AND_RECORDS_LANDINGS = (
 #: `repo-recover` verbs that draft the body the run path drafts; and a relink onto the
 #: onevcs and oneagentgraph releases whose `sweep` verbs report as JSON.
 #: `tests/unwatched/test_unwatched_and_stop_hook_e2e.py` drives the guard through the
-#: `Stop` hook, `tests/e2e/test_publish_branch_e2e.py` lands through `just publish-branch`,
-#: and `tests/e2e/test_sweep_e2e.py` reads both sweep reports.
+#: `Stop` hook, `tests/e2e/publish_and_landing/test_publish_branch_e2e.py` lands through
+#: `just publish-branch`, and `tests/e2e/publish_and_landing/test_sweep_e2e.py` reads both
+#: sweep reports.
 SCRIPTS_AUDIT_LANDINGS = (
     Landing(
         node="op-supervision-verbs",
@@ -475,7 +476,8 @@ SCRIPTS_AUDIT_LANDINGS = (
 
 #: The engine-side node of the unpublished-and-unfinished plan: every session a node opens
 #: carries `run`, `node` and `launcher` labels on its `onevcs` session record.
-#: `tests/e2e/test_repositories_field_dispatch_e2e.py` reads them after a real dispatch.
+#: `tests/e2e/launch_monitor_observer/test_repositories_field_dispatch_e2e.py` reads them
+#: after a real dispatch.
 UNPUBLISHED_UNFINISHED_LANDINGS = (
     Landing(
         node="op-session-labels",
@@ -532,10 +534,11 @@ GRAPHQL_WRITEBACK_QUOTA_LANDINGS = (
 #: The three engine-side nodes of the plan adopting the live-note, re-dispatch-tip and
 #: copy-id fixes. `op-live-note` was delivered by its retry, `op-live-note-r5`, and is
 #: recorded under the node id for the reason `Landing.node` gives.
-#: `tests/e2e/test_live_note_leaves_the_run_journalling_e2e.py` and
-#: `tests/e2e/test_redispatch_names_the_published_tip_e2e.py` drive the first two through
-#: `just orchestrate`, and `tests/plan_tooling/plan_copy/test_plan_copy_destination_ids_e2e.py` the
-#: copy the third relinks.
+#: `tests/e2e/launch_monitor_observer/test_live_note_leaves_the_run_journalling_e2e.py` and
+#: `tests/e2e/publish_and_landing/test_redispatch_names_the_published_tip_e2e.py` drive the
+#: first two through `just orchestrate`, and
+#: `tests/plan_tooling/plan_copy/test_plan_copy_destination_ids_e2e.py` the copy the third
+#: relinks.
 LIVE_NOTE_AND_REDISPATCH_TIP_LANDINGS = (
     Landing(
         node="op-redispatch-tip",
@@ -575,8 +578,8 @@ COMMENT_FLOW_LANDINGS = (
 #: whose `github-projects` source answers text, metadata and origin queries with GitHub's
 #: own search and whose copy records and follows `onetaskgraph.copies`. The settlement
 #: write-back and a dispatch's store reads go through that linked store;
-#: `tests/e2e/test_onetaskgraph_host_e2e.py` drives the same release's CLI over this
-#: checkout's board fixture.
+#: `tests/e2e/launch_monitor_observer/test_onetaskgraph_host_e2e.py` drives the same
+#: release's CLI over this checkout's board fixture.
 NATIVE_BOARD_QUERIES_LANDINGS = (
     Landing(
         node="op-link-store",
@@ -589,8 +592,8 @@ NATIVE_BOARD_QUERIES_LANDINGS = (
 #: The engine-side node of the plan that made the host sweep fast again, which relinked
 #: the onevcs whose finished-branches retirement pass records each branch's verdict and
 #: reuses it while its inputs are unchanged. The engine's idle maintenance runs that pass
-#: through the linked onevcs; `tests/e2e/test_sweep_e2e.py` drives the same release's
-#: CLI through `just sweep` and reads the reuse off its report.
+#: through the linked onevcs; `tests/e2e/publish_and_landing/test_sweep_e2e.py` drives the
+#: same release's CLI through `just sweep` and reads the reuse off its report.
 VERDICT_REUSE_LANDINGS = (
     Landing(
         node="op-link-onevcs-r4",
@@ -604,7 +607,8 @@ VERDICT_REUSE_LANDINGS = (
 #: the onejudge and oneagentgraph releases and the `oneharness-core` 0.24.0 under them —
 #: whose history records into dated segments and never reads an index or walks the store
 #: to record a run. The engine records history in-process through that core;
-#: `tests/e2e/test_oneharness_history_segments_e2e.py` traces the same core's CLI.
+#: `tests/e2e/launch_monitor_observer/test_oneharness_history_segments_e2e.py` traces the
+#: same core's CLI.
 HISTORY_SEGMENTS_LANDINGS = (
     Landing(
         node="op-link-core",
@@ -617,8 +621,8 @@ HISTORY_SEGMENTS_LANDINGS = (
 #: The engine-side node of the narrow-search-pages plan, which linked the onetaskgraph
 #: release whose board searches size their first page to twenty rows and fetch a further
 #: page only when one is needed. The engine's write-back reads the board through that
-#: store; `tests/e2e/test_onetaskgraph_host_e2e.py` holds the same release's CLI to the
-#: follow-up budget.
+#: store; `tests/e2e/launch_monitor_observer/test_onetaskgraph_host_e2e.py` holds the same
+#: release's CLI to the follow-up budget.
 NARROW_SEARCH_PAGES_LANDINGS = (
     Landing(
         node="op-link-store",
@@ -726,8 +730,8 @@ TICKET_FIXES_LANDINGS = (
 #: The five engine-side nodes of the accepted-follow-ups plan `accepted-followups-1002`.
 #: `op-parked-liveness` is recorded a second time, under this plan's landing #714, because
 #: the node id was reused for the published-hold reading after the run-ending-liveness
-#: plan's #701. `tests/e2e/test_parked_run_is_driven_e2e.py` drives the parked reading
-#: through the recipes on this host.
+#: plan's #701. `tests/e2e/launch_monitor_observer/test_parked_run_is_driven_e2e.py` drives
+#: the parked reading through the recipes on this host.
 ACCEPTED_FOLLOW_UPS_1002_LANDINGS = (
     Landing(
         node="op-payload-schemas",
@@ -764,8 +768,8 @@ ACCEPTED_FOLLOW_UPS_1002_LANDINGS = (
 #: The two engine-side nodes of the approved-budgets plan, issue #1508: a lifecycle node
 #: kept as a branch on its origin rather than landed, settling `done` as `preserved`, and
 #: the per-change telemetry view over a run's dispatches, gate runs and landing.
-#: `tests/e2e/test_budget_capabilities_adopted_e2e.py` drives both through the recipes
-#: on this host.
+#: `tests/e2e/launch_monitor_observer/test_budget_capabilities_adopted_e2e.py` drives both
+#: through the recipes on this host.
 APPROVED_BUDGETS_LANDINGS = (
     Landing(
         node="onepipeline-preserve-2",
@@ -784,8 +788,9 @@ APPROVED_BUDGETS_LANDINGS = (
 #: The engine-side node of the plan adopting onepipeline issue #668
 #: (https://github.com/nickderobertis/onepipeline/issues/668): a manager may `reparent` a
 #: waiting, unattested `kind: human` approval, which re-gates it behind its new
-#: prerequisites. `tests/e2e/test_reparent_waiting_human_adopted_e2e.py` drives it through
-#: `just channel-reply` and `just status` on this host.
+#: prerequisites.
+#: `tests/e2e/launch_monitor_observer/test_reparent_waiting_human_adopted_e2e.py` drives it
+#: through `just channel-reply` and `just status` on this host.
 REPARENT_WAITING_HUMAN_LANDINGS = (
     Landing(
         node="op-reparent-waiting-human",

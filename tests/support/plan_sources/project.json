@@ -8,7 +8,8 @@
   "implicitDependencies": [],
   "namedInputs": {
     "testSupport": [
-      "{workspaceRoot}/tests/plan_sources.py"
+      "{workspaceRoot}/tests/plan_sources.py",
+      "{projectRoot}/project.json"
     ]
   },
   "targets": {

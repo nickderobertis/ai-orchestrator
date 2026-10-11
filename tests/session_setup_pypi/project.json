@@ -12,7 +12,8 @@
     "support-nx-workspace",
     "support-onejudge-bundle",
     "support-provisioning",
-    "support-published-tools"
+    "support-published-tools",
+    "support-test-linked-libraries"
   ],
   "namedInputs": {
     "sessionSetupPypiWorkspace": [

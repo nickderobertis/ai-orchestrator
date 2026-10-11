@@ -43,7 +43,7 @@ def test_the_document_explains_every_outcome_the_script_reports() -> None:
 
 #: The journeys that read a job's `state` file, each declaring the statuses it expects.
 STATE_READERS = (
-    REPO_ROOT / "tests" / "e2e" / "test_repos_bootstrap_e2e.py",
+    REPO_ROOT / "tests" / "e2e" / "registry_and_recipes" / "test_repos_bootstrap_e2e.py",
     REPO_ROOT / "tests" / "session_setup" / "test_locked_plan_store_setup_e2e.py",
 )
 #: The script's one statement of the state file's schema, read key by key.

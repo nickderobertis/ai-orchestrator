@@ -12,7 +12,8 @@
   ],
   "namedInputs": {
     "testSupport": [
-      "{workspaceRoot}/tests/persona_stand_in.py"
+      "{workspaceRoot}/tests/persona_stand_in.py",
+      "{projectRoot}/project.json"
     ]
   },
   "targets": {

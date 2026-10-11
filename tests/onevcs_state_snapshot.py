@@ -53,11 +53,13 @@ identities: `onevcs resolve`, `release targets`, `pool status` or `rules check` 
 repository this host registers. That environment also refuses every git transport but
 `file`, so such a read reaches the checkout on disk and never its origin; nothing that can
 start a driver or a sweep is ever pointed at it.
-`tests/e2e/test_onevcs_state_snapshot_e2e.py` drives the migration for real against a
-copy, drives a capacity read against a copied workspaces file, holds the export to
-carrying none of the host's identities, and drives the transport refusal through git;
-`tests/e2e/test_launch_walks_no_host_identity_e2e.py` drives a real launch under the
-export to prove the driver's idle pass reached no checkout or origin of this host's.
+`tests/e2e/publish_and_landing/test_onevcs_state_snapshot_e2e.py` drives the migration for
+real against a copy, drives a capacity read against a copied workspaces file, holds the
+export to carrying none of the host's identities, and drives the transport refusal through
+git; `tests/e2e/launch_monitor_observer/test_launch_walks_no_host_identity_e2e.py` drives a
+real launch under the export to prove the driver's idle pass reached no checkout or origin
+of
+this host's.
 """
 
 from __future__ import annotations

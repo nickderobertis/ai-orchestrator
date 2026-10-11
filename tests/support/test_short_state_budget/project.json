@@ -11,7 +11,9 @@
   ],
   "namedInputs": {
     "testSupport": [
-      "{workspaceRoot}/tests/test_short_state_budget.py"
+      "{workspaceRoot}/tests/test_short_state_budget.py",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{projectRoot}/project.json"
     ]
   },
   "targets": {

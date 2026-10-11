@@ -5,10 +5,11 @@
 at a different moment, so every way the two can disagree is demonstrated here rather
 than left to a reader. What can then refuse the merge is not a third file: the adopted
 `onevcs` reads each identity's required checks off the host itself, and `just repos
---audit-gate-coverage` reports them — `tests/e2e/test_merge_path_audit_e2e.py` drives
-that. A tracked copy of that list used to stand here, reconciled against GitHub by a test
-at the end of the gate, and every branch failed a whole gate whenever a sibling renamed a
-check; it is gone rather than kept as an annotation.
+--audit-gate-coverage` reports them —
+`tests/e2e/publish_and_landing/test_merge_path_audit_e2e.py` drives that. A tracked copy of
+that list used to stand here, reconciled against GitHub by a test at the end of the gate,
+and every branch failed a whole gate whenever a sibling renamed a check; it is gone rather
+than kept as an annotation.
 
 Content is the whole subject: a checkout path is a claim about a directory outside
 this tree. What policy the files resolve is `tests/e2e/test_repo_registry_apply_e2e.py`'s,

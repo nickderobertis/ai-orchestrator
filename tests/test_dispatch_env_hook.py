@@ -15,7 +15,8 @@ directory, the alternate Codex home, the checkout's template root and the plan s
 non-interactive setting. And there is one definition of which resolvers
 those are — `scripts/dispatch-env.sh` — that both the wrapper's driver-start arm and the
 hook source, so a resolver added to one cannot be missing from the other.
-`tests/e2e/test_orchestrate_launch_e2e.py` drives the hook through a real launch.
+`tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` drives the hook through a
+real launch.
 """
 
 from __future__ import annotations

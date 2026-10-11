@@ -18,7 +18,9 @@
       "{workspaceRoot}/scripts/host-sweep.sh",
       "{workspaceRoot}/scripts/setup-llmlint.sh",
       "{workspaceRoot}/scripts/repos-bootstrap.sh",
-      "{workspaceRoot}/scripts/registered-checkouts.sh"
+      "{workspaceRoot}/scripts/registered-checkouts.sh",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{projectRoot}/project.json"
     ]
   },
   "targets": {

@@ -177,8 +177,9 @@ CHAIN_CLASSIFICATION_CORE_FLOOR = Release(0, 13, 1)
 #: `Not logged in` refusal is an authentication failure, not a rate limit. This is the
 #: operator-facing distinction between authenticating the named configuration directory
 #: and waiting for quota that was never exhausted. The installed-engine journey in
-#: `tests/e2e/test_claude_identity_routing_e2e.py` drives the linked classifier through
-#: a single-sided node graph and holds the host-visible verdict to that distinction.
+#: `tests/e2e/launch_monitor_observer/test_claude_identity_routing_e2e.py` drives the linked
+#: classifier through a single-sided node graph and holds the host-visible verdict to that
+#: distinction.
 CLAUDE_LOGIN_CLASSIFICATION_CORE_FLOOR = Release(0, 13, 2)
 #: The accepted-follow-ups plan's linked onevcs work, read at the tag of each release:
 #: https://github.com/nickderobertis/onevcs/pull/292 (`c2747424`), first cut as 0.40.0,
@@ -409,8 +410,8 @@ def test_the_linked_oneharness_core_runs_a_controlled_turn_under_its_own_model()
     `config/oneharness.version` answers for the CLI the smoke spawns rather than for the
     core a dispatched member's turn goes through. Only the linked release says which
     path a dispatch is on. The property itself is driven for real, offline, by
-    `tests/e2e/test_controlled_turn_model_e2e.py`; this holds the engine to a core that
-    can pass it.
+    `tests/e2e/launch_monitor_observer/test_controlled_turn_model_e2e.py`; this holds the
+    engine to a core that can pass it.
     """
     linked = Release.parse(_linked_version(UNRECONCILABLE_PIN.crate))
 
@@ -468,9 +469,9 @@ def test_the_linked_onevcs_places_a_session_on_a_pooled_slot_it_can_maintain() -
     `config/onevcs.workspaces.yml` sizes a pool per identity and names the command that
     maintains its idle slots, and both halves are read by the `onevcs` a session is
     opened through — the linked copy for a dispatch, the CLI pin for the manager verbs.
-    `tests/e2e/test_worktree_pool_e2e.py` drives the CLI pin through a pooled scratch
-    identity; this holds the other half, since a dispatch is placed by the copy the
-    engine links and nothing the CLI pin says reaches it.
+    `tests/e2e/publish_and_landing/test_worktree_pool_e2e.py` drives the CLI pin through a
+    pooled scratch identity; this holds the other half, since a dispatch is placed by the
+    copy the engine links and nothing the CLI pin says reaches it.
     """
     linked = Release.parse(_linked_version("onevcs"))
 
@@ -530,9 +531,9 @@ def test_the_linked_onejudge_lets_a_workers_judge_side_be_a_list() -> None:
     the report. Held on the *linked* copy because that is what a dispatch settles on — a
     bump to `config/onepipeline.version` that resolved an older onejudge would leave every
     pin on this host reading current, and would fail only when a graph first named
-    `judges:`, as a config error on a member. `tests/e2e/test_judge_panel_e2e.py` drives
-    the property itself through the pinned CLI; this holds the engine to a onejudge that
-    has it.
+    `judges:`, as a config error on a member.
+    `tests/e2e/launch_monitor_observer/test_judge_panel_e2e.py` drives the property itself
+    through the pinned CLI; this holds the engine to a onejudge that has it.
     """
     linked = Release.parse(_linked_version("onejudge"))
 

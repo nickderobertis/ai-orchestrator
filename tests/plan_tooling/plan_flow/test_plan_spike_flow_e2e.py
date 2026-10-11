@@ -47,7 +47,7 @@ from typing import Any, NamedTuple, NewType, cast
 import plan_fixture_source
 import pytest
 import short_state
-from nx_workspace import answering_this_checkouts_origin, copy_working_tree
+from nx_workspace import TOOLCHAIN_WRITER_MARKS, answering_this_checkouts_origin, copy_working_tree
 from project_fixtures import no_budgets
 from scratch_identity import PLANNING_FLOW_ORIGIN, seeded
 from spike_flow_engine import Node
@@ -64,7 +64,13 @@ from waits import timeout as e2e_timeout
 from orchestrator import design_approval, spike_plan
 
 #: Copies the tracked tree, so it sits in the whole-workspace tier.
-pytestmark = [pytest.mark.reads_docs, pytest.mark.xdist_group("plan-spike-flow")]
+# A writer: its module fixture provisions the copied checkout with `uv sync --locked`
+# (`test_plan_flow_e2e._provisioned`), into the copy's own `.venv` and never this one's.
+pytestmark = [
+    *TOOLCHAIN_WRITER_MARKS,
+    pytest.mark.reads_docs,
+    pytest.mark.xdist_group("plan-spike-flow"),
+]
 
 #: A run id, a plan's qualified project, and a spike's node id.
 RunId = NewType("RunId", str)

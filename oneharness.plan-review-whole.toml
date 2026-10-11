@@ -10,7 +10,7 @@
 # and no other turn of this repository's reviewer should be granted any tool, and
 # `timeout`, because opening several task files is a longer job than reading one prompt.
 # Written into the per-task file, either would move every per-task turn with it.
-# `tests/e2e/test_oneharness_timeout_e2e.py` holds this chain to that file's.
+# `tests/e2e/launch_monitor_observer/test_oneharness_timeout_e2e.py` holds this chain to that file's.
 extends = "oneharness.identities.toml"
 
 # mode: the approval mode each harness is asked for. `read-only` is what lets the turn
@@ -38,7 +38,7 @@ stream = false
 history_labels = { role = "agent" }
 
 # The supervisory order, in the per-task file's order and for its reason.
-# llmlint: ignore[changed_behavior_has_e2e] tests/e2e/test_oneharness_timeout_e2e.py proves this list against the real CLI's effective configuration; paid-provider quota rejection cannot be deterministic.
+# llmlint: ignore[changed_behavior_has_e2e] tests/e2e/launch_monitor_observer/test_oneharness_timeout_e2e.py proves this list against the real CLI's effective configuration; paid-provider quota rejection cannot be deterministic.
 harnesses = [
     "codex:primary",
     "codex:alternate",

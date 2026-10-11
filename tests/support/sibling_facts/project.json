@@ -12,7 +12,10 @@
     "testSupport": [
       "{workspaceRoot}/tests/sibling_facts.py",
       "{workspaceRoot}/config/onevcs.releases.yml",
-      "{workspaceRoot}/scripts/comparison-base.sh"
+      "{workspaceRoot}/scripts/comparison-base.sh",
+      "{workspaceRoot}/orchestrator/host_installs.py",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{projectRoot}/project.json"
     ]
   },
   "targets": {

@@ -56,7 +56,7 @@ the retired spelling as the control beside each:
 4. The graph schema range and the `{task}` boundary the dag-scope document states:
    0.3.0 still reads versions 1 through 6, and still expands `{task}` from 4.
 
-Probe 3 is not a one-off any more — `tests/e2e/test_path_dispatched_personas_e2e.py`
+Probe 3 is not a one-off any more — `tests/e2e/launch_monitor_observer/test_path_dispatched_personas_e2e.py`
 takes it on every gate run, which is what stops the next persona-format break from
 being caught by validation that cannot see it.
 
@@ -69,7 +69,7 @@ the three persona documents onepipeline itself ships, `Cargo.toml`/`Cargo.lock`,
 its own tests — no engine, driver, channel, ledger, or environment path is touched —
 so every claim those sentences carry is a claim about code that did not move. Two of
 them are re-taken on every gate run anyway, by
-`tests/e2e/test_orchestrate_launch_e2e.py`: the `ONEPIPELINE_RUN_ID` export an
+`tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py`: the `ONEPIPELINE_RUN_ID` export an
 observer member is given, and the `--config` a dispatched agent side arrives with.
 
 Three sentences changed wording rather than only their number, in `AGENTS.md` and

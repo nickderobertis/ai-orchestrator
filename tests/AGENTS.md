@@ -12,7 +12,7 @@ Conventions for this repository's tests.
   a recipe delegates to, doubled below the seam under test. Never double a recipe, a
   wrapper script, or the shell they run in.
 - **A delegated recipe's journey is its row in
-  `tests/e2e/test_delegated_recipes_e2e.py`** — the `just` invocation and the one
+  `tests/e2e/registry_and_recipes/test_delegated_recipes_e2e.py`** — the `just` invocation and the one
   command line it must produce. Add the row with the recipe. A recipe whose answer moves
   with an `orchestrator/` module lives in the tier keyed on that module instead, on the
   same `tests/delegation_checkout.py` checkout: `just follow-ups`' row is in
@@ -59,32 +59,42 @@ Conventions for this repository's tests.
   pass and `onevcs sweep` walk every identity a registry names against its real origin
   and can retire branches there. A read of a repository this host registers names
   `onevcs_state_snapshot.host_registry()` for that one call, never for a launch or a
-  sweep; `tests/e2e/test_launch_walks_no_host_identity_e2e.py` holds it.
+  sweep; `tests/e2e/launch_monitor_observer/test_launch_walks_no_host_identity_e2e.py` holds it.
 - **The environment a test runs in is the test's to state.** The autouse fixtures in
   `conftest.py` drop the dispatch's comparison base, ownership stamp, per-side harness
   selection, and oneharness history settings — inherited, the last queue every turn on
   a host-wide history index — and a test that means to exercise one sets it itself.
 - Every recipe needs a real journey here before it is done.
 
-## The journeys' project
+## The journeys' projects
 
-The modules directly under `tests/e2e/` are `orchestrator-e2e`'s, the unit modules
+Every journey module under `tests/e2e/` belongs to a directory-owned project — one
+directory per family of journeys, keyed on what that family reads — the unit modules
 directly under `tests/` are `orchestrator`'s, and each drift-gate subject is a project of
-its own in a directory under `tests/`; `tests/nx_inputs.py` says why each key is what it
-is.
+its own in a directory under `tests/`. The journey modules left directly under `tests/e2e/`
+are `e2e-root`'s, which names each one; the other modules there are shared helpers,
+carried by test-support units. `E2E_JOURNEYS` in `tests/nx_inputs.py` lists the journey
+projects, and that module says how each key was derived.
 
-- **Markers route a journey between `orchestrator-e2e:test`, `test-recipes` and
-  `test-checkouts`**, as they route a unit test between the orchestrator project's
-  targets. A `reads_docs` journey is collected by `orchestrator:test-docs` instead: a
-  target keyed on the whole workspace would select the journeys for every diff.
+- **A journey goes in the family whose key covers what it reads**, child processes
+  included: a module's imports come from its project's test-support edges, and what the
+  scripts it runs open comes from a trace of that project's command. A journey that
+  copies this checkout reads every tracked file, so it goes in `workspace-copies`, marked
+  `reads_docs`, whose `test-docs` target is the one keyed on the whole workspace.
+- **A `reads_checkouts` journey runs in its project's uncached `test-checkouts` target**;
+  a project that holds one declares that target, with `inputs` naming what its journeys
+  read of this checkout. Uncached is not undeclared: `tests/conftest.py` holds those
+  journeys to that declaration, and the drift gates hold it to their imports and to the
+  `project.json` files their guard opens.
 - **A journey imports a unit or drift-gate module only through a test-support unit**
   carrying it under `tests/support/`, because only an edge selects the journeys when that
   module changes.
-- **A unit or drift-gate test that opens a journey by path names it in
-  `journeysTheUnitGatesRead`** in `tests/e2e/project.json`, or `orchestrator:test`
-  replays over an edit to it; `tests/conftest.py` fails the read until it does.
-- **A directory added at the repository root joins `e2eWorkspace`**, which names what
-  it keeps; `tests/tree_scans/test_nx_cache_scope.py` fails until it does.
+- **A unit or drift-gate test that opens a journey by path names it in its project's
+  `journeysTheUnitGatesRead`**, or `orchestrator:test` replays over an edit to it;
+  `tests/conftest.py` fails the read until it does.
+- **A journey project that measures `orchestrator/` writes `.coverage.<project>`** and
+  is in `orchestrator:coverage`'s combine; `tests/tree_scans/test_nx_cache_scope.py` reads
+  that set off the declarations.
 
 ## Project boundaries
 

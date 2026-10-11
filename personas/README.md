@@ -65,7 +65,7 @@ request drafting under it, so a plan node's own worker may not run as it.
 That the shipped set is those five and no more is measured two ways — once against
 the oneagentgraph CLI `config/oneagentgraph.version` pins, and once against the
 oneagentgraph the adopted `onepipeline` links, which is the one a dispatch reads and is
-the same release. `tests/e2e/test_shipped_persona_catalog_e2e.py`
+the same release. `tests/e2e/launch_monitor_observer/test_shipped_persona_catalog_e2e.py`
 runs each:
 
 - A graph carrying its own `personas` catalog is refused when one of its files
@@ -87,8 +87,8 @@ byte-identical: the accounts that did named `src/agentgraph.rs` and `src/graph.r
 and the crate has carried neither path since before 0.2.18 — so that argument was
 reading nothing. What holds these between launches is this repository's own suite,
 which re-takes both measurements on every gate run:
-`tests/e2e/test_shipped_persona_catalog_e2e.py` resolves the shipped set from the
-pinned binary, and `tests/e2e/test_orchestrate_launch_e2e.py` reads the composed
+`tests/e2e/launch_monitor_observer/test_shipped_persona_catalog_e2e.py` resolves the shipped set from the
+pinned binary, and `tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` reads the composed
 completion criterion out of a real dispatch.
 
 - Editing a flat file here whose name a built-in claims does not change what a node
@@ -152,7 +152,7 @@ catch separate failures:
   alias. Every name resolved, and the model they described asked for the opposite of
   the work.
 
-`tests/e2e/test_persona_review_bar_e2e.py` asks both of the bar a real supervisor was
+`tests/e2e/launch_monitor_observer/test_persona_review_bar_e2e.py` asks both of the bar a real supervisor was
 handed on a real graph run, which is where either failure takes effect. A flat,
 cross-repo persona names no repository and is outside both reconciliations.
 
@@ -250,7 +250,7 @@ So a split *across that break* — the CLI on one shape and the linked reader on
 other — would certify files that produce no member at all, and `graphs/dag-scope.yaml` names
 `../personas/orchestrator.yaml` and `../personas/check-in.yaml` **by path**, so the
 monitor and the pacemaker are what a split would silently cost.
-`tests/e2e/test_path_dispatched_personas_e2e.py` is what keeps that from being an
+`tests/e2e/launch_monitor_observer/test_path_dispatched_personas_e2e.py` is what keeps that from being an
 argument: it runs each path-named persona through a real `oneagentgraph run` and
 fails if either stops loading.
 
@@ -266,6 +266,6 @@ between paced turns or re-reads what the previous turn judged; it writes no file
 its working directory may be a checkout — and its `max_turns`
 derivation is restated at the paced rate where the value is declared. `check-in` keeps
 its resettable schedule and, being a scheduled member that declares nothing, is
-background: it fires inside the monitor's holds. `tests/e2e/test_observer_graph_liveness_e2e.py`
+background: it fires inside the monitor's holds. `tests/e2e/launch_monitor_observer/test_observer_graph_liveness_e2e.py`
 holds the arrangement, and the graph document says beside each member why it is
 foreground or not.

@@ -1,11 +1,11 @@
 """Release adoption's readers, over scratch siblings in the shapes this host's have been in.
 
-`tests/e2e/test_release_adoption_in_force_e2e.py` asks this host's own checkouts which
-registered repositories declare release targets and what this host resolves over them;
-what it reads them with is `tests/sibling_facts.py`, driven here over real checkouts
-made for the purpose: one declaring nothing, one that gained targets and a language
-after it was registered, and one that dropped the default target the tracked override
-names for it. Which repositories declare, and how many targets, is derived from the
+`tests/e2e/publish_and_landing/test_release_adoption_in_force_e2e.py` asks this host's own
+checkouts which registered repositories declare release targets and what this host resolves
+over them; what it reads them with is `tests/sibling_facts.py`, driven here over real
+checkouts made for the purpose: one declaring nothing, one that gained targets and a
+language after it was registered, and one that dropped the default target the tracked
+override names for it. Which repositories declare, and how many targets, is derived from the
 declarations as they now stand — never a list kept here — and only the contradiction is
 named.
 """

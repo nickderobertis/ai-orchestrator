@@ -48,8 +48,9 @@ EXAMPLES_ROOT = f"ONETASKGRAPH_SOURCES__{EXAMPLES.upper()}__CONFIG__ROOT"
 #: The one shipped project these journeys do not hold to `check-plan`: it is the plan flow's
 #: own output, byte for byte what `just plan examples/planner-brief.example.md` writes — its
 #: one node is the manager's hand-written brief, which no template renders, so that launch
-#: alone names `--require-rendered false` — and `tests/e2e/test_plan_recipe_e2e.py` holds it
-#: to that. It is excluded here rather than exempted in the check.
+#: alone names `--require-rendered false` — and
+#: `tests/e2e/launch_monitor_observer/test_plan_recipe_e2e.py` holds it to that. It is
+#: excluded here rather than exempted in the check.
 PLAN_FLOW_OUTPUT = f"{EXAMPLES}:planner-brief-example"
 
 #: The example copied byte for byte into another local source, and its records' paths there.

@@ -8,7 +8,8 @@
   "implicitDependencies": [],
   "namedInputs": {
     "testSupport": [
-      "{workspaceRoot}/tests/e2e/harness_configs.py"
+      "{workspaceRoot}/tests/e2e/harness_configs.py",
+      "{projectRoot}/project.json"
     ]
   },
   "targets": {

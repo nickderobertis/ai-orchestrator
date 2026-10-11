@@ -43,7 +43,7 @@ set -uo pipefail
 # breaking: positional `FILES` are intersected with the configured file globs rather
 # than replacing them. Nothing here passes positional files — `just lint-llm-diff` scopes
 # by `--diff` — so this host is unaffected by that half.
-# llmlint: ignore[changed_behavior_has_e2e] declarative dependency floor only; the installer's selection is driven by tests/e2e/test_setup_llmlint_e2e.py.
+# llmlint: ignore[changed_behavior_has_e2e] declarative dependency floor only; the installer's selection is driven by tests/e2e/registry_and_recipes/test_setup_llmlint_e2e.py.
 readonly LLMLINT_MIN="0.4.6"
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(dirname -- "$script_dir")

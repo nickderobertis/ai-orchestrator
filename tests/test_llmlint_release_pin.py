@@ -8,7 +8,7 @@ says when the two part anyway — a stop-gap by hand, an older installer, a pin 
 without re-running setup — naming both versions, off the installed distribution's
 own metadata and nothing on the network. Its subject is the host's tool directory,
 outside this workspace and every cache key, hence `reads_checkouts`.
-`tests/e2e/test_setup_llmlint_e2e.py` drives the installer's selection itself.
+`tests/e2e/registry_and_recipes/test_setup_llmlint_e2e.py` drives the installer's selection itself.
 """
 
 from __future__ import annotations

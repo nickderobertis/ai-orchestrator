@@ -23,6 +23,7 @@
     "support-registered-checkouts",
     "support-run-snapshot",
     "support-short-state",
+    "support-test-linked-libraries",
     "support-waits",
     "support-watch-rule"
   ],

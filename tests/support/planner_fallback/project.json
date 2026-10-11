@@ -8,7 +8,8 @@
   "implicitDependencies": [],
   "namedInputs": {
     "testSupport": [
-      "{workspaceRoot}/tests/planner_fallback.py"
+      "{workspaceRoot}/tests/planner_fallback.py",
+      "{projectRoot}/project.json"
     ]
   },
   "targets": {

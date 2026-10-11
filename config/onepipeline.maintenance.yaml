@@ -33,9 +33,9 @@
 # `tests/test_adopted_engine_carries_this_plan.py` holds the pin to; a launch here idles
 # for ten minutes before its first sweep, which is not a journey this suite can spend.
 # What this repository owns is proven here: that every launch names this file and the
-# engine retains its parse (`tests/e2e/test_orchestrate_launch_e2e.py`), and that the
+# engine retains its parse (`tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py`), and that the
 # verb it schedules runs the workspaces file's `maintain` command in an idle slot and
-# stamps it (`tests/e2e/test_worktree_pool_e2e.py`).
+# stamps it (`tests/e2e/publish_and_landing/test_worktree_pool_e2e.py`).
 version: 1
 default:
   every: 7d
