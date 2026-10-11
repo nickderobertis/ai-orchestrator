@@ -138,6 +138,12 @@ def test_the_library_measures_the_summary_of_the_committed_fixture(
     which the plan store refuses as settings with no source anywhere but the checkout.
     """
     budgets = ROOT_BUDGETS
+    # The root file's `dispatches` condition runs on every check, whatever budget is
+    # targeted, and reads the engine's runs root; this one is the test's own and empty, so
+    # the check's cost and its condition never depend on this host's run history.
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    environment = {**os.environ, "ONEPIPELINE_RUNS_DIR": str(runs)}
     if where == "elsewhere":
         (summary,) = [one for one in _root()["budgets"] if one["id"] == SUMMARY_BUDGET]
         summary["command"] = [str(REPO_ROOT / summary["command"][0])]
@@ -148,6 +154,7 @@ def test_the_library_measures_the_summary_of_the_committed_fixture(
     ran = subprocess.run(
         [str(CHECKER), "check", "--id", SUMMARY_BUDGET, "--output", "json", str(budgets)],
         cwd=budgets.parent,
+        env=environment,
         capture_output=True,
         text=True,
         check=False,
@@ -159,6 +166,8 @@ def test_the_library_measures_the_summary_of_the_committed_fixture(
     (result,) = json.loads(ran.stdout[ran.stdout.index("{") :])["results"]
     rendered = REPO_ROOT / "tests" / "fixtures" / "budgets" / "issue-1568-summary.txt"
     assert result["actual"] == len(rendered.read_text(encoding="utf-8")), result
+    if where == "checkout":
+        assert result["host"]["conditions"]["dispatches"] == "0", result["host"]
 
 
 @pytest.mark.parametrize(

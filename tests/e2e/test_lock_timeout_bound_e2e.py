@@ -85,13 +85,21 @@ def _bash(script: str, environment: dict[str, str]) -> subprocess.CompletedProce
 
 
 def _state(tmp_path: Path) -> dict[str, str]:
-    """An environment whose state root, and so whose recording, is this journey's own."""
+    """An environment whose state root, and so whose recording, is this journey's own.
+
+    Its runs root is the journey's own and empty too: `record_local_direct_gate` samples
+    `scripts/budget-dispatches.sh` while the gate runs, and that reads the engine's runs
+    root, which would otherwise be this checkout's whole run history.
+    """
     state = tmp_path / "state"
     state.mkdir(exist_ok=True)
+    runs = tmp_path / "runs"
+    runs.mkdir(exist_ok=True)
     return {
         "PATH": os.environ["PATH"],
         "HOME": str(tmp_path / "home"),
         "XDG_STATE_HOME": str(state),
+        "ONEPIPELINE_RUNS_DIR": str(runs),
     }
 
 
