@@ -122,7 +122,7 @@ user:
   #
   # Phrasing it against the task works because onejudge hands it to the judge verbatim
   # beside a transcript whose first message is the task; verified against onejudge 0.17.2
-  # (`config/onejudge.version`, drift-gated by tests/test_onejudge_version.py). See
+  # (`config/onejudge.version`, drift-gated by tests/release_pins/test_onejudge_version.py). See
   # docs/orchestration.md, "Where a node's review bar lives".
   done_when: >-
     every acceptance criterion stated in the task is met, with every change this dispatch

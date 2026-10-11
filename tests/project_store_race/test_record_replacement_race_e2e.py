@@ -5,9 +5,10 @@ launches — its `just` recipes, its driver, and the dispatches below it — and
 takes in every task file under the root, not only the project being read. So a task file
 caught empty, between a truncating open and the write that follows it, refuses an unscoped
 read in some other process, and on the plan-store release this host ran then refused a read
-scoped to some *other* project too. A publication's own pre-push gate failed exactly that
-way, in `merge-policy:test` and `plan-tooling:test`, back when every tier of this suite
-shared one fixture root and `tests/ask_seam/` was writing records into it at that moment.
+scoped to some *other* project too. A publication's own pre-push gate failed exactly that way,
+in `merge-policy:test` and the single `plan-tooling:test` tier since split, back when every
+tier of this suite shared one fixture root and `tests/ask_seam/` was writing records into it at
+that moment.
 Each test process has had a fixture root of its own since
 (`tests/plan_fixture_source.py`), which narrows who can meet a half-written record but not
 what one does to a reader. So `publish_record` stages a record beside its destination and

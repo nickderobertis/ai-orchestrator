@@ -36,6 +36,7 @@ from nx_inputs import (
     CODE_SCOPED,
     DAG_UI_ROOT,
     DAG_UI_WORKSPACE,
+    DRIFT_GATE_PROJECTS,
     E2E_ROOT,
     E2E_WORKSPACE,
     GRACEFUL_CANCEL_ROOT,
@@ -50,8 +51,7 @@ from nx_inputs import (
     MERGE_POLICY_WORKSPACE,
     PLAN_STORE_ASSETS_ROOT,
     PLAN_STORE_ASSETS_WORKSPACE,
-    PLAN_TOOLING_ROOT,
-    PLAN_TOOLING_WORKSPACE,
+    PLAN_TOOLING_PROJECTS,
     PROJECT_STORE_RACE_ROOT,
     PROJECT_STORE_RACE_WORKSPACE,
     RECIPE_SCOPED,
@@ -124,7 +124,7 @@ WORKSPACE_INSTALL = REPO_ROOT / "scripts" / "workspace-install.sh"
 #: The directories under this checkout that git ignores and Nx therefore never hashes.
 #: A read of one is toolchain state rather than the tree under judgement, so **no** input
 #: declaration could cover it and holding a key to one is a demand nothing can satisfy.
-#: `tests/test_nx_cache_scope.py` states the same rule from the other side, in what it
+#: `tests/tree_scans/test_nx_cache_scope.py` states the same rule from the other side, in what it
 #: will accept as covered at all. Measured rather than anticipated: a session-scoped
 #: fixture asking `importlib.metadata` for an installed distribution's version opens that
 #: distribution's `METADATA` under `.venv`, and every journey of one project failed for
@@ -132,10 +132,16 @@ WORKSPACE_INSTALL = REPO_ROOT / "scripts" / "workspace-install.sh"
 #: what its journeys measured (`tests/budget_telemetry.py`): that target's own output.
 UNHASHED_DIRECTORIES = frozenset({".venv", "node_modules", ".git", ".nx", ".telemetry"})
 #: The marker that moves a test from its project's narrow key to that project's
-#: whole-workspace one. Its one source is `pyproject.toml`'s marker registration, and
-#: the `test` / `test-docs` targets of both `orchestrator` and `plan-tooling` select on
-#: it. It routes between the targets of one project and never between projects: which
-#: project owns a test is decided by where the test lives.
+#: whole-workspace one. Its one source is `pyproject.toml`'s marker registration, and the
+#: `test` / `test-docs` targets of `orchestrator` and of every directory-owned project with
+#: a whole-workspace target select on it. In `orchestrator` it marks a test that reads this
+#: repository's prose; in a directory-owned project it marks only a test that copies this
+#: checkout or scans every tracked document, and a test there that reads named prose
+#: carries no marker, its project's key naming what it reads. It routes between the
+#: targets of one project and never between projects, save one exception: a journey directly
+#: under `tests/e2e/` carrying it leaves `orchestrator-e2e`, which has no whole-workspace
+#: target, for `orchestrator:test-docs`. Otherwise which project owns a test is decided by
+#: where the test lives.
 READS_DOCS_MARKER = "reads_docs"
 DOCUMENTATION_DIRECTORY = "docs"
 #: The marker that moves a test into the narrow recipe-scoped key.
@@ -145,9 +151,9 @@ READS_RECIPES_MARKER = "reads_recipes"
 #: Every directory a project of its own owns, and the key that project's test target is
 #: memoized on. Tests there are routed by *path* rather than by marker — the project
 #: boundary is the tier — so the guards below ask where a test lives rather than what it
-#: declares. `docs_tier` says whether that project has a second, whole-workspace target
-#: for `reads_docs` to route a test into: `plan-tooling` does, for the journeys that copy
-#: this checkout, and no ask-seam journey does, so a prose read there is a read outside
+#: declares. `docs_tier` says whether that project has a whole-workspace target for
+#: `reads_docs` to route a test into: each plan-tooling subject holding journeys that copy
+#: this checkout does, and no ask-seam journey does, so a prose read there is a read outside
 #: its only key rather than a routing instruction. Each ask-seam journey is its own
 #: project under `tests/ask_seam/`, held to its own key — the one `tests/nx_inputs.py`
 #: lists beside it — because a key those journeys shared made every one of them replay,
@@ -163,7 +169,19 @@ class OwnedProject(NamedTuple):
 
 
 OWNED_PROJECTS = {
-    PLAN_TOOLING_ROOT: OwnedProject(key=PLAN_TOOLING_WORKSPACE, docs_tier=True),
+    # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
+    # catalog of test projects, where every project has its entry, and
+    # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside
+    # the tiers it describes; the plan-tooling subjects and drift-gate projects are listed
+    # once in `tests/nx_inputs.py` and expanded here beside the others' because the catalog
+    # is the domain.
+    **{
+        subject.root: OwnedProject(
+            key=subject.key, docs_tier=subject.docs_tier, target=subject.target
+        )
+        for subject in (*PLAN_TOOLING_PROJECTS, *DRIFT_GATE_PROJECTS)
+    },
+    # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     **{
         journey.root: OwnedProject(key=journey.key, docs_tier=False)
         for journey in ASK_SEAM_JOURNEYS
@@ -186,9 +204,9 @@ OWNED_PROJECTS = {
     PROJECT_STORE_RACE_ROOT: OwnedProject(key=PROJECT_STORE_RACE_WORKSPACE, docs_tier=False),
     # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
     # catalog of test projects, where every project has its entry, and
-    # `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
-    # describes; the plan-store-assets and render-diagram entries sit beside the others' rather
-    # than in a domain of their own because the catalog is the domain.
+    # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside
+    # the tiers it describes; the plan-store-assets and render-diagram entries sit beside
+    # the others' rather than in a domain of their own because the catalog is the domain.
     PLAN_STORE_ASSETS_ROOT: OwnedProject(key=PLAN_STORE_ASSETS_WORKSPACE, docs_tier=False),
     RENDER_DIAGRAM_ROOT: OwnedProject(key=RENDER_DIAGRAM_WORKSPACE, docs_tier=False),
     # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
@@ -196,30 +214,30 @@ OWNED_PROJECTS = {
     UNFINISHED_ROOT: OwnedProject(key=UNFINISHED_WORKSPACE, docs_tier=False),
     # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
     # catalog of test projects, where every project has its entry, and
-    # `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
-    # describes; the board-copy-approval entry sits beside the others' because the catalog is
-    # the domain.
+    # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside
+    # the tiers it describes; the board-copy-approval entry sits beside the others' because
+    # the catalog is the domain.
     BOARD_COPY_APPROVAL_ROOT: OwnedProject(key=BOARD_COPY_APPROVAL_WORKSPACE, docs_tier=False),
     # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
     # catalog of test projects, where every project has its entry, and
-    # `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
-    # describes; the toolchain-isolation entry sits beside the others' because the catalog is
-    # the domain.
+    # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside
+    # the tiers it describes; the toolchain-isolation entry sits beside the others' because
+    # the catalog is the domain.
     TOOLCHAIN_ISOLATION_ROOT: OwnedProject(key=TOOLCHAIN_ISOLATION_WORKSPACE, docs_tier=False),
     # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
     # catalog of test projects, where every project has its entry, and
-    # `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
-    # describes; the graceful-cancel entry sits beside the others' because the catalog is the
-    # domain.
+    # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside
+    # the tiers it describes; the graceful-cancel entry sits beside the others' because the
+    # catalog is the domain.
     GRACEFUL_CANCEL_ROOT: OwnedProject(key=GRACEFUL_CANCEL_WORKSPACE, docs_tier=False),
     # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
     # catalog of test projects, where every project has its entry, and
-    # `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
-    # describes; the manager-allowlist entry sits beside the others' rather than in a domain of its
-    # own because the catalog is the domain.
+    # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside
+    # the tiers it describes; the manager-allowlist entry sits beside the others' rather
+    # than in a domain of its own because the catalog is the domain.
     MANAGER_ALLOWLIST_ROOT: OwnedProject(key=MANAGER_ALLOWLIST_WORKSPACE, docs_tier=False),
     # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The read guard needs every
@@ -541,8 +559,10 @@ def _code_key_reads_are_declared(
     `AGENTS.md` would replay a green verdict for a tree whose tests would have failed.
 
     So the declaration is enforced where it is made. An undeclared test that opens
-    what the key drops fails here and is told to join the whole-workspace tier
-    instead, which is the direction this decision has to fail in. A read from inside
+    what the key drops fails here and is told where it belongs instead — a drift gate in
+    the subject project under `tests/` whose key names the documents it reads, anything
+    else in the whole-workspace tier — which is the direction this decision has to fail
+    in. A read from inside
     a child process is out of reach — but a journey that hands a real tool the whole
     tree copies it first, and copying is itself a read.
 
@@ -585,8 +605,10 @@ def _code_key_reads_are_declared(
         if uncovered is not None:
             raise AssertionError(
                 f"{request.node.name} reads {uncovered}, which {project}:{CODE_SCOPED}'s "
-                f"key does not cover; mark it @pytest.mark.{READS_DOCS_MARKER} so it runs "
-                f"in the whole-workspace tier, or add the path to {key} in "
+                "key does not cover; move a drift gate into the subject project under "
+                "tests/ whose key names what it reads (tests/nx_inputs.py's "
+                f"DRIFT_GATE_PROJECTS), mark anything else @pytest.mark.{READS_DOCS_MARKER} "
+                f"so it runs in the whole-workspace tier, or add the path to {key} in "
                 f"{root}/project.json when the tier is meant to be keyed on it"
             )
         return opener(file, *args, **kwargs)

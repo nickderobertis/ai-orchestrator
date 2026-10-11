@@ -41,7 +41,7 @@ library that owns the seam, as a general feature of that library rather than thi
 host's special case, is released, and is adopted here through the governing pin ([Which
 pin governs a dispatch](#which-pin-governs-a-dispatch)); then the local code is deleted,
 with its tests, the lint ignore markers written for it, its recipes and its prose.
-`tests/test_upstream_workaround_rule.py` is the one drift gate that holds this: the
+`tests/family_scans/test_upstream_workaround_rule.py` is the one drift gate that holds this: the
 rule stated once, a script under `scripts/` whose own header calls it a workaround
 naming the upstream issue that retires it, and the fills a plan is retiring present
 until their replacement lands and gone after.
@@ -335,7 +335,7 @@ What each tool is *for here*. How to use it is the tool's own to say — in
   files). `config/oneharness.version` governs the CLI the wrapper scripts and `just
   smoke` spawn; a dispatch's turn goes through the core library the engine links.
   `oneharness --help`; https://github.com/nickderobertis/oneharness.
-<!-- llmlint: ignore-block[instruction_layer_localized] Which `onetaskgraph` answers is a host-wide fact rather than an `orchestrator/` implementation constraint: every board command a manager runs — `just plans`, `just check-plan`, `just approve-design`, `just follow-ups` — reads through that resolution, and the reader diagnosing a read about the wrong release is the manager, whose document this is. It sits in the roster beside the pin that governs the release, and `orchestrator/AGENTS.md` owns no statement of tool selection; `tests/test_plan_store_guidance.py` holds this one copy to the code. The block runs to the end of this bullet. -->
+<!-- llmlint: ignore-block[instruction_layer_localized] Which `onetaskgraph` answers is a host-wide fact rather than an `orchestrator/` implementation constraint: every board command a manager runs — `just plans`, `just check-plan`, `just approve-design`, `just follow-ups` — reads through that resolution, and the reader diagnosing a read about the wrong release is the manager, whose document this is. It sits in the roster beside the pin that governs the release, and `orchestrator/AGENTS.md` owns no statement of tool selection; `tests/plan_guidance/test_plan_store_guidance.py` holds this one copy to the code. The block runs to the end of this bullet. -->
 - **`onetaskgraph`** — the plan store, installed with its SDK from the project lock: the `authoring` source a plan is drafted in and
   the `plans` board it is approved and launched from, as `onetaskgraph.yaml`
   configures them. `config/onetaskgraph.version` governs the standalone CLI this host's
@@ -435,7 +435,7 @@ this one sit either side. And
 a fix that lands as CI configuration, scripts, or a dev-only crate is in force by
 merging, in that repository's build graph, with no pin here to move: `git tag
 --contains` says the release carries the commit while the archive carries nothing of
-it, and `tests/test_plan_store_guidance.py` re-takes that on the installed plan-store
+it, and `tests/plan_guidance/test_plan_store_guidance.py` re-takes that on the installed plan-store
 CLI.
 
 **The `onevcs` pin moves for the whole host at once, never for one checkout.** `onevcs`
@@ -575,7 +575,7 @@ run's settlements are projected back to the project it was launched from
 source, the board every session's verified follow-up tickets accumulate on, are never
 repointed either, because a later run comments on an earlier run's issue there.
 
-<!-- llmlint: ignore-block[agents_md_durable_and_terse] This node's acceptance criteria require the manager's own document to state where a plan's home and members land and what each Linear state means for a plan task, because a manager reads a plan's Linear items from here; docs/orchestration.md keeps the fuller table, and tests/test_plan_store_guidance.py holds this paragraph's state names and route to the configured mapping and route. -->
+<!-- llmlint: ignore-block[agents_md_durable_and_terse] This node's acceptance criteria require the manager's own document to state where a plan's home and members land and what each Linear state means for a plan task, because a manager reads a plan's Linear items from here; docs/orchestration.md keeps the fuller table, and tests/plan_guidance/test_plan_store_guidance.py holds this paragraph's state names and route to the configured mapping and route. -->
 **A task of a `github.com/petsinc/*` repository lands in Hello Patient's Linear,
 `hellopatient`, by the `plans` route and never by choice**, so author a plan spanning both orgs
 as one project. Its home goes to `hellopatient` only when every task is petsinc's, and
@@ -661,7 +661,7 @@ them reach you; `manager` names the session role and is never a command.
    plan project, and is run by passing its qualified `source:project` id to `just
    orchestrate`.
 
-   <!-- llmlint: ignore-block[changed_behavior_has_e2e] This paragraph is judgment a manager session reads, not code any process executes, so there is no journey to drive: what a test can hold is that the rule is stated once and in the manager's own document, which `tests/test_decomposition_guidance.py` anchors on "no direct large operations". -->
+   <!-- llmlint: ignore-block[changed_behavior_has_e2e] This paragraph is judgment a manager session reads, not code any process executes, so there is no journey to drive: what a test can hold is that the rule is stated once and in the manager's own document, which `tests/manager_guidance/test_decomposition_guidance.py` anchors on "no direct large operations". -->
    One direct-tweak rule: **no direct large operations**. Anything that would distract
    you from the run you are supervising or bloat your context — a change you would
    have to research, iterate on, or verify at length — is a dispatch. A change that is
@@ -998,7 +998,7 @@ it: `just follow-ups` and `just follow-ups-answer-comments` differ in what the d
 they launch will and will not do, and a manager who picks the wrong one pays a provider
 turn to find out. The disposition words are named because the manager reads the account,
 and each validator is named because the manager runs it when a detached run's own report is
-all there is. `tests/test_follow_up_ticket_docs.py` reads both vocabularies out of
+all there is. `tests/plan_guidance/test_follow_up_ticket_docs.py` reads both vocabularies out of
 `orchestrator/follow_up_tickets.py` and fails when this prose stops matching them, so this
 is one statement held to the code rather than a second one. The block runs to the end of
 the paragraph naming where each validator binds. -->
@@ -1006,7 +1006,7 @@ the paragraph naming where each validator binds. -->
 operating knowledge — which of its recipes selects which mode, and what each dispatch it
 launches owes — rather than an `orchestrator/` implementation constraint, and
 `orchestrator/AGENTS.md` owns no statement of a recipe's behaviour. It sits inside the
-follow-ups section this document already carries, which `tests/test_follow_up_ticket_docs.py`
+follow-ups section this document already carries, which `tests/plan_guidance/test_follow_up_ticket_docs.py`
 reads from `AGENTS.md` by name and holds to the module's own vocabularies. The block runs to
 the end of the paragraph naming the two places each validator binds. -->
 **A follow-up dispatch's task is rendered from this host's `follow-up-task` template,
@@ -1050,7 +1050,7 @@ green and the attached recipe re-runs that reply validator after settlement.
 <!-- llmlint: ignore-end[instruction_layer_localized] -->
 <!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 
-<!-- llmlint: ignore-block[instruction_layer_localized] These three paragraphs are the manager's own loop rather than an `orchestrator/` implementation constraint: the manager session reads them when it briefs and supervises follow-up runs and reads the board, and no nested instruction file is one the manager reads; `tests/test_follow_up_ticket_docs.py` holds the keys and commands they name to `orchestrator/follow_up_tickets.py`. The block runs to the end of the paragraph on which board item a ticket is copied onto. -->
+<!-- llmlint: ignore-block[instruction_layer_localized] These three paragraphs are the manager's own loop rather than an `orchestrator/` implementation constraint: the manager session reads them when it briefs and supervises follow-up runs and reads the board, and no nested instruction file is one the manager reads; `tests/plan_guidance/test_follow_up_ticket_docs.py` holds the keys and commands they name to `orchestrator/follow_up_tickets.py`. The block runs to the end of the paragraph on which board item a ticket is copied onto. -->
 **Every proposal is written against the board's accepted fixes.** The follow-up agent
 reads the accepted tickets its searches for a ticket returned for other root causes — `Todo`,
 `Queued`, `In Progress`, and `Done` where the fix has not reached the basis the ticket was
@@ -1104,7 +1104,7 @@ from the binding, and every copy the task prescribes goes through `copy`: a bare
 updates whichever carrier the store lists first.
 <!-- llmlint: ignore-end[instruction_layer_localized] -->
 
-<!-- llmlint: ignore-block[instruction_layer_localized] This paragraph is the manager's own loop rather than an `orchestrator/` implementation constraint: the manager reads it to know which board and repository a follow-up run files each ticket in, and so which links to relay and who accepts each item, and no nested instruction file is one the manager reads; `tests/test_follow_up_ticket_docs.py` holds the commands it names to `orchestrator/follow_up_tickets.py`. -->
+<!-- llmlint: ignore-block[instruction_layer_localized] This paragraph is the manager's own loop rather than an `orchestrator/` implementation constraint: the manager reads it to know which board and repository a follow-up run files each ticket in, and so which links to relay and who accepts each item, and no nested instruction file is one the manager reads; `tests/plan_guidance/test_follow_up_ticket_docs.py` holds the commands it names to `orchestrator/follow_up_tickets.py`. -->
 **The `followups` board is the user's decision.** A ticket lists every repository its fix
 changes. One whose fix changes one repository has its issue created in it, which must be
 under the board's owner, as an item of the one board; a ticket naming a repository outside
@@ -1125,7 +1125,7 @@ tickets selects `Todo` items only.** `python -m orchestrator.follow_up_tickets s
 prints the vocabulary every agent reads, copied here:
 <!-- llmlint: ignore-end[instruction_layer_localized] -->
 
-<!-- llmlint: ignore-block[agents_md_durable_and_terse] The node that added the `Deferred` status requires this section to carry the module's rendered vocabulary, so a manager briefing a dispatch to pick up accepted tickets reads what `Todo` means without running a command; `tests/test_follow_up_ticket_docs.py` fails when this copy differs from `status_vocabulary()`, so it cannot drift from its one source. -->
+<!-- llmlint: ignore-block[agents_md_durable_and_terse] The node that added the `Deferred` status requires this section to carry the module's rendered vocabulary, so a manager briefing a dispatch to pick up accepted tickets reads what `Todo` means without running a command; `tests/plan_guidance/test_follow_up_ticket_docs.py` fails when this copy differs from `status_vocabulary()`, so it cannot drift from its one source. -->
 <!-- llmlint: ignore-block[instruction_layer_localized] `.github/CODEOWNERS` routes ownership, but a diff-scoped run never shows it to this rule; lift once it does. -->
 - **Board status `Proposal`**, Linear state `Proposed`, written `backlog`: a proposal
   awaiting the user's decision. Who moves an item there: a follow-up run's first copy of a
@@ -1162,7 +1162,7 @@ Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Review
 <!-- llmlint: ignore-end[instruction_layer_localized] -->
 <!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 
-<!-- llmlint: ignore-block[instruction_layer_localized] The node that added the priority estimate requires this section to state it tersely, because the manager is who briefs follow-up runs and reads the board, and has to tell a person's priority from the estimate's without reading the module; no nested instruction file is one the manager reads, and `tests/test_follow_up_ticket_docs.py` holds every record key named here to `orchestrator/follow_up_tickets.py`. -->
+<!-- llmlint: ignore-block[instruction_layer_localized] The node that added the priority estimate requires this section to state it tersely, because the manager is who briefs follow-up runs and reads the board, and has to tell a person's priority from the estimate's without reading the module; no nested instruction file is one the manager reads, and `tests/plan_guidance/test_follow_up_ticket_docs.py` holds every record key named here to `orchestrator/follow_up_tickets.py`. -->
 **A ticket's priority is estimated from its facts, and a person's override stands.** A
 follow-up agent records facts and never a priority: the `## Impact` severity with the
 workaround, and whether the root cause fires consistently as the record's `frequency`. Both
@@ -1515,7 +1515,7 @@ this host disables; the `repo-write` allowlister hook stays wired by
 
 ## Command surface
 
-<!-- llmlint: ignore-block[no_redundant_instruction_pointers] A maintainer opens this section to write a script, a thousand lines below the rule that decides whether the script should exist, and the gate `tests/test_upstream_workaround_rule.py` holds that rule to one statement — so the section that would otherwise restate it points instead, and this is that one pointer. -->
+<!-- llmlint: ignore-block[no_redundant_instruction_pointers] A maintainer opens this section to write a script, a thousand lines below the rule that decides whether the script should exist, and the gate `tests/family_scans/test_upstream_workaround_rule.py` holds that rule to one statement — so the section that would otherwise restate it points instead, and this is that one pointer. -->
 Before writing a script here, read [A canonical example of the libraries, not a
 workaround layer](#a-canonical-example-of-the-libraries-not-a-workaround-layer): a
 script is a thin wrapper over a library verb, or it is a gap to surface.
@@ -1822,7 +1822,7 @@ ruff, mypy, pytest) for the small `orchestrator/` package — the label contract
 redaction rule, and the suite that proves this layer; YAML, JSON, and TOML for
 configs. The engine, the lifecycle, and the browser view are not built here.
 
-[//]: # (llmlint: ignore-block[agents_md_durable_and_terse] The create-repo baseline checker's `--buildout` tier reads which reference fragments apply from the composition bullet below and from nowhere else, so the line restates `llmlint.yml`'s plugin list on purpose, and `tests/test_composition_record.py` holds the two to one composition; the exclusion beside it is the recorded decision that check also asks for.)
+[//]: # (llmlint: ignore-block[agents_md_durable_and_terse] The create-repo baseline checker's `--buildout` tier reads which reference fragments apply from the composition bullet below and from nowhere else, so the line restates `llmlint.yml`'s plugin list on purpose, and `tests/manager_guidance/test_composition_record.py` holds the two to one composition; the exclusion beside it is the recorded decision that check also asks for.)
 - **References composed:** `base.md`, `shapes/skills-repo.md`, `project-graph.md`,
   `languages/python.md`, `languages/bash.md`, `ci.md` — the fragments `llmlint.yml` loads.
 - **Excluded:** `releasing.md`, because nothing versioned is published.
@@ -1847,8 +1847,9 @@ pre-push because there is no CI.
 - **Coverage is enforced at 100% line coverage on `orchestrator/`**, because what is
   left of the package is all trust boundary. `[tool.coverage.report]` in
   `pyproject.toml` is the floor's one source, and the uncached `orchestrator:coverage`
-  read compares what `orchestrator:test` and `orchestrator-e2e:test` measured to it, so
-  nothing else may name one.
+  read compares what `orchestrator:test`, `orchestrator-e2e:test` and each test project
+  measuring into its own `.coverage.<project name>` measured to it, so nothing else may
+  name one.
 - **The suite runs across four xdist workers**, from measurement rather than `auto`:
   it is latency-bound and the curve is flat past four on a host also running
   dispatches. A test whose subject is a process- or machine-wide resource declares
@@ -1858,14 +1859,15 @@ pre-push because there is no CI.
   because every test that installs into a `.venv` or `node_modules` declares
   `rewrites_workspace_toolchain` and installs into a copy of its own. So readers run
   ungrouped, and an xdist group names one module's shared fixture, never a toolchain —
-  the contract `tests/e2e/nx_workspace.py` states, `tests/test_nx_cache_scope.py` holds
+  the contract `tests/e2e/nx_workspace.py` states, `tests/tree_scans/test_nx_cache_scope.py` holds
   and `tests/e2e/toolchain_isolation/` proves. Read a wait that *expires* as something
   holding a lock and a wait that merely lengthens as load.
   <!-- llmlint: ignore-block[agents_md_durable_and_terse] The task that ended the shared toolchain group requires this invariant to carry the tier figures it measured and their host conditions: they are the evidence the ungrouped four-worker schedule rests on, as "from measurement" above is for the worker count. -->
   Measured with the three slowest tiers together (Nx `parallel` 3, cache skipped) on this
   14-core host beside other dispatches: ending the group took `orchestrator-e2e:test`
   from 2392 s to 1122 s and `orchestrator:test-docs` from 844 s to 528 s, while
-  `plan-tooling:test` rose from 464 s to 708 s (load1 peaks 38.5 and 27.5).
+  `plan-tooling:test`, since split into the `plan-tooling-*` subject projects, rose from
+  464 s to 708 s (load1 peaks 38.5 and 27.5).
   <!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 - **Tests are realistic, not mocked.** The suite drives the real `just` recipes, the
   real wrapper scripts, the real `oneharness` CLI, and real Nx; only the paid model and
@@ -1895,7 +1897,7 @@ dated measurement of somebody else's software reads as current for as long as it
 stands, so every ISO date here is a claim about an external tool until its paragraph
 names a test under `tests/` that fails when the release behind it moves, or classifies
 the date as stamping something that *happened* with `<!-- dated-claim: incident
-<reason> -->`. `tests/test_dated_claims.py` triggers on the bare date rather than on
+<reason> -->`. `tests/manager_guidance/test_dated_claims.py` triggers on the bare date rather than on
 how the sentence is written, because there is no closed vocabulary for asserting
 something. A claim with neither goes, and what may stand in its place is what a
 release did, cited to something a reader can open.

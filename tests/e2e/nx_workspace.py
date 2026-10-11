@@ -33,7 +33,7 @@ toolchain. With no writer touching this checkout's toolchain, the only thing a r
 meets is `uv run`'s environment lock on `<root>/.venv`, which `uv` holds only while it
 checks or syncs the environment and releases before it starts the child — `--no-sync`,
 `--frozen` and `--locked` alike — and nothing syncs this checkout's. So readers keep plain
-`uv run`. `tests/test_nx_cache_scope.py` holds the contract on every test module, and
+`uv run`. `tests/tree_scans/test_nx_cache_scope.py` holds the contract on every test module, and
 `tests/e2e/toolchain_isolation/test_toolchain_isolation_e2e.py` drives a writer beside a
 reader to prove it.
 """

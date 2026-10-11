@@ -41,7 +41,6 @@ from onevcs_stand_in import install_three_verb_stand_in, release_answer
 
 from orchestrator import adoption_guard, criteria_guard, envelope_review, plan_review, plan_store
 from orchestrator.criteria_guard import (
-    APPENDIX,
     CRITERIA_HEADING,
     Bar,
     CriteriaError,
@@ -971,59 +970,6 @@ def _live_edit_rows() -> dict[str, str]:
         if cells[0] == "`finding`":
             break
     return rows
-
-
-@pytest.mark.reads_docs
-def test_the_task_bearing_ops_are_the_ones_the_live_edit_table_says_carry_a_task() -> None:
-    """Which ops put task prose in front of a dispatch is the engine's answer, gated here.
-
-    The module restates three things of the live-edit table — which ops state a whole
-    task, in which field each states it, and which op states an amendment — and this is
-    what holds the restatement to the table rather than to memory.
-    """
-    rows = _live_edit_rows()
-    assert rows, f"no live-edit table under {LIVE_EDIT_TABLE_OPENS!r} in {LIVE_EDIT_TABLE}"
-
-    stated_in = {
-        op: "node" if "`node`: full" in fields else "amend"
-        for op, fields in rows.items()
-        if "`node`: full" in fields or "`amend`: partial node overrides" in fields
-    }
-    assert stated_in == envelope_review.STATED_IN, (rows, envelope_review.STATED_IN)
-    assert set(stated_in) == set(envelope_review.WHOLE_TASK_OPS)
-
-    amending = [op for op, fields in rows.items() if fields == "`id`; `text`"]
-    assert amending == [envelope_review.AMEND_OP], rows
-
-    stated = LIVE_EDIT_TABLE.read_text(encoding="utf-8")
-    assert f"`{envelope_review.NO_DISPATCH}: true`" in stated, (
-        f"the field a node declares it dispatches nobody by is not the one {LIVE_EDIT_TABLE} "
-        f"documents"
-    )
-    assert "without dispatching onejudge" in stated
-
-
-# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_docs` routes a
-# test between two targets of the project that already owns it, rather than standing in
-# for a project: this one reads `templates/dispatch-appendix.md`, which collection refuses
-# without the marker, and so runs under `orchestrator:test-docs`'s whole-workspace key.
-@pytest.mark.reads_docs
-def test_the_tracked_appendix_itself_is_left_alone() -> None:
-    """The exemption proven against the text this host actually requires.
-
-    Every dispatched task carries `templates/dispatch-appendix.md` verbatim, and that text
-    names `pkill`, `git status`, a `just` invocation and a chained shell command — so a
-    reader that examined its section would refuse every task this repository demands.
-    """
-    tracked = (REPO_ROOT / APPENDIX).read_text(encoding="utf-8").strip()
-
-    assert (
-        refusal(_envelope(_retry(_task(criteria=SOUND_CRITERION).replace(APPENDIX_TEXT, tracked))))
-        is None
-    )
-
-
-# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 
 def test_a_live_edit_spends_no_plan_level_turn_and_reads_no_plan_level_record(

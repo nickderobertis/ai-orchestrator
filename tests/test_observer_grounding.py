@@ -92,19 +92,3 @@ def test_an_observers_supervisor_sends_back_an_ungrounded_violation(persona: str
         f"personas/{persona}'s supervisor rejects without naming the repair, so a turn it "
         "sends back has no stated way to come back"
     )
-
-
-@pytest.mark.reads_docs
-def test_the_rule_is_explained_where_an_operator_reads_it() -> None:
-    """Four instructed sides, one explanation, and the explanation names them all."""
-    written = " ".join(DOCUMENTED.read_text(encoding="utf-8").split())
-
-    assert " ".join(SECTION.split()) in written, (
-        f"{DOCUMENTED.name} no longer carries {SECTION!r}; the personas would instruct a "
-        "rule an operator reading a surfaced finding has nowhere to look up"
-    )
-    for persona in OBSERVER_PERSONAS:
-        assert f"personas/{persona}" in written, (
-            f"{DOCUMENTED.name} explains the grounding rule without naming personas/"
-            f"{persona} as a place it is stated, so that side can be dropped unnoticed"
-        )

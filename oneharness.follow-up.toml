@@ -33,7 +33,7 @@ extends = "oneharness.dispatch.toml"
 # here. Declared in this file rather than on the graph member because the oneagentgraph
 # the engine links admits no `mode` on a single-sided `kind: oneharness` member, and
 # stamps none over the config it hands through — so this is the value the turn uses.
-# `tests/plan_tooling/test_follow_ups_recipe_e2e.py` dispatches the member against a
+# `tests/plan_tooling/follow_ups/test_follow_ups_recipe_e2e.py` dispatches the member against a
 # provider that refuses a default-mode turn the way codex does.
 mode = "bypass"
 

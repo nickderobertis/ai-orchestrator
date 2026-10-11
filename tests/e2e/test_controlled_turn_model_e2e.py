@@ -33,9 +33,9 @@ outside every `nx.json` key, so it runs in the uncached tier.
 # The finding these answer is about which Nx project owns this file, so it is the file
 # that is suppressed and a project split that would resolve it. The journeys read the
 # `codex` and `oneharness` this host installed, which live outside the workspace and so
-# outside every `nx.json` key: the uncached `orchestrator:test-checkouts` tier exists
+# outside every `nx.json` key: the uncached `orchestrator-e2e:test-checkouts` tier exists
 # for exactly that, selected by `reads_checkouts`, and a second Nx project would need
-# its own key over the same nothing. `tests/test_nx_cache_scope.py` holds the marker to
+# its own key over the same nothing. `tests/tree_scans/test_nx_cache_scope.py` holds the marker to
 # routing rather than to a shortcut.
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] see above
 # llmlint: ignore-block[shell_test_tiers_stay_split] see above

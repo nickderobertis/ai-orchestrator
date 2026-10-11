@@ -17,10 +17,12 @@ working directory and git state, and the node, resolved from the run's own dispa
 by walking up from the drafting process to the dispatch the engine recorded.
 
 The root is stated to the launch rather than left to resolve to this checkout's
-`.follow-ups/`, for the reason `tests/plan_tooling/test_plan_root_env.py`'s neighbours state
-theirs: a journey that wrote into the tree it runs in would leave records behind for every
-other reader of that store. The helper still resolves and validates it through the store,
-and `tests/plan_tooling/test_follow_up_drafts_e2e.py` holds the value it resolves on its own.
+`.follow-ups/`, for the reason `tests/plan_tooling/plan_flow/test_plan_root_env.py`'s
+neighbours state theirs: a journey that wrote into the tree it runs in would leave records
+behind for every other reader of that store. The helper still resolves and validates it
+through the store, and `tests/plan_tooling/follow_ups/test_follow_up_drafts_e2e.py` holds
+the value it resolves
+on its own.
 """
 
 from __future__ import annotations

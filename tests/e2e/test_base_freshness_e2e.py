@@ -12,13 +12,14 @@ it sits in the recipe-scoped tier beside the other script journeys rather than i
 whole-workspace one.
 
 llmlint: ignore-file[shell_test_tiers_stay_split] `git` is the one host tool here, and
-`recipeWorkspace` is already the tier for that: `tests/e2e/test_workspace_contract_e2e.py`
-beside it builds real repositories and drives real `just` under the same key, which is the
-justfile and `scripts/**` — the two things this suite exercises and nothing else. A project
-of its own would add a fourth Nx project to hold one module whose edges would be that same
-pair, and a change to this repository's Nx project selection is a sibling node of this
-plan's to make. What this file already does not pay for is the expensive part: no Nx, no
-copied checkout, and no judge, which is why it is not in the module it was split out of.
+`orchestrator-e2e:test-recipes`, keyed `e2eRecipeWorkspace`, is already the tier for that:
+`tests/e2e/test_workspace_contract_e2e.py` beside it builds real repositories and drives
+real `just` under the same key, which is the justfile and `scripts/**` — the two things this
+suite exercises and nothing else. A project of its own would add an Nx project to hold one
+module whose edges would be that same pair, and a change to this repository's Nx project
+selection is a sibling node of this plan's to make. What this file already does not pay for
+is the expensive part: no Nx, no copied checkout, and no judge, which is why it is not in
+the module it was split out of.
 """
 
 from __future__ import annotations

@@ -9,7 +9,7 @@ So no test spells the name. This reads it out of the helper, by sourcing the hel
 printing the constant it holds — which is the same read `scripts/plan.sh` makes, one
 step short of the resolution. Deliberately short of it: a caller who only needs the name
 should not need a resolvable plan store to learn it, and every journey that varies the
-environment the resolution runs under lives in `tests/plan_tooling/test_plan_root_env.py`.
+environment the resolution runs under lives in `tests/plan_tooling/plan_flow/test_plan_root_env.py`.
 """
 
 from __future__ import annotations

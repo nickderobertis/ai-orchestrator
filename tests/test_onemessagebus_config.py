@@ -141,19 +141,6 @@ def test_the_channel_is_the_planner_channel_layout_over_the_runs_own_directory()
     assert re.search(r"^queues:", _lines(), re.MULTILINE) is None
 
 
-@pytest.mark.reads_docs
-def test_the_monitors_grants_are_the_allowlist_agents_md_states() -> None:
-    """Exactly the ops `AGENTS.md` names for the monitor's edit author, and no others."""
-    agents = " ".join((REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8").split())
-    stated = re.search(
-        r"allowlist its edit author is bounded to — ((?:`\w+`(?:, | and )?)+)", agents
-    )
-    assert stated is not None, "AGENTS.md no longer names the monitor's allowlist"
-    named = re.findall(r"`(\w+)`", stated.group(1))
-    granted = _value(r"^authors:\n  monitor:\n    capabilities: \[([^\]]*)\]$")
-    assert [op.strip() for op in granted.split(",")] == named
-
-
 def test_the_monitor_is_refused_every_other_op_for_the_reason_the_bus_once_gave(
     tmp_path: Path,
 ) -> None:

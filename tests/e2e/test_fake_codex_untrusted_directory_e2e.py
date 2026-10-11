@@ -6,7 +6,8 @@ that refusal. Neither is worth anything unless the pinned `oneharness` agrees â€
 classifies that stderr as `untrusted-directory` and moves a chain on, and what builds the bypass
 command â€” so both are read back here out of a real `oneharness run` over the stand-in. A release
 that moves either one fails here, rather than leaving
-`tests/plan_tooling/test_follow_ups_recipe_e2e.py` passing against a refusal nothing reads.
+`tests/plan_tooling/follow_ups/test_follow_ups_recipe_e2e.py` passing against a refusal
+nothing reads.
 """
 
 from __future__ import annotations

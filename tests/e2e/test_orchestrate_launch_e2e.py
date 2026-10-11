@@ -2954,10 +2954,11 @@ def test_a_launch_names_its_run_to_the_graph_watching_it(
 # the rule is misapplied to *this* test rather than wrong about the file: the expense
 # behind the finding is the `observed_launch` launch, which is module-scoped and was
 # already being spent by the two journeys beside this one before it existed. Adding a
-# third read off that one launch cannot make an unrelated `recipeWorkspace` change cause
-# a launch that change already caused. What the finding describes truthfully is the
-# placement of `tests/e2e` as a whole, and moving it behind an edge of its own is a
-# restructuring of the tier — the note above says why one added assertion is not the
+# third read off that one launch cannot make an unrelated change cause a launch that
+# change already caused. What the finding describes truthfully is the placement of
+# `tests/e2e` as a whole, the `orchestrator-e2e` project's `test` target keyed
+# `e2eWorkspace`, and splitting that into a project per subject is a restructuring of the
+# tier — the note above says why one added assertion is not the
 # change that should carry it.
 @pytest.mark.xdist_group("observer-environment")
 def test_a_launch_hands_its_observer_the_run_history_settings_the_engine_stamps(

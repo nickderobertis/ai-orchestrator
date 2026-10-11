@@ -24,17 +24,17 @@ repair is missing when it is not.
 
 **What this cannot say is whether a row is complete.** Nothing here knows the plan; the
 rows are what the run that made them recorded, node by node, and a tenth engine node
-nobody added would go unnoticed. That is the same gap `tests/test_dated_claims.py`
+nobody added would go unnoticed. That is the same gap `tests/manager_guidance/test_dated_claims.py`
 records about the test a paragraph names, and the reviewer reading the plan beside this
 table is the judge of it. What it *can* say — and what no reader can hold in their head —
 is that this release carries all nine of these rather than five of them.
 
 llmlint: ignore-file[shell_test_tiers_stay_split,test_tiers_split_by_project_not_by_marker] This
-repository runs one Nx project and splits its tiers by pytest marker over four `nx.json`
-keys. The subject here is a registered checkout of another repository, which lives outside
-this workspace and so outside every one of those keys — hence `reads_checkouts`, the
-uncached tier, where a memo cannot replay a green across the upgrade this exists to catch.
-A project of its own would need a key over the same nothing.
+module's project, the root `orchestrator`, splits its tiers by pytest marker over the keys of its
+four targets. The subject here is a registered checkout of another repository, which lives outside
+this workspace and so outside every one of those keys — hence `reads_checkouts`, the uncached tier,
+where a memo cannot replay a green across the upgrade this exists to catch. A project of its own
+would need a key over the same nothing.
 """
 
 from __future__ import annotations
@@ -534,7 +534,7 @@ GRAPHQL_WRITEBACK_QUOTA_LANDINGS = (
 #: recorded under the node id for the reason `Landing.node` gives.
 #: `tests/e2e/test_live_note_leaves_the_run_journalling_e2e.py` and
 #: `tests/e2e/test_redispatch_names_the_published_tip_e2e.py` drive the first two through
-#: `just orchestrate`, and `tests/plan_tooling/test_plan_copy_destination_ids_e2e.py` the
+#: `just orchestrate`, and `tests/plan_tooling/plan_copy/test_plan_copy_destination_ids_e2e.py` the
 #: copy the third relinks.
 LIVE_NOTE_AND_REDISPATCH_TIP_LANDINGS = (
     Landing(
@@ -560,7 +560,7 @@ LIVE_NOTE_AND_REDISPATCH_TIP_LANDINGS = (
 #: The follow-up comment flow plan's engine-side node, which relinked the plan store so a
 #: dispatch's linked store answers the narrowed comment query `just
 #: follow-ups-answer-comments` asks;
-#: `tests/plan_tooling/test_follow_ups_answer_comments_recipe_e2e.py` drives that query
+#: `tests/plan_tooling/follow_ups/test_follow_ups_answer_comments_recipe_e2e.py` drives that query
 #: through a real launch.
 COMMENT_FLOW_LANDINGS = (
     Landing(
@@ -661,7 +661,7 @@ CORRELATED_RULING_LANDINGS = (
 #: from; an envelope that does not decode refused rather than discarded; a live, quiet
 #: driver read as `PARKED` and driven; a new hook epoch when an adoption finds the graph
 #: live; and the `driver-exited` journal record.
-#: `tests/plan_tooling/test_follow_ups_recipe_e2e.py` drives the reading on this host.
+#: `tests/plan_tooling/follow_ups/test_follow_ups_recipe_e2e.py` drives the reading on this host.
 RUN_ENDING_LIVENESS_LANDINGS = (
     Landing(
         node="op-run-ending-reading",
@@ -798,8 +798,9 @@ REPARENT_WAITING_HUMAN_LANDINGS = (
 #: The engine-side node of the plan letting a spike build on a shared harness spike's kept
 #: branch (https://github.com/nickderobertis/onepipeline/pull/776): a `publish: "preserve"`
 #: node may depend on preserve nodes, and its session starts from its base dependency's kept
-#: branch. `tests/plan_tooling/test_check_plan_spikes_e2e.py` holds the adopted `plan check`
-#: to accepting a harness spike's fan-out and refusing a fan-in no stacking chain resolves.
+#: branch. `tests/plan_tooling/check_and_review/test_check_plan_spikes_e2e.py` holds the
+#: adopted `plan check` to accepting a harness spike's fan-out and refusing a fan-in no
+#: stacking chain resolves.
 PRESERVE_ON_PRESERVE_LANDINGS = (
     Landing(
         node="op-preserve-on-preserve",

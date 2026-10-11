@@ -3,11 +3,11 @@
 Each entry is taken verbatim out of `docs/plan-review-refusals.json`, where it cost a
 real judged review turn. They live here rather than beside either set of tests because
 both levels drive them and neither owns them: `tests/test_criteria_guard.py` calls the
-detectors directly, and `tests/plan_tooling/test_check_plan_recipe_e2e.py` drives the
-same criteria through `just check-plan`, which is where an operator meets a refusal. A
-form added here is therefore exercised at both, which is the property a second copy of
-this list would quietly lose — and the gap that copy would leave is the branch nobody
-thought to write down twice.
+detectors directly, and `tests/plan_tooling/check_and_review/test_check_plan_recipe_e2e.py`
+drives the same criteria through `just check-plan`, which is where an operator meets a
+refusal. A form added here is therefore exercised at both, which is the property a second
+copy of this list would quietly lose — and the gap that copy would leave is the branch
+nobody thought to write down twice.
 
 The tuples come in pairs — a shape's refusals, then the sound criteria of that same
 shape — and the pairing is the point rather than an accident of grouping. Every widening
@@ -25,7 +25,7 @@ what the detector does and not of what a judged turn was paid for.
 from __future__ import annotations
 
 #: Every distinct fragment the red-before-green branch matches. All six are classified
-#: `newly-caught` in the corpus, and `tests/test_plan_review_refusals.py` holds the
+#: `newly-caught` in the corpus, and `tests/dispatch_bar/test_plan_review_refusals.py` holds the
 #: fragment each of these is refused on to the fragments the corpus recorded — so a
 #: widening that stopped catching its own evidence, or a fixture that drifted off it,
 #: fails there rather than in the corpus's prose.

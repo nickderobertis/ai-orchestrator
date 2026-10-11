@@ -1,0 +1,70 @@
+{
+  "name": "plan-tooling-plan-copy",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/plan_tooling/plan_copy",
+  "tags": [
+    "scope:plan-tooling-plan-copy",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-fake-codex",
+    "support-follow-up-variables",
+    "support-no-paid-provider",
+    "support-nx-inputs",
+    "support-onejudge-bundle",
+    "support-onevcs-state-snapshot",
+    "support-plan-fixture-source",
+    "support-plan-root-variable",
+    "support-plan-sources",
+    "support-project-fixtures",
+    "support-published-tools",
+    "support-registered-checkouts",
+    "support-short-state",
+    "support-waits"
+  ],
+  "namedInputs": {
+    "planToolingPlanCopyWorkspace": [
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/onetaskgraph.yaml",
+      "{workspaceRoot}/oneharness.identities.toml",
+      "{workspaceRoot}/oneharness.plan-review.toml",
+      "{workspaceRoot}/oneharness.plan-review-whole.toml",
+      "{workspaceRoot}/personas/planner.yaml",
+      "{workspaceRoot}/scripts/claude-alt-config-dir.sh",
+      "{workspaceRoot}/scripts/codex-alt-home.sh",
+      "{workspaceRoot}/scripts/credentials-env.sh",
+      "{workspaceRoot}/scripts/launcher-session.sh",
+      "{workspaceRoot}/scripts/onepipeline.sh",
+      "{workspaceRoot}/scripts/plan-check.sh",
+      "{workspaceRoot}/scripts/plan-store.sh",
+      "{workspaceRoot}/scripts/review-plan.sh",
+      "{workspaceRoot}/scripts/template-env.sh",
+      "{workspaceRoot}/config/**/*",
+      "{workspaceRoot}/templates/**/*",
+      "{workspaceRoot}/orchestrator/**/*",
+      "{workspaceRoot}/tests/plan_tooling/plan_copy/**/*"
+    ]
+  },
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 COVERAGE_FILE=.coverage.plan-tooling-plan-copy uv run pytest tests/plan_tooling/plan_copy -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0",
+      "options": {
+        "cwd": "."
+      },
+      "outputs": [
+        "{workspaceRoot}/.coverage.plan-tooling-plan-copy"
+      ],
+      "inputs": [
+        "planToolingPlanCopyWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ]
+    }
+  }
+}

@@ -673,7 +673,7 @@ fi
 
 # 3. The finalize: a planner reworks the plan from every report, unless its run exists.
 if [ "$spikes_ran" -eq 1 ] && [ ! -e "$runs_root/$finalize_run" ]; then
-    # llmlint: ignore[changed_behavior_has_e2e] The note reads the branches the line above has just read and found, so it fails only when `onevcs` stops answering between the two reads; tests/test_spike_flow.py drives the read's own refusals, and tests/plan_tooling/test_plan_spike_flow_e2e.py the stop this shares when the first read finds no branch.
+    # llmlint: ignore[changed_behavior_has_e2e] The note reads the branches the line above has just read and found, so it fails only when `onevcs` stops answering between the two reads; tests/test_spike_flow.py drives the read's own refusals, and tests/plan_tooling/plan_flow/test_plan_spike_flow_e2e.py the stop this shares when the first read finds no branch.
     finalize_note=$("$python" -m orchestrator.spike_flow note "$declared_project" "$spikes_run") ||
         stop "the finalize planner's note could not be composed; the line above names why" finalize
     plan=$(write_planner "$finalize_run" "$FINALIZE_NODE_ID" "$finalize_note" "Finalize $declared_project from its spikes")

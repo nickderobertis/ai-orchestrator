@@ -1,7 +1,7 @@
 """How a landed plan is found in a destination, and what is refused rather than guessed.
 
 Where a destination holds a copied plan is driven for real in
-`tests/plan_tooling/test_finish_plan_recipe_e2e.py`, against the real recipe, the real
+`tests/plan_tooling/plan_flow/test_finish_plan_recipe_e2e.py`, against the real recipe, the real
 store CLI, and a real second source. What is proven here is the correspondence itself and
 the three answers it declines to give — a destination that holds no copy of this plan,
 one that holds two, and one whose store cannot be read at all. Each of those is a state a

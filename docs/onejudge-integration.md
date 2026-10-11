@@ -358,7 +358,7 @@ outright, naming the field to write instead. The real-CLI e2e suite checks these
 schema and CLI surfaces before it drives the same SDK-to-CLI path used in production
 dispatch.
 
-<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Per-release claims, each cited to its release, opened by the sentence `tests/test_onejudge_version.py` holds to `config/oneharness.version`: a bump fails there and re-opens this paragraph. -->
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Per-release claims, each cited to its release, opened by the sentence `tests/release_pins/test_onejudge_version.py` holds to `config/oneharness.version`: a bump fails there and re-opens this paragraph. -->
 **Getting the adopted oneharness on this box.** The prebuilt oneharness
 release binary needs a newer glibc than the host provides, and the crates.io build
 lags behind the 0.3.x releases that added `init`. The **PyPI `oneharness-cli`
@@ -1013,7 +1013,7 @@ as one is the trap this section exists for. Measured against the adopted oneharn
 0.22.0, a config's per-harness `model` **beats** the variable, while the `--model`
 flag on an invocation's own argv beats the config — a precedence that is a fact about
 one release, so the literal above is derived from `config/oneharness.version` by
-`tests/test_onejudge_version.py::test_the_model_precedence_claim_names_the_adopted_oneharness`
+`tests/release_pins/test_onejudge_version.py::test_the_model_precedence_claim_names_the_adopted_oneharness`
 and an upgrade fails here until this measurement is redone:
 
 ```

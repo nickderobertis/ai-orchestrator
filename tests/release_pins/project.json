@@ -1,0 +1,67 @@
+{
+  "name": "release-pins",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/release_pins",
+  "tags": [
+    "scope:release-pins",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-follow-up-variables",
+    "support-nx-inputs",
+    "support-onejudge-bundle",
+    "support-onevcs-state-snapshot",
+    "support-plan-fixture-source",
+    "support-plan-root-variable",
+    "support-plan-sources",
+    "support-registered-checkouts",
+    "support-short-state",
+    "support-waits"
+  ],
+  "namedInputs": {
+    "releasePinsWorkspace": [
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/AGENTS.md",
+      "{workspaceRoot}/oneharness*.toml",
+      "{workspaceRoot}/config/**/*",
+      "{workspaceRoot}/docs/dag-ui.md",
+      "{workspaceRoot}/docs/host-setup.md",
+      "{workspaceRoot}/docs/onejudge-integration.md",
+      "{workspaceRoot}/docs/orchestration.md",
+      "{workspaceRoot}/docs/repo-lifecycle.md",
+      "{workspaceRoot}/docs/telemetry.md",
+      "{workspaceRoot}/graphs/**/*",
+      "{workspaceRoot}/personas/**/*",
+      "{workspaceRoot}/scripts/claude-alt-config-dir.sh",
+      "{workspaceRoot}/scripts/repos-bootstrap.sh",
+      "{workspaceRoot}/orchestrator/**/*",
+      "{workspaceRoot}/tests/dag_ui/test_dag_ui_serving_e2e.py",
+      "{workspaceRoot}/tests/e2e/test_repos_bootstrap_e2e.py",
+      "{workspaceRoot}/tests/session_setup/test_locked_plan_store_setup_e2e.py",
+      "{workspaceRoot}/tests/test_planner_channel_personas.py",
+      "{workspaceRoot}/tests/test_linked_libraries.py",
+      "{workspaceRoot}/tests/release_pins/**/*"
+    ]
+  },
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 COVERAGE_FILE=.coverage.release-pins uv run pytest tests/release_pins -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0",
+      "options": {
+        "cwd": "."
+      },
+      "outputs": [
+        "{workspaceRoot}/.coverage.release-pins"
+      ],
+      "inputs": [
+        "releasePinsWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ]
+    }
+  }
+}

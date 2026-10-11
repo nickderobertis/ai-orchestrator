@@ -165,7 +165,7 @@ after the 0.22.0/0.17.2 upgrade (`config/oneharness.version` and
 sat behind. What a run recorded *before* that pair reports is **not established
 here** — re-measure rather than assuming the shape carries backwards, and re-check
 this paragraph whenever either pin moves, which
-`tests/test_onejudge_version.py::test_telemetry_upgrade_boundary_matches_authoritative_versions`
+`tests/release_pins/test_onejudge_version.py::test_telemetry_upgrade_boundary_matches_authoritative_versions`
 forces by failing on the boundary sentence above until the pair it names is the adopted
 one. That re-check has now been made fifteen times
 without the shape moving. For the 0.10.3/0.5.1 upgrade, one turn spent on each binary
@@ -522,7 +522,7 @@ served them.
    installed wheel, and `onepipeline-api serve` is its only verb — there is no schema
    to dump. Every other engine contract in these documents is reconciled against
    source; this one is a *measurement* off a live response, so what
-   `tests/test_onejudge_version.py::test_claims_about_the_adopted_read_api_name_the_adopted_release`
+   `tests/release_pins/test_onejudge_version.py::test_claims_about_the_adopted_read_api_name_the_adopted_release`
    holds is the half that can be held — that the paragraph names the release it was
    measured on, so a pin bump fails the gate and re-opens it. Reconciling the fields
    themselves needs a registered checkout of that crate or a schema verb on its CLI,

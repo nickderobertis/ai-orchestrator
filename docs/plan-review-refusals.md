@@ -308,7 +308,7 @@ onto the task above the operational notes anyway; the grant sentence itself name
 publication — *"may be published early"* — and is passed over as a grant rather than
 refused as a criterion. `tests/test_criteria_guard.py` drives every one of those cases —
 the amendment's beside the task's, since the amendment check is that module's own — and
-`tests/plan_tooling/test_check_plan_recipe_e2e.py` drives the admitted, the ungranted,
+`tests/plan_tooling/check_and_review/test_check_plan_recipe_e2e.py` drives the admitted, the ungranted,
 the wrong-grant and the still-refused shapes through the real `just check-plan`. This
 shape is labelled coverage rather than corpus evidence, for the reason the released-artifact
 shape is: the corpus stores a fragment per refusal, and the two refusals above were paid

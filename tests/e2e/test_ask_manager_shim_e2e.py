@@ -16,10 +16,10 @@ and reads each frame's text back off the channel with the bus's own `next`.
 llmlint: ignore-file[shell_test_tiers_stay_split,test_tiers_split_by_project_not_by_marker] One
 Nx project: the `reads_recipes` marker moves these journeys between targets of the *same*
 project, which is the mechanism `tests/conftest.py` documents and enforces — it refuses a marked
-journey that reads anything its tier's key does not cover, and `tests/test_nx_cache_scope.py`
-holds the selectors to a partition of the suite — rather than a way around a project
-boundary; the host-tool journeys that spend a launch are the ones `tests/ask_seam/` splits
-into projects of their own.
+journey that reads anything its tier's key does not cover, and
+`tests/tree_scans/test_nx_cache_scope.py` holds the selectors to a partition of the suite —
+rather than a way around a project boundary; the host-tool journeys that spend a launch are
+the ones `tests/ask_seam/` splits into projects of their own.
 
 llmlint: ignore-file[tests_mirror_real_usage] The two real-channel journeys ask on a run
 root `tests/e2e/probe_run_root.py` builds rather than one a launch wrote, because what

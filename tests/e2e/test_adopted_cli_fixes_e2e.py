@@ -101,9 +101,9 @@ from orchestrator.root import REPO_ROOT
 # `nx affected` skipping it on a project edge is exactly the memo it must not have.
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] The subject is the set of
 # binaries this checkout installed, which live outside the workspace and so outside every
-# `nx.json` key: the uncached `orchestrator:test-checkouts` tier exists for exactly that,
+# `nx.json` key: the uncached `orchestrator-e2e:test-checkouts` tier exists for exactly that,
 # selected by `reads_checkouts`, and a second Nx project would need its own key over the
-# same nothing. `tests/test_nx_cache_scope.py` holds the marker to routing.
+# same nothing. `tests/tree_scans/test_nx_cache_scope.py` holds the marker to routing.
 pytestmark = pytest.mark.reads_checkouts
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

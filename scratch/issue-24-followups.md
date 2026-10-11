@@ -62,7 +62,7 @@ being caught by validation that cannot see it.
 
 ### Why the other 0.7.5 measurements were carried forward rather than re-taken
 
-The drift gates in `tests/test_onejudge_version.py` make every sentence naming the
+The drift gates in `tests/release_pins/test_onejudge_version.py` make every sentence naming the
 adopted onepipeline release move with the pin, which is a prompt to re-measure and
 not a licence to retype the number. Here the whole of `git diff v0.7.5..v0.8.0` is
 the three persona documents onepipeline itself ships, `Cargo.toml`/`Cargo.lock`, and
@@ -77,7 +77,7 @@ Three sentences changed wording rather than only their number, in `AGENTS.md` an
 that arrived in 0.7.5, and the adopted release and the arrival release stopped being
 the same one at 0.8.0; they were rewritten to say "on the adopted onepipeline
 <adopted>", which is what the gate is actually asking them to keep true, and
-`tests/test_onejudge_version.py` has moved that number with the pin at every
+`tests/release_pins/test_onejudge_version.py` has moved that number with the pin at every
 adoption since.
 
 ---

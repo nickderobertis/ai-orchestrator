@@ -1,11 +1,11 @@
 """The spike convention `orchestrator/spike_plan.py` states, read over loaded plans.
 
-`tests/plan_tooling/test_check_plan_spikes_e2e.py` drives every refusal through the real
-`just check-plan` over plan-store fixtures, with bodies the pinned store rendered. This holds
-the readings that recipe cannot reach on demand: the shapes a loaded plan carries that the
-engine's loader never hands over, a stamp read off the project record by kind, and a body
-whose evidence section is missing or malformed. The store is answered at its reader's seam,
-since what is under test is what this module decides from the answer.
+`tests/plan_tooling/check_and_review/test_check_plan_spikes_e2e.py` drives every refusal
+through the real `just check-plan` over plan-store fixtures, with bodies the pinned store
+rendered. This holds the readings that recipe cannot reach on demand: the shapes a loaded
+plan carries that the engine's loader never hands over, a stamp read off the project record
+by kind, and a body whose evidence section is missing or malformed. The store is answered at
+its reader's seam, since what is under test is what this module decides from the answer.
 """
 
 from __future__ import annotations

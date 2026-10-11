@@ -403,7 +403,7 @@ def _write_local_project(root: Path) -> None:
     )
 
 
-# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split] This journey's placement in `orchestrator:test` predates this change, which only accounts  # noqa: E501
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split] This journey's placement in its module's tier, now `orchestrator-e2e:test`, predates this change, which only accounts  # noqa: E501
 # for the `hellopatient` source the adopted configuration adds; it is a Python journey over the
 # real recipe like every board journey beside it, and re-homing them is enforcement
 # configuration this change may not move.
@@ -465,7 +465,7 @@ def test_credentialed_plan_store_reads_local_and_remote_sources(tmp_path: Path) 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split]
 
 
-# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split] This journey's placement in `orchestrator:test` predates this change, which only accounts  # noqa: E501
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split] This journey's placement in its module's tier, now `orchestrator-e2e:test`, predates this change, which only accounts  # noqa: E501
 # for the `hellopatient` source the adopted configuration adds; it is a Python journey over the
 # real recipe like every board journey beside it, and re-homing them is enforcement
 # configuration this change may not move.
@@ -640,7 +640,7 @@ def _looked_up() -> list[_Repository]:
 # inputs as every journey beside them — the installed plan-store CLI driven against the
 # loopback board — so `nx affected` already selects this whole module together, and a
 # project of two functions would buy no selection while moving a placement that predates
-# them. They run in `orchestrator:test`, keyed `codeWorkspace`, which is the edge every
+# them. They run in `orchestrator-e2e:test`, keyed `e2eWorkspace`, which is the edge every
 # other CLI-spawning journey in this file already pays.
 def test_project_copy_files_each_task_issue_in_the_repository_its_own_record_names(
     tmp_path: Path,
@@ -803,7 +803,7 @@ def _copy_to_the_board(
     # llmlint: ignore-block[tests_mirror_real_usage] `just plans` is an operator recipe,
     # not a private seam below one: `just copy-plan` adds a review pre-flight and then
     # runs this very verb with its streams uncaptured, so what an operator reads is
-    # identical, and its own journey is `tests/plan_tooling/test_copy_plan_recipe_e2e.py`.
+    # identical, and its own journey is `tests/plan_tooling/plan_copy/test_copy_plan_recipe_e2e.py`.
     return subprocess.run(
         ["just", "plans", "project", "copy", LOCAL_QUALIFIED, "--to", "plans"],
         cwd=REPO_ROOT,
@@ -818,7 +818,7 @@ def _copy_to_the_board(
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] Same subject and same
 # inputs as every journey beside them, so `nx affected` already selects the whole file
 # together and a project of two functions would buy no selection — the split-by-cost
-# shape this rule is named against. They run in `orchestrator:test`, keyed `codeWorkspace`.
+# shape this rule is named against. They run in `orchestrator-e2e:test`, keyed `e2eWorkspace`.
 # llmlint: ignore-block[shell_test_tiers_stay_split] Neither is a shell test: both are
 # Python journeys spawning the installed plan-store CLI, so there is no shell suite here
 # to keep split from anything.
@@ -1306,7 +1306,7 @@ def _enumerations() -> list[str]:
 # inputs as every journey beside it — the installed plan-store CLI driven against this
 # module's loopback board — so `nx affected` already selects the whole file together, and a
 # project of one function would buy no selection while splitting it from the private board
-# fixture it drives. It runs in `orchestrator:test`, keyed `codeWorkspace`.
+# fixture it drives. It runs in `orchestrator-e2e:test`, keyed `e2eWorkspace`.
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Same site, same reason:
 # the edge it runs behind is the one every CLI-spawning journey in this file already pays,
 # and its board writes are unpaced — the fixture environment sets no pacing it waits on.
@@ -1493,7 +1493,7 @@ def _write_projected_project(root: Path) -> dict[str, _ProjectedStatus]:
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] Same subject and same
 # inputs as every journey beside it — the installed plan-store CLI driven against the
 # loopback board — so `nx affected` already selects this module together, and a project of
-# one function would buy no selection. It runs in `orchestrator:test`, keyed `codeWorkspace`.
+# one function would buy no selection. It runs in `orchestrator-e2e:test`, keyed `e2eWorkspace`.
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Same site, same reason:
 # the edge it pays is the one every other CLI-spawning journey in this file already pays.
 def test_every_word_the_write_back_projects_outside_the_categories_reaches_the_board(
@@ -1667,7 +1667,7 @@ def _copy_proposed_ticket(
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] Same subject and same
 # inputs as every journey beside it — the installed plan-store CLI driven against the
 # loopback board — so `nx affected` already selects this module together, and a project of
-# one function would buy no selection. It runs in `orchestrator:test`, keyed `codeWorkspace`.
+# one function would buy no selection. It runs in `orchestrator-e2e:test`, keyed `e2eWorkspace`.
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Same site, same reason:
 # the edge it pays is the one every other CLI-spawning journey in this file already pays.
 def test_a_new_follow_up_ticket_is_written_to_the_followups_boards_proposal_option(
@@ -3477,7 +3477,7 @@ PROJECTED_STATUS_WORD = re.compile(r'#\[serde\(rename = "([^"]+)"\)\]')
 
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_checkouts` is not a
 # narrower tier of a memoized one: it moves this check into the uncached
-# `orchestrator:test-checkouts`, because its subject — onepipeline's source at the pinned
+# `orchestrator-e2e:test-checkouts`, because its subject — onepipeline's source at the pinned
 # release — is outside this workspace and no `nx.json` key could name it.
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Same site, same reason: a
 # project edge of its own is what earns a memo, and a memo is what this check must not have.
@@ -3526,7 +3526,7 @@ def test_the_projected_words_the_board_journey_feeds_are_the_engines_own() -> No
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 
-# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split] This journey's placement in `orchestrator:test` predates this change, which only accounts  # noqa: E501
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split] This journey's placement in its module's tier, now `orchestrator-e2e:test`, predates this change, which only accounts  # noqa: E501
 # for the `hellopatient` source the adopted configuration adds; it is a Python journey over the
 # real recipe like every board journey beside it, and re-homing them is enforcement
 # configuration this change may not move.
@@ -4041,7 +4041,7 @@ def _claimed_or_still_projecting(
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] Same subject and same
 # inputs as every journey beside it — the installed plan-store CLI and the real recipes
 # driven against the loopback board — so `nx affected` already selects this module together,
-# and a project of one function would buy no selection. It runs in `orchestrator:test`.
+# and a project of one function would buy no selection. It runs in `orchestrator-e2e:test`.
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Same site, same reason:
 # the edge it pays is the one every other launching journey in this file already pays.
 # llmlint: ignore-block[e2e_not_mocked] Two boundaries are doubled in the two journeys
@@ -4614,7 +4614,7 @@ def _remedy(qualified: str) -> str:
     )
 
 
-# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker, expensive_tests_stay_behind_their_own_edge] Same subject and same inputs as every journey beside them — the installed plan-store CLI and engine driven through this checkout's recipes, against the loopback board and the local project writer this module owns — so `nx affected` already selects the module together, and a project of three functions would be keyed on the same files. They run in `orchestrator:test`, keyed `codeWorkspace`, the edge every launch and board journey in this file pays.  # noqa: E501
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker, expensive_tests_stay_behind_their_own_edge] Same subject and same inputs as every journey beside them — the installed plan-store CLI and engine driven through this checkout's recipes, against the loopback board and the local project writer this module owns — so `nx affected` already selects the module together, and a project of three functions would be keyed on the same files. They run in `orchestrator-e2e:test`, keyed `e2eWorkspace`, the edge every launch and board journey in this file pays.  # noqa: E501
 # llmlint: ignore-block[e2e_not_mocked] GitHub's Projects API is the one boundary doubled,
 # for the reason the block around `_Board` gives — driving it writes to the live board this
 # repository plans on — and the paid model is the other; the recipes, the pinned engine and

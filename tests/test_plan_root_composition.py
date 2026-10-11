@@ -8,7 +8,7 @@ lands where nobody looks — so the one place is a gate rather than a convention
 
 It sits here rather than beside the journeys that drive the helper, and the key is why:
 this asks a question about the whole tracked tree, so it belongs to the tier keyed on the
-whole workspace minus its prose. `tests/plan_tooling/test_plan_root_env.py` holds
+whole workspace minus its prose. `tests/plan_tooling/plan_flow/test_plan_root_env.py` holds
 everything the helper itself does, in the project that owns this repository's host-tool
 plan journeys.
 """

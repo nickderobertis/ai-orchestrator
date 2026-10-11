@@ -28,8 +28,8 @@ adopted `onevcs` declares.
 
 llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] What these spend is a
 few `bash` runs of the helper and one two-second stand-in gate — no launch, no paid turn
-— and what they read is `scripts/lock-timeout.sh`, which the root
-project's `codeWorkspace` key already covers.
+— and what they read is `scripts/lock-timeout.sh`, which the `orchestrator-e2e`
+project's `e2eWorkspace` key already covers.
 """
 
 from __future__ import annotations

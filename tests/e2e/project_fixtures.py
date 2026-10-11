@@ -90,7 +90,7 @@ def local_project(content: str, name: str) -> str:
     — and the approval is recorded by the real `just approve-design`, the same seam
     `reviewed` below reaches its own record through, so no journey built on this begins
     from state the exercised interface cannot produce. What the recipe *decides* is proven in
-    `tests/plan_tooling/test_approve_design_recipe_e2e.py`; what it does here is put a
+    `tests/plan_tooling/plan_flow/test_approve_design_recipe_e2e.py`; what it does here is put a
     fixture project into the one state a launch accepts.
     """
     slug = re.sub(r"[^a-z0-9-]+", "-", name.lower()).strip("-")

@@ -38,8 +38,9 @@ none. When nothing matches, the draft says `unresolved` and is still written.
   as a node the run has no records for — so a monitor or pacemaker draft points at the run's
   event stream narrowed to that member's `member` label, which the engine's filter grammar
   matches by exact equality: `onepipeline monitor <run> --filter
-  '{"include":[{"member":"<member>"}]}'`. `tests/plan_tooling/test_follow_up_drafts_e2e.py`
-  runs that command against a recorded run and holds it to showing that member alone;
+  '{"include":[{"member":"<member>"}]}'`.
+  `tests/plan_tooling/follow_ups/test_follow_up_drafts_e2e.py` runs that command against a
+  recorded run and holds it to showing that member alone;
 - a manager draft points at nothing, because a manager's own session is not a record the
   run keeps.
 

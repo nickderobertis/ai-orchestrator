@@ -9,11 +9,11 @@ cannot be proven against two different ideas of what `onevcs` says.
 llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] The answer shapes and verbs
 here restate the published `onevcs` CLI, which is the double's whole purpose; they are
 held to the installed release by the journeys that ask the real verb about real scratch
-identities — `tests/plan_tooling/test_check_plan_recipe_e2e.py` for `release targets`,
-`resolve` and `rules check`,
-`tests/ask_seam/structural_reply/test_structural_reply_e2e.py` for a live run —
-and by the vocabulary tests in `tests/test_adoption_guard.py` and
-`tests/test_publication_guard.py` that read the installed `onevcs`.
+identities — `tests/plan_tooling/check_and_review/test_check_plan_recipe_e2e.py` for
+`release targets`, `resolve` and `rules check`,
+`tests/ask_seam/structural_reply/test_structural_reply_e2e.py` for a live run — and by the
+vocabulary tests in `tests/test_adoption_guard.py` and `tests/test_publication_guard.py`
+that read the installed `onevcs`.
 """
 
 from __future__ import annotations

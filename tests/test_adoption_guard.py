@@ -7,8 +7,8 @@ what says which targets a repository resolves, which adoption its rungs answer, 
 which identity an alias names — and the checkout this host's own origin is read off is a
 real one made here, so a test about "this host's own repository" is not a test about
 whichever checkout the suite happens to run in.
-`tests/plan_tooling/test_check_plan_recipe_e2e.py` drives the real verb through the real
-`just check-plan`, against scratch producers that really declare targets.
+`tests/plan_tooling/check_and_review/test_check_plan_recipe_e2e.py` drives the real verb
+through the real `just check-plan`, against scratch producers that really declare targets.
 """
 
 from __future__ import annotations

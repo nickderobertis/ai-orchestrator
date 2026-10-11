@@ -22,7 +22,7 @@ what `tests/e2e/test_budget_target_e2e.py` beside it spends for the same reason.
 llmlint: ignore-file[shell_test_tiers_stay_split] For the same cost: these journeys spend
 seconds against a scratch workspace and nothing outside it, so a test project of their own
 would narrow the key of a few seconds of work at the price of a catalog entry in each of
-the places `tests/nx_inputs.py` and `tests/test_nx_cache_scope.py` hold every project to,
+the places `tests/nx_inputs.py` and `tests/tree_scans/test_nx_cache_scope.py` hold every project to,
 as `tests/e2e/test_budget_target_e2e.py` says of the same journeys' shape.
 """
 

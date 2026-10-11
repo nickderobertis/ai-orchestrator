@@ -1,11 +1,12 @@
 """The issue body a task becomes on the `plans` board, measured before the copy.
 
-`tests/plan_tooling/test_check_plan_recipe_e2e.py` drives the real recipe over a plan
-whose task's body crosses the limit, one between the thresholds, and one below, and
-`tests/plan_tooling/test_design_document_body_limit_e2e.py` drives `just copy-plan` over a
-design document past each threshold. What is here is the composition itself — held to the
-plugin's `compose_body` in the registered `onetaskgraph` checkout, for a task and for a
-design document — and the faces of the reading the recipes reach it through.
+`tests/plan_tooling/check_and_review/test_check_plan_recipe_e2e.py` drives the real recipe
+over a plan whose task's body crosses the limit, one between the thresholds, and one below,
+and `tests/plan_tooling/check_and_review/test_design_document_body_limit_e2e.py` drives
+`just copy-plan` over a design document past each threshold. What is here is the composition
+itself — held to the plugin's `compose_body` in the registered `onetaskgraph` checkout, for
+a task and for a design document — and the faces of the reading the recipes reach it
+through.
 
 The plugin's source is read at the release `config/onetaskgraph.version` pins, or at the
 head of a checkout that has not fetched that tag. Either way it is read from the sibling's

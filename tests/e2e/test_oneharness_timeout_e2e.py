@@ -20,8 +20,8 @@ llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] The whole modul
 about seven seconds and no paid turn: two journeys drive the stand-in harness
 `tests/e2e/timeout_harness.py` through a real `oneharness run`, about five seconds and
 one, and the rest read `oneharness config` and `oneharness list`, each sub-second. What
-it reads is this repository's own `oneharness*.toml` and `graphs/`, which the root
-project's `codeWorkspace` key already covers, so a project of this module's own would be
+it reads is this repository's own `oneharness*.toml` and `graphs/`, which the `orchestrator-e2e`
+project's `e2eWorkspace` key already covers, so a project of this module's own would be
 keyed on less than the module reads, or on the same workspace twice.
 
 llmlint: ignore-file[shell_test_tiers_stay_split] These are pytest journeys over the

@@ -55,11 +55,11 @@ JOURNEYS_THE_UNIT_GATES_READ = "journeysTheUnitGatesRead"
 #: selects a project by the positive `{workspaceRoot}` filesets its targets declare and
 #: never subtracts an exclusion: a key starting from the whole tree would select the
 #: journeys for every edit to a unit test, which is the cost this project exists to keep
-#: off them. `tests/test_nx_cache_scope.py` fails when a tracked path outside `tests/` that
-#: is not prose falls out of it, so a directory added at the root is added here. The shared
-#: helpers, and the four unit and drift-gate modules a journey imports, reach it as
-#: test-support units — through an edge, because that is what selects the journeys when one
-#: of them changes.
+#: off them. `tests/tree_scans/test_nx_cache_scope.py` fails when a tracked path outside
+#: `tests/` that is not prose falls out of it, so a directory added at the root is added
+#: here. The shared helpers, and the four unit and drift-gate modules a journey imports,
+#: reach it as test-support units — through an edge, because that is what selects the
+#: journeys when one of them changes.
 E2E_WORKSPACE = "e2eWorkspace"
 #: The key `orchestrator-e2e:test-recipes` is memoized on: what its recipe journeys drive,
 #: as `recipeWorkspace` is the orchestrator project's.
@@ -68,20 +68,6 @@ E2E_RECIPE_WORKSPACE = "e2eRecipeWorkspace"
 #: what the recipe journeys drive, plus the modules that define them. The helpers those
 #: modules import reach the key as the project's test-support dependencies.
 RECIPE_WORKSPACE = "recipeWorkspace"
-#: The key `plan-tooling:test` is memoized on: what the host-tool journeys over this
-#: repository's plan surface drive and read. Narrower than the whole workspace by the
-#: prose those journeys never open, which is what makes editing `docs/` free of them.
-#: Its trees were measured rather than kept by habit — the tier's own command traced under
-#: `strace -f -y -e trace=openat,execve`, so every child a launch spawns counts, each
-#: opened path intersected with what git tracks. `config/`, `scripts/` and `orchestrator/`
-#: were read in full, every tracked file of each, so each stays a tree. `graphs/` and
-#: `personas/` stay trees though one run read only some of each, because a plan names
-#: its graph and its personas by path and the family is what the tier can read. The
-#: rest of tracked `scratch/` was read not at all and is not in the key; what stays is
-#: `scratch/personas/`, the draft-persona family `personas/README.md` names, which the
-#: `check-plan` journeys write and read back. Git ignores it, so Nx hashes nothing there:
-#: the glob declares the family so the read guard admits it, rather than keying anything.
-PLAN_TOOLING_WORKSPACE = "planToolingWorkspace"
 #: The key `session-setup:test` is memoized on: what the journey over this checkout's
 #: own provisioning drives and reads. Named file by file rather than as `scripts/**/*`
 #: or `config/**/*`: the journey runs the real `scripts/session-setup.sh`, which
@@ -96,7 +82,7 @@ PLAN_TOOLING_WORKSPACE = "planToolingWorkspace"
 SESSION_SETUP_WORKSPACE = "sessionSetupWorkspace"
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This module is the domain
 # that owns tier names, one row per test project, as the block over the ask-seam
-# journeys below says: `tests/conftest.py`'s read guard, `tests/test_nx_cache_scope.py`
+# journeys below says: `tests/conftest.py`'s read guard, `tests/tree_scans/test_nx_cache_scope.py`
 # and the real-Nx selection journeys resolve every project's key, name and directory
 # from here, so the host-sweep project's row lands where each sibling's does rather than
 # in `tests/host_sweep/`, which the guard reads before collecting it.
@@ -115,10 +101,10 @@ HOST_SWEEP_WORKSPACE = "hostSweepWorkspace"
 #: else, because the race reads a temporary root and nothing of this checkout.
 PROJECT_STORE_RACE_WORKSPACE = "projectStoreRaceWorkspace"
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one catalog
-# of test projects, where every project has its entry, and `tests/test_nx_cache_scope.py` fails when
-# a project's tests fall outside the tiers it describes; the plan-store-assets and render-diagram
-# entries sit beside the others' rather than in a domain of their own because the catalog is the
-# domain.
+# of test projects, where every project has its entry, and
+# `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside the
+# tiers it describes; the plan-store-assets and render-diagram entries sit beside the
+# others' rather than in a domain of their own because the catalog is the domain.
 #: The key `plan-store-assets:test` is memoized on: the lock that decides which plan-store
 #: CLI answers, the store configuration it loads from this checkout, the project's own
 #: files, and the suite modules `tests/conftest.py` imports — nothing else, because the
@@ -169,7 +155,7 @@ UNWATCHED_WORKSPACE = "unwatchedWorkspace"
 UNFINISHED_WORKSPACE = "unfinishedWorkspace"
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
 # catalog of test projects, where every project has its entry, and
-# `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
+# `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
 # describes; the board-copy-approval entry sits beside the others' because the catalog is
 # the domain.
 #: The key `board-copy-approval:test` is memoized on. Files rather than trees, measured as
@@ -183,7 +169,7 @@ BOARD_COPY_APPROVAL_WORKSPACE = "boardCopyApprovalWorkspace"
 
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
 # catalog of test projects, where every project has its entry, and
-# `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
+# `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
 # describes; the toolchain-isolation entry sits beside the others' because the catalog is
 # the domain.
 #: The key `toolchain-isolation:test` is memoized on: what a copy of this checkout with a
@@ -206,9 +192,9 @@ GRACEFUL_CANCEL_WORKSPACE = "gracefulCancelWorkspace"
 # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This module holds one row per test
 # project, as the block over the ask-seam journeys says: `tests/conftest.py`'s read guard,
-# `tests/test_nx_cache_scope.py` and the real-Nx selection journeys resolve every project's key,
-# name and directory from here before collecting any of them, so this project's row cannot live in
-# its own directory.
+# `tests/tree_scans/test_nx_cache_scope.py` and the real-Nx selection journeys resolve every
+# project's key, name and directory from here before collecting any of them, so this
+# project's row cannot live in its own directory.
 #: The key `session-open-conflict:test` is memoized on. Files rather than trees, for the
 #: reason `unwatchedWorkspace` names, and measured the same way: the tier traced under
 #: `strace -f -e trace=openat,execve`, each opened path normalized and intersected with
@@ -220,9 +206,10 @@ GRACEFUL_CANCEL_WORKSPACE = "gracefulCancelWorkspace"
 SESSION_OPEN_CONFLICT_WORKSPACE = "sessionOpenConflictWorkspace"
 # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one catalog
-# of test projects, where every project has its entry, and `tests/test_nx_cache_scope.py` fails when
-# a project's tests fall outside the tiers it describes; the manager-allowlist entry sits beside the
-# others' rather than in a domain of its own because the catalog is the domain.
+# of test projects, where every project has its entry, and
+# `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside the
+# tiers it describes; the manager-allowlist entry sits beside the others' rather than in a
+# domain of its own because the catalog is the domain.
 #: The key the `manager-allowlist` project's one tier is memoized on: the recipes, the
 #: probe and the resolvers its wrapper sources, the source and its two renderings, the
 #: chain the probe reads its identities from, and the modules the journeys import. Files
@@ -304,30 +291,132 @@ RECIPE_SCOPED = "test-recipes"
 #: Deliberately unmemoized: no `nx.json` key could cover either, so any memo would be a
 #: verdict on whatever they looked like when it was recorded.
 CHECKOUT_SCOPED = "test-checkouts"
-#: The project whose test target owns the host-tool journeys over the plan surface —
-#: `just check-plan`, `just review-plan`, the registered check script, the installed
-#: engine and a real `oneharness run`. A project rather than a marker tier of the
-#: orchestrator project, because what those journeys cost and what answers them are both
-#: different from the Python suite beside them, and `nx affected` can only tell the two
-#: apart where they are two projects. It declares **no Python distribution**: there is
-#: one `pyproject.toml` and one `uv.lock` in this repository and this project runs that
-#: workspace's own pytest over a directory, so the Nx project graph gains a target
-#: rather than the Python workspace gaining a member.
-PLAN_TOOLING_PROJECT = "plan-tooling"
-#: That project's own test target, keyed on the narrow set its journeys read.
-PLAN_TOOLING_SCOPED = "test"
-#: That project's second target: the journeys that build a **copy** of this checkout,
-#: keyed on the whole workspace because copying the tracked tree is reading all of it.
-#: A target of the project that owns them rather than a marker handing them to another
-#: project's tier — the two costs are two keys, and a tier whose tests live in one
-#: project while another project's target collects them is a cost `nx affected` cannot
-#: attribute to the code that moved it.
-PLAN_TOOLING_DOCS_SCOPED = "test-docs"
-#: The directory that project owns, which every other project's tiers ignore.
-#: Path-selected rather than marker-selected: the project boundary is what routes these,
-#: so a file added here joins this project by being here, and which of the project's two
-#: targets runs it is the only thing its markers decide.
+#: The directory every host-tool journey over this repository's plan surface lives under —
+#: `just check-plan`, `just review-plan`, `just plan`, `just finish-plan`, `just
+#: follow-ups`, the registered check script, the installed engine and a real `oneharness
+#: run` — and which every other project's tiers ignore. Not a project itself, as
+#: `ASK_SEAM_ROOT` is not: each subject under it is a project in a directory of its own,
+#: because while one key covered every journey here, an edit any one of them read re-ran
+#: all of them. None of them declares a Python distribution: there is one `pyproject.toml`
+#: and one `uv.lock` in this repository and each runs that workspace's own pytest over its
+#: directory, so the Nx project graph gains targets rather than the Python workspace
+#: gaining members.
 PLAN_TOOLING_ROOT = "tests/plan_tooling"
+#: Each subject project's target keyed on what its journeys read.
+PLAN_TOOLING_SCOPED = "test"
+#: The second target of a subject project holding journeys that build a **copy** of this
+#: checkout: keyed on the whole workspace because copying the tracked tree is reading all
+#: of it, and collecting exactly the tests that carry `reads_docs`, which in a
+#: directory-owned project marks a test that copies the checkout or scans every tracked
+#: document and nothing else. A target of the project that owns them rather than a marker
+#: handing them to another project's tier, so their cost stays charged to the code `nx
+#: affected` selects that project for.
+PLAN_TOOLING_DOCS_SCOPED = "test-docs"
+
+
+class SubjectProject(NamedTuple):
+    """One directory-owned test project of a family split by subject, as the guards name it."""
+
+    #: The Nx project, which is how `nx affected` charges its tiers to what selects them.
+    project: str
+    #: The directory it owns: its modules, the helpers only they import, and its
+    #: `project.json`.
+    root: str
+    #: The named input its `project.json` declares, which its narrow target is memoized on
+    #: with the `testSupport` of every unit it depends on; the whole workspace for a
+    #: project whose only target is the whole-workspace one.
+    key: str
+    #: Whether it has a whole-workspace `test-docs` target for `reads_docs` to route a test
+    #: into.
+    docs_tier: bool
+    #: The target its key belongs to: `test`, or `test-docs` for a project that has no
+    #: narrow target at all.
+    target: str = PLAN_TOOLING_SCOPED
+
+
+# llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This module is the domain
+# that owns tier names, one row per test project, as the block over the ask-seam journeys
+# says: the read guard, `tests/tree_scans/test_nx_cache_scope.py` and the real-Nx selection journeys
+# resolve each project's name, directory and key from here before collecting any of them.
+#: One project per subject of the plan surface, in what each is keyed on. Each key was
+#: measured rather than kept by habit: the spike's traced run of the tiers these journeys
+#: came from — `plan-tooling:test` and `plan-tooling:test-docs` under `strace -f -e
+#: trace=openat,execve`, each opened path intersected with what git tracks and attributed to
+#: the test its worker was running — for what a child process reads, and an in-process
+#: record of every `open` per test for what the journeys read themselves, each without the
+#: tests that copy the checkout, whose reads are everything. A family stays a tree where a
+#: test can name a path in it or reads every file of it: `scripts/` for the check-and-review
+#: journeys, one of which reads every script, and for the follow-up journeys, which copy the
+#: whole tree into the mirror checkout their recipe runs in; `personas/` and `graphs/` for
+#: the check-and-review journeys, whose plans name a persona by path relative to `graphs/`;
+#: and `config/`, `templates/` and `orchestrator/` everywhere, because the engine and the
+#: plan store a launch reaches read pins and templates no test names, and a child running
+#: `python -m orchestrator…` reads bytecode a trace cannot map to its source. Elsewhere a
+#: family is the files measured. The repository's own `README.md`, which `uv run` opens as
+#: package metadata, decides no verdict here and is left out as every sibling key leaves it.
+PLAN_TOOLING_PROJECTS: tuple[SubjectProject, ...] = (
+    SubjectProject(
+        "plan-tooling-check-and-review",
+        f"{PLAN_TOOLING_ROOT}/check_and_review",
+        "planToolingCheckAndReviewWorkspace",
+        docs_tier=True,
+    ),
+    SubjectProject(
+        "plan-tooling-follow-ups",
+        f"{PLAN_TOOLING_ROOT}/follow_ups",
+        "planToolingFollowUpsWorkspace",
+        docs_tier=True,
+    ),
+    SubjectProject(
+        "plan-tooling-plan-flow",
+        f"{PLAN_TOOLING_ROOT}/plan_flow",
+        "planToolingPlanFlowWorkspace",
+        docs_tier=True,
+    ),
+    SubjectProject(
+        "plan-tooling-plan-copy",
+        f"{PLAN_TOOLING_ROOT}/plan_copy",
+        "planToolingPlanCopyWorkspace",
+        docs_tier=False,
+    ),
+)
+
+#: The named input a whole-workspace target is keyed on, which `nx.json` declares.
+WHOLE_WORKSPACE = "wholeWorkspace"
+#: One project per subject of this repository's drift gates — the tests that hold its
+#: prose to the code, configuration and releases it describes — each in a directory of its
+#: own directly under `tests/`. While `orchestrator:test-docs` collected them all on the
+#: whole workspace, a typo in any document re-ran every one; each is keyed on the documents
+#: it reads and the code it reconciles them with. Each key was measured: an in-process
+#: record of every `open` per module and the spike's traced run of `orchestrator:test-docs`
+#: under `strace -f -e trace=openat,execve` for what a child reads, each intersected with
+#: what git tracks. A document is named file by file, so an edit to one selects only the
+#: gates that read it; a family stays a tree where a test globs it or can name any path in
+#: it — `config/`, `templates/` and `orchestrator/`, whose modules the gates import, and
+#: `tests/**/test_*.py` with `tests/test_*.py` where a gate checks that a test module a
+#: document names exists. A root test module a gate imports is named file by file, and a
+#: shared helper reaches a key through its unit's edge, never through such a glob.
+#: `tree-scans` is the one project whose every module copies this checkout or scans every
+#: tracked document or Python module, so its one target is keyed on the whole workspace.
+DRIFT_GATE_PROJECTS: tuple[SubjectProject, ...] = (
+    SubjectProject("dispatch-bar", "tests/dispatch_bar", "dispatchBarWorkspace", docs_tier=False),
+    SubjectProject("family-scans", "tests/family_scans", "familyScansWorkspace", docs_tier=False),
+    SubjectProject(
+        "manager-guidance", "tests/manager_guidance", "managerGuidanceWorkspace", docs_tier=True
+    ),
+    SubjectProject(
+        "plan-guidance", "tests/plan_guidance", "planGuidanceWorkspace", docs_tier=False
+    ),
+    SubjectProject("release-pins", "tests/release_pins", "releasePinsWorkspace", docs_tier=False),
+    SubjectProject(
+        "tree-scans",
+        "tests/tree_scans",
+        WHOLE_WORKSPACE,
+        docs_tier=True,
+        target=PLAN_TOOLING_DOCS_SCOPED,
+    ),
+)
+# llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
 #: The directory every host-tool journey over the ask seam lives under — the real
 #: `scripts/ask-manager.sh`, the installed engine's `onepipeline ask` it execs, and
@@ -356,11 +445,11 @@ class AskSeamJourney(NamedTuple):
 
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This module is the domain
 # that owns tier names: the Nx project a journey is, its directory and its key are read by
-# `tests/conftest.py`'s read guard, `tests/test_nx_cache_scope.py` and the real-Nx
+# `tests/conftest.py`'s read guard, `tests/tree_scans/test_nx_cache_scope.py` and the real-Nx
 # selection journeys, and resolving them from one row each is what keeps a renamed journey
 # from leaving a guard checking a project nobody runs, as the module docstring says.
 #: One memoization unit per journey, in what each is keyed on. Every key names files
-#: rather than trees — `tests/test_nx_cache_scope.py` refuses a `config/**/*` or a
+#: rather than trees — `tests/tree_scans/test_nx_cache_scope.py` refuses a `config/**/*` or a
 #: `scripts/**/*` in one — because a journey here spends a real launch, and a path in its
 #: key it never reads makes an unrelated edit pay for that launch. Each was measured
 #: rather than guessed: the module run under the target's own command with every open of
@@ -402,8 +491,8 @@ ASK_SEAM_JOURNEYS: tuple[AskSeamJourney, ...] = (
 
 #: The project whose test target owns the journeys over this repository's composition of
 #: the DAG Observatory — the two recipes, the proxy behind them, and what the published
-#: reader answers. A project of its own for the reason `plan-tooling` and each ask-seam
-#: journey are:
+#: reader answers. A project of its own for the reason each plan-tooling subject and each
+#: ask-seam journey is:
 #: two real servers per test is a cost `nx affected` can only keep off an unrelated edit
 #: where it is a separate project, and while these journeys sat in the orchestrator
 #: project every change in the repository paid it. It declares no Python distribution
@@ -414,22 +503,23 @@ DAG_UI_PROJECT = "dag-ui"
 #: nothing here reads this repository's prose.
 DAG_UI_SCOPED = "test"
 #: The directory it owns, which every other project's tiers ignore. Path-selected, as
-#: `PLAN_TOOLING_ROOT` is: a file added here joins this project by being here.
+#: each project under `PLAN_TOOLING_ROOT` is: a file added here joins this project by being here.
 DAG_UI_ROOT = "tests/dag_ui"
 
 #: The project whose test target owns the journeys over `onepipeline unwatched` and the
 #: `Stop` hook that reads it — the real hook script, the real recipe, the installed engine
 #: they ask, and the launch shapes whose runs it has to name. A project of its own for the
-#: reason `plan-tooling`, the ask-seam journeys and `dag-ui` are: a watch armed for real, a
-#: process killed and left unreaped, this checkout's own project-environment lock held, and
-#: three real launches are a cost `nx affected` can only keep off an unrelated edit where
-#: it is a separate project. It declares no Python distribution either, for the same reason.
+#: reason the plan-tooling subjects, the ask-seam journeys and `dag-ui` are: a watch armed
+#: for real, a process killed and left unreaped, this checkout's own project-environment
+#: lock held, and three real launches are a cost `nx affected` can only keep off an
+#: unrelated edit where it is a separate project. It declares no Python distribution either,
+#: for the same reason.
 UNWATCHED_PROJECT = "unwatched"
 #: That project's one test target. One rather than two, as each ask-seam journey has one:
 #: nothing here reads this repository's prose.
 UNWATCHED_SCOPED = "test"
 #: The directory it owns, which every other project's tiers ignore. Path-selected, as
-#: `PLAN_TOOLING_ROOT` is: a file added here joins this project by being here.
+#: each project under `PLAN_TOOLING_ROOT` is: a file added here joins this project by being here.
 UNWATCHED_ROOT = "tests/unwatched"
 
 #: The project whose test target owns the journeys that hold the `merge_policy` vocabulary
@@ -442,7 +532,7 @@ MERGE_POLICY_PROJECT = "merge-policy"
 #: repository's prose is three named documents, carried in its key by name.
 MERGE_POLICY_SCOPED = "test"
 #: The directory it owns, which every other project's tiers ignore. Path-selected, as
-#: `PLAN_TOOLING_ROOT` is: a file added here joins this project by being here.
+#: each project under `PLAN_TOOLING_ROOT` is: a file added here joins this project by being here.
 MERGE_POLICY_ROOT = "tests/merge_policy"
 
 #: The project whose test target owns the journeys that hold the adopted engine's
@@ -456,7 +546,7 @@ WRITEBACK_BUDGET_PROJECT = "writeback-budget"
 #: here reads this repository's prose.
 WRITEBACK_BUDGET_SCOPED = "test"
 #: The directory it owns, which every other project's tiers ignore. Path-selected, as
-#: `PLAN_TOOLING_ROOT` is: a file added here joins this project by being here.
+#: each project under `PLAN_TOOLING_ROOT` is: a file added here joins this project by being here.
 WRITEBACK_BUDGET_ROOT = "tests/writeback_budget"
 
 #: The project whose test target owns the journey that fires this host's run-end hooks
@@ -529,7 +619,7 @@ HOST_VIEWS_PROJECT = "host-views"
 #: this repository's prose about itself.
 HOST_VIEWS_SCOPED = "test"
 #: The directory it owns, which every other project's tiers ignore. Path-selected, as
-#: `PLAN_TOOLING_ROOT` is: a file added here joins this project by being here.
+#: each project under `PLAN_TOOLING_ROOT` is: a file added here joins this project by being here.
 HOST_VIEWS_ROOT = "tests/host_views"
 
 #: The project whose test target owns the two-process replacement race over
@@ -546,10 +636,10 @@ PROJECT_STORE_RACE_SCOPED = "test"
 PROJECT_STORE_RACE_ROOT = "tests/project_store_race"
 
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one catalog
-# of test projects, where every project has its entry, and `tests/test_nx_cache_scope.py` fails when
-# a project's tests fall outside the tiers it describes; the plan-store-assets and render-diagram
-# entries sit beside the others' rather than in a domain of their own because the catalog is the
-# domain.
+# of test projects, where every project has its entry, and
+# `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside the
+# tiers it describes; the plan-store-assets and render-diagram entries sit beside the
+# others' rather than in a domain of their own because the catalog is the domain.
 #: The project whose test target owns the journey over a document's image assets: the
 #: locked plan-store CLI creating one with `--asset`, copying it into a second `local-md`
 #: source and reading both back. A project of its own because it drives a real host tool,
@@ -590,7 +680,7 @@ UNFINISHED_PROJECT = "unfinished"
 UNFINISHED_SCOPED = "test"
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
 # catalog of test projects, where every project has its entry, and
-# `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
+# `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
 # describes; the unfinished project's timed tier sits beside its other because the catalog
 # is the domain.
 #: Its uncached target timing the own-sessions read at scale, the one journey its `test`
@@ -603,7 +693,7 @@ UNFINISHED_ROOT = "tests/unfinished"
 
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
 # catalog of test projects, where every project has its entry, and
-# `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
+# `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
 # describes; the board-copy-approval entry sits beside the others' because the catalog is
 # the domain.
 #: The project whose test target owns the journeys approving a design document on the
@@ -620,7 +710,7 @@ BOARD_COPY_APPROVAL_ROOT = "tests/e2e/board_copy_approval"
 
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
 # catalog of test projects, where every project has its entry, and
-# `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
+# `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
 # describes; the toolchain-isolation entry sits beside the others' because the catalog is
 # the domain.
 #: The project whose test target owns the journeys that build a copy of this checkout
@@ -663,9 +753,10 @@ SESSION_OPEN_CONFLICT_ROOT = "tests/session_open_conflict"
 # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one catalog
-# of test projects, where every project has its entry, and `tests/test_nx_cache_scope.py` fails when
-# a project's tests fall outside the tiers it describes; the manager-allowlist entry sits beside the
-# others' rather than in a domain of its own because the catalog is the domain.
+# of test projects, where every project has its entry, and
+# `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside the
+# tiers it describes; the manager-allowlist entry sits beside the others' rather than in a
+# domain of its own because the catalog is the domain.
 #: The project whose test target owns the journeys over `just sync-allowlist` and `just
 #: probe-allowlist`: the real recipes, the pinned `oneharness sync` and the probe's
 #: scratch project, with the paid tools doubled. A project of its own because each drives
@@ -680,9 +771,9 @@ MANAGER_ALLOWLIST_ROOT = "tests/manager_allowlist"
 
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This module holds one row per
 # test project, as the block over the ask-seam journeys says: the read guard,
-# `tests/test_nx_cache_scope.py` and the real-Nx selection journeys resolve every project's
-# name, directory and key from here, so the journey project's rows sit beside its siblings'
-# rather than in `tests/e2e/`.
+# `tests/tree_scans/test_nx_cache_scope.py` and the real-Nx selection journeys resolve every
+# project's name, directory and key from here, so the journey project's rows sit beside its
+# siblings' rather than in `tests/e2e/`.
 #: The project whose three marker-routed targets own the journeys directly under
 #: `tests/e2e/` — every module there but the two subdirectories that are projects of their
 #: own — beside the orchestrator project's four over the unit and drift-gate modules. A
@@ -710,7 +801,7 @@ UNIT_COVERAGE_DATA = ".coverage.parallel"
 #: The two projects whose targets a marker routes a test between, by root: a test module
 #: under `tests/e2e/` that no directory-owned project claims is the journey project's, and
 #: every other one outside those projects is the orchestrator project's — `reads_docs` aside,
-#: which is the orchestrator project's wherever the test lives.
+#: which sends a test under either root to `orchestrator:test-docs`.
 MARKER_TIER_ROOTS = ("orchestrator", E2E_ROOT)
 
 
@@ -747,7 +838,7 @@ BUDGETS_VALIDATION_SCOPED = "validate-budgets"
 
 #: The deterministic tier's targets `just check` lets the diff select, in the order the
 #: recipe names them. Every one is memoized, which is what makes skipping an unselected
-#: project equivalent to replaying it; `tests/test_nx_cache_scope.py` refuses one that
+#: project equivalent to replaying it; `tests/tree_scans/test_nx_cache_scope.py` refuses one that
 #: is not.
 SELECTED_TARGETS = (
     "format-check",

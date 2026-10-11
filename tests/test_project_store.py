@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import io
 import json
-import re
 import sys
 from pathlib import Path
 
 import pytest
 
 from orchestrator import plan_store, project_store
-from orchestrator.root import REPO_ROOT
 
 #: The `local-md` source each round trip below reads through the installed store, named
 #: into the store's own environment layer the way `tests/test_plan_store_pages.py` does.
@@ -199,37 +197,6 @@ def test_a_dependency_that_is_neither_a_task_nor_a_well_formed_reference_is_refu
             {"name": "plan", "tasks": [{"id": "node", "deps": ["node-2", entry]}, {"id": "node-2"}]}
         )
     assert str(refused.value).endswith(f": {entry}"), refused.value
-
-
-@pytest.mark.reads_docs
-def test_the_documented_reference_shape_is_the_one_the_renderer_reads() -> None:
-    """`docs/orchestration.md`'s node-shapes section and the renderer state one shape.
-
-    The section is the shape's one source and the renderer is the one place this
-    repository parses it, so the spelling is read back out of the prose rather than
-    restated here, and the reader is shown accepting exactly the form the prose states —
-    both placeholders filled — and refusing the same form with either half emptied.
-    """
-    text = (REPO_ROOT / "docs" / "orchestration.md").read_text(encoding="utf-8")
-    start = text.index("\n## Node shapes\n")
-    section = text[start : text.index("\n## ", start + 1)]
-    documented = re.search(
-        r"cross-DAG references of the form\s+`([^`]+)`", " ".join(section.split())
-    )
-    assert documented is not None, "the node-shapes section no longer states the reference shape"
-    assert documented.group(1) == project_store.CROSS_DAG_REFERENCE_SHAPE
-
-    placeholders = re.findall(r"<([^<>]+)>", project_store.CROSS_DAG_REFERENCE_SHAPE)
-    assert placeholders == ["run_id", "node_id"], placeholders
-    filled = project_store.CROSS_DAG_REFERENCE_SHAPE
-    for placeholder, value in zip(placeholders, ("r-upstream-0001", "adopt"), strict=True):
-        filled = filled.replace(f"<{placeholder}>", value)
-    assert project_store.cross_dag_reference(filled) == filled
-    for placeholder in placeholders:
-        emptied = project_store.CROSS_DAG_REFERENCE_SHAPE.replace(f"<{placeholder}>", "")
-        for other in placeholders:
-            emptied = emptied.replace(f"<{other}>", "x")
-        assert project_store.cross_dag_reference(emptied) is None, emptied
 
 
 def test_slug_rejects_a_value_with_no_identifier() -> None:

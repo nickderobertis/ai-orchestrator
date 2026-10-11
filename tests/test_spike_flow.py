@@ -1,10 +1,11 @@
 """What `scripts/plan.sh` reads and writes between its stages, through `orchestrator/spike_flow.py`.
 
-`tests/plan_tooling/test_plan_spike_flow_e2e.py` drives the whole flow through `just plan`.
-This holds each answer the flow branches on against real stores: a spikes project written
-into this process's own plan store and stamped through the store's own SDK, a run's ledger
-record under a runs root of its own, and the branches a run kept as the pinned `onevcs`
-origins and registered checkouts list them in a scratch registry, even without sessions.
+`tests/plan_tooling/plan_flow/test_plan_spike_flow_e2e.py` drives the whole flow through
+`just plan`. This holds each answer the flow branches on against real stores: a spikes
+project written into this process's own plan store and stamped through the store's own SDK,
+a run's ledger record under a runs root of its own, and the branches a run kept as the
+pinned `onevcs` origins and registered checkouts list them in a scratch registry, even
+without sessions.
 
 llmlint: ignore-file[test_tiers_split_by_project_not_by_marker] These are the coverage tier's
 measure of an `orchestrator/` module, whose every line the 100% floor `pyproject.toml` sets
@@ -274,10 +275,11 @@ def test_each_spike_is_answered_by_name_without_session_records(
     ]
 
 
-# llmlint: ignore-block[shell_test_tiers_stay_split] This task explicitly requires extending
-# this module's real-store boundary coverage: branches and note are its public API, and Git
-# and pinned onevcs provide their actual data boundary. The recipe journey stays separately
-# in plan-tooling; moving this test would remove the module's coverage of the cwd regression.
+# llmlint: ignore-block[shell_test_tiers_stay_split] This task explicitly requires extending this
+# module's real-store boundary coverage: branches and note are its public API, and Git and pinned
+# onevcs provide their actual data boundary. The recipe journey stays separately in
+# `plan-tooling-plan-flow`; moving this test would remove the module's coverage of the cwd
+# regression.
 def test_branches_and_note_find_another_identity_from_a_registered_flow_checkout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -424,7 +426,7 @@ def test_a_run_id_that_is_not_a_name_is_refused_before_anything_is_read(
 
 # llmlint: ignore-block[shell_test_tiers_stay_split] The task expressly requires these
 # regressions in tests/test_spike_flow.py. They drive the module's real local Git/onevcs
-# boundary in an isolated registry; the plan recipe journey remains in plan-tooling.
+# boundary in an isolated registry; the plan recipe journey remains in `plan-tooling-plan-flow`.
 @pytest.mark.parametrize("nodes", [("spike-a", "spike-a-2"), ("spike-a-2", "spike-a-3")])
 def test_multiple_kept_branches_without_session_labels_are_refused(
     tmp_path: Path,

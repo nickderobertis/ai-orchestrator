@@ -41,12 +41,13 @@ from llmlint_install import (
 from packaging.version import Version
 
 #: The tier for journeys that drive this repository's scripts and read nothing else of
-#: it: `recipeWorkspace` in `orchestrator/project.json` lists this module and the pin, and
+#: it: `e2eRecipeWorkspace` in `tests/e2e/project.json` lists this module and the pin, and
 #: the tier takes its helper through the `support-llmlint-install` unit.
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] The marker is this
 # repository's tier mechanism rather than a shortcut around one: it routes a test between
-# four targets of one Nx project keyed on four `nx.json` named inputs, and every shell
-# journey here is tiered this way (`tests/test_nx_cache_scope.py` holds the selectors to
+# the `orchestrator-e2e` project's targets, each keyed on a named input of its own, and
+# `orchestrator:test-docs`, and every shell
+# journey here is tiered this way (`tests/tree_scans/test_nx_cache_scope.py` holds the selectors to
 # a partition of the suite). A project of its own would give these four tests a fifth
 # key over the same script.
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Four sub-second runs

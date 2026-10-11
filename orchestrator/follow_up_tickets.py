@@ -365,9 +365,10 @@ _KEPT_OPEN = [
 # is driven where the tooling decides it: `board-status --withdraw` over a real `local-md`
 # board refuses every protected status (`tests/test_follow_up_tickets.py`'s
 # `test_a_withdrawal_of_a_ticket_a_person_accepted_or_deferred_is_refused_and_moves_nothing`,
-# parametrized over each), and `tests/plan_tooling/test_follow_ups_comment_answers_e2e.py`
-# drives a comment dispatch withdrawing its own `Proposal` and being refused at `Deferred`.
-# Whether a ticket is still relevant is the agent's reading, which no journey scripts.
+# parametrized over each), and
+# `tests/plan_tooling/follow_ups/test_follow_ups_comment_answers_e2e.py` drives a comment
+# dispatch withdrawing its own `Proposal` and being refused at `Deferred`. Whether a ticket
+# is still relevant is the agent's reading, which no journey scripts.
 WITHDRAWAL_EXCEPTION = (
     "**Never change a board item's status except by one withdrawal.** Where the ticket of the "
     "issue a quoted comment sits on is no longer relevant — handled elsewhere, superseded, or "
@@ -511,8 +512,8 @@ COPIES_KEY = plan_store.COPIES_KEY
 #: `kind`, so only the blocking kind is admitted here) and `task deps` walks it from either
 #: end. It is read back only through that walk — `task show` carries no `depends_on` — never
 #: by parsing the front matter, and it sits outside the `orchestrator.follow-up` record: no
-#: record key duplicates it. `tests/test_follow_up_ticket_docs.py` admits the name in the
-#: documents through this constant.
+#: record key duplicates it. `tests/plan_guidance/test_follow_up_ticket_docs.py` admits the
+#: name in the documents through this constant.
 DEPENDENCY_FIELD = "depends_on"
 #: What each end of such an edge is, and what the edge means, as the store reports them.
 DEPENDENCY_ITEM = "task"
@@ -666,7 +667,7 @@ _RUBRIC_ROWS = {
 #: severities are judged and how its priority is estimated from them. It reaches a follow-up
 #: agent through the example ticket's `## Impact` guidance (:data:`_HEADING_GUIDANCE`), and
 #: `AGENTS.md` and `docs/orchestration.md` restate only its estimate, which
-#: `tests/test_follow_up_ticket_docs.py` holds to :func:`estimate`.
+#: `tests/plan_guidance/test_follow_up_ticket_docs.py` holds to :func:`estimate`.
 RUBRIC = "\n".join(
     [
         "**Severity** is judged from the product owner's perspective across three impact "

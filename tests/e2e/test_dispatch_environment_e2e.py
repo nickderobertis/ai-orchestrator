@@ -26,7 +26,7 @@ were not the same thing.
 llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] What each journey here
 spends is one `oneharness run` whose provider is the recorder below — about 40 ms, no
 paid turn, no launch — and what it reads is this repository's own `oneharness*.toml`,
-which the root project's `codeWorkspace` key already covers. A project of this module's
+which the `orchestrator-e2e` project's `e2eWorkspace` key already covers. A project of this module's
 own would be keyed on less than the module reads, or on the same workspace twice.
 
 llmlint: ignore-file[shell_test_tiers_stay_split] These are pytest journeys over the

@@ -21,7 +21,7 @@ the publication was.
 
 llmlint: ignore-file[shell_test_tiers_stay_split,test_tiers_split_by_project_not_by_marker] Every
 journey here is `reads_recipes`: it drives the real justfile and reads nothing of this
-repository but the justfile and `.gitignore`, both of which `recipeWorkspace` keys, and a
+repository but the justfile and `.gitignore`, both of which `e2eRecipeWorkspace` keys, and a
 project of its own for one setting would be a second key naming the same files.
 """
 
@@ -47,7 +47,7 @@ pytestmark = pytest.mark.reads_recipes
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] These two lines only
 # name which shebang recipe the journeys below already ran; each journey is one `just`
 # invocation that finishes in seconds and spends no launch or provider turn, in the tier
-# whose `recipeWorkspace` key already reads the justfile it copies.
+# whose `e2eRecipeWorkspace` key already reads the justfile it copies.
 SHEBANG_RECIPE = ("_verdict", "approve", "journey-run", "an extra message")
 BODY_RAN = "channel-approve: approve does not accept a message"
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

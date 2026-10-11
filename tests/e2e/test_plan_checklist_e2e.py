@@ -28,7 +28,7 @@ workspace and so outside every `nx.json` key, so they run in the uncached tier.
 # The findings these answer are about which Nx project owns this file, so it is the file
 # that is suppressed and a project split that would resolve it. The journeys run the
 # llmlint, onejudge and oneagentgraph this host installed, which live outside the workspace
-# and so outside every `nx.json` key: the uncached `orchestrator:test-checkouts` tier
+# and so outside every `nx.json` key: the uncached `orchestrator-e2e:test-checkouts` tier
 # exists for exactly that, selected by `reads_checkouts`, as `test_judge_panel_e2e.py`'s
 # are.
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] see above

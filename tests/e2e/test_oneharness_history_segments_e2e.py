@@ -57,7 +57,7 @@ from orchestrator.root import REPO_ROOT
 #:
 #: Re-capture it only against another pre-cutover release. It carries no README of its
 #: own because the recipe tier's key reads `tests/fixtures/` whole while the code key
-#: excludes every Markdown file (`tests/test_nx_cache_scope.py`).
+#: excludes every Markdown file (`tests/tree_scans/test_nx_cache_scope.py`).
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "pre-cutover-history"
 #: Where the fixture's pointer file names the store it was captured into.
 HISTORY_DIR_PLACEHOLDER = "{{HISTORY_DIR}}"
@@ -194,7 +194,7 @@ def _store_with_unopenable_legacy_indexes(store: Path) -> tuple[list[Path], dict
 
 # These two journeys are neither slow nor external: the provider is oneharness's own
 # mock, nothing reaches a network, and the whole module runs in well under a second.
-# They sit in `orchestrator:test` beside
+# They sit in `orchestrator-e2e:test` beside
 # tests/e2e/test_oneharness_bin_override_e2e.py, which drives the same installed CLI
 # there, so a project of their own would isolate no cost from any change.
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] see the note above

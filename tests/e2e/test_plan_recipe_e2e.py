@@ -27,12 +27,14 @@ one, through the real recipe, the real `scripts/plan.sh`, the real
 
 llmlint: ignore-file[shell_test_tiers_stay_split,test_tiers_split_by_project_not_by_marker] The
 finding these answer is about which Nx project owns this file, and that is a property of
-the whole module rather than of any one journey in it. This module sits in the root
-`orchestrator` project's tiers — `orchestrator:test` for most of it, `orchestrator:test-docs`
-for the two `reads_docs` journeys — and that placement predates every change made here.
-`AGENTS.md` records which suites were split out of that project and why, `plan-tooling`
-among them; a change to a journey here moves no test between tiers, and re-homing this
-module is test selection over the `tests/e2e` tree rather than anything a journey does.
+the whole module rather than of any one journey in it. Most of this module runs in the
+`orchestrator-e2e` project's `orchestrator-e2e:test` target, keyed `e2eWorkspace`, and its two
+`reads_docs` journeys in the root `orchestrator` project's `orchestrator:test-docs`, which
+still collects `tests/e2e` on the whole-workspace key; that placement predates every change
+made here. `AGENTS.md` records which suites were split out of the root project and why, the
+`plan-tooling-*` projects among them; a change to a journey here moves no test between tiers,
+and re-homing this module is test selection over the `tests/e2e` tree rather than anything a
+journey does.
 The `xdist_group` markers are what they are everywhere in this suite — a worker under
 `--dist loadgroup`, so a module-scoped fixture that spends a real launch is not run
 twice — and never a tier.
@@ -206,7 +208,7 @@ are blocked on the answer.
 - What an exhausted page answers is stated.
 """
 #: Per pytest process rather than one fixed word, because the module's one launch is
-#: made by two tiers at once. `orchestrator:test` and `orchestrator:test-docs` are
+#: made by two tiers at once. `orchestrator-e2e:test` and `orchestrator:test-docs` are
 #: separate pytest runs Nx starts together, and the `reads_docs` journey below shares
 #: the `planned` fixture with the rest — so each tier launches this module's plan into
 #: the *same* `.plans` root this checkout resolves, under whatever name is written
@@ -399,7 +401,7 @@ def planned(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Pl
             # a brief becomes, and the tail after it is about the plan a planner writes —
             # which a stand-in provider does not write, so every step of it would be a
             # refusal about a project nothing authored. `just finish-plan` is driven whole
-            # in tests/plan_tooling/test_finish_plan_recipe_e2e.py, where a stand-in does
+            # in tests/plan_tooling/plan_flow/test_finish_plan_recipe_e2e.py, where a stand-in does
             # author one.
             "--no-design-doc",
             environment=environment,

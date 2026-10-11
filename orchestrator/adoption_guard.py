@@ -117,8 +117,9 @@ class Targets(NamedTuple):
 
     The fields this module reads out of that verb's answer, narrowed where they are read.
     Held to the installed `onevcs` rather than to this declaration: the check-plan
-    journeys in `tests/plan_tooling/test_check_plan_recipe_e2e.py` ask the real verb
-    about real scratch producers and assert on what comes back through these fields.
+    journeys in `tests/plan_tooling/check_and_review/test_check_plan_recipe_e2e.py` ask the
+    real verb about real scratch producers and assert on what comes back through these
+    fields.
     """
 
     #: The identity the repository resolves to, which is how two spellings of one

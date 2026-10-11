@@ -46,8 +46,8 @@ That section is what the check reads, rather than the store's stored answers: a 
 a task's answers only where it was drafted and never copies them, while the rendered body
 travels with every copy, and the engine's ``require_rendered`` holds that body to being the
 template's rendering. :data:`EVIDENCE_ENTRY` is the one reading of the line the template
-renders, and `tests/plan_tooling/test_check_plan_spikes_e2e.py` holds the two together by
-checking bodies the pinned store rendered from that template.
+renders, and `tests/plan_tooling/check_and_review/test_check_plan_spikes_e2e.py` holds the
+two together by checking bodies the pinned store rendered from that template.
 """
 
 from __future__ import annotations

@@ -1102,10 +1102,23 @@ suite. But "keyed on everything it reads" and "keyed on the whole workspace" are
 not the same requirement, and the suite answers at more than one scope, so it is
 split at those seams rather than at convenient ones:
 
-- **`orchestrator:test-docs`** runs the tests marked `@pytest.mark.reads_docs` and
-  keeps the `wholeWorkspace` key — the journeys' prose readers included, because a
-  target keyed on the whole workspace selects its project for every diff and the
-  orchestrator project already is.
+- **`orchestrator:test-docs`** runs the tests marked `@pytest.mark.reads_docs` that no
+  project of their own owns — `tests/test_dispatch_appendix.py`, for the reason at its
+  declaration, and the journeys' prose readers directly under `tests/e2e/` — and keeps
+  the `wholeWorkspace` key, because a target keyed on the whole workspace selects its
+  project for every diff and the orchestrator project already is.
+- **The plan-tooling subjects** — `plan-tooling-check-and-review`,
+  `plan-tooling-follow-ups`, `plan-tooling-plan-flow` and `plan-tooling-plan-copy` under
+  `tests/plan_tooling/` — are projects of their own, each keyed on what its journeys read,
+  with a whole-workspace `test-docs` target beside it where some of its journeys copy this
+  checkout; `tests/nx_inputs.py`'s `PLAN_TOOLING_PROJECTS` says what each key names.
+- **The drift gates** — the tests holding this repository's prose to the code,
+  configuration and releases it describes — are subject projects of their own:
+  `dispatch-bar`, `manager-guidance`, `plan-guidance`, `release-pins` and `family-scans`,
+  each keyed on the documents it reads by name and the families it reconciles them with,
+  so an edit to one document re-runs only the gates that read it. `tree-scans` holds the
+  gates that copy this checkout or scan every tracked document, keyed on the whole
+  workspace; `tests/nx_inputs.py`'s `DRIFT_GATE_PROJECTS` says what each key names.
 - **`orchestrator:test-recipes`** and **`orchestrator-e2e:test-recipes`** run the tests
   marked `@pytest.mark.reads_recipes`
   — the journeys that build real worktrees and run real package installs to drive
@@ -1187,7 +1200,7 @@ its own tier's key does not carry, naming the path and the marker it needs. A re
 from inside a child process is out of a guard's reach, but a journey that hands a
 real tool the whole tree copies the tree first, and copying is itself a read.
 
-`tests/test_nx_cache_scope.py` holds every declaration to its globs — that nothing
+`tests/tree_scans/test_nx_cache_scope.py` holds every declaration to its globs — that nothing
 but documentation and the front end falls outside the code key, that every tier of the
 suite depends on exactly the test-support units its modules import and takes exactly
 those into its key, that no configuration names a path that does not exist, that the
@@ -1203,9 +1216,10 @@ edit inside it must miss and an edit outside it must replay.
 
 One more thing has to hold for a replayed test verdict to be usable, and it is
 proved in the same place: the measuring tiers declare their coverage data files as
-Nx `outputs`, so a cache hit **restores** `.coverage.parallel` and `.coverage.e2e`
-rather than leaving the uncached combine with nothing. Delete both, replay both
-tiers, and `orchestrator:coverage` still combines and reports — a dropped `outputs`
+Nx `outputs`, so a cache hit **restores** `.coverage.parallel`, `.coverage.e2e` and
+each test project's `.coverage.<project name>` rather than leaving the uncached combine
+with nothing. Delete `.coverage.parallel` and `.coverage.e2e`, replay the two tiers
+that wrote them, and `orchestrator:coverage` still combines and reports — a dropped `outputs`
 declaration turns every replayed commit's gate into a failure instead of a saving.
 
 Three tiers, one answer, and none of them lenient: a recorded llmlint **failure**
@@ -1217,9 +1231,9 @@ The suite waits on subprocesses rather than on compute — a serial run holds on
 core at about 3.5% for a quarter of an hour — so its wall clock is latency and
 workers are nearly free. `orchestrator:test`, `orchestrator:test-docs`,
 `orchestrator:test-recipes`, `orchestrator:test-checkouts`, the three tiers of
-`orchestrator-e2e`, `plan-tooling:test`,
-`plan-tooling:test-docs`, `session-setup-pypi:test-pypi`, each ask-seam journey's `test`
-target, and `just test-e2e` all run `-n 4 --dist loadgroup`.
+`orchestrator-e2e`, every target of each `plan-tooling-*` and drift-gate subject
+project, `session-setup-pypi:test-pypi`, each ask-seam journey's `test` target, and `just
+test-e2e` all run `-n 4 --dist loadgroup`.
 
 Both numbers come from measuring this host, not from a default. One sample each,
 same tier and same selection, taken back to back while a second worktree ran its
@@ -1249,8 +1263,10 @@ merely slow, or that races something it does not own, is a test to fix.
 
 `orchestrator:test` and `orchestrator-e2e:test` measure under pytest-cov — which is what
 carries coverage into the xdist workers — into `.coverage.parallel` and `.coverage.e2e`,
-and **judge nothing**. The uncached `orchestrator:coverage` waits on both, combines both
-files, and reports.
+as does each plan-tooling subject and drift-gate project whose tests exercise
+`orchestrator/` in process, into `.coverage.<project name>`, and all of them **judge
+nothing**. The uncached `orchestrator:coverage` waits on every one, combines their files,
+and reports.
 
 `coverage report` is what compares the total to the declared floor, so the floor
 has exactly one source and is evaluated exactly once. The measuring tier carries a
@@ -1269,7 +1285,7 @@ against. And `orchestrator:coverage` is **uncached**: its input is a file on dis
 rather than the tree, it costs seconds, and a floor that always runs is one no
 replay can skip.
 
-`tests/test_nx_cache_scope.py` holds the three tiers to a real partition —
+`tests/tree_scans/test_nx_cache_scope.py` holds the three tiers to a real partition —
 collecting each selector for real and requiring their union to equal the suite —
 because commands selecting on markers is exactly the shape that drops tests in
 silence.

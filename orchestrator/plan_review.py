@@ -337,8 +337,9 @@ class Verdict(TypedDict):
 
     Stated here as well as in `config/plan-review-verdict.schema.json` because the
     schema is what oneharness validates and this is what decides whether a record is
-    written: the two have to agree, and `tests/plan_tooling/test_plan_review_e2e.py` drives a
-    real turn through both.
+    written: the two have to agree, and
+    `tests/plan_tooling/check_and_review/test_plan_review_e2e.py` drives a real turn through
+    both.
 
     `findings` is a list because a reviewer that can see three defects and report one
     tells its reader that one thing is wrong; `docs/plan-review-refusals.md` is what the
@@ -506,10 +507,11 @@ def is_lifecycle(task: StoreTask) -> bool:
     `repositories` or the reserved `onepipeline.repo`, and `onepipeline.steps` — and
     never off prose. A node naming neither is a **direct** node, dispatched into the
     launching checkout with no branch of its own. Held to the engine rather than
-    trusted: `tests/plan_tooling/test_plan_review_e2e.py` reconciles this answer, node by
-    node, with whether the installed loader hands a check a `repo` or `steps` for it, and
-    drives the two shapes that loader refuses — steps naming no repository, and a human
-    node naming one — through the review, which reads the store before any loader has.
+    trusted: `tests/plan_tooling/check_and_review/test_plan_review_e2e.py` reconciles this
+    answer, node by node, with whether the installed loader hands a check a `repo` or
+    `steps` for it, and drives the two shapes that loader refuses — steps naming no
+    repository, and a human node naming one — through the review, which reads the store
+    before any loader has.
     """
     return repository_of(task) is not None or bool(authored_steps(task))
 
@@ -583,10 +585,11 @@ STEPS = "onepipeline.steps"
 #: here the way :data:`PERSONA` is, as the engine's `onepipeline.<field>` metadata keys,
 #: and held to the engine rather than trusted: `tests/e2e/test_release_adoption_in_force_e2e.py`
 #: drives the installed loader refusing a bad `adoption` and a mis-keyed `consumes`
-#: written under exactly these keys, `tests/plan_tooling/test_check_plan_recipe_e2e.py`
-#: drives it reading a node's stated `merge_policy`, and the store-versus-loaded journey
-#: in `tests/plan_tooling/test_plan_review_e2e.py` holds the record written from the
-#: store's spelling to the document the loader hands the check.
+#: written under exactly these keys,
+#: `tests/plan_tooling/check_and_review/test_check_plan_recipe_e2e.py` drives it reading a
+#: node's stated `merge_policy`, and the store-versus-loaded journey in
+#: `tests/plan_tooling/check_and_review/test_plan_review_e2e.py` holds the record written
+#: from the store's spelling to the document the loader hands the check.
 ADOPTION = "onepipeline.adoption"
 CONSUMES = "onepipeline.consumes"
 MERGE_POLICY = "onepipeline.merge_policy"
@@ -1713,7 +1716,7 @@ class PlanView:
 # reaches this: `review` refuses a store no record can be written into (`unwritable`)
 # before any view is built. So a board location is reachable only by handing this the
 # store's answer directly, which `tests/test_plan_review.py` does; the local paths it
-# names are driven end to end by `tests/plan_tooling/test_plan_review_e2e.py`.
+# names are driven end to end by `tests/plan_tooling/check_and_review/test_plan_review_e2e.py`.
 def plan_view(
     project: str,
     records: Sequence[StoreTask],

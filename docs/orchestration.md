@@ -75,9 +75,9 @@ tasks, and its petsinc tasks go into one member project in `hellopatient`, tied 
 finish-plan` reports the home's qualified id; `just approve-design <home>` records the approval
 on the design document wherever it is, and `just orchestrate <home>` runs the home with its
 members as one run, writing each settlement to the task's own item.
-`tests/plan_tooling/test_linear_routed_plans_e2e.py` drives both shapes,
+`tests/plan_tooling/plan_flow/test_linear_routed_plans_e2e.py` drives both shapes,
 `tests/test_plan_source_roots.py` holds the source and the route, and
-`tests/test_plan_store_guidance.py` holds the table below and the routing prose to them.
+`tests/plan_guidance/test_plan_store_guidance.py` holds the table below and the routing prose to them.
 
 What each `hellopatient` category means for a plan task and its member project,
 as its `status_mapping` writes it:
@@ -256,13 +256,13 @@ A task of a plan written here has an id scoped to its project — `demo/first` �
 project copied beside itself lands as `demo-2` with its tasks at `demo-2/first` in that
 project's own folder and their dependencies pointing inside the copy, so re-planning by
 copying an `authoring` project to its successor leaves nothing to repair.
-`tests/plan_tooling/test_plan_copy_destination_ids_e2e.py` drives it through `just plans
+`tests/plan_tooling/plan_copy/test_plan_copy_destination_ids_e2e.py` drives it through `just plans
 project copy`. A board copy is untouched by this: GitHub assigns a copied issue its id.
-`tests/plan_tooling/test_copy_plan_recipe_e2e.py` drives the copy itself for real —
+`tests/plan_tooling/plan_copy/test_copy_plan_recipe_e2e.py` drives the copy itself for real —
 drafting, clearing, a trial run that writes nothing, the copy, the record read back off
 what landed, and the check over it — against a second local store rather than the live
-board. `tests/plan_tooling/test_plan_flow_e2e.py` drives the whole of `just plan` the same
-way, and `tests/plan_tooling/test_finish_plan_recipe_e2e.py` drives the tail on its own
+board. `tests/plan_tooling/plan_flow/test_plan_flow_e2e.py` drives the whole of `just plan` the same
+way, and `tests/plan_tooling/plan_flow/test_finish_plan_recipe_e2e.py` drives the tail on its own
 together with each of the refusals above.
 
 **Where the destination holds what landed is read back out of it rather than composed.** A
@@ -449,7 +449,7 @@ worker for something other than its work — a machine tier, run against the pla
 This is a person's decision about one document. Folding either into the other would let a
 plan nobody read past pass because a machine liked its wording.
 
-`tests/plan_tooling/test_approve_design_recipe_e2e.py` drives it end to end: a real
+`tests/plan_tooling/plan_flow/test_approve_design_recipe_e2e.py` drives it end to end: a real
 launch refused for want of an approval, the real recipe recording one, the same launch
 then reaching the engine, an edit to the document refusing it again, a planning launch
 reaching the engine with no document at all — and that same planning project refused once
@@ -2207,7 +2207,7 @@ the status the board holds it at. Withdrawing a ticket closes a proposal as not 
 and a run never withdraws a ticket the board shows as accepted: it copies nothing, leaves
 its own ticket as it is, and reports what it would have withdrawn and why. The statuses,
 the record's keys and the board's options are stated in `orchestrator/follow_up_tickets.py`
-and `onetaskgraph.yaml` alone, and `tests/test_follow_up_ticket_docs.py` holds this
+and `onetaskgraph.yaml` alone, and `tests/plan_guidance/test_follow_up_ticket_docs.py` holds this
 paragraph to them.
 
 **A ticket's priority is estimated from its facts, and a person's override stands.** A

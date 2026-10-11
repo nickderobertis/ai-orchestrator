@@ -530,7 +530,7 @@ OUT_OF_DISPATCH = (
     #
     # Which is why it is an entry of this list rather than a pattern of the amendment
     # check's own: every entry here is driven through the real `just check-plan` over a
-    # real plan by `tests/plan_tooling/test_check_plan_recipe_e2e.py`'s
+    # real plan by `tests/plan_tooling/check_and_review/test_check_plan_recipe_e2e.py`'s
     # `test_a_criterion_resting_on_work_the_dispatch_cannot_do_is_refused`, which
     # parametrizes over this tuple and refuses each entry's own `example` — so an entry
     # added here is a plan-check journey with nothing to write.
@@ -1408,7 +1408,7 @@ def dispatched_nodes(plan: object) -> Iterator[Node]:
     # sets `tasks` on every plan it assembles, so a project whose store answer has no task
     # arrives here as an empty list rather than a missing key. The two refusals below this
     # one are reachable from a real project and are driven by
-    # tests/plan_tooling/test_check_plan_recipe_e2e.py.
+    # tests/plan_tooling/check_and_review/test_check_plan_recipe_e2e.py.
     # llmlint: ignore[changed_behavior_has_e2e] see the note above this line
     if "tasks" not in document:
         raise CriteriaError(

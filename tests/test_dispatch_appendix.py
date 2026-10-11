@@ -84,6 +84,14 @@ import pytest
 from orchestrator.criteria_guard import APPENDIX, AUTHORIZATIONS
 from orchestrator.root import REPO_ROOT
 
+# The one drift gate left directly under `tests/`, and so in `orchestrator:test-docs`'s
+# whole-workspace key rather than in the `dispatch-bar` project: the operational notes every
+# dispatch carries, `templates/dispatch-appendix.md`, name this module at this path as the
+# gate that holds them. Moving it means editing that file, which `templates/plan-task.md.j2`
+# includes, so the edit moves the `plan-task` template digest and `onepipeline template
+# check` then refuses every task rendered before it as changed since rendering: the shipped
+# examples and fixtures, and every plan on this host rendered but not yet launched. That
+# move waits for a change scheduled when nothing here is waiting to launch.
 pytestmark = pytest.mark.reads_docs
 
 #: The definition this file used to carry, asserted absent. Kept as the shape it had,

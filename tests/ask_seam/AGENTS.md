@@ -24,7 +24,7 @@ configuration its run records.
   and nothing wider: no `config/**/*`,
   `scripts/**/*` or `orchestrator/**/*`, no prose, and no helper or sibling journey it
   never opens, so an edit pays for a launch only where that launch would read the edit.
-  `tests/nx_inputs.py` lists the journeys and `tests/test_nx_cache_scope.py` holds each
+  `tests/nx_inputs.py` lists the journeys and `tests/tree_scans/test_nx_cache_scope.py` holds each
   key to that shape; `tests/conftest.py` fails a journey the moment it opens something its
   own key does not carry. A new journey is a new directory, a new row in that list and a
   new key measured from what it reads, with an edge to each unit its module imports, never a file added beside an existing module.

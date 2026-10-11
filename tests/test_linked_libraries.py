@@ -318,7 +318,7 @@ def _linked_by_dependent(crate: str) -> tuple[LinkedCore, ...]:
 
 #: Per-crate claims about what the adopted engine links, as crate → file → the sentence
 #: that file must spell for the *measured* version. Same shape as the pin drift gates in
-#: `tests/test_onejudge_version.py` and a different source: those hold a sentence to a
+#: `tests/release_pins/test_onejudge_version.py` and a different source: those hold a sentence to a
 #: file this repository writes, this one holds a sentence to a fact the engine publishes.
 LINKED_VERSION_CLAIMS: dict[str, dict[str, tuple[str, ...]]] = {
     "oneagentgraph": {
@@ -541,40 +541,6 @@ def test_the_linked_onejudge_lets_a_workers_judge_side_be_a_list() -> None:
         "lets a judge side be a list, adds the `llmlint` judge kind, and records per-judge "
         "decisions on the report; a graph naming `judges:` would be refused at dispatch"
     )
-
-
-@pytest.mark.reads_docs
-@pytest.mark.parametrize(
-    ("crate", "relative_path", "templates"),
-    [
-        (crate, path, templates)
-        for crate, files in LINKED_VERSION_CLAIMS.items()
-        for path, templates in files.items()
-    ],
-)
-def test_claims_about_a_linked_library_name_the_linked_version(
-    crate: str, relative_path: str, templates: tuple[str, ...]
-) -> None:
-    """Each sentence is required exactly once, against the version the wheel declares.
-
-    Exactly once for the reason the pin gates give: a claim satisfied anywhere in its
-    file leaves a second site ungated, and a duplicate left by an edit goes unnoticed
-    the same way. Against the wheel rather than a literal because the whole defect this
-    gate exists for is prose that agreed with a `Cargo.toml` requirement while the build
-    resolved something else.
-    """
-    linked = _linked_version(crate)
-    # Whitespace-normalized: these sentences wrap across lines, and a reflow is not a
-    # change to what they assert.
-    written = " ".join((REPO_ROOT / relative_path).read_text(encoding="utf-8").split())
-
-    for template in templates:
-        stated = template.format(version=linked)
-        assert written.count(stated) == 1, (
-            f"{relative_path} states {stated!r} {written.count(stated)} times, not once; "
-            f"the adopted engine links {crate} {linked}, so re-read the claim against "
-            "that and update the one site in the same change"
-        )
 
 
 class Divergence(NamedTuple):
@@ -1336,7 +1302,7 @@ def registry_reading(
 # one Nx project, keyed on four `nx.json` named inputs, and `reads_checkouts` is the
 # selector for the *uncached* target `orchestrator:test-checkouts` — the tier that exists
 # precisely because no key over this workspace can describe state outside it. A second Nx
-# project would need its own key over the same nothing. `tests/test_nx_cache_scope.py`
+# project would need its own key over the same nothing. `tests/tree_scans/test_nx_cache_scope.py`
 # holds the four selectors to a partition of the suite, so a marker that stopped routing
 # is a failing check rather than a test nothing runs.
 @pytest.mark.reads_checkouts

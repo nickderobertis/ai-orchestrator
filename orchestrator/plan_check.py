@@ -551,7 +551,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
     engine = plan_check_engine()
-    # llmlint: ignore[boundary_inputs_validated, changed_behavior_has_e2e] A probe that fails for any reason takes the direct path, as an engine that could not be found always has, and that path says on its accepted line that the engine's loader did not read the plan and a launch may still refuse it — so the narrower answer is never read as the whole one. The direct path after a failed probe is driven through the real recipe by `tests/plan_tooling/test_check_plan_recipe_e2e.py`'s narrower-path journeys; a failing probe of this checkout's own wrapper is a checkout whose pinned engine is not installed, which no journey can produce without breaking the `.venv` every concurrent test shares.  # noqa: E501
+    # llmlint: ignore[boundary_inputs_validated, changed_behavior_has_e2e] A probe that fails for any reason takes the direct path, as an engine that could not be found always has, and that path says on its accepted line that the engine's loader did not read the plan and a launch may still refuse it — so the narrower answer is never read as the whole one. The direct path after a failed probe is driven through the real recipe by `tests/plan_tooling/check_and_review/test_check_plan_recipe_e2e.py`'s narrower-path journeys; a failing probe of this checkout's own wrapper is a checkout whose pinned engine is not installed, which no journey can produce without breaking the `.venv` every concurrent test shares.  # noqa: E501
     if carries_plan_check(engine):
         return check_through_engine(args.project, engine)
     return criteria_guard.check_directly(args.project, review_exempt=review_exempt(args.project))

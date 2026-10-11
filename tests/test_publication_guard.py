@@ -13,8 +13,8 @@ statement. What is doubled is `onevcs`, at the boundary this repository doubles 
 published CLI a recipe delegates to: it is what says which identity a `repo` names and
 which policy that identity resolves, and asking the real one would make this tier's
 memoized verdict depend on another repository's registration.
-`tests/plan_tooling/test_check_plan_recipe_e2e.py` drives the real one, through the real
-`just check-plan`, against a registered scratch identity.
+`tests/plan_tooling/check_and_review/test_check_plan_recipe_e2e.py` drives the real one,
+through the real `just check-plan`, against a registered scratch identity.
 """
 
 from __future__ import annotations

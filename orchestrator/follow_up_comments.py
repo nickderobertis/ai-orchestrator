@@ -194,8 +194,8 @@ OVERLAP = timedelta(minutes=15)
 #: A run id `scripts/follow-ups.sh` launches, which is `scripts/plan-brief.sh`'s
 #: `PLAN_SAFE_RUN_ID`: narrower than a store record's component, so an issue whose record names
 #: a run outside it is one no launch here could answer.
-#: `tests/plan_tooling/test_follow_ups_answer_comments_recipe_e2e.py` holds the two spellings
-#: to one grammar.
+#: `tests/plan_tooling/follow_ups/test_follow_ups_answer_comments_recipe_e2e.py` holds the
+#: two spellings to one grammar.
 LAUNCHABLE_RUN = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]*")
 
 #: The store categories whose items are answered: `Proposal` and `Deferred` on the board,

@@ -22,10 +22,10 @@ carry the unread count is asserted there, where heartbeats exist; the helper bel
 reads a heartbeat's count is shared so both halves read it one way.
 
 llmlint: ignore-file[shell_test_tiers_stay_split,test_tiers_split_by_project_not_by_marker] This
-repository runs one Nx project and splits its test tiers by pytest marker, which is a
-settled design rather than an omission. Every test here is `reads_checkouts` — its
+module runs in the `orchestrator-e2e` project, which splits its test tiers by pytest
+marker, a settled design rather than an omission. Every test here is `reads_checkouts` — its
 subject is the engine wheel installed under `.venv`, which lives outside every `nx.json`
-key — so it belongs in the *uncached* `orchestrator:test-checkouts` target, where a memo
+key — so it belongs in the *uncached* `orchestrator-e2e:test-checkouts` target, where a memo
 over this workspace would replay a green across the very upgrade this module exists to
 catch. A project of its own would need a key over the same nothing.
 """

@@ -48,11 +48,11 @@ TASKS_DIRECTORY = "tasks"
 #: `onevcs` files a hosted repository under exactly this key, and its `resolve` answers
 #: an identity's `origin` in it, so what this recognizes is what that CLI would answer.
 #: Reconciled against both owners rather than trusted:
-#: `tests/plan_tooling/test_check_plan_recipe_e2e.py` registers a real hosted scratch
-#: identity, writes a record through this shape, and reads the node's `repo` back out of
-#: the installed engine's own loader equal to the origin the installed `onevcs` answers.
-#: Each segment is held to the characters a host name, an owner and a repository name
-#: are made of, because the value is promoted into a record other programs then read:
+#: `tests/plan_tooling/check_and_review/test_check_plan_recipe_e2e.py` registers a real
+#: hosted scratch identity, writes a record through this shape, and reads the node's `repo`
+#: back out of the installed engine's own loader equal to the origin the installed `onevcs`
+#: answers. Each segment is held to the characters a host name, an owner and a repository
+#: name are made of, because the value is promoted into a record other programs then read:
 #: whitespace, a query string or a control character in a segment is not an origin.
 _HOSTED_ORIGIN = re.compile(r"[A-Za-z0-9.-]+/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+")
 _CLONE_SCHEME = re.compile(r"^https?://")

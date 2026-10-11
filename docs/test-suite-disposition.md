@@ -26,18 +26,18 @@ items were replaced by three recipe-coverage items.
 | --- | --- | --- |
 | `tests/test_agent_allowlist.py` | Keep all | Holds the manager's allowlist, `config/manager-allowlist.toml`, to the invocation table and keeps the hooks `.claude/settings.json` registers. |
 | `tests/test_coverage_gate.py` | Keep all | Proves this checkout's 100% floor is enforceable. |
-| `tests/test_decomposition_guidance.py` | Keep all | Drift gate over this checkout's planner prose. |
+| `tests/manager_guidance/test_decomposition_guidance.py` | Keep all | Drift gate over this checkout's planner prose. |
 | `tests/test_dispatch_cwd_does_not_shadow.py` | Keep all | Proves this checkout's agent wrapper and installed-CLI boundary. |
 | `tests/test_dispatch_environment_contract.py` | Keep all | Reconciles this checkout's wrappers, hook, and isolation fixture. |
 | `tests/test_labels.py` | Keep all | Unit contract for surviving `orchestrator/labels.py`. |
 | `tests/test_llmlint_oneharness_wrapper.py` | Keep all | Proves this checkout's llmlint harness routing. |
-| `tests/test_nx_cache_scope.py` | Keep all | Unit drift gates for this checkout's Nx keys. |
+| `tests/tree_scans/test_nx_cache_scope.py` | Keep all | Unit drift gates for this checkout's Nx keys. |
 | `tests/test_oneharness_usage_wrapper.py` | Keep all | Proves this checkout's usage/fallback wrapper. |
-| `tests/test_onejudge_version.py` | Keep all | Drift gate over this checkout's adopted pin. |
+| `tests/release_pins/test_onejudge_version.py` | Keep all | Drift gate over this checkout's adopted pin. |
 | `tests/test_published_tools.py` | Keep all | Drift gate from this checkout's four pins to dependencies and installed entry points. |
 | `tests/test_redaction.py` | Keep all | Unit contract for surviving `orchestrator/redaction.py`. |
 | `tests/test_session_setup.py` | Keep all | Each case covers provisioning logic still implemented by `scripts/session-setup.sh`; size is not upstream ownership. |
-| `tests/test_smoke_selector.py` | Keep | Proves the selector in this checkout's `scripts/smoke.sh`. |
+| `tests/tree_scans/test_smoke_selector.py` | Keep | Proves the selector in this checkout's `scripts/smoke.sh`. |
 | `tests/dag_ui/test_dag_ui_serving_e2e.py` | Keep all | Drives this checkout's two serving recipes over the published `onepipeline-api serve [--ui]`, which answers the view and its data on one origin. UI behavior itself is not asserted. |
 | `tests/e2e/test_delegated_recipes_e2e.py` | Convert | Keeps every existing journey, adds the previously absent real `repo-policy` delegation and `lint-llm-validate` validator journey. |
 | `tests/e2e/test_gate_selection_e2e.py` | Keep all | Drives this checkout's comparison-base script and pre-push hook. |

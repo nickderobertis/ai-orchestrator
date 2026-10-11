@@ -16,14 +16,23 @@ Conventions for this repository's tests.
   command line it must produce. Add the row with the recipe. A recipe whose answer moves
   with an `orchestrator/` module lives in the tier keyed on that module instead, on the
   same `tests/delegation_checkout.py` checkout: `just follow-ups`' row is in
-  `tests/plan_tooling/test_follow_ups_recipe_e2e.py`.
+  `tests/plan_tooling/follow_ups/test_follow_ups_recipe_e2e.py`.
 - **Wait on a fact, and assert one.** Never sleep and then assume; wait for an observable
   state transition, and correlate fields from one event rather than from log-wide
   matches.
-- **A test that reads this repository's prose declares `@pytest.mark.reads_docs`, and
-  one that drives a recipe declares `@pytest.mark.reads_recipes`.** `conftest.py` fails
-  an undeclared read, because the code-keyed tier would otherwise replay a stale verdict
-  over a documentation edit.
+- **A unit test directly under `tests/` that reads this repository's prose declares
+  `@pytest.mark.reads_docs`, and one that drives a recipe declares
+  `@pytest.mark.reads_recipes`.** `conftest.py` fails an undeclared read, because the
+  code-keyed tier would otherwise replay a stale verdict over a documentation edit. In a
+  directory-owned project `reads_docs` marks only a test that copies this checkout or
+  scans every tracked document, collected by that project's whole-workspace `test-docs`
+  target; a test there reading named prose carries no marker, and its project's key names
+  what it reads. A drift gate — prose held to the code it describes — belongs in the
+  subject project of its own under `tests/` (`tests/dispatch_bar/`,
+  `tests/manager_guidance/`, `tests/plan_guidance/`, `tests/release_pins/`,
+  `tests/family_scans/`, `tests/tree_scans/`), never in `orchestrator:test-docs`, which of
+  the modules directly under `tests/` keeps only `tests/test_dispatch_appendix.py`, for the
+  reason at its declaration.
 - **A host-tool journey belongs to an Nx project of its own, selected by directory**, so
   an unrelated edit stops paying for it; `conftest.py` holds each project to its key, and
   `tests/nx_inputs.py` says what each key names and why.
@@ -59,9 +68,10 @@ Conventions for this repository's tests.
 
 ## The journeys' project
 
-The modules directly under `tests/e2e/` are `orchestrator-e2e`'s, and the unit and
-drift-gate modules directly under `tests/` are `orchestrator`'s; `tests/nx_inputs.py` says
-why each key is what it is.
+The modules directly under `tests/e2e/` are `orchestrator-e2e`'s, the unit modules
+directly under `tests/` are `orchestrator`'s, and each drift-gate subject is a project of
+its own in a directory under `tests/`; `tests/nx_inputs.py` says why each key is what it
+is.
 
 - **Markers route a journey between `orchestrator-e2e:test`, `test-recipes` and
   `test-checkouts`**, as they route a unit test between the orchestrator project's
@@ -74,13 +84,13 @@ why each key is what it is.
   `journeysTheUnitGatesRead`** in `tests/e2e/project.json`, or `orchestrator:test`
   replays over an edit to it; `tests/conftest.py` fails the read until it does.
 - **A directory added at the repository root joins `e2eWorkspace`**, which names what
-  it keeps; `tests/test_nx_cache_scope.py` fails until it does.
+  it keeps; `tests/tree_scans/test_nx_cache_scope.py` fails until it does.
 
 ## Project boundaries
 
 Every Nx project carries a tag one row below names, and every edge it declares or
 Nx infers is to a project tagged with what that row allows.
-`tests/test_project_boundaries.py` reads this table and Nx's own project graph, and fails on
+`tests/tree_scans/test_project_boundaries.py` reads this table and Nx's own project graph, and fails on
 a project no row names or an edge no row allows, naming the project, the edge and the rule.
 
 | A project tagged | may depend only on projects tagged |

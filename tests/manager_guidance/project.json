@@ -1,0 +1,80 @@
+{
+  "name": "manager-guidance",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/manager_guidance",
+  "tags": [
+    "scope:manager-guidance",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-follow-up-variables",
+    "support-manager-invocations",
+    "support-monitor-conversation",
+    "support-nx-inputs",
+    "support-onejudge-bundle",
+    "support-onevcs-state-snapshot",
+    "support-plan-fixture-source",
+    "support-plan-root-variable",
+    "support-plan-sources",
+    "support-probe-run-root",
+    "support-published-surface",
+    "support-registered-checkouts",
+    "support-run-snapshot",
+    "support-short-state",
+    "support-waits",
+    "support-watch-rule"
+  ],
+  "namedInputs": {
+    "managerGuidanceWorkspace": [
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/AGENTS.md",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/llmlint.yml",
+      "{workspaceRoot}/.claude/settings.json",
+      "{workspaceRoot}/config/onemessagebus.yaml",
+      "{workspaceRoot}/docs/orchestration.md",
+      "{workspaceRoot}/docs/repo-lifecycle.md",
+      "{workspaceRoot}/docs/telemetry.md",
+      "{workspaceRoot}/graphs/pr-author.yaml",
+      "{workspaceRoot}/personas/planner.yaml",
+      "{workspaceRoot}/templates/dispatch-appendix.md",
+      "{workspaceRoot}/orchestrator/**/*",
+      "{workspaceRoot}/tests/**/test_*.py",
+      "{workspaceRoot}/tests/test_*.py",
+      "{workspaceRoot}/tests/manager_guidance/**/*"
+    ]
+  },
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 COVERAGE_FILE=.coverage.manager-guidance uv run pytest tests/manager_guidance -m 'not reads_docs' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0",
+      "options": {
+        "cwd": "."
+      },
+      "outputs": [
+        "{workspaceRoot}/.coverage.manager-guidance"
+      ],
+      "inputs": [
+        "managerGuidanceWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ]
+    },
+    "test-docs": {
+      "command": "rm -rf .telemetry/manager-guidance/test-docs && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/manager-guidance/test-docs NO_COLOR=1 uv run pytest tests/manager_guidance -m reads_docs -n 4 --dist loadgroup --no-cov",
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "wholeWorkspace"
+      ],
+      "outputs": [
+        "{workspaceRoot}/.telemetry/manager-guidance/test-docs"
+      ]
+    }
+  }
+}

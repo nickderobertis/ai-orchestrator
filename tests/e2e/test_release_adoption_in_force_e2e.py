@@ -94,7 +94,7 @@ GUIDANCE_SECTION = "## Sequencing a node behind a release"
 # rule wants is the one the block below answers: this tier is deliberately uncached, so
 # `nx affected` skipping it on a project edge is exactly the memo it must not have.
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] This marker is not a
-# tier the default run hides: `orchestrator:test-checkouts` is a target of this same
+# tier the default run hides: `orchestrator-e2e:test-checkouts` is a target of this same
 # project that runs exactly `-m reads_checkouts`, deliberately uncached, and the uniform
 # target set `just check` runs includes it. The rule's remedy — its own project, so `nx
 # affected` can skip it — is the opposite of what this tier needs, because its subject is
@@ -360,7 +360,7 @@ def test_the_cli_the_manager_verbs_run_carries_the_release_surface() -> None:
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker, shell_test_tiers_stay_split]  # noqa: E501 - llmlint reads a directive's rule list off one line
 # This journey's tier is the module's, for the reason the block around `pytestmark` gives: its
 # subject is the installed `onevcs` and this host's checkouts, outside every key, so it runs in
-# the uncached `orchestrator:test-checkouts` and a project edge would only memoize it. It is a
+# the uncached `orchestrator-e2e:test-checkouts` and a project edge would only memoize it. It is a
 # pytest journey over a published CLI, not a shell test suite.
 def test_which_registered_repositories_declare_a_release_target() -> None:
     """The section's opening claims, measured rather than assumed.
@@ -486,7 +486,7 @@ def test_which_registered_repositories_declare_a_release_target() -> None:
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker, shell_test_tiers_stay_split]  # noqa: E501 - llmlint reads a directive's rule list off one line
 # This journey's tier is the module's, for the reason the block around `pytestmark` gives: its
 # subject is the installed `onevcs` and this host's checkouts, outside every key, so it runs in
-# the uncached `orchestrator:test-checkouts` and a project edge would only memoize it. It is a
+# the uncached `orchestrator-e2e:test-checkouts` and a project edge would only memoize it. It is a
 # pytest journey over a published CLI, not a shell test suite.
 def test_this_host_resolves_what_the_tracked_override_configures() -> None:
     """The override's answer on this host, once `just repos-apply` has put it in force.

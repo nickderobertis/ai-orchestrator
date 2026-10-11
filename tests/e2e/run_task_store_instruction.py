@@ -49,7 +49,7 @@ class Witness(TypedDict):
 
     One shape whether the instruction ran or not: ``problem`` names why nothing was run
     and leaves every reading below it ``None``, so a reader never has to tell an absent
-    key from an unanswered one. `tests/plan_tooling/test_follow_ups_recipe_e2e.py` is the
+    key from an unanswered one. `tests/plan_tooling/follow_ups/test_follow_ups_recipe_e2e.py` is the
     reader, and the keys here are its contract.
     """
 

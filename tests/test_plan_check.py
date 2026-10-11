@@ -4,11 +4,11 @@
 check the loaded plan on stdin. `orchestrator/plan_check.py` is both sides of that: the
 check the verb spawns, and the wrapper `just check-plan` is that registers it.
 
-`tests/plan_tooling/test_check_plan_recipe_e2e.py` drives both through the real recipe against
-the real engine. What is here is what a journey cannot state: the answers a verb of some
-*other* shape would give — one that grew a field, dropped one, exited on a code nothing
-names, or answered nothing at all — because this checkout installs exactly one engine
-and it answers exactly one way.
+`tests/plan_tooling/check_and_review/test_check_plan_recipe_e2e.py` drives both through the
+real recipe against the real engine. What is here is what a journey cannot state: the
+answers a verb of some *other* shape would give — one that grew a field, dropped one, exited
+on a code nothing names, or answered nothing at all — because this checkout installs exactly
+one engine and it answers exactly one way.
 """
 
 from __future__ import annotations
@@ -624,8 +624,9 @@ def test_the_verb_is_asked_to_require_rendered_tasks_unless_the_caller_exported_
 ) -> None:
     """`true` by default, and nothing where the engine's own variable already answers it.
 
-    The journeys in `tests/plan_tooling/test_check_plan_recipe_e2e.py` drive what the
-    engine then refuses; this is what the command hands it, read off the argv it spawns.
+    The journeys in `tests/plan_tooling/check_and_review/test_check_plan_recipe_e2e.py`
+    drive what the engine then refuses; this is what the command hands it, read off the argv
+    it spawns.
     """
     if exported is None:
         monkeypatch.delenv(plan_check.REQUIRE_RENDERED_ENV, raising=False)

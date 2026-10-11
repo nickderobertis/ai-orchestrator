@@ -627,28 +627,3 @@ def test_the_linear_source_configuration_is_one_the_linear_plugin_accepts(name: 
 #: test workspace's key. Read off the installed schema's default by the test below, and
 #: spelled in two halves here so this file is not itself a tracked file naming it.
 RESERVED_LINEAR_KEY = "LINEAR" + "_API_KEY"
-
-
-@pytest.mark.reads_docs
-def test_no_tracked_file_names_the_store_s_test_linear_key() -> None:
-    """Nothing here names the key onetaskgraph's own live lane reads.
-
-    This host's Linear key is `HELLOPATIENT_LINEAR_API_KEY`. A tracked file naming the bare
-    default — in a config, a mask, an `.env` template — is one edit away from a source or a
-    dispatch reading the test workspace's key in place of the production one, or handing the
-    production one to a lane that expects the test one.
-    """
-    properties = _linear_schema()["properties"]
-    assert isinstance(properties, dict)
-    assert properties["api_key_env"]["default"] == RESERVED_LINEAR_KEY, properties["api_key_env"]
-    named = subprocess.run(
-        ["git", "grep", "--line-number", "--word-regexp", "--fixed-strings", RESERVED_LINEAR_KEY],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert named.returncode == 1, (
-        f"tracked files name {RESERVED_LINEAR_KEY}, onetaskgraph's test key:\n"
-        f"{named.stdout}{named.stderr}"
-    )

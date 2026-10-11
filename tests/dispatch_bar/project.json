@@ -1,0 +1,71 @@
+{
+  "name": "dispatch-bar",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/dispatch_bar",
+  "tags": [
+    "scope:dispatch-bar",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-budget-telemetry",
+    "support-conftest",
+    "support-criteria-examples",
+    "support-fake-codex",
+    "support-follow-up-variables",
+    "support-no-paid-provider",
+    "support-nx-inputs",
+    "support-onejudge-bundle",
+    "support-onevcs-stand-in",
+    "support-onevcs-state-snapshot",
+    "support-plan-fixture-source",
+    "support-plan-root-variable",
+    "support-plan-sources",
+    "support-project-fixtures",
+    "support-published-tools",
+    "support-registered-checkouts",
+    "support-shared-dispatch-bar",
+    "support-short-state",
+    "support-sibling-facts",
+    "support-test-dispatch-appendix",
+    "support-test-shared-dispatch-bar",
+    "support-waits"
+  ],
+  "namedInputs": {
+    "dispatchBarWorkspace": [
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/AGENTS.md",
+      "{workspaceRoot}/config/**/*",
+      "{workspaceRoot}/docs/orchestration.md",
+      "{workspaceRoot}/docs/plan-review-refusals.json",
+      "{workspaceRoot}/docs/plan-review-refusals.md",
+      "{workspaceRoot}/personas/planner.yaml",
+      "{workspaceRoot}/templates/**/*",
+      "{workspaceRoot}/orchestrator/**/*",
+      "{workspaceRoot}/tests/test_plan_review.py",
+      "{workspaceRoot}/tests/test_envelope_review.py",
+      "{workspaceRoot}/tests/test_host_installs.py",
+      "{workspaceRoot}/tests/dispatch_bar/**/*"
+    ]
+  },
+  "targets": {
+    "test": {
+      "command": "rm -rf .telemetry/dispatch-bar/test && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/dispatch-bar/test NO_COLOR=1 COVERAGE_FILE=.coverage.dispatch-bar uv run pytest tests/dispatch_bar -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0",
+      "options": {
+        "cwd": "."
+      },
+      "outputs": [
+        "{workspaceRoot}/.coverage.dispatch-bar",
+        "{workspaceRoot}/.telemetry/dispatch-bar/test"
+      ],
+      "inputs": [
+        "dispatchBarWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,85 @@
+{
+  "name": "plan-tooling-check-and-review",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/plan_tooling/check_and_review",
+  "tags": [
+    "scope:plan-tooling-check-and-review",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-criteria-examples",
+    "support-fake-backend",
+    "support-fake-codex",
+    "support-follow-up-variables",
+    "support-no-paid-provider",
+    "support-nx-inputs",
+    "support-nx-workspace",
+    "support-onejudge-bundle",
+    "support-onevcs-state-snapshot",
+    "support-plan-fixture-source",
+    "support-plan-root-variable",
+    "support-plan-sources",
+    "support-project-fixtures",
+    "support-published-tools",
+    "support-registered-checkouts",
+    "support-scratch-identity",
+    "support-short-state",
+    "support-waits"
+  ],
+  "namedInputs": {
+    "planToolingCheckAndReviewWorkspace": [
+      "{workspaceRoot}/.gitignore",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/onetaskgraph.yaml",
+      "{workspaceRoot}/oneharness.identities.toml",
+      "{workspaceRoot}/oneharness.plan-review.toml",
+      "{workspaceRoot}/oneharness.plan-review-whole.toml",
+      "{workspaceRoot}/.githooks/**/*",
+      "{workspaceRoot}/scripts/**/*",
+      "{workspaceRoot}/graphs/**/*",
+      "{workspaceRoot}/personas/**/*",
+      "{workspaceRoot}/scratch/personas/**/*",
+      "{workspaceRoot}/examples/**/*",
+      "{workspaceRoot}/config/**/*",
+      "{workspaceRoot}/templates/**/*",
+      "{workspaceRoot}/orchestrator/**/*",
+      "{workspaceRoot}/tests/fixtures/budgets/**/*",
+      "{workspaceRoot}/tests/fixtures/design_doc/**/*",
+      "{workspaceRoot}/tests/plan_tooling/check_and_review/**/*"
+    ]
+  },
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 COVERAGE_FILE=.coverage.plan-tooling-check-and-review uv run pytest tests/plan_tooling/check_and_review -m 'not reads_docs' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0",
+      "options": {
+        "cwd": "."
+      },
+      "outputs": [
+        "{workspaceRoot}/.coverage.plan-tooling-check-and-review"
+      ],
+      "inputs": [
+        "planToolingCheckAndReviewWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ]
+    },
+    "test-docs": {
+      "command": "rm -rf .telemetry/plan-tooling-check-and-review/test-docs && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/plan-tooling-check-and-review/test-docs NO_COLOR=1 uv run pytest tests/plan_tooling/check_and_review -m reads_docs --no-cov -n 4 --dist loadgroup",
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "wholeWorkspace"
+      ],
+      "outputs": [
+        "{workspaceRoot}/.telemetry/plan-tooling-check-and-review/test-docs"
+      ]
+    }
+  }
+}

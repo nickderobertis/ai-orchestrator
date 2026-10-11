@@ -320,7 +320,7 @@ def test_a_listed_line_that_is_no_spike_of_the_plan_stops_the_listing(line: str,
 
 # llmlint: ignore-block[shell_test_tiers_stay_split] This task requires this module’s
 # coverage at the real local Git/onevcs boundary, with seconds-long isolated registries;
-# the plan recipe journey stays in the separate plan-tooling tier.
+# the plan recipe journey stays in the separate `plan-tooling-plan-flow` project.
 def test_resume_listing_includes_all_registered_checkouts_of_only_its_identity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

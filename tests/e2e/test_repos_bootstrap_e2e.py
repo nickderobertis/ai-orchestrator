@@ -17,7 +17,7 @@ The recipe, the script, `just`, `git` and `flock` are the real ones.
 
 llmlint: ignore-file[shell_test_tiers_stay_split,test_tiers_split_by_project_not_by_marker] Every
 journey here is `reads_recipes`: it drives the real recipe over stand-ins it builds and
-reads nothing of this repository in-process, which is what `recipeWorkspace` keys, and a
+reads nothing of this repository in-process, which is what `e2eRecipeWorkspace` keys, and a
 project of its own for one recipe would be a second key naming the same files.
 llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] This module is not the
 expensive kind: every journey runs the recipe over stand-ins under `tmp_path`, spends no
@@ -846,7 +846,7 @@ def test_a_checkout_it_cannot_enter_or_record_is_refused_and_the_rest_still_run(
 # own bootstrap, and every journey releases and waits out its jobs before it ends.
 
 #: Every status a job's state records, as the script writes it;
-#: `tests/test_repos_bootstrap_docs.py` holds this to the script's own vocabulary.
+#: `tests/release_pins/test_repos_bootstrap_docs.py` holds this to the script's own vocabulary.
 JobStatus = Literal["running", "done", "failed", "stale"]
 JOB_ENDINGS: frozenset[JobStatus] = frozenset({"done", "failed", "stale"})
 

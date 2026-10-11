@@ -9,20 +9,22 @@ key covers everything the check reads, and this suite reads far beyond
 subset, a change to any of those replayed a green verdict for a tree whose tests
 would have failed had they run.
 
-The suite answers at three scopes, so it is keyed at three. Only a handful of tests
-assert on this repository's prose, and charging every documentation edit eight
-minutes for the rest bought nothing: `orchestrator:test-docs` runs those and keeps
-the whole-workspace key. Narrower again, the two costliest journeys in the suite
-build real worktrees and run real package installs to drive `just` recipes and
-shell scripts, and read no prose and no `orchestrator/` at all:
-`orchestrator:test-recipes` runs those under a key of exactly what they drive.
-`orchestrator:test` runs the remainder, keyed on the workspace minus its
-documentation. Every half of that claim is load bearing — each key must still
-invalidate on what its tier reads, and must still replay on what it does not — so
-each is proved here, along with the
-cross-worktree cache check `just check` now replays through Nx as well, and the
-uncached `orchestrator:coverage` step that turns what those tiers measured into
-the one comparison against the floor.
+The orchestrator project's unit modules answer at three scopes, so it is keyed at
+three. Only a handful of its tests assert on this repository's prose, and charging every
+documentation edit eight minutes for the rest bought nothing: `orchestrator:test-docs`
+runs those, with the journeys' prose readers under `tests/e2e/`, and keeps the
+whole-workspace key, while the drift gates and plan-tooling journeys are projects of
+their own (`tests/e2e/test_split_tier_selection_e2e.py` proves their keys). Narrower
+again, the unit tests that drive `just` recipes and shell scripts and read no prose and
+no `orchestrator/` at all are collected by `orchestrator:test-recipes` under a key of
+exactly what they drive, and the journeys of that kind by `orchestrator-e2e:test-recipes`.
+`orchestrator:test` runs the remaining unit modules, keyed on the workspace minus its
+documentation and the journeys, and `orchestrator-e2e:test` the remaining journeys.
+Every half of that claim is load bearing — each key must still invalidate on what its
+tier reads, and must still replay on what it does not — so each is proved here, along
+with the cross-worktree cache check `just check` now replays through Nx as well, and
+the uncached `orchestrator:coverage` step that turns what every measuring tier measured
+into the one comparison against the floor.
 
 These journeys drive the real `nx.json`, the real `orchestrator/project.json`
 declarations, and the real `scripts/nx.sh` against a throwaway copy of this
@@ -87,6 +89,7 @@ from nx_inputs import (
     DAG_UI_PROJECT,
     DAG_UI_SCOPED,
     DOCS_SCOPED,
+    DRIFT_GATE_PROJECTS,
     E2E_COVERAGE_DATA,
     E2E_PROJECT,
     GRACEFUL_CANCEL_PROJECT,
@@ -99,6 +102,7 @@ from nx_inputs import (
     MANAGER_ALLOWLIST_SCOPED,
     PLAN_STORE_ASSETS_PROJECT,
     PLAN_STORE_ASSETS_SCOPED,
+    PLAN_TOOLING_PROJECTS,
     PROJECT_STORE_RACE_PROJECT,
     PROJECT_STORE_RACE_SCOPED,
     RECIPE_SCOPED,
@@ -126,6 +130,7 @@ from nx_inputs import (
     WRITEBACK_BUDGET_SCOPED,
     covers,
     matches,
+    project_declarations,
     project_root,
     repository_relative_globs,
     target_input_globs,
@@ -141,8 +146,8 @@ from orchestrator.root import REPO_ROOT
 pytestmark = [*WORKSPACE_INSTALL_MARKS, *TOOLCHAIN_WRITER_MARKS, pytest.mark.reads_docs]
 
 CACHE_HIT = "read the output from the cache"
-# The suite reads this file directly — tests/test_decomposition_guidance.py holds the
-# manager's half of the doctrine to it — and it lives outside every project root.
+# The suite reads this file directly — tests/manager_guidance/test_decomposition_guidance.py
+# holds the manager's half of the doctrine to it — and it lives outside every project root.
 PROSE_WITNESS = "AGENTS.md"
 PROSE_TEXT = "Skip busywork."
 PROSE_EDIT = "Skip busywork, and say which you skipped."
@@ -171,8 +176,19 @@ CODE_TIER = f"{PROJECT}:{CODE_SCOPED}"
 E2E_TIER = f"{E2E_PROJECT}:{CODE_SCOPED}"
 #: The uncached tier that reads what those two measured and judges the floor.
 COVERAGE_TIER = f"{PROJECT}:{COVERAGE_SCOPED}"
-#: What each measuring tier writes for the floor to combine.
-MEASURED = {CODE_TIER: UNIT_COVERAGE_DATA, E2E_TIER: E2E_COVERAGE_DATA}
+#: What each measuring tier writes for the floor to combine: the two the package was first
+#: measured in, and each subject project whose narrow target measures into a file named for
+#: it — read off its own declaration, as `tests/tree_scans/test_nx_cache_scope.py` reads it.
+MEASURED = {
+    CODE_TIER: UNIT_COVERAGE_DATA,
+    E2E_TIER: E2E_COVERAGE_DATA,
+    **{
+        f"{subject.project}:{subject.target}": f".coverage.{subject.project}"
+        for subject in (*PLAN_TOOLING_PROJECTS, *DRIFT_GATE_PROJECTS)
+        if "--cov=orchestrator"
+        in project_declarations()[subject.root]["targets"][subject.target]["command"]
+    },
+}
 #: What every journey below shortens the Python suite to. The claim under test is
 #: the *key*, computed from the declared inputs before the command runs.
 COLLECT_ONLY = "--collect-only --no-cov -q"
@@ -296,8 +312,8 @@ class Checkout:
         path.write_text(f"{path.read_text(encoding='utf-8')}{line}\n", encoding="utf-8")
 
 
-@pytest.fixture
-def checkout(tmp_path: Path) -> Checkout:
+def copied_checkout(tmp_path: Path) -> Checkout:
+    """A copy of this checkout under ``tmp_path``, wired to a cache of its own."""
     root = tmp_path / "checkout"
     copy_checkout(root)
     # Nx resolves its workspace and its ignore rules from git, and scripts/nx.sh
@@ -308,6 +324,11 @@ def checkout(tmp_path: Path) -> Checkout:
     if (host / SHARED_FIXTURE_RESOLUTIONS).is_dir():
         shutil.copytree(host / SHARED_FIXTURE_RESOLUTIONS, cache / SHARED_FIXTURE_RESOLUTIONS)
     return Checkout(root=root, cache=cache)
+
+
+@pytest.fixture
+def checkout(tmp_path: Path) -> Checkout:
+    return copied_checkout(tmp_path)
 
 
 def test_a_workspace_file_the_suite_reads_invalidates_the_cached_test_verdict(
@@ -391,10 +412,16 @@ def test_the_coverage_tier_resolves_as_an_unmemoized_step_after_the_tier_that_me
     resolved = checkout.resolved_target(COVERAGE_SCOPED)
 
     assert resolved.get("cache") is False, resolved
-    assert resolved["dependsOn"] == [
+    assert resolved["dependsOn"][:2] == [
         CODE_SCOPED,
         {"projects": [E2E_PROJECT], "target": CODE_SCOPED},
     ], resolved
+    waited = {
+        f"{project}:{entry['target']}"
+        for entry in resolved["dependsOn"][2:]
+        for project in entry["projects"]
+    }
+    assert waited == set(MEASURED) - {CODE_TIER, E2E_TIER}, resolved
     for tier in MEASURED:
         project, target = tier.split(":")
         measuring = checkout.resolved_project(project)["targets"][target]
@@ -485,7 +512,9 @@ def test_a_replayed_test_verdict_restores_the_coverage_data_the_floor_needs(
     floor's own value is proven at the real boundary.
     """
     checkout.edit("pyproject.toml", "fail_under = 100", "fail_under = 0")
-    measured = MEASURED
+    # The two tiers the package was first measured in: every measuring tier restores its
+    # data file through the same `outputs` declaration, which the static gate holds for each.
+    measured = {tier: MEASURED[tier] for tier in (CODE_TIER, E2E_TIER)}
     for tier in measured:
         assert checkout.ran_the_command(tier, addopts=COLLECT_ONLY_MEASURED)
     for tier, data_file in measured.items():
@@ -525,10 +554,11 @@ def test_the_unit_and_journey_tiers_are_each_charged_only_for_what_they_read(
 ) -> None:
     """The split this project boundary is for, asked of the real selector and the cache.
 
-    `orchestrator:test` holds the unit and drift-gate modules and `orchestrator-e2e:test`
-    the journeys. An edit to a unit module leaves the journeys out of the selection `just
-    check` makes and replays their verdict; an edit to a journey re-runs the journeys and
-    replays the unit verdict; an edit to the package selects and re-runs both. The two
+    `orchestrator:test` holds the unit modules directly under `tests/`, and the halves of
+    the drift-gate modules that read no prose, and `orchestrator-e2e:test` the journeys.
+    An edit to a unit module leaves the journeys out of the selection `just check` makes
+    and replays their verdict; an edit to a journey re-runs the journeys and replays the
+    unit verdict; an edit to the package selects and re-runs both. The two
     exceptions each tier's key states are asked too: a journey a unit gate reads re-runs
     that tier, and a unit module a journey imports selects and re-runs the journeys.
     """
@@ -588,9 +618,13 @@ def test_the_unit_and_journey_tiers_are_each_charged_only_for_what_they_read(
         assert selector.ran_the_command(E2E_TIER)
 
 
-#: A small real run of each measuring tier, one fast module apiece, so the floor below is
-#: judged on lines that ran: a collection-only run measures nothing a probe could lower.
+#: A small real run of the two tiers the package was first measured in, one fast module
+#: apiece, so the floor below is judged on lines that ran: a collection-only run measures
+#: nothing a probe could lower.
 SMALL_MEASURED = "-q -k 'test_labels.py or test_waits.py'"
+#: Every other measuring tier: the subject projects, whose modules drive tools a copy of this
+#: checkout does not install, so their data is a collection's, replayed from the cache.
+SUBJECT_MEASURED = tuple(tier for tier in MEASURED if tier not in (CODE_TIER, E2E_TIER))
 #: How many uncovered functions the probe module adds: enough statements that the total
 #: falls below a floor stated at two decimals.
 PROBE_FUNCTIONS = 400
@@ -602,13 +636,14 @@ REPORTED_TOTAL = re.compile(r"^TOTAL\s.*?(\d+\.\d+)%\s*$", re.MULTILINE)
 
 
 def test_the_floor_is_judged_on_what_both_tiers_measured(checkout: Checkout) -> None:
-    """`orchestrator:coverage` combines both measuring tiers' data and fails below the floor.
+    """`orchestrator:coverage` combines every measuring tier's data and fails below the floor.
 
-    Measured with each tier shortened to one fast module, so the total is what those ran;
-    the floor is then set to exactly that total, which passes, and an untested module added
-    to the package — which both tiers' keys carry, so both re-measure — takes the total under
-    it, which fails. `tests/test_coverage_gate.py` holds the real
-    floor's value and rounding at the boundary; this is the combine across the two tiers.
+    Measured with the unit and journey tiers shortened to one fast module each and every
+    subject tier replaying a verdict recorded from its collection, so the total is what those
+    ran; the floor is then set to exactly that total, which passes, and an untested module
+    added to the package — which the unit and journey tiers' keys carry, so both re-measure —
+    takes the total under it, which fails. `tests/test_coverage_gate.py` holds the real
+    floor's value and rounding at the boundary; this is the combine across the tiers.
     """
     checkout.edit("pyproject.toml", "fail_under = 100", "fail_under = 0")
     # The copy runs this checkout's environment, whose editable install of the package
@@ -616,11 +651,20 @@ def test_the_floor_is_judged_on_what_both_tiers_measured(checkout: Checkout) -> 
     # that run and are measured.
     own_package = {"PYTHONPATH": str(checkout.root)}
 
+    def recorded_subjects() -> None:
+        # Nx keys no tier on `PYTEST_ADDOPTS`, so a subject tier recorded from its
+        # collection is replayed, data file and all, when the coverage tier runs below; a
+        # tree edit that reaches its key is recorded again before the floor is judged.
+        for tier in SUBJECT_MEASURED:
+            recorded = checkout.run(tier, addopts=COLLECT_ONLY_MEASURED, environment=own_package)
+            assert recorded.returncode == 0, recorded.stdout + recorded.stderr
+
+    recorded_subjects()
     measured = checkout.run(COVERAGE_TIER, addopts=SMALL_MEASURED, environment=own_package)
 
     assert measured.returncode == 0, measured.stdout + measured.stderr
-    # Both files are named on the combine's command line, which refuses a path that is
-    # not there; what it read is what it reports combining, a file whose data another
+    # Every measuring tier's file is named on the combine's command line, which refuses a
+    # path that is not there; what it read is what it reports combining, a file whose data another
     # already carried counted as skipped rather than combined.
     read = COMBINED.search(measured.stdout)
     assert read is not None, measured.stdout
@@ -632,6 +676,7 @@ def test_the_floor_is_judged_on_what_both_tiers_measured(checkout: Checkout) -> 
 
     checkout.edit("pyproject.toml", "fail_under = 0", f"fail_under = {total.group(1)}")
     assert float(total.group(1)) > 0, measured.stdout
+    recorded_subjects()
     at_floor = checkout.run(COVERAGE_TIER, addopts=SMALL_MEASURED, environment=own_package)
     assert at_floor.returncode == 0, at_floor.stdout + at_floor.stderr
 
@@ -639,6 +684,7 @@ def test_the_floor_is_judged_on_what_both_tiers_measured(checkout: Checkout) -> 
         "".join(f"def probe_{n}() -> int:\n    return {n}\n\n\n" for n in range(PROBE_FUNCTIONS)),
         encoding="utf-8",
     )
+    recorded_subjects()
     below = checkout.run(COVERAGE_TIER, addopts=SMALL_MEASURED, environment=own_package)
 
     reported = below.stdout + below.stderr
@@ -857,16 +903,18 @@ SKIPPABLE_TIERS = frozenset(
         (SESSION_SETUP_PROJECT, SESSION_SETUP_SCOPED),
         # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
         # catalog of test projects, where every project has its entry, and
-        # `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
-        # describes; the host-sweep entry sits beside the others' because the catalog is the domain.
+        # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall
+        # outside the tiers it describes; the host-sweep entry sits beside the others'
+        # because the catalog is the domain.
         (HOST_SWEEP_PROJECT, HOST_SWEEP_SCOPED),
         # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
         (PROJECT_STORE_RACE_PROJECT, PROJECT_STORE_RACE_SCOPED),
         # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
         # catalog of test projects, where every project has its entry, and
-        # `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
-        # describes; the plan-store-assets and render-diagram entries sit beside the others' rather
-        # than in a domain of their own because the catalog is the domain.
+        # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall
+        # outside the tiers it describes; the plan-store-assets and render-diagram entries
+        # sit beside the others' rather than in a domain of their own because the catalog is
+        # the domain.
         (PLAN_STORE_ASSETS_PROJECT, PLAN_STORE_ASSETS_SCOPED),
         (RENDER_DIAGRAM_PROJECT, RENDER_DIAGRAM_SCOPED),
         # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
@@ -874,37 +922,37 @@ SKIPPABLE_TIERS = frozenset(
         (UNFINISHED_PROJECT, UNFINISHED_SCOPED),
         # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's
         # one catalog of test projects, where every project has its entry, and
-        # `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
-        # describes; the unfinished project's budgets entry sits beside its test tier's
-        # because the catalog is the domain.
+        # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall
+        # outside the tiers it describes; the unfinished project's budgets entry sits beside
+        # its test tier's because the catalog is the domain.
         (UNFINISHED_PROJECT, BUDGET_SCOPED),
         # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
         # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
         # catalog of test projects, where every project has its entry, and
-        # `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
-        # describes; the board-copy-approval entry sits beside the others' because the catalog is
-        # the domain.
+        # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall
+        # outside the tiers it describes; the board-copy-approval entry sits beside the
+        # others' because the catalog is the domain.
         (BOARD_COPY_APPROVAL_PROJECT, BOARD_COPY_APPROVAL_SCOPED),
         # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
         # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
         # catalog of test projects, where every project has its entry, and
-        # `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
-        # describes; the toolchain-isolation entry sits beside the others' because the catalog is
-        # the domain.
+        # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall
+        # outside the tiers it describes; the toolchain-isolation entry sits beside the
+        # others' because the catalog is the domain.
         (TOOLCHAIN_ISOLATION_PROJECT, TOOLCHAIN_ISOLATION_SCOPED),
         # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
         # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
         # catalog of test projects, where every project has its entry, and
-        # `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
-        # describes; the graceful-cancel entry sits beside the others' because the catalog is the
-        # domain.
+        # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall
+        # outside the tiers it describes; the graceful-cancel entry sits beside the others'
+        # because the catalog is the domain.
         (GRACEFUL_CANCEL_PROJECT, GRACEFUL_CANCEL_SCOPED),
         # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
         # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
         # catalog of test projects, where every project has its entry, and
-        # `tests/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers it
-        # describes; the manager-allowlist entry sits beside the others' rather than in a domain of
-        # its own because the catalog is the domain.
+        # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall
+        # outside the tiers it describes; the manager-allowlist entry sits beside the
+        # others' rather than in a domain of its own because the catalog is the domain.
         (MANAGER_ALLOWLIST_PROJECT, MANAGER_ALLOWLIST_SCOPED),
         # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
         # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This set is the catalog of
@@ -917,6 +965,12 @@ SKIPPABLE_TIERS = frozenset(
         # every project's entry sits here; the journey project's two diff-selected tiers are rows.
         (E2E_PROJECT, CODE_SCOPED),
         (E2E_PROJECT, RECIPE_SCOPED),
+        # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+        # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This set is the catalog of
+        # tiers a documentation push may skip, derived again from the graph by this journey, so
+        # every project's entry sits here; the plan-copy journeys, whose key reads no prose and
+        # which have no whole-workspace target, are one row of it.
+        ("plan-tooling-plan-copy", CODE_SCOPED),
         # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     }
 )
@@ -1121,8 +1175,7 @@ class Selector(Checkout):
         return self._show("--affected", *flags, *(("-t", target) if target else ()))
 
 
-@pytest.fixture
-def selector(checkout: Checkout) -> Selector:
+def published(checkout: Checkout) -> Selector:
     """`checkout` with its tree committed and published, which is what a diff is against.
 
     Published because the ref the selector resolves is the one the judged tier and the
@@ -1152,6 +1205,11 @@ def selector(checkout: Checkout) -> Selector:
         capture_output=True,
     )
     return Selector(root=checkout.root, cache=checkout.cache)
+
+
+@pytest.fixture
+def selector(checkout: Checkout) -> Selector:
+    return published(checkout)
 
 
 def test_a_prose_only_diff_still_selects_every_tier_whose_subject_is_prose(
@@ -1492,7 +1550,7 @@ def test_a_test_support_edit_selects_and_re_runs_exactly_the_tiers_whose_modules
     whole-workspace targets, and `orchestrator-e2e:test` reaches the shared helper but not
     the single-tier one, so neither project's other tiers are what this is about. The expected sets
     are reconciled against the declared keys first, so what real Nx is asked is the claim
-    `tests/test_nx_cache_scope.py` holds statically.
+    `tests/tree_scans/test_nx_cache_scope.py` holds statically.
     """
     tiers = REACHES_SHARED | REACHES_NEITHER
     for tier in sorted(tiers):

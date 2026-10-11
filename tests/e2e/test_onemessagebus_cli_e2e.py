@@ -14,8 +14,8 @@ directory under `tmp_path`, and every reading is the verb's own output. The queu
 document the adopted engine publishes, which the adopted bus compiles no copy of — because
 that is the configuration and the queue the judge side and the recipes raise and read on.
 
-llmlint: ignore-file[shell_test_tiers_stay_split] This repository runs one Nx project and
-splits its tiers by pytest marker over `nx.json` keys, and the binary this drives is the
+llmlint: ignore-file[shell_test_tiers_stay_split] This module runs in the `orchestrator-e2e`
+project, whose tiers are split by pytest marker over named inputs, and the binary this drives is the
 locked `.venv` install `scripts/nx.sh` heals from `uv.lock` — the input every workspace
 tier is already keyed on, exactly as `.venv/bin/onepipeline` is for the journey named
 above. It reaches no network and no tool outside the workspace, so a project of its own

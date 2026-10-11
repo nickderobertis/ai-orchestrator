@@ -1,7 +1,7 @@
 """`orchestrator/run_reading.py`: what `just follow-ups` decides from the engine's reading.
 
 The decisions are driven end to end over run roots the installed engine leaves by
-`tests/plan_tooling/test_follow_ups_recipe_e2e.py`; this module holds every refusal the
+`tests/plan_tooling/follow_ups/test_follow_ups_recipe_e2e.py`; this module holds every refusal the
 reader makes to an answer the engine would not give, and — marked `reads_checkouts` —
 holds the reader's restated vocabulary to the schema the pinned engine publishes.
 """
@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import io
 import json
-import re
 from typing import NamedTuple
 
 import jsonschema
@@ -18,7 +17,6 @@ import pytest
 from test_engine_contracts import ONEPIPELINE_SCHEMAS, _source
 
 from orchestrator import run_reading
-from orchestrator.root import REPO_ROOT
 from orchestrator.run_reading import RunId, Unreadable, decide
 
 RUN = RunId("run-1")
@@ -180,11 +178,11 @@ def test_the_command_refuses_a_call_that_names_no_single_run(
 
 
 # llmlint: ignore-block[shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker] This
-# repository runs one Nx project and splits its tiers by pytest marker over four `nx.json`
-# keys. The subject of the two tests below is the engine's registered checkout, read at the
-# pinned tag the way `tests/test_engine_contracts.py` reads it, which lives outside this
-# workspace and so outside every one of those keys — hence `reads_checkouts`, the uncached
-# tier, where a memo cannot replay a green across the pin bump these exist to catch.
+# module's project, the root `orchestrator`, splits its tiers by pytest marker over the keys of its
+# four targets. The subject of the two tests below is the engine's registered checkout, read at the
+# pinned tag the way `tests/test_engine_contracts.py` reads it, which lives outside this workspace
+# and so outside every one of those keys — hence `reads_checkouts`, the uncached tier, where a memo
+# cannot replay a green across the pin bump these exist to catch.
 #: The published document, at the release `config/onepipeline.version` pins.
 def _schema() -> dict[str, object]:
     document: object = json.loads(_source(ONEPIPELINE_SCHEMAS, "run-reading.schema.json"))
@@ -297,22 +295,3 @@ WORD_PASSAGES = (
         "docs/telemetry.md", "The word printed for the run puts its ending first", "(`just status"
     ),
 )
-
-
-@pytest.mark.reads_docs
-@pytest.mark.parametrize(("document", "opens", "closes"), WORD_PASSAGES)
-def test_the_prose_names_every_ending_word_and_only_the_engines_words(
-    document: str, opens: str, closes: str
-) -> None:
-    """Each passage names every word a run that is not merely driven or not reads, and no other."""
-    text = (REPO_ROOT / document).read_text(encoding="utf-8")
-    start = text.index(opens)
-    passage = " ".join(text[start : text.index(closes, start)].split())
-    named = {
-        word for word in re.findall(r"`([A-Z][A-Za-z ]*)`", passage) if word.split()[0].isupper()
-    }
-
-    assert named <= run_reading.WORDS, named - run_reading.WORDS
-    assert named >= run_reading.WORDS - run_reading.LIVENESS, (
-        f"{document} leaves out {sorted(run_reading.WORDS - run_reading.LIVENESS - named)}"
-    )

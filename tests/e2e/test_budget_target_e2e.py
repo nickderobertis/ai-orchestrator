@@ -29,7 +29,7 @@ code tier's key already covers.
 llmlint: ignore-file[shell_test_tiers_stay_split] For the same cost: these journeys spend
 seconds, against a scratch workspace and nothing outside it, so a test project of their own
 would narrow the key of a few seconds of work at the price of a catalog entry in each of
-the places `tests/nx_inputs.py` and `tests/test_nx_cache_scope.py` hold every project to.
+the places `tests/nx_inputs.py` and `tests/tree_scans/test_nx_cache_scope.py` hold every project to.
 
 """
 
@@ -352,8 +352,8 @@ def test_the_validation_tier_refuses_a_malformed_nested_budgets_file(
     assert measured == [], "validation ran a budget's command"
 
 
-# The fixture also reads uv.lock and the checker pin, outside recipeWorkspace,
-# so this journey belongs to the broader code-keyed tier.
+# The fixture also reads uv.lock and the checker pin, outside e2eRecipeWorkspace,
+# so this journey belongs to the broader `orchestrator-e2e:test` tier, keyed e2eWorkspace.
 def test_real_check_measures_host_budgets_when_no_project_is_touched(
     workspace: Workspace,
 ) -> None:

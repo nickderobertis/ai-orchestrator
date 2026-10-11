@@ -15,11 +15,12 @@ launch agents.
 llmlint: ignore-file[shell_test_tiers_stay_split,test_tiers_split_by_project_not_by_marker] Every
 test in this module is `reads_recipes`, so the property is file-wide rather than about any
 one row. That marker is this repository's tier mechanism rather than a shortcut around
-one: it runs four tiers over one Nx project, keyed on four `nx.json` named inputs, and
-`orchestrator:test-recipes` is a target of that same project keyed on `recipeWorkspace` —
+one: it runs this module's tiers as targets of its one Nx project, `orchestrator-e2e`, each
+keyed on a named input, and `orchestrator-e2e:test-recipes` is the one keyed on
+`e2eRecipeWorkspace` —
 the justfile, `scripts/**` and the modules that collect these tests, which is exactly what
 this table drives. `tests/conftest.py` fails a marked test that opens anything outside that
-key and `tests/test_nx_cache_scope.py` holds the four selectors to a partition of the
+key and `tests/tree_scans/test_nx_cache_scope.py` holds the four selectors to a partition of the
 suite, so the tier is enforced rather than declared. A project per delegated recipe is also
 the opposite of what this file is for: `tests/AGENTS.md` states that a delegated recipe's
 journey *is* its row here, in one table, so that a recipe which starts naming a different
@@ -81,7 +82,7 @@ DESIGN_PROJECT = "authoring:cursor-shape-design"
 
 #: The source `just finish-plan` copies into when the caller names none, which is the
 #: board this repository plans against. A literal here for the reason
-#: `tests/plan_tooling/test_copy_plan_recipe_e2e.py` spells it as one: importing the
+#: `tests/plan_tooling/plan_copy/test_copy_plan_recipe_e2e.py` spells it as one: importing the
 #: constant would make this table assert that it equals itself.
 THE_BOARD = "plans"
 
@@ -1114,7 +1115,8 @@ def test_the_plan_recipe_opt_out_still_refuses_a_plan_project_it_cannot_compare(
 
 #: The status `scripts/finish-plan.sh` ends on when a step it depends on answered with
 #: something it cannot act on. A literal for the reason every status in
-#: `tests/plan_tooling/test_finish_plan_recipe_e2e.py` is one: it is what a caller branches on.
+#: `tests/plan_tooling/plan_flow/test_finish_plan_recipe_e2e.py` is one: it is what a caller
+#: branches on.
 FINISH_PLAN_UNRUNNABLE = 2
 
 
@@ -2518,7 +2520,7 @@ def _board_checkout(tmp_path: Path, credentials: str | None) -> tuple[Path, Path
     """A checkout whose board commands are traced for the credential they were handed."""
     checkout, trace = _checkout(tmp_path)
     # Written rather than copied: this repository's own `onetaskgraph.yaml` is outside
-    # `recipeWorkspace`, so a journey in this tier that read it would replay a verdict
+    # `e2eRecipeWorkspace`, so a journey in this tier that read it would replay a verdict
     # recorded before it changed. What it states here is the shape `scripts/plan-store.sh`
     # reads a credential name out of; that the *real* source still spells it `token_env`
     # and still names this variable is `tests/test_plan_source_roots.py`'s to hold.

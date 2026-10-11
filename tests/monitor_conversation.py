@@ -14,10 +14,11 @@ codex alone is what keeps a paid provider out of reach. The judge argv names its
 configuration launch-relative (`config/onemessagebus.yaml`), so the scratch carries that
 path too — this host's committed file, linked, or a copy a journey names.
 
-Owned by the orchestrator project's tiers, the way every helper under `tests/` is: no
-project definition names this directory, so a helper belongs to a tier by being inside
-its key, and `tests/test_nx_cache_scope.py` holds every memoized tier that imports this
-module to that — with this module as the sentinel that the guard reaches something.
+Owned by the `support-monitor-conversation` test-support unit, the way every shared helper
+under `tests/` is owned by one: that unit's `testSupport` input names this module and the
+bus configuration it links, every test project whose modules import it depends on the
+unit and takes that input into its key, and `tests/tree_scans/test_nx_cache_scope.py`
+holds every tier to depending on exactly the units its modules import.
 """
 
 from __future__ import annotations

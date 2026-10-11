@@ -61,8 +61,8 @@
 # one-node project the design launch runs, the file that launch's judge is pointed at (and
 # the plan outside the authoring source whose judge is pointed at none), and the two
 # locations it reports — is driven end
-# to end in tests/plan_tooling/test_finish_plan_recipe_e2e.py against real stores and a real
-# launch, and by tests/plan_tooling/test_plan_flow_e2e.py through `just plan`. One guard is
+# to end in tests/plan_tooling/plan_flow/test_finish_plan_recipe_e2e.py against real stores and a real
+# launch, and by tests/plan_tooling/plan_flow/test_plan_flow_e2e.py through `just plan`. One guard is
 # uncovered for another reason and says why at its own site: the refusal of a plan id whose
 # path component would leave the documents directory, which the store refuses first. Past
 # it, what remains uncovered is one kind of thing and only that kind: guards over a broken checkout, which
@@ -70,7 +70,7 @@
 # not be provisioned. A missing or unloadable helper, an unprovisioned plan-store CLI, an
 # unwritable plan-authoring root, and a verb that cannot run at all are each driven one
 # command earlier against the same helper — in tests/ask_seam/launch/test_launch_ask_seam_e2e.py
-# and tests/plan_tooling/test_plan_write_refusals_e2e.py, over `scripts/plan.sh`, which
+# and tests/plan_tooling/check_and_review/test_plan_write_refusals_e2e.py, over `scripts/plan.sh`, which
 # sources the same files and writes through the same root. Reaching one of them through
 # *this* entry point means first getting a plan past a judged review and the plan check and
 # only then breaking the filesystem or the toolchain under it, which is a journey about
@@ -819,7 +819,7 @@ if [ "$checked" -ne 0 ]; then
     exit "$WRITER_REFUSED"
 fi
 
-# llmlint: ignore[tool_output_is_signal] The one line naming the run this launches and the command that answers its questions, which a detached or interrupted supervisor has no other way to reach; tests/plan_tooling/test_finish_plan_recipe_e2e.py's test_the_tail_names_the_channel_of_the_run_it_launches requires it.
+# llmlint: ignore[tool_output_is_signal] The one line naming the run this launches and the command that answers its questions, which a detached or interrupted supervisor has no other way to reach; tests/plan_tooling/plan_flow/test_finish_plan_recipe_e2e.py's test_the_tail_names_the_channel_of_the_run_it_launches requires it.
 echo "finish-plan: launching run $design_run to write the design document for $plan_project; answer this dispatch's questions with: just channel-next $design_run" >&2
 
 # 3. The design-document launch, through the shared wrapper rather than `uv run`

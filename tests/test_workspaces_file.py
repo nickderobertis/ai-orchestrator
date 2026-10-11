@@ -23,12 +23,12 @@ carry `reads_checkouts` and run in the uncached tier; the same readers are drive
 scratch checkouts in the memoized one, as are the gates about the file's own shape.
 
 llmlint: ignore-file[shell_test_tiers_stay_split,test_tiers_split_by_project_not_by_marker] This
-repository runs one Nx project and splits its tiers by pytest marker over four
-`nx.json` keys. The subject of the marked gates here is this host — its registered
-checkouts, its `PATH`, a binary it installed — which lives outside this workspace and so
-outside every one of those keys; hence `reads_checkouts`, the uncached tier, exactly as
-`tests/test_adopted_engine_carries_this_plan.py` reasons for its own subject. A project
-of its own would need a key over the same nothing.
+module's project, the root `orchestrator`, splits its tiers by pytest marker over the keys of its
+four targets. The subject of the marked gates here is this host — its registered checkouts, its
+`PATH`, a binary it installed — which lives outside this workspace and so outside every one of those
+keys; hence `reads_checkouts`, the uncached tier, exactly as
+`tests/test_adopted_engine_carries_this_plan.py` reasons for its own subject. A project of its own
+would need a key over the same nothing.
 """
 
 from __future__ import annotations

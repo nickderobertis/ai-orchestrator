@@ -34,7 +34,7 @@ handful of records — no launch and no paid turn — and what they read is
 llmlint: ignore-file[shell_test_tiers_stay_split] For the same cost: these journeys spend
 seconds, against nothing outside this checkout, so a test project of their own would
 narrow the key of a few seconds of work at the price of a catalog entry in each of the
-places `tests/nx_inputs.py` and `tests/test_nx_cache_scope.py` hold every project to.
+places `tests/nx_inputs.py` and `tests/tree_scans/test_nx_cache_scope.py` hold every project to.
 
 llmlint: ignore-file[tests_mirror_real_usage] Two departures, each forced. The journeys
 call `gate_within_budgets`, the hook's step, rather than `.githooks/pre-push` whole,

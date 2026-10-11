@@ -1,7 +1,7 @@
 """What `just copy-plan` decides before and after the store's own copy verb runs.
 The flow itself — drafting a plan locally, clearing it there, copying it up, and
 checking the copy — is driven for real in
-`tests/plan_tooling/test_copy_plan_recipe_e2e.py`, against the real recipe and the real
+`tests/plan_tooling/plan_copy/test_copy_plan_recipe_e2e.py`, against the real recipe and the real
 store CLI. What is proven here is the half no journey can reach without breaking this
 checkout: a review bar that cannot be composed, and a store CLI that is not installed.
 Both are host failures rather than plan failures, and both have to be told apart from a
@@ -302,9 +302,10 @@ def test_a_design_document_over_the_limit_refuses_the_copy_before_the_store_is_a
 ) -> None:
     """Refused under its own status, naming the document, and with nothing written.
 
-    The journey is `tests/plan_tooling/test_design_document_body_limit_e2e.py`; what this
-    adds is that the refusal precedes the copy itself, which a journey sees only as an
-    empty destination.
+    The journey is
+    `tests/plan_tooling/check_and_review/test_design_document_body_limit_e2e.py`; what this
+    adds is that the refusal precedes the copy itself, which a journey sees only as an empty
+    destination.
     """
     _reads(monkeypatch, _reviewed("route"))
     _holds(

@@ -1,12 +1,12 @@
 """Which board comments go to which run, the files they are written as, and the watermark.
 
-`tests/plan_tooling/test_follow_ups_answer_comments_recipe_e2e.py` drives the recipe through
-real launches. What is proven here is each of the module's three steps in process, against
-the installed `onetaskgraph`: a drafts root and a second local store standing in for the
-board, both named through the store's environment layer, tickets copied and comments written
-through the store's own verbs. Only the malformed answers a real store never gives are put
-in the store's place, the way `tests/test_plan_store.py` refuses a listing it cannot account
-for.
+`tests/plan_tooling/follow_ups/test_follow_ups_answer_comments_recipe_e2e.py` drives the
+recipe through real launches. What is proven here is each of the module's three steps in
+process, against the installed `onetaskgraph`: a drafts root and a second local store
+standing in for the board, both named through the store's environment layer, tickets copied
+and comments written through the store's own verbs. Only the malformed answers a real store
+never gives are put in the store's place, the way `tests/test_plan_store.py` refuses a
+listing it cannot account for.
 
 Comment times are the store's own and whole seconds, so a test that needs one comment to be
 older than a response waits for the clock to pass a second between them.

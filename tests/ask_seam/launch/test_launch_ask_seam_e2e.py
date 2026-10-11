@@ -302,7 +302,7 @@ LAUNCH_GROUP = "ask-seam-launch"
 #: Measured rather than reasoned about. On a developer's checkout a `.env` already exists,
 #: every worker takes the appending branch, and the module passes; on a publication clone
 #: there is none, all four workers take the creating branch at once, and five tests error
-#: in setup and refuse the push. `tests/test_nx_cache_scope.py` holds the rule.
+#: in setup and refuse the push. `tests/tree_scans/test_nx_cache_scope.py` holds the rule.
 pytestmark = [
     *WORKSPACE_INSTALL_MARKS,
     pytest.mark.xdist_group(LAUNCH_GROUP),

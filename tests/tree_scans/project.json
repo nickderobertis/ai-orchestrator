@@ -1,0 +1,41 @@
+{
+  "name": "tree-scans",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/tree_scans",
+  "tags": [
+    "scope:tree-scans",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-follow-up-variables",
+    "support-nx-inputs",
+    "support-nx-workspace",
+    "support-onejudge-bundle",
+    "support-onevcs-state-snapshot",
+    "support-plan-fixture-source",
+    "support-plan-root-variable",
+    "support-plan-sources",
+    "support-published-surface",
+    "support-published-tools",
+    "support-registered-checkouts",
+    "support-short-state",
+    "support-waits"
+  ],
+  "targets": {
+    "test-docs": {
+      "command": "rm -rf .telemetry/tree-scans/test-docs && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/tree-scans/test-docs NO_COLOR=1 COVERAGE_FILE=.coverage.tree-scans uv run pytest tests/tree_scans -m reads_docs -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0",
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "wholeWorkspace"
+      ],
+      "outputs": [
+        "{workspaceRoot}/.coverage.tree-scans",
+        "{workspaceRoot}/.telemetry/tree-scans/test-docs"
+      ]
+    }
+  }
+}

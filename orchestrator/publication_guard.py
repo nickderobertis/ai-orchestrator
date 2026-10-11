@@ -69,8 +69,9 @@ HUMAN = "human"
 #: The metadata key the engine reserves for a repository `repositories` cannot hold. A
 #: record naming one both ways is the engine's own refusal; what this module refuses is
 #: the key carrying a value that list *could* hold. The name is held to the installed
-#: engine by `tests/plan_tooling/test_check_plan_recipe_e2e.py`, whose structural journey
-#: writes this key beside `repositories` and reads the loader's own refusal of the pair.
+#: engine by `tests/plan_tooling/check_and_review/test_check_plan_recipe_e2e.py`, whose
+#: structural journey writes this key beside `repositories` and reads the loader's own
+#: refusal of the pair.
 RESERVED_REPO_KEY = "onepipeline.repo"
 
 #: A repository identity, which is what a policy belongs to: an alias is one of several
@@ -143,9 +144,9 @@ class Resolved(NamedTuple):
 
     The three fields this module reads out of that verb's JSON, narrowed where they are
     read. Held to the installed `onevcs` rather than to this declaration: the check-plan
-    journeys in `tests/plan_tooling/test_check_plan_recipe_e2e.py` and the reads-checkouts
-    tier in `tests/test_publication_guard.py` ask the real verb about real scratch
-    identities and assert on what comes back through these fields.
+    journeys in `tests/plan_tooling/check_and_review/test_check_plan_recipe_e2e.py` and the
+    reads-checkouts tier in `tests/test_publication_guard.py` ask the real verb about real
+    scratch identities and assert on what comes back through these fields.
     """
 
     #: The repository identity, which is what a refusal names.

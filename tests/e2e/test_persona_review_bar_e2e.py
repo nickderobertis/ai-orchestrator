@@ -239,7 +239,7 @@ def crozier_stand_in(tmp_path: Path) -> Path:
 
 
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker, expensive_tests_stay_behind_their_own_edge, contracts_have_one_source_or_a_drift_gate] `reads_checkouts`  # noqa: E501
-# is this repository's uncached tier: `orchestrator:test-checkouts` runs exactly `-m
+# is this repository's uncached tier: `orchestrator-e2e:test-checkouts` runs exactly `-m
 # reads_checkouts` and `just check` includes it. A project of its own, so `nx affected` can skip it,
 # is the opposite of what this needs, because its subject is a sibling's checkout outside the
 # workspace and a memo keyed on this workspace would replay what that checkout said when it was

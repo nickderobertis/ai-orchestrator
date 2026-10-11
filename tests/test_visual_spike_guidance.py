@@ -12,9 +12,7 @@ manager's ruling in place of a spend or planning-latency budget — to the one s
 from __future__ import annotations
 
 import re
-import subprocess
 
-import pytest
 import yaml
 
 from orchestrator import spike_plan
@@ -81,20 +79,6 @@ def test_the_visual_spike_is_capped_at_forty_turns_as_a_hard_cap() -> None:
     assert stated == [CAP], f"{PLANNER.name} states the visual spike's cap as {stated}"
     flat = _flat(guidance)
     assert "the manager's ruling, an accepted exception in place of a spend or" in flat, flat
-
-
-@pytest.mark.reads_docs
-def test_the_cap_is_stated_in_the_planner_persona_and_nowhere_else() -> None:
-    """A second statement of the number is a second answer to drift from the first."""
-    tracked = subprocess.run(
-        ["git", "grep", "-l", "-E", "-z", r"max_turns`? no larger", "--", ".", ":!tests"],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert tracked.returncode in (0, 1), tracked.stderr
-    assert [one for one in tracked.stdout.split("\0") if one] == ["personas/planner.yaml"]
 
 
 def test_the_writer_is_told_visual_changes_is_quoted_by_its_task_and_never_composed() -> None:

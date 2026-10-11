@@ -1,0 +1,339 @@
+"""`just plan` refuses a plan-authoring root it cannot write its project into.
+
+The recipe resolves that root before it writes anything and writes its project under it,
+so the two states below are the ones between a launch and a plan on disk: a root whose
+`projects` is already something else, and one whose `tasks` is. Neither is reachable from
+a root the recipe resolved for itself — that one is validated first, in the helper's own
+words — so both are driven over a root this journey states, which is also how an operator
+who has pointed the root somewhere reaches them.
+
+They live in this project rather than beside the rest of `just plan`'s journeys because
+of what they now spawn: the recipe resolves its root through the installed plan-store
+CLI, so a copied checkout has to be one that CLI can be read in, and
+`plan-tooling-check-and-review` is the project that owns this repository's host-tool plan
+journeys over checking a plan and is keyed on what they read: the script and the seams the
+detached copy carries, the store configuration and the package the resolution imports.
+
+Everything below the recipe is real — the real script, the real helpers it sources, the
+real package the resolution imports, and the real store configuration — and nothing is
+doubled: what is supplied is a root, which is an input.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+from enum import StrEnum
+from pathlib import Path
+from typing import NamedTuple, NewType
+
+import plan_root_variable
+import pytest
+from waits import timeout as e2e_timeout
+
+from orchestrator.root import REPO_ROOT
+
+#: The brief these journeys launch from. Written here rather than read from `examples/`,
+#: because this project's key covers no document under it: reading one would replay a
+#: verdict recorded before it changed.
+BRIEF = """## What
+Decide whether the paginated listing's cursor is an opaque token or a node id.
+
+Plan project: authoring:cursor-shape
+
+## Why
+The browser view cannot deep-link to a page until that is settled.
+
+## Acceptance criteria
+- The cursor's shape and its type are stated.
+"""
+
+#: Everything an enclosing dispatch would otherwise decide for these launches. The
+#: plan-authoring root is the one that matters here — this suite runs inside a dispatch,
+#: and a journey that kept an enclosing planning launch's root would refuse over a
+#: directory it never stated.
+INHERITED = (
+    "ONEPIPELINE_LAUNCHER",
+    "ONEPIPELINE_LAUNCHER_SESSION",
+    "ONEPIPELINE_RUN_ID",
+    plan_root_variable.name(),
+)
+
+
+def _environment(tmp_path: Path, root: Path) -> dict[str, str]:
+    """The environment one refused launch runs in, stating the root it is refused over.
+
+    Smaller than the one the launching journeys beside this project build, and that is
+    the point rather than an omission: both refusals below happen before the recipe
+    reaches `onepipeline start`, so no run is created, no session is opened and no
+    repository registry is touched — there is nothing here for a scratch identity to
+    keep off this host's own.
+
+    The run ledger is the one exception: the recipe asks whether both of its run ids are
+    taken before it reaches any of the refusals below, so a journey that inherited this
+    host's ledger would be refused for a run somebody else launched rather than for the
+    state it damaged.
+    """
+    runs = tmp_path / "runs"
+    runs.mkdir(exist_ok=True)
+    return {
+        **{key: value for key, value in os.environ.items() if key not in INHERITED},
+        plan_root_variable.name(): str(root),
+        "ONEPIPELINE_RUNS_DIR": str(runs),
+    }
+
+
+RunId = NewType("RunId", str)
+
+
+class PlanScript(StrEnum):
+    """A plan flow whose run-id collision this module exercises."""
+
+    PLAN = "plan.sh"
+    FINISH_PLAN = "finish-plan.sh"
+
+
+class Minted(NamedTuple):
+    """One run id a launch in this module mints, and a launch that asks for it first."""
+
+    run_id: RunId
+    script: PlanScript
+    #: The arguments after the brief that make that id the first one the launch checks.
+    arguments: tuple[str, ...]
+
+
+#: Every run id the launches below mint: `brief` from the brief's filename, `half-written`
+#: from the one journey that names its own, and each with the design-document launch's
+#: suffix, which the recipe refuses as taken before its own. Each carries a launch that
+#: checks it first, so `test_the_seeded_ledger_collides_with_every_minted_run_id` holds
+#: this table to what the scripts actually mint rather than to what it says they do.
+MINTED = (
+    Minted(RunId("brief-design"), PlanScript.PLAN, ()),
+    Minted(RunId("brief"), PlanScript.PLAN, ("--no-design-doc",)),
+    Minted(RunId("half-written-design"), PlanScript.PLAN, ("--name", "half-written")),
+    Minted(
+        RunId("half-written"),
+        PlanScript.PLAN,
+        ("--name", "half-written", "--no-design-doc"),
+    ),
+    Minted(RunId("brief-design"), PlanScript.FINISH_PLAN, ()),
+)
+MINTED_RUN_IDS = frozenset(minted.run_id for minted in MINTED)
+
+
+@pytest.fixture
+def colliding_inherited_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """An inherited run ledger already holding a run under every id these launches mint.
+
+    This is the host a journey used to fail on: one whose ledger held an unrelated run of
+    the colliding id, so the launch was refused as `already exists` and never reached the
+    refusal the journey is about. Seeded under this test's own directory and exported to
+    the test process, which is where a journey inherits it from — never this checkout's or
+    this host's own ledger.
+    """
+    inherited = tmp_path / "inherited-runs"
+    for run_id in MINTED_RUN_IDS:
+        (inherited / run_id).mkdir(parents=True)
+    monkeypatch.setenv("ONEPIPELINE_RUNS_DIR", str(inherited))
+    return inherited
+
+
+#: Every journey in this module runs over that ledger, so each one proves it reaches the
+#: refusal it is about with a colliding run inherited, rather than only on a host that
+#: happens to hold none.
+pytestmark = pytest.mark.usefixtures("colliding_inherited_runs")
+
+
+def _detached_recipe(tmp_path: Path) -> Path:
+    """A copy of the recipe's script and every seam it requires, outside this checkout.
+
+    All of them, because the recipe refuses to launch a planner it could not establish an
+    environment for before it writes anything, and a copy carrying only itself would be
+    refused for the wrong reason. There are two such seams. The **ask** seam is the
+    helper that establishes it and the wrapper that helper insists on. The
+    **plan-authoring root** is the other: the helper that resolves it, the package that
+    performs the resolution, and the store configuration that declares the source — the
+    recipe writes its project under the root that resolves to, so a copy the store cannot
+    be read in is a copy that cannot write a plan at all.
+
+    The root the copy resolves is its own `.plans`, which is what makes these journeys
+    about a checkout rather than about this one.
+    """
+    checkout = tmp_path / "checkout"
+    scripts = checkout / "scripts"
+    scripts.mkdir(parents=True)
+    for name in (
+        "plan.sh",
+        # The grammar `scripts/plan.sh` reads its brief and its options through: a
+        # checkout without it cannot get as far as the refusal these journeys are about.
+        "plan-brief.sh",
+        "credentials-env.sh",
+        "ask-manager-env.sh",
+        "ask-manager.sh",
+        "plan-root-env.sh",
+    ):
+        copied = scripts / name
+        copied.write_bytes((REPO_ROOT / "scripts" / name).read_bytes())
+        copied.chmod(0o755)
+    # The package without its prose: what the resolution imports is code, and these
+    # journeys belong to a tier whose key drops markdown, so copying a document would be
+    # reading one.
+    shutil.copytree(
+        REPO_ROOT / "orchestrator",
+        checkout / "orchestrator",
+        ignore=shutil.ignore_patterns("*.md"),
+    )
+    shutil.copy(REPO_ROOT / "onetaskgraph.yaml", checkout)
+    return scripts / "plan.sh"
+
+
+def test_a_plan_directory_that_cannot_be_created_is_refused_before_the_launch(
+    tmp_path: Path,
+) -> None:
+    """A record directory that cannot be made is said out loud rather than exited through.
+
+    The recipe writes its project under the plan-authoring root it resolved, into that
+    root's own `projects/` directory — so the state this guards is a root the launch may
+    write into whose `projects` is already something else. That is what makes it a
+    different failure from the root itself being unusable, which the helper refuses one
+    step earlier and in its own words: this one is reached with the root validated, and
+    without a guard it is `mkdir`'s message and an exit status, naming neither what was
+    being attempted nor what to do.
+
+    Driven by running the real script over a root of this journey's own, because a root
+    the recipe resolves for itself is by construction one it can create that directory
+    in.
+    """
+    brief = tmp_path / "brief.md"
+    brief.write_text(BRIEF, encoding="utf-8")
+    recipe = _detached_recipe(tmp_path)
+    root = tmp_path / "plans"
+    root.mkdir()
+    (root / "projects").write_text("not a records directory\n", encoding="utf-8")
+    working = tmp_path / "working"
+    working.mkdir()
+
+    refused = subprocess.run(  # noqa: S603 - the real script, over a root it cannot write into
+        [str(recipe), str(brief)],
+        cwd=working,
+        env=_environment(tmp_path, root),
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+
+    assert refused.returncode != 0, refused.stdout
+    assert "could not be created" in refused.stderr, refused.stderr
+    assert str(root / "projects") in refused.stderr, refused.stderr
+
+
+def test_a_plan_that_could_not_be_written_leaves_no_half_written_file_behind(
+    tmp_path: Path,
+) -> None:
+    """A partial plan is removed, because the next launch would otherwise read it.
+
+    A project is a directory of task records and one project record under one root, and
+    the store writes the project record **last** so that a project becomes visible only
+    with its tasks already beside it. So the partial state a failed write leaves is the
+    task records without their project — at exactly the paths a rerun, or a manager
+    relaunching with `just orchestrate`, would pick up — and the refusal has to take them
+    with it.
+
+    Induced by occupying the project record's own path, which is what makes the write
+    fail at its last step with everything before it already on disk. The cause is stood
+    in for because the real ones are not drivable — a device that fills mid-write, a
+    process killed between two files — and it is the cause rather than the layer under
+    test: what is measured is what the refusal leaves behind.
+
+    Induced at the destination rather than at the interpreter, which is what this used to
+    do: the recipe resolves its plan-authoring root through that same interpreter before
+    it writes anything, so an interpreter that cannot run now fails the resolution first
+    and never reaches the write this journey is about.
+    """
+    recipe = _detached_recipe(tmp_path)
+    brief = tmp_path / "brief.md"
+    brief.write_text(BRIEF, encoding="utf-8")
+    root = tmp_path / "plans"
+    (root / "projects" / "half-written.md").mkdir(parents=True)
+    working = tmp_path / "working"
+    working.mkdir()
+
+    refused = subprocess.run(  # noqa: S603 - the real script, over a root it cannot write into
+        [str(recipe), str(brief), "--name", "half-written"],
+        cwd=working,
+        env=_environment(tmp_path, root),
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+
+    assert refused.returncode != 0, refused.stdout
+    assert "could not be written" in refused.stderr, refused.stderr
+    assert not (root / "tasks" / "half-written").exists(), (
+        "the task records of a half-written plan were left where the next launch would "
+        f"read them:\n{refused.stderr}"
+    )
+    # And what it could not take is named, because the one thing worse than a partial
+    # plan left behind is one left behind in silence.
+    assert "could not be removed" in refused.stderr, refused.stderr
+
+
+def _detached_tail(tmp_path: Path) -> Path:
+    """A copy of the tail's own script and the grammar it reads, and nothing else.
+
+    Smaller than the copy above because the refusal it is driven to — a run id already
+    taken — comes before anything needing a store, an interpreter or a credential.
+    """
+    scripts = tmp_path / "tail" / "scripts"
+    scripts.mkdir(parents=True)
+    for name in ("finish-plan.sh", "plan-brief.sh"):
+        copied = scripts / name
+        copied.write_bytes((REPO_ROOT / "scripts" / name).read_bytes())
+        copied.chmod(0o755)
+    return scripts / "finish-plan.sh"
+
+
+@pytest.mark.parametrize("minted", MINTED, ids=lambda minted: f"{minted.script}:{minted.run_id}")
+def test_the_seeded_ledger_collides_with_every_minted_run_id(
+    tmp_path: Path, colliding_inherited_runs: Path, minted: Minted
+) -> None:
+    """The inherited ledger every journey above runs over really holds their run ids.
+
+    Those journeys pass whether or not their launch would have collided, so on their own
+    they cannot tell a ledger that still holds the ids the scripts mint from one a rename
+    left holding nothing they ask for. This launch is handed that ledger rather than one
+    of its own and has to be refused over exactly the id the table names.
+    """
+    brief = tmp_path / "brief.md"
+    brief.write_text(BRIEF, encoding="utf-8")
+    recipe = (
+        _detached_recipe(tmp_path) if minted.script is PlanScript.PLAN else _detached_tail(tmp_path)
+    )
+    working = tmp_path / "working"
+    working.mkdir()
+
+    # llmlint: ignore-block[tests_mirror_real_usage] The documented surface is a
+    # pass-through: `just plan` and `just finish-plan` are `@./scripts/<name>.sh "$@"`, a
+    # delegation `tests/e2e/test_delegated_recipes_e2e.py` drives as a real recipe, and
+    # these copies are deliberately outside any checkout carrying a `justfile`.
+    refused = subprocess.run(  # noqa: S603 - the real script, over a ledger already holding its run id
+        [str(recipe), str(brief), *minted.arguments],
+        cwd=working,
+        env={
+            **_environment(tmp_path, tmp_path / "plans"),
+            "ONEPIPELINE_RUNS_DIR": str(colliding_inherited_runs),
+        },
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    # llmlint: ignore-end[tests_mirror_real_usage]
+
+    assert refused.returncode != 0, refused.stdout
+    assert f"run '{minted.run_id}' already exists under {colliding_inherited_runs}" in (
+        refused.stderr
+    ), refused.stderr

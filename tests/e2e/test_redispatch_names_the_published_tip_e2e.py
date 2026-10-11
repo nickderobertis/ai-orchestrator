@@ -40,7 +40,7 @@ not register or publish from this host's own checkouts.
 
 llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] The host double is read
 out of a registered checkout of `onevcs`, which lives outside this workspace and so
-outside every `nx.json` key: the uncached `orchestrator:test-checkouts` tier exists for
+outside every `nx.json` key: the uncached `orchestrator-e2e:test-checkouts` tier exists for
 exactly that, selected by `reads_checkouts`, and a memo on any narrower edge would replay a
 green across the `onevcs` release it must re-read. Its two launches take about thirty
 seconds between them.

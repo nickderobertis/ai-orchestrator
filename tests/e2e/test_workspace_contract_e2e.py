@@ -47,7 +47,7 @@ from waits import until
 ROOT = Path(__file__).resolve().parents[2]
 #: The two selections `just check` makes, spelled as Nx receives them. Which tiers
 #: belong to each is declared once in `tests/nx_inputs.py`, and
-#: `tests/test_nx_cache_scope.py` holds the recipe to that split; what these journeys
+#: `tests/tree_scans/test_nx_cache_scope.py` holds the recipe to that split; what these journeys
 #: add is that the recipe really hands Nx two invocations rather than one.
 CHECK_SELECTED = ",".join(SELECTED_TARGETS)
 CHECK_UNCONDITIONAL = ",".join(UNCONDITIONAL_TARGETS)
@@ -1052,14 +1052,14 @@ def _await_installer_waiting(
 
 
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_recipes`
-# deselects nothing and hides no cost: `orchestrator:test-recipes` runs `-m reads_recipes`
+# deselects nothing and hides no cost: `orchestrator-e2e:test-recipes` runs `-m reads_recipes`
 # as a target of this same project and `just check` runs it, so the marker chooses the
-# `recipeWorkspace` key the verdict is memoized on — and `tests/conftest.py` fails a recipe
+# `e2eRecipeWorkspace` key the verdict is memoized on — and `tests/conftest.py` fails a recipe
 # journey that omits it. The installer under test is the doubled one every sibling here
 # drives, and the journey takes seconds.
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] Same site, same
 # reason: what it spends is two doubled installer processes and the lock it holds them on,
-# and `recipeWorkspace`, which covers `scripts/**/*`, is the narrowest key that reads the
+# and `e2eRecipeWorkspace`, which covers `scripts/**/*`, is the narrowest key that reads the
 # installer it exercises. Moving this module's recipe journeys into a project of their own
 # is a change to the tier layout, not to this journey.
 @rewrites_workspace_toolchain
@@ -1218,7 +1218,7 @@ def test_a_forced_install_discards_a_tree_it_cannot_enter(tmp_path: Path) -> Non
 
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_recipes` is the
 # marker `tests/conftest.py` requires of any test that opens a script, and the tier it
-# selects, `orchestrator:test-recipes`, is keyed on `recipeWorkspace` — which covers
+# selects, `orchestrator-e2e:test-recipes`, is keyed on `e2eRecipeWorkspace` — which covers
 # `scripts/**/*`, so an edit to the installer or the lock helper this drives selects it
 # already. Moving this module's recipe journeys into a project of their own is a change to
 # the tier layout, not to this journey.
@@ -1368,10 +1368,10 @@ def _flockless_env(checkout: Path, tmp_path: Path, trace: Path, **overrides: str
 
 
 # Both findings these answer are that the two fallback journeys below are selected by a
-# marker inside the `orchestrator` project rather than owned by an Nx project of their own.
+# marker inside the `orchestrator-e2e` project rather than owned by an Nx project of their own.
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_recipes` is the
 # marker `tests/conftest.py` requires of any test that opens a script, and the tier it
-# selects, `orchestrator:test-recipes`, is keyed on `recipeWorkspace` — which covers
+# selects, `orchestrator-e2e:test-recipes`, is keyed on `e2eRecipeWorkspace` — which covers
 # `scripts/**/*`, so an edit to the installer or the lock helper these drive selects it
 # already. That is the edge a project of its own would add, and moving the fifty-odd
 # recipe journeys of this module into one is a change to the tier layout, not to these.
@@ -1658,7 +1658,7 @@ def test_a_forced_install_that_cannot_discard_the_tree_stops_before_bun(tmp_path
 
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_recipes` is the
 # marker `tests/conftest.py` requires of any test that opens a script, and the tier it
-# selects, `orchestrator:test-recipes`, is keyed on `recipeWorkspace` — which covers
+# selects, `orchestrator-e2e:test-recipes`, is keyed on `e2eRecipeWorkspace` — which covers
 # `scripts/**/*`, so an edit to the installer or the lock helper this drives selects it
 # already. Moving this module's recipe journeys into a project of their own is a change to
 # the tier layout, not to this journey.
@@ -1953,8 +1953,8 @@ def _venv_python_version(checkout: Path) -> PythonVersion:
 # beside it. It costs about two seconds on a warm uv cache.
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_docs` is how this
 # repository routes a test to `orchestrator:test-docs`, the tier keyed on the whole
-# workspace, and `tests/test_nx_cache_scope.py` holds the marker to that routing; a separate
-# Nx project would need a key over the same whole tree.
+# workspace, and `tests/tree_scans/test_nx_cache_scope.py` holds the marker to that routing;
+# a separate Nx project would need a key over the same whole tree.
 # llmlint: ignore-block[shell_test_tiers_stay_split] uv is the host tool, and the sibling
 # provisioning journeys above and below drive the same real `uv sync` from this project;
 # moving one of them out would split one install contract across two projects.

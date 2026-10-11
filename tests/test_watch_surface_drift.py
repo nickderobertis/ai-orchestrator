@@ -65,7 +65,7 @@ that exists precisely because no key over this workspace can describe state outs
 which is what an installed engine is. The rule's remedy, its own project so `nx affected`
 can skip it, is the opposite of what this tier needs: a second project would need its own
 key over the same nothing. `just check` runs that target in its uniform set, and
-`tests/test_nx_cache_scope.py` holds the four selectors to a partition of the suite, so a
+`tests/tree_scans/test_nx_cache_scope.py` holds the four selectors to a partition of the suite, so a
 marker that stopped routing is a failing check rather than a test nothing runs.
 """
 
@@ -505,41 +505,6 @@ def test_the_terminal_record_is_read_as_the_verbs_own_pairing() -> None:
     ) == Terminal(condition="elapsed", exit=5)
     # A record missing either half of the pairing answers neither half of it.
     assert terminal_record('{"watch":"return","condition":"settled"}\n') is None
-
-
-@pytest.mark.reads_docs
-def test_the_reconciliation_names_a_swapped_and_an_unknown_exit_status() -> None:
-    """The comparison bites on every shape of drift, and is quiet on agreement.
-
-    A swap is the shape that keeps every number and changes what two of them mean, and
-    it is the one a check that only asked whether a status was known cannot see — so it
-    is asserted first and by name.
-    """
-    restated = _restated_statuses()
-    agreeing = {
-        f"run-{status}": Terminal(condition=condition, exit=status)
-        for status, condition in restated.items()
-    }
-
-    assert disagreements(restated, agreeing) == []
-
-    moved = sorted(restated)[-2:]
-    swapped = dict(agreeing) | {
-        f"run-{moved[0]}": Terminal(condition=restated[moved[1]], exit=moved[0]),
-        f"run-{moved[1]}": Terminal(condition=restated[moved[0]], exit=moved[1]),
-    }
-    named = disagreements(restated, swapped)
-    assert len(named) == 2
-    for status in moved:
-        assert any(f"exit status {status}" in entry for entry in named)
-
-    # One past every status the rule names, so the example stays unknown as the rule grows.
-    unused = max(restated) + 1
-    unknown = {f"run-{unused}": Terminal(condition="interrupted", exit=unused)}
-    assert disagreements(restated, unknown) == [
-        f"the verb answered `interrupted` at exit status {unused} on `run-{unused}`, and this "
-        "repository branches on no such status"
-    ]
 
 
 def _claimed_by_a_driver_gone_from_this_host(launch: Path) -> None:

@@ -16,7 +16,8 @@ from orchestrator.root import REPO_ROOT
 # This journey reconciles installed producer binaries, whose contents are outside this
 # workspace's cache key. `reads_checkouts` routes it to the uncached test-checkouts target;
 # a separate affected project would skip the very wheel replacement this adoption must
-# verify. `tests/test_nx_cache_scope.py` holds that routing to the suite's tier partition.
+# verify. `tests/tree_scans/test_nx_cache_scope.py` holds that routing to the suite's tier
+# partition.
 pytestmark = pytest.mark.reads_checkouts
 
 

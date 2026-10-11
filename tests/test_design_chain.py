@@ -8,8 +8,8 @@ none — names no repository, so the working directory's layer answers.
 
 Each case is read out of a real local plan store through the pinned plan-store CLI, the
 way both callers read it. The journeys that hold the two callers to it are
-`tests/plan_tooling/test_finish_plan_recipe_e2e.py` and
-`tests/plan_tooling/test_approve_design_recipe_e2e.py`.
+`tests/plan_tooling/plan_flow/test_finish_plan_recipe_e2e.py` and
+`tests/plan_tooling/plan_flow/test_approve_design_recipe_e2e.py`.
 
 llmlint: ignore-file[shell_test_tiers_stay_split] Not a shell suite and not a host tool: the
 plan-store CLI the SDK spawns is the workspace's own locked install, which `uv.lock` names and

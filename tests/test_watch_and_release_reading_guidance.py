@@ -15,7 +15,7 @@ marker is this repository's tier mechanism rather than a shortcut around one: on
 project runs four tiers keyed on four `nx.json` named inputs, and `reads_checkouts`
 selects the uncached `orchestrator:test-checkouts` target that exists because no key over
 this workspace can describe an installed engine. A project of its own would need a key
-over the same nothing; `tests/test_nx_cache_scope.py` holds the selectors to a partition
+over the same nothing; `tests/tree_scans/test_nx_cache_scope.py` holds the selectors to a partition
 of the suite. `tests/test_watch_surface_drift.py` carries the same directive for the
 same reason.
 """

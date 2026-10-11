@@ -163,7 +163,7 @@ checkout whose lock is held is never started a second time; a checkout whose mem
 matches is never started at all.
 
 It prints one line per listed checkout, opening with what happened to it, and a summary
-counting each outcome; `tests/test_repos_bootstrap_docs.py` holds this list to exactly
+counting each outcome; `tests/release_pins/test_repos_bootstrap_docs.py` holds this list to exactly
 the outcomes the script reports:
 
 - `ran` — by hand: that sibling's own bootstrap ran and succeeded; the line names the log

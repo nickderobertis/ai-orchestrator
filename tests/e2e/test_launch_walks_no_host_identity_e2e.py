@@ -30,10 +30,10 @@ launch journey for 13 to 15 minutes after its run settled.
 # repos`, whose first contact migrates a registry — `tests/onevcs_state_snapshot.py` is
 # the measurement — and the git trace is a stream no view renders.
 # llmlint: ignore-file[tests_mirror_real_usage] see above
-# llmlint: ignore-file[new_code_lands_in_a_project] `tests/e2e/` has no project file of its
-# own: every module in it is collected by the `orchestrator` project's `test` target, whose
-# pytest command selects `tests/` outside the directories other projects own, and this
-# module is placed and collected exactly as its siblings are.
+# llmlint: ignore-file[new_code_lands_in_a_project] `tests/e2e/` is the `orchestrator-e2e`
+# project: its `test` target collects every test in it that no tier marker routes elsewhere,
+# outside the subdirectories other projects own, and this module is placed and collected
+# exactly as its siblings are.
 
 from __future__ import annotations
 

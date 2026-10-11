@@ -485,7 +485,7 @@ fi
 # llmlint: ignore[changed_behavior_has_e2e] No lease is taken before setup because a
 # run root an open session names is never reclaimed: that is `onevcs session open`'s
 # own behaviour since onevcs 0.14.1 (nickderobertis/onevcs#82, widened in 0.15.6),
-# proven in onevcs's repository, and `tests/test_upstream_workaround_rule.py` keeps
+# proven in onevcs's repository, and `tests/family_scans/test_upstream_workaround_rule.py` keeps
 # the retired lease from returning. A journey here would re-test a published CLI.
 toolchain_failed=0
 ensure_just

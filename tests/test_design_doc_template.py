@@ -15,7 +15,8 @@ render`. Nothing is doubled, and no expectation is read from the template it hol
 
 llmlint: ignore-file[test_tiers_split_by_project_not_by_marker,shell_test_tiers_stay_split] Every
 file this module reads is in the key its tier is memoized on: `orchestrator:test` is keyed on
-`nx.json`'s `codeWorkspace`, which is the whole workspace less `docs/` and `*.md`, so
+`unitWorkspace`, `nx.json`'s `codeWorkspace` — the whole workspace less `docs/` and
+`*.md` — without the journeys under `tests/e2e/`, so
 `templates/design-doc.md.j2`, `templates/templates.yaml`, `personas/design-doc.yaml` and
 `scripts/onepipeline.sh` are all in it, and the published CLIs it spawns — through the
 wrapper a launch uses, which is the boundary this module is about — are the pinned installs
@@ -966,24 +967,3 @@ def test_the_role_states_the_why_rule_on_both_sides_and_how_a_diagram_is_given()
 #: the real prose the regenerated Why is read against.
 WHY_FIXTURES = REPO_ROOT / "tests" / "fixtures" / "design-doc-why"
 WHY_FIXTURE_PLANS = ("follow-up-root-cause-granularity", "sweep-fast-again")
-
-
-@pytest.mark.reads_docs
-def test_the_why_fixtures_are_the_preserved_snapshots_and_narrate_who_asked() -> None:
-    """Each file is the preserved one, and each document's Why is the attributed kind."""
-    listed = (WHY_FIXTURES / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
-    sums = dict(reversed(line.split("  ./", 1)) for line in listed if line.strip())
-    on_disk = sorted(
-        str(path.relative_to(WHY_FIXTURES))
-        for path in WHY_FIXTURES.rglob("*")
-        if path.is_file() and path.name != "SHA256SUMS"
-    )
-    assert on_disk == sorted(sums), on_disk
-    for name, digest in sums.items():
-        held = hashlib.sha256((WHY_FIXTURES / name).read_bytes()).hexdigest()
-        assert held == digest, name
-    for plan in WHY_FIXTURE_PLANS:
-        document = (WHY_FIXTURES / plan / "documents" / f"{plan}-design.md").read_text("utf-8")
-        why = document.split("\n## Why\n", 1)[1].split("\n## ", 1)[0]
-        assert re.search(r"The user (reports|said)", why), why
-        assert "“" in why, why

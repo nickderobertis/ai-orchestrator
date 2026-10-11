@@ -61,7 +61,7 @@ REQUIRED = "required checks:"
 
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_checkouts` is
 # not a narrower tier of a memoized one: it moves this suite out of every memoized tier
-# into the uncached `orchestrator:test-checkouts`, because its subject — what another
+# into the uncached `orchestrator-e2e:test-checkouts`, because its subject — what another
 # repository's branch protection requires — is outside this workspace and no `nx.json`
 # key could name it. A project of its own would give it a key, which is the thing it
 # must not have.

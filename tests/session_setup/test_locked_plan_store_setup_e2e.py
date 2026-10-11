@@ -34,7 +34,7 @@ RELEASE_VARIABLE = "STAND_IN_RELEASE"
 #: leaves nothing running for long.
 HELD_BOOTSTRAP_SECONDS = 600
 #: Every status a job's state records, as the script writes it;
-#: `tests/test_repos_bootstrap_docs.py` holds this to the script's own vocabulary.
+#: `tests/release_pins/test_repos_bootstrap_docs.py` holds this to the script's own vocabulary.
 JobStatus = Literal["running", "done", "failed", "stale"]
 JOB_ENDINGS: frozenset[JobStatus] = frozenset({"done", "failed", "stale"})
 

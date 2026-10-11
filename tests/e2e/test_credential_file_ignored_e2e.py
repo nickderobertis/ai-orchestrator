@@ -19,7 +19,8 @@ precisely where a pattern read by eye and a pattern read by git part company.
 llmlint: ignore-file[shell_test_tiers_stay_split] These are pytest journeys rather than
 a shell test suite, and what they cost is one `git check-ignore` apiece — milliseconds,
 on a tool every checkout already has. A project of their own would be keyed on the one
-file they read, `.gitignore`, which the root project's own key already covers.
+file they read, `.gitignore`, which the `orchestrator-e2e` project's `e2eWorkspace` key
+already covers.
 """
 
 from __future__ import annotations

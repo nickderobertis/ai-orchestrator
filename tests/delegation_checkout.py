@@ -3,7 +3,7 @@
 Shared by `tests/e2e/test_delegated_recipes_e2e.py`, the recipe tier's delegation table,
 and by the one delegated journey whose answer moves with an `orchestrator/` module rather
 than with `scripts/` alone: `just follow-ups`, whose journey is in
-`tests/plan_tooling/test_follow_ups_recipe_e2e.py` because that project's key already
+`tests/plan_tooling/follow_ups/test_follow_ups_recipe_e2e.py` because that project's key already
 carries `orchestrator/follow_up_tickets.py`, so an edit to that module re-runs one tier
 rather than every recipe journey. One definition, so the two tiers build the same checkout
 and a change to it reaches both.

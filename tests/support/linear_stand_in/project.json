@@ -1,0 +1,26 @@
+{
+  "name": "support-linear-stand-in",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "tags": [
+    "type:test-support"
+  ],
+  "implicitDependencies": [
+    "support-published-tools",
+    "support-waits"
+  ],
+  "namedInputs": {
+    "testSupport": [
+      "{workspaceRoot}/tests/linear_stand_in.py",
+      "{workspaceRoot}/onetaskgraph.yaml"
+    ]
+  },
+  "targets": {
+    "test-support": {
+      "executor": "nx:noop",
+      "inputs": [
+        "testSupport"
+      ]
+    }
+  }
+}

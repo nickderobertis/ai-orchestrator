@@ -1,0 +1,121 @@
+{
+  "name": "plan-tooling-follow-ups",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/plan_tooling/follow_ups",
+  "tags": [
+    "scope:plan-tooling-follow-ups",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-budget-telemetry",
+    "support-conftest",
+    "support-delegation-checkout",
+    "support-fake-backend",
+    "support-fake-codex",
+    "support-fake-codex-untrusted-directory",
+    "support-follow-up-ticket-shape",
+    "support-follow-up-variables",
+    "support-github-board",
+    "support-linear-stand-in",
+    "support-no-paid-provider",
+    "support-nx-inputs",
+    "support-nx-workspace",
+    "support-older-plan-store",
+    "support-onejudge-bundle",
+    "support-onevcs-state-snapshot",
+    "support-plan-fixture-source",
+    "support-plan-root-variable",
+    "support-plan-sources",
+    "support-probe-run-root",
+    "support-project-fixtures",
+    "support-published-tools",
+    "support-registered-checkouts",
+    "support-run-task-store-instruction",
+    "support-short-state",
+    "support-waits"
+  ],
+  "namedInputs": {
+    "planToolingFollowUpsWorkspace": [
+      "{workspaceRoot}/.gitignore",
+      "{workspaceRoot}/budgets.yaml",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/onetaskgraph.yaml",
+      "{workspaceRoot}/oneharness.toml",
+      "{workspaceRoot}/oneharness.dispatch.toml",
+      "{workspaceRoot}/oneharness.identities.toml",
+      "{workspaceRoot}/oneharness.follow-up.toml",
+      "{workspaceRoot}/graphs/follow-up.yaml",
+      "{workspaceRoot}/graphs/node-scope.yaml",
+      "{workspaceRoot}/graphs/pr-author.yaml",
+      "{workspaceRoot}/personas/follow-up.yaml",
+      "{workspaceRoot}/personas/planner.yaml",
+      "{workspaceRoot}/scripts/**/*",
+      "{workspaceRoot}/config/**/*",
+      "{workspaceRoot}/templates/**/*",
+      "{workspaceRoot}/orchestrator/**/*",
+      "{workspaceRoot}/tests/fixtures/cycle-time/**/*",
+      "{workspaceRoot}/tests/fixtures/nx-cache/**/*",
+      "{workspaceRoot}/tests/fixtures/timeline-runs/dag-ui-truth-monitor-slice/**/*",
+      "{workspaceRoot}/tests/plan_tooling/follow_ups/**/*"
+    ]
+  },
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 COVERAGE_FILE=.coverage.plan-tooling-follow-ups uv run pytest tests/plan_tooling/follow_ups -m 'not reads_docs' -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0",
+      "options": {
+        "cwd": "."
+      },
+      "outputs": [
+        "{workspaceRoot}/.coverage.plan-tooling-follow-ups"
+      ],
+      "inputs": [
+        "planToolingFollowUpsWorkspace",
+        {
+          "input": "testSupport",
+          "projects": [
+            "support-budget-telemetry",
+            "support-conftest",
+            "support-delegation-checkout",
+            "support-fake-codex",
+            "support-fake-codex-untrusted-directory",
+            "support-follow-up-ticket-shape",
+            "support-follow-up-variables",
+            "support-github-board",
+            "support-no-paid-provider",
+            "support-nx-inputs",
+            "support-nx-workspace",
+            "support-older-plan-store",
+            "support-onejudge-bundle",
+            "support-onevcs-state-snapshot",
+            "support-plan-fixture-source",
+            "support-plan-root-variable",
+            "support-plan-sources",
+            "support-probe-run-root",
+            "support-project-fixtures",
+            "support-published-tools",
+            "support-registered-checkouts",
+            "support-run-task-store-instruction",
+            "support-short-state",
+            "support-waits"
+          ]
+        }
+      ]
+    },
+    "test-docs": {
+      "command": "rm -rf .telemetry/plan-tooling-follow-ups/test-docs && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/plan-tooling-follow-ups/test-docs NO_COLOR=1 uv run pytest tests/plan_tooling/follow_ups -m reads_docs --no-cov -n 4 --dist loadgroup",
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "wholeWorkspace"
+      ],
+      "outputs": [
+        "{workspaceRoot}/.telemetry/plan-tooling-follow-ups/test-docs"
+      ]
+    }
+  }
+}

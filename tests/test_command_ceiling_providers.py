@@ -32,7 +32,7 @@ from fake_codex import CONFIG_OPTIONS
 # this repository's tier mechanism rather than a shortcut around one: it routes a test
 # to the uncached target `orchestrator:test-checkouts`, the tier that exists because no
 # key over this workspace can describe state outside it, and the installed `codex` and
-# `claude` are such state. `tests/test_nx_cache_scope.py` holds the selectors to a
+# `claude` are such state. `tests/tree_scans/test_nx_cache_scope.py` holds the selectors to a
 # partition of the suite.
 # llmlint: ignore-block[shell_test_tiers_stay_split] Same site, same reason; and this is
 # a pytest gate over installed providers, not a shell test suite.

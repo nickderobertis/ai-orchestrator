@@ -7,9 +7,9 @@ the store's `task metadata set`, and its plan-level answers rendered as its desc
 pinned engine's `template resolve plan-description` piped into the pinned store's `project
 create`, beside the same answers as `orchestrator.plan-budgets`. The checks are then asked
 through the store, so what is proven is what `just check-plan`, `just review-plan` and the
-finish-plan flow read. `tests/plan_tooling/test_check_plan_budgets_e2e.py` drives the same
-rules through the recipe; what is here is every rule and every shape the reader refuses, one
-at a time.
+finish-plan flow read. `tests/plan_tooling/check_and_review/test_check_plan_budgets_e2e.py`
+drives the same rules through the recipe; what is here is every rule and every shape the
+reader refuses, one at a time.
 
 llmlint: ignore-file[shell_test_tiers_stay_split,test_tiers_split_by_project_not_by_marker] The
 subject is `orchestrator/plan_budgets.py`, this tier's own module, and the boundary it reads

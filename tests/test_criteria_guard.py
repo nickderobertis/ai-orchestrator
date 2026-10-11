@@ -14,10 +14,11 @@ resolves to a role compiled into the `oneagentgraph` **that binary links** — n
 that resolution against the real binary this checkout installs, so a release that
 moves a role moves what this guard demands, with nothing here to update.
 
-`tests/plan_tooling/test_check_plan_recipe_e2e.py` drives the same guard through the real
-`just check-plan` over tasks carrying the real tracked appendix; the tests here are the
-ones that can state a synthetic bar, and notes shaped like the appendix whose wording
-makes no demand of its own, which is what makes each refusal attributable to one cause.
+`tests/plan_tooling/check_and_review/test_check_plan_recipe_e2e.py` drives the same guard
+through the real `just check-plan` over tasks carrying the real tracked appendix; the tests
+here are the ones that can state a synthetic bar, and notes shaped like the appendix whose
+wording makes no demand of its own, which is what makes each refusal attributable to one
+cause.
 """
 
 from __future__ import annotations
@@ -437,8 +438,8 @@ def test_a_missing_or_repeated_criteria_section_is_left_to_the_engine_to_refuse(
     """Absent reads as an empty block and repeated as its first; neither raises here.
 
     The engine's plan loader refuses both before any consumer check runs —
-    `tests/plan_tooling/test_check_plan_recipe_e2e.py` drives that refusal through the
-    recipe — so this module restates neither.
+    `tests/plan_tooling/check_and_review/test_check_plan_recipe_e2e.py` drives that refusal
+    through the recipe — so this module restates neither.
     """
     twice = f"{_task('- The thing is done.')}\n{CRITERIA_HEADING}\n\n- Another thing.\n"
 

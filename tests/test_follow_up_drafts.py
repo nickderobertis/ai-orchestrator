@@ -5,7 +5,7 @@ proven here is that each of those halves agrees with the others: a draft renders
 that parses back to the same draft, a store's answer about that record validates to the
 same draft, and every way a record or an input can depart from the shape is refused with a
 sentence saying what to do. The command every party drafts through is driven end to end by
-`tests/plan_tooling/test_follow_up_drafts_e2e.py` and from inside a real launch by
+`tests/plan_tooling/follow_ups/test_follow_up_drafts_e2e.py` and from inside a real launch by
 `tests/ask_seam/follow_up_drafts_launch/test_follow_up_drafts_launch_e2e.py`; this is the
 in-process half those journeys cannot measure line by line.
 

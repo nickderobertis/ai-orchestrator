@@ -909,9 +909,10 @@ def description_refusals(project: str, held: Mapping[str, object]) -> list[Refus
         copied = isinstance(metadata.get(plan_store.ORIGIN_KEY), str)
         # llmlint: ignore[changed_behavior_has_e2e] The adopted store's `project copy` carries
         # a description verbatim, rewriting references only in a copied document, so no real
-        # copy reaches this acceptance yet: `tests/plan_tooling/test_copy_plan_recipe_e2e.py`
-        # copies a description naming a task's location, sees it land unrewritten and checked,
-        # and sees an edit after the copy refused, and fails the day the store rewrites it.
+        # copy reaches this acceptance yet:
+        # `tests/plan_tooling/plan_copy/test_copy_plan_recipe_e2e.py` copies a description
+        # naming a task's location, sees it land unrewritten and checked, and sees an edit
+        # after the copy refused, and fails the day the store rewrites it.
         if not (
             copied
             and provenance.get("body_digest") == body

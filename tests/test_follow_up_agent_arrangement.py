@@ -19,9 +19,9 @@ scratch directory, not a repository, so it has to run in `bypass` — and the on
 engine links admits no `mode` on a single-sided member, so `oneharness.follow-up.toml` is the
 one place that says so. A `mode` on the member would be a second answer that could disagree.
 
-`tests/plan_tooling/test_follow_ups_recipe_e2e.py` launches a direct node naming this graph
-through the installed engine and reads the composed task out of the member's own turn; this
-holds, on every tree, the arrangement that journey measured.
+`tests/plan_tooling/follow_ups/test_follow_ups_recipe_e2e.py` launches a direct node naming
+this graph through the installed engine and reads the composed task out of the member's own
+turn; this holds, on every tree, the arrangement that journey measured.
 """
 
 from __future__ import annotations

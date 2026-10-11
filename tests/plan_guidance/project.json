@@ -1,0 +1,72 @@
+{
+  "name": "plan-guidance",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/plan_guidance",
+  "tags": [
+    "scope:plan-guidance",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-fake-codex",
+    "support-follow-up-ticket-shape",
+    "support-follow-up-variables",
+    "support-github-board",
+    "support-no-paid-provider",
+    "support-nx-inputs",
+    "support-onejudge-bundle",
+    "support-onevcs-state-snapshot",
+    "support-plan-fixture-source",
+    "support-plan-root-variable",
+    "support-plan-sources",
+    "support-project-fixtures",
+    "support-published-tools",
+    "support-registered-checkouts",
+    "support-short-state",
+    "support-waits"
+  ],
+  "namedInputs": {
+    "planGuidanceWorkspace": [
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/AGENTS.md",
+      "{workspaceRoot}/budgets.yaml",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/onetaskgraph.yaml",
+      "{workspaceRoot}/docs/budgets.md",
+      "{workspaceRoot}/docs/orchestration.md",
+      "{workspaceRoot}/examples/**/*",
+      "{workspaceRoot}/personas/follow-up.yaml",
+      "{workspaceRoot}/personas/planner.yaml",
+      "{workspaceRoot}/config/**/*",
+      "{workspaceRoot}/scripts/**/*",
+      "{workspaceRoot}/templates/**/*",
+      "{workspaceRoot}/orchestrator/**/*",
+      "{workspaceRoot}/tests/fixtures/design-doc-why/**/*",
+      "{workspaceRoot}/tests/fixtures/cycle-time/**/*",
+      "{workspaceRoot}/tests/test_follow_up_tickets.py",
+      "{workspaceRoot}/tests/test_design_doc_template.py",
+      "{workspaceRoot}/tests/test_design_approval.py",
+      "{workspaceRoot}/tests/plan_guidance/**/*"
+    ]
+  },
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 COVERAGE_FILE=.coverage.plan-guidance uv run pytest tests/plan_guidance -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0",
+      "options": {
+        "cwd": "."
+      },
+      "outputs": [
+        "{workspaceRoot}/.coverage.plan-guidance"
+      ],
+      "inputs": [
+        "planGuidanceWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ]
+    }
+  }
+}

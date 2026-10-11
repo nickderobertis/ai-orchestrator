@@ -158,7 +158,7 @@ rules:
   # `external_service_suite_stays_out_of_the_affected_tier` forbids. The two upstream
   # rules conflict at this one file and JSON carries no site-scoped directive, so this
   # per-rule exclusion is that site's; every other project is still judged, and
-  # `tests/test_nx_cache_scope.py` holds `just test` and `just upgrade` to naming
+  # `tests/tree_scans/test_nx_cache_scope.py` holds `just test` and `just upgrade` to naming
   # `test-pypi` so the target the fanout misses is still run.
   - name: new_projects_keep_the_graph_uniform
     override: true
