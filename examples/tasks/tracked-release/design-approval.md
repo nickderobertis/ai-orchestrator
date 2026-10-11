@@ -5,6 +5,7 @@ status: "todo"
 depends_on: ["tracked-release/design"]
 metadata:
   "onepipeline.id": "design-approval"
+  "orchestrator.unit": "Design"
   "onepipeline.kind": "human"
 ---
 

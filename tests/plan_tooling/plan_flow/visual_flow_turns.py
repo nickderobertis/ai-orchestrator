@@ -143,7 +143,12 @@ def plan(store: str, engine: str, scenario: dict[str, object]) -> None:
     )
     for task in tasks:
         assert isinstance(task.answers, dict)
-        metadata = [f"onepipeline.id={task.node}", 'onepipeline.persona="engineer"', *task.placing]
+        metadata = [
+            f"onepipeline.id={task.node}",
+            'onepipeline.persona="engineer"',
+            'orchestrator.unit="Views"',
+            *task.placing,
+        ]
         _run(
             [store, "task", "create", source, "--template-loader", "-", "--no-interactive"]
             + ["--project", task.project, "--title", task.title]

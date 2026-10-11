@@ -158,6 +158,7 @@ STEPPED_PLAN: dict[str, object] = {
         {
             "id": "landing",
             "title": "feat: add the checkout route",
+            "unit": "Checkout service",
             # No `persona` beside `steps`: a stepped node takes its persona, task and turn
             # budget from the steps, and the engine's loader refuses one that states both.
             "repo": f"https://{SERVICE_ORIGIN}.git",

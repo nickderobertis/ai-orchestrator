@@ -517,6 +517,8 @@ class _Board:
         self.priorities: tuple[_StatusOption, ...] = ()
         #: How many comments this board has taken, which numbers the next one.
         self.commented = 0
+        #: Each user attachment uploaded to it, by the path GitHub serves it at.
+        self.attachments: dict[str, bytes] = {}
 
     def issues_created_and_kept(self) -> list[_Issue]:
         return [issue for issue in self.created if issue in self.issues]
@@ -1322,8 +1324,38 @@ class _GitHubFixture(BaseHTTPRequestHandler):
     #: board's items showing up on the other.
     board: ClassVar[_Board]
 
+    #: Where GitHub takes a user attachment and serves it back, as the source reaches it on
+    #: a loopback endpoint: uploaded beside the GraphQL endpoint, then read at the URL the
+    #: upload answered with, after the numeric id of the issue's repository is read by REST.
+    ATTACHMENTS = "/user-attachments/assets"
+    REPOSITORIES = re.compile(r"^/repos/(?P<owner>[^/]+)/(?P<name>[^/?]+)$")
+
+    def do_GET(self) -> None:  # noqa: N802 - stdlib callback name
+        named = self.REPOSITORIES.match(self.path)
+        if named is not None:
+            known = list(REPOSITORY_NODE_IDS).index(
+                _Repository(owner=named["owner"], name=named["name"])
+            )
+            self._send(200, {"id": known + 1})
+            return
+        held = self.board.attachments.get(self.path)
+        if held is None:
+            self._send(404, {"message": f"no attachment at {self.path}"})
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Length", str(len(held)))
+        self.end_headers()
+        self.wfile.write(held)
+
     def do_POST(self) -> None:  # noqa: N802 - stdlib callback name
         length = int(self.headers["Content-Length"])
+        if self.path.startswith(f"{self.ATTACHMENTS}?"):
+            served = f"{self.ATTACHMENTS}/{len(self.board.attachments) + 1}"
+            self.board.attachments[served] = self.rfile.read(length)
+            host, port = self.server.server_address[:2]
+            self._send(201, {"url": f"http://{host!s}:{port}{served}"})
+            return
         request = _GraphQLRequest.from_json(self.rfile.read(length))
         self.requests.append(request)
         if self.refusal is not None:
@@ -1829,7 +1861,7 @@ TICKET_LIFECYCLE_BUDGET = "ticket-lifecycle-points"
 REQUEST_PRICES: dict[_Operation, DocumentPrice] = {
     _Operation.SEARCH: DocumentPrice("SEARCH_ISSUES", 5),
     _Operation.ISSUE: DocumentPrice("ISSUE", 1),
-    _Operation.SUB_ISSUES: DocumentPrice("SUB_ISSUES", 5),
+    _Operation.SUB_ISSUES: DocumentPrice("SUB_ISSUES", 6),
     _Operation.BOARD: DocumentPrice("BOARD", 2),
     _Operation.ORIGIN_LOOKUP: DocumentPrice("ORIGIN_LOOKUP", 1),
     _Operation.BOARD_FIELDS: DocumentPrice("BOARD_FIELDS", 1),

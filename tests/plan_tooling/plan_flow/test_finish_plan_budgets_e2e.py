@@ -50,6 +50,7 @@ from nx_workspace import (
 )
 from published_tools import ONETASKGRAPH_BIN
 from test_finish_plan_recipe_e2e import (
+    COPIES_THE_ROWS,
     DESIGN_RUN_SUFFIX,
     DESIGN_TASK_MARKER,
     DESTINATION,
@@ -58,6 +59,7 @@ from test_finish_plan_recipe_e2e import (
     OK,
     PASSES,
     PLAN_REFUSED,
+    PLAN_UNIT,
     Bench,
     Drafted,
     RunId,
@@ -133,6 +135,9 @@ WRITER = r"""
 import json, os, re, shlex, subprocess, sys, tempfile
 
 (engine, store, source, project, title, document, base, design_project, change) = sys.argv[1:10]
+helpers = sys.argv[10]
+sys.path.insert(0, helpers)
+import copy_quoted_rows
 listed = subprocess.run(
     [store, "task", "list", "--source", "authoring", "--project", design_project, "--json"],
     capture_output=True, text=True, check=True,
@@ -152,6 +157,8 @@ match change:
     case "invented-predates":
         budgets["predates_budgets"] = "it was written before budgets"
 answers.update(budgets)
+# And the rows, units and graph image the task quotes, copied as a writer copies them.
+answers, image = copy_quoted_rows.copied(answers, task)
 if change == "fenced-prose":
     answers["units"][0]["decisions"][0]["content"] = [
         {"type": "prose", "text": "```text\nexplanation\n```"}
@@ -165,7 +172,7 @@ with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as written:
 subprocess.run(
     [store, "document", "create", source, "--project", project, "--title", title,
      "--id", document, "--template-loader", "-", "--answers", written.name,
-     "--no-interactive"],
+     "--no-interactive", *(("--asset", image) if image else ())],
     input=loader, text=True, check=True,
 )
 os.unlink(written.name)
@@ -179,7 +186,8 @@ def _writes_from_its_task(bench: Bench, drafted: Drafted, run: RunId, change: st
     base = bench.tmp_path / f"{drafted.document}.base.json"
     answers = _answers(drafted)
     example = json.loads((REPO_ROOT / "tests/fixtures/design_doc/modern-answers.json").read_text())
-    answers["units"] = example["units"]
+    # The example's unit, as the one unit every task of the drafted plan changes.
+    answers["units"] = [{**example["units"][0], "name": PLAN_UNIT}]
     base.write_text(json.dumps(answers), encoding="utf-8")
     keyed = bench.tmp_path / f"commands-{drafted.project}.json"
     source, _, project = drafted.qualified.partition(":")
@@ -199,6 +207,7 @@ def _writes_from_its_task(bench: Bench, drafted: Drafted, run: RunId, change: st
                         str(base),
                         f"{run}{DESIGN_RUN_SUFFIX}",
                         change,
+                        str(COPIES_THE_ROWS.parent),
                     ]
                 ]
             }

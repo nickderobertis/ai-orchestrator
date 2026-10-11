@@ -4,6 +4,7 @@ project: "plan-example"
 status: "todo"
 metadata:
   "onepipeline.id": "design"
+  "orchestrator.unit": "Design notes"
   "onepipeline.persona": "planner"
   "onetaskgraph.template": {"answers_digest":"sha256:151dcd7c499cb12d9448994161dd31b51da762d51d7a45b18004f87f8efe9c6c","body_digest":"sha256:851eca7b21ef0b56f1c5924e6bfe01c7f2fdbfdfc1b80137e887c46f10e4ac0a","digest":"sha256:094afa20a55d0b9740923d270cdb02667b834b6b43c1b2c59f9e38b68c8e7325","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []

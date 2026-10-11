@@ -11,6 +11,7 @@ the tracked records to byte-for-byte what they were before it ran.
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import shutil
@@ -103,7 +104,8 @@ def _approved_in_the_copy(root: Path) -> None:
     copy, and nowhere else, each document is regenerated through the chain in force and
     approved through the real recipe: the copy then stands where the tracked examples will
     once a person has approved them, and `ExampleCopy.assert_tracked_untouched` proves the
-    tracked records were not.
+    tracked records were not. A plan whose graph has an edge has its document regenerated
+    opening with that graph, which approval requires of it.
     """
     base = {**os.environ, ROOT_VARIABLE: str(root)}
     for record in sorted((root / "projects").glob("*.md")):
@@ -130,7 +132,8 @@ def _approved_in_the_copy(root: Path) -> None:
         ).stdout
         for command in (
             [str(REPO_ROOT / ".venv" / "bin" / "onetaskgraph"), "document", "render"]
-            + [f"{project}-design", "--template-loader", "-", "--no-interactive"],
+            + [f"{project}-design", "--template-loader", "-", "--no-interactive"]
+            + _graphed(project, root, environment),
             ["just", "approve-design", project],
         ):
             done = subprocess.run(
@@ -147,3 +150,45 @@ def _approved_in_the_copy(root: Path) -> None:
                     f"the copy of {project} could not be brought under the chain in force: "
                     f"{done.stdout}{done.stderr}"
                 )
+
+
+def _graphed(project: str, root: Path, environment: dict[str, str]) -> list[str]:
+    """The flags that open ``project``'s Planned tasks with its graph, when its plan has one.
+
+    The graph is the plan store's own `project graph --group-by orchestrator.unit` of the
+    copied plan, drawn by the real `just render-diagram`, as `just finish-plan` draws it; a
+    plan of one task or of no dependency edge shows none, and gets no flag.
+    """
+    drawn = root.parent / f"{project.partition(':')[2]}-graph"
+    drawn.mkdir(exist_ok=True)
+    for form, kept in (("mermaid", "plan-graph.mmd"), ("json", "plan-graph.json")):
+        read = subprocess.run(
+            [str(REPO_ROOT / ".venv" / "bin" / "onetaskgraph"), "project", "graph", project]
+            + ["--format", form, "--group-by", "orchestrator.unit"],
+            cwd=REPO_ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        (drawn / kept).write_text(read.stdout, encoding="utf-8")
+    derived = subprocess.run(
+        [str(REPO_ROOT / ".venv" / "bin" / "python"), "-m", "orchestrator.planned_tasks"]
+        + [project, "--graph", str(drawn / "plan-graph.json")],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    if not json.loads(derived.stdout)["image"]:
+        return []
+    subprocess.run(
+        ["just", "render-diagram", str(drawn / "plan-graph.mmd"), str(drawn / "plan-dag.png")],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return ["--var", "dag_image=plan-dag.png", "--asset", str(drawn / "plan-dag.png")]

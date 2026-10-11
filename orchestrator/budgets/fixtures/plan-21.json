@@ -1,0 +1,174 @@
+{
+  "project": "authoring:plan-21",
+  "tasks": [
+    {
+      "id": "plan-21-t001",
+      "title": "Measure a dispatched worker on every dispatch this host makes (#1)",
+      "depends_on": [],
+      "unit": "Unit 01: a dispatched worker"
+    },
+    {
+      "id": "plan-21-t002",
+      "title": "Measure the design document on every dispatch this host makes (#2)",
+      "depends_on": [
+        "plan-21-t001"
+      ],
+      "unit": "Unit 02: the design document"
+    },
+    {
+      "id": "plan-21-t003",
+      "title": "Refuse the publication closeout without a second copy of the rule (#3)",
+      "depends_on": [
+        "plan-21-t001"
+      ],
+      "unit": "Unit 03: the publication closeout"
+    },
+    {
+      "id": "plan-21-t004",
+      "title": "Render the engine's channel on every dispatch this host makes (#4)",
+      "depends_on": [
+        "plan-21-t001"
+      ],
+      "unit": "Unit 04: the engine's channel"
+    },
+    {
+      "id": "plan-21-t005",
+      "title": "Refuse the engine's channel without a second copy of the rule (#5)",
+      "depends_on": [
+        "plan-21-t001"
+      ],
+      "unit": "Unit 05: the engine's channel"
+    },
+    {
+      "id": "plan-21-t006",
+      "title": "Record the publication closeout on every dispatch this host makes (#6)",
+      "depends_on": [
+        "plan-21-t001"
+      ],
+      "unit": "Unit 06: the publication closeout"
+    },
+    {
+      "id": "plan-21-t007",
+      "title": "Hold the manager's allowlist with one source for its contract (#7)",
+      "depends_on": [
+        "plan-21-t001"
+      ],
+      "unit": "Unit 07: the manager's allowlist"
+    },
+    {
+      "id": "plan-21-t008",
+      "title": "Measure the design document on every dispatch this host makes (#8)",
+      "depends_on": [
+        "plan-21-t001"
+      ],
+      "unit": "Unit 08: the design document"
+    },
+    {
+      "id": "plan-21-t009",
+      "title": "Measure the manager's allowlist so a failed node names its cause (#9)",
+      "depends_on": [
+        "plan-21-t001"
+      ],
+      "unit": "Unit 09: the manager's allowlist"
+    },
+    {
+      "id": "plan-21-t010",
+      "title": "Bound the publication closeout so a reader sees what changed (#10)",
+      "depends_on": [
+        "plan-21-t001"
+      ],
+      "unit": "Unit 10: the publication closeout"
+    },
+    {
+      "id": "plan-21-t011",
+      "title": "Expose the manager's allowlist so a failed node names its cause (#11)",
+      "depends_on": [
+        "plan-21-t001"
+      ],
+      "unit": "Unit 11: the manager's allowlist"
+    },
+    {
+      "id": "plan-21-t012",
+      "title": "Measure the observer graph without a second copy of the rule (#12)",
+      "depends_on": [
+        "plan-21-t001"
+      ],
+      "unit": "Unit 12: the observer graph"
+    },
+    {
+      "id": "plan-21-t013",
+      "title": "Carry the engine's channel against the pinned engine release (#13)",
+      "depends_on": [
+        "plan-21-t001"
+      ],
+      "unit": "Unit 13: the engine's channel"
+    },
+    {
+      "id": "plan-21-t014",
+      "title": "Record the publication closeout against the pinned engine release (#14)",
+      "depends_on": [
+        "plan-21-t001"
+      ],
+      "unit": "Unit 14: the publication closeout"
+    },
+    {
+      "id": "plan-21-t015",
+      "title": "Record the engine's channel with one source for its contract (#15)",
+      "depends_on": [
+        "plan-21-t011"
+      ],
+      "unit": "Unit 11: the manager's allowlist"
+    },
+    {
+      "id": "plan-21-t016",
+      "title": "Carry the manager's allowlist with one source for its contract (#16)",
+      "depends_on": [
+        "plan-21-t013"
+      ],
+      "unit": "Unit 13: the engine's channel"
+    },
+    {
+      "id": "plan-21-t017",
+      "title": "Add the publication closeout against the pinned engine release (#17)",
+      "depends_on": [
+        "plan-21-t008",
+        "plan-21-t006"
+      ],
+      "unit": "Unit 08: the design document"
+    },
+    {
+      "id": "plan-21-t018",
+      "title": "Measure the publication closeout so a reader sees what changed (#18)",
+      "depends_on": [
+        "plan-21-t012"
+      ],
+      "unit": "Unit 12: the observer graph"
+    },
+    {
+      "id": "plan-21-t019",
+      "title": "Carry the manager's allowlist without a second copy of the rule (#19)",
+      "depends_on": [
+        "plan-21-t015"
+      ],
+      "unit": "Unit 11: the manager's allowlist"
+    },
+    {
+      "id": "plan-21-t020",
+      "title": "Settle the manager's allowlist on every dispatch this host makes (#20)",
+      "depends_on": [
+        "plan-21-t017",
+        "plan-21-t015"
+      ],
+      "unit": "Unit 08: the design document"
+    },
+    {
+      "id": "plan-21-t021",
+      "title": "Record the engine's channel without a second copy of the rule (#21)",
+      "depends_on": [
+        "plan-21-t020",
+        "plan-21-t019"
+      ],
+      "unit": "Unit 08: the design document"
+    }
+  ]
+}

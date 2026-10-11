@@ -5,6 +5,7 @@ status: "todo"
 repositories: ["github.com/nickderobertis/some-service"]
 metadata:
   "onepipeline.id": "health"
+  "orchestrator.unit": "Health endpoint"
   "onepipeline.repo_type": "team"
   "onepipeline.persona": "engineer"
   "onetaskgraph.template": {"answers_digest":"sha256:193d52d4e100fcbe40f89f6785ded2c37e5c6a15d650520becdbcc7b2a3cbc31","body_digest":"sha256:20719e708ea8e830557cde74f13010c825961e68a1284515d831098802a94a7a","digest":"sha256:094afa20a55d0b9740923d270cdb02667b834b6b43c1b2c59f9e38b68c8e7325","template":"onepipeline:plan-task"}

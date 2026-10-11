@@ -14,11 +14,13 @@ import itertools
 import json
 import os
 import re
+import struct
 import subprocess
 import tempfile
-from collections.abc import Iterable, Mapping
+import zlib
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import plan_fixture_source
 from published_tools import ONETASKGRAPH_BIN
@@ -85,6 +87,9 @@ def local_project(content: str, name: str) -> str:
     produce a project no `just orchestrate` could start — and every journey that launches
     one would be asserting about that refusal instead of about what it came to test.
 
+    Each task records the fixture's one unit unless it names its own, because a task
+    without one is refused by `just check-plan`.
+
     The document is rendered the way a design-doc dispatch renders one — the pinned
     engine's `template resolve design-doc` piped into the pinned store's `document create`
     — and the approval is recorded by the real `just approve-design`, the same seam
@@ -99,6 +104,11 @@ def local_project(content: str, name: str) -> str:
     if not isinstance(plan, dict):
         raise ValueError("a plan fixture must be a JSON object")
     plan.setdefault("name", native)
+    # Every task records the unit it changes, as a planner's do, which `just check-plan`
+    # refuses a task without; a fixture's task that names none changes the fixture itself.
+    for task in plan.get("tasks", []):
+        if isinstance(task, dict):
+            task.setdefault("unit", FIXTURE_UNIT)
     write_plan_project(plan_fixture_source.root(), plan, native_id=native)
     project = f"test-fixtures:{native}"
     budgeted(plan_fixture_source.SOURCE, native, no_budgets(plan_repositories(plan)))
@@ -477,12 +487,48 @@ def _designed(native: str) -> None:
 FIXTURE_UNIT = "Fixture"
 
 
+class GraphImage(TypedDict):
+    """What :func:`designed` takes to open a document's Planned tasks with a graph image."""
+
+    answers: Mapping[str, object]
+    assets: Sequence[Path]
+
+
+def graph_image(directory: Path) -> GraphImage:
+    """What a fixture document of a plan with a dependency edge carries to open with its graph.
+
+    `just approve-design` refuses a document listing more than one planned task with a
+    dependency between them unless its Planned tasks section opens with an image of the
+    plan's graph held as its asset; `just finish-plan` renders that image from the plan. A
+    fixture that writes its document directly stands in for the render with one small PNG
+    written into ``directory``, given as :func:`designed`'s ``answers`` and ``assets``.
+    """
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+        )
+
+    pixels = zlib.compress(b"".join(b"\x00" + bytes([row, 128, 255 - row] * 4) for row in range(4)))
+    image = directory / "plan-dag.png"
+    directory.mkdir(parents=True, exist_ok=True)
+    image.write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 4, 4, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", pixels)
+        + chunk(b"IEND", b"")
+    )
+    return GraphImage(answers={"dag_image": image.name}, assets=[image])
+
+
 def designed(
     source: str,
     native: str,
     planned_tasks: list[dict[str, str]],
     environment: dict[str, str] | None = None,
     budget_answers: Mapping[str, object] | None = None,
+    answers: Mapping[str, object] | None = None,
+    assets: Sequence[Path] = (),
 ) -> None:
     """Render ``native``'s design document into ``source`` the way a design-doc dispatch does.
 
@@ -493,9 +539,10 @@ def designed(
     root of its own; the planned tasks are the one answer a journey states, because each
     row's location is where that journey's store put the task. Every row changes the one
     unit the fixture is, unless it names its own. ``budget_answers`` are the document's
-    budget answers, as `python -m orchestrator.plan_budgets` prints them, when given.
+    budget answers, as `python -m orchestrator.plan_budgets` prints them, when given;
+    ``answers`` replace any of the others, and each of ``assets`` is given with `--asset`.
     """
-    answers = {
+    composed = {
         "what": f"The fixture plan {native}.",
         "why": "A journey needs a project it can launch.",
         "architecture": "One project, its tasks, and this document.",
@@ -512,6 +559,7 @@ def designed(
         "acceptance_criteria": ["The journey that launched it passes."],
         "planned_tasks": [{"unit": FIXTURE_UNIT, **row} for row in planned_tasks],
         **(budget_answers or {}),
+        **(answers or {}),
     }
     resolved = subprocess.run(
         [str(_ENGINE), "template", "resolve", "design-doc", "--json"]
@@ -525,12 +573,13 @@ def designed(
     if resolved.returncode != 0:
         raise AssertionError(f"the design-doc template did not resolve: {resolved.stderr}")
     with tempfile.NamedTemporaryFile("w", suffix=".json", encoding="utf-8") as written:
-        json.dump(answers, written)
+        json.dump(composed, written)
         written.flush()
         created = subprocess.run(
             [str(ONETASKGRAPH_BIN), "document", "create", source]
             + ["--project", native, "--title", f"Design: {native}", "--id", f"{native}-design"]
-            + ["--template-loader", "-", "--answers", written.name, "--no-interactive"],
+            + ["--template-loader", "-", "--answers", written.name, "--no-interactive"]
+            + [flag for asset in assets for flag in ("--asset", str(asset))],
             cwd=REPO_ROOT,
             env=environment,
             input=resolved.stdout,

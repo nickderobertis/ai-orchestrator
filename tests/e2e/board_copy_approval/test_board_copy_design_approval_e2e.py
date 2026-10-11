@@ -34,7 +34,7 @@ from github_board import (
     _plan_environment,
     _serving_board,
 )
-from project_fixtures import designed, reviewed
+from project_fixtures import designed, graph_image, reviewed
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
@@ -180,6 +180,7 @@ def _authored(tmp_path: Path, root: Path, environment: Mapping[str, str]) -> dic
             str(answered),
             f"--metadata=onepipeline.id={json.dumps(node)}",
             '--metadata=onepipeline.persona="engineer"',
+            '--metadata=orchestrator.unit="Listing"',
             *depends,
         )
         assert made.returncode == 0, made.stdout + made.stderr
@@ -251,6 +252,8 @@ def _drafted_for_the_board(
             },
         ],
         environment,
+        # The second task depends on the first, so the document opens with the plan's graph.
+        **graph_image(tmp_path / "graph"),
     )
     reviewed(RENDERED_QUALIFIED)
     if approve:

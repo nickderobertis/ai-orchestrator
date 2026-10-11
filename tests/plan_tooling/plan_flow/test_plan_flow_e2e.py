@@ -93,6 +93,9 @@ from orchestrator.root import REPO_ROOT
 #: The step a stand-in writer runs to copy the budget command's output into its answers.
 MERGES_THE_BUDGETS = Path(__file__).resolve().parent / "merge_answers.py"
 
+#: The step it runs to copy the rows, units and graph image its task quotes into its answers.
+COPIES_THE_ROWS = Path(__file__).resolve().parent / "copy_quoted_rows.py"
+
 #: This journey is its own Nx project's, `plan-tooling-plan-flow`, rather than a marker tier of the
 #: orchestrator project: it drives a whole real planning flow — the installed
 #: `onepipeline`, two real launches, a dispatched lifecycle node, a judged review turn and
@@ -337,6 +340,7 @@ def _plan_records(stored: Stored) -> dict[str, str]:
                 "persona": "engineer",
                 "title": stored.task_title,
                 "repo": stored.repository,
+                "unit": "Route",
                 "task": (
                     "## What\n\nAdd the paginated listing and the test that drives it.\n\n"
                     "## Why\n\nAn operator cannot see past the first screen of nodes.\n\n"
@@ -354,6 +358,7 @@ def _plan_records(stored: Stored) -> dict[str, str]:
                 "persona": "engineer",
                 "title": stored.second_task_title,
                 "repo": stored.second_repository,
+                "unit": "View",
                 "task": (
                     "## What\n\nFollow the stated cursor from the browser view.\n\n"
                     "## Why\n\nThe shape is worth nothing until something reads it.\n\n"
@@ -443,9 +448,10 @@ def _renders_the_document(tmp_path: Path, stored: Stored, source: str) -> list[s
         "-c",
         'printed=$(uv run python -m orchestrator.plan_budgets "$3:$4") &&'
         ' python3 "$8" "$7" "$printed" &&'
+        ' asset=$(python3 "$9" "$7" "$2") &&'
         ' "$1" template resolve design-doc --json | "$2" document create "$3"'
         ' --project "$4" --title "$5" --id "$6" --template-loader -'
-        ' --answers "$7" --no-interactive',
+        ' --answers "$7" --no-interactive ${asset:+--asset "$asset"}',
         "store-the-document",
         str(ENGINE_BIN),
         str(ONETASKGRAPH_BIN),
@@ -455,6 +461,7 @@ def _renders_the_document(tmp_path: Path, stored: Stored, source: str) -> list[s
         stored.document,
         str(answers),
         str(MERGES_THE_BUDGETS),
+        str(COPIES_THE_ROWS),
     ]
 
 

@@ -1425,6 +1425,59 @@ def test_a_document_whose_stored_answers_the_template_no_longer_takes_is_sent_to
     assert "document render" not in said, said
 
 
+#: The template's Planned tasks header and separator, and the header alone: what a chain
+#: rendering a table with no separator row writes in their place.
+SEPARATED_HEADER = (
+    "| Task | Unit | What it delivers | Depends on | Where it lives |\n"
+    "| --- | --- | --- | --- | --- |\n{% for row in planned_tasks %}"
+)
+UNSEPARATED_HEADER = (
+    "| Task | Unit | What it delivers | Depends on | Where it lives |\n"
+    "{% for row in planned_tasks %}"
+)
+
+
+def test_a_rendered_table_with_no_separator_row_is_refused_by_approve_and_records_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A chain whose table has no separator row renders a document approval can key.
+
+    Its first task row would be dropped as the separator, leaving one task and no edge, so
+    the document would be approved with no graph of a plan whose tasks depend on each other.
+    The chain is a scratch copy of this checkout's design-doc template differing only there,
+    resolved by the real engine, so the key is the real one and the refusal is the table's.
+    """
+    chain = tmp_path / "templates"
+    chain.mkdir()
+    shutil.copyfile(REPO_ROOT / "templates" / "templates.yaml", chain / "templates.yaml")
+    shutil.copyfile(REPO_ROOT / "templates" / "design-doc.md.j2", chain / "design-doc.md.j2")
+    shaped = (chain / "design-doc.md.j2").read_text(encoding="utf-8")
+    assert shaped.count(SEPARATED_HEADER) == 1, "the template's Planned tasks header moved"
+    (chain / "design-doc.md.j2").write_text(
+        shaped.replace(SEPARATED_HEADER, UNSEPARATED_HEADER), encoding="utf-8"
+    )
+    monkeypatch.setattr(design_approval, "TEMPLATE_ROOT", chain)
+    first = {
+        "task": "feat: page",
+        "unit": "Route",
+        "delivers": "the route",
+        "depends_on": "none",
+        "location": "/plans/tasks/page.md",
+    }
+    second = {**first, "task": "feat: show", "depends_on": "feat: page"}
+    planned = {**CURRENT, "planned_tasks": [first, second]}
+    project = _designed(tmp_path / "store", monkeypatch, planned)
+    document = design_approval.design_document(project)
+    assert "| feat: page | Route |" in document.content, document.content
+    assert "| --- |" not in document.content.split(design_approval.PLANNED_TASKS_HEADING)[1]
+    design_approval.approval_key(document, design_approval.resolved_digest(chain))
+
+    with pytest.raises(OSError, match="`## Planned tasks` table is not the design-doc template's"):
+        design_approval.approve(project)
+    held = design_approval.design_document(project)
+    assert design_approval.RECORD_KEY not in held.metadata, held.metadata
+
+
 # llmlint: ignore-end[shell_test_tiers_stay_split]
 
 
@@ -1564,9 +1617,10 @@ def test_a_document_showing_its_visual_changes_or_a_plan_with_none_passes_the_vi
 
 # llmlint: ignore-block[shell_test_tiers_stay_split] Not a shell suite and not a host tool:
 # the plan-store CLI these spawn is the workspace's own locked install, in this tier's key, the
-# store is each test's own temporary one, and they cover `asset_digests`, `served_digests` and
-# `read_document_assets` under the tier's 100% coverage floor, as the `_designed` tests above
-# do; the one reading the plan store's checkout is routed to the uncached tier by its marker.
+# store is each test's own temporary one, and they cover `asset_digests`, `served_digests`,
+# `ungraphed` and `read_document_assets` under the tier's 100% coverage floor, as the
+# `_designed` tests above do; the one reading the plan store's checkout is routed to the
+# uncached tier by its marker.
 def _png(seed: int) -> bytes:
     """A small PNG distinct per ``seed``, which the store accepts as an image asset."""
 
@@ -1793,6 +1847,115 @@ def test_the_served_records_key_is_the_one_the_pinned_plan_store_declares() -> N
     assert shown.returncode == 0, shown.stderr.decode("utf-8", "replace")
     declared = shown.stdout.decode("utf-8")
     assert f'pub const ASSETS_KEY: &\'static str = "{plan_store.ASSETS_KEY}";' in declared
+
+
+#: A Planned tasks table of two tasks, the second depending on the first.
+EDGED_TABLE = (
+    "## Planned tasks\n\n"
+    "| Task | Unit | What it delivers | Depends on | Where it lives |\n"
+    "| --- | --- | --- | --- | --- |\n"
+    "| Draw it | Graph | the picture | none | /a.md |\n"
+    "| Show it \\| twice | Doc | the image | Draw it | /b.md |\n"
+)
+
+#: That table written without its separator row, whose first task row would otherwise be
+#: dropped as the separator, leaving one task and no dependency to require a graph of.
+SEPARATORLESS_TABLE = EDGED_TABLE.replace("| --- | --- | --- | --- | --- |\n", "")
+
+#: The image a Planned tasks section of such a plan opens with.
+GRAPH_IMAGE = "![Dependency graph of the plan's tasks](./plan-dag.png)"
+
+
+def _graphed_locally(root: Path, monkeypatch: pytest.MonkeyPatch, content: str) -> StoreDocument:
+    """Store ``content``, which shows the graph image, with that image as its asset."""
+    monkeypatch.setenv("ONETASKGRAPH_SOURCES__GRAPHED__PLUGIN", "local-md")
+    monkeypatch.setenv("ONETASKGRAPH_SOURCES__GRAPHED__CONFIG__ROOT", str(root / "store"))
+    (root / "store").mkdir(parents=True)
+    (root / "plan-dag.png").write_bytes(_png(3))
+    (root / "body.md").write_text(content, encoding="utf-8")
+    created = subprocess.run(
+        [str(plan_store.locked_binary()), "document", "create", "graphed", "--project", "demo"]
+        + ["--title", APPROVED_TITLE, "--id", "demo-design", "--body-file", str(root / "body.md")]
+        + ["--asset", str(root / "plan-dag.png")],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert created.returncode == 0, created.stderr
+    return _document(qualified_id="graphed:demo-design", content=content)
+
+
+def test_the_planned_tasks_table_is_read_back_cell_by_cell() -> None:
+    assert design_approval.planned_rows(APPROVED_PROSE) == []
+    for malformed in (
+        EDGED_TABLE.replace("| Depends on ", ""),
+        EDGED_TABLE.replace("| Draw it | /b.md |", "| /b.md |"),
+        "## Planned tasks\n\nNo table at all.\n",
+        EDGED_TABLE.split("| --- |")[0],
+        SEPARATORLESS_TABLE,
+    ):
+        with pytest.raises(OSError, match="table is not the design-doc template's"):
+            design_approval.planned_rows(malformed)
+    assert design_approval.planned_rows(f"{EDGED_TABLE}\n## After\n\n| not | ours |\n") == [
+        design_approval.PlannedRow("Draw it", "Graph", "the picture", "none", "/a.md"),
+        design_approval.PlannedRow("Show it \\| twice", "Doc", "the image", "Draw it", "/b.md"),
+    ]
+    aligned = EDGED_TABLE.replace("| --- | --- |", "| :--- | :-: |", 1).replace(
+        "| --- | --- |", "| ---: | - |", 1
+    )
+    assert design_approval.planned_rows(aligned) == design_approval.planned_rows(EDGED_TABLE)
+
+
+def test_an_edged_plans_document_opening_with_no_held_graph_is_not_approved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The table says a task depends on another; the picture of that is required, and held."""
+    shown = _graphed_locally(
+        tmp_path, monkeypatch, EDGED_TABLE.replace("\n\n|", f"\n\n{GRAPH_IMAGE}\n\n|", 1)
+    )
+    bare = _document(qualified_id="graphed:demo-design", content=EDGED_TABLE)
+    with pytest.raises(OSError, match="lists 2 planned tasks with a dependency between them"):
+        design_approval.ungraphed("graphed:demo", bare)
+
+    unheld = _document(
+        qualified_id="graphed:demo-design",
+        content=EDGED_TABLE.replace(
+            "\n\n|", f"\n\n{GRAPH_IMAGE.replace('plan-dag', 'other')}\n\n|", 1
+        ),
+    )
+    with pytest.raises(OSError, match="does not open with an image of their graph held as an"):
+        design_approval.ungraphed("graphed:demo", unheld)
+
+    assert design_approval.ungraphed("graphed:demo", shown) is None
+
+
+def test_an_edged_table_written_without_its_separator_row_is_refused_rather_than_approved() -> None:
+    """Its first task would be read as the separator, leaving one row and no graph required."""
+    bare = _document(qualified_id="graphed:demo-design", content=SEPARATORLESS_TABLE)
+    with pytest.raises(OSError, match="table is not the design-doc template's"):
+        design_approval.ungraphed("graphed:demo", bare)
+
+
+def test_a_graph_served_at_a_url_is_held_and_a_plan_with_no_edge_needs_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(plan_store, "read_document_assets", lambda _document: [])
+    url = "https://img.invalid/plan-dag.png"
+    served = _document(
+        content=EDGED_TABLE.replace("\n\n|", f"\n\n![Dependency graph]({url})\n\n|", 1),
+        metadata={plan_store.ASSETS_KEY: {"plan-dag.png": {"sha256": "0" * 64, "url": url}}},
+    )
+    assert design_approval.ungraphed("board:demo", served) is None
+    edgeless = _document(content=EDGED_TABLE.replace("| Draw it | /b.md |", "| none | /b.md |"))
+    assert design_approval.ungraphed("authoring:demo", edgeless) is None
+    assert (
+        design_approval.ungraphed(
+            "authoring:demo", _document(content=EDGED_TABLE.split("| Show")[0])
+        )
+        is None
+    )
+    assert design_approval.ungraphed("authoring:demo", _document()) is None
 
 
 # llmlint: ignore-end[shell_test_tiers_stay_split]

@@ -2195,4 +2195,61 @@ def test_an_image_in_a_form_approval_cannot_read_is_refused_naming_it(
 # llmlint: ignore-end[shell_test_tiers_stay_split]
 
 
+#: Two planned tasks, the second depending on the first: a plan whose graph has an edge.
+EDGED_ROWS = [
+    {
+        "task": "handoff",
+        "unit": "Handoff",
+        "delivers": "the recorded no-change handoff",
+        "depends_on": "none",
+        "location": "the store's own location",
+    },
+    {
+        "task": "follow-up",
+        "unit": "Handoff",
+        "delivers": "the second handoff",
+        "depends_on": "handoff",
+        "location": "the store's own location",
+    },
+]
+
+
+@pytest.mark.xdist_group("approve-design")
+def test_an_edged_plans_document_is_approved_only_once_it_opens_with_its_held_graph(
+    store: Store, runs: Path, tmp_path: Path
+) -> None:
+    """A table of tasks depending on each other needs the picture of it, held by the document.
+
+    The document's stored Planned tasks has two rows and a dependency; rendered without a
+    `dag_image` it is refused by the real recipe, naming the missing graph, and nothing is
+    recorded. Rendered again opening with the graph image, given with `--asset`, it is
+    approved.
+    """
+    native = "approve-design-graph"
+    project = store.plan(native)
+    store.document(native, {**DESIGN, "planned_tasks": EDGED_ROWS})
+
+    refused = _just("approve-design", project, runs=runs)
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+    assert "lists 2 planned tasks with a dependency between them" in refused.stderr
+    assert "does not open with an image of their graph held as an asset" in refused.stderr
+    assert all(RECORD_KEY not in one["item"]["metadata"] for one in store.listed())
+
+    image = tmp_path / "plan-dag.png"
+    write_noise_png(image, 7, TYPICAL)
+    answers = tmp_path / "graphed.answers.json"
+    answers.write_text(
+        json.dumps({**DESIGN, "planned_tasks": EDGED_ROWS, "dag_image": "plan-dag.png"}),
+        encoding="utf-8",
+    )
+    store._piped(
+        *("document", "create", SOURCE, "--project", native, "--title", f"Design: {native}"),
+        *("--id", f"{native}-design", "--answers", str(answers), "--asset", str(image)),
+        resolving=design_chain.resolve_arguments(None),
+    )
+    approved = _just("approve-design", project, runs=runs)
+    assert approved.returncode == 0, approved.stdout + approved.stderr
+    assert "recorded the approval" in approved.stdout, approved.stdout
+
+
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

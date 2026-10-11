@@ -153,6 +153,7 @@ def _drafted(
         {
             "id": NODE,
             "persona": "engineer",
+            "unit": "Listing",
             "repo": f"https://{REPOSITORY}",
             "title": "feat: page the node listing",
             "task": _task(shown),

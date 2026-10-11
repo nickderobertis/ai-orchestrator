@@ -104,6 +104,7 @@ def _tail(destination: str = THE_BOARD, project: str = PLAN_PROJECT) -> tuple[st
     return (
         f"uv run orchestrator-review-plan {project}",
         f"uv run orchestrator-check-plan {project}",
+        *_graph_reads(project),
         *_writer_task(project),
         f"uv run orchestrator-launch-gate {DESIGN_PROJECT} --dag-graph off",
         ENGINE_VERSION,
@@ -116,6 +117,18 @@ def _tail(destination: str = THE_BOARD, project: str = PLAN_PROJECT) -> tuple[st
 #: Where the tail's composed answers file is named on a trace line: a scratch file whose
 #: name is the system's to choose, so a row states it as this placeholder.
 ANSWERS = "--answers <answers>"
+
+
+def _graph_reads(project: str) -> tuple[str, ...]:
+    """The store's two reads of the plan's graph, grouped by unit: the picture's, then the rows'.
+
+    Through `uv run`, as the tail's other plan-store reads are, so a checkout that delegates
+    to another's installs reaches the store the same way.
+    """
+    return tuple(
+        f"uv run onetaskgraph project graph {project} --format {form} --group-by orchestrator.unit"
+        for form in ("mermaid", "json")
+    )
 
 
 def _writer_task(project: str) -> tuple[str, ...]:
@@ -372,6 +385,7 @@ DELEGATIONS = (
         "uv run orchestrator-review-plan authoring:listing-cursor",
         then=(
             "uv run orchestrator-check-plan authoring:listing-cursor",
+            *_graph_reads("authoring:listing-cursor"),
             *_writer_task("authoring:listing-cursor"),
             "uv run orchestrator-launch-gate authoring:cursor-shape-design --dag-graph off",
             ENGINE_VERSION,

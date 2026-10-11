@@ -10,6 +10,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, NamedTuple, NotRequired, TypedDict, cast
 
+from orchestrator import plan_units
+
 
 class PlanNode(TypedDict):
     """One generated node before it is serialized as a local-md task."""
@@ -20,6 +22,7 @@ class PlanNode(TypedDict):
     deps: NotRequired[list[str]]
     repo: NotRequired[str]
     delivers: NotRequired[list[str]]
+    unit: NotRequired[str]
 
 
 class PlanDocument(TypedDict):
@@ -245,6 +248,7 @@ def render_plan_project(
         deps = node.pop("deps", [])
         repo = node.pop("repo", None)
         delivers = node.pop("delivers", [])
+        unit = node.pop("unit", plan_units.ABSENT)
         if not isinstance(body, str) or not isinstance(title, str):
             raise ValueError(f"generated task {node_id!r} requires string title and task")
         if not isinstance(deps, list) or not all(
@@ -310,6 +314,14 @@ def render_plan_project(
         }
         if cross_dag:
             metadata_fields[CROSS_DAG_DEPS] = cross_dag
+        # The unit the task changes is this repository's own record, never an engine field,
+        # so it is written under its own key exactly as a planner's `task create --metadata`
+        # writes it; `orchestrator/plan_units.py` states the key and holds its value.
+        if unit is not plan_units.ABSENT:
+            wrong = plan_units.problem(unit)
+            if wrong is not None:
+                raise ValueError(f"generated task {node_id!r} {wrong}")
+            metadata_fields[plan_units.UNIT_KEY] = unit
         fields["metadata"] = metadata_fields
         rendered[Path(TASKS_DIRECTORY) / project / f"{node_slug}.md"] = frontmatter(fields, body)
     # The project document is rendered last, and `write_plan_project` writes in this

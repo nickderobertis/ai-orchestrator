@@ -46,6 +46,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict, cast
 
+import copy_quoted_rows
+
 #: What the journey names, under the `FAKE_` prefix a launch keeps: the real engine, the
 #: pinned store and `onevcs`, the scenario and where each `start` is logged.
 REAL = "FAKE_ENGINE_REAL"
@@ -210,7 +212,9 @@ def _create_task(
     return str(held["id"])
 
 
-def _document(plan: str, document: str, template: str, answers: dict[str, object]) -> None:
+def _document(
+    plan: str, document: str, template: str, answers: dict[str, object], asset: str = ""
+) -> None:
     source, _, native = plan.partition(":")
     _store(
         "document",
@@ -227,6 +231,7 @@ def _document(plan: str, document: str, template: str, answers: dict[str, object
         "--answers",
         _with_answers(answers),
         "--no-interactive",
+        *(("--asset", asset) if asset else ()),
         stdin=_resolved(template),
     )
 
@@ -270,6 +275,7 @@ def draft(scenario: Scenario) -> list[Node]:
         scenario["task"],
         'onepipeline.id="build-listing"',
         'onepipeline.persona="engineer"',
+        'orchestrator.unit="Listing"',
         repository=scenario["repository"],
     )
     if scenario["budgets"] is not None:
@@ -285,6 +291,7 @@ def draft(scenario: Scenario) -> list[Node]:
             scenario["spike_task"],
             f'onepipeline.id="{spike}"',
             'onepipeline.persona="engineer"',
+            'orchestrator.unit="Listing"',
             *publish,
             repository=scenario["repository"],
             depends_on=tuple(created[dep] for dep in scenario.get("spike_deps", {}).get(spike, [])),
@@ -508,8 +515,10 @@ def design(scenario: Scenario, project: str) -> list[Node]:
     (command,) = set(re.findall(r"`(uv run python -m orchestrator\.plan_budgets [^`]+)`", content))
     printed = subprocess.run(shlex.split(command), capture_output=True, text=True, check=True)
     answers.update(json.loads(printed.stdout))
+    # And the rows, units and graph image the task quotes, copied as a writer copies them.
+    answers, image = copy_quoted_rows.copied(answers, content)
     plan = scenario["plan"]
-    _document(plan, f"{plan.partition(':')[2]}-design", "design-doc", answers)
+    _document(plan, f"{plan.partition(':')[2]}-design", "design-doc", answers, image)
     return [{"id": "design-doc", "status": "done"}]
 
 

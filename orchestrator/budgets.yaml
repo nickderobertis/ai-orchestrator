@@ -63,8 +63,9 @@ budgets:
     threshold: 1600
   # llmlint: ignore-end[budgets_track_product_owner_outcomes]
   # This repository's orchestrator project keeps every test under tests/ and every fixture
-  # under tests/fixtures, and orchestrator/ holds the package alone; the budgets above are
-  # measured from tests/ too, through tests/budget_telemetry.py.
+  # under tests/fixtures, and orchestrator/ holds the package and, under budgets/, only the
+  # design document graph's own measurement below; the budgets above are measured from
+  # tests/ too, through tests/budget_telemetry.py.
   # llmlint: ignore-block[budgets_scoped_to_minimal_tree] see above
   - id: plan-checklist-added-seconds
     description: >-
@@ -88,3 +89,25 @@ budgets:
     direction: max
     threshold: 3000000
   # llmlint: ignore-end[budgets_scoped_to_minimal_tree]
+  - id: design-doc-dag-label-size
+    description: >-
+      Smallest on-screen label size of the Planned tasks graph a design document opens with,
+      read in a board's 880-px column, across four plan shapes of 10, 21, 48 and 100 tasks
+      grouped by unit. It protects whether a person approving a plan can read its graph.
+    measure: reported
+    command: ["budgets/design-doc-dag-label-size.sh"]
+    unit: pixels
+    direction: min
+    threshold: 10
+  # llmlint: ignore-block[budgets_track_product_owner_outcomes] An escalated exception the user asked for: one step inward from label size, whose denominator this is, so a widening layout is caught and named before labels become unreadable rather than only once they have.
+  - id: design-doc-dag-natural-width
+    description: >-
+      Largest natural width of the Planned tasks graph across the same four plan shapes,
+      before it is fitted to the page. A wider picture shrinks every label once fitted, so
+      this names a widening layout before labels become unreadable.
+    measure: reported
+    command: ["budgets/design-doc-dag-natural-width.sh"]
+    unit: pixels
+    direction: max
+    threshold: 1350
+  # llmlint: ignore-end[budgets_track_product_owner_outcomes]

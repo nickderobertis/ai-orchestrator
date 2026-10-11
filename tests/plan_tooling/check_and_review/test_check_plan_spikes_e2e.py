@@ -171,7 +171,8 @@ def _plan(
             "schema_version": 3,
             "goal": {"text": "Page the node listing"},
             "name": native,
-            "tasks": nodes,
+            # Each node records the unit it changes, as a planner's do.
+            "tasks": [{"unit": "Listing", **node} for node in nodes],
         },
         native_id=native,
         project_metadata=None

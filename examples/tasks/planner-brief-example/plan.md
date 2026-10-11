@@ -4,6 +4,7 @@ project: "planner-brief-example"
 status: "todo"
 metadata:
   "onepipeline.id": "plan"
+  "orchestrator.unit": "Planning"
   "onepipeline.persona": "../personas/planner.yaml"
 ---
 

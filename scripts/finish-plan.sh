@@ -26,7 +26,9 @@
 #   3. **launch** the design-document node, as its own one-node planning project whose
 #      task is rendered from the `plan-task` template and checked by the engine before
 #      anything is dispatched;
-#   4. **hold** the written document's budget answers to what the plan's records state;
+#   4. **hold** the written document's budget answers to what the plan's records state, and
+#      its Planned tasks rows, Architecture units and graph image to the plan's graph, which
+#      this flow read and rendered before the launch (`orchestrator/planned_tasks.py`);
 #   5. **copy** the plan and its documents into the destination a person reviews them in;
 #   6. **report** where that destination holds the project and the document, read back
 #      out of the store rather than composed from a name;
@@ -44,7 +46,8 @@
 # them apart would retry one as the other: 1 is the review refusing the plan's own
 # criteria or its plan checklist failing a rule, 3 is the pre-launch check refusing the plan, 6 is the engine refusing the
 # design-document node's own rendered task, 7 is the written document restating budget
-# answers that differ from the plan's records, 5 is the destination refusing the copy, 4 is
+# answers that differ from the plan's records or a table, units or graph image that differ
+# from the plan's graph, 5 is the destination refusing the copy, 4 is
 # the design-document launch not settling, and 2 is a flow that could not run at all. There is no repair loop here and there will not be one: the planner's own
 # judge is the repair loop and it has already run, so a refusal hands every refused
 # criterion back and stops.
@@ -182,7 +185,7 @@ DAG_GRAPH_FLAG="--dag-graph"
 WRITER_ANSWERS_PROGRAM='
 import json, pathlib, re, sys
 
-(brief, plan, document, template, note, resolve, visual_report, visual_answers, visual_shown) = sys.argv[1:10]
+(brief, plan, document, template, note, resolve, visual_report, visual_answers, visual_shown, graph_rows, graph_image, graph_read) = sys.argv[1:13]
 # Line endings and trailing blanks are read the way `scripts/plan-brief.sh` reads a heading
 # when it validates the brief, so a brief it accepted is one this composes from.
 text = pathlib.Path(brief).read_text(encoding="utf-8").replace("\r\n", "\n")
@@ -254,6 +257,40 @@ if visual_report:
     )
 else:
     visual_criterion = "The document\u2019s `visual_changes` answer is `[]`."
+# The rows are quoted rather than named, like the visual answer: the flow derived them from
+# the plan\u2019s graph, and the writer copies their four columns and authors only `delivers`.
+derived = json.loads(graph_rows)
+rows_quoted = json.dumps(derived["rows"], ensure_ascii=False, indent=2)
+units_quoted = ", ".join(f"`{unit}`" for unit in derived["units"])
+planned_task = (
+    f"The flow read the plan\u2019s graph with `{graph_read}` and derived the planned-tasks "
+    f"rows from it. Answer `planned_tasks` with exactly these rows, in this order, each "
+    f"keeping its `task`, `unit`, `depends_on` and `location` exactly as given and adding "
+    f"only `delivers`, which you write:\n\n```json\n{rows_quoted}\n```\n\n"
+    f"The `name`s of the `units` answer are exactly these units, each once: {units_quoted}.\n\n"
+)
+rows_criterion = (
+    "The document\u2019s `planned_tasks` answer has exactly the rows this task quotes, in "
+    "that order, each with the `task`, `unit`, `depends_on` and `location` quoted for it, and "
+    "the `name`s of its `units` answer are exactly the units this task quotes."
+)
+if graph_image:
+    planned_task += (
+        f"The flow rendered that graph, each task inside its unit, to `{graph_image}`. Answer "
+        f"`dag_image` with `{pathlib.Path(graph_image).name}` and give that file to the command "
+        f"that stores the document as `--asset {graph_image}`. Never draw, edit or replace "
+        f"it.\n\n"
+    )
+    graph_criterion = (
+        f"The document\u2019s `dag_image` answer is `{pathlib.Path(graph_image).name}`, and the "
+        f"document holds `{graph_image}`, byte for byte, as that asset."
+    )
+else:
+    planned_task += (
+        "The plan has one task, or no task depending on another, so its graph would only "
+        "repeat the table: the document shows none.\n\n"
+    )
+    graph_criterion = "The document\u2019s `dag_image` answer is `\"\"`."
 answers = {
     "what": (
         f"Write the design document a person reviews the plan `{plan}` as \u2014 terse prose, "
@@ -267,6 +304,7 @@ answers = {
         f"guidance comments in that chain say how to write it, and `{variables}` lists the "
         f"answers it takes.\n\n"
         f"{budget_task}\n\n"
+        f"{planned_task}"
         f"{visual_task}"
         f"What the planner was asked to plan, in the brief\u2019s words, for the document\u2019s What:"
         f"\n\n{brief_what}\n\n"
@@ -292,9 +330,8 @@ answers = {
         f"wrote it, which replaces a document the store already holds by that id whole, the "
         f"answers it was rendered from included, so it records `onepipeline:{template}` "
         f"provenance and the answers it was rendered from.",
-        f"Every task of `{plan}` has one row in the planned-tasks answer, and each row\u2019s "
-        "location is the location the plan store reports for that task, read back out of the "
-        "store and never composed by hand.",
+        rows_criterion,
+        graph_criterion,
         budget_criterion,
         visual_criterion,
         "Every image the document references is held as an asset of the document.",
@@ -634,6 +671,48 @@ fi
     fail "what the design document of $plan_project restates about its budgets could not be read; the diagnostic above names why" \
         "repair what it names, then run this command again"
 
+# The plan's graph, read once for this flow and kept beside what it renders, so the picture,
+# the rows the writer copies and the hold after it are one read: the plan store's own
+# `project graph`, grouped by the unit each task records under the key
+# `orchestrator/plan_units.py` states, as Mermaid for the picture and as JSON for the rows.
+# Reached through `uv run`, as this script's other plan-store reads are, so the store is
+# the project's locked install in a checkout and a delegating one alike. A read that fails
+# stops the flow here, before anything is launched.
+unit_key=$("$python" -c 'from orchestrator import plan_units; print(plan_units.UNIT_KEY)') ||
+    fail "the metadata key a task records its unit under could not be read" \
+        "restore the pinned toolchain with 'just bootstrap', then retry"
+graph_dir=$(mktemp -d "${TMPDIR:-/tmp}/finish-plan-graph.XXXXXX") ||
+    fail "a scratch directory for the plan's graph could not be created" \
+        "check that ${TMPDIR:-/tmp} is a directory this launch may write into, then retry"
+graph_mermaid="$graph_dir/plan-graph.mmd"
+graph_json="$graph_dir/plan-graph.json"
+# llmlint: ignore[tool_output_is_signal] The one line naming where the graph this flow read is kept: every refusal after it — a render, the rows, the hold on the written document — is a difference from those files, and they are what an operator opens to repair one.
+echo "finish-plan: the graph of $plan_project this flow reads is kept in $graph_dir" >&2
+graph_read="uv run onetaskgraph project graph $plan_project --group-by $unit_key"
+read_graph() {
+    uv run onetaskgraph project graph "$plan_project" --format "$1" --group-by "$unit_key" >"$2" ||
+        fail "the --format $1 read of the graph of $plan_project failed, for the reason above, so no design document was launched" \
+            "repair what it names until '$graph_read --format $1' prints the graph, then run this command again"
+}
+read_graph mermaid "$graph_mermaid"
+read_graph json "$graph_json"
+graph_rows=$("$python" -m orchestrator.planned_tasks "$plan_project" --graph "$graph_json") ||
+    fail "the planned-tasks rows of $plan_project could not be derived from its graph, for the reason above" \
+        "repair what it names until 'python -m orchestrator.planned_tasks $plan_project --graph $graph_json' prints them, then run this command again"
+graph_image=""
+shows=$("$python" -c 'import json, sys; print(json.loads(sys.argv[1])["image"])' "$graph_rows") ||
+    fail "whether the design document of $plan_project shows its graph could not be read from the rows derived for it" \
+        "restore the pinned toolchain with 'just bootstrap', then retry"
+if [ "$shows" = True ]; then
+    image_name=$("$python" -c 'from orchestrator import planned_tasks; print(planned_tasks.IMAGE_NAME)') ||
+        fail "the file name the graph image is rendered to could not be read" \
+            "restore the pinned toolchain with 'just bootstrap', then retry"
+    graph_image="$graph_dir/$image_name"
+    recipe render-diagram "$graph_mermaid" "$graph_image" ||
+        fail "the graph of $plan_project could not be rendered to $graph_image, for the reason above (a missing browser or mermaid-cli is provisioned with 'just bootstrap'), so no design document was launched" \
+            "repair what it names until 'just render-diagram $graph_mermaid $graph_image' renders it, then run this command again"
+fi
+
 plan_source=${plan_project%%:*}
 design_document_id="${plan_project#*:}$DESIGN_DOC_ID_SUFFIX"
 
@@ -713,7 +792,7 @@ answers_file=$(mktemp "${TMPDIR:-/tmp}/finish-plan-answers.XXXXXX") || {
 }
 "$python" -c "$WRITER_ANSWERS_PROGRAM" "$brief" "$plan_project" \
     "$design_document_id" "$DOCUMENT_TEMPLATE" "$PLAN_DIRECT_PLACEMENT_NOTE" "$document_resolve" \
-    "$visual_report" "$visual_answers" "$visual_shown" >"$answers_file" || {
+    "$visual_report" "$visual_answers" "$visual_shown" "$graph_rows" "$graph_image" "$graph_read" >"$answers_file" || {
     discard_answers
     take_back
     fail "the design-document task's answers could not be composed from '$brief' by $python; the diagnostic above names why" \
@@ -848,6 +927,27 @@ if [ "$budgets_status" -ne 0 ]; then
         exit "$DOCUMENT_REFUSED"
     fi
     fail "the budget answers of the design document of $plan_project could not be read; the diagnostic above names why" \
+        "repair what it names, then run this command again"
+fi
+
+# The document's Planned tasks, its Architecture's units and its graph image, held to the
+# graph this flow read before the writer: the rows the writer copied, the units they name,
+# and the image the flow rendered, byte for byte, or none for a plan whose graph would only
+# repeat its table. A difference is named here, and nothing is copied.
+graph_status=0
+if [ -n "$graph_image" ]; then
+    "$python" -m orchestrator.planned_tasks "$plan_project" --graph "$graph_json" \
+        --check-design-document --image "$graph_image" || graph_status=$?
+else
+    "$python" -m orchestrator.planned_tasks "$plan_project" --graph "$graph_json" \
+        --check-design-document || graph_status=$?
+fi
+if [ "$graph_status" -ne 0 ]; then
+    if [ "$graph_status" -eq 1 ]; then
+        echo "finish-plan: the design document of $plan_project parts from its plan's graph, as named above, so nothing was copied into '$destination'; regenerate the document with the rows, units and graph image its task quotes, then run this command again" >&2
+        exit "$DOCUMENT_REFUSED"
+    fi
+    fail "the design document of $plan_project could not be held to its plan's graph; the diagnostic above names why" \
         "repair what it names, then run this command again"
 fi
 

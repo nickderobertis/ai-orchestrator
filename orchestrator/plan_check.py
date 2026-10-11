@@ -38,7 +38,7 @@ import os
 import shutil
 import subprocess
 import sys
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import TypedDict
 
@@ -47,6 +47,7 @@ from orchestrator import (
     plan_budgets,
     plan_review,
     plan_store,
+    plan_units,
     spike_plan,
     structural_guard,
     task_body,
@@ -228,6 +229,65 @@ def _plan_review_refusal(document: object, project: str | None) -> Refusal | Non
     return Refusal(node=None, field="metadata", reason=reason)
 
 
+def _addresses(project: str | None) -> dict[plan_store.NodeId, str]:
+    """Each node of ``project`` by the qualified id the store files its task under.
+
+    What a unit refusal's repair command names. Empty for a check handed no project, and
+    for a store that cannot list it, whose refusal another check here already reports: the
+    refusal then names the listing that finds the id instead.
+    """
+    if project is None:
+        return {}
+    try:
+        listed = plan_store.plan_listing(project)
+    except OSError:
+        return {}
+    return {
+        plan_store.NodeId(node): held.id.model_dump()
+        for held in listed
+        if isinstance(node := held.item.metadata.get("onepipeline.id"), str)
+    }
+
+
+def _unit_refusals(
+    document: object, addresses: Mapping[plan_store.NodeId, str]
+) -> Iterator[tuple[plan_store.NodeId, str]]:
+    """Each task of ``document`` whose unit breaks :mod:`orchestrator.plan_units`'s rule, and why.
+
+    ``addresses`` maps a node to its task's qualified id, which the repair command names; a
+    node it does not map is named by a placeholder, with the listing that finds its id.
+    """
+    tasks = document.get("tasks") if isinstance(document, Mapping) else None
+    for task in tasks if isinstance(tasks, list) else []:
+        if not isinstance(task, Mapping) or not isinstance(task.get("id"), str):
+            continue
+        node = plan_store.NodeId(task["id"])
+        metadata = task.get("metadata")
+        held = (
+            metadata.get(plan_units.UNIT_KEY, plan_units.ABSENT)
+            if isinstance(metadata, Mapping)
+            else plan_units.ABSENT
+        )
+        wrong = plan_units.problem(held)
+        if wrong is None:
+            continue
+        address = addresses.get(node)
+        where = (
+            f"`{plan_units.set_command(address)}`"
+            if address is not None
+            else f"`{plan_units.set_command('<task id>')}`, the task id being the one "
+            f"`onetaskgraph task list --project <project>` lists for this node"
+        )
+        yield (
+            node,
+            f"{wrong}: every task records the unit it changes — a repository, or a part of "
+            f"one — as a non-empty one-line JSON string of at most {plan_units.UNIT_MAX_CHARS} "
+            f"characters, the same string for every task of that unit, because the design "
+            f"document's graph, its planned-tasks table and its Architecture all read it from "
+            f"there. Set it with {where}",
+        )
+
+
 def refusals(document: object, project: str) -> list[Refusal]:
     """Everything this repository refuses about ``document``, in the order it reads it.
 
@@ -257,6 +317,10 @@ def refusals(document: object, project: str) -> list[Refusal]:
     found.extend(
         Refusal(node=refused.node, field=refused.field, reason=refused.reason)
         for refused in task_body.refusals(document)
+    )
+    found.extend(
+        Refusal(node=node, field="metadata", reason=reason)
+        for node, reason in _unit_refusals(document, _addresses(named))
     )
     # Read only for a project the wrapper named: the plan-level answers and the description
     # are the project's, which the loaded plan does not carry, and a check handed no id is

@@ -94,7 +94,7 @@ from plan_store_pin import (
     adopted_release,
     held_below_the_pacing_floor,
 )
-from project_fixtures import budgeted, designed, no_budgets, reviewed
+from project_fixtures import budgeted, designed, graph_image, no_budgets, reviewed
 from published_tools import ONETASKGRAPH_BIN
 from sibling_facts import registered_checkouts
 from test_orchestrate_launch_e2e import _environment as _launch_environment
@@ -3896,6 +3896,7 @@ def _write_delivering_plan(root: Path, delivers: str) -> None:
                     "id": FIRST_NODE,
                     "persona": "engineer",
                     "title": FIRST_TASK_TITLE,
+                    "unit": "Probe",
                     "task": "## What\nReply with done.\n\n## Why\nHold the second node back.\n\n"
                     "## Acceptance criteria\n- The task settles.\n",
                 },
@@ -3903,6 +3904,7 @@ def _write_delivering_plan(root: Path, delivers: str) -> None:
                     "id": DELIVERING_NODE,
                     "persona": "engineer",
                     "title": DELIVERING_TASK_TITLE,
+                    "unit": "Probe",
                     "deps": [FIRST_NODE],
                     "delivers": [delivers],
                     "task": "## What\nReply with done.\n\n## Why\nDeliver the ticket.\n\n"
@@ -3929,6 +3931,7 @@ def _write_delivering_plan(root: Path, delivers: str) -> None:
             },
         ],
         {**os.environ, AUTHORING_ROOT_ENV: str(root)},
+        **graph_image(root.parent / "delivering-graph"),
     )
     recording = subprocess.run(
         ["just", "approve-design", DELIVERING_QUALIFIED],
@@ -4156,11 +4159,15 @@ def _prepare_claiming_launch(
         "--to",
         "plans",
     )
+    project = next(
+        str(entry["destination"]) for entry in copied if entry["source"] == DELIVERING_QUALIFIED
+    )
+    # The document opens with the plan's graph, whose reference the board rewrites to where it
+    # serves the image, so the approval is recorded on the board copy a person reads.
+    _approved_on_the_board(environment, project)
     return _Claiming(
         environment=environment,
-        project=next(
-            str(entry["destination"]) for entry in copied if entry["source"] == DELIVERING_QUALIFIED
-        ),
+        project=project,
         task_items={
             str(entry["source"]).rpartition("/")[2]: str(entry["destination"])
             for entry in copied
@@ -4169,6 +4176,20 @@ def _prepare_claiming_launch(
         ticket_item=str(filed["destination"]),
         gate=gate,
     )
+
+
+def _approved_on_the_board(environment: dict[str, str], project: str) -> None:
+    """Record the approval of ``project``'s board copy through the real recipe."""
+    approved = subprocess.run(
+        ["just", "approve-design", project],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(300),
+        check=False,
+    )
+    assert approved.returncode == 0, approved.stdout + approved.stderr
 
 
 def _launching(claiming: _Claiming) -> subprocess.Popen[str]:
@@ -4519,6 +4540,7 @@ def _write_rendered_project(
             str(answered),
             f"--metadata=onepipeline.id={json.dumps(node)}",
             '--metadata=onepipeline.persona="engineer"',
+            '--metadata=orchestrator.unit="Listing"',
             *depends,
         )
         assert made.returncode == 0, made.stdout + made.stderr
@@ -4543,6 +4565,7 @@ def _write_rendered_project(
             for node, title in (RENDERED_FIRST, RENDERED_SECOND)
         ],
         {**os.environ, AUTHORING_ROOT_ENV: str(root)},
+        **graph_image(root.parent / "rendered-graph"),
     )
     approved = subprocess.run(
         ["just", "approve-design", RENDERED_QUALIFIED],
@@ -4679,6 +4702,9 @@ def test_a_regenerated_task_keeps_its_identity_and_its_board_item_and_launches_r
         second = _recipe(on_the_board, "copy-plan", RENDERED_QUALIFIED, "--to", "plans")
         assert second.returncode == 0, second.stdout + second.stderr
         reissued = {issue.title: issue for issue in BOARD.issues_created_and_kept()}
+        # Its document opens with the plan's graph, which the board serves from where it
+        # hosts the image, so the approval is recorded on the board copy a person reads.
+        _approved_on_the_board(on_the_board, destinations[RENDERED_QUALIFIED])
 
         launching = _launch_environment(tmp_path / "execution", oneharness_bin)
         launching.update(_prepare_plan_sources(root))

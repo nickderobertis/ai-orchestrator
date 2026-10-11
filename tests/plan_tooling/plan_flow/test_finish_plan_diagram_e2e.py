@@ -45,6 +45,7 @@ from typing import Any, NamedTuple
 import pytest
 from nx_workspace import answering_this_checkouts_origin, copy_checkout
 from test_finish_plan_recipe_e2e import (
+    COPIES_THE_ROWS,
     DESIGN_RUN_SUFFIX,
     DESIGN_TASK_MARKER,
     DESTINATION,
@@ -145,6 +146,7 @@ def _writes_a_document_showing_a_diagram(bench: Bench, drafted: Drafted, checkou
                         "set -euo pipefail"
                         '; printed=$(uv run python -m orchestrator.plan_budgets "$3:$4")'
                         '; python3 "$8" "$7" "$printed"'
+                        '; python3 "${13}" "$7" "$2" "${14}" >/dev/null'
                         '; printf "%s" "${10}" > "$9/architecture.mmd"'
                         '; just --justfile "${12}/justfile" render-diagram'
                         ' "$9/architecture.mmd" "$9/architecture.png"'
@@ -169,6 +171,8 @@ def _writes_a_document_showing_a_diagram(bench: Bench, drafted: Drafted, checkou
                         DIAGRAM,
                         SHOWN,
                         str(checkout),
+                        str(COPIES_THE_ROWS),
+                        f"{RUN}{DESIGN_RUN_SUFFIX}",
                     ]
                 ]
             }

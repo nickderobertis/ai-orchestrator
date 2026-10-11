@@ -238,6 +238,10 @@ def _task(criteria: str, section: str = "") -> str:
     )
 
 
+#: The unit every task of a drafted plan changes, recorded as `orchestrator.unit`.
+PLAN_UNIT = "Listing"
+
+
 def _draft(
     name: str,
     criteria: str = STATES_ITS_BAR,
@@ -291,6 +295,7 @@ def _draft(
                         criteria, budget_section(list(owned)) if owned and index == 0 else ""
                     ),
                     **({"repo": repositories[index]} if repositories else {}),
+                    "unit": PLAN_UNIT,
                 }
                 for index in range(max(1, len(repositories)))
             ],
@@ -355,6 +360,10 @@ def _answers(drafted: Drafted) -> dict[str, object]:
 #: The step a stand-in writer runs to copy the budget command's output into its answers:
 #: the file of answers, then the command's printed JSON, merged over it in place.
 MERGES_THE_BUDGETS = Path(__file__).resolve().parent / "merge_answers.py"
+
+#: The step a stand-in writer runs to copy the rows, units and graph image its task quotes
+#: into its answers: the file of answers, then the pinned store; it prints the image to give.
+COPIES_THE_ROWS = Path(__file__).resolve().parent / "copy_quoted_rows.py"
 
 
 def _staged_answers(tmp_path: Path, drafted: Drafted) -> Path:
@@ -451,10 +460,11 @@ def _stores_the_document(bench: Bench, drafted: Drafted, repository: str | None 
                         # copied into the answers as the writer copies them.
                         'printed=$(uv run python -m orchestrator.plan_budgets "$3:$4") &&'
                         ' python3 "$9" "$7" "$printed" &&'
+                        ' asset=$(python3 "${10}" "$7" "$2") &&'
                         ' "$1" template resolve design-doc ${8:+--repository "$8"} --json'
                         ' | "$2" document create "$3"'
                         ' --project "$4" --title "$5" --id "$6" --template-loader -'
-                        ' --answers "$7" --no-interactive',
+                        ' --answers "$7" --no-interactive ${asset:+--asset "$asset"}',
                         "store-the-document",
                         str(ENGINE_BIN),
                         str(ONETASKGRAPH_BIN),
@@ -465,6 +475,7 @@ def _stores_the_document(bench: Bench, drafted: Drafted, repository: str | None 
                         str(answers),
                         repository or "",
                         str(MERGES_THE_BUDGETS),
+                        str(COPIES_THE_ROWS),
                     ]
                 ]
             }
@@ -800,8 +811,12 @@ WRITER_OBLIGATIONS = (
     "create --id ",
     "--template-loader - --no-interactive` wrote it, which replaces a document the store "
     "already holds by that id whole",
-    # Every row's location is the store's own answer.
-    "location is the location the plan store reports for that task",
+    # Every row's four derived columns, and the units, are the ones the task quotes.
+    "answer has exactly the rows this task quotes, in that order, each with the `task`, "
+    "`unit`, `depends_on` and `location` quoted for it",
+    "the `name`s of its `units` answer are exactly the units this task quotes",
+    # A one-task plan's document shows no graph.
+    'The document\u2019s `dag_image` answer is `""`.',
     # And where the store put it is reported.
     "This dispatch reports where the store put the document",
 )

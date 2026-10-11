@@ -197,6 +197,32 @@ SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 VISUAL_HEADING = re.compile(r"^## Visual changes$", re.MULTILINE)
 
 
+#: The heading the design-doc template renders a plan's Planned tasks table under, which for a
+#: plan of more than one task with a dependency edge opens with the graph image.
+PLANNED_TASKS_HEADING = "## Planned tasks\n"
+
+#: A table cell boundary: a `|` the template's `cell` macro did not escape.
+CELL_BOUNDARY = re.compile(r"(?<!\\)\|")
+
+#: A Markdown table's separator cell: dashes, optionally with alignment colons.
+SEPARATOR_CELL = re.compile(r":?-+:?")
+
+#: The Planned tasks table's columns as the template renders them, and what a row with no
+#: prerequisite says in its Depends on column.
+PLANNED_COLUMNS = ["Task", "Unit", "What it delivers", "Depends on", "Where it lives"]
+NO_DEPENDENCY = "none"
+
+
+class PlannedRow(NamedTuple):
+    """One row of a design document's Planned tasks table, as its cells read."""
+
+    task: str
+    unit: str
+    delivers: str
+    depends_on: str
+    location: str
+
+
 class Unrendered(OSError):
     """A document that is not, as it stands, a rendering of the design-doc template in force."""
 
@@ -870,6 +896,9 @@ def approve(project: str) -> Approved:
     unshown(project, document, documents)
     repository = design_chain.plan_repository(project)
     key = approval_key(document, resolved_digest(TEMPLATE_ROOT, repository), repository)
+    # After the key, which refuses a document that is not a rendering of the chain in force:
+    # only such a rendering's table is the one the template's shape is read against.
+    ungraphed(project, document)
     if recorded(document) == key:
         return Approved(document.qualified_id, located(document), held=True)
     value = {"key": key, "approved_at": datetime.now(UTC).isoformat()}
@@ -901,6 +930,66 @@ def unshown(project: str, document: StoreDocument, documents: Sequence[StoreDocu
         f"person would approve it without seeing what the plan changes; regenerate the "
         f"document with its `visual_changes` answer restating that report's, each image "
         f"given with `--asset`, then record the approval again"
+    )
+
+
+def planned_rows(content: str) -> list[PlannedRow]:
+    """The rows of the Planned tasks table ``content`` holds, each as its cells' text.
+
+    Read from the document itself — the table its stored `planned_tasks` answer rendered —
+    rather than from the plan, so a copy on a board is read the same as its draft. A table
+    whose header or rows are not the template's shape is refused rather than read, because a
+    row missing its Depends on cell would otherwise read as a task depending on nothing, and
+    a second row that is not a separator would otherwise be dropped as one with its task.
+    """
+    if PLANNED_TASKS_HEADING not in content:
+        return []
+    section = content.split(PLANNED_TASKS_HEADING, 1)[1].split("\n## ", 1)[0]
+    lines = [line for line in section.splitlines() if line.startswith("|")]
+    cells = [[cell.strip() for cell in CELL_BOUNDARY.split(line)[1:-1]] for line in lines]
+    if (
+        len(cells) < 2
+        or cells[0] != PLANNED_COLUMNS
+        or any(len(row) != len(PLANNED_COLUMNS) for row in cells[1:])
+        or not all(SEPARATOR_CELL.fullmatch(cell) for cell in cells[1])
+    ):
+        raise OSError(
+            f"the `## Planned tasks` table is not the {TEMPLATE_NAME} template's, whose columns "
+            f"are {', '.join(PLANNED_COLUMNS)} on every row, so which tasks depend on which "
+            f"cannot be read; regenerate the document with `just finish-plan <brief>`, then "
+            f"record the approval again"
+        )
+    return [PlannedRow(*row) for row in cells[2:]]
+
+
+def ungraphed(project: str, document: StoreDocument) -> None:
+    """Refuse a design document of a plan with a dependency edge that shows no graph of it.
+
+    A plan of more than one task, at least one of which depends on another, has a picture
+    of its tasks and their dependencies that a person approving it reads at a glance where
+    the table cannot be, so its Planned tasks section opens with that image, held as an
+    asset of the document. A plan of one task, or of none depending on another, passes.
+    """
+    rows = planned_rows(document.content)
+    if len(rows) <= 1 or all(row.depends_on == NO_DEPENDENCY for row in rows):
+        return
+    section = document.content.split(PLANNED_TASKS_HEADING, 1)[1]
+    opening = next((line for line in section.splitlines() if line.strip()), "")
+    image = ASSET_IMAGE.fullmatch(opening.strip())
+    target = image.group(1) if image else None
+    held = {
+        f"{ASSET_PREFIX}{asset.name}"
+        for asset in plan_store.read_document_assets(str(document.qualified_id))
+    } | served_urls(document)
+    if target is not None and target in held:
+        return
+    raise OSError(
+        f"{project}'s design document {document.qualified_id} lists {len(rows)} planned tasks "
+        f"with a dependency between them, and its `## Planned tasks` section does not open with "
+        f"an image of their graph held as an asset of the document, so a person would approve "
+        f"it without seeing how its tasks depend on each other; regenerate it with "
+        f"`just finish-plan <brief>`, which renders that graph from the plan and gives it as "
+        f"`dag_image`, then record the approval again"
     )
 
 

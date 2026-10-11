@@ -16,6 +16,7 @@ real.
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -294,6 +295,8 @@ case "$*" in
       printf '%s\\n' "$FAKE_CHECK_OUTPUT" >&2
       exit 2
     fi ;;
+  "run onetaskgraph project graph "*)
+    cd "$PINNED_ROOT" && exec .venv/bin/onetaskgraph "${@:3}" ;;
   "run onetaskgraph task create "*)
     record="$PLAN_ROOT"/tasks/write-the-design-document.md
     location="${FAKE_CREATED_LOCATION-}"
@@ -312,6 +315,11 @@ exit "${FAKE_UV_EXIT:-0}"
         # The root the store reports its created task under, read through the one helper
         # that composes the variable's name rather than spelled a second time here.
         .replace('"$PLAN_ROOT"', f'"${plan_root_variable.name()}"')
+        # The flow's graph read is answered by the pinned store itself, from this checkout
+        # as the seeding runs it, over the plan the seeding wrote: its rows are what the tail
+        # holds the seeded document to, so an invented answer would be a second statement of
+        # the store's graph to drift.
+        .replace('"$PINNED_ROOT"', shlex.quote(str(ROOT)))
     )
     uv.chmod(0o755)
     # The engine a **launch** reaches: the installed binary in this checkout's own
@@ -415,6 +423,9 @@ def run_recipe(
             [],
             environment,
             budget_answers={"predates_budgets": "", "plan_budgets": no_budgets([]), "budgets": []},
+            # A plan of no task changes no unit, which the tail holds the document's
+            # Architecture to through the plan's graph.
+            answers={"units": []},
         )
     # llmlint: ignore-end[shell_test_tiers_stay_split]
     # The follow-up drafts root every launch exports, stated for the same reason: an

@@ -5,6 +5,7 @@ status: "todo"
 repositories: ["github.com/nickderobertis/some-service"]
 metadata:
   "onepipeline.id": "api"
+  "orchestrator.unit": "Service API"
   "onepipeline.repo_type": "team"
   "onepipeline.persona": "engineer"
   "onetaskgraph.template": {"answers_digest":"sha256:6e18bcb88045629bf311320e6d41697d444915ba522b5d583f44ced46e5987a1","body_digest":"sha256:f8d0d43b10ed4a748079c30fa004557b9e0414f54ea939480ce4f6436c52c640","digest":"sha256:094afa20a55d0b9740923d270cdb02667b834b6b43c1b2c59f9e38b68c8e7325","template":"onepipeline:plan-task"}

@@ -1445,6 +1445,7 @@ def _authored_records(native: str) -> dict[str, str]:
                 "persona": "engineer",
                 "repo": "https://github.com/nickderobertis/some-service",
                 "title": "feat: add the checkout route",
+                "unit": "Checkout service",
                 "task": _task(),
             }
         ],

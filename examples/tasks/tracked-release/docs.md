@@ -6,6 +6,7 @@ repositories: ["github.com/nickderobertis/some-docs"]
 depends_on: ["tracked-release/design-approval"]
 metadata:
   "onepipeline.id": "docs"
+  "orchestrator.unit": "Documentation"
   "onepipeline.repo_type": "team"
   "onepipeline.persona": "docs-writer"
   "onetaskgraph.template": {"answers_digest":"sha256:1d37b87858cd2308dc42903cbd761ca2b9dfbbe723b6ff6600912e6727029db9","body_digest":"sha256:83cc297f704027202b9e4ee7f6f00845b67c12d5bf2d354a31af439bd8563262","digest":"sha256:094afa20a55d0b9740923d270cdb02667b834b6b43c1b2c59f9e38b68c8e7325","template":"onepipeline:plan-task"}

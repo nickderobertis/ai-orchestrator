@@ -64,7 +64,7 @@ from github_board import (
 )
 from linear_stand_in import provisioned, stand_in
 from nx_workspace import TOOLCHAIN_WRITER_MARKS, answering_this_checkouts_origin, copy_working_tree
-from project_fixtures import designed, helper
+from project_fixtures import designed, graph_image, helper
 from waits import timeout as e2e_timeout
 
 from orchestrator import follow_up_comments as comments
@@ -945,6 +945,8 @@ def _delivering_launch(
             },
         ],
         bench.environment,
+        # One task depends on the other, so the document opens with the plan's graph.
+        **graph_image(bench.tmp / "delivering-graph"),
     )
     approved = _run(bench, "just", "approve-design", project, seconds=300)
     assert approved.returncode == 0, approved.stdout + approved.stderr

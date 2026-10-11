@@ -37,6 +37,7 @@ import pytest
 from fake_backend import ENVIRONMENT_KEYS_ENV, PROMPT_LOG_ENV, RUN_ON_MARKER_ENV
 from published_tools import ONETASKGRAPH_BIN
 from test_finish_plan_recipe_e2e import (
+    COPIES_THE_ROWS,
     DESIGN_RUN_SUFFIX,
     DESIGN_TASK_MARKER,
     DESTINATION,
@@ -196,6 +197,7 @@ def _writes_the_visual_document(bench: Bench, drafted: Drafted, report: str) -> 
                         "set -euo pipefail"
                         '; printed=$(uv run python -m orchestrator.plan_budgets "$3:$4")'
                         '; python3 "$9" "$7" "$printed"'
+                        '; python3 "${12}" "$7" "$2" >/dev/null'
                         '; mapfile -t held < <(python3 "${10}" "$2" "$7" "${11}")'
                         '; flags=(); for path in "${held[@]}"; do flags+=(--asset "$path"); done'
                         '; "$1" template resolve design-doc --json'
@@ -213,6 +215,7 @@ def _writes_the_visual_document(bench: Bench, drafted: Drafted, report: str) -> 
                         str(MERGES_THE_BUDGETS),
                         str(RESTATES_THE_REPORT),
                         report,
+                        str(COPIES_THE_ROWS),
                     ]
                 ]
             }

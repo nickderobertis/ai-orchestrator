@@ -55,7 +55,7 @@ from github_board import LINEAR_KEY_ENV, _serving_board
 from linear_stand_in import provisioned, stand_in
 from nx_workspace import (
     answering_this_checkouts_origin,
-    copy_working_tree,
+    copy_checkout,
     rewrites_workspace_toolchain,
 )
 from project_fixtures import budgeted, helper, no_budgets
@@ -154,7 +154,7 @@ def routed(tmp_path_factory: pytest.TempPathFactory) -> Routed:
     tmp_path = tmp_path_factory.mktemp("linear-routed")
     checkout = tmp_path / "checkout"
     checkout.mkdir()
-    copy_working_tree(checkout)
+    copy_checkout(checkout)
     answering_this_checkouts_origin(checkout)
     linear = tmp_path / LINEAR
     linear.mkdir()
@@ -291,6 +291,7 @@ def _draft(bench: Bench, name: str, nodes: tuple[Node, ...]) -> str:
                         else {"persona": "engineer"}
                     ),
                     "task": _task(COMMIT_MARKER if node.id == committing else "Reply with done."),
+                    "unit": "Petsinc change" if node.petsinc else "Library",
                 }
                 for node in nodes
             ],
@@ -357,9 +358,11 @@ def _scripted(bench: Bench, name: str, nodes: tuple[Node, ...]) -> None:
                         "-c",
                         'printed=$(uv run python -m orchestrator.plan_budgets "$3:$4") &&'
                         ' python3 "$9" "$7" "$printed" &&'
+                        ' asset=$(python3 "${10}" "$7" "$2") &&'
                         ' "$1" template resolve design-doc ${8:+--repository "$8"} --json'
                         ' | "$2" document create "$3" --project "$4" --title "$5" --id "$6"'
-                        ' --template-loader - --answers "$7" --no-interactive',
+                        ' --template-loader - --answers "$7" --no-interactive'
+                        ' ${asset:+--asset "$asset"}',
                         "store-the-document",
                         str(ENGINE_BIN),
                         str(ONETASKGRAPH_BIN),
@@ -370,6 +373,7 @@ def _scripted(bench: Bench, name: str, nodes: tuple[Node, ...]) -> None:
                         str(answers),
                         repository,
                         str(MERGES_THE_BUDGETS),
+                        str(MERGES_THE_BUDGETS.with_name("copy_quoted_rows.py")),
                     ]
                 ],
                 COMMIT_MARKER: COMMIT_COMMANDS,

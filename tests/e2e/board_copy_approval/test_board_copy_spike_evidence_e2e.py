@@ -141,6 +141,7 @@ def _finalized(root: Path, environment: Mapping[str, str]) -> None:
             one.title,
             f"--metadata=onepipeline.id={json.dumps(one.node)}",
             '--metadata=onepipeline.persona="engineer"',
+            '--metadata=orchestrator.unit="Listing"',
             "--repository",
             REPOSITORY,
             answers={

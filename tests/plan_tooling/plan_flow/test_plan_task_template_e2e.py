@@ -152,14 +152,16 @@ first=$(onepipeline template resolve plan-task --json \\
       --project {stored.project} --title '{stored.task_title}' \\
       --answers {answers / "first.json"} --repository {stored.repository} \\
       --metadata 'onepipeline.id="decide-the-cursor"' \\
-      --metadata 'onepipeline.persona="engineer"')
+      --metadata 'onepipeline.persona="engineer"' \\
+      --metadata 'orchestrator.unit="Route"')
 onepipeline template resolve plan-task --json \\
   | onetaskgraph task create {AUTHORING} --template-loader - --no-interactive \\
       --project {stored.project} --title '{stored.second_task_title}' \\
       --answers {answers / "second.json"} --repository {stored.second_repository} \\
       --depends-on "$first" \\
       --metadata 'onepipeline.id="read-the-cursor"' \\
-      --metadata 'onepipeline.persona="engineer"'
+      --metadata 'onepipeline.persona="engineer"' \\
+      --metadata 'orchestrator.unit="View"'
 """,
         encoding="utf-8",
     )

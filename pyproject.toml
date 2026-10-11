@@ -7,14 +7,14 @@ requires-python = ">=3.13"
 # classifier is the truthful statement of that, and the one PyPI refuses an upload over.
 classifiers = ["Private :: Do Not Upload"]
 dependencies = [
-    "onetaskgraph-sdk==0.3.10",
+    "onetaskgraph-sdk==0.3.11",
     "onebudgetspec-cli==0.1.4",
     "oneagentgraph-cli==0.5.5",
     "oneharness-cli==0.22.0",
     "onejudge==0.17.2",
     "onemessagebus-cli==0.9.0",
-    "onepipeline-api-cli==0.26.5",
-    "onepipeline-cli==0.63.6",
+    "onepipeline-api-cli==0.26.6",
+    "onepipeline-cli==0.63.7",
     "onevcs-cli==0.43.1",
     # A library rather than a producer's wheel: the one YAML reader this package has,
     # for composing the workspaces file `just repos-apply` installs. Pinned exactly like
@@ -106,7 +106,9 @@ strict = true
 warn_unused_ignores = true
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+# `orchestrator/budgets` holds the tests of the budget measurement it holds, which the
+# judged lint's `budgets_scoped_to_minimal_tree` keeps beside `orchestrator/budgets.yaml`.
+testpaths = ["tests", "orchestrator/budgets"]
 # pytest's own import path for this suite's shared modules, so `project_fixtures` and
 # `waits` resolve from whichever directory a tier collects rather than only from the one
 # pytest happens to have inserted for the files it is collecting. It declares nothing

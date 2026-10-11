@@ -45,7 +45,12 @@ from fake_backend import ENVIRONMENT_KEYS_ENV, PROMPT_LOG_ENV, RUN_ON_MARKER_ENV
 from project_fixtures import helper, no_budgets
 from published_tools import ONETASKGRAPH_BIN
 from scratch_identity import GIT_IDENTITY, Identity, seeded
-from test_finish_plan_recipe_e2e import DESIGN_TASK_MARKER, ENGINE_BIN, MERGES_THE_BUDGETS
+from test_finish_plan_recipe_e2e import (
+    COPIES_THE_ROWS,
+    DESIGN_TASK_MARKER,
+    ENGINE_BIN,
+    MERGES_THE_BUDGETS,
+)
 from test_plan_flow_e2e import INHERITED_ENVIRONMENT, PASSING_VERDICT
 from visual_images import decoded_pixels, sizes_like_screenshots
 from waits import timeout as e2e_timeout
@@ -268,6 +273,7 @@ def _design_writer(plan: str, staged: Path) -> list[str]:
         "set -euo pipefail"
         '; printed=$(uv run python -m orchestrator.plan_budgets "$3:$4")'
         '; python3 "$7" "$6" "$printed"'
+        '; python3 "${11}" "$6" "$2" >/dev/null'
         '; mapfile -t held < <(python3 "$8" "$2" "$6" "$3:${9}")'
         '; flags=(); for path in "${held[@]}"; do flags+=(--asset "$path"); done'
         '; "$1" template resolve design-doc --repository "${10}" --json'
@@ -284,6 +290,7 @@ def _design_writer(plan: str, staged: Path) -> list[str]:
         str(RESTATES_THE_REPORT),
         spike_plan.VISUAL_REPORT,
         TARGET,
+        str(COPIES_THE_ROWS),
     ]
 
 

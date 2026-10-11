@@ -93,6 +93,10 @@ def test_a_rendered_plan_lists_its_project_document_last() -> None:
         {"name": "plan", "tasks": [{"id": "node", "delivers": ["followups:"]}]},
         {"name": "plan", "tasks": [{"id": "node", "deps": ["absent"]}]},
         {"name": "plan", "tasks": [{"id": "same id"}, {"id": "same-id"}]},
+        # A unit is held to its one rule where it is written, never stored broken.
+        {"name": "plan", "tasks": [{"id": "node", "unit": ""}]},
+        {"name": "plan", "tasks": [{"id": "node", "unit": 7}]},
+        {"name": "plan", "tasks": [{"id": "node", "unit": None}]},
     ),
 )
 def test_render_plan_project_rejects_invalid_generated_fields(plan: dict[str, object]) -> None:

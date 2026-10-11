@@ -156,6 +156,7 @@ def _plan_project(native: str) -> str:
                     "id": "decide-the-cursor",
                     "persona": "engineer",
                     "title": "feat: page the node listing",
+                    "unit": "Listing",
                     "task": (
                         "## What\n\nAdd the paginated listing and the test that drives it.\n\n"
                         "## Why\n\nAn operator cannot see past the first screen of nodes.\n\n"

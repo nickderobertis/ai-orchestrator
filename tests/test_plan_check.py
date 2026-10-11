@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 from criteria_examples import RELEASED_ELSEWHERE
@@ -27,6 +28,7 @@ from orchestrator import (
     plan_check,
     plan_review,
     plan_store,
+    plan_units,
     task_body,
 )
 from orchestrator.root import REPO_ROOT
@@ -82,6 +84,10 @@ def _planned(record: dict[str, object], document: dict[str, object]) -> dict[str
     return document
 
 
+#: The unit every task here changes, recorded as the planner records it.
+UNIT = {"orchestrator.unit": "Listing route"}
+
+
 def _task(criteria: str = COMPLETE) -> str:
     return f"## What\n\nAdd it.\n\n## Acceptance criteria\n\n{criteria}\n\n{APPENDIX}"
 
@@ -92,7 +98,11 @@ def _node(**fields: object) -> dict[str, object]:
         "persona": "engineer",
         "title": "feat: add the route",
         "task": _task(),
-        "metadata": {"onepipeline.id": "route", "onepipeline.persona": "engineer"},
+        "metadata": {
+            "onepipeline.id": "route",
+            "onepipeline.persona": "engineer",
+            "orchestrator.unit": "Listing route",
+        },
     }
     node.update(fields)
     return node
@@ -306,7 +316,7 @@ def test_a_plan_shape_this_check_cannot_walk_is_one_refusal_about_the_plan() -> 
     Reported as a refusal about the plan rather than raised, because a traceback would
     be read as a broken check — which is a different thing from a plan to fix.
     """
-    malformed = {"tasks": [{"id": "route", "kind": "review"}]}
+    malformed = {"tasks": [{"id": "route", "kind": "review", "metadata": UNIT}]}
     refusal, *rest = plan_check.refusals(malformed, "s:p")
 
     assert refusal["node"] is None
@@ -886,3 +896,72 @@ def test_a_check_handed_no_project_reads_no_budgets(project_record: dict[str, ob
     refused = plan_check.refusals(document, plan_check.UNNAMED_PROJECT)
 
     assert [one["field"] for one in refused] == ["metadata"]
+
+
+def test_a_task_recording_no_unit_is_refused_naming_the_command_that_records_one(
+    project_record: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each task's unit is held to its rule, and the refusal names the store's address for it."""
+    # The listing's two fields this reads, as the SDK's model answers them.
+    listed = [
+        SimpleNamespace(
+            id=SimpleNamespace(model_dump=lambda: "authoring:probe/route"),
+            item=SimpleNamespace(metadata={"onepipeline.id": "route"}),
+        )
+    ]
+    monkeypatch.setattr(plan_store, "plan_listing", lambda _project: listed)
+    node = _node(metadata={"onepipeline.id": "route", "onepipeline.persona": "engineer"})
+    document = _planned(project_record, _document(_reviewed(node)))
+
+    (refusal,) = plan_check.refusals(document, "authoring:probe")
+    assert (refusal["node"], refusal["field"]) == ("route", "metadata"), refusal
+    assert "carries no `orchestrator.unit` metadata" in refusal["reason"], refusal
+    assert (
+        "onetaskgraph task metadata set authoring:probe/route orchestrator.unit"
+        in refusal["reason"]
+    ), refusal
+
+
+def test_a_unit_refusal_names_the_listing_when_the_store_cannot_address_the_task(
+    project_record: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refused(_project: str) -> object:
+        raise OSError("the store did not answer")
+
+    monkeypatch.setattr(plan_store, "plan_listing", refused)
+    node = _node(metadata={"onepipeline.id": "route", "onepipeline.persona": "engineer"})
+    document = _planned(project_record, _document(_reviewed(node)))
+
+    (refusal,) = plan_check.refusals(document, "authoring:probe")
+    assert "onetaskgraph task metadata set '<task id>'" in refusal["reason"], refusal
+    (unnamed, *_) = plan_check.refusals(document, plan_check.UNNAMED_PROJECT)
+    assert "'<task id>'" in unnamed["reason"], unnamed
+
+
+def _unit_document(*metadata: dict[str, object] | None) -> dict[str, object]:
+    tasks: list[object] = [
+        {"id": f"node-{index}", **({} if held is None else {"metadata": held})}
+        for index, held in enumerate(metadata)
+    ]
+    return {"tasks": [*tasks, "not a task", {"id": 3}]}
+
+
+def test_the_check_refuses_each_task_naming_it_and_the_command_by_its_address() -> None:
+    document = _unit_document(
+        {plan_units.UNIT_KEY: "Plan graph"},
+        {plan_units.UNIT_KEY: ""},
+        None,
+        {"onepipeline.id": "node-3"},
+    )
+    found = list(
+        plan_check._unit_refusals(document, {plan_store.NodeId("node-1"): "authoring:p/one"})
+    )
+
+    assert [node for node, _ in found] == ["node-1", "node-2", "node-3"], found
+    assert "holds an empty string" in found[0][1], found[0]
+    assert f"`{plan_units.set_command('authoring:p/one')}`" in found[0][1], found[0]
+    assert "carries no `orchestrator.unit` metadata" in found[1][1], found[1]
+    assert f"`{plan_units.set_command('<task id>')}`" in found[1][1], found[1]
+    assert "onetaskgraph task list --project <project>" in found[1][1], found[1]
+    assert list(plan_check._unit_refusals("not a plan", {})) == []
+    assert list(plan_check._unit_refusals({"tasks": "not a list"}, {})) == []

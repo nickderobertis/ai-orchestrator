@@ -243,6 +243,15 @@
       "inputs": [
         "default",
         "{workspaceRoot}/config/onebudgetspec.version",
+        "{workspaceRoot}/templates/design-doc.md.j2",
+        "{workspaceRoot}/scripts/render-diagram.sh",
+        "{workspaceRoot}/config/mermaid/config.json",
+        "{workspaceRoot}/config/mermaid/render.css",
+        "{workspaceRoot}/config/mermaid/fonts.conf",
+        "{workspaceRoot}/justfile",
+        "{workspaceRoot}/bun.lock",
+        "{workspaceRoot}/uv.lock",
+        "{workspaceRoot}/config/onetaskgraph.version",
         {
           "input": "testSupport",
           "projects": [

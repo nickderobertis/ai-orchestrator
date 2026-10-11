@@ -5,6 +5,7 @@ status: "todo"
 repositories: ["github.com/nickderobertis/some-docs"]
 metadata:
   "onepipeline.id": "docs"
+  "orchestrator.unit": "Documentation"
   "onepipeline.repo_type": "team"
   "onepipeline.merge_policy": "change-auto"
   "onepipeline.persona": "docs-writer"
