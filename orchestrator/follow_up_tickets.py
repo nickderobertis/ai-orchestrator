@@ -42,7 +42,11 @@ files a parentless task naming several (:func:`filing_problems`), never by any o
 reaches the board as a proposal and a person accepts it there, so the status a copy writes
 is read off the board item first (:func:`status_before_copy`) rather than carried over from
 the ticket. Evidence is a claim about trees read on one machine, so the record's `host` and
-its `## Evidence` section both name the host the verification ran on.
+its `## Evidence` section both name the host the verification ran on. The `followups`
+source projects that `host` (:data:`HOST_FIELD`) onto the board's `Host` text field, so the
+board filters by it as it does by origin; `just plans sources fields followups --apply`
+creates the field, never a hand-written mutation, and a copy onto a board without it is
+refused by the store, naming `sources fields`.
 
 **A ticket is read through the store, never parsed here.** An agent writes the front matter
 in whatever YAML style it likes, and what reaches the board is what the installed
@@ -156,6 +160,9 @@ SOUND_SCHEMAS = tuple(range(ESTIMATE_AT, SCHEMA + 1))
 
 #: The metadata key a ticket's record sits under, which travels onto the board item.
 KEY = "orchestrator.follow-up"
+#: The record's key naming the machine its verification ran on, which the `followups`
+#: source's `metadata_fields` projects onto the board's `Host` text field.
+HOST_FIELD = "host"
 
 
 class Status(StrEnum):
@@ -455,7 +462,7 @@ RECORD_KEYS = (
     "drafts",
     "basis",
     "verified_at",
-    "host",
+    HOST_FIELD,
     "priority_estimate",
 )
 #: The required key holding the estimate :func:`estimate` computed when the ticket was last
@@ -1255,7 +1262,7 @@ def record(ticket: Ticket) -> dict[str, object]:
         "drafts": list(ticket.drafts),
         "basis": {entry.origin: entry.commit for entry in ticket.basis},
         "verified_at": ticket.verified_at,
-        "host": ticket.host,
+        HOST_FIELD: ticket.host,
     }
     if ticket.priority_estimate is not None:
         held[ESTIMATE_FIELD] = str(ticket.priority_estimate)
@@ -1493,7 +1500,7 @@ def _record_problems(
             f"`verified_at` {held['verified_at']!r} is not an RFC 3339 UTC time like "
             "YYYY-MM-DDTHH:MM:SSZ"
         )
-    if not is_host(held["host"]):
+    if not is_host(held[HOST_FIELD]):
         found.append(
             f"`host` {held['host']!r} is not a hostname: at most {HOST_LIMIT} characters of "
             "dot-separated labels, each 1–63 ASCII letters, digits and `-`, neither starting "
@@ -2358,7 +2365,7 @@ def problems(  # noqa: PLR0913 - each reading of an item is its own keyword
         )
         found.extend(_origin_problems(metadata.get(ORIGIN_KEY), held))
         found.extend(_links_problems(metadata.get(COPIES_KEY)))
-        repository, host = held.get("repository"), held.get("host")
+        repository, host = held.get("repository"), held.get(HOST_FIELD)
     else:
         found.append(f"the ticket carries no `{KEY}` metadata record")
         repository = host = None
@@ -2469,7 +2476,7 @@ def from_store_item(  # noqa: PLR0913 - each reading of an item is its own keywo
             )
         ),
         verified_at=Timestamp(str(held["verified_at"])),
-        host=Host(str(held["host"])),
+        host=Host(str(held[HOST_FIELD])),
         body=str(item["content"]).strip(),
         depends_on=tuple(sorted(QualifiedBoardId(edge.to) for edge in edges)),
         board_item=BoardItemId(str(held[BINDING_FIELD])) if BINDING_FIELD in held else None,
@@ -3453,7 +3460,7 @@ def re_estimate(board: str, issue: str) -> ReEstimated:
     # and a malformed one is refused rather than written back.
     if unsound := _body_problems(
         text,
-        held.get("host"),
+        held.get(HOST_FIELD),
         None,
         structured=_structured(held),
         invariant=_invariant(held),

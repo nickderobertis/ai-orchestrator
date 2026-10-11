@@ -262,8 +262,8 @@ the pinned oneagentgraph composes no field for, so a member judged by that panel
 list to the split and the engine linking it is adopted, `scripts/plan.sh` names the graph on
 no node, `config/onejudge.base.yaml`'s `provider:` names the one `oneharness.judge.toml`,
 and every dispatch keeps its single simulated user; the plan checklist reaches a plan
-through `just review-plan` instead. The shape is stated in [onejudge v0.17.2's
-`judges.md`](https://github.com/nickderobertis/onejudge/blob/v0.17.2/docs/judges.md)
+through `just review-plan` instead. The shape is stated in [onejudge v0.19.0's
+`judges.md`](https://github.com/nickderobertis/onejudge/blob/onejudge-v0.19.0/docs/judges.md)
 — the config, how a panel decides, and what each surface carries per judge — and, for a
 graph member, in [oneagentgraph v0.5.5's
 `contract.md`](https://github.com/nickderobertis/oneagentgraph/blob/v0.5.5/docs/contract.md).
@@ -1605,7 +1605,7 @@ gate before downstream consumer gates.
 ## Testing against a harness without a paid model
 
 onejudge's `command` provider speaks a small JSON-lines protocol
-([onejudge v0.17.2 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.17.2/docs/protocol.md)),
+([onejudge v0.19.0 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/onejudge-v0.19.0/docs/protocol.md)),
 so any command can stand in for the harness — which is how the engines that
 dispatch prove themselves in their own repositories. What this repository's own
 suite drives is the layer above: the real recipes, the real wrapper scripts, and

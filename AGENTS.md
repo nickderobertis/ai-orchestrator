@@ -588,8 +588,9 @@ Accepted once claimed, In Progress while working, Blocked when attention is need
 Completed once done; Proposal, Idea and Canceled mean proposed, deferred and withdrawn.
 <!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 
-**A board field — a `Status` option, or the `Priority` field a source's
-`priority_mapping` names — is set up through the plan-store verb, never by a
+**A board field — a `Status` option, the `Priority` field a source's
+`priority_mapping` names, or a text field its `metadata_fields` names, such as the
+`followups` board's `Host` — is set up through the plan-store verb, never by a
 hand-written mutation.** Read the plan with `just plans sources fields <source>`, which
 writes nothing, then add only what it names with `just plans sources fields <source>
 --apply`. A hand-written `updateProjectV2Field` mutation re-mints every option id, which
@@ -1114,7 +1115,10 @@ elsewhere: a `github.com/petsinc/*` root cause's ticket is filed in Hello Patien
 it under the same contract. One listing several is filed as the store files a task naming
 several — in the board's configured repository, and routed only when every repository it
 lists matches the route. A ticket's record's `host` names the
-machine its verification ran on, and its evidence states the same host. A new ticket
+machine its verification ran on, and its evidence states the same host. The `followups`
+source projects it onto the board's `Host` text field, which filters like a ticket's origin.
+That field is created through the plan-store verb, like every board field (see where a plan
+of this repository lives). A copy onto a board lacking it is refused by name. A new ticket
 reaches the board in `Proposal`; the user moving it to `Todo` is what accepts it, and a
 later copy keeps whatever status the board holds, so a re-dispatch never moves an item
 back. Withdrawal closes a proposal as not planned, and a run never withdraws a ticket the

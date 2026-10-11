@@ -14,6 +14,7 @@ copy a reviewed plan correctly, and would only be caught by the plan nobody revi
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Sequence
 from types import SimpleNamespace
 
@@ -122,6 +123,8 @@ def test_sdk_copy_options_and_reference_summary_are_rendered(
     }
     with pytest.raises(OSError, match="unsupported"):
         plan_copy._copy_options(["--unknown"])
+    with pytest.raises(OSError, match="unsupported project-copy argument '--term-scope'"):
+        plan_copy._copy_options(["--term-scope", "github.com/o/a"])
     with pytest.raises(OSError, match="requires an integer"):
         plan_copy._copy_options(["--page-size", "seven"])
     report = CopyReport.model_validate(
@@ -145,6 +148,34 @@ def test_a_moved_sdk_copy_signature_is_refused_before_any_argument_is_translated
     def project_copy(id: str, to: str, dry_run: bool = False) -> None:  # noqa: A002
         raise AssertionError("never called")
 
+    monkeypatch.setattr(plan_store, "client", lambda: SimpleNamespace(project_copy=project_copy))
+    with pytest.raises(OSError, match="project-copy parameters changed"):
+        plan_copy._copy_options([])
+
+
+def test_an_sdk_that_dropped_a_parameter_this_recipe_leaves_unexposed_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`UNEXPOSED` is held to the SDK too, so a parameter it names that the SDK drops fails."""
+    real = inspect.signature(plan_store.client().project_copy)
+
+    def project_copy(*args: object, **kwargs: object) -> None:
+        raise AssertionError("never called")
+
+    # `inspect.signature` reads `__signature__` first, which is how a release that dropped
+    # the parameter is presented to the reconciliation without a second SDK installed.
+    monkeypatch.setattr(
+        project_copy,
+        "__signature__",
+        real.replace(
+            parameters=[
+                parameter
+                for name, parameter in real.parameters.items()
+                if name not in plan_copy.UNEXPOSED
+            ]
+        ),
+        raising=False,
+    )
     monkeypatch.setattr(plan_store, "client", lambda: SimpleNamespace(project_copy=project_copy))
     with pytest.raises(OSError, match="project-copy parameters changed"):
         plan_copy._copy_options([])

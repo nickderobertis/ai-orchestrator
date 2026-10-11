@@ -41,7 +41,8 @@ ONEJUDGE_VERSION_REFERENCE_COUNTS = {
     Path("config/onejudge.base.yaml"): 1,
 }
 ONEJUDGE_VERSION_REFERENCE = re.compile(
-    r"(?:\bonejudge(?:-cli| SDK/CLI)?(?:'s)?(?: version)?[\s`*(=]+|/onejudge/(?:blob/)?)"
+    r"(?:\bonejudge(?:-cli| SDK/CLI)?(?:'s)?(?: version)?[\s`*(=]+"
+    r"|/onejudge/(?:blob/)?(?:onejudge-)?)"
     r"v?(?P<version>\d+\.\d+\.\d+)",
     re.IGNORECASE,
 )

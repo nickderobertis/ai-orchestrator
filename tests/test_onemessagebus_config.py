@@ -254,7 +254,7 @@ def test_the_link_names_the_adopted_onejudge_release_and_the_protocol_it_speaks(
     adopted = ONEJUDGE_VERSION.read_text(encoding="utf-8").strip()
     assert location == (
         "https://raw.githubusercontent.com/nickderobertis/onejudge/"
-        f"v{adopted}/schemas/judge-seat-frames.json"
+        f"onejudge-v{adopted}/schemas/judge-seat-frames.json"
     ), location
     assert pin == onejudge_bundle.protocol(), (
         f"the link pins @{pin}, and the installed onejudge {adopted} speaks protocol "

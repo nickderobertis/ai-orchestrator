@@ -296,6 +296,35 @@ def test_the_follow_ups_board_maps_every_priority_and_the_plans_board_maps_none(
     )
 
 
+#: The board text field each follow-up ticket's record value is projected onto, per
+#: source. Stated here for the reason :data:`FOLLOWUPS_PRIORITIES` is: the other party is the
+#: live board, so what is held is the projection the installed CLI resolves. Linear keeps a
+#: ticket's host in its description's metadata slot, as it keeps the origin, so the
+#: `hellopatient-followups` source projects nothing.
+FOLLOWUPS_METADATA_FIELDS = [
+    {"field": "Host", "key": follow_up_tickets.KEY, "path": [follow_up_tickets.HOST_FIELD]}
+]
+
+
+@pytest.mark.reads_checkouts
+def test_the_follow_ups_board_projects_a_ticket_s_host_onto_its_host_field() -> None:
+    """`followups` projects the record's `host` onto `Host`, and no other source projects.
+
+    Read through the installed CLI's own resolution, because an entry the store does not
+    resolve is one no copy writes. Its `key` and `path` are this module's record constants,
+    so a record that renamed either would leave the board's field empty on every copy
+    rather than failing here.
+    """
+    resolved = _resolved_configuration()
+    projections = {
+        key: value for key, value in resolved.items() if key.endswith(".config.metadata_fields")
+    }
+    assert projections == {"sources.followups.config.metadata_fields": FOLLOWUPS_METADATA_FIELDS}, (
+        f"onetaskgraph.yaml's sources resolve the metadata-field projections {projections}, "
+        f"and this host states only the `followups` source's {FOLLOWUPS_METADATA_FIELDS}"
+    )
+
+
 def test_every_source_a_planning_closeout_records_into_is_configured_and_writable() -> None:
     """`PLAN_SOURCES` restates names `onetaskgraph.yaml` owns, so it is reconciled here.
 

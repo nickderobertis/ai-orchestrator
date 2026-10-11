@@ -341,6 +341,12 @@ class CopyOptions(TypedDict, total=False):
     set: list[str]
 
 
+#: The SDK project-copy parameters this recipe deliberately does not expose: the public-boundary
+#: check's term scope, which no copy this host makes has a reason to narrow. Named rather than
+#: left out of the reconciliation, so a parameter the SDK adds later still fails it by name.
+UNEXPOSED: frozenset[str] = frozenset({"term_scope"})
+
+
 def _copy_options(arguments: Sequence[str]) -> CopyOptions:
     """Translate the SDK project-copy parameters exposed by this recipe."""
     translated = CopyOptions.__required_keys__ | CopyOptions.__optional_keys__
@@ -348,7 +354,7 @@ def _copy_options(arguments: Sequence[str]) -> CopyOptions:
         "id",
         "to",
     }
-    if sdk_parameters != translated:
+    if sdk_parameters != translated | UNEXPOSED:
         raise OSError(
             "the onetaskgraph SDK project-copy parameters changed; update this recipe's "
             f"argument translation ({sorted(sdk_parameters)!r})"

@@ -11,11 +11,14 @@ from pathlib import Path
 
 import pytest
 from github_board import (
+    BATCHED_CLEARS,
+    BATCHED_WRITES,
     RequestCost,
     _bounded_step,
     _GitHubFixture,
     _GraphQLRequest,
     _request_points,
+    batched_slot_drift,
 )
 
 
@@ -54,3 +57,34 @@ def test_a_write_step_resolves_each_item_once_per_store_invocation(
         step(received=[11.0, 12.0], launched=[10.0, 20.0])
     with pytest.raises(ValueError, match="needs the trace"):
         _bounded_step("write step", bound=True, writes=True)
+
+
+def test_a_batched_field_document_whose_slots_moved_is_named_rather_than_modelled() -> None:
+    """The board answers only the slots it models, so a document with others is refused by name.
+
+    The store's own document reaches this check on every journey that copies a ticket; the
+    one built here from the modelled slots is what that document has to agree with, and the
+    two edits of it are the drift a release would bring: a slot renamed, and one added.
+    """
+    writes = " ".join(
+        f"{'' if at == 0 else slot.alias + ':'}updateProjectV2ItemFieldValue"
+        f"(input:${slot.variable}) @include(if:${slot.flag}){{projectV2Item{{id}}}}"
+        for at, slot in enumerate(BATCHED_WRITES)
+    )
+    clears = " ".join(
+        f"{slot.alias}:clearProjectV2ItemFieldValue(input:${slot.variable}) "
+        f"@include(if:${slot.flag}){{projectV2Item{{id}}}}"
+        for slot in BATCHED_CLEARS
+    )
+    document = f"mutation{{{writes} {clears}}}"
+
+    assert batched_slot_drift(document) == []
+    renamed = document.replace("sixth:", "seventh:")
+    assert batched_slot_drift(renamed) == [
+        "the batched field document lacks "
+        "`sixth:updateProjectV2ItemFieldValue(input:$sixth) @include(if:$writeSixth)`"
+    ]
+    added = document.replace("}}", "} extra:x @include(if:$writeExtra){id}}", 1)
+    assert batched_slot_drift(added) == [
+        "the batched field document carries 10 slots and the board models 9"
+    ]

@@ -162,6 +162,13 @@ _RepositoryNodeId = NewType("_RepositoryNodeId", str)
 ORIGIN_FIELD_NAME = "onetaskgraph.origin"
 
 
+#: The board text field the `followups` source's `metadata_fields` projects a ticket's host
+#: onto. Every board here carries it unless a journey takes it away, as the live one does
+#: once `sources fields followups --apply` has created it; the `plans` source projects
+#: nothing, so carrying it there changes nothing it writes.
+HOST_FIELD_NAME = "Host"
+
+
 class _BoardField(StrEnum):
     """The board fields a copy writes, as the ids GitHub answers them under.
 
@@ -174,6 +181,7 @@ class _BoardField(StrEnum):
     STATUS = "FIELD_status"
     ORIGIN = "FIELD_origin"
     PRIORITY = "FIELD_priority"
+    HOST = "FIELD_host"
 
 
 @dataclass(frozen=True)
@@ -305,6 +313,10 @@ class _Issue:
     #: item it already made — a row that forgot it would have every re-copy create a
     #: replacement, and a journey about updating in place would prove nothing.
     origin: str | None = None
+    #: The text this row's `Host` field holds, as the last write projecting the record's host
+    #: left it — kept and answered back for the reason `origin` is, since the source sends a
+    #: projected value again only when the row does not already hold it.
+    host: str | None = None
     #: The Status option this row is at: where a person last moved it, or where the last
     #: write put it. Applied rather than only recorded, because a read-back is what the
     #: store's own `delivers` relation decides on — it computes a delivered ticket's status
@@ -364,6 +376,16 @@ class _Issue:
                 }
             ]
         )
+        host = (
+            []
+            if self.host is None
+            else [
+                {
+                    "text": self.host,
+                    "field": {"id": _BoardField.HOST, "name": HOST_FIELD_NAME},
+                }
+            ]
+        )
         held = self.priority_value()
         priority = [] if held is None else [held]
         return {
@@ -378,6 +400,7 @@ class _Issue:
                 },
                 *priority,
                 *origin,
+                *host,
             ],
             "pageInfo": {"hasNextPage": False},
         }
@@ -463,12 +486,52 @@ class _BatchedWrite(NamedTuple):
         return self.flag is None or variables.get(self.flag) is True
 
 
-#: The three field writes of the source's batched document, in the order it lists them.
+#: The one write of the source's standalone field-write document, always sent.
+SINGLE_WRITE = _BatchedWrite("updateProjectV2ItemFieldValue", "input", None)
+
+
+#: The six field writes of the source's batched document, in the order it lists them.
 BATCHED_WRITES = (
-    _BatchedWrite("updateProjectV2ItemFieldValue", "input", None),
+    _BatchedWrite("updateProjectV2ItemFieldValue", "input", "writeFirst"),
     _BatchedWrite("second", "second", "writeSecond"),
     _BatchedWrite("third", "third", "writeThird"),
+    _BatchedWrite("fourth", "fourth", "writeFourth"),
+    _BatchedWrite("fifth", "fifth", "writeFifth"),
+    _BatchedWrite("sixth", "sixth", "writeSixth"),
 )
+
+
+#: The three field clears of the source's batched document, which it runs after its writes.
+BATCHED_CLEARS = (
+    _BatchedWrite("cleared", "clear", "writeClear"),
+    _BatchedWrite("clearedSecond", "clearSecond", "writeClearSecond"),
+    _BatchedWrite("clearedThird", "clearThird", "writeClearThird"),
+)
+
+
+def batched_slot_drift(query: str) -> list[str]:
+    """How the batched field document the store sent differs from the slots modelled above.
+
+    Read off the document itself on every batched write, so a release that adds, drops or
+    renames a slot fails the journey that met it, naming the slot, rather than having its
+    writes applied or ignored by a model of the release before it.
+    """
+    spelled = [
+        f"{'' if slot.alias == SINGLE_WRITE.alias else slot.alias + ':'}"
+        f"updateProjectV2ItemFieldValue(input:${slot.variable}) @include(if:${slot.flag})"
+        for slot in BATCHED_WRITES
+    ] + [
+        f"{slot.alias}:clearProjectV2ItemFieldValue(input:${slot.variable}) "
+        f"@include(if:${slot.flag})"
+        for slot in BATCHED_CLEARS
+    ]
+    drift = [f"the batched field document lacks `{slot}`" for slot in spelled if slot not in query]
+    sent = query.count("@include(")
+    if sent != len(spelled):
+        drift.append(
+            f"the batched field document carries {sent} slots and the board models {len(spelled)}"
+        )
+    return drift
 
 
 class _Board:
@@ -519,6 +582,8 @@ class _Board:
         self.commented = 0
         #: Each user attachment uploaded to it, by the path GitHub serves it at.
         self.attachments: dict[str, bytes] = {}
+        #: Whether the board carries the `Host` text field, which one journey takes away.
+        self.has_host_field = True
 
     def issues_created_and_kept(self) -> list[_Issue]:
         return [issue for issue in self.created if issue in self.issues]
@@ -552,7 +617,20 @@ class _Board:
                     "__typename": "ProjectV2Field",
                     "id": _BoardField.ORIGIN,
                     "name": ORIGIN_FIELD_NAME,
+                    "dataType": "TEXT",
                 },
+                *(
+                    [
+                        {
+                            "__typename": "ProjectV2Field",
+                            "id": _BoardField.HOST,
+                            "name": HOST_FIELD_NAME,
+                            "dataType": "TEXT",
+                        }
+                    ]
+                    if self.has_host_field
+                    else []
+                ),
                 *(
                     [
                         {
@@ -826,18 +904,24 @@ class _Board:
                 self._row(item_id).status = self._option_named(value)
             case _BoardField.ORIGIN:
                 self._row(item_id).origin = self._text(value)
+            case _BoardField.HOST:
+                self._row(item_id).host = self._text(value)
             case _BoardField.PRIORITY:
                 self._row(item_id).priority = self._option_named(value, self.priorities)
         return item_id
 
     def _cleared(self, payload: object) -> object:
-        """Clear one field value on a row, which is how a priority of `none` is written."""
+        """Clear one field value on a row: a priority of `none`, or a host no longer recorded."""
         if not isinstance(payload, dict):
             raise ValueError("clearProjectV2ItemFieldValue requires an input object")
         item_id = payload.get("itemId")
-        if payload.get("fieldId") != _BoardField.PRIORITY:
-            raise ValueError(f"only the Priority field is cleared here, not {payload!r}")
-        self._row(item_id).priority = None
+        match payload.get("fieldId"):
+            case _BoardField.PRIORITY:
+                self._row(item_id).priority = None
+            case _BoardField.HOST:
+                self._row(item_id).host = None
+            case _:
+                raise ValueError(f"only Priority and Host are cleared here, not {payload!r}")
         return item_id
 
     def set_field(self, variables: dict[str, object]) -> dict[str, object]:
@@ -875,8 +959,10 @@ class _Board:
             if write.included(variables):
                 applied = self._applied(variables.get(write.variable))
                 answer[write.alias] = {"projectV2Item": {"id": applied}}
-        if variables.get("writeClear") is True:
-            answer["cleared"] = {"projectV2Item": {"id": self._cleared(variables.get("clear"))}}
+        for clear in BATCHED_CLEARS:
+            if clear.included(variables):
+                cleared = self._cleared(variables.get(clear.variable))
+                answer[clear.alias] = {"projectV2Item": {"id": cleared}}
         return {"data": answer}
 
     def snapshot_response(self) -> dict[str, object]:
@@ -937,13 +1023,25 @@ class _Board:
         }
 
     def create_field(self, variables: dict[str, object]) -> dict[str, object]:
-        """Create the board's `Priority` field with the options the setup sends, in its order."""
-        payload = variables.get("input")
-        if not isinstance(payload, dict) or payload.get("name") != "Priority":
-            raise ValueError(f"only the Priority field is created here, not {payload!r}")
-        options = payload.get("singleSelectOptions")
-        if not isinstance(options, list) or self.priorities:
-            raise ValueError(f"a Priority field is created once, with options: {payload!r}")
+        """Create the board's `Priority` field, or its missing `Host` text field.
+
+        `Priority` takes the options the setup sends, in its order. `Host` is answered with
+        nothing, as GitHub answers a text field to a document selecting only a single-select
+        field's fragment.
+        """
+        match variables.get("input"):
+            case {"dataType": "TEXT", "name": str(name)} if (
+                name == HOST_FIELD_NAME and not self.has_host_field
+            ):
+                self.has_host_field = True
+                return {"data": {"createProjectV2Field": {"projectV2Field": {}}}}
+            case {"name": "Priority", "singleSelectOptions": list(options)} if not self.priorities:
+                pass
+            case payload:
+                raise ValueError(
+                    f"only a missing Host text field or a Priority field with options is "
+                    f"created here, once: {payload!r}"
+                )
         self.priorities = tuple(
             _StatusOption(id=_FieldOptionId(f"OPT_priority_{at}"), name=str(option["name"]))
             for at, option in enumerate(options)
@@ -1437,6 +1535,8 @@ class _GitHubFixture(BaseHTTPRequestHandler):
             case _Operation.UPDATE_FIELD:
                 return self.board.set_field(request.variables)
             case _Operation.UPDATE_FIELDS:
+                if drift := batched_slot_drift(request.query):
+                    return {"errors": [{"message": "; ".join(drift)}]}
                 return self.board.set_fields(request.variables)
             case _Operation.ADD_SUB_ISSUE:
                 return self.board.add_sub_issue(request.variables)
@@ -1761,7 +1861,7 @@ def _field_writes(requests: list[_GraphQLRequest]) -> list[dict[str, object]]:
     written: list[dict[str, object]] = []
     for request in requests:
         carried = {
-            _Operation.UPDATE_FIELD: BATCHED_WRITES[:1],
+            _Operation.UPDATE_FIELD: (SINGLE_WRITE,),
             _Operation.UPDATE_FIELDS: BATCHED_WRITES,
         }.get(request.operation, ())
         for write in carried:
@@ -1775,13 +1875,14 @@ def _field_clears(requests: list[_GraphQLRequest]) -> list[dict[str, object]]:
     """The input of every field-value clear among ``requests``, batched or standalone."""
     cleared: list[dict[str, object]] = []
     for request in requests:
-        name = {_Operation.CLEAR_FIELD: "input", _Operation.UPDATE_FIELDS: "clear"}.get(
-            request.operation
-        )
-        if name == "clear" and request.variables.get("writeClear") is not True:
-            continue
-        if name is not None and isinstance(payload := request.variables.get(name), dict):
-            cleared.append(payload)
+        carried = {
+            _Operation.CLEAR_FIELD: (_BatchedWrite("clearProjectV2ItemFieldValue", "input", None),),
+            _Operation.UPDATE_FIELDS: BATCHED_CLEARS,
+        }.get(request.operation, ())
+        for clear in carried:
+            payload = request.variables.get(clear.variable)
+            if clear.included(request.variables) and isinstance(payload, dict):
+                cleared.append(payload)
     return cleared
 
 
