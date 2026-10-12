@@ -1,0 +1,28 @@
+{
+  "name": "support-flow-engine-stand-in",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "tags": [
+    "type:test-support"
+  ],
+  "implicitDependencies": [],
+  "namedInputs": {
+    "testSupport": [
+      "{workspaceRoot}/tests/flow_engine_stand_in.py",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/scripts/onepipeline.sh",
+      "{workspaceRoot}/scripts/launcher-session.sh",
+      "{workspaceRoot}/scripts/template-env.sh",
+      "{workspaceRoot}/templates/templates.yaml",
+      "{projectRoot}/project.json"
+    ]
+  },
+  "targets": {
+    "test-support": {
+      "executor": "nx:noop",
+      "inputs": [
+        "testSupport"
+      ]
+    }
+  }
+}

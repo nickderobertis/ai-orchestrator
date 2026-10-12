@@ -37,7 +37,7 @@ from nx_workspace import WORKSPACE_INSTALL_MARKS
 from published_tools import ONETASKGRAPH_BIN
 from test_follow_ups_answer_comments_recipe_e2e import (
     BOARD_CREDENTIAL,
-    NO_ENGINE,
+    ENGINE_STOP,
     PLANTED_CREDENTIAL,
     PROCESS_CREDENTIAL,
     Mirror,
@@ -1056,8 +1056,8 @@ def test_the_comments_mode_reads_the_board_with_the_credential_this_checkout_sup
 
     assert result.returncode == REFUSED, result.stdout + result.stderr
     assert _handed(mirror) == {handed}, mirror.trace.read_text(encoding="utf-8")
-    # Past the board read, the mirror has no engine to state the template with, so nothing launched.
-    assert NO_ENGINE in result.stderr, result.stderr
+    # Past the board read, the mirror's engine refuses to state the template, so nothing launched.
+    assert ENGINE_STOP in result.stderr, result.stderr
     _nothing_launched(mirror)
     assert PLANTED_CREDENTIAL not in result.stdout + result.stderr, "a credential value was printed"
 
@@ -1083,7 +1083,7 @@ def test_the_initial_mode_hands_the_store_the_credential_this_checkout_supplies(
 
     assert result.returncode == REFUSED, result.stdout + result.stderr
     assert _handed(mirror) == {handed}, mirror.trace.read_text(encoding="utf-8")
-    assert NO_ENGINE in result.stderr, result.stderr
+    assert ENGINE_STOP in result.stderr, result.stderr
     _nothing_launched(mirror)
     assert PLANTED_CREDENTIAL not in result.stdout + result.stderr, "a credential value was printed"
 

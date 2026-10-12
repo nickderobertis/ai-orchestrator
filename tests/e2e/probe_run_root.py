@@ -75,6 +75,7 @@ def run_root(
     dispatch_pid: int | None = None,
     session: str = DEFAULT_SESSION,
     driver_pid: int | None = None,
+    flow: str | None = None,
 ) -> Path:
     """One run root the engine will read: a launch, and one node.
 
@@ -92,6 +93,10 @@ def run_root(
     required for that — a pid alone is a pid the kernel may have handed round again, and
     a stamp that is not the one this host reports is a positive statement that the
     process is somebody else's.
+
+    `flow` is the flow the run was launched in, which the launch records as `flow` exactly
+    when `start` ran under a live flow of its session; given none, the key is absent, as it
+    is for a run that belongs to no flow.
     """
     directory = root / run
     directory.mkdir(parents=True)
@@ -134,6 +139,7 @@ def run_root(
                 "heartbeat_interval": 1800,
                 "adoptions": 0,
             }
+            | ({} if flow is None else {"flow": flow})
         ),
         encoding="utf-8",
     )

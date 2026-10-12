@@ -8,14 +8,17 @@
     "type:tests"
   ],
   "implicitDependencies": [
+    "support-budget-telemetry",
     "support-conftest",
     "support-fake-backend",
     "support-fake-codex",
     "support-harness-indirections",
     "support-no-paid-provider",
     "support-nx-workspace",
+    "support-plan-fixture-source",
     "support-probe-run-root",
     "support-project-fixtures",
+    "support-scratch-identity",
     "support-short-state",
     "support-waits"
   ],
@@ -68,12 +71,48 @@
       "{workspaceRoot}/orchestrator/unpublished.py",
       "{workspaceRoot}/tests/unwatched/project.json",
       "{workspaceRoot}/tests/unwatched/test_unwatched_and_stop_hook_e2e.py",
-      "{workspaceRoot}/tests/unwatched/test_unwatched_launch_shapes_e2e.py"
+      "{workspaceRoot}/tests/unwatched/test_unwatched_launch_shapes_e2e.py",
+      "{workspaceRoot}/config/**/*",
+      "{workspaceRoot}/graphs/**/*",
+      "{workspaceRoot}/orchestrator/**/*",
+      "{workspaceRoot}/templates/**/*",
+      "{workspaceRoot}/oneharness.toml",
+      "{workspaceRoot}/oneharness.dispatch.toml",
+      "{workspaceRoot}/oneharness.identities.toml",
+      "{workspaceRoot}/oneharness.judge.toml",
+      "{workspaceRoot}/oneharness.plan-review.toml",
+      "{workspaceRoot}/oneharness.plan-review-whole.toml",
+      "{workspaceRoot}/oneharness.llmlint.toml",
+      "{workspaceRoot}/tests/plan_tooling/plan_flow/spike_flow_engine.py",
+      "{workspaceRoot}/tests/plan_tooling/plan_flow/copy_quoted_rows.py",
+      "{workspaceRoot}/tests/unwatched/budgets.yaml",
+      "{workspaceRoot}/tests/unwatched/test_flow_stop_hook_e2e.py",
+      "{workspaceRoot}/scripts/ask-manager.sh",
+      "{workspaceRoot}/scripts/finish-plan.sh",
+      "{workspaceRoot}/scripts/launch-flow.sh",
+      "{workspaceRoot}/scripts/lock-timeout.sh",
+      "{workspaceRoot}/scripts/plan-check.sh",
+      "{workspaceRoot}/scripts/plan-checklist.sh",
+      "{workspaceRoot}/scripts/plan-root-env.sh",
+      "{workspaceRoot}/scripts/plan-store.sh",
+      "{workspaceRoot}/scripts/plan.sh",
+      "{workspaceRoot}/scripts/registered-checkouts.sh",
+      "{workspaceRoot}/scripts/render-diagram.sh",
+      "{workspaceRoot}/scripts/review-plan.sh",
+      "{workspaceRoot}/personas/planner.yaml",
+      "{workspaceRoot}/personas/design-doc.yaml",
+      "{workspaceRoot}/scripts/apply-repo-registry.sh",
+      "{workspaceRoot}/scripts/llmlint-fingerprint.sh",
+      "{workspaceRoot}/scripts/llmlint-judge.sh",
+      "{workspaceRoot}/scripts/llmlint-oneharness.sh",
+      "{workspaceRoot}/scripts/llmlint-runtime-env.sh",
+      "{workspaceRoot}/scripts/setup-llmlint.sh"
     ]
   },
   "targets": {
     "test": {
-      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/unwatched --no-cov -n 4 --dist loadgroup",
+      "//": "llmlint: ignore[expensive_tests_stay_behind_their_own_edge] unwatchedWorkspace keys this target on config/, graphs/, orchestrator/ and templates/ whole because tests/unwatched/test_flow_stop_hook_e2e.py runs a real `just plan` flow, whose review, plan check, checklist and launch read each of those trees as a whole (the same four plan-tooling-plan-flow keys its journeys of this flow on), and it copies them into the checkout it runs in: a key narrower than that copy would replay a verdict over files that changed it.",
+      "command": "rm -rf .telemetry/unwatched/test && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/unwatched/test NO_COLOR=1 uv run pytest tests/unwatched --no-cov -n 4 --dist loadgroup",
       "options": {
         "cwd": "."
       },
@@ -83,7 +122,35 @@
           "input": "testSupport",
           "dependencies": true
         }
+      ],
+      "outputs": [
+        "{workspaceRoot}/.telemetry/unwatched/test"
       ]
-    }
+    },
+    "budgets": {
+      "dependsOn": [
+        "test"
+      ],
+      "options": {
+        "cwd": ".",
+        "env": {
+          "BUDGET_TELEMETRY_SOURCES": ".telemetry/unwatched/test"
+        }
+      },
+      "inputs": [
+        "{projectRoot}/budgets.yaml",
+        "{workspaceRoot}/config/onebudgetspec.version",
+        {
+          "input": "testSupport",
+          "projects": [
+            "support-budget-telemetry"
+          ]
+        },
+        {
+          "dependentTasksOutputFiles": "**/*.json"
+        }
+      ]
+    },
+    "budgets-host": {}
   }
 }

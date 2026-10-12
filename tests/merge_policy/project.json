@@ -53,6 +53,7 @@
       "{workspaceRoot}/scripts/follow-up-env.sh",
       "{workspaceRoot}/scripts/follow-ups.sh",
       "{workspaceRoot}/scripts/launcher-session.sh",
+      "{workspaceRoot}/scripts/launch-flow.sh",
       "{workspaceRoot}/scripts/onepipeline.sh",
       "{workspaceRoot}/scripts/orchestrate.sh",
       "{workspaceRoot}/scripts/plan-brief.sh",

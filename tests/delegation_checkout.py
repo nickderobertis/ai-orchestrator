@@ -82,6 +82,9 @@ WRAPPER_SCRIPTS = (
     # `just follow-ups` writes a one-node direct project and launches it through the same
     # wrapper, having counted the run's drafts under the root `follow-up-env.sh` exports.
     "follow-ups.sh",
+    # `just plan`, `just finish-plan`, `just follow-ups` and `just follow-ups-answer-comments`
+    # each re-execute inside a flow the launching session owns through this one.
+    "launch-flow.sh",
     # This host's template root, which the launch wrapper names on every verb and which
     # the dispatch-environment definition below establishes for a dispatch; it refuses a
     # checkout whose `templates/` carries no registration.
@@ -328,8 +331,8 @@ exit "${FAKE_UV_EXIT:-0}"
         .replace('"$PINNED_ROOT"', shlex.quote(str(ROOT)))
     )
     uv.chmod(0o755)
-    # The engine a **launch** reaches: the installed binary in this checkout's own
-    # `.venv`, which is what `scripts/onepipeline.sh` execs rather than `uv run
+    # The engine a **launch** reaches, and a launcher's flow: the installed binary in this
+    # checkout's own `.venv`, which is what `scripts/onepipeline.sh` execs rather than `uv run
     # onepipeline` so that the engine — and so every dispatch under it — is not handed
     # this checkout's `VIRTUAL_ENV` (ai-orchestrator#1162). Traced the same way `uv` is,
     # under its own name, and it answers the `--version` every launch asks for the pair
@@ -348,6 +351,19 @@ fi
 if [ "$*" = "--version" ]; then
   echo "onepipeline ${{{ENGINE_REPORTS_ENV}:-{PINNED_ENGINE}}}"
   exit 0
+fi
+# A flow runs its program, as the engine's `flow run` does: in the flow it names, or in
+# the one already entered, which is the engine's joining a live flow of the same session.
+# `FAKE_FLOW_ID` stands for an engine minting an id this repository should not print.
+if [ "${{1:-}} ${{2:-}}" = "flow run" ]; then
+  shift 2
+  flow=""
+  while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do
+    [ "$1" != "--name" ] || flow=${{2:-}}
+    shift
+  done
+  shift
+  ONEPIPELINE_FLOW=${{ONEPIPELINE_FLOW:-${{FAKE_FLOW_ID:-$flow}}}} exec "$@"
 fi
 exit "${{FAKE_ENGINE_EXIT:-0}}"
 """

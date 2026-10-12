@@ -30,6 +30,7 @@ from typing import NamedTuple, NewType
 
 import plan_root_variable
 import pytest
+from flow_engine_stand_in import give_flow_engine
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
@@ -168,6 +169,9 @@ def _detached_recipe(tmp_path: Path) -> Path:
         # The grammar `scripts/plan.sh` reads its brief and its options through: a
         # checkout without it cannot get as far as the refusal these journeys are about.
         "plan-brief.sh",
+        # The flow it enters before writing, through the engine `give_flow_engine` puts
+        # below: a checkout without one is refused there, before these journeys' refusals.
+        "launch-flow.sh",
         "credentials-env.sh",
         "ask-manager-env.sh",
         "ask-manager.sh",
@@ -190,6 +194,8 @@ def _detached_recipe(tmp_path: Path) -> Path:
     # journeys are about.
     (checkout / "config").mkdir()
     shutil.copy(REPO_ROOT / "config" / "plan-checklist.llmlint.yml", checkout / "config")
+    # llmlint: ignore[e2e_not_mocked] The engine is a published CLI, which this suite doubles at its binary and nowhere above it: the stand-in only runs the launcher it is handed inside the flow it names, while the real wrapper and launcher run unchanged, and a real `flow run` would register a flow owned by whichever session runs the suite.  # noqa: E501 - a directive is one line, and its reason is longer than the limit
+    give_flow_engine(checkout)
     return scripts / "plan.sh"
 
 

@@ -3,7 +3,9 @@
 # [--to SOURCE] [--since RFC3339] [--detach]`: a thin script over
 # `orchestrator/follow_up_comments.py`, which states what is read, where each comment goes and
 # when the watermark moves. This only runs its steps with the launches between them, each
-# through `scripts/follow-ups.sh --comments`.
+# through `scripts/follow-ups.sh --comments`. The whole of it is one flow
+# (`scripts/launch-flow.sh`) holding the launching session until it exits, whose first lines
+# name the flow and the `just watch --flow <ID>` that watches it.
 set -euo pipefail
 
 fail() {
@@ -44,6 +46,13 @@ load follow-up-env.sh "drafts-root helper"
 export_follow_up_drafts follow-ups-answer-comments || exit "$?"
 drafts_root=${!FOLLOW_UP_DRAFTS_ROOT_ENV}
 load plan-brief.sh "run-id helper"
+
+# The gathering, its launches, their watches and the settling check are one flow holding the
+# session until it exits; each `scripts/follow-ups.sh` below runs in it rather than in one of
+# its own.
+load launch-flow.sh "flow helper"
+run_in_launch_flow follow-ups-answer-comments follow-ups-answer-comments \
+    "$checkout/scripts/follow-ups-answer-comments.sh" "$@"
 
 scratch=$(mktemp -d) || fail "a scratch directory for the gathering could not be created" "free disk space and retry"
 trap 'rm -rf "$scratch" || echo "follow-ups-answer-comments: the scratch directory $scratch could not be removed; delete it by hand" >&2' EXIT

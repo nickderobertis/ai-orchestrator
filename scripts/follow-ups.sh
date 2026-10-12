@@ -98,6 +98,16 @@
 # The launch goes through `scripts/onepipeline.sh`, which keeps an exported launcher
 # identity, so the follow-up run is owned by whichever session launched this. Nothing in
 # this repository calls this recipe after another launch returns; that is the hook's.
+#
+# **The launch is a flow, and its first lines say so.** Once every ending that launches
+# nothing is behind it, the recipe re-executes itself inside a flow named for the run it
+# launches (`scripts/launch-flow.sh`), owned by the launching session until it exits, and
+# prints that flow's id beside the `just watch --flow <ID>` that watches it on standard
+# error — before the attached run's own watch command — so arming it is one copy-paste. A
+# `--detach` launch ends the flow as it hands back; its run is then owed on its own, which
+# is the watch command its stdout names. Under a live flow of the same session — the
+# success hook's call under a planning flow, or `scripts/follow-ups-answer-comments.sh` —
+# it runs in that flow instead.
 set -euo pipefail
 
 #: The project this launch writes says what it is: the one-node project a follow-ups launch
@@ -180,6 +190,9 @@ load() {
 # shellcheck source=scripts/plan-brief.sh
 load plan-brief.sh
 
+# Kept whole for re-executing this launcher inside its flow, below, after the parse has
+# consumed them.
+launch_arguments=("$@")
 run=${1:-}
 case "$run" in
     "" | -*) fail "name the run whose drafts to verify as the first word" "usage: $usage" ;;
@@ -357,6 +370,14 @@ while [ -e "$runs_root/$follow_up_run" ]; do
     attempt=$((attempt + 1))
     follow_up_run="$project_native-$attempt"
 done
+
+# Every ending that launches nothing is behind it, so the flow starts here, named for the
+# run it will launch, and holds the session until the account is checked. A `--detach`
+# launch ends it as it hands back, leaving its run owed on its own.
+# shellcheck source=scripts/launch-flow.sh
+load launch-flow.sh
+run_in_launch_flow follow-ups "$follow_up_run" "$script_dir/follow-ups.sh" "${launch_arguments[@]}"
+
 export "$PLAN_RUN_ID_ENV=$follow_up_run"
 
 # shellcheck source=scripts/plan-root-env.sh

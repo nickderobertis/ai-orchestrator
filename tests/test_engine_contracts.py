@@ -57,6 +57,7 @@ the installed CLI's surface rather than anything a dispatch links.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import re
@@ -2583,12 +2584,56 @@ def _built_run_root(tmp_path: Path) -> Path:
 
     With a dispatch recorded against this process, which is the pairing those journeys
     exist for — a launch nothing is driving beside a dispatch that is still alive — and
-    the only shape in which every record this builder writes is on disk at once.
+    the only shape in which every record this builder writes is on disk at once — the
+    launch's optional `flow` included, so the key a run launched in a flow carries is
+    reconciled with the rest.
     """
-    root = probe_run_root.run_root(tmp_path, probe_run_root.run_name(), dispatch_pid=os.getpid())
+    root = probe_run_root.run_root(
+        tmp_path, probe_run_root.run_name(), dispatch_pid=os.getpid(), flow="probe-flow"
+    )
     probe_run_root.record_supervision(root, pid=os.getpid(), session=probe_run_root.DEFAULT_SESSION)
     probe_run_root.record_command_outcomes(root)
     return root
+
+
+#: The engine double `just plan`'s flow journeys install in place of `start`, which writes a
+#: launch record of its own that `unwatched`, the views and a flow's watch read as the
+#: engine's — `tests/unwatched/test_flow_stop_hook_e2e.py` among them.
+SPIKE_FLOW_ENGINE = REPO_ROOT / "tests" / "plan_tooling" / "plan_flow" / "spike_flow_engine.py"
+
+
+def test_the_spike_flow_doubles_launch_record_is_one_the_engine_declares(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The launch record the `start` double writes, `flow` included, is the engine's shape.
+
+    Built by the double's own writer and read back, both directions, for the reason
+    `test_the_built_run_root_writes_the_records_the_engine_declares` gives for the builder.
+    """
+    monkeypatch.syspath_prepend(str(SPIKE_FLOW_ENGINE.parent))
+    spec = importlib.util.spec_from_file_location("spike_flow_engine", SPIKE_FLOW_ENGINE)
+    assert spec is not None and spec.loader is not None
+    double = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(double)
+    monkeypatch.setenv("ONEPIPELINE_LAUNCHER", "claude-code")
+    monkeypatch.setenv("ONEPIPELINE_LAUNCHER_SESSION", probe_run_root.DEFAULT_SESSION)
+    monkeypatch.setenv("ONEPIPELINE_FLOW", "probe-flow")
+    root = tmp_path / "runs" / "probe-run"
+    double._launched(root, "probe-run", "authoring:probe-run")
+
+    composed = json.loads((root / "launch.json").read_text("utf-8"))
+    declared = _declared_fields(ONEPIPELINE, "ledger.rs", "LaunchRecord")
+    names = {field.name for field in declared}
+    required = {field.name for field in declared if not field.optional}
+    assert composed.get("flow") == "probe-flow", composed
+    assert set(composed) <= names, (
+        f"{SPIKE_FLOW_ENGINE.name} writes {sorted(set(composed) - names)} into a launch "
+        f"record, which onepipeline {ONEPIPELINE.ref}'s `LaunchRecord` does not declare"
+    )
+    assert required <= set(composed), (
+        f"{SPIKE_FLOW_ENGINE.name} omits {sorted(required - set(composed))} from a launch "
+        f"record, which onepipeline {ONEPIPELINE.ref}'s `LaunchRecord` requires"
+    )
 
 
 @pytest.mark.parametrize("record", BUILT_RECORDS, ids=lambda record: record.struct)

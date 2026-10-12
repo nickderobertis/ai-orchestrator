@@ -61,6 +61,7 @@ from fake_backend import (
     PANEL_JUDGE_CONFIG,
     PROMPT_LOG_ENV,
 )
+from flow_engine_stand_in import give_flow_engine
 from project_fixtures import helper, read_project_plan
 from published_tools import ONETASKGRAPH_BIN
 from scratch_identity import PLANNING_FLOW_ORIGIN, seeded
@@ -1544,10 +1545,20 @@ def test_a_planner_that_could_not_ask_questions_is_not_launched_at_all(tmp_path:
     """
     detached = tmp_path / "checkout" / "scripts"
     detached.mkdir(parents=True)
-    for name in ("plan.sh", "plan-brief.sh", "credentials-env.sh", "ask-manager-env.sh"):
+    # The flow helper and the engine it enters the launch flow through, because a checkout
+    # without them is refused there, before the seam this journey is about.
+    for name in (
+        "plan.sh",
+        "plan-brief.sh",
+        "launch-flow.sh",
+        "credentials-env.sh",
+        "ask-manager-env.sh",
+    ):
         copied = detached / name
         copied.write_bytes((REPO_ROOT / "scripts" / name).read_bytes())
         copied.chmod(0o755)
+    # llmlint: ignore[e2e_not_mocked] The engine is a published CLI, which this suite doubles at its binary and nowhere above it: the stand-in only runs the launcher it is handed inside the flow it names, while the real wrapper and launcher run unchanged, and a real `flow run` would register a flow owned by whichever session runs the suite.  # noqa: E501 - a directive is one line, and its reason is longer than the limit
+    give_flow_engine(detached.parent)
     copied = detached / "plan.sh"
     brief = tmp_path / "brief.md"
     brief.write_text(BRIEF, encoding="utf-8")

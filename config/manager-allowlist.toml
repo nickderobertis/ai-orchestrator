@@ -42,7 +42,8 @@ allowed_tools = [
 
     # `just unpublished`, `just unwatched` and `just unfinished` are granted as fixed
     # reads: a prefix would admit `--acknowledge`, the one write each of the first two
-    # carries, and the session-targeted read of the last two is approved per use.
+    # carries (and `just unwatched --acknowledge-flow`, which closes a flow the same way),
+    # and the session-targeted read of the last two is approved per use.
     "Bash(just unpublished --host)",
     "Bash(just unpublished --print-surface)",
     "Bash(just unwatched)",

@@ -52,10 +52,16 @@
 #     under a `.plans` relative to the directory the recipe was invoked from: those name
 #     one directory for an ordinary launch and two the moment a caller points the root
 #     elsewhere, and the launch gate then refuses the plan the launch has just written.
-#   * **The watch command is printed**, so arming it is one copy-paste rather than
-#     something composed under time pressure. `just channel-next` and not `just
-#     monitor`: rendering a surface is not reading it, and only `channel-next`
-#     consumes one — a planner's blocking question is answered there or not at all.
+#   * **The flow is one watch, printed first.** Once every refusal above it has passed,
+#     the recipe re-executes itself inside a flow named for the run name
+#     (`scripts/launch-flow.sh`), owned by the launching session from there until the
+#     tail's last step, so the session is held between stages as well as during them.
+#     Its first lines name the flow and the `just watch --flow <ID>` that watches it, so
+#     arming that is one copy-paste rather than something composed under time pressure;
+#     a `--detach` launch ends the flow as it hands back, leaving its run owed on its own.
+#     Each stage then prints `just channel-next` for its run, and not `just monitor`:
+#     rendering a surface is not reading it, and only `channel-next` consumes one — a
+#     planner's blocking question is answered there or not at all.
 #
 # **It is one direct node, so the planner works in the checkout the launch was made
 # from.** That is the one thing about this recipe that is not merely convenience, and it
@@ -466,6 +472,15 @@ fi
 # A resume carries on from a stage after the draft, whose run is this flow's own and so is
 # not refused as taken; a fresh flow refuses it like every other id above.
 [ -n "$PLAN_OPT_RESUME" ] || plan_run_is_free plan "$name" || exit 2
+
+# Every refusal above is made before anything is written, so this is where the flow starts:
+# the launcher re-executes itself inside a flow named for the run name, which holds the
+# session from here to the tail's last step, the handover to `scripts/finish-plan.sh`
+# included. The header's watch paragraph says what it prints.
+# shellcheck source=scripts/launch-flow.sh
+load launch-flow.sh
+run_in_launch_flow plan "$name" "$script_dir/plan.sh" "$brief" "$@"
+
 export "$PLAN_RUN_ID_ENV=$name"
 
 # shellcheck source=scripts/credentials-env.sh

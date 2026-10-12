@@ -445,14 +445,16 @@ copy-plan *args:
 # check-in updates — and not each dispatched worker's turns. `--filter detailed`
 # widens it to the whole merged stream the monitor member reads, `--filter
 # <spec>` takes a filter file or inline JSON, and `--all` reads the store through no
-# profile at all. The two are mutually exclusive; the CLI says so.
+# profile at all. The two are mutually exclusive; the CLI says so. `--flow <ID>` in place
+# of the run reads a launch flow's own channel.
 # llmlint: ignore[tool_output_is_signal] channel-next returns a structured bounded status or a validated transport error for planner recovery.
 channel-next *args:
     @./scripts/onepipeline.sh next "$@"
 
 # `just channel-reply <run-id> [FILE] [--correlation C]` — the envelope is read from
 # FILE, or from stdin when none is named. It carries a verdict, versioned live graph
-# edits, or both.
+# edits, or both. `just channel-reply --flow <ID> FILE` answers a launch flow's own
+# channel, with a verdict alone: a flow has no graph to edit.
 #
 # It is the engine's own submission verb, `onepipeline reply`, through
 # `scripts/onepipeline.sh` so the acting session is named as every other verb names it,
@@ -779,7 +781,8 @@ monitor *args:
 # deliberately does not: it reaches the binary directly, so that a turn does not
 # end behind this checkout's project-environment lock. Its exit status is the
 # whole of what a caller branches on and is carried back unchanged — `6` says a
-# run this session owns is unwatched.
+# run or flow this session owns is unwatched. `--acknowledge-flow <ID> --reason <why>`
+# closes a flow that ended non-zero or died, as `--acknowledge` closes a run.
 # llmlint: ignore[tool_output_is_signal] one line per unwatched run is what this viewing command is run to produce, and it is the text the hook puts in front of a manager.
 unwatched *args:
     @./scripts/onepipeline.sh unwatched "$@"
@@ -788,7 +791,8 @@ unwatched *args:
 # <run-id> [OPTIONS]`, the engine's own `onepipeline watch` with every argument
 # forwarded. AGENTS.md's watch rule states what a watch owes, its `--until` vocabulary
 # and its exit statuses, and `tests/test_watch_surface_drift.py` reconciles those
-# against the installed engine.
+# against the installed engine. `just watch --flow <ID>` watches a launch flow instead —
+# `just plan` and the follow-up recipes run as one and print its id first.
 # llmlint: ignore[tool_output_is_signal] Watching a run as it happens is the whole of what this command is for; the per-event and per-heartbeat lines are its product, and the unread-surface count inside a heartbeat is the one signal AGENTS.md forbids filtering out.
 [doc('Watch one run, blocking, with heartbeats that carry the unread-surface count; see AGENTS.md.')]
 watch *args:

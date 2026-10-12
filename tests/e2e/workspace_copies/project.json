@@ -9,6 +9,7 @@
     "type:tests"
   ],
   "implicitDependencies": [
+    "support-budget-telemetry",
     "support-conftest",
     "support-follow-up-variables",
     "support-nx-inputs",

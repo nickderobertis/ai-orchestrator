@@ -66,6 +66,7 @@ import plan_root_variable
 import pytest
 import short_state
 import yaml
+from flow_engine_stand_in import give_flow_engine
 from follow_up_ticket_shape import DUPLICATE_SEARCH, impact_prose
 from nx_workspace import WORKSPACE_INSTALL_MARKS
 from project_fixtures import helper, project_from_plan
@@ -2609,13 +2610,17 @@ def _unprovisioned(root: Path) -> Path:
     which the interpreter it falls back to can import from here because that package is
     stdlib-only — and the `onetaskgraph.yaml` every plan source is resolved against, which
     a checkout without one answers for as a store configuring no sources at all. What is
-    deliberately absent is `.venv/`, so this checkout has neither the pinned plan-store CLI
-    nor an interpreter of its own: the state of every checkout before `just bootstrap` has
-    run in it.
+    deliberately absent is the rest of `.venv/`, so this checkout has neither the pinned
+    plan-store CLI nor an interpreter of its own: the state of a checkout `just bootstrap`
+    has not provisioned. Its one occupant is the engine the recipe enters its launch flow
+    through (`give_flow_engine`), because a checkout without one is refused there, naming
+    the engine, before the plan store is ever resolved.
     """
     for directory in ("scripts", "config", "orchestrator"):
         shutil.copytree(REPO_ROOT / directory, root / directory, dirs_exist_ok=True)
     shutil.copy2(REPO_ROOT / "onetaskgraph.yaml", root / "onetaskgraph.yaml")
+    # llmlint: ignore[e2e_not_mocked] The engine is a published CLI, which this suite doubles at its binary and nowhere above it: the stand-in only runs the launcher it is handed inside the flow it names and refuses every other verb, while the real wrapper and recipe run unchanged; a real engine would launch the run these journeys stop before.  # noqa: E501 - a directive is one line, and its reason is longer than the limit
+    give_flow_engine(root)
     return root
 
 
@@ -3978,6 +3983,15 @@ def _creates_tasks(checkout: Path) -> None:
     assert str(ENGINE) in engine.read_text(encoding="utf-8"), "the engine double was not extended"
 
 
+def _flow_line(checkout: Path, name: str, *arguments: str) -> str:
+    """The flow the recipe re-executes itself in before it writes, as the trace records it."""
+    return delegation_checkout.at(
+        checkout,
+        f"{delegation_checkout.ENGINE} flow run {delegation_checkout.BUS_CONFIG} --name {name} "
+        f"-- {delegation_checkout.CHECKOUT}/scripts/follow-ups.sh {' '.join(arguments)}",
+    )
+
+
 def _template_lines(checkout: Path, project: str) -> tuple[str, ...]:
     """The two engine calls the recipe makes before it launches, as the trace records them."""
     resolved = checkout.resolve()
@@ -4255,6 +4269,7 @@ def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_fre
     """
     checkout, trace, store = _launchable(tmp_path)
     launched = (
+        _flow_line(checkout, "run-1-follow-ups", "run-1"),
         *_template_lines(checkout, "authoring:run-1-follow-ups"),
         *(
             delegation_checkout.at(checkout, line)
@@ -4311,7 +4326,9 @@ def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_fre
     assert second.returncode == 0, second.stderr
     assert [line.split(" --success-hook", 1)[0] for line in trace.read_text().splitlines()] == [
         *launched,
-        *launched,
+        # Its flow is named for the run it launches, which is the free run id it took.
+        _flow_line(checkout, "run-1-follow-ups-2", "run-1"),
+        *launched[1:],
     ]
     project = (checkout / ".plans/projects/run-1-follow-ups.md").read_text(encoding="utf-8")
     assert 'title: "run-1-follow-ups-2"' in project
@@ -4433,6 +4450,7 @@ def test_a_run_id_carrying_capitals_launches_the_project_the_store_wrote(
     assert launched.returncode == 0, launched.stderr
     traced = trace.read_text().splitlines()
     assert [line.split(" --success-hook", 1)[0] for line in traced] == [
+        _flow_line(checkout, f"{run}-follow-ups", run),
         *_template_lines(checkout, "authoring:run-1-follow-ups"),
         *(
             delegation_checkout.at(checkout, line)
@@ -4453,7 +4471,7 @@ def test_a_run_id_carrying_capitals_launches_the_project_the_store_wrote(
     gated = subprocess.run(
         [
             Path(sys.executable).with_name("orchestrator-launch-gate"),
-            *shlex.split(traced[2].split("orchestrator-launch-gate", 1)[1]),
+            *shlex.split(traced[3].split("orchestrator-launch-gate", 1)[1]),
         ],
         cwd=checkout,
         env=os.environ | {plan_root_variable.name(): str(checkout / ".plans")},
@@ -5233,7 +5251,8 @@ def test_failed_detached_follow_up_closes_its_budget_account_without_launching_a
         assert tickets.change_line(entry) in results.stdout
     assert snapshot.exists() and hook.exists()
     assert not (bench.runs / followed.run / "hooks/success.log").exists()
-    assert {path.name for path in bench.runs.iterdir()} == {main, followed.run}
+    # Past the engine's own `.flows`, where the launch's flow is kept and which holds no run.
+    assert {path.name for path in bench.runs.iterdir()} - {".flows"} == {main, followed.run}
     # These files belong to the deliberately refused test launch; preservation was asserted.
     hook.unlink()
     snapshot.unlink()

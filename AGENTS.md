@@ -1262,14 +1262,26 @@ do not just re-arm.
    snapshot the whole watch reads — `just status "$RUN" --no-providers` — which drops
    that report and nothing else, so the unread-surface line and the free-space reading
    both stay in it.
-7. **A planning run is a dispatch.** Neither launch `just plan` makes attaches a
-   monitor, because a planning run's plan is its own output, so each is owed the same
-   watch, read to the end and re-armed from its cursor.
+7. **A planning flow is a dispatch, and the flow is what you watch.** `just plan`,
+   `just finish-plan`, `just follow-ups` and `just follow-ups-answer-comments` each run
+   as a **flow**: the engine's `onepipeline flow run`, owned by this session from the
+   launcher's start to its exit, its runs and the steps between them alike, so a turn
+   cannot end in a review step while the flow's next run and questions wait. Each prints
+   its flow first; arm `just watch --flow <ID>` on it, read each ending as a run watch's
+   is read, and re-arm from its cursor on every one, a new run joining included. While
+   the flow lives that watch covers its runs; once it has exited, a run still open is
+   owed on its own, as is a `--detach` launch's run.
 
-Supervising several runs still requires a qualifying watch for each owed run. Every
-run this session launched stays owed until closed: the `complete` verdict, `just stop`,
-or `just unwatched --acknowledge <run> --reason "<why>"`. The last is a deliberate,
-reasoned escape hatch, mirroring `just unpublished --acknowledge`.
+Supervising several runs still requires a qualifying watch for each owed run and flow.
+Every run this session launched stays owed until closed: the `complete` verdict, `just
+stop`, or `just unwatched --acknowledge <run> --reason "<why>"`. A flow that ended
+non-zero or died is owed closure: `just unwatched --acknowledge-flow <ID> --reason
+"<why>"`, once you have reported it. Both are deliberate, reasoned escape hatches,
+mirroring `just unpublished --acknowledge`. Any other process you must supervise that is
+not a run — a deploy, a CI wait — is wrapped the same way, in `onepipeline flow run`, so
+it is owed a watch too; a flow's own questions and updates arrive on its own channel,
+read with `just channel-next --flow <ID>` and answered with `just channel-reply --flow
+<ID> <FILE>`.
 
 ### Answering on the channel
 

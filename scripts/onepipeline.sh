@@ -90,10 +90,15 @@ export_template_root onepipeline || exit "$?"
 # Only a launch starts harnesses; a read-only view must not create a directory or
 # refuse on an indirection it never uses. `launching` carries this arm's answer past the
 # design-approval gate below, so which verbs are a launch is decided here once.
+# `installed` says which verbs run the installed binary rather than `uv run`: every launch,
+# and `flow`, whose program launches runs of its own (the exec below says why).
 launching=false
+installed=false
+[ "${1:-}" != flow ] || installed=true
 case "${1:-}" in
     start | adopt)
         launching=true
+        installed=true
         # The credentials, every Claude identity's config directory and the alternate
         # Codex home, through the one definition of which resolvers establish them —
         # the same definition the dispatch-env hook named below re-runs before every
@@ -157,7 +162,8 @@ if [ "$launching" = true ]; then
     export_follow_up_drafts onepipeline || exit "$?"
 fi
 
-# Which `onepipeline` a launch runs, and it is not `uv run`'s: `uv run` exports
+# Which `onepipeline` a launch — or a flow, whose program launches — runs, and it is not
+# `uv run`'s: `uv run` exports
 # `VIRTUAL_ENV` naming this checkout's `.venv` into the process it starts, which would put
 # back, after the construction above, the name that construction exists to take out. So a
 # launch execs the installed binary itself, and `scripts/dispatch-env.sh` puts this
@@ -167,12 +173,14 @@ fi
 # Resolved *after* the design-approval gate above, because that gate is itself a `uv run`
 # and so is what heals a fresh worktree's environment before this reads it; an `adopt`,
 # which runs no gate, is the one shape that can reach the refusal below.
-if [ "$launching" = true ]; then
+if [ "$installed" = true ]; then
     engine="${script_dir%/scripts}/.venv/bin/onepipeline"
     if [ ! -x "$engine" ]; then
         echo "onepipeline: this checkout has no executable engine at $engine, and a launch runs the installed binary rather than 'uv run' so that a dispatch does not inherit this checkout's Python environment; run 'just bootstrap' to install the pinned releases, then retry" >&2
         exit 2
     fi
+fi
+if [ "$launching" = true ]; then
     # The engine this launch requests and the one it is about to run, as one line on
     # stderr — stdout is what `monitor` prints and where an attached launch writes its
     # settlement record. Printed, never acted on: whether the two should differ is the
@@ -245,6 +253,24 @@ if [ "${1:-}" = start ]; then
     fi
 fi
 
+# A flow keeps a planner channel of its own, which `ask` raises a launcher's questions on
+# when no run is named, so it is kept under the same bus configuration a run's is.
+# `scripts/launch-flow.sh` is the one caller. Only the flags before `--` are the verb's;
+# everything after it is the program the flow runs, so a `--bus-config` there is not this
+# one. A caller who names one keeps theirs.
+if [ "${1:-} ${2:-}" = "flow run" ]; then
+    named_bus_config=false
+    for argument in "${@:3}"; do
+        case "$argument" in
+            --) break ;;
+            --bus-config | --bus-config=*) named_bus_config=true ;;
+        esac
+    done
+    if [ "$named_bus_config" = false ]; then
+        set -- flow run --bus-config "${script_dir%/scripts}/config/onemessagebus.yaml" "${@:3}"
+    fi
+fi
+
 # `start` and `plan check` default to `--require-rendered true` (`adopt` replays its
 # launch record). A caller who names the flag, or exports ONEPIPELINE_REQUIRE_RENDERED,
 # keeps their answer.
@@ -277,7 +303,7 @@ fi
 # A launch runs the binary the line above reported; a read-only view keeps `uv run`, the
 # way every other recipe here reaches a pinned CLI. The header says why the two differ.
 # llmlint: ignore[tool_output_is_signal] This process is replaced by onepipeline, so what a run or a view reports is onepipeline's own to report; a line added here would corrupt the streams `monitor` and an attached launch are.
-if [ "$launching" = true ]; then
+if [ "$installed" = true ]; then
     # `execfail` so that an engine the check above found executable and the kernel still
     # refuses — a missing interpreter, a wrong architecture — is explained here rather
     # than by the shell's bare error.

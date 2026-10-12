@@ -27,10 +27,13 @@ with the real tools, what each of the flow's runs leaves behind when it settles:
   plan's task with the `spikes` answer linking each report and branch;
 * the **design** run renders the design document into the plan's project.
 
-Each settles by writing the run root the engine keeps — `launch.json` and the `result.json`
-ledger record — and ending as an attached `start` does. Every call is appended to a log, so
-a journey reads what was launched, in order. The scenario is a JSON document the journey
-names in the environment; its controls are what each journey varies.
+Each writes its launch record as it starts, as the engine does — the launching session, this
+process as the driver with the start token this host reports for it, and, when it is
+launched under `ONEPIPELINE_FLOW`, that flow as its `flow` — then settles by writing the
+`result.json` ledger record and ending as an attached `start` does. A `hold` scenario keeps
+one run started and unsettled, its driver alive, until the journey releases it. Every call is
+appended to a log, so a journey reads what was launched, in order. The scenario is a JSON
+document the journey names in the environment; its controls are what each journey varies.
 """
 
 from __future__ import annotations
@@ -39,12 +42,14 @@ import json
 import os
 import re
 import shlex
+import socket
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, NotRequired, TypedDict, cast
+from typing import Any, NewType, NotRequired, TypedDict, cast
 
 import copy_quoted_rows
 
@@ -102,6 +107,18 @@ class Scenario(TypedDict):
     refuse_spikes: NotRequired[bool]
     #: A finalize run settling `failed`.
     fail_finalize: NotRequired[bool]
+    #: A run held started and unsettled until the journey releases it.
+    hold: NotRequired[Hold]
+
+
+class Hold(TypedDict):
+    """A run held between its launch record and its settlement, its driver alive."""
+
+    #: Which stage's run is held: its id less the flow's name, `""` for the draft.
+    suffix: str
+    #: A file whose existence ends the hold, and the seconds it lasts at most without one.
+    release: str
+    seconds: float
 
 
 class Node(TypedDict):
@@ -522,6 +539,88 @@ def design(scenario: Scenario, project: str) -> list[Node]:
     return [{"id": "design-doc", "status": "done"}]
 
 
+#: A run's id, a qualified plan project's, a launching session's and a flow's.
+RunId = NewType("RunId", str)
+ProjectId = NewType("ProjectId", str)
+SessionId = NewType("SessionId", str)
+FlowId = NewType("FlowId", str)
+
+
+class Launch(TypedDict):
+    """The launch record a `start` writes as it starts a run, in the fields this one writes."""
+
+    run_id: RunId
+    project: ProjectId
+    dir: str
+    launcher: str
+    session: SessionId
+    pid: int
+    host: str
+    started: str
+    started_at: str
+    #: The flow it was launched in, absent for a run of no flow.
+    flow: NotRequired[FlowId]
+
+
+class Member(TypedDict):
+    """A run's membership of the flow it was launched in, as the engine's `flow.rs` keeps it."""
+
+    schema_version: int
+    run_id: RunId
+    at: str
+
+
+def _started() -> str:
+    """This process's start token, as the engine stamps a driver's: its start time in ticks."""
+    stat = Path("/proc/self/stat").read_text(encoding="utf-8")
+    # Everything after the comm field, which is the only one that can carry a bracket.
+    return f"linux-proc-stat:{stat[stat.rindex(')') + 2 :].split()[19]}"
+
+
+def _launched(root: Path, run: str, project: str) -> None:
+    """Write the launch record a real `start` writes as it starts a run, before any node works.
+
+    The session is the launcher identity `scripts/onepipeline.sh` exports, and the driver is
+    this process, which lives until the run settles. The flow is the one the launch was made
+    under, which the engine records only for a live flow of the same session; the flows this
+    journey launches under are always that.
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    launch: Launch = {
+        "run_id": RunId(run),
+        "project": ProjectId(project),
+        "dir": str(root),
+        "launcher": os.environ.get("ONEPIPELINE_LAUNCHER", "unknown"),
+        "session": SessionId(os.environ.get("ONEPIPELINE_LAUNCHER_SESSION", "")),
+        "pid": os.getpid(),
+        "host": socket.gethostname(),
+        "started": _started(),
+        # The launch instant the engine records as it starts a run, which an adoption keeps.
+        "started_at": datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+    }
+    if flow := os.environ.get("ONEPIPELINE_FLOW"):
+        launch["flow"] = FlowId(flow)
+        # And the membership a launch in a flow records beside the flow, which is what a
+        # watch of that flow lists to wake on a run joining it: the engine's `flow.rs`
+        # `Member`, under `.flows/<flow>/members/`. A drift in it fails
+        # `tests/unwatched/test_flow_stop_hook_e2e.py`, whose watch then never wakes.
+        members = root.parent / ".flows" / flow / "members"
+        members.mkdir(parents=True, exist_ok=True)
+        member: Member = {"schema_version": 1, "run_id": RunId(run), "at": launch["started_at"]}
+        (members / f"{run}.json").write_text(json.dumps(member), "utf-8")
+    (root / "launch.json").write_text(json.dumps(launch), "utf-8")
+
+
+def _held(scenario: Scenario, suffix: str) -> None:
+    """Keep this run unsettled while the scenario holds its stage, until released."""
+    hold = scenario.get("hold")
+    if hold is None or hold["suffix"] != suffix:
+        return
+    ends = time.monotonic() + hold["seconds"]
+    while not Path(hold["release"]).exists() and time.monotonic() < ends:
+        time.sleep(0.1)
+
+
 def start(arguments: list[str]) -> int:
     project, template, detached, rest = "", "", False, list(arguments)
     while rest:
@@ -544,6 +643,11 @@ def start(arguments: list[str]) -> int:
     with Path(os.environ[LOG]).open("a", encoding="utf-8") as log:
         log.write(json.dumps({"run": run, "project": project, "arguments": arguments}) + "\n")
     flow = scenario["run"]
+    root = Path(os.environ.get("ONEPIPELINE_RUNS_DIR", "runs")) / run
+    refused = run == f"{flow}-spikes" and scenario.get("refuse_spikes")
+    if not refused:
+        _launched(root, run, project)
+        _held(scenario, run.removeprefix(flow))
     match run:
         case _ if run == flow:
             nodes = draft(scenario)
@@ -557,11 +661,6 @@ def start(arguments: list[str]) -> int:
             nodes = finalize(scenario, project)
         case _:
             nodes = design(scenario, project)
-    root = Path(os.environ.get("ONEPIPELINE_RUNS_DIR", "runs")) / run
-    root.mkdir(parents=True, exist_ok=True)
-    # The launch instant the engine records as it starts a run, which an adoption keeps.
-    launch = {"run_id": run, "project": project, "started_at": datetime.now(UTC).isoformat()}
-    (root / "launch.json").write_text(json.dumps(launch), "utf-8")
     done = all(node["status"] == "done" for node in nodes)
     ledger = {
         "schema_version": 5,

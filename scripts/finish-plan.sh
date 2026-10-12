@@ -42,6 +42,12 @@
 # The id is printed beside the command that answers that run's questions, so a supervisor
 # holding only this output can reach either run's channel without composing one.
 #
+# **The whole tail is one flow** (`scripts/launch-flow.sh`), owned by the launching session
+# until it exits, so the session is held through the review, the check and the copy as
+# well as the document's run. Run on its own, its first lines name the flow and the `just
+# watch --flow <ID>` that watches it; handed over from `scripts/plan.sh`, it runs in the
+# planning flow that recipe started, whose watch already covers it.
+#
 # **The refusals are told apart by exit status**, because a builder that could not tell
 # them apart would retry one as the other: 1 is the review refusing the plan's own
 # criteria or its plan checklist failing a rule, 3 is the pre-launch check refusing the plan, 6 is the engine refusing the
@@ -562,6 +568,13 @@ fi
 
 plan_project=$(plan_brief_project finish-plan "$brief") || exit "$UNRUNNABLE"
 plan_run_is_free finish-plan "$design_run" || exit "$UNRUNNABLE"
+
+# Every refusal that writes nothing has passed, so the flow starts here and holds the
+# session to the report. Handed over from `scripts/plan.sh`, this joins the planning flow
+# rather than starting another; run on its own, it is a flow named for the run name.
+# shellcheck source=scripts/launch-flow.sh
+load launch-flow.sh
+run_in_launch_flow finish-plan "$name" "$script_dir/finish-plan.sh" "$brief" "$@"
 
 # The board this repository plans against when the caller names none, read from the one
 # place that states it rather than spelled a second time here: `just copy-plan` copies

@@ -75,7 +75,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+import budget_telemetry
 import pytest
+import yaml
 from nx_inputs import (
     ASK_SEAM_JOURNEYS,
     ASK_SEAM_SCOPED,
@@ -255,6 +257,47 @@ class Checkout:
         result = self.run(target, *nx_args, addopts=addopts)
         assert result.returncode == 0, result.stdout + result.stderr
         return CACHE_HIT not in result.stdout
+
+    def ran_its_own_command(self, target: str) -> bool:
+        """Run ``target``; False when Nx replayed *its* verdict, whatever its dependencies did.
+
+        A target depending on another reports that dependency's replay in the same output,
+        so the whole-run summary cannot say which of the two ran; the task's own header line
+        can, since Nx annotates a replayed task there (`[local cache]`) and a run one not.
+        """
+        result = self.run(target)
+        assert result.returncode == 0, result.stdout + result.stderr
+        header = re.search(rf"^> nx run {re.escape(target)}(.*)$", result.stdout, re.MULTILINE)
+        assert header, f"Nx printed no header for {target}:\n{result.stdout}"
+        return not header.group(1).strip()
+
+    def record_collected_telemetry(self, project: str) -> None:
+        """Record a part for each telemetry budget ``project``'s `budgets` target reads.
+
+        These journeys shorten every suite to collection, so a test target whose journeys
+        record a budget's parts records none, and the budget target reading them refuses an
+        empty record. One stand-in part per budget, written where that target reads,
+        keeps the tier runnable: the claim here is its key, never its figure.
+        """
+        declared = self.resolved_project(project)
+        sources = (
+            declared["targets"][BUDGET_SCOPED]
+            .get("options", {})
+            .get("env", {})
+            .get(budget_telemetry.SOURCES_ENV, "")
+            .split()
+        )
+        budgets = yaml.safe_load(
+            (self.root / declared["root"] / "budgets.yaml").read_text(encoding="utf-8")
+        )["budgets"]
+        for source in sources:
+            with pytest.MonkeyPatch.context() as environment:
+                environment.setenv(budget_telemetry.TELEMETRY_ENV, str(self.root / source))
+                for budget in budgets:
+                    if "tests.budget_telemetry" in budget["command"]:
+                        budget_telemetry.record(
+                            budget["command"][-1], "collected only", 0.0, unit=budget["unit"]
+                        )
 
     def resolved_project(self, project: str = PROJECT) -> dict:
         """Ask Nx itself how one project resolves, `targetDefaults` merged in."""
@@ -952,9 +995,10 @@ SKIPPABLE_TIERS = frozenset(
         # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's
         # one catalog of test projects, where every project has its entry, and
         # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall
-        # outside the tiers it describes; the unfinished project's budgets entry sits beside
-        # its test tier's because the catalog is the domain.
+        # outside the tiers it describes; the unfinished and unwatched projects' budgets
+        # entries sit beside their test tiers' because the catalog is the domain.
         (UNFINISHED_PROJECT, BUDGET_SCOPED),
+        (UNWATCHED_PROJECT, BUDGET_SCOPED),
         # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
         # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
         # catalog of test projects, where every project has its entry, and
@@ -1353,8 +1397,11 @@ def test_a_prose_only_diff_leaves_out_only_tiers_that_would_have_replayed(
     Recording both together is what separates a selector that is cheaper from one that
     merely checks less.
     """
-    for project, target in SKIPPABLE_TIERS:
-        assert selector.ran_the_command(f"{project}:{target}")
+    # A budget tier reads what its project's test tier recorded, so it is driven after them.
+    for project, target in sorted(SKIPPABLE_TIERS, key=lambda tier: tier[1] == BUDGET_SCOPED):
+        if target == BUDGET_SCOPED:
+            selector.record_collected_telemetry(project)
+        assert selector.ran_its_own_command(f"{project}:{target}")
 
     selector.edit(PROSE_WITNESS, PROSE_TEXT, PROSE_EDIT)
 
@@ -1365,7 +1412,7 @@ def test_a_prose_only_diff_leaves_out_only_tiers_that_would_have_replayed(
         "running are the ones whose keys carry no prose"
     )
     for project, target in sorted(SKIPPABLE_TIERS):
-        assert not selector.ran_the_command(f"{project}:{target}"), (
+        assert not selector.ran_its_own_command(f"{project}:{target}"), (
             f"{project}:{target} is left out of this diff's selection, and the licence "
             "for that is that it would have replayed a verdict recorded for this tree"
         )

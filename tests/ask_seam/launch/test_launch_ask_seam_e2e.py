@@ -62,6 +62,7 @@ from fake_backend import (
     PROMPT_LOG_ENV,
     RUN_ON_MARKER_ENV,
 )
+from flow_engine_stand_in import give_flow_engine
 from nx_workspace import WORKSPACE_INSTALL_MARKS
 from planner_channel import PersistentManager, just, ruling
 from project_fixtures import helper, project_from_plan
@@ -2160,6 +2161,11 @@ def test_a_plan_launch_that_cannot_search_the_ledger_refuses_rather_than_assumin
 #: them, so a checkout without it never reaches the refusal each of these journeys is
 #: about. Kept present in every one of them for that reason.
 BRIEF_GRAMMAR = "plan-brief.sh"
+#: The helper `scripts/plan.sh` enters its flow through, sourced after the brief grammar and
+#: before any environment helper; kept present for the same reason, and given the engine it
+#: enters that flow through (`give_flow_engine`), because a checkout without one is refused
+#: there, before any refusal below.
+FLOW_HELPER = "launch-flow.sh"
 
 LAUNCH_ENVIRONMENT_HELPERS = (
     "credentials-env.sh",
@@ -2187,11 +2193,13 @@ def test_a_plan_launch_without_a_helper_that_establishes_its_environment_writes_
     # `ask-manager.sh` beside them, because it is what the ask-manager helper resolves
     # and refuses over: without it every case past that helper reports its absence
     # instead of the one this case removed.
-    kept = {*LAUNCH_ENVIRONMENT_HELPERS, "ask-manager.sh", BRIEF_GRAMMAR} - {missing}
+    kept = {*LAUNCH_ENVIRONMENT_HELPERS, "ask-manager.sh", BRIEF_GRAMMAR, FLOW_HELPER} - {missing}
     for present in sorted(kept):
         copied = scripts / present
         copied.write_bytes((REPO_ROOT / "scripts" / present).read_bytes())
         copied.chmod(0o755)
+    # llmlint: ignore[e2e_not_mocked] The engine is a published CLI, which this suite doubles at its binary and nowhere above it: the stand-in only runs the launcher it is handed inside the flow it names, while the real wrapper and launcher run unchanged, and a real `flow run` would register a flow owned by whichever session runs the suite.  # noqa: E501 - a directive is one line, and its reason is longer than the limit
+    give_flow_engine(scripts.parent)
     brief = tmp_path / "brief.md"
     brief.write_text(BRIEF, encoding="utf-8")
     working = tmp_path / "working"
@@ -2215,6 +2223,109 @@ def test_a_plan_launch_without_a_helper_that_establishes_its_environment_writes_
     )
 
 
+def test_a_plan_launch_in_a_checkout_without_an_engine_is_refused_naming_it(
+    tmp_path: Path,
+) -> None:
+    """No engine means no launch flow, and the launcher refuses rather than going on without one.
+
+    The flow is what holds the manager's session for the launcher's whole life, so a
+    launcher that went on in no flow would launch runs and ask questions nothing is woken
+    for. Driven through the real recipe from a checkout holding every helper and the real
+    engine wrapper but no `.venv/bin/onepipeline`, so the refusal proved is the missing
+    engine's and nothing after it.
+    """
+    checkout = tmp_path / "checkout"
+    scripts = checkout / "scripts"
+    scripts.mkdir(parents=True)
+    for present in (
+        "plan.sh",
+        *LAUNCH_ENVIRONMENT_HELPERS,
+        "ask-manager.sh",
+        BRIEF_GRAMMAR,
+        FLOW_HELPER,
+    ):
+        copied = scripts / present
+        copied.write_bytes((REPO_ROOT / "scripts" / present).read_bytes())
+        copied.chmod(0o755)
+    # llmlint: ignore[e2e_not_mocked] The engine is a published CLI, which this suite doubles at its binary and nowhere above it: the stand-in only runs the launcher it is handed inside the flow it names, while the real wrapper and launcher run unchanged, and a real `flow run` would register a flow owned by whichever session runs the suite.  # noqa: E501 - a directive is one line, and its reason is longer than the limit
+    engine = give_flow_engine(checkout)
+    engine.unlink()
+    brief = tmp_path / "brief.md"
+    brief.write_text(BRIEF, encoding="utf-8")
+    working = tmp_path / "working"
+    working.mkdir()
+    runs = tmp_path / "runs"
+
+    refused = subprocess.run(  # noqa: S603 - the real recipe, from a checkout without an engine
+        [str(scripts / "plan.sh"), str(brief), "--name", "launch-seam-no-engine"],
+        cwd=working,
+        env={**dict(os.environ), "ONEPIPELINE_RUNS_DIR": str(runs)},
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+
+    assert refused.returncode == 2, refused.stdout + refused.stderr
+    # The refusal is the launcher's only word: nothing past the flow's entry ran.
+    (said,) = refused.stderr.splitlines()
+    assert said.startswith(f"plan: this checkout has no engine at {engine}"), said
+    assert "just bootstrap" in said, said
+    assert not (working / "scratch").exists(), "a plan was written for a launch with no engine"
+    assert not runs.exists(), "a run was started for a launch with no engine"
+
+
+def test_a_plan_launch_whose_engine_wrapper_cannot_be_run_is_refused_naming_it(
+    tmp_path: Path,
+) -> None:
+    """A wrapper the kernel refuses is explained by the launcher, never left to a bare error.
+
+    The flow is entered by exec'ing the engine wrapper, so its failure must come back to
+    the launcher to say what to repair. Driven through the real recipe from a checkout
+    holding every helper and an engine, with the wrapper present but not executable, so
+    the refusal proved is the wrapper's and nothing before it.
+    """
+    checkout = tmp_path / "checkout"
+    scripts = checkout / "scripts"
+    scripts.mkdir(parents=True)
+    for present in (
+        "plan.sh",
+        *LAUNCH_ENVIRONMENT_HELPERS,
+        "ask-manager.sh",
+        BRIEF_GRAMMAR,
+        FLOW_HELPER,
+    ):
+        copied = scripts / present
+        copied.write_bytes((REPO_ROOT / "scripts" / present).read_bytes())
+        copied.chmod(0o755)
+    # llmlint: ignore[e2e_not_mocked] The engine is a published CLI, which this suite doubles at its binary and nowhere above it: the stand-in only runs the launcher it is handed inside the flow it names, while the real wrapper and launcher run unchanged, and a real `flow run` would register a flow owned by whichever session runs the suite.  # noqa: E501 - a directive is one line, and its reason is longer than the limit
+    give_flow_engine(checkout)
+    wrapper = scripts / "onepipeline.sh"
+    wrapper.chmod(0o644)
+    brief = tmp_path / "brief.md"
+    brief.write_text(BRIEF, encoding="utf-8")
+    working = tmp_path / "working"
+    working.mkdir()
+    runs = tmp_path / "runs"
+
+    refused = subprocess.run(  # noqa: S603 - the real recipe, from a checkout whose wrapper cannot run
+        [str(scripts / "plan.sh"), str(brief), "--name", "launch-seam-no-wrapper"],
+        cwd=working,
+        env={**dict(os.environ), "ONEPIPELINE_RUNS_DIR": str(runs)},
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+
+    assert refused.returncode == 2, refused.stdout + refused.stderr
+    said = refused.stderr.splitlines()[-1]
+    assert said.startswith(f"plan: the engine wrapper {wrapper} could not be run"), said
+    assert "just bootstrap" in said, said
+    assert not (working / "scratch").exists(), "a plan was written for a launch with no flow"
+    assert not runs.exists(), "a run was started for a launch with no flow"
+
+
 #: Every helper `scripts/plan.sh` sources, so each one's load failure is driven rather
 #: than the first one's standing in for the rest. They are sourced in sequence and each
 #: establishes a different part of the dispatch environment, so a reader cannot infer one
@@ -2222,6 +2333,7 @@ def test_a_plan_launch_without_a_helper_that_establishes_its_environment_writes_
 #: was left to strict mode while the credentials source three lines above it was not, and
 #: nothing here noticed because only the credentials half had a journey.
 SOURCED_HELPERS = (
+    FLOW_HELPER,
     "credentials-env.sh",
     "ask-manager-env.sh",
     "plan-root-env.sh",
@@ -2250,6 +2362,8 @@ def test_a_plan_launch_whose_helper_cannot_be_loaded_writes_nothing(
         copied = scripts / present
         copied.write_bytes((REPO_ROOT / "scripts" / present).read_bytes())
         copied.chmod(0o755)
+    # llmlint: ignore[e2e_not_mocked] The engine is a published CLI, which this suite doubles at its binary and nowhere above it: the stand-in only runs the launcher it is handed inside the flow it names, while the real wrapper and launcher run unchanged, and a real `flow run` would register a flow owned by whichever session runs the suite.  # noqa: E501 - a directive is one line, and its reason is longer than the limit
+    give_flow_engine(scripts.parent)
     (scripts / corrupted).write_text("this is ( not valid bash\n", encoding="utf-8")
     brief = tmp_path / "brief.md"
     brief.write_text(BRIEF, encoding="utf-8")
@@ -2309,6 +2423,7 @@ def test_a_plan_launch_over_an_unusable_credentials_file_writes_nothing(
     alone.chmod(0o755)
     for present in (
         BRIEF_GRAMMAR,
+        FLOW_HELPER,
         "credentials-env.sh",
         "ask-manager-env.sh",
         "ask-manager.sh",
@@ -2317,6 +2432,8 @@ def test_a_plan_launch_over_an_unusable_credentials_file_writes_nothing(
         copied = scripts / present
         copied.write_bytes((REPO_ROOT / "scripts" / present).read_bytes())
         copied.chmod(0o755)
+    # llmlint: ignore[e2e_not_mocked] The engine is a published CLI, which this suite doubles at its binary and nowhere above it: the stand-in only runs the launcher it is handed inside the flow it names, while the real wrapper and launcher run unchanged, and a real `flow run` would register a flow owned by whichever session runs the suite.  # noqa: E501 - a directive is one line, and its reason is longer than the limit
+    give_flow_engine(checkout)
     credentials = checkout / ".env"
     if written is None:
         credentials.mkdir()

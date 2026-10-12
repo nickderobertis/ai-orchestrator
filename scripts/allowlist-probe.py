@@ -303,6 +303,7 @@ def _values(scratch: Scratch, invocation: Invocation, pid: int) -> dict[str, str
     runs = scratch.project / "runs"
     return {
         "run": f"run-{tag}",
+        "flow": f"flow-{tag}",
         "node": "node-1",
         "log": str(scratch.project / ".logs" / f"watch-{tag}.log"),
         "cursor": f"cursor-{tag}",

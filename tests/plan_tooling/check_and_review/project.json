@@ -12,6 +12,7 @@
     "support-criteria-examples",
     "support-fake-backend",
     "support-fake-codex",
+    "support-flow-engine-stand-in",
     "support-follow-up-variables",
     "support-no-paid-provider",
     "support-nx-inputs",

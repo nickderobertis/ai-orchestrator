@@ -42,10 +42,11 @@ import time
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, NewType
 
 import follow_up_variables
 import pytest
+from flow_engine_stand_in import UNDOUBLED, give_flow_engine
 from nx_workspace import WORKSPACE_INSTALL_MARKS
 from published_tools import ONETASKGRAPH_BIN
 from test_follow_ups_recipe_e2e import (
@@ -428,6 +429,10 @@ class Invocation(NamedTuple):
         return since
 
 
+#: A flow's id, a namespace the engine keeps apart from runs'.
+FlowId = NewType("FlowId", str)
+
+
 class Life(NamedTuple):
     """Every phase of one board's life, read back before anything is torn down."""
 
@@ -451,6 +456,10 @@ class Life(NamedTuple):
     real_started: datetime
     real_ended: datetime
     launched: list[str]
+    #: The flows the real gathering left under the runs root, and the flow each run it
+    #: launched records in its launch record (empty for none).
+    flows: list[FlowId]
+    flow_of: dict[tickets.RunId, FlowId]
     witnesses: dict[str, str]
     stored: Stored
     feedback: dict[str, str]
@@ -548,7 +557,10 @@ def _snapshot(root: Path) -> dict[str, bytes]:
 
 
 def _follow_up_runs(bench: Bench) -> list[str]:
-    return sorted(path.name for path in bench.runs.iterdir()) if bench.runs.is_dir() else []
+    """Every run under the runs root, past the engine's own `.flows`, which holds no run."""
+    if not bench.runs.is_dir():
+        return []
+    return sorted(path.name for path in bench.runs.iterdir() if path.name != ".flows")
 
 
 def _watermark(bench: Bench) -> bytes:
@@ -781,6 +793,17 @@ def life(tmp_path_factory: pytest.TempPathFactory) -> Life:  # noqa: PLR0915 - o
             real_started=real_started,
             real_ended=real_ended,
             launched=launched,
+            flows=sorted(FlowId(path.name) for path in (bench.runs / ".flows").glob("*")),
+            flow_of={
+                tickets.RunId(run): FlowId(
+                    str(
+                        json.loads((bench.runs / run / "launch.json").read_text("utf-8")).get(
+                            "flow", ""
+                        )
+                    )
+                )
+                for run in launched
+            },
             witnesses={
                 key: (tmp / f"witness-{key}").read_text(encoding="utf-8")
                 if (tmp / f"witness-{key}").is_file()
@@ -995,6 +1018,18 @@ def test_the_real_gathering_launches_one_run_per_owning_run_all_at_once(life: Li
     assert life.witnesses == dict.fromkeys(("A", "B", "C"), "every launch record existed")
     assert life.stored.metadata["onepipeline.id"] == "follow-ups"
     assert life.stored.checked.returncode == OK, life.stored.checked.stderr
+
+
+def test_the_gathering_and_every_run_it_launches_are_one_flow(life: Life) -> None:
+    """The whole gathering holds its session as one flow, its launches joined to it.
+
+    Each `scripts/follow-ups.sh` it starts enters a flow too, and runs in the one already
+    entered rather than nesting, so the manager arms one watch for all of it.
+    """
+    _settled(life)
+    (flow,) = set(life.flow_of.values())
+    assert flow.startswith("follow-ups-answer-comments") and flow in life.flows, life.flow_of
+    assert sorted(life.flow_of) == life.launched, life.flow_of
 
 
 def test_each_feedback_file_quotes_only_its_own_runs_comments(life: Life) -> None:
@@ -1509,11 +1544,12 @@ printf '%s\\n' "${GH_PROJECTS_TOKEN-<unset>}" >>"$CREDENTIAL_TRACE"
 exec "$REAL_PLAN_STORE" "$@"
 """
 
-#: `scripts/follow-ups.sh`'s own refusal where the mirror's launch stops: that checkout
-#: carries this repository's `scripts/`, `justfile` and a plan store and nothing else, so
-#: there is no engine to state the follow-up task's template with — which is past the board
-#: read this mirror exists for, and before any task is created or anything launched.
-NO_ENGINE = "has no engine at"
+#: Where the mirror's launch stops: that checkout carries this repository's `scripts/`,
+#: `justfile`, a plan store and an engine that doubles only the launch flow's `flow run`
+#: (`give_flow_engine`), so the first other verb — stating the follow-up task's template —
+#: is refused. That is past the board read this mirror exists for, and before any task is
+#: created or anything launched.
+ENGINE_STOP = UNDOUBLED
 
 #: The cause of the one issue a mirror's run owns, and the person's comment on it.
 MIRROR_CAUSE = "listing-cursor-skips-last-page"
@@ -1541,8 +1577,8 @@ def _mirror(
     mirroring this checkout's (:func:`_mirrored_toolchain`) whose plan store is ``store``,
     with the `.env` this journey states. The board is the same `local-md` stand-in every
     journey here reads, holding one issue the run owns with a person's comment nobody
-    answered. That checkout carries no engine, so a launch stops where its task would be
-    created — after the board read this exists for, and before any launch.
+    answered. That checkout's engine doubles only the launch flow, so a launch stops where
+    its task would be created — after the board read this exists for, and before any launch.
     """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
@@ -1551,6 +1587,8 @@ def _mirror(
     shutil.copytree(REPO_ROOT / "scripts", checkout / "scripts")
     shutil.copy2(REPO_ROOT / "justfile", checkout / "justfile")
     _mirrored_toolchain(checkout, store)
+    # llmlint: ignore[e2e_not_mocked] The engine is a published CLI, which this suite doubles at its binary and nowhere above it: the stand-in only runs the launcher it is handed inside the flow it names and refuses every other verb, while the real wrapper and recipe run unchanged; a real engine would launch the run these journeys stop before.  # noqa: E501 - a directive is one line, and its reason is longer than the limit
+    give_flow_engine(checkout)
     if credentials is not None:
         (checkout / ".env").write_text(credentials, encoding="utf-8")
     run = tickets.RunId(f"ac-mirror-{os.getpid()}")
@@ -1625,7 +1663,7 @@ def test_the_board_read_is_handed_the_credential_this_checkout_supplies(
         "2*.md"
     )
     assert ON_MIRROR.rstrip() in feedback.read_text(encoding="utf-8")
-    assert NO_ENGINE in result.stderr, result.stderr
+    assert ENGINE_STOP in result.stderr, result.stderr
     assert f"run {mirror.run}: its follow-up run did not launch" in result.stdout
     assert not list(mirror.bench.runs.glob(f"{mirror.run}{SUFFIX}*"))
     assert PLANTED_CREDENTIAL not in result.stdout + result.stderr, "a credential value was printed"

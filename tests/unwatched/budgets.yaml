@@ -1,0 +1,17 @@
+# The unwatched project's budgets. Unlabelled, so the cached `budgets` target checks them,
+# reading what this project's cached `test` target recorded: `flow-wake-gap` is bounded by a
+# watch's own deadline rather than by how fast this host runs, so a recording replayed for
+# an unchanged tree is the same answer. The command is the one analysis every budget runs
+# (`tests/budget_telemetry.py`).
+schema_version: 1
+budgets:
+  - id: flow-wake-gap
+    description: >-
+      The longest a manager waits, while a launch flow lives, from arming a
+      `just watch --flow` to that watch waking it, as a fraction of the wake budget. It
+      protects the user's update cadence through a planning flow's steps between runs.
+    measure: reported
+    command: ["uv", "run", "--directory", "../..", "python", "-m", "tests.budget_telemetry", "flow-wake-gap"]
+    unit: fraction
+    direction: max
+    threshold: 1.0

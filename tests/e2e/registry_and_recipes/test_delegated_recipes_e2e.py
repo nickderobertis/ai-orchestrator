@@ -83,6 +83,19 @@ THE_BOARD = "plans"
 PLANNING_RENDERED = "--require-rendered false"
 
 
+def _flow(script: str, name: str, *arguments: str) -> str:
+    """The flow a launcher enters before anything it writes, re-executing itself in it.
+
+    Through the wrapper, which adds this host's bus configuration as it does to a launch;
+    `just plan` handing over to its tail enters it again, which the engine answers by
+    running the tail in the flow already entered.
+    """
+    return (
+        f"{ENGINE} flow run {BUS_CONFIG} --name {name} -- "
+        f"{CHECKOUT}/scripts/{script} {' '.join(arguments)}"
+    )
+
+
 def _tail(destination: str = THE_BOARD, project: str = PLAN_PROJECT) -> tuple[str, ...]:
     """Every command line the tail of the planning flow reaches, in order.
 
@@ -93,7 +106,9 @@ def _tail(destination: str = THE_BOARD, project: str = PLAN_PROJECT) -> tuple[st
     document, and the copy is after both — because a document written from unreviewed
     content is the failure this ordering exists to prevent.
     """
+    to = () if destination == THE_BOARD else ("--to", destination)
     return (
+        _flow("finish-plan.sh", "cursor-shape", BRIEF, "--name", "cursor-shape", *to),
         f"uv run orchestrator-review-plan {project}",
         f"uv run orchestrator-check-plan {project}",
         *_graph_reads(project),
@@ -314,6 +329,7 @@ DELEGATIONS = (
         (BRIEF,),
         f"{ENGINE} start {DEFAULTS} authoring:cursor-shape --dag-graph off {PLANNING_RENDERED}",
         then=_tail(),
+        before=(_flow("plan.sh", "cursor-shape", BRIEF),),
     ),
     # `--detach` hands back before the planner has written anything, so there is no plan
     # for the tail to be about and the launch prints the command that finishes it later.
@@ -323,6 +339,18 @@ DELEGATIONS = (
         (BRIEF, "--name", "listing-api", "--max-turns", "40", "--detach"),
         f"{ENGINE} start {DEFAULTS} authoring:listing-api --detach --dag-graph off "
         f"{PLANNING_RENDERED}",
+        before=(
+            _flow(
+                "plan.sh",
+                "listing-api",
+                BRIEF,
+                "--name",
+                "listing-api",
+                "--max-turns",
+                "40",
+                "--detach",
+            ),
+        ),
     ),
     # The joined spelling of both, which is a separate parsing path: `--name=` decides
     # the plan path this line names, and `--max-turns=` is absorbed rather than
@@ -332,6 +360,11 @@ DELEGATIONS = (
         (BRIEF, "--name=listing-api", "--max-turns=40", "--detach"),
         f"{ENGINE} start {DEFAULTS} authoring:listing-api --detach --dag-graph off "
         f"{PLANNING_RENDERED}",
+        before=(
+            _flow(
+                "plan.sh", "listing-api", BRIEF, "--name=listing-api", "--max-turns=40", "--detach"
+            ),
+        ),
     ),
     # `--no-design-doc` stops the flow after the planner, so the tail is absent here for
     # a different reason than it is absent above: there is nothing to write a document
@@ -340,6 +373,7 @@ DELEGATIONS = (
         "plan",
         (BRIEF, "--no-design-doc"),
         f"{ENGINE} start {DEFAULTS} authoring:cursor-shape --dag-graph off {PLANNING_RENDERED}",
+        before=(_flow("plan.sh", "cursor-shape", BRIEF, "--no-design-doc"),),
     ),
     # `--to` is the tail's own flag and reaches it rather than `onepipeline start`: the
     # destination decides nothing about the planner, and everything about where the plan
@@ -349,6 +383,7 @@ DELEGATIONS = (
         (BRIEF, "--to", "elsewhere"),
         f"{ENGINE} start {DEFAULTS} authoring:cursor-shape --dag-graph off {PLANNING_RENDERED}",
         then=_tail(destination="elsewhere"),
+        before=(_flow("plan.sh", "cursor-shape", BRIEF, "--to", "elsewhere"),),
     ),
     # A caller who names an observer keeps it, in either spelling and including their
     # own `off`: the flag refuses to be given twice, so the default is added only when
@@ -360,12 +395,16 @@ DELEGATIONS = (
         f"{ENGINE} start {DEFAULTS} authoring:cursor-shape --dag-graph graphs/dag-scope.yaml "
         f"{PLANNING_RENDERED}",
         then=_tail(),
+        before=(_flow("plan.sh", "cursor-shape", BRIEF, "--dag-graph", "graphs/dag-scope.yaml"),),
     ),
     Delegation(
         "plan",
         (BRIEF, "--dag-graph=graphs/other.yaml", "--detach"),
         f"{ENGINE} start {DEFAULTS} authoring:cursor-shape --dag-graph=graphs/other.yaml --detach "
         f"{PLANNING_RENDERED}",
+        before=(
+            _flow("plan.sh", "cursor-shape", BRIEF, "--dag-graph=graphs/other.yaml", "--detach"),
+        ),
     ),
     # The tail on its own, which is how a plan edited after it was authored is finished:
     # the same six verbs in the same order, reached without a planner being launched at
@@ -375,6 +414,7 @@ DELEGATIONS = (
         "finish-plan",
         (BRIEF, "--to", "elsewhere"),
         "uv run orchestrator-review-plan authoring:listing-cursor",
+        before=(_flow("finish-plan.sh", "cursor-shape", BRIEF, "--to", "elsewhere"),),
         then=(
             "uv run orchestrator-check-plan authoring:listing-cursor",
             *_graph_reads("authoring:listing-cursor"),
@@ -2855,3 +2895,56 @@ def test_a_board_recipe_refuses_when_the_credentials_helper_cannot_be_loaded(
         "the command ran without the checkout's credentials established, so the store "
         "was handed whatever this process held"
     )
+
+
+def test_a_launcher_names_its_flow_first_and_never_an_id_it_cannot_vouch_for(
+    tmp_path: Path,
+) -> None:
+    """The first line of `just plan` is its flow's watch, and only for an id the engine mints.
+
+    The receipt is what a manager copies to arm the watch, so it names the flow in the
+    recipe's own form; an id outside the alphabet the engine mints from — a control
+    sequence, a shell word — is withheld rather than printed into a terminal or a command.
+    """
+    checkout, trace = _checkout(tmp_path)
+    named = _run(checkout, trace, "plan", BRIEF, "--no-design-doc")
+    assert named.returncode == 0, named.stderr
+    assert named.stderr.splitlines()[0] == (
+        "flow cursor-shape: watch it with: just watch --flow cursor-shape"
+    ), named.stderr
+
+    unsafe = _run(
+        checkout,
+        trace,
+        "plan",
+        BRIEF,
+        "--name",
+        "cursor-shape-2",
+        "--no-design-doc",
+        env={"FAKE_FLOW_ID": "bad\x1b[2J; rm -rf ~"},
+    )
+    assert unsafe.returncode == 0, unsafe.stderr
+    assert "watch --flow" not in unsafe.stderr, unsafe.stderr
+
+    # A re-entry marker some unrelated process left in the environment names a launcher
+    # that is not this one's parent, so the launcher still enters a flow of its own.
+    trace.write_text("", encoding="utf-8")
+    stale = _run(
+        checkout,
+        trace,
+        "plan",
+        BRIEF,
+        "--name",
+        "cursor-shape-3",
+        "--no-design-doc",
+        env={"ORCHESTRATOR_FLOW_ENTERED": "1:inherited-flow"},
+    )
+    assert stale.returncode == 0, stale.stderr
+    assert stale.stderr.splitlines()[0] == (
+        "flow cursor-shape-3: watch it with: just watch --flow cursor-shape-3"
+    ), stale.stderr
+    assert (
+        trace.read_text(encoding="utf-8")
+        .splitlines()[0]
+        .startswith(_at(checkout, f"{ENGINE} flow run "))
+    ), trace.read_text(encoding="utf-8")

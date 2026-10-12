@@ -199,6 +199,12 @@ _ACK_BRANCH = (
     '--reason "<why>"`'
 )
 _ACK_RUN = 'or `just unwatched --acknowledge <run> --reason "<why>"`'
+_ACK_FLOW = '`just unwatched --acknowledge-flow <ID> --reason "<why>"`'
+_WATCH_FLOW = "arm `just watch --flow <ID>` on it"
+_FLOW_CHANNEL = (
+    "read with `just channel-next --flow <ID>` and answered with `just channel-reply --flow "
+    "<ID> <FILE>`"
+)
 _FORBIDDEN = "What stays off it is what this document forbids a manager"
 _NO_VERIFY = "a hook bypassed with `git -c core.hooksPath=…` or `--no-verify`"
 _BYPASS = "Nothing that changes what a remote or a base branch sees bypasses `onevcs`"
@@ -256,6 +262,12 @@ INVOCATIONS: tuple[Invocation, ...] = (
         "just watch {run} --cursor {cursor} --log {log}",
         _WATCH,
     ),
+    _allow("watch-flow", "just watch --flow {flow} --log {log}", _WATCH_FLOW),
+    _allow(
+        "watch-flow-rearm",
+        "just watch --flow {flow} --cursor {cursor} --log {log}",
+        _WATCH_FLOW,
+    ),
     _allow("runs", "just runs", _VIEWS),
     _allow("monitor", "just monitor {run}", _AFTER_LAUNCH),
     _allow("unwatched", "just unwatched", _AFTER_LAUNCH, codex=CODEX_EXACT),
@@ -279,6 +291,8 @@ INVOCATIONS: tuple[Invocation, ...] = (
         "just channel-reply {run} {envelope} --correlation {correlation}",
         _AFTER_LAUNCH,
     ),
+    _allow("channel-next-flow", "just channel-next --flow {flow}", _FLOW_CHANNEL),
+    _allow("channel-reply-flow", "just channel-reply --flow {flow} {envelope}", _FLOW_CHANNEL),
     _allow("envelope-write", "{envelope}", _ENVELOPE, codex=CODEX_WRITE_TOOL, kind="write"),
     _allow("plan", "just plan {brief}", _PLAN),
     _allow("finish-plan", "just finish-plan {brief}", _FINISH),
@@ -409,6 +423,11 @@ INVOCATIONS: tuple[Invocation, ...] = (
         "just unwatched --acknowledge {run} --reason done",
         _ACK_RUN,
     ),
+    _refuse(
+        "unwatched-acknowledge-flow",
+        "just unwatched --acknowledge-flow {flow} --reason done",
+        _ACK_FLOW,
+    ),
     _refuse("git-C-merge", "git -C {workspace} merge {branch}", _FORBIDDEN),
     _refuse("git-C-checkout", "git -C {workspace} checkout {branch}", _FORBIDDEN),
     _refuse("git-C-commit", "git -C {workspace} commit -m probe", _FORBIDDEN),
@@ -445,6 +464,7 @@ INVOCATIONS: tuple[Invocation, ...] = (
 PLACEHOLDERS = frozenset(
     {
         "run",
+        "flow",
         "node",
         "log",
         "cursor",
