@@ -644,6 +644,42 @@ def test_every_parallel_declaration_names_the_same_worker_contract() -> None:
     assert len(contracts) == 1, f"the parallel worker contract has drifted apart: {found}"
 
 
+PARALLELISM_INVARIANT = re.compile(
+    r"\*\*The gate runs (\w+) Nx tasks at once, each across (\w+) xdist workers\*\*"
+)
+NUMBER_WORDS = dict(
+    zip(
+        ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"),
+        range(1, 11),
+        strict=True,
+    )
+)
+
+
+def test_agents_md_states_the_parallelism_the_gate_runs() -> None:
+    """AGENTS.md names the gate's Nx slots and xdist width, so both are held to it.
+
+    The slot count was chosen by measurement and kept on the manager's ruling, and
+    the sentence that says so is what a later change has to answer; a figure there
+    that no longer matched `nx.json` or the worker contract would argue for a setting
+    the gate no longer runs.
+    """
+    stated = PARALLELISM_INVARIANT.search((REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8"))
+    assert stated is not None, "AGENTS.md no longer states the gate's parallelism invariant"
+    slots, workers = (NUMBER_WORDS.get(word) for word in stated.groups())
+
+    configured = json.loads((REPO_ROOT / "nx.json").read_text(encoding="utf-8")).get("parallel")
+    assert slots == configured, (
+        f"AGENTS.md says the gate runs {stated[1]} Nx tasks at once, but nx.json's "
+        f"`parallel` is {configured}; change both together"
+    )
+    widths = {int(n) for site in PARALLEL_SITES for n, _ in _worker_contracts(*site)}
+    assert widths == {workers}, (
+        f"AGENTS.md says each Nx task runs across {stated[2]} xdist workers, but the "
+        f"test targets declare -n {sorted(widths)}; change both together"
+    )
+
+
 #: The scripts that install into or rewrite a `.venv`, `.venv/bin` or `node_modules`, by
 #: file name: `scripts/nx.sh` heals both installs before every invocation, and the two
 #: setup scripts provision the project environment and run `uv tool install`.

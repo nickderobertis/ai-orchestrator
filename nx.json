@@ -1,6 +1,7 @@
 {
   "$schema": "./node_modules/nx/schemas/nx-schema.json",
   "cacheDirectory": ".nx/cache",
+  "parallel": 3,
   "defaultBase": "main",
   "namedInputs": {
     "default": [

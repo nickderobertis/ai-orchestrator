@@ -1854,9 +1854,20 @@ pre-push because there is no CI.
   read compares what `orchestrator:test` and each test project measuring into its own
   `.coverage.<project name>` — the journey projects under `tests/e2e/` among them —
   measured to it, so nothing else may name one.
-- **The suite runs across four xdist workers**, from measurement rather than `auto`:
-  it is latency-bound and the curve is flat past four on a host also running
-  dispatches. A test whose subject is a process- or machine-wide resource declares
+- **The gate runs three Nx tasks at once, each across four xdist workers** —
+  `nx.json`'s `parallel`, which is Nx's own default, and `-n 4` on every test target,
+  both held to this sentence by `tests/tree_scans/test_nx_cache_scope.py` — from
+  measurement rather than `auto`: the xdist curve is flat past four on a host also
+  running dispatches, and Nx's slots are held to a load ceiling of this host's `nproc`.
+  <!-- llmlint: ignore-block[agents_md_durable_and_terse] The task that tuned the gate's parallelism requires this invariant to state the measurement behind the chosen values, and the ruling that kept them is what a later change to the slot count has to answer. -->
+  On a cold wide-diff `just check` beside other dispatches, Nx `parallel` 5 took
+  1788.8 s against three slots' 3252.7 s at like load (load1 mean 34.3 against 36.3),
+  three slots sitting on their floor of task work / 3; but every run exceeded the
+  ceiling on other dispatches' load alone, and the user chose to keep three slots,
+  leaving the host's CPU to its other managers, and to speed the gate by cutting the
+  work in its slowest test tiers instead.
+  <!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
+  A test whose subject is a process- or machine-wide resource declares
   that as a scheduling constraint — never a loosened assertion, and never a solo
   re-proof by hand. This checkout's toolchain is not one: `uv run` holds the
   `<root>/.venv` lock only while it checks or syncs, and nothing syncs this checkout's,
