@@ -1993,6 +1993,41 @@ def test_every_tier_of_the_suite_partitions_it_between_them() -> None:
     assert all(parts), [len(part) for part in parts]
 
 
+#: What takes a session's temporary root back out of `tests/pytest_temp_root.py`'s hands:
+#: a base named outright, a conftest not loaded or cut off above `tests/`, and the
+#: environment pytest and `tempfile` read for where the shared per-user root lives.
+_TEMP_ROOT_OVERRIDES = ("--basetemp", "--noconftest", "--confcutdir", "-p no:")
+_TEMP_ROOT_VARIABLES = ("PYTEST_DEBUG_TEMPROOT=", "TMPDIR=", "PYTEST_ADDOPTS=")
+#: The options of a selection that take their value as the next argument.
+_VALUED_OPTIONS = frozenset({"-m", "-k", "-p", "--deselect", "--ignore"})
+
+
+def test_every_tier_keeps_the_temporary_root_its_conftest_claims() -> None:
+    """Every tier's session takes a root of its own rather than the host's shared one.
+
+    The claim is `tests/conftest.py`'s, so a tier reaches it only by running from the
+    workspace root and collecting under `tests/` — naming paths there, or none and taking
+    `testpaths` — with nothing on its command line or in its environment that names a base
+    or a root instead. `tests/test_pytest_temp_root.py` drives what the claim does; this
+    holds every real command to reaching it.
+    """
+    for path, target in SUITE_TIERS:
+        declared = json.loads((REPO_ROOT / path).read_text(encoding="utf-8"))["targets"][target]
+        command = declared["command"]
+        where = f"{path} {target}"
+        assert declared.get("options", {}).get("cwd", ".") == ".", where
+        overridden = [o for o in (*_TEMP_ROOT_OVERRIDES, *_TEMP_ROOT_VARIABLES) if o in command]
+        assert not overridden, f"{where} names its own temporary root: {overridden}"
+        selection = _selection(command)
+        named = [
+            argument
+            for previous, argument in zip(["", *selection[:-1]], selection, strict=True)
+            if not argument.startswith("-") and previous not in _VALUED_OPTIONS
+        ]
+        outside = [argument for argument in named if not argument.startswith("tests/")]
+        assert not outside, f"{where} collects outside the conftest that claims a root: {outside}"
+
+
 def _root_of(project: str) -> str:
     """The root of the project Nx knows as ``project``."""
     return next(

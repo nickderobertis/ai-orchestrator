@@ -26,6 +26,11 @@ GitHub's refusal counts *characters*, so :func:`measure` counts Unicode code poi
 way.** The plugin writes a document through the same `write_item` as a task — its content,
 and its metadata map in the same slot `compose_body` appends — so :func:`compose` is its
 composition as well, and `tests/test_task_body.py` holds the document write to that path.
+A document's pictures are uploaded first, and the plugin-api's `serve_asset_references`
+rewrites the content and the slot before `compose_body` runs: each `./<name>` reference
+becomes the URL the upload is served at, the slot gains :data:`ASSETS_KEY`, and a template
+rendering's `body_digest` is re-recorded over the rewritten content. :func:`serve` is that
+rewrite, measured against :data:`SERVED_URL_BOUND` because no URL exists before the copy.
 It is measured by `just copy-plan` rather than by `just check-plan`, because in the flow
 `just finish-plan` runs the check *before* the document-writing launch and the copy after
 it: the copy's pre-flight is the one step that always has the document in front of it and
@@ -40,8 +45,10 @@ with :func:`measure`, through `orchestrator/plan_budgets.py`, under the same lim
 
 from __future__ import annotations
 
+import hashlib
 import json
-from collections.abc import Iterable, Iterator, Mapping
+import re
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import NamedTuple
 
 from orchestrator.plan_store import NodeId, QualifiedDocumentId, StoreDocument, StoreTask
@@ -89,14 +96,130 @@ UNMEASURED = (
     "copy itself adds or routes elsewhere: " + ", ".join(f"`{key}`" for key in UNMEASURED_KEYS)
 )
 
+# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] These measurement
+# helpers mirror the pinned plugin through DOCUMENT_COMPOSITION in tests/test_task_body.py.
+# ai-orchestrator#1529 deliberately makes sibling drift block registration edits alone
+# and report other edits: a sibling release changing must not refuse unrelated work here.
+# The fixture journeys prove both outcomes, including a release dropping the asset rewrite.
+#: The slot key `serve_asset_references` records a document's uploads under, as the
+#: plugin-api's `MetadataKey::ASSETS_KEY` spells it, and the provenance key whose
+#: `body_digest` it re-records, as its `MetadataKey::TEMPLATE_KEY` does.
+ASSETS_KEY = "onetaskgraph.assets"
+TEMPLATE_KEY = "onetaskgraph.template"
+
+#: A reference to an asset, as the plugin-api's `AssetName` and its reference parser accept
+#: one: `![alt](./<name>` with the alt on one line, and a bare name — no `/`, `\`, `..`,
+#: whitespace, parenthesis or angle bracket — ending in an accepted image extension, closed
+#: by `)` or by whitespace before a title. Matched wider than the parser, which also skips an
+#: escaped image, one inside code and one whose title is malformed, so every reference the
+#: board rewrites is matched here and some it leaves as written are too; :func:`serve` keeps
+#: whichever of a target and its URL is longer, so a match the board would not rewrite never
+#: makes the figure smaller. The parser's
+#: lines this grammar mirrors are held by `tests/test_task_body.py`'s `DOCUMENT_COMPOSITION`.
+# llmlint: ignore[changed_behavior_has_e2e] Every form this grammar matches — a repeated,
+# a titled and an over-matched reference — is a pure string rewrite that
+# `tests/test_task_body.py` drives through `document_bodies`, the interface `just copy-plan`
+# calls; the recipe journeys drive that same call with a pictured document, so a recipe run
+# per form would re-prove the function rather than the road to it.
+REFERENCE = re.compile(
+    r"!\[[^\]\n]*\]\(\./(?P<name>[^\s/\\()<>]+\.(?:png|jpe?g|gif|webp))(?=[)\s])",
+    re.IGNORECASE,
+)
+
+#: The URL each upload is measured as served at, before any exists: the plugin accepts an
+#: upload's URL only under `https://github.com/user-attachments/assets/`, and GitHub
+#: answers that prefix followed by a 36-character UUID. A longer URL GitHub ever answered
+#: is the one thing about a picture this figure does not cover, said in
+#: :data:`DOCUMENT_UNMEASURED`. The prefix is held to the plugin's source by
+#: `tests/test_task_body.py`.
+# llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The identifier's length is
+# GitHub's answer to an upload, which GitHub publishes no machine-readable source for and
+# the plugin does not constrain: the one comparison that tests it is a live upload onto the
+# `plans` board, and no gate here spends a write to the live board. The figure is a bound
+# rather than a contract, and the gap from `WARN_FROM` to the limit covers a longer URL.
+SERVED_URL_BOUND = "https://github.com/user-attachments/assets/" + "0" * 36
+
+#: The lowercase hex SHA-256 each upload is recorded under, measured at its fixed length.
+SHA256_BOUND = "0" * 64
+
+
+class AssetUpload(NamedTuple):
+    """What the board recorded for one uploaded asset: its bytes' SHA-256 and its URL."""
+
+    sha256: str
+    url: str
+
+
+def bound_upload(name: str) -> AssetUpload:
+    """The upload every asset is measured as when nothing has been uploaded yet."""
+    del name  # every asset is bounded alike
+    return AssetUpload(SHA256_BOUND, SERVED_URL_BOUND)
+
+
+def _body_digest(content: str) -> str:
+    return "sha256:" + hashlib.sha256(content.encode()).hexdigest()
+
+
+def serve(
+    content: str | None, metadata: Mapping[str, object], uploads: Callable[[str], AssetUpload]
+) -> tuple[str | None, dict[str, object]]:
+    """``content`` and ``metadata`` as the plugin composes them once ``uploads`` are served.
+
+    The plugin-api's `serve_asset_references` over the assets ``content`` references: each
+    reference's target becomes its upload's URL, the slot records the uploads by name under
+    :data:`ASSETS_KEY`, and a :data:`TEMPLATE_KEY` entry whose `body_digest` was the digest
+    of ``content`` is re-recorded over the rewritten content. A document referencing no
+    asset is answered as it came, which is never smaller than what the plugin sends for it.
+
+    A bound rather than a mirror where the two can differ: a target longer than its URL is
+    kept as written, because :data:`REFERENCE` also matches images the board leaves as
+    written — inside code, say — and shortening one of those would measure a body shorter
+    than the one sent. Where every URL is at least as long as its target, which a
+    :data:`SERVED_URL_BOUND` is for any name under 78 characters, this is the plugin's
+    composition exactly.
+    """
+    visible = content or ""
+    served = {match["name"]: uploads(match["name"]) for match in REFERENCE.finditer(visible)}
+    if not served:
+        return content, dict(metadata)
+
+    def longer(match: re.Match[str]) -> str:
+        target = f"./{match['name']}"
+        url = served[match["name"]].url
+        return match[0].removesuffix(target) + max(url, target, key=len)
+
+    rewritten = REFERENCE.sub(longer, visible)
+    slot = dict(metadata)
+    # The shape of the plugin-api's `AssetUploads`, held by `tests/test_task_body.py`.
+    slot[ASSETS_KEY] = {
+        name: {"sha256": upload.sha256, "url": upload.url} for name, upload in served.items()
+    }
+    # llmlint: ignore[changed_behavior_has_e2e] A rendering's digest the content no longer
+    # vouches for is unreachable through the recipe: the store records `body_digest` over the
+    # content it renders, so only a hand edit of the stored file leaves it stale, and
+    # `tests/test_task_body.py` drives that branch through `serve` directly; a document with
+    # no rendering at all passes its map through unchanged, which no measurement can miss.
+    match slot.get(TEMPLATE_KEY):
+        case Mapping() as entry if entry.get("body_digest") == _body_digest(visible):
+            slot[TEMPLATE_KEY] = {**entry, "body_digest": _body_digest(rewritten)}
+        case _:
+            pass
+    return (rewritten if content is not None else None), slot
+
+
+# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+
+
 #: The same account for a design document, whose map carries the template provenance
 #: and the design approval rather than `onepipeline.*` keys and a review record; the keys
 #: left out are the same, because the plugin's `slot_metadata` is the same call.
 DOCUMENT_UNMEASURED = (
     "measured as the document's content followed by the metadata slot the "
     "`github-projects` source appends — its template provenance and its design approval, "
-    "as compact key-sorted JSON — and leaving out what the copy itself adds or routes "
-    "elsewhere: " + ", ".join(f"`{key}`" for key in UNMEASURED_KEYS)
+    "as compact key-sorted JSON, with each `./<name>` picture it references rewritten to "
+    f"a {len(SERVED_URL_BOUND)}-character attachment URL and recorded under `{ASSETS_KEY}` "
+    "— and leaving out what the copy itself adds or routes elsewhere: "
+    + ", ".join(f"`{key}`" for key in UNMEASURED_KEYS)
 )
 
 
@@ -246,16 +369,20 @@ def check_records(records: Iterable[StoreTask]) -> None:
             raise BodyError(f"{refused.node}: {refused.field}: {refused.reason}")
 
 
-def document_bodies(documents: Iterable[StoreDocument]) -> Iterator[DocumentBody]:
+def document_bodies(
+    documents: Iterable[StoreDocument], uploads: Callable[[str], AssetUpload] = bound_upload
+) -> Iterator[DocumentBody]:
     """Every document's body, measured from the content and the map the store reads back.
 
     The content is what the source answers as the document's own — a `local-md` record's
     stored template answers are not part of it, and the board keeps none either — and the
     map is the record's whole metadata map, which is what the store's `document copy`
-    hands the destination.
+    hands the destination. Both are first put through :func:`serve` with ``uploads``, the
+    upload each referenced asset is measured as — :func:`bound_upload` before a copy.
     """
     for document in documents:
-        yield DocumentBody(document.qualified_id, measure(document.content, document.metadata))
+        content, slot = serve(document.content, document.metadata, uploads)
+        yield DocumentBody(document.qualified_id, measure(content, slot))
 
 
 def document_refusals(documents: Iterable[StoreDocument]) -> list[str]:

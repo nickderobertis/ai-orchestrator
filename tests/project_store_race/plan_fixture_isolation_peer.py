@@ -153,6 +153,8 @@ def test_a_peer_writes_a_record_and_plays_its_half_of_the_removal() -> None:
 
     if role is Role.REMOVER:
         _remove(root)
+        assert not (root / "projects" / f"{SHARED_NATIVE}.md").exists()
+        assert not (root / TASKS_DIRECTORY / SHARED_NATIVE).exists()
         _announce("removed")
         return
 
@@ -164,3 +166,6 @@ def test_a_peer_writes_a_record_and_plays_its_half_of_the_removal() -> None:
         assert time.monotonic() <= deadline, f"{removed} never appeared; the remover failed"
         _stored_project()
     _stored_project()
+    # Check while this session owns its files; session close removes its temporary root.
+    assert (root / "projects" / f"{SHARED_NATIVE}.md").is_file()
+    assert (root / TASKS_DIRECTORY / SHARED_NATIVE).is_dir()

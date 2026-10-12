@@ -2645,11 +2645,15 @@ def test_gate_recipe_refuses_an_invalid_ignore_directive_before_any_judged_turn(
 @pytest.mark.skipif(
     shutil.which("llmlint") is None, reason="the gate's first stage is the installed llmlint"
 )
-def test_gate_recipe_validates_first_then_judges_then_checks(tmp_path: Path) -> None:
+@pytest.mark.parametrize("cache_skip", ["", "NX_SKIP_NX_CACHE", "NX_DISABLE_NX_CACHE"])
+def test_gate_recipe_validates_first_then_judges_then_checks(
+    tmp_path: Path, cache_skip: str
+) -> None:
     """A tree `validate` accepts goes on to the judge, and only then the deterministic tier.
 
     The one summary line comes after every stage, carrying the coverage the last stage
-    measured and the provenance the judged stage printed.
+    measured and the provenance the judged stage printed, including its warning when
+    it ignores either ambient global cache skip.
     """
     checkout, trace = _validating_gate_checkout(tmp_path, "robust_shell")
     (checkout / ".coverage").write_text("")
@@ -2669,6 +2673,8 @@ def test_gate_recipe_validates_first_then_judges_then_checks(tmp_path: Path) -> 
         "main",
         REAL_LLMLINT=str(shutil.which("llmlint")),
         FAKE_COVERAGE_TOTAL="96.41",
+        NX_SKIP_NX_CACHE="true" if cache_skip == "NX_SKIP_NX_CACHE" else "",
+        NX_DISABLE_NX_CACHE="true" if cache_skip == "NX_DISABLE_NX_CACHE" else "",
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
@@ -2677,9 +2683,10 @@ def test_gate_recipe_validates_first_then_judges_then_checks(tmp_path: Path) -> 
     assert ran[1] == "nx.sh run workspace:lint-llm-diff", ran
     assert any(line.startswith("nx.sh ") and "-t format-check" in line for line in ran[2:]), ran
     assert not any("-t format-check" in line for line in ran[:2]), ran
+    note = " [ignored an ambient global Nx cache skip]" if cache_skip else ""
     assert [line for line in result.stdout.splitlines() if line.startswith("gate: ")] == [
         "gate: complete gate passed (line coverage 96.41%); "
-        f"judged this diff against base {base} (Nx cache miss)"
+        f"judged this diff against base {base} (Nx cache miss){note}"
     ], result.stdout
 
 

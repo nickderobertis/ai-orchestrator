@@ -29,6 +29,7 @@ import onevcs_state_snapshot
 import plan_fixture_source
 import plan_root_variable
 import pytest
+import pytest_temp_root
 from nx_inputs import (
     ASK_SEAM_JOURNEYS,
     BOARD_COPY_APPROVAL_ROOT,
@@ -121,6 +122,23 @@ onevcs_state_snapshot.snapshot()
 # scope is set up after launches that already load the file. `tests/onejudge_bundle.py`
 # is how, and why nothing leaves the host.
 onejudge_bundle.seed_process_cache()
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_configure(config: pytest.Config) -> None:
+    """Take this session's temporary root out of the one every session on the host prunes.
+
+    First, because pytest's own temporary-path factory reads `--basetemp` when it is
+    configured. `tests/pytest_temp_root.py` is the rule and why.
+    """
+    pytest_temp_root.claim(config)
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_unconfigure(config: pytest.Config) -> None:
+    """Remove the root `pytest_configure` claimed, after everything else has let go of it."""
+    pytest_temp_root.release()
+
 
 WORKSPACE_INSTALL = REPO_ROOT / "scripts" / "workspace-install.sh"
 #: The directories under this checkout that git ignores and Nx therefore never hashes.

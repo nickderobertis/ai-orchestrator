@@ -51,8 +51,8 @@ LOCAL_DIRECT = "github.com/nickderobertis/ai-orchestrator"
 #: report is where a list rather than a single name is read.
 MANY_REMOTE_CHECKS = "github.com/nickderobertis/llmlint"
 #: Two of the checks that repository requires and this host cannot run: the check that
-#: validates the change request's title, and a build on another platform.
-AMONG_MANY = ("pr-title", "cross (macos-latest)")
+#: validates the change request's title, and a Windows build.
+AMONG_MANY = ("pr-title", "cross (windows-latest)")
 
 #: `onevcs`'s own wording, not this suite's: the two absence assertions below would
 #: pass vacuously against an audit that renamed it, so the presence ones are what
@@ -156,7 +156,7 @@ def test_an_identity_with_several_remote_checks_reports_a_list_not_an_exemplar(
     Naming one and counting the rest would leave an operator to guess which of a dozen
     checks is the one their branch is about to fail on. The two named here are ones this
     host could never run — the change request's title has no meaning before there is a
-    change request, and the other platform is not this one.
+    change request, and the Windows build cannot run on this Linux host.
     """
     audited = repos(registry.home, "repos", "--audit-gate-coverage")
 

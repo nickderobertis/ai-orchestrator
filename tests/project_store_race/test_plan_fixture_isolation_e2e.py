@@ -10,7 +10,6 @@ from pathlib import Path
 import plan_fixture_isolation_peer as peer
 import plan_fixture_source
 
-from orchestrator.project_store import TASKS_DIRECTORY
 from orchestrator.root import REPO_ROOT
 
 #: The peer as pytest is given it. Named by path rather than collected: its filename does
@@ -85,10 +84,3 @@ def test_two_concurrent_test_processes_keep_their_own_fixture_roots(tmp_path: Pa
         assert root != plan_fixture_source.tracked_root(), (
             f"the {role} peer used the root onetaskgraph.yaml states rather than its own"
         )
-
-    kept = roots[peer.Role.KEEPER] / "projects" / f"{peer.SHARED_NATIVE}.md"
-    gone = roots[peer.Role.REMOVER] / "projects" / f"{peer.SHARED_NATIVE}.md"
-    assert kept.is_file(), f"the keeper's own record is gone from {kept}"
-    assert not gone.exists(), f"the remover never removed {gone}"
-    assert (roots[peer.Role.KEEPER] / TASKS_DIRECTORY / peer.SHARED_NATIVE).is_dir()
-    assert not (roots[peer.Role.REMOVER] / TASKS_DIRECTORY / peer.SHARED_NATIVE).exists()

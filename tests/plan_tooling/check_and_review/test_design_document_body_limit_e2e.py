@@ -29,7 +29,7 @@ from pathlib import Path
 
 import plan_fixture_source
 import pytest
-from project_fixtures import reviewed
+from project_fixtures import GraphImage, graph_image, reviewed
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
@@ -132,8 +132,12 @@ def _answers(native: str, padding: int) -> dict[str, object]:
     }
 
 
-def _designed(native: str, padding: int, scratch: Path) -> None:
-    """Render ``native``'s design document from this host's template, as a dispatch does."""
+def _designed(native: str, padding: int, scratch: Path, pictured: bool = False) -> None:
+    """Render ``native``'s design document from this host's template, as a dispatch does.
+
+    A ``pictured`` document opens its Planned tasks with the plan's graph, held as its
+    asset, as `just finish-plan` renders one for a plan with a dependency edge.
+    """
     resolved = subprocess.run(
         [str(REPO_ROOT / "scripts" / "onepipeline.sh"), "template", "resolve", "design-doc"]
         + ["--json"],
@@ -145,11 +149,15 @@ def _designed(native: str, padding: int, scratch: Path) -> None:
     )
     assert resolved.returncode == 0, resolved.stderr
     answers = scratch / f"{native}-answers.json"
-    answers.write_text(json.dumps(_answers(native, padding)), encoding="utf-8")
+    picture = graph_image(scratch / native) if pictured else GraphImage(answers={}, assets=())
+    answers.write_text(
+        json.dumps({**_answers(native, padding), **picture["answers"]}), encoding="utf-8"
+    )
     created = subprocess.run(
         [str(ONETASKGRAPH_BIN), "document", "create", DRAFTED_IN]
         + ["--project", native, "--title", f"Design: {native}", "--id", f"{native}-design"]
-        + ["--template-loader", "-", "--answers", str(answers), "--no-interactive"],
+        + ["--template-loader", "-", "--answers", str(answers), "--no-interactive"]
+        + [flag for asset in picture["assets"] for flag in ("--asset", str(asset))],
         cwd=REPO_ROOT,
         input=resolved.stdout,
         text=True,
@@ -160,7 +168,7 @@ def _designed(native: str, padding: int, scratch: Path) -> None:
     assert created.returncode == 0, created.stderr
 
 
-def _cleared(name: str, padding: int, scratch: Path) -> str:
+def _cleared(name: str, padding: int, scratch: Path, pictured: bool = False) -> str:
     """A plan of one task, its design document padded by ``padding``, and the plan reviewed.
 
     Written with the store layout's own writer and the document rendered here rather than
@@ -194,7 +202,7 @@ def _cleared(name: str, padding: int, scratch: Path) -> str:
         native_id=native,
     )
     project = f"{DRAFTED_IN}:{native}"
-    _designed(native, padding, scratch)
+    _designed(native, padding, scratch, pictured)
     # `reviewed` reaches these records the way an operator does — the real `just
     # review-plan`, its script, the real `oneharness` CLI and its response schema — and
     # substitutes the paid provider process alone, this suite's one sanctioned double.
@@ -244,9 +252,15 @@ def test_a_design_document_the_board_would_refuse_is_refused_before_anything_is_
 def test_a_design_document_past_the_warning_threshold_is_warned_about_and_copied(
     destination: Path, tmp_path: Path
 ) -> None:
-    """Warned about on stderr, then copied whole, the document beside the plan."""
-    project = _cleared("warned-document", task_body.WARN_FROM + 2_000, tmp_path)
+    """Warned about on stderr, then copied whole, the document beside the plan.
+
+    The document carries the plan's graph, so the size warned about is the one measured
+    with the picture served, and a pictured document within the limit still copies.
+    """
+    project = _cleared("warned-document", task_body.WARN_FROM + 2_000, tmp_path, pictured=True)
+    (document,) = plan_store.read_documents(project)
     size = _measured(project)
+    assert size > task_body.measure(document.content, document.metadata), size
     assert task_body.WARN_FROM <= size <= task_body.BODY_LIMIT, size
     _, _, native = project.partition(":")
 
@@ -263,6 +277,43 @@ def test_a_design_document_past_the_warning_threshold_is_warned_about_and_copied
         f"projects/{native}.md",
         f"tasks/{native}/route.md",
     ], copied.stdout + copied.stderr
+
+
+def test_a_design_document_its_picture_carries_past_the_limit_is_refused_as_served(
+    destination: Path, tmp_path: Path
+) -> None:
+    """A document whose content and map fit, but not once the board serves its picture.
+
+    The board rewrites the picture's `./<name>` to the URL it is served at and records the
+    upload in the slot, so the body it sends is longer than the document as stored. Sized
+    from a probe of the same shape to sit within that difference under the limit, the
+    document is refused before anything is copied, as the board would have refused it.
+    """
+    probe = f"test-{os.getpid()}-pictured-probe"
+    probe_padding = task_body.BODY_LIMIT - 2_000
+    _designed(probe, probe_padding, tmp_path, pictured=True)
+    (probed,) = plan_store.read_documents(f"{DRAFTED_IN}:{probe}")
+    probed_stored = task_body.measure(probed.content, probed.metadata)
+    serving_adds = _measured(f"{DRAFTED_IN}:{probe}") - probed_stored
+    assert serving_adds > 2 * len(SENTENCE), serving_adds
+    padding = probe_padding + task_body.BODY_LIMIT - serving_adds // 2 - probed_stored
+
+    project = _cleared("pictured-sized", padding, tmp_path, pictured=True)
+    (document,) = plan_store.read_documents(project)
+    stored = task_body.measure(document.content, document.metadata)
+    size = _measured(project)
+    assert "](./plan-dag.png)" in document.content, document.content
+    assert stored <= task_body.BODY_LIMIT < size, (stored, size)
+
+    refused = _just("copy-plan", project, "--to", DESTINATION)
+
+    assert refused.returncode == 4, refused.stdout + refused.stderr
+    assert f"{project}-design: its composed issue body measures {size:,} characters" in (
+        refused.stderr
+    ), refused.stderr
+    assert task_body.DOCUMENT_UNMEASURED in refused.stderr, refused.stderr
+    assert refused.stdout == "", refused.stdout
+    assert _records(destination) == [], "a plan whose served document is oversized was copied"
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

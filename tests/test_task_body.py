@@ -18,6 +18,8 @@ reported as `SiblingDrift` for any other.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import subprocess
 from collections.abc import Callable, Mapping
@@ -47,6 +49,10 @@ from orchestrator.root import REPO_ROOT
 PLUGIN_REPOSITORY = "github.com/nickderobertis/onetaskgraph"
 PLUGIN_SOURCE = Path("crates") / "onetaskgraph-github-projects" / "src" / "lib.rs"
 PLUGIN_API_SOURCE = Path("crates") / "onetaskgraph-plugin-api" / "src" / "work.rs"
+#: The plugin's upload module, the plugin-api's asset rewrite, and the plugin-api's keys.
+PLUGIN_ASSETS_SOURCE = Path("crates") / "onetaskgraph-github-projects" / "src" / "assets.rs"
+PLUGIN_API_ASSET_SOURCE = Path("crates") / "onetaskgraph-plugin-api" / "src" / "asset.rs"
+PLUGIN_API_METADATA_SOURCE = Path("crates") / "onetaskgraph-plugin-api" / "src" / "metadata.rs"
 
 
 def _record(node: str, content: str | None, **metadata: object) -> plan_store.StoreTask:
@@ -140,6 +146,7 @@ def test_a_body_over_the_limit_is_refused_naming_the_size_the_limit_and_what_is_
     # The raising face walks past the record within the limit and names the one over it,
     # which is the accepted path and the refused one read in a single observable outcome.
     fits = _record("fits", _sized(task_body.BODY_LIMIT - 100))
+    task_body.check_records([fits])
     with pytest.raises(task_body.BodyError, match=r"^big: task: its composed issue body"):
         task_body.check_records([fits, _record("big", _sized(task_body.BODY_LIMIT + 1))])
 
@@ -217,6 +224,131 @@ def test_a_document_is_measured_as_its_content_and_its_whole_map_the_way_a_task_
         len(task_body.compose("## What\n\nProbe.\n", {**provenance, **approval})),
     )
     assert body.size > len("## What\n\nProbe.\n") + len(task_body.METADATA_OPEN)
+
+
+#: What the pinned plugin's upload step answers for the two pictures below, as a board
+#: would: controlled rather than uploaded, and longer than the measurement's bound, so the
+#: test holds the composition rather than the bound.
+UPLOADED = {
+    "plan-graph.png": task_body.AssetUpload(
+        "a" * 64, "https://github.com/user-attachments/assets/" + "1" * 36 + "?graph"
+    ),
+    "unit.webp": task_body.AssetUpload(
+        "b" * 64, "https://github.com/user-attachments/assets/" + "2" * 36 + "?unit"
+    ),
+}
+
+
+def _v0_4_0_body(content: str, metadata: Mapping[str, object]) -> str:
+    """The body v0.4.0's `write_item` sends for a document whose uploads are :data:`UPLOADED`.
+
+    Spelled out step by step from the release's source rather than through `task_body`:
+    `serve_asset_references` rewrites each `./<name>` target to its URL, records the uploads
+    by name under `onetaskgraph.assets`, and re-records the template rendering's
+    `body_digest` over the rewritten content; `compose_body` then joins the two.
+    """
+    rewritten = content
+    for name, upload in UPLOADED.items():
+        rewritten = rewritten.replace(f"](./{name}", f"]({upload.url}")
+    digest = "sha256:" + hashlib.sha256(rewritten.encode()).hexdigest()
+    template = metadata["onetaskgraph.template"]
+    assert isinstance(template, Mapping)
+    slot = {
+        **metadata,
+        "onetaskgraph.assets": {
+            name: {"sha256": upload.sha256, "url": upload.url} for name, upload in UPLOADED.items()
+        },
+        "onetaskgraph.template": {**template, "body_digest": digest},
+    }
+    encoded = json.dumps(slot, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return f"{rewritten}\n\n<!-- onetaskgraph.metadata\n{encoded}\n-->"
+
+
+def test_a_document_s_pictures_are_measured_as_served_with_the_slot_the_rewrite_edits() -> None:
+    """The board sends the content with each picture's URL and the slot recording them.
+
+    Measured exactly as v0.4.0's `serve_asset_references` then `compose_body` compose it,
+    so a measurement leaving out the rewritten references or the uploads record measures
+    short of what GitHub is sent. The re-recorded digest is the same length as the one it
+    replaces, so no size can tell it apart; it is asserted on the slot directly.
+    """
+    content = (
+        "## Plan\n\n![The plan's graph](./plan-graph.png)\n\n"
+        '## Unit\n\n![A unit](./unit.webp "its seams") and ![again](./plan-graph.png)\n'
+    )
+    provenance = {
+        "template": "onepipeline:design-doc",
+        "body_digest": "sha256:" + hashlib.sha256(content.encode()).hexdigest(),
+    }
+    pictured = _document(
+        "pictured",
+        content,
+        **{"onetaskgraph.template": provenance, "orchestrator.design-approval": {"key": "k"}},
+    )
+    sent = _v0_4_0_body(content, pictured.metadata)
+
+    (body,) = task_body.document_bodies([pictured], UPLOADED.__getitem__)
+
+    assert body.size >= len(sent)
+    assert body.size == len(sent)
+    assert sent.count("https://github.com/user-attachments/assets/") == 5
+    # Before a copy no upload exists, and the bound measures every picture as served too.
+    (bounded,) = task_body.document_bodies([pictured])
+    assert bounded.size > task_body.measure(content, pictured.metadata)
+    # The digest the board records is the rewritten content's, not the content's as stored.
+    served, slot = task_body.serve(content, pictured.metadata, UPLOADED.__getitem__)
+    assert served is not None
+    assert sent.startswith(served + "\n\n")
+    assert slot["onetaskgraph.template"] == {
+        **provenance,
+        "body_digest": "sha256:" + hashlib.sha256(served.encode()).hexdigest(),
+    }
+    assert slot["onetaskgraph.template"] != provenance
+
+
+#: An image basename longer than any attachment URL: ten of them inside a fenced block
+#: are not references to the board, which leaves the content exactly as written.
+LONG_NAME = "a" * 496 + ".png"
+
+
+def test_an_overmatched_target_longer_than_its_url_is_never_measured_shorter() -> None:
+    """Images inside code are matched though the board leaves them, and must not shrink.
+
+    v0.4.0's parser skips an image inside a fenced block, so it uploads nothing and sends
+    the content unchanged with no uploads record; the measurement, which matches wider,
+    keeps each target its URL would shorten, so it measures at least what is sent.
+    """
+    content = "```\n" + "".join(f"![x](./{LONG_NAME})\n" for _ in range(10)) + "```\n"
+    fenced = _document("fenced", content, k="v")
+    sent = task_body.compose(content, {"k": "v"})
+
+    (body,) = task_body.document_bodies([fenced])
+
+    assert len(f"./{LONG_NAME}") > len(task_body.SERVED_URL_BOUND)
+    assert body.size >= len(sent), (body.size, len(sent))
+    served, _ = task_body.serve(content, fenced.metadata, task_body.bound_upload)
+    assert served == content
+
+
+def test_a_document_referencing_no_picture_is_measured_as_its_content_and_map() -> None:
+    """Nothing is served, so no uploads record is measured; a non-reference stays as written."""
+    content = "No pictures: ![remote](https://example.invalid/x.png) and ![nested](./a/b.png).\n"
+    plain = _document("plain", content, k="v")
+
+    (body,) = task_body.document_bodies([plain], UPLOADED.__getitem__)
+
+    assert body.size == task_body.measure(content, {"k": "v"})
+    assert task_body.serve(None, {"k": "v"}, task_body.bound_upload) == (None, {"k": "v"})
+
+
+def test_a_digest_the_content_no_longer_vouches_for_is_carried_verbatim() -> None:
+    """`serve_asset_references` re-records a rendering's digest only while it is the content's."""
+    stale = {"onetaskgraph.template": {"body_digest": "sha256:" + "f" * 64}}
+
+    content, slot = task_body.serve("![g](./plan-graph.png)", stale, UPLOADED.__getitem__)
+
+    assert content == f"![g]({UPLOADED['plan-graph.png'].url})"
+    assert slot["onetaskgraph.template"] == stale["onetaskgraph.template"]
 
 
 def test_a_document_over_the_limit_is_refused_and_one_from_the_threshold_warned_about() -> None:
@@ -460,25 +592,129 @@ def test_the_keys_the_measurement_leaves_out_are_the_ones_the_plugin_adds_or_dro
     )
 
 
-#: The lines of the plugin that put a design document through the task's composition: its
-#: `write_document` hands `write_item` the document's own content and metadata map, and
-#: `write_item` — the one write of all three kinds — composes the body from them with
-#: `compose_body` after `slot_metadata`, which for a document drops the item-kind marker
-#: rather than adding it. A plugin that composed a document's body any other way fails
-#: here rather than leaving `just copy-plan` measuring a body the board never sees.
+#: The lines of the pinned release that put a design document through the task's
+#: composition, and where each lives. Its `write_document` delegates to
+#: `write_document_assets`, which hands `write_item` — the one write of all three kinds —
+#: the document's own content, its assets and its metadata map. `write_item` takes the slot
+#: from `slot_metadata`, which for a document drops the item-kind marker rather than adding
+#: it, and, when the document carries assets, uploads them and has the plugin-api's
+#: `serve_asset_references` rewrite the content's references and edit the slot before
+#: `compose_body` runs on the rewritten content: what `task_body.serve` mirrors, down to the
+#: two keys it spells and the URL prefix its bound is measured against. A plugin that
+#: composed a document's body any other way, or dropped or moved that rewrite, fails here
+#: rather than leaving `just copy-plan` measuring a body the board never sees.
 DOCUMENT_COMPOSITION = (
-    "    async fn write_document(&self, write: &ItemWrite<Document>) "
-    "-> Result<NativeId, SourceError> {",
-    "            &Incoming {\n"
-    "                written: Written::Document,\n"
-    "                title: &write.item.title,\n"
-    "                content: write.item.content.as_deref(),\n"
-    "                labels: &write.item.labels,\n"
-    "                metadata: &write.item.metadata,",
-    "        let slot = slot_metadata(incoming, own_repository.as_ref(), &fallback);\n"
-    "        let body = compose_body(incoming.content, &slot)?;",
-    "        BoardKind::Document => metadata.remove(ItemKind::METADATA_KEY),",
+    (
+        PLUGIN_SOURCE,
+        "    async fn write_document(&self, write: &ItemWrite<Document>) "
+        "-> Result<NativeId, SourceError> {\n"
+        "        self.write_document_assets(write, None)",
+    ),
+    (
+        PLUGIN_SOURCE,
+        "            &Incoming {\n"
+        "                written: Written::Document,\n"
+        "                title: &write.item.title,\n"
+        "                content: write.item.content.as_deref(),\n"
+        "                assets,\n"
+        "                labels: &write.item.labels,\n"
+        "                metadata: &write.item.metadata,",
+    ),
+    (
+        PLUGIN_SOURCE,
+        "        let mut slot = slot_metadata(incoming, own_repository.as_ref(), &fallback);\n"
+        "        let content = match incoming.assets {\n"
+        "            Some(assets) => {\n"
+        "                let uploads = self.upload_assets(own_repository.as_ref(), assets)"
+        ".await?;\n"
+        "                let rewritten = onetaskgraph_plugin_api::serve_asset_references(\n"
+        "                    incoming.content.unwrap_or_default(),\n"
+        "                    &mut slot,\n"
+        "                    &uploads,\n"
+        "                );\n"
+        "                incoming.content.map(|_| rewritten)\n"
+        "            }\n"
+        "            None => incoming.content.map(str::to_owned),\n"
+        "        };\n"
+        "        let body = compose_body(content.as_deref(), &slot)?;",
+    ),
+    (PLUGIN_SOURCE, "        BoardKind::Document => metadata.remove(ItemKind::METADATA_KEY),"),
+    (PLUGIN_ASSETS_SOURCE, '            && url.path().starts_with("/user-attachments/assets/")'),
+    (PLUGIN_API_ASSET_SOURCE, 'const REFERENCE_PREFIX: &str = "./";'),
+    # The grammar `task_body.REFERENCE` matches: the accepted extensions, what a name may
+    # not hold, an alt on one line, and a target ended by `)` or whitespace.
+    (
+        PLUGIN_API_ASSET_SOURCE,
+        "const EXTENSIONS: [(&str, AssetContentType); 5] = [\n"
+        '    ("png", AssetContentType::Png),\n'
+        '    ("jpg", AssetContentType::Jpeg),\n'
+        '    ("jpeg", AssetContentType::Jpeg),\n'
+        '    ("gif", AssetContentType::Gif),\n'
+        '    ("webp", AssetContentType::Webp),\n'
+        "];",
+    ),
+    (
+        PLUGIN_API_ASSET_SOURCE,
+        "        .find(|(accepted, _)| extension.eq_ignore_ascii_case(accepted))",
+    ),
+    (PLUGIN_API_ASSET_SOURCE, "        if name.contains('/') || name.contains('\\\\') {"),
+    (PLUGIN_API_ASSET_SOURCE, "        if name.contains(['(', ')', '<', '>']) {"),
+    (PLUGIN_API_ASSET_SOURCE, "        if content[from..alt_end].contains('\\n') {"),
+    (PLUGIN_API_ASSET_SOURCE, "        if content.as_bytes().get(open) != Some(&b'(') {"),
+    (
+        PLUGIN_API_ASSET_SOURCE,
+        "            .find(|character: char| character == ')' || character.is_whitespace())",
+    ),
+    # The shape `task_body.serve` records the uploads in: an object of names to the two
+    # string fields of each upload.
+    (
+        PLUGIN_API_ASSET_SOURCE,
+        "pub struct AssetUpload {\n    /// The lowercase hex SHA-256 of the bytes uploaded.",
+    ),
+    (
+        PLUGIN_API_ASSET_SOURCE,
+        "    pub sha256: String,\n    /// Where the destination serves them.",
+    ),
+    (PLUGIN_API_ASSET_SOURCE, "    pub url: String,\n}"),
+    (
+        PLUGIN_API_ASSET_SOURCE,
+        "#[serde(transparent)]\npub struct AssetUploads(pub BTreeMap<AssetName, AssetUpload>);",
+    ),
+    (
+        PLUGIN_API_ASSET_SOURCE,
+        "    let rewritten = rewrite_asset_references(content, &served);\n"
+        "    if rewritten != content\n"
+        "        && let Some(Value::Object(entry)) = metadata.get_mut(MetadataKey::TEMPLATE_KEY)\n"
+        '        && entry.get("body_digest").and_then(Value::as_str) '
+        "== Some(&body_digest(content))",
+    ),
+    (
+        PLUGIN_API_ASSET_SOURCE,
+        "    if uploads.0.is_empty() {\n"
+        "        metadata.remove(MetadataKey::ASSETS_KEY);\n"
+        "    } else {\n"
+        "        metadata.insert(MetadataKey::ASSETS_KEY.to_owned(), uploads.to_value());",
+    ),
+    (PLUGIN_API_ASSET_SOURCE, '    format!("sha256:{}", asset_sha256(content.as_bytes()))'),
+    (
+        PLUGIN_API_METADATA_SOURCE,
+        f'    pub const ASSETS_KEY: &\'static str = "{task_body.ASSETS_KEY}";',
+    ),
+    (
+        PLUGIN_API_METADATA_SOURCE,
+        f'    pub const TEMPLATE_KEY: &\'static str = "{task_body.TEMPLATE_KEY}";',
+    ),
 )
+
+
+def document_composition_findings(read: Mapping[Path, PluginSource]) -> list[str]:
+    """Every line of :data:`DOCUMENT_COMPOSITION` the plugin source ``read`` does not hold."""
+    return [
+        f"{read[source].read_from} no longer writes a design document's body the way "
+        f"orchestrator/task_body.py measures it; its {source.as_posix()} lacks:\n{line}"
+        for source, line in DOCUMENT_COMPOSITION
+        if line not in read[source].text
+    ]
 
 
 @pytest.mark.reads_checkouts
@@ -487,24 +723,21 @@ def test_a_document_s_body_is_composed_by_the_plugin_exactly_as_a_task_s_is() ->
 
     Held line by line, beside the composition the task gate above holds: a document that
     reached the board some other way — its own composer, a slot of its own, content
-    re-rendered on the way — would be measured here against a body it never becomes.
+    re-rendered on the way, its pictures served otherwise — would be measured here against
+    a body it never becomes.
     """
-    found = _plugin_source()
-    if found is None:
-        return
+    read: dict[Path, PluginSource] = {}
+    for source in dict.fromkeys(source for source, _ in DOCUMENT_COMPOSITION):
+        found = _plugin_source(source)
+        if found is None:
+            return
+        read[source] = found
     # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Settled rather than
     # asserted: ai-orchestrator#1529 rules that a check whose subject is a sibling's live state
     # refuses only a push changing one of the five registration files and reports the drift
     # otherwise; `tests/sibling_facts.py`'s `settle_drift` decides it, and this module's
     # fixture tests drive both pushes through it.
-    settle_drift(
-        [
-            f"{found.read_from} no longer writes a design document's body the way "
-            f"orchestrator/task_body.py measures it; it lacks:\n{line}"
-            for line in DOCUMENT_COMPOSITION
-            if line not in found.text
-        ]
-    )
+    settle_drift(document_composition_findings(read))
     # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
 
@@ -622,6 +855,41 @@ def test_a_pinned_release_composing_otherwise_is_settled_by_what_the_change_touc
         tmp_path,
         changed,
         f"{checkout} at {FIXTURE_TAG} no longer composes an issue body",
+        lambda **settle: settle_drift(findings, **settle),
+    )
+
+
+@pytest.mark.parametrize("changed", PUSHES)
+def test_a_pinned_release_writing_documents_otherwise_is_settled_by_what_the_change_touches(
+    tmp_path: Path, changed: str
+) -> None:
+    """A release whose document write skips the asset rewrite is a finding, not a pass.
+
+    Every line :data:`DOCUMENT_COMPOSITION` holds is present but the rewrite, as a release
+    that composed a document's body from its unrewritten content would read.
+    """
+    held = {
+        source: "\n".join(line for at, line in DOCUMENT_COMPOSITION if at == source)
+        for source, _ in DOCUMENT_COMPOSITION
+    }
+    held[PLUGIN_SOURCE] = held[PLUGIN_SOURCE].replace(
+        "onetaskgraph_plugin_api::serve_asset_references(", "leave_references_as_written("
+    )
+    checkout = _pinned_fixture(tmp_path, {source.as_posix(): text for source, text in held.items()})
+    read = {
+        source: found
+        for source in held
+        if (found := plugin_source_at(checkout, FIXTURE_TAG, source)) is not None
+    }
+    assert set(read) == set(held)
+    findings = document_composition_findings(read)
+    assert len(findings) == 1
+    assert "serve_asset_references" in findings[0]
+
+    _settled(
+        tmp_path,
+        changed,
+        f"{checkout} at {FIXTURE_TAG} no longer writes a design document's body",
         lambda **settle: settle_drift(findings, **settle),
     )
 
