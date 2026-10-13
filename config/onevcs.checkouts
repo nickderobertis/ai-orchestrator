@@ -50,6 +50,13 @@
 ~/.ai-orchestrator/repos/nickderobertis__onepipeline-ui
 ~/.ai-orchestrator/repos/nickderobertis__onevcs
 
+# `cargo-prune-superseded`, the shared pruner each Rust repository's declared pool
+# maintenance runs. Each of those repositories installs its pinned release through its
+# own `just bootstrap`, so this host installs nothing from it; it is registered so plans
+# can dispatch work into it. Listed under both layouts.
+~/.ai-orchestrator/repos/nickderobertis__cargo-prune-superseded
+~/projects/cargo-prune-superseded
+
 # Other repositories dispatched against from this host.
 ~/.ai-orchestrator/repos/nickderobertis__allowlister
 ~/.ai-orchestrator/repos/nickderobertis__allowlister-remote

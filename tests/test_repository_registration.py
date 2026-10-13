@@ -33,6 +33,7 @@ import re
 from pathlib import Path
 from typing import NamedTuple
 
+import pytest
 from registered_checkouts import RepoIdentity
 
 from orchestrator.root import REPO_ROOT
@@ -408,3 +409,81 @@ def test_onebudgetspec_is_listed_and_ruled_to_publish_like_its_siblings() -> Non
     (rule,) = matching
     assert rule.fields == EXPECTED_POLICY
     assert rule.at < registration.rules.index(FALLTHROUGH)
+
+
+#: The shared pruner each Rust repository's declared pool maintenance runs, routed like
+#: its single-owner siblings so its changes land through its own merge path. Listed in
+#: both host layouts, because each host registers the spelling it has.
+PRUNER: RepoIdentity = f"github.com/{OWNER}/cargo-prune-superseded"
+PRUNER_CHECKOUTS = (
+    f"{DISPATCHED_ROOT}/{OWNER}__cargo-prune-superseded",
+    "~/projects/cargo-prune-superseded",
+)
+PRUNER_RULE_BLOCK = (
+    f"  - match: {{host: github.com, owner: {OWNER}, name: cargo-prune-superseded}}\n"
+    "    publication: change-auto\n"
+    "    approvals: none\n"
+)
+
+
+def pruner_complaints(registration: Registration) -> list[str]:
+    """Every way the two files fail to register the pruner as its siblings are."""
+    entries = listed(registration.checkouts)
+    found = [
+        f"config/onevcs.checkouts does not list {entry!r}"
+        for entry in PRUNER_CHECKOUTS
+        if entry not in entries
+    ]
+    matching = [rule for rule in rules_of(registration.rules) if rule.identity == PRUNER]
+    if len(matching) != 1:
+        return [*found, f"config/onevcs.rules.yml states {len(matching)} rules for {PRUNER}"]
+    (rule,) = matching
+    if rule.fields != EXPECTED_POLICY:
+        found.append(f"config/onevcs.rules.yml gives {PRUNER} {rule.fields}")
+    if rule.at > registration.rules.index(FALLTHROUGH):
+        found.append(f"config/onevcs.rules.yml states the rule for {PRUNER} below `default:`")
+    return found
+
+
+def test_the_pruner_is_listed_in_both_layouts_and_ruled_like_its_siblings() -> None:
+    """Both checkout spellings, and one rule above `default:` stating the sibling policy."""
+    assert pruner_complaints(tracked()) == []
+
+
+@pytest.mark.parametrize("entry", PRUNER_CHECKOUTS)
+def test_a_pruner_checkout_going_absent_is_refused(entry: str) -> None:
+    """Either spelling dropped leaves the host using that layout with nothing to register."""
+    registration = tracked()
+    defective = registration._replace(checkouts=registration.checkouts.replace(f"{entry}\n", ""))
+
+    assert f"config/onevcs.checkouts does not list {entry!r}" in pruner_complaints(defective)
+
+
+def test_a_pruner_rule_going_absent_is_refused() -> None:
+    """With no rule it falls through to the reviewed default."""
+    registration = tracked()
+    defective = registration._replace(rules=registration.rules.replace(PRUNER_RULE_BLOCK, ""))
+
+    assert any("states 0 rules" in found for found in pruner_complaints(defective))
+
+
+def test_a_pruner_rule_below_the_default_is_refused() -> None:
+    """First match wins, so a rule after `default:` is one nothing reads."""
+    registration = tracked()
+    moved = registration.rules.replace(PRUNER_RULE_BLOCK, "", 1)
+    defective = registration._replace(rules=f"{moved}\n{PRUNER_RULE_BLOCK}")
+
+    assert any("below `default:`" in found for found in pruner_complaints(defective))
+
+
+def test_a_pruner_rule_carrying_another_policy_is_refused() -> None:
+    """The reviewed pair would hold every change there for a review nobody asked for."""
+    registration = tracked()
+    defective = registration._replace(
+        rules=registration.rules.replace(
+            PRUNER_RULE_BLOCK,
+            PRUNER_RULE_BLOCK.replace("change-auto", "change-open").replace("none", "required"),
+        )
+    )
+
+    assert any(f"gives {PRUNER}" in found for found in pruner_complaints(defective))
