@@ -183,7 +183,7 @@ def test_a_settlement_is_one_targeted_update_and_a_failure_carries_only_what_had
     _targeted_only([first])
     assert first.outcome == "projected", first
     assert set(first.items) == {HELD_NODE, *WAITING}, first
-    assert first.calls == {"task-update": len(first.items)}, first
+    assert first.calls == {"task-update": len(first.items), "project-metadata-set": 1}, first
     assert first.actions is not None and first.actions["created"] == 0, first
 
     recorded = quiet_projections(driven)

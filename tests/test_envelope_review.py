@@ -1338,3 +1338,16 @@ def test_the_graph_an_envelope_forms_carries_deps_and_consumes_as_the_engine_doe
         "emptied-2",
     ]
     assert envelope == sent, "folding the graph rewrote the envelope's own commands"
+
+
+def test_folding_includes_a_classified_node_and_omits_one_with_an_unknown_field() -> None:
+    """Folding keeps the adopted classification field and omits a misspelled field."""
+    node = {"id": "classified", "classification": "private"}
+    graph, resulting = stated_graph(
+        _envelope(
+            {"op": "add", "node": node},
+            {"op": "add", "node": {"id": "unknown", "classificaton": "private"}},
+        )
+    )
+    assert graph == {"classified": node}
+    assert resulting == ["classified"]

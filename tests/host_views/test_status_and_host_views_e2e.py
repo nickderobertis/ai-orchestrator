@@ -72,12 +72,10 @@ FREE_SPACE_LINE = "  free space: "
 DURATION = re.compile(r"\b\d+(?:h\d+m|m\d+s|[hms])\b")
 FREE_SPACE = re.compile(r"\b\d+(?:\.\d+)? [KMGTP]?i?B\b|\b\d+(?:\.\d+)?% free\b")
 
-#: The one thing a *reading* verb may leave behind: the fold checkpoint the engine
-#: resumes a read from instead of replaying a run's whole journal. It is derived, it is
-#: the run's own and goes when the run does, so a view that writes one has not changed
-#: the run's record of itself — the property the last journey here is about.
-#: `tests/test_engine_contracts.py` reconciles the name against the engine's `RunPaths`.
-DERIVED_BY_A_READER = frozenset({"checkpoint.json"})
+#: Readers refresh the fold checkpoint and summary derived from the journal. Both
+#: belong to the run and disappear with it; neither is an authored record. The source
+#: reconciliation in `tests/test_engine_contracts.py` holds their names to `RunPaths`.
+DERIVED_BY_A_READER = frozenset({"checkpoint.json", "summary.json"})
 
 
 def _stable(line: str) -> str:

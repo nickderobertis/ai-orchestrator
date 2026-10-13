@@ -43,16 +43,18 @@ from waits import timeout as e2e_timeout
 from orchestrator.project_store import hosted_origin
 from orchestrator.root import REPO_ROOT
 
-#: The scratch identity's policy: merged in the local checkout. It names no verifier
-#: because onevcs 0.11.0 removed the concept, and a registered checkout that matched no
-#: rule fails `just repos-apply` outright — so the catch-all is what makes a seeded
+#: The scratch identity's policy: merged locally and explicitly private because this
+#: fixture is a local scratch repository. It names no verifier because onevcs 0.11.0
+#: removed the concept. A checkout matching no rule fails `just repos-apply` outright,
+#: so the catch-all makes a seeded
 #: identity registrable at all.
-RULES = """version: 3
+RULES = """version: 4
 trailer_prefix: Orchestrator-
 rules:
   - match: {path: "*"}
     publication: local-direct
     approvals: none
+    visibility: private
 default:
   publication: local-direct
   approvals: none
@@ -236,7 +238,7 @@ def rules_for_hosted(
     """
     rules = RULES.replace('match: {path: "*"}', f"match: {{host: {host}, owner: {owner}}}")
     rules = rules.replace("version: 3", "version: 4")
-    rules = rules.replace("    publication:", f"    visibility: {visibility}\n    publication:")
+    rules = rules.replace("    visibility: private", f"    visibility: {visibility}")
     return rules
 
 

@@ -865,6 +865,7 @@ FOLLOW_UP_FIXES_LANDINGS = (
 
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
+    Landing("op-host-view", 861, "61194ef", "bound the host view and publish its JSON reading"),
     Landing(
         node="op-relink-status-by-kind",
         change_request=775,

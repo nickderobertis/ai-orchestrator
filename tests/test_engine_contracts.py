@@ -2257,7 +2257,7 @@ RUNS_DIR_ENV = re.compile(r'pub const RUNS_DIR_ENV: &(?:\'static )?str = "([^"]+
 #: How `sys::process_start_token` encodes what it read out of `/proc/<pid>/stat`. The
 #: prefix is captured rather than written here, because this gate exists to say the
 #: draft strips the prefix the engine actually stamps.
-START_TOKEN_ENCODING = re.compile(r'\.map\(\|ticks\| format!\("([^"{]*)\{ticks\}"\)\)')
+START_TOKEN_ENCODING = re.compile(r'const PROC_STAT_TOKEN: &str = "([^"{]*)";')
 
 #: One field of a serde-derived record, with the attributes above it — which is where a
 #: `rename` moves its wire name and a `default` says the engine can read a record that
@@ -2988,6 +2988,8 @@ class Restatement(NamedTuple):
     reads: re.Pattern[str]
     #: What it is doing there, for a failure that has to say what stopped working.
     what: str
+    #: The RunPaths accessor that declares this derived record.
+    accessor: str = "checkpoint"
 
 
 CHECKPOINT_RESTATEMENTS = (
@@ -2998,8 +3000,14 @@ CHECKPOINT_RESTATEMENTS = (
     ),
     Restatement(
         path=Path("tests/host_views/test_status_and_host_views_e2e.py"),
-        reads=re.compile(r"DERIVED_BY_A_READER = frozenset\(\{\"([a-z._]+)\"\}\)"),
-        what="the record the reading views are allowed to leave behind",
+        reads=re.compile(r"DERIVED_BY_A_READER = frozenset\(\{\"([a-z._]+)\""),
+        what="the checkpoint the reading views are allowed to leave behind",
+    ),
+    Restatement(
+        path=Path("tests/host_views/test_status_and_host_views_e2e.py"),
+        reads=re.compile(r"DERIVED_BY_A_READER = frozenset\(\{\"[a-z._]+\", \"([a-z._]+)\"\}\)"),
+        what="the summary the reading views are allowed to refresh",
+        accessor="summary",
     ),
 )
 
@@ -3031,7 +3039,10 @@ def test_the_checkpoint_a_reader_writes_is_named_what_the_engine_names_it(
     `docs/repo-lifecycle.md`'s ledger listing carries the third restatement and is
     reconciled by the run-ledger vocabulary above, which reads the same `RunPaths`.
     """
-    declared = CHECKPOINT_DECLARATION.search(_source(ONEPIPELINE, "ledger.rs"))
+    declaration = re.compile(
+        CHECKPOINT_DECLARATION.pattern.replace("fn checkpoint", f"fn {restatement.accessor}")
+    )
+    declared = declaration.search(_source(ONEPIPELINE, "ledger.rs"))
     assert declared is not None, (
         f"onepipeline {ONEPIPELINE.ref} no longer declares a fold checkpoint on "
         "`RunPaths` where this gate reads it, so the two restatements below are "
@@ -3201,10 +3212,10 @@ _OPERATIONS = r"pub const {name}: \[&str; \d+\] = \[(?P<body>[^\]]*)\];"
 #: Where the write-back declares each settlement key the targeted journey allows.
 _SETTLEMENT_KEY_SOURCES = (
     ("taskgraph.rs", "SETTLEMENT_KEY"),
-    ("writeback.rs", "LANDING_KEY"),
-    ("writeback.rs", "LANDING_COMMIT_KEY"),
-    ("writeback.rs", "CHANGE_URL_KEY"),
-    ("writeback.rs", "LANDING_EVIDENCE_KEY"),
+    ("taskgraph.rs", "LANDING_KEY"),
+    ("taskgraph.rs", "LANDING_COMMIT_KEY"),
+    ("taskgraph.rs", "CHANGE_URL_KEY"),
+    ("taskgraph.rs", "LANDING_EVIDENCE_KEY"),
 )
 
 
@@ -4226,6 +4237,51 @@ def test_the_interlock_words_this_host_relies_on_are_the_engines_own(
             f"{reader.relative_to(REPO_ROOT)} no longer says {interlock.word!r}; drop it "
             "from this row in the same change that dropped the reliance, or restore it"
         )
+
+
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+
+
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] This cheap git
+# read follows the existing contract module's uncached-source boundary: the
+# registered producer checkout lives outside this workspace and its state cannot
+# be represented by an Nx input here. reads_checkouts prevents replaying a stale
+# green; it does not hide a slow or external-service suite in a fast tier.
+def test_dispatch_count_fields_are_in_the_pinned_host_schema() -> None:
+    """The consumer reads only the version, root error, dispatch array and proof."""
+    schema = json.loads(
+        subprocess.check_output(
+            [
+                "git",
+                "-C",
+                str(_checkout(ONEPIPELINE)),
+                "show",
+                f"{ONEPIPELINE.ref}:schemas/host-reading.schema.json",
+            ],
+            text=True,
+        )
+    )
+    consumer = (REPO_ROOT / "scripts" / "budget-dispatches.sh").read_text("utf-8")
+    assert set(re.findall(r'view(?:\.get\(|\[)"([^"]+)"', consumer)) == {
+        "schema_version",
+        "root_error",
+        "dispatches",
+    }
+    assert set(re.findall(r'dispatch(?:\.get\(|\[)"([^"]+)"', consumer)) == {"proof"}
+    assert "pub const HOST_READING_SCHEMA_VERSION: u32 = 1;" in _source(ONEPIPELINE, "hostview.rs")
+    for field, shape in (
+        ("schema_version", "integer"),
+        ("root_error", ["string", "null"]),
+        ("dispatches", "array"),
+    ):
+        assert field in schema["required"]
+        assert schema["properties"][field]["type"] == shape
+    reference = schema["properties"]["dispatches"]["items"]["$ref"]
+    row = schema["$defs"][reference.rsplit("/", 1)[1]]
+    assert "proof" in row["required"]
+    proof = schema["$defs"][row["properties"]["proof"]["$ref"].rsplit("/", 1)[1]]
+    assert all(choice["type"] == "string" for choice in proof["oneOf"])
+    assert {choice["const"] for choice in proof["oneOf"]} == {"held", "unproven"}
 
 
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]

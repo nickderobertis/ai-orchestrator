@@ -72,10 +72,11 @@ PROJECTIONS_FILE = "writeback-projections.jsonl"
 #: The projection record's version the adopted engine writes, entry 73's `schema.current`:
 #: the one whose every line counts the store calls it made.
 PROJECTIONS_SCHEMA_VERSION = 4
-#: The one store operation an attempt that changes only existing items makes, by entry 73's
-#: closed names: a targeted update of one item. Held as an allow-list rather than a list of
-#: copy operations, so a copy under any name, renamed or new, is a call outside it.
-TARGETED_CALLS = frozenset({"task-update"})
+#: The store operations an attempt that changes only existing items makes, by entry 73's
+#: closed names: a targeted update of one item or one engine-owned project key. Held as
+#: an allow-list rather than a list of copy operations, so a copy under any name, renamed
+#: or new, is a call outside it.
+TARGETED_CALLS = frozenset({"task-update", "project-metadata-set"})
 #: Where the engine keeps what it last put on the board, per lineage root — entry 93's
 #: landed baseline, seeded at launch and advanced only by writes that landed.
 LANDED_FILE = "writeback-landed.json"
