@@ -34,6 +34,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import re
 import shlex
 import shutil
 import socket
@@ -49,6 +50,7 @@ import plan_root_variable
 import pytest
 import short_state
 from fake_backend import TURN_GATE_ENV, TURN_GATE_REACHED, TURN_GATE_RELEASED
+from follow_up_ticket_shape import before_schema_11, before_schema_12
 from github_board import (
     FOLLOWUPS_ENV_PREFIX,
     FOLLOWUPS_OPTIONS,
@@ -450,14 +452,15 @@ def _placed_and_copied(bench: Bench, staged: Path, ticket: Path, draft: str) -> 
     )
 
 
-def _decided_and_copied(module: str, ticket: Path) -> str:
+def _decided_and_copied(module: str, ticket: Path, *, witness: Path | None = None) -> str:
     """The step before every copy: ask `board-status`, write the word, validate, then copy."""
     quoted = shlex.quote(str(ticket))
+    output = f" >> {shlex.quote(str(witness))}" if witness is not None else ""
     return (
         f"word=$({module} board-status --board {BOARD} {quoted})\n"
         f'sed -i "s/^status: .*/status: \\"$word\\"/" {quoted}\n'
         f"{module} validate {quoted}\n"
-        f"{module} copy --board {BOARD} {quoted}\n"
+        f"{module} copy --board {BOARD} {quoted}{output}\n"
     )
 
 
@@ -532,6 +535,14 @@ def _commented(bench: Bench, issue: str, body: str, author: str | None = None) -
     return str(added["id"])
 
 
+class Rewrite(NamedTuple):
+    """Published snapshots after bringing both destinations forward from one old schema."""
+
+    schema: int
+    linear: dict[str, object]
+    github: dict[str, object]
+
+
 class Life(NamedTuple):
     """Every phase of the two destinations' life, read back before anything is torn down."""
 
@@ -545,6 +556,7 @@ class Life(NamedTuple):
     board_issues_after_filing: int
     redispatched: subprocess.CompletedProcess[str]
     redispatch_copies: list[dict[str, object]]
+    rewritten_bodies: list[Rewrite]
     linear_files_after_redispatch: list[str]
     board_issues_after_redispatch: int
     bindings: dict[str, tickets.Ticket]
@@ -668,23 +680,72 @@ def life(routed: tuple[Path, Path, Path], oneharness_bin: str) -> Iterator[Life]
         linear_files_after_filing = _linear_items(bench)
         board_issues_after_filing = _board_issues()
 
-        # Re-dispatch: the same run, its two tickets decided and copied again.
-        feedback = _staged(bench, "feedback.md", "Copy both tickets again as they stand.\n")
+        # Each destination rewrites both historical shapes through a real re-dispatch.
+        feedback = _staged(bench, "feedback.md", "Bring both own tickets to the current shape.\n")
         copies = tmp / "redispatch-copies.jsonl"
-        recopied = [
-            _in_checkout(
-                bench,
-                f"word=$({module} board-status --board {BOARD} {shlex.quote(str(path))})\n"
-                f'sed -i "s/^status: .*/status: \\"$word\\"/" {shlex.quote(str(path))}\n'
-                f"{module} validate {shlex.quote(str(path))}\n"
-                f"{module} copy --board {BOARD} {shlex.quote(str(path))} "
-                f">> {shlex.quote(str(copies))}\n",
+        rewritten_bodies = []
+        for schema in (10, 11):
+            rewritten_texts = {}
+            for path in (linear_path, board_path):
+                current = tickets.read_ticket(path)
+                rewritten_texts[path] = tickets.render(current)
+                historical = dataclasses.replace(
+                    current,
+                    body=(
+                        before_schema_11(current.body)
+                        if schema == 10
+                        else before_schema_12(current.body)
+                    ),
+                )
+                historical = dataclasses.replace(
+                    historical,
+                    body=historical.body.replace(
+                        f"## {tickets.DUPLICATE_SEARCH}",
+                        "## Related tickets\n\n"
+                        "- [Irrelevant old candidate](https://github.com/o/s/issues/999) — "
+                        "related: It shares an area but supplies no similar cause or fix.\n\n"
+                        f"## {tickets.DUPLICATE_SEARCH}",
+                    ),
+                )
+                text = tickets.render(historical).replace(
+                    f'"schema": {tickets.SCHEMA}', f'"schema": {schema}', 1
+                )
+                path.write_text(text, encoding="utf-8")
+                seeded = _run(
+                    bench,
+                    bench.python,
+                    "-m",
+                    "orchestrator.follow_up_tickets",
+                    "copy",
+                    "--board",
+                    BOARD,
+                    str(path),
+                )
+                assert seeded.returncode == 0, seeded.stdout + seeded.stderr
+            # Keep the copy witnesses in one invocation-specific file, in destination order.
+            recopied = []
+            for path in (linear_path, board_path):
+                staged = _staged(
+                    bench,
+                    f"current-{schema}-{path.stem}.md",
+                    rewritten_texts[path],
+                )
+                recopied.append(
+                    _in_checkout(
+                        bench,
+                        f"cp {shlex.quote(str(staged))} {shlex.quote(str(path))}\n"
+                        + _decided_and_copied(module, path, witness=copies),
+                    )
+                )
+            copies.write_text("", encoding="utf-8")
+            _scripted(bench, FILER, [*recopied, _accounting(bench, FILER, account)])
+            redispatched = _run(bench, "just", "follow-ups", FILER, "--feedback", str(feedback))
+            assert redispatched.returncode == 0, (
+                redispatched.stdout + redispatched.stderr + _ran(bench)
             )
-            for path in (linear_path, board_path)
-        ]
-        _scripted(bench, FILER, [*recopied, _accounting(bench, FILER, account)])
-        redispatched = _run(bench, "just", "follow-ups", FILER, "--feedback", str(feedback))
-        assert redispatched.returncode == 0, redispatched.stdout + redispatched.stderr + _ran(bench)
+            rewritten_bodies.append(
+                Rewrite(schema, _item(bench, filed_linear_item), _item(bench, filed_board_item))
+            )
         redispatch_copies = [
             json.loads(line) for line in copies.read_text(encoding="utf-8").splitlines()
         ]
@@ -864,6 +925,7 @@ def life(routed: tuple[Path, Path, Path], oneharness_bin: str) -> Iterator[Life]
             board_issues_after_filing=board_issues_after_filing,
             redispatched=redispatched,
             redispatch_copies=redispatch_copies,
+            rewritten_bodies=rewritten_bodies,
             linear_files_after_redispatch=linear_files_after_redispatch,
             board_issues_after_redispatch=board_issues_after_redispatch,
             bindings=bindings,
@@ -1132,3 +1194,28 @@ def test_a_node_delivering_the_linear_ticket_queues_it_and_settles_it_done(life:
 
 # llmlint: ignore-end[e2e_not_mocked]
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]  # noqa: E501 - a directive is one line, and the three rules it names run past the limit
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This assertion consumes
+# the existing module-scoped life fixture in the task's required project and dependency
+# edges. Copying the checkout requires its existing whole-workspace test-docs key; this
+# assertion starts no independent launch.
+def test_new_and_rewritten_historical_bodies_publish_without_search_logs_on_both_routes(
+    life: Life,
+) -> None:
+    assert [rewrite.schema for rewrite in life.rewritten_bodies] == [10, 11]
+    bodies = [life.linear_after_filing, life.board_after_filing]
+    bodies.extend(
+        item for rewrite in life.rewritten_bodies for item in (rewrite.linear, rewrite.github)
+    )
+    for item in bodies:
+        body = str(item["content"])
+        assert _record(item)["schema"] == 12
+        assert "Duplicate search" not in body and "Queries:" not in body
+        assert "Related tickets" not in body
+        assert "Irrelevant old candidate" not in body and "/issues/999" not in body
+        assert not re.search(r"(?mi)^none\s*$", body)
+        assert [heading for heading, _ in tickets.drafts.sections(body)][-1] == tickets.EVIDENCE
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

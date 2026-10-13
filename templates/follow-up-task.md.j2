@@ -294,7 +294,7 @@ Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Review
    points at different files but shares one invariant become one ticket, its
    `## {{ shape.suggested_fix }}`'s {{ shape.contributing_locations }} listing each location they name; drafts whose fixes would
    each stand alone stay separate tickets, each listing the other under
-   `## {{ shape.related_tickets }}` where it contributes to the same broader problem. One
+   `## {{ shape.related_tickets }}` only where it clearly addresses a similar root cause or suggests a similar fix. One
    ticket states one concrete suggested fix, which may change several units in several
    repositories. For each, **judge both severities by the rubric** in
    the example's `## {{ shape.impact }}` guidance, from the product owner's perspective across
@@ -339,8 +339,9 @@ Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Review
    Linear's own search of the project's issue titles and descriptions, matched regardless of
    case.
    Only an unbound ticket needs these duplicate searches; nothing in this task lists the board.
-   Record what they asked and what they returned in the ticket's `## {{ shape.duplicate_search }}`, as
-   "The verified ticket" states.
+   Keep search results out of the ticket. Never mention a rejected irrelevant candidate
+   anywhere in its body, including Evidence; persist no query or candidate log. The existing
+   disposition account, bindings and marked comments supply the proof for check-dispositions.
    <!-- llmlint: ignore-block[changed_behavior_has_e2e] Whether an item's stated root cause meets the bar is the agent's judgment of two reports, which the suite never scripts a verdict for: it doubles the agent's turn, so a journey could only assert what its own script chose. What the tooling decides is driven: `tests/test_follow_up_tickets.py` holds the rendered task to this rule and drives `check-dispositions --board` and `re-estimate` accepting this run's evidence on another run's item under the slug this ticket adopted, and refusing it under a slug it kept, over a real `local-md` board; `tests/plan_tooling/follow_ups/test_follow_ups_recipe_e2e.py` holds that the invariant-phrased search a real dispatch is handed answers an earlier run's item filed under a different slug. -->
    - **The same root cause.** An open item, at any open status, whose stated root cause meets
      the bar of step 5 — one change to the rule would remove this ticket's instances and its
@@ -351,7 +352,7 @@ Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Review
      comment's marker, the account and the item's occurrence recount all name the one root
      cause. Where you compare a candidate's locations with this ticket's, read them where its
      schema puts them: under `## {{ shape.suggested_fix }}`'s {{ shape.contributing_locations }} on a
-     schema-{{ shape.plain_at }} ticket, under `## Root cause`'s {{ shape.contributing_locations }} on a
+     schema-{{ shape.plain_at }} or later ticket, under `## Root cause`'s {{ shape.contributing_locations }} on a
      schema-{{ shape.invariant_at }} ticket, and in the prose of its `## Root cause` on an older one. An
      item at `Proposal` or `Deferred` is open: no agent picks it up to work on, but it is searched like any other open item and still takes this run's evidence. Where this
      run's evidence shows the cause broader than that item states, the comment's
@@ -384,7 +385,7 @@ Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Review
    A `Done` item's fix is assumed only where it has not reached the basis recorded in
    step 1 — read the tree; where it has, the verification at the basis already accounts
    for it and nothing changes. A `Proposal` or `Deferred` item's fix is never assumed; one
-   that contributes to the same broader problem but needs a fix of its own is a
+   that clearly addresses a similar root cause or suggests a similar fix is a
    `{{ shape.related_relation }}` entry of the ticket's `## {{ shape.related_tickets }}`, as "The verified ticket" states.
    <!-- llmlint: ignore-end[changed_behavior_has_e2e] -->
 
@@ -550,29 +551,17 @@ A ticket is a local Markdown task in the `{{ shape.drafts_source }}` source, wri
   in several repositories. Every specific code reference the ticket carries belongs in that
   section. `{{ validate }}` refuses a schema-{{ shape.schema }} fix without the part, with no bullet in it,
   or with it after a unit subsection.
-- **Every section a person reads to decide on the ticket comes first**, and the agent-facing
-  ones trail: `## {{ shape.duplicate_search }}`, then `## {{ shape.evidence }}`, which closes the ticket.
-  `{{ validate }}` refuses a schema-{{ shape.schema }} body whose last section is not `## {{ shape.evidence }}` or
-  whose `## {{ shape.duplicate_search }}` is not directly before it.
-- **`## {{ shape.duplicate_search }}` comes directly before `## {{ shape.evidence }}`, and is terse**, because the user reads every
-  ticket: one line naming the text queries step 7 ran, then one line per open item those
-  searches returned that was judged a different root cause — a link to it whose text is its
-  title, never a bare URL, and why one change would not remove both — or `none` in place of
-  those lines. It never restates a matched item's content. A ticket that ran no search, being
-  bound, says that no search was recorded when it was filed.
-- **`## {{ shape.related_tickets }}` is optional, directly before `## {{ shape.duplicate_search }}`**, and
-  left out — no heading, no `none` — when it has no entries. It lists every ticket this one's
-  `{{ shape.dependency_field }}` names, marked `{{ shape.dependency_relation }}`, and each issue that contributes to the
-  same broader problem but needs an independent fix — it did not meet the bar of step 5 —
-  marked `{{ shape.related_relation }}`, at whatever status. Each entry is one bullet and nothing more,
-  {{ shape.related_shape }}: a markdown link whose text is that ticket's title, never a bare or
-  plain-text URL, its mark, and exactly **one sentence** saying why it is related to or
-  different from this ticket — for a `{{ shape.dependency_relation }}`, what this ticket needs from it —
-  never a longer description or a restatement of the other ticket. It differs from
-  `## {{ shape.duplicate_search }}`, which records near-matches judged a different root cause: this one
-  is related work a reader should know about, so an item may appear in both. `{{ validate }}`
-  refuses a present section that is empty, says `none`, or carries an entry of any other
-  shape.
+- **`## {{ shape.evidence }}` closes the ticket**, after every section a person reads to
+  decide on it. `{{ validate }}` refuses a schema-{{ shape.schema }} body with any retired search
+  heading or with Evidence anywhere but last. Write no substitute query or candidate log.
+- **`## {{ shape.related_tickets }}` is optional, directly before `## {{ shape.evidence }}`**, and
+  omitted entirely when empty: no heading and no placeholder `none`. {{ shape.relatedness_bar }}
+  Keep every `{{ shape.dependency_field }}` entry as a
+  `{{ shape.dependency_relation }}` bullet; other qualifying tickets use `{{ shape.related_relation }}`.
+  Each item is one linked bullet and exactly **one explanatory sentence**, {{ shape.related_shape }}:
+  its title links to its URL, its relation follows, then why it qualifies or what this ticket
+  needs from it. `{{ validate }}` refuses an empty, `none`, repeated or misplaced section and
+  entries of any other shape.
 - **Its priority is estimated from facts, never chosen.** Judge from the original evidence
   whether the root cause fires consistently, and record it as the `{{ shape.record_key }}` record's
   `{{ shape.frequency_field }}`: `{{ shape.consistent }}` when it fires every time its conditions hold,
@@ -864,12 +853,24 @@ what the project does but not how it is built, naming no file, module, function,
 `path:line` or code identifier; every location contributing to it is listed in
 `## {{ shape.suggested_fix }}`'s {{ shape.contributing_locations }}, {{ shape.location_shape }}, after its opening paragraph and
 before its unit subsections; the `**{{ shape.owner_cost }}.**` part states the impact with no
-label naming which area decides; and `## {{ shape.duplicate_search }}`, then `## {{ shape.evidence }}`, close it.
+label naming which area decides; optional `## {{ shape.related_tickets }}` comes directly before
+the last `## {{ shape.evidence }}`. Remove retired search logs and write no substitute query or
+candidate log.
 `{{ validate }}` refuses a schema-{{ shape.schema }} ticket that departs from it, and `{{ check_responses }}`
 refuses this account while the ticket of an issue it answers on is refused.
 
 ````markdown
 {{ ticket_example }}````
+
+- **`## {{ shape.related_tickets }}` is optional, directly before `## {{ shape.evidence }}`**, and
+  omitted entirely when empty: no heading and no placeholder `none`. {{ shape.relatedness_bar }}
+  Keep every `{{ shape.dependency_field }}` entry as a
+  `{{ shape.dependency_relation }}` bullet; other qualifying tickets use `{{ shape.related_relation }}`.
+  Each item is one linked bullet and exactly **one explanatory sentence**, {{ shape.related_shape }}:
+  its title links to its URL, its relation follows, then why it qualifies or what this ticket
+  needs from it. `{{ validate }}` refuses an empty, `none`, repeated or misplaced section and
+  entries of any other shape.
+
 
 ## What to do, in order
 

@@ -2179,9 +2179,13 @@ evidence as a comment, whose `Bears on the ticket:` paragraph states only the wi
 invariant, in the same plain words, and its added locations as the suggested fix's, where the
 evidence shows the cause broader, and the run's ticket takes its slug, so the comment's
 marker, the account and the recount agree. Every section a person reads to decide on a
-ticket comes first; it records the search it ran in `## Duplicate search`, on the board
-rather than only in the verifying host's account, and closes with the agent-facing
-`## Evidence`.
+ticket comes first, with optional `## Related tickets` directly before the last
+`## Evidence`. List only tickets clearly addressing a similar root cause, suggesting a
+similar fix, or supplying a dependency this ticket needs, each as one linked bullet with
+one explanatory sentence. Mere shared area or a broader problem is insufficient. Omit the
+section when empty and never mention rejected irrelevant candidates anywhere, even in
+Evidence. Schema 12 rejects the retired search heading and carries no query or candidate
+log; disposition accounts, bindings and marked comments remain the duplicate-prevention proof.
 A ticket's `repositories` lists every repository its fix changes. A ticket listing one has
 its issue created in that repository, as an item of the one board; it must be under the
 board's owner, and `board-status` refuses a ticket naming a repository outside that owner

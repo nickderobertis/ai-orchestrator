@@ -67,7 +67,7 @@ import pytest
 import short_state
 import yaml
 from flow_engine_stand_in import give_flow_engine
-from follow_up_ticket_shape import DUPLICATE_SEARCH, impact_prose
+from follow_up_ticket_shape import QUALIFYING_RELATIONS, UNRELATED_CANDIDATES, impact_prose
 from nx_workspace import WORKSPACE_INSTALL_MARKS
 from project_fixtures import helper, project_from_plan
 from published_tools import ONETASKGRAPH_BIN
@@ -250,8 +250,15 @@ LOCATIONS = (
 )
 FULL_SEVERITY = (tickets.Severity.HIGH, tickets.Severity.MEDIUM)
 RELATED = (
-    f"- [some-service: the sweep stays inside its root]({PROPOSED_URL}) — related: It proposes "
-    "the sweep fix, which this ticket does not assume."
+    "\n".join(
+        f"- [{candidate.title}]({candidate.url}) — {candidate.relation}: {candidate.explanation}"
+        for candidate in QUALIFYING_RELATIONS[:2]
+    )
+    + "\n"
+    + (
+        f"- [some-service: the sweep stays inside its root]({PROPOSED_URL}) — related: It proposes "
+        "the sweep fix, which this ticket does not assume."
+    )
 )
 WITHDRAWN = f"Withdrawn: the accepted fix in {PROPOSED_URL} removes this root cause too."
 #: The first pass's report, naming the draft dropped under the accepted item's URL.
@@ -492,7 +499,7 @@ def _ticket(
     priority are `board-status`'s to write, so a ticket an agent writes carries none;
     ``estimated`` writes them as `board-status` would for one occurrence, which is what an
     item an earlier run copied onto the board carries. ``related`` is its `## Related tickets`
-    section, directly before `## Duplicate search`; its `## Root cause` is ``body``'s invariant
+    section, directly before Evidence; its `## Root cause` is ``body``'s invariant
     in plain prose, and its fix lists the one contributing location.
     """
     line = tickets.estimate_line(severity[1], frequency, 1) + "\n" if estimated else ""
@@ -516,11 +523,9 @@ def _ticket(
                     text += f"\n\n## {tickets.REJECTED_FIXES}\n\n{rejected}"
             case tickets.ROOT_CAUSE:
                 text = _root_cause(f"{body} ({heading}). {root_cause_note}".rstrip())
-            case tickets.DUPLICATE_SEARCH:
+            case tickets.EVIDENCE:
                 if related is not None:
                     sections.append(f"## {tickets.RELATED_TICKETS}\n\n{related}")
-                text = DUPLICATE_SEARCH
-            case tickets.EVIDENCE:
                 text = f"{body} ({heading}). Verified on `{host}`."
             case _:
                 text = f"{body} ({heading})."
@@ -1276,6 +1281,25 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
             PROPOSED_URL,
             "Have the sweep ignore symlinks",
         )
+        # Scripted choices prove the relation syntax and omission contract, not judgment.
+        for at, candidate in enumerate(QUALIFYING_RELATIONS[:2]):
+            _board_item(
+                bench,
+                other,
+                f"relation-probe-{at}",
+                tickets.Status.PROPOSED.value,
+                candidate.url,
+                f"Relation probe: {candidate.title}. {candidate.explanation}",
+            )
+        for at, candidate in enumerate(UNRELATED_CANDIDATES):
+            _board_item(
+                bench,
+                other,
+                f"irrelevant-probe-{at}",
+                tickets.Status.PROPOSED.value,
+                candidate.url,
+                f"Relation probe: {candidate.title}. An independent billing question.",
+            )
         # Two withdrawn items about the sweep trailer the store lists ahead of the open one.
         for at, cause in enumerate(WITHDRAWN_CAUSES):
             _board_item(
@@ -1403,6 +1427,25 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                     str(REPO_ROOT),
                     "--witness",
                     STORE_INSTRUCTION_WITNESS,
+                ],
+                [
+                    "sh",
+                    "-c",
+                    shlex.join(
+                        [
+                            python,
+                            "-m",
+                            "orchestrator.follow_up_tickets",
+                            "board-items",
+                            "--board",
+                            BOARD,
+                            "--repository",
+                            REPOSITORY,
+                            "--search",
+                            "Relation probe",
+                        ]
+                    )
+                    + " > relation-candidates.json",
                 ],
                 # The shared ticket, written under the slug its draft's file suggested.
                 ["mkdir", "-p", str(new_ticket.parent)],
@@ -3108,7 +3151,6 @@ def test_a_feedback_re_dispatch_brings_a_schema_4_ticket_to_one_fix_updating_its
             "Suggested fix",
             "Rejected fixes",
             "Owning runs",
-            "Duplicate search",
             "Evidence",
         ], headings
         fix = ticket.body.split(f"## {tickets.SUGGESTED_FIX}\n\n", 1)[1].split("\n\n## ", 1)[0]
@@ -3118,7 +3160,7 @@ def test_a_feedback_re_dispatch_brings_a_schema_4_ticket_to_one_fix_updating_its
         assert shown["repositories"] == [REPOSITORY] == [ticket.repository]
         metadata = shown["metadata"]
         assert isinstance(metadata, dict)
-        assert metadata[tickets.KEY]["schema"] == tickets.SCHEMA == 11
+        assert metadata[tickets.KEY]["schema"] == tickets.SCHEMA == 12
         assert _category(shown) == accepted, "bringing a ticket to the current shape undid it"
     metadata_after = after["metadata"]
     assert isinstance(metadata_after, dict)
@@ -3624,7 +3666,7 @@ def test_a_ticket_narrowed_by_an_accepted_fix_lands_depending_on_it_with_the_url
     # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] `plan-tooling-follow-ups` is
     # already the Nx project edge this repository keeps for follow-up journeys that launch the
     # installed engine, keyed on `planToolingFollowUpsWorkspace`, which covers every file this
-    # launch reads; this assertion only states the schema-11 fix the journey lands.
+    # launch reads; this assertion only states the schema-12 fix the journey lands.
     assert fix == f"{REPLACEMENT_FIX}\n\n{LOCATIONS}\n\n{UNIT}", (
         "the fix that remains right once the accepted one is in"
     )
@@ -5259,3 +5301,34 @@ def test_failed_detached_follow_up_closes_its_budget_account_without_launching_a
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, e2e_not_mocked, tests_mirror_real_usage]  # noqa: E501 - directive rule lists occupy one line
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This assertion reads
+# the existing module-scoped followed fixture and starts no independent launch. The task
+# requires these slow journeys to remain in plan-tooling-follow-ups with its existing
+# dependency edges; these snapshots belong to that same journey rather than a new project.
+def test_only_qualifying_related_links_survive_a_search_of_25_unrelated_candidates(
+    followed: Followed,
+) -> None:
+    """The paid-agent script selects fixtures; this tests tooling and published formatting."""
+    witness = followed.first_turn.directory / "relation-candidates.json"
+    found = json.loads(witness.read_text(encoding="utf-8"))["items"]
+    assert len(found) == 27
+    body = str(followed.related_after_first["content"])
+    for candidate in QUALIFYING_RELATIONS[:2]:
+        assert (
+            f"- [{candidate.title}]({candidate.url}) — related: {candidate.explanation}"
+        ) in body
+    dependency_body = str(followed.new_after_first["content"])
+    assert f"]({NARROWING_URL}) — dependency:" in dependency_body
+    for candidate in UNRELATED_CANDIDATES:
+        assert any(candidate.title in str(item) and candidate.url in str(item) for item in found)
+        assert candidate.title not in body and candidate.url not in body
+        assert candidate.title not in dependency_body and candidate.url not in dependency_body
+    for published in (body, dependency_body):
+        assert "Duplicate search" not in published
+        assert "Queries:" not in published and "Relation probe:" not in published
+        assert not re.search(r"(?mi)^none\s*$", published)
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

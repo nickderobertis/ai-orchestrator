@@ -367,3 +367,25 @@ def test_the_manager_document_says_accepted_means_todo_and_names_the_command() -
         "from the binding, and every copy the task prescribes goes through `copy`",
     ):
         assert said in flat, said
+
+
+@pytest.mark.parametrize(("document", "heading"), SECTIONS.items())
+def test_follow_up_prose_keeps_only_qualifying_related_work_before_evidence(
+    document: str, heading: str
+) -> None:
+    prose = " ".join(section(document, heading).split()).lower()
+    assert tickets.SCHEMA == 12 and tickets.PLAIN_AT == 11
+    assert "`## duplicate search`" not in prose
+    assert "optional `## related tickets` directly before" in prose
+    for required in (
+        "similar root cause",
+        "similar fix",
+        "dependency this ticket needs",
+        "mere shared area or a broader problem is insufficient",
+        "empty related",
+        "rejected irrelevant candidates",
+    ):
+        if required == "empty related" and document == "docs/orchestration.md":
+            assert "section when empty" in prose
+        else:
+            assert required in prose, (document, required)

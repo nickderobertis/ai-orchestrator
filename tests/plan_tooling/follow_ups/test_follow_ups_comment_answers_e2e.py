@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
-from follow_up_ticket_shape import before_schema_10, before_schema_11
+from follow_up_ticket_shape import before_schema_10, before_schema_11, before_schema_12
 from nx_workspace import WORKSPACE_INSTALL_MARKS
 from published_tools import ONETASKGRAPH_BIN
 from test_follow_ups_answer_comments_recipe_e2e import (
@@ -98,10 +98,11 @@ pytestmark = [*WORKSPACE_INSTALL_MARKS, pytest.mark.xdist_group("follow-ups-comm
 #: retired; 5, which the onepipeline#438 ticket carried; 6, the last with no stored estimate; 7,
 #: the last before the rubric's structure; 8, the first with it; 9, the last whose
 #: `## Root cause` is plain prose naming where it lives and which closes with no
-#: `## Duplicate search`; and 10, the one before the current, whose `## Root cause` is its
+#: `## Duplicate search`; and 10, whose `## Root cause` is its
 #: invariant and contributing locations and which closes with `## Duplicate search` rather than
-#: `## Evidence` — 7, 8, 9 and 10 all still validate, and are brought forward when they are
-#: rewritten.
+#: `## Evidence`; and 11, whose plain root cause and fix locations close with the historical
+#: search log then Evidence. Schemas 7–11 stay readable and advance when their own run
+#: rewrites them.
 PROPOSED_CAUSE = "listing-cursor-skips-last-page"
 UNSURE_CAUSE = "lock-file-left-after-crash"
 DEFERRED_CAUSE = "sweep-trailer-omits-a-family"
@@ -121,6 +122,7 @@ OLDER_CAUSES = dict(
             "badge-counts-stale-items",
             "feed-skips-a-retried-entry",
             "queue-drops-a-late-job",
+            "download-skips-a-chunk",
         ),
         strict=True,
     )
@@ -201,11 +203,9 @@ cause = re.search(rf"## {tickets.ROOT_CAUSE}\\n\\n(.*?)(?=\\n\\n## )", text, fla
 stated = cause[1].split(f"\\n\\n{located}", 1)[0].replace(f"{invariant} ", "", 1).strip()
 plain = re.split(r"(?<=[.!?])\\s", stated, maxsplit=1)[0]
 text = text[: cause.start(1)] + plain + text[cause.end(1) :]
-if f"## {tickets.DUPLICATE_SEARCH}\\n" not in text:
-    text = text.rstrip("\\n") + (
-        f"\\n\\n## {tickets.DUPLICATE_SEARCH}\\n\\n"
-        "No search was recorded when this ticket was filed, and this dispatch ran none for it.\\n"
-    )
+text = re.sub(
+    rf"\\n*## {tickets.DUPLICATE_SEARCH}\\n\\n.*?(?=\\n\\n## |\\Z)", "", text, flags=re.DOTALL
+)
 text = text.replace("## Suggested fixes\\n", f"## {tickets.SUGGESTED_FIX}\\n", 1)
 record[tickets.FREQUENCY_FIELD] = str(tickets.Frequency.INTERMITTENT)
 text = text.replace(line, prefix + json.dumps(record), 1)
@@ -213,7 +213,7 @@ text = re.sub(
     rf"(## {tickets.SUGGESTED_FIX}\\n\\n).*?(\\n\\n## )", lambda held: held[1] + fix + held[2],
     text, count=1, flags=re.DOTALL,
 )
-# `## Evidence` closes the ticket, after `## Duplicate search`.
+# Evidence closes the rewritten ticket.
 evidence = re.search(
     rf"\\n\\n## {tickets.EVIDENCE}\\n\\n.*?(?=\\n\\n## |\\Z)", text, flags=re.DOTALL
 )
@@ -323,6 +323,8 @@ class Answered(NamedTuple):
     #: Another run's schema-6 item this run marked, before and after the dispatch.
     other_run: Filed
     other_run_after: dict[str, object]
+    protected_before: dict[str, object]
+    protected_after: dict[str, object]
 
 
 #: A gathering for one run, composed from the module's own item reads and writer: every
@@ -495,7 +497,9 @@ def _older(ticket: tickets.Ticket, schema: int) -> str:
     ticket = dataclasses.replace(
         ticket,
         body=(
-            before_schema_11(ticket.body)
+            before_schema_12(ticket.body)
+            if schema >= tickets.PLAIN_AT
+            else before_schema_11(ticket.body)
             if schema >= tickets.INVARIANT_AT
             else before_schema_10(ticket.body)
         ),
@@ -671,6 +675,9 @@ def answered(tmp_path_factory: pytest.TempPathFactory) -> Answered:
         older = {
             schema: _file_older(bench, run, cause, schema) for schema, cause in OLDER_CAUSES.items()
         }
+        protected = _file_older(
+            bench, f"ca-unrelated-{os.getpid()}", "archived-listing-problem", tickets.PLAIN_AT
+        )
         # Another run's item, which this run marked with an evidence comment of its own.
         other_run = _file_older(
             bench, f"ca-other-{os.getpid()}", OTHER_RUN_CAUSE, tickets.UNESTIMATED_SCHEMA
@@ -785,6 +792,8 @@ def answered(tmp_path_factory: pytest.TempPathFactory) -> Answered:
             },
             other_run=other_run,
             other_run_after=_item(bench, other_run.issue),
+            protected_before=protected.before,
+            protected_after=_item(bench, protected.issue),
         )
     finally:
         if (bench.runs / follow_up_run).exists():
@@ -1193,3 +1202,20 @@ def test_the_recipe_refuses_before_any_store_command_when_the_credentials_helper
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, e2e_not_mocked, tests_mirror_real_usage]  # noqa: E501 - llmlint reads a directive's rule list off one line
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This assertion reads
+# the existing module-scoped answered fixture and starts no independent launch. The task
+# requires these slow journeys to remain in plan-tooling-follow-ups with its existing
+# dependency edges; these snapshots belong to that same journey rather than a new project.
+def test_another_runs_schema_11_item_is_untouched_by_own_ticket_rewrites(
+    answered: Answered,
+) -> None:
+    assert answered.protected_before == answered.protected_after
+    metadata = answered.protected_after["metadata"]
+    assert isinstance(metadata, dict)
+    assert metadata[tickets.KEY]["schema"] == 11
+    assert "## Duplicate search" in str(answered.protected_after["content"])
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

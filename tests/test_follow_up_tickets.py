@@ -41,8 +41,11 @@ from follow_up_ticket_shape import (
     OWNER_COST,
     PRIOR_FIX,
     PRIOR_OWNER_COST,
+    QUALIFYING_RELATIONS,
+    UNRELATED_CANDIDATES,
     before_schema_10,
     before_schema_11,
+    before_schema_12,
     brought_forward,
     brought_from_schema_10,
     current_section,
@@ -108,10 +111,10 @@ def _body(
     related: str | None = None,
 ) -> str:
     """A body of every heading, with ``rejected`` as a `## Rejected fixes` after the fix and
-    ``related`` as a `## Related tickets` before `## Duplicate search`."""
+    ``related`` as a `## Related tickets` before Evidence."""
     sections = []
     for heading in tickets.HEADINGS:
-        if heading == tickets.DUPLICATE_SEARCH and related is not None:
+        if heading == tickets.EVIDENCE and related is not None:
             sections.append(f"## {tickets.RELATED_TICKETS}\n\n{related}")
         sections.append(
             f"## {heading}\n\n"
@@ -401,7 +404,7 @@ def test_a_sound_item_reads_back_as_the_ticket_it_was_rendered_from() -> None:
 def test_the_record_is_the_current_schema_and_carries_the_host_after_verified_at() -> None:
     held = tickets.record(_ticket())
 
-    assert held["schema"] == tickets.SCHEMA == 11
+    assert held["schema"] == tickets.SCHEMA == 12
     keys = list(held)
     assert keys == [*tickets.RECORD_KEYS, tickets.FREQUENCY_FIELD]
     assert held[tickets.ESTIMATE_FIELD] == "medium"
@@ -477,11 +480,11 @@ def _status(word: str) -> Callable[[dict[str, object]], None]:
         (_drop_record("basis"), "record is missing basis"),
         (_drop_record("host"), "record is missing host"),
         (_set_record("extra", 1), "carries keys this does not write: extra"),
-        (_set_record("schema", 1), "is schema 1, and this reads schema 7, 8, 9, 10 or 11"),
-        (_set_record("schema", 2), "is schema 2, and this reads schema 7, 8, 9, 10 or 11"),
-        (_set_record("schema", 3), "is schema 3, and this reads schema 7, 8, 9, 10 or 11"),
-        (_set_record("schema", 4), "is schema 4, and this reads schema 7, 8, 9, 10 or 11"),
-        (_set_record("schema", 6), "is schema 6, and this reads schema 7, 8, 9, 10 or 11"),
+        (_set_record("schema", 1), "is schema 1, and this reads schema 7, 8, 9, 10, 11 or 12"),
+        (_set_record("schema", 2), "is schema 2, and this reads schema 7, 8, 9, 10, 11 or 12"),
+        (_set_record("schema", 3), "is schema 3, and this reads schema 7, 8, 9, 10, 11 or 12"),
+        (_set_record("schema", 4), "is schema 4, and this reads schema 7, 8, 9, 10, 11 or 12"),
+        (_set_record("schema", 6), "is schema 6, and this reads schema 7, 8, 9, 10, 11 or 12"),
         (_drop_record("priority_estimate"), "record is missing priority_estimate; `priority"),
         (_set_record("priority_estimate", "critical"), "`priority_estimate` 'critical' is not"),
         (_set_record("priority_estimate", "none"), "`priority_estimate` 'none' is not one of"),
@@ -612,9 +615,9 @@ def test_a_schema_4_ticket_is_refused_naming_its_schema_first() -> None:
 
     found = tickets.problems(item, run=RUN, root_cause=CAUSE)
 
-    assert found[0].startswith("the record is schema 4, and this reads schema 7, 8, 9, 10 or 11"), (
-        found
-    )
+    assert found[0].startswith(
+        "the record is schema 4, and this reads schema 7, 8, 9, 10, 11 or 12"
+    ), found
     assert any(
         "carries `## Repository` and `## Suggested fixes`, which schema 5 retired; bring the "
         "ticket to the current shape" in problem
@@ -1203,12 +1206,9 @@ INITIAL_SECTIONS = (
     *tickets.HEADINGS[: tickets.HEADINGS.index(tickets.SUGGESTED_FIX) + 1],
     tickets.REJECTED_FIXES,
     *tickets.HEADINGS[
-        tickets.HEADINGS.index(tickets.SUGGESTED_FIX) + 1 : tickets.HEADINGS.index(
-            tickets.DUPLICATE_SEARCH
-        )
+        tickets.HEADINGS.index(tickets.SUGGESTED_FIX) + 1 : tickets.HEADINGS.index(tickets.EVIDENCE)
     ],
     tickets.RELATED_TICKETS,
-    tickets.DUPLICATE_SEARCH,
     tickets.EVIDENCE,
     # The approved example's three sections, shown after the example's placeholders.
     tickets.ROOT_CAUSE,
@@ -1230,12 +1230,9 @@ FEEDBACK_SECTIONS = (
     *tickets.HEADINGS[: tickets.HEADINGS.index(tickets.SUGGESTED_FIX) + 1],
     tickets.REJECTED_FIXES,
     *tickets.HEADINGS[
-        tickets.HEADINGS.index(tickets.SUGGESTED_FIX) + 1 : tickets.HEADINGS.index(
-            tickets.DUPLICATE_SEARCH
-        )
+        tickets.HEADINGS.index(tickets.SUGGESTED_FIX) + 1 : tickets.HEADINGS.index(tickets.EVIDENCE)
     ],
     tickets.RELATED_TICKETS,
-    tickets.DUPLICATE_SEARCH,
     tickets.EVIDENCE,
     "What to do, in order",
     "Ownership on the board",
@@ -1571,7 +1568,6 @@ def test_the_task_asks_for_one_concrete_fix_and_optional_rejected_fixes() -> Non
         "Rejected fixes",
         "Owning runs",
         "Related tickets",
-        "Duplicate search",
         "Evidence",
     ], headings
     assert "## Repository" not in task and "## Suggested fixes" not in example
@@ -3859,7 +3855,7 @@ def test_the_task_writes_each_ticket_against_the_accepted_fixes_its_searches_ret
         "A `Done` item's fix is assumed only where it has not reached the basis recorded in "
         "step 1 — read the tree; where it has, the verification at the basis already accounts "
         "for it and nothing changes. A `Proposal` or `Deferred` item's fix is never assumed; "
-        "one that contributes to the same broader problem but needs a fix of its own is a "
+        "one that clearly addresses a similar root cause or suggests a similar fix is a "
         "`related` entry of the ticket's `## Related tickets`",
         "For every fate but unchanged, add the item's `depends_on` entry, list it as a "
         "`dependency` entry of `## Related tickets`, and say in the text where and how its fix "
@@ -4206,6 +4202,7 @@ def test_ticket_section_headings_are_derived_from_every_heading_a_ticket_carries
     """One function names them, so a heading added to a ticket is refused in a comment too."""
     assert tickets.ticket_section_headings() == (
         *tickets.HEADINGS,
+        tickets.DUPLICATE_SEARCH,
         tickets.REJECTED_FIXES,
         tickets.RELATED_TICKETS,
         *tickets.RETIRED_HEADINGS,
@@ -5130,13 +5127,9 @@ def test_the_older_schema_rule_names_the_schemas_and_headings_the_module_reads()
     rule = _older_schema_rule(_task(redispatch=True))
 
     assert (
-        f"a ticket of this run older than schema {tickets.INVARIANT_AT} is brought forward when "
-        "this run rewrites it: its dependency entries and the related items it mentions become "
-        f"the entries of a `## {tickets.RELATED_TICKETS}` section, {tickets.RELATED_SHAPE}, left "
-        f"out when there are none; and it carries `## {tickets.DUPLICATE_SEARCH}`, which says "
-        "that no search was recorded when it was filed where this dispatch ran none for it — a "
-        "bound ticket runs none."
-    ) in rule, rule
+        "whenever this run rewrites its own older ticket, remove the retired search section" in rule
+    )
+    assert "This applies to schemas 10 and 11 as well as earlier tickets" in rule
     assert (
         f"a ticket of this run older than schema {tickets.PLAIN_AT} is brought to it when this "
         f"run rewrites it: its `## {tickets.ROOT_CAUSE}` is rewritten as plain prose in the "
@@ -5147,7 +5140,8 @@ def test_the_older_schema_rule_names_the_schemas_and_headings_the_module_reads()
         f"`**{tickets.CONTRIBUTING_LOCATIONS}.**` part, after its opening paragraph and before "
         f"its unit subsections; its `**{tickets.OWNER_COST}.**` part states the impact with no "
         f"label naming which area decides; and `## {tickets.EVIDENCE}` moves to the end, "
-        f"directly after `## {tickets.DUPLICATE_SEARCH}`. Then `{BOARD_STATUS}` records it at "
+        f"directly after optional `## {tickets.RELATED_TICKETS}`. Then `{BOARD_STATUS}` "
+        "records it at "
         f"schema {tickets.SCHEMA}"
     ) in rule, rule
     assert (
@@ -6050,7 +6044,7 @@ def test_a_schema_9_ticket_of_this_run_brought_forward_validates_at_the_current_
 
     Left as schema 9 wrote it, the ticket is refused there for its `## Root cause` naming the
     file it lives in; once its run writes the plain guarantee, moves the location to its fix,
-    adds `## Duplicate search` and closes it with `## Evidence`, as the older-schema rule
+    removes old search logs and closes it with `## Evidence`, as the older-schema rule
     says, it is sound.
     """
     older = _ticket(body=before_schema_10(BODY))
@@ -6069,7 +6063,7 @@ def test_a_schema_9_ticket_of_this_run_brought_forward_validates_at_the_current_
     assert tickets.read_ticket(path).body == BODY
 
 
-def test_a_schema_10_ticket_of_this_run_brought_forward_validates_at_schema_11(
+def test_a_schema_10_ticket_of_this_run_brought_forward_validates_at_schema_12(
     board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A schema-10 ticket stays sound as it was written, and is held to schema 11 once
@@ -6087,10 +6081,7 @@ def test_a_schema_10_ticket_of_this_run_brought_forward_validates_at_schema_11(
     assert f'"schema": {tickets.SCHEMA},' in path.read_text(encoding="utf-8")
 
     assert tickets.main(["validate", str(path)]) == tickets.UNSOUND
-    assert (
-        "`## Root cause` section carries `**Invariant.**` and `**Contributing locations.**`, "
-        "which schema 11 retired"
-    ) in _flat(capsys.readouterr().err)
+    assert "`## Duplicate search`, which schema 12 retired" in _flat(capsys.readouterr().err)
     path.write_text(brought_from_schema_10(path.read_text(encoding="utf-8")), encoding="utf-8")
     assert tickets.main(["validate", str(path)]) == tickets.SOUND, capsys.readouterr().err
     assert tickets.read_ticket(path).body == BODY
@@ -6312,13 +6303,13 @@ def test_a_schema_11_product_owners_cost_stating_the_impact_is_sound(
 def test_a_schema_11_body_closes_with_its_duplicate_search_and_then_its_evidence(
     drafts_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    sections = BODY.split("\n\n## ")
+    sections = before_schema_12(BODY).split("\n\n## ")
     assert [section.split("\n", 1)[0].removeprefix("## ") for section in sections][-2:] == [
         tickets.DUPLICATE_SEARCH,
         tickets.EVIDENCE,
     ]
-    trailing = BODY + "\n\n## Owning runs\n\nA second list of runs."
-    between = BODY.replace(
+    trailing = before_schema_12(BODY) + "\n\n## Owning runs\n\nA second list of runs."
+    between = before_schema_12(BODY).replace(
         f"## {tickets.EVIDENCE}",
         f"## {tickets.RELATED_TICKETS}\n\n{RELATED}\n\n## {tickets.EVIDENCE}",
     )
@@ -6332,11 +6323,11 @@ def test_a_schema_11_body_closes_with_its_duplicate_search_and_then_its_evidence
             "the body carries no `## Evidence` heading in its place",
         ),
         (
-            BODY.replace(f"Verified on `{HOST}`.", "Verified."),
+            before_schema_12(BODY).replace(f"Verified on `{HOST}`.", "Verified."),
             f"does not name the host {HOST!r} the record's `host` states",
         ),
     ):
-        refused = _validated(drafts_root, capsys, tickets.render(_ticket(body=body)))
+        refused = _validated(drafts_root, capsys, _at_schema(_ticket(body=body), tickets.PLAIN_AT))
         assert reason in refused, refused
 
 
@@ -6354,7 +6345,7 @@ def test_a_ticket_recorded_before_schema_10_validates_without_its_invariant_or_s
     path = _write(drafts_root, older, _at_schema(older, schema))
 
     assert tickets.main(["validate", str(path)]) == tickets.SOUND, capsys.readouterr().err
-    assert _record(_item(_ticket()))["schema"] == tickets.PLAIN_AT == tickets.SCHEMA
+    assert _record(_item(_ticket()))["schema"] == tickets.SCHEMA == 12
 
 
 #: Two well-formed `## Related tickets` entries, one of each relation.
@@ -6362,7 +6353,7 @@ RELATED = (
     "- [some-service: a retry loop backs off](https://github.com/o/some-service/issues/42) — "
     "dependency: This ticket needs its backoff before the last page is retried.\n"
     "- [some-service: an export keeps every column](https://github.com/o/some-service/issues/43) "
-    "— related: It loses columns rather than pages, so its fix stands alone."
+    "— related: It suggests the same cursor paging fix for exports."
 )
 RELATED_REFUSALS = [
     ("\n", "the body's `## Related tickets` section is empty; it is optional"),
@@ -6423,7 +6414,7 @@ def test_a_present_related_tickets_section_is_its_entries_and_nothing_more(
     assert _flat(reason) in refused, refused
 
 
-def test_related_tickets_is_optional_and_sits_directly_before_duplicate_search_once(
+def test_related_tickets_is_optional_and_sits_directly_before_evidence_once(
     drafts_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     sound = _related_body(RELATED)
@@ -6437,11 +6428,11 @@ def test_related_tickets_is_optional_and_sits_directly_before_duplicate_search_o
         "## Owning runs", f"## {tickets.RELATED_TICKETS}\n\n{RELATED}\n\n## Owning runs"
     )
     twice = sound.replace(
-        f"## {tickets.DUPLICATE_SEARCH}",
-        f"## {tickets.RELATED_TICKETS}\n\n{RELATED}\n\n## {tickets.DUPLICATE_SEARCH}",
+        f"## {tickets.EVIDENCE}",
+        f"## {tickets.RELATED_TICKETS}\n\n{RELATED}\n\n## {tickets.EVIDENCE}",
     )
     for body, reason in (
-        (misplaced, "`## Related tickets` section is not directly before `## Duplicate search`"),
+        (misplaced, "`## Related tickets` section is not directly before `## Evidence`"),
         (twice, "the body carries `## Related tickets` 2 times; it is optional"),
     ):
         refused = _validated(drafts_root, capsys, tickets.render(_ticket(body=body)))
@@ -6550,9 +6541,7 @@ def test_the_root_cause_definition_reaches_the_task_and_names_none_of_its_exampl
     assert "**Invariant.**" not in root_cause and "\n- <" not in root_cause, root_cause
     fix = example.split(f"## {tickets.SUGGESTED_FIX}\n\n", 1)[1].split("\n\n## ", 1)[0]
     assert "\n\n**Contributing locations.**\n- <repository name> `<path>`: <" in fix, fix
-    searched = example.split(f"## {tickets.DUPLICATE_SEARCH}\n\n", 1)[1]
-    assert "Never restate a matched item's content" in _flat(searched), searched
-    assert "never a bare URL" in _flat(searched), searched
+    assert tickets.DUPLICATE_SEARCH not in example
     stated = _flat(
         " ".join(
             (
@@ -6582,28 +6571,20 @@ def test_the_root_cause_definition_reaches_the_task_and_names_none_of_its_exampl
         assert example_name not in stated, example_name
 
 
-def test_the_related_tickets_and_duplicate_search_rules_reach_the_task() -> None:
-    contract = _flat(_verified_ticket())
-
+@pytest.mark.parametrize("feedback", [False, True])
+def test_the_relatedness_rules_reach_every_task_mode(feedback: bool) -> None:
+    contract = _flat(_feedback_task() if feedback else _task())
     for said in (
-        "**`## Duplicate search` comes directly before `## Evidence`, and is terse**, because "
-        "the user reads every "
-        "ticket: one line naming the text queries step 7 ran, then one line per open item those "
-        "searches returned that was judged a different root cause — a link to it whose text is "
-        "its title, never a bare URL, and why one change would not remove both — or `none` in "
-        "place of those lines. It never restates a matched item's content.",
-        "**`## Related tickets` is optional, directly before `## Duplicate search`**, and left "
-        "out — no heading, no `none` — when it has no entries.",
-        "It lists every ticket this one's `depends_on` names, marked `dependency`, and each "
-        "issue that contributes to the same broader problem but needs an independent fix",
-        f"Each entry is one bullet and nothing more, {tickets.RELATED_SHAPE}",
-        "exactly **one sentence** saying why it is related to or different from this ticket — "
-        "for a `dependency`, what this ticket needs from it — never a longer description or a "
-        "restatement of the other ticket.",
-        "so an item may appear in both",
+        "clearly addressing a similar root cause, suggesting a similar fix, or supplying a "
+        "dependency this ticket needs",
+        "Mere shared area or a broader problem is insufficient",
+        "Exclude a candidate meeting none of these three tests",
+        "never mention a rejected irrelevant candidate elsewhere, even in Evidence",
+        "**`## Related tickets` is optional, directly before `## Evidence`**",
+        "exactly **one explanatory sentence**",
     ):
         assert said in contract, said
-    assert "may be named as related, by URL" not in _flat(_task())
+    assert "## Duplicate search" not in contract
 
 
 def test_an_unreadable_filed_ticket_cannot_be_made_sound_by_board_evidence(
@@ -7427,7 +7408,7 @@ def test_budget_record_round_trips_and_an_older_record_without_it_is_unchanged(
     assert read.budget == budget
     assert tickets.render(read) == tickets.render(ticket)
     assert tickets.record(read)["budget"] == budget.record()
-    held = _item(_ticket(body=before_schema_11(BODY)))
+    held = _item(_ticket(body=before_schema_12(BODY)))
     _record(held)["schema"] = tickets.PRIOR_SCHEMA
     old = tickets.from_store_item(held)
     assert old.budget is None
@@ -7733,11 +7714,11 @@ def test_cycle_script_through_installed_budgetspec_reports_verdicts_and_failure_
         assert tickets._host_line(result["host"]).startswith("load=")
 
 
-def test_budget_record_schema_eleven_matches_the_checked_in_golden() -> None:
+def test_budget_record_schema_twelve_matches_the_checked_in_golden() -> None:
     budget = tickets.OverrunBudget(
         tickets.Origin(REPOSITORY), "budgets.yaml", "cycle-time", 123, "max"
     )
-    golden = json.loads((CYCLE_DOCUMENT.parent / "ticket-v11.json").read_text())
+    golden = json.loads((CYCLE_DOCUMENT.parent / "ticket-v12.json").read_text())
     assert tickets.record(_ticket(budget=budget)) == golden
 
 
@@ -8569,13 +8550,15 @@ def _sound_older(schema: int) -> tuple[tickets.Ticket, str]:
         )
     elif schema < tickets.INVARIANT_AT:
         older = dataclasses.replace(older, body=before_schema_10(BODY))
-    else:
+    elif schema < tickets.PLAIN_AT:
         older = dataclasses.replace(older, body=before_schema_11(BODY))
+    else:
+        older = dataclasses.replace(older, body=before_schema_12(BODY))
     return older, _at_schema(older, schema)
 
 
 #: Every sound schema before the current one, each left in the shape it was written in.
-OLDER_SOUND = list(range(tickets.ESTIMATE_AT, tickets.PLAIN_AT))
+OLDER_SOUND = list(range(tickets.ESTIMATE_AT, tickets.SCHEMA))
 
 
 def _dispositions_checked(
@@ -8685,7 +8668,7 @@ def test_check_responses_accepts_an_answered_ticket_of_each_older_sound_schema_i
 
 
 @pytest.mark.parametrize("mode", list(tickets.Mode))
-def test_both_modes_show_the_schema_11_example_ticket_in_the_shape_validate_accepts(
+def test_both_modes_show_the_schema_12_example_ticket_in_the_shape_validate_accepts(
     drafts_root: Path, capsys: pytest.CaptureFixture[str], mode: tickets.Mode
 ) -> None:
     """The example an agent copies, as the real template renders it in each mode: its root
@@ -8700,7 +8683,7 @@ def test_both_modes_show_the_schema_11_example_ticket_in_the_shape_validate_acce
     named = [name for name, _ in sections]
     optional = (tickets.REJECTED_FIXES, tickets.RELATED_TICKETS)
     assert [name for name in named if name not in optional] == list(tickets.HEADINGS), named
-    assert named[-2:] == [tickets.DUPLICATE_SEARCH, tickets.EVIDENCE], named
+    assert named[-2:] == [tickets.RELATED_TICKETS, tickets.EVIDENCE], named
     held = dict(sections)
     assert tickets.code_references(held[tickets.ROOT_CAUSE]) == [], held[tickets.ROOT_CAUSE]
     assert not re.search(r"(?m)^\*\*", held[tickets.ROOT_CAUSE]), held[tickets.ROOT_CAUSE]
@@ -8728,7 +8711,7 @@ def test_the_rendered_search_says_where_a_candidates_locations_are_read_at_each_
     where = {
         tickets.SCHEMA: (
             f"under `## {tickets.SUGGESTED_FIX}`'s `**{tickets.CONTRIBUTING_LOCATIONS}.**` on a "
-            f"schema-{tickets.PLAIN_AT} ticket"
+            f"schema-{tickets.PLAIN_AT} or later ticket"
         ),
         tickets.INVARIANT_AT: (
             f"under `## {tickets.ROOT_CAUSE}`'s `**{tickets.CONTRIBUTING_LOCATIONS}.**` on a "
@@ -8824,6 +8807,139 @@ def test_check_responses_reads_no_ticket_for_a_gathering_outside_a_drafts_root(
     assert tickets.main([*command, str(elsewhere), RUN]) == tickets.SOUND, capsys.readouterr().err
     assert tickets.main([*command, str(feedback), RUN]) == tickets.UNSOUND
     assert "opens with 'Users decide'" in _flat(capsys.readouterr().err)
+
+
+# llmlint: ignore-end[shell_test_tiers_stay_split]
+
+
+# llmlint: ignore-block[shell_test_tiers_stay_split] Required public CLI regression over a
+# temporary local-md board through the locked store, with no engine or provider launch.
+# The slow recipe journeys remain in plan-tooling-follow-ups.
+@pytest.mark.parametrize("before", [None, *tickets.HEADINGS])
+def test_schema_12_refuses_the_retired_search_heading_anywhere(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str], before: str | None
+) -> None:
+    retired = f"## {tickets.DUPLICATE_SEARCH}\n\nHistorical search log.\n\n"
+    body = (
+        BODY + "\n\n" + retired
+        if before is None
+        else BODY.replace(f"## {before}", retired + f"## {before}", 1)
+    )
+    path = _write(drafts_root, _ticket(body=body))
+    assert tickets.main(["validate", str(path)]) == tickets.UNSOUND
+    assert "`## Duplicate search`, which schema 12 retired" in capsys.readouterr().err
+    status, _, reason = _decided(path, capsys)
+    assert status == tickets.UNRUNNABLE
+    assert "`## Duplicate search`, which schema 12 retired" in reason
+
+
+# llmlint: ignore-end[shell_test_tiers_stay_split]
+
+
+# llmlint: ignore-block[shell_test_tiers_stay_split] Required public CLI regression over a
+# temporary local-md board through the locked store, with no engine or provider launch.
+# The slow recipe journeys remain in plan-tooling-follow-ups.
+@pytest.mark.parametrize("schema", [10, 11])
+def test_historical_search_tails_remain_sound_at_board_status(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str], schema: int
+) -> None:
+    body = before_schema_11(BODY) if schema == 10 else before_schema_12(BODY)
+    ticket = _ticket(body=body)
+    path = _write(drafts_root, ticket, _at_schema(ticket, schema))
+    assert tickets.main(["validate", str(path)]) == tickets.SOUND, capsys.readouterr().err
+    capsys.readouterr()
+    assert _decided(path, capsys) == (tickets.SOUND, "backlog\n", "")
+    # Recording the rewrite advances the schema, so the old log must now be removed.
+    assert tickets.main(["validate", str(path)]) == tickets.UNSOUND
+    assert "which schema 12 retired" in capsys.readouterr().err
+
+
+# llmlint: ignore-end[shell_test_tiers_stay_split]
+
+
+def test_qualifying_relation_fixtures_format_without_irrelevant_candidates(
+    drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    body = _related_body(
+        "\n".join(
+            f"- [{candidate.title}]({candidate.url}) — {candidate.relation}: "
+            f"{candidate.explanation}"
+            for candidate in QUALIFYING_RELATIONS
+        )
+    )
+    path = _write(drafts_root, _ticket(body=body))
+    assert tickets.main(["validate", str(path)]) == tickets.SOUND, capsys.readouterr().err
+    for candidate in UNRELATED_CANDIDATES:
+        assert candidate.title not in body and candidate.url not in body
+
+
+def test_schema_11_record_golden_stays_readable_with_its_historical_body() -> None:
+    golden = json.loads((CYCLE_DOCUMENT.parent / "ticket-v11.json").read_text())
+    budget = tickets.OverrunBudget(
+        tickets.Origin(REPOSITORY), "budgets.yaml", "cycle-time", 123, "max"
+    )
+    item = _item(_ticket(budget=budget, body=before_schema_12(BODY)))
+    item["metadata"] = {tickets.KEY: golden}
+    assert tickets.from_store_item(item).budget == budget
+
+
+# llmlint: ignore-block[shell_test_tiers_stay_split] Required public CLI regression over a
+# temporary local-md board through the locked store, with no engine or provider launch.
+# The slow recipe journeys remain in plan-tooling-follow-ups.
+@pytest.mark.parametrize(
+    ("body", "reason"),
+    [
+        (_related_body(""), "is empty"),
+        (_related_body("none"), "says 'none'"),
+        (
+            _related_body(RELATED).replace(
+                "## Evidence", f"## Related tickets\n\n{RELATED}\n\n## Evidence"
+            ),
+            "`## Related tickets` 2 times",
+        ),
+        (
+            BODY.replace("## Owning runs", f"## Related tickets\n\n{RELATED}\n\n## Owning runs"),
+            "not directly before `## Evidence`",
+        ),
+        (BODY + f"\n\n## Related tickets\n\n{RELATED}", "`## Evidence` section is not its last"),
+    ],
+)
+def test_schema_12_related_section_refusals_reach_board_status(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str], body: str, reason: str
+) -> None:
+    path = _write(drafts_root, _ticket(body=body))
+    assert tickets.main(["validate", str(path)]) == tickets.UNSOUND
+    assert reason in capsys.readouterr().err
+    status, _, refused = _decided(path, capsys)
+    assert status == tickets.UNRUNNABLE
+    assert reason in refused
+
+
+# llmlint: ignore-end[shell_test_tiers_stay_split]
+
+
+# llmlint: ignore-block[shell_test_tiers_stay_split] Required public CLI regression over a
+# temporary local-md board through the locked store, with no engine or provider launch.
+# The slow recipe journeys remain in plan-tooling-follow-ups.
+@pytest.mark.parametrize("with_related", [False, True])
+def test_schema_12_board_status_and_validation_end_in_evidence(
+    with_related: bool, board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    related = "\n".join(
+        f"- [{candidate.title}]({candidate.url}) — {candidate.relation}: {candidate.explanation}"
+        for candidate in QUALIFYING_RELATIONS[:2]
+    )
+    path = _write(drafts_root, _ticket(body=_related_body(related) if with_related else BODY))
+    assert _decided(path, capsys) == (tickets.SOUND, "backlog\n", "")
+    assert tickets.main(["validate", str(path)]) == tickets.SOUND, capsys.readouterr().err
+    body = tickets.read_ticket(path).body
+    headings = [heading for heading, _ in drafts.sections(body)]
+    assert headings[-1] == tickets.EVIDENCE
+    if with_related:
+        assert headings[-2] == tickets.RELATED_TICKETS
+    else:
+        assert tickets.RELATED_TICKETS not in headings
+    assert tickets.DUPLICATE_SEARCH not in headings
 
 
 # llmlint: ignore-end[shell_test_tiers_stay_split]

@@ -3,7 +3,7 @@
 `orchestrator/follow_up_tickets.py` refuses a current ticket whose `## Impact` prose is not its
 labelled parts, whose `## Suggested fix` is not an opening paragraph, its contributing
 locations and its unit subsections, whose `## Root cause` is not plain prose naming no code,
-or which does not close with `## Duplicate search` and then `## Evidence`, so every suite that
+or which does not close with `## Evidence`, so every suite that
 writes a sound ticket writes them from here rather than restating them, and a part renamed in
 the module renames them all. The older shapes a ticket on the board may still carry are
 written from here too, by the functions that take a current body back to them.
@@ -134,6 +134,22 @@ def _join(sections: list[Section]) -> str:
     return "## " + _BREAK.join(f"{section.heading}\n\n{section.content}" for section in sections)
 
 
+def before_schema_12(body: str) -> str:
+    """A current body as schema 11 carried it, with its historical search log."""
+    sections = _split(body)
+    if not any(section.heading == tickets.DUPLICATE_SEARCH for section in sections):
+        at = next(at for at, section in enumerate(sections) if section.heading == tickets.EVIDENCE)
+        sections.insert(at, Section(tickets.DUPLICATE_SEARCH, DUPLICATE_SEARCH))
+    return _join(sections)
+
+
+def after_schema_11(body: str) -> str:
+    """An own historical body brought forward by removing its retired search log."""
+    return _join(
+        [section for section in _split(body) if section.heading != tickets.DUPLICATE_SEARCH]
+    )
+
+
 def before_schema_11(body: str) -> str:
     """A current ``body`` as a schema-10 ticket carried it.
 
@@ -142,7 +158,7 @@ def before_schema_11(body: str) -> str:
     no contributing locations, its product owner's part opens on the deciding area, and
     `## Evidence` sits after `## Examples`.
     """
-    sections = _split(body)
+    sections = _split(before_schema_12(body))
     fixes = [section for section in sections if section.heading == tickets.SUGGESTED_FIX]
     listed = _LOCATIONS.search(fixes[0].content) if fixes else None
     bullets = listed[0].split("\n", 1)[1].strip() if listed else LOCATION
@@ -179,7 +195,7 @@ def before_schema_10(body: str) -> str:
 
 
 def after_schema_10(body: str) -> str:
-    """A schema-10 ``body`` brought to schema 11, as its run does when it rewrites it.
+    """A schema-10 ``body`` brought to schema 12, as its run does when it rewrites it.
 
     Its `## Root cause` becomes the plain guarantee, its locations move to the contributing
     locations of its `## Suggested fix`, its product owner's part loses its label, and
@@ -194,7 +210,7 @@ def after_schema_10(body: str) -> str:
         section.content = section.content.replace(PRIOR_OWNER_COST, OWNER_COST)
     evidence = [section for section in sections if section.heading == tickets.EVIDENCE]
     kept = [section for section in sections if section.heading != tickets.EVIDENCE]
-    return _join(kept + evidence)
+    return after_schema_11(_join(kept + evidence))
 
 
 def _brought(text: str, forward: Callable[[str], str]) -> str:
@@ -206,8 +222,8 @@ def _brought(text: str, forward: Callable[[str], str]) -> str:
 def brought_forward(text: str) -> str:
     """A ticket file's ``text`` with its pre-schema-10 body brought to the current schema.
 
-    Its `## Root cause` becomes the plain guarantee, it gains `## Duplicate search`, and its
-    body is then brought from schema 10 by :func:`after_schema_10`.
+    Its `## Root cause` becomes the plain guarantee and its locations move into the fix;
+    historical search logs are removed by :func:`after_schema_10`.
     """
 
     def forward(body: str) -> str:
@@ -218,5 +234,48 @@ def brought_forward(text: str) -> str:
 
 
 def brought_from_schema_10(text: str) -> str:
-    """A ticket file's ``text`` with its schema-10 body brought to schema 11."""
+    """A ticket file's ``text`` with its schema-10 body brought to schema 12."""
     return _brought(text, after_schema_10)
+
+
+@dataclass(frozen=True)
+class Candidate:
+    """A board search result, with the title and URL a published link would expose."""
+
+    title: str
+    url: str
+
+
+@dataclass(frozen=True)
+class RelatedCandidate(Candidate):
+    """A scripted qualifying choice: its typed relation and one explanatory sentence."""
+
+    relation: tickets.Relation
+    explanation: str
+
+
+#: These fixtures exercise formatting and routing, never an agent's semantic judgment.
+QUALIFYING_RELATIONS = (
+    RelatedCandidate(
+        "Similar root with independent fix",
+        "https://github.com/o/s/issues/71",
+        tickets.Relation.RELATED,
+        "It has a similar cursor root cause but needs an independent retry fix.",
+    ),
+    RelatedCandidate(
+        "Similar fix",
+        "https://github.com/o/s/issues/72",
+        tickets.Relation.RELATED,
+        "It suggests the same cursor paging fix for exports.",
+    ),
+    RelatedCandidate(
+        "Required dependency",
+        "https://github.com/o/s/issues/73",
+        tickets.Relation.DEPENDENCY,
+        "This ticket needs its cursor support before paging can change.",
+    ),
+)
+UNRELATED_CANDIDATES = tuple(
+    Candidate(f"Unrelated candidate {at:02d}", f"https://github.com/o/s/issues/{100 + at}")
+    for at in range(25)
+)

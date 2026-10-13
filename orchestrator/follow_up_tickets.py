@@ -129,12 +129,13 @@ BOARD = "followups"
 #: locations moved to `## Suggested fix`'s :data:`CONTRIBUTING_LOCATIONS` part, the
 #: product owner's cost states the impact with no who-decides label, and `## Evidence`, which
 #: agents read, moved last, after `## Duplicate search`. Schemas 7 to 10 stay sound as they were.
-SCHEMA = 11
+#: Schema 12 removes the search log; optional related work directly precedes Evidence.
+SCHEMA = 12
 #: Every earlier schema a re-dispatch brings a ticket forward from, enumerated rather than
 #: admitted by range, so a record declaring any other schema — zero, negative, a later one or
 #: no integer — is refused by name rather than read as an older ticket. `board-status` reads a
 #: board item's record of one before :data:`ESTIMATE_AT` as storing no estimate.
-PRIOR_SCHEMAS = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+PRIOR_SCHEMAS = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
 #: The schema just before, which every reader still accepts as sound: its body predates
 #: :data:`SCHEMA`'s structure, and a run that rewrites it brings it forward.
 PRIOR_SCHEMA = PRIOR_SCHEMAS[-1]
@@ -152,6 +153,8 @@ INVARIANT_AT = 10
 #: The schema whose `## Root cause` is plain prose naming no code, whose `## Suggested fix`
 #: carries the contributing locations, and whose body ends with `## Evidence`.
 PLAIN_AT = 11
+#: The schema that retires the search log while keeping the plain shape.
+SEARCH_RETIRED_AT = 12
 #: Every schema a reader accepts as sound: from :data:`ESTIMATE_AT` on, because schema 7's body
 #: predates the structure :data:`STRUCTURE_AT` added, schemas 7 to 9 the structure
 #: :data:`INVARIANT_AT` added, and schemas 7 to 10 the shape :data:`PLAIN_AT` gave it, which a
@@ -544,22 +547,21 @@ CONTRIBUTING_LOCATIONS = ROOT_CAUSE_PARTS[1]
 #: How one contributing location reads, wherever a ticket's schema puts the list.
 LOCATION_SHAPE = "`- <repository> `<path>`: <what this location does that breaks the guarantee>`"
 
-#: The section that closes the ticket at :data:`INVARIANT_AT`, and directly precedes
-#: `## Evidence` from :data:`PLAIN_AT` on: the text queries the board search ran, then one line
+#: The historical section that closes schema 10 and directly precedes Evidence in schema 11:
+#: the text queries the board search ran, then one line
 #: per open item it returned that was judged a different root cause, or `none`. It is on the
 #: board because the disposition account stays on the host that verified the ticket.
 DUPLICATE_SEARCH = "Duplicate search"
 
 #: The level-2 headings a :data:`SCHEMA` ticket's body carries, in this order, each with
 #: content: every section a person reads to decide on the ticket first, then the agent-facing
-#: :data:`DUPLICATE_SEARCH` and `## Evidence` last.
+#: optional related work and `## Evidence` last.
 HEADINGS = (
     ROOT_CAUSE,
     "Impact",
     "Examples",
     "Suggested fix",
     "Owning runs",
-    DUPLICATE_SEARCH,
     "Evidence",
 )
 #: The headings a ticket before :data:`PLAIN_AT` carries, in that schema's order;
@@ -580,17 +582,27 @@ SUGGESTED_FIX = "Suggested fix"
 #: The one optional heading: at most once, directly after :data:`SUGGESTED_FIX`, with content.
 REJECTED_FIXES = "Rejected fixes"
 
-#: The optional section from :data:`INVARIANT_AT` on, directly before :data:`DUPLICATE_SEARCH`
-#: and left out when it has no entries: one bullet per other ticket a reader should know about,
+#: The optional section from :data:`INVARIANT_AT` on, before the historical search log
+#: or, from schema 12, Evidence, and left out when it has no entries: one bullet per
+#: qualifying ticket a reader should know about,
 #: each exactly a link to it whose text is its title, its :class:`Relation`, and one sentence.
 RELATED_TICKETS = "Related tickets"
+
+
+#: The decision contract for including a ticket, distinct from the validated bullet syntax.
+RELATEDNESS_BAR = (
+    "List only a ticket clearly addressing a similar root cause, suggesting a similar fix, "
+    "or supplying a dependency this ticket needs. Mere shared area or a broader problem is "
+    "insufficient. Exclude a candidate meeting none of these three tests, and never mention "
+    "a rejected irrelevant candidate elsewhere, even in Evidence."
+)
 
 
 class Relation(StrEnum):
     """Why a `## Related tickets` entry is listed.
 
     A `dependency` is an accepted ticket the ticket's :data:`DEPENDENCY_FIELD` names; a
-    `related` one contributes to the same broader problem but needs a fix of its own, at
+    `related` one clearly addresses a similar root cause or suggests a similar fix, at
     whatever status, and is no dependency.
     """
 
@@ -1866,14 +1878,17 @@ def _body_problems(
     structured: bool = True,
     invariant: bool = True,
     plain: bool = True,
+    search_retired: bool = True,
 ) -> list[str]:
     """Every way a body is not a ticket's; ``structured`` is :func:`_impact_problems`'s, and
     also holds `## Suggested fix` to its opening paragraph and unit subsections. ``invariant``
-    holds an :data:`INVARIANT_AT` ticket to its `## Duplicate search` and its optional
-    `## Related tickets`; an older body carries none. ``plain`` holds a :data:`PLAIN_AT` ticket
+    holds an :data:`INVARIANT_AT` ticket to its optional `## Related tickets` and, before
+    ``search_retired``, its historical search section; an older body carries none. ``plain``
+    holds a :data:`PLAIN_AT` ticket
     to its order, its plain `## Root cause`, the :data:`CONTRIBUTING_LOCATIONS` of its
     `## Suggested fix` and its last `## Evidence`; without it an :data:`INVARIANT_AT` ticket's
-    `## Root cause` is its :data:`ROOT_CAUSE_PARTS` and `## Duplicate search` is its last."""
+    `## Root cause` is its :data:`ROOT_CAUSE_PARTS` and the historical search section is last.
+    ``search_retired`` refuses that heading anywhere and places related work before Evidence."""
     plain = plain and invariant
     if not isinstance(body, str):
         return ["the ticket has no body"]
@@ -1885,8 +1900,15 @@ def _body_problems(
             + " and ".join(f"`## {heading}`" for heading in retired)
             + f", which schema {RETIRED_AT} retired; bring the ticket to the current shape"
         ]
+    search_retired = search_retired and plain
+    if search_retired and DUPLICATE_SEARCH in names:
+        return [
+            f"the body carries `## {DUPLICATE_SEARCH}`, which schema {SEARCH_RETIRED_AT} retired"
+        ]
     headings = (
         HEADINGS
+        if search_retired
+        else (*HEADINGS[:-1], DUPLICATE_SEARCH, EVIDENCE)
         if plain
         else PRIOR_HEADINGS
         if invariant
@@ -1932,7 +1954,7 @@ def _body_problems(
             ]
         after = at + 1
     return _rejected_fixes_problems(found) + (
-        _tail_problems(found, plain=plain) if invariant else []
+        _tail_problems(found, plain=plain, search_retired=search_retired) if invariant else []
     )
 
 
@@ -2058,10 +2080,12 @@ def _root_cause_problems(text: str) -> list[str]:
     return []
 
 
-def _tail_problems(found: Sequence[tuple[str, str]], *, plain: bool) -> list[str]:
-    """How an :data:`INVARIANT_AT` body does not end with its optional `## Related tickets`
-    and then `## Duplicate search`, each at most once — and, when ``plain``, then
-    `## Evidence`, which closes a :data:`PLAIN_AT` ticket."""
+def _tail_problems(
+    found: Sequence[tuple[str, str]], *, plain: bool, search_retired: bool
+) -> list[str]:
+    """How the schema-aware closing sections are misplaced or repeated. Historical schema
+    10 ends in its search log and schema 11 in that log then Evidence. From schema 12 the
+    optional related work directly precedes Evidence, with the search log retired."""
     names = [name for name, _ in found]
     problems = []
     if names.count(DUPLICATE_SEARCH) > 1:
@@ -2073,7 +2097,7 @@ def _tail_problems(found: Sequence[tuple[str, str]], *, plain: bool) -> list[str
             f"the body's `## {EVIDENCE}` section is not its last; from schema {PLAIN_AT} it "
             "closes the ticket, after every section a person reads to decide on it"
         )
-    elif plain and names[-2] != DUPLICATE_SEARCH:
+    elif plain and not search_retired and names[-2] != DUPLICATE_SEARCH:
         problems.append(
             f"the body's `## {DUPLICATE_SEARCH}` section is not directly before "
             f"`## {EVIDENCE}`; from schema {PLAIN_AT} it comes right before it"
@@ -2082,14 +2106,15 @@ def _tail_problems(found: Sequence[tuple[str, str]], *, plain: bool) -> list[str
         problems.append(
             f"the body's `## {DUPLICATE_SEARCH}` section is not its last; it closes the ticket"
         )
+    following = EVIDENCE if search_retired else DUPLICATE_SEARCH
     held = [at for at, name in enumerate(names) if name == RELATED_TICKETS]
     match held:
         case []:
             pass
-        case [at] if at + 1 == len(names) or names[at + 1] != DUPLICATE_SEARCH:
+        case [at] if at + 1 == len(names) or names[at + 1] != following:
             problems.append(
                 f"the body's `## {RELATED_TICKETS}` section is not directly before "
-                f"`## {DUPLICATE_SEARCH}`; when present, it comes right before it"
+                f"`## {following}`; when present, it comes right before it"
             )
         case [at]:
             problems.extend(related_problems(found[at][1]))
@@ -2151,7 +2176,7 @@ def related_problems(text: str) -> list[str]:
         elif _SENTENCE_BREAK.search(sentence) or sentence[-1] not in ".!?":
             problems.append(
                 f"{where}'s entry {line!r} does not carry exactly one sentence after its "
-                "relation; say in one sentence why it is related to or different from this "
+                "relation; say in one sentence why it is related to this "
                 "ticket, and for a dependency what this ticket needs from it"
             )
     return problems
@@ -2401,6 +2426,7 @@ def problems(  # noqa: PLR0913 - each reading of an item is its own keyword
             structured=structured,
             invariant=invariant,
             plain=plain,
+            search_retired=isinstance(held, Mapping) and _search_retired_shape(held),
         )
     )
     found.extend(edge_problems(edges))
@@ -2428,6 +2454,12 @@ def _plain_shape(held: Mapping[str, object]) -> bool:
 def _category(status: object) -> object:
     """The category a store item's status reports, which is what a ticket's status is."""
     return status.get("category") if isinstance(status, Mapping) else status
+
+
+def _search_retired_shape(held: Mapping[str, object]) -> bool:
+    """Whether the record's schema retires the historical search log."""
+    schema = held.get("schema")
+    return type(schema) is int and schema >= SEARCH_RETIRED_AT
 
 
 def from_store_item(  # noqa: PLR0913 - each reading of an item is its own keyword
@@ -3465,6 +3497,7 @@ def re_estimate(board: str, issue: str) -> ReEstimated:
         structured=_structured(held),
         invariant=_invariant(held),
         plain=_plain_shape(held),
+        search_retired=_search_retired_shape(held),
     ):
         raise Refused([f"{issue}'s content is not sound: {problem}" for problem in unsound])
     frequency = _record_frequency(held, issue)
@@ -4282,7 +4315,7 @@ def ticket_section_headings() -> tuple[str, ...]:
     has re-rendered the ticket into the comment; deriving them here means a heading added to
     a ticket is refused in a comment with no further edit.
     """
-    return (*HEADINGS, REJECTED_FIXES, RELATED_TICKETS, *RETIRED_HEADINGS)
+    return (*HEADINGS, DUPLICATE_SEARCH, REJECTED_FIXES, RELATED_TICKETS, *RETIRED_HEADINGS)
 
 
 #: A Markdown ATX level-2 heading line, its text without the optional closing hashes.
@@ -5717,13 +5750,6 @@ _HEADING_GUIDANCE = (
     "shapes and documented behaviour — each as a diff or the full shape. A fix that changes "
     f"behaviour with no interface change says so in one sentence. {_CONCISION}>",
     "<every run whose evidence this ticket carries>",
-    "<terse, because the user reads every ticket: one line naming the text queries the board "
-    "search ran; then one line per open item those searches returned that was judged a "
-    "different root cause — a link to it whose text is its title, never a bare URL, and why one "
-    "change would not remove both — or `none` in place of those lines. Never restate a matched "
-    "item's content>\n\n"
-    "Queries: <each text query, in the order it was asked>\n"
-    "- [<that item's title>](<its URL>): <why one change would not remove both>",
     "<the host the verification ran on, exactly as `hostname` printed it; then per draft: "
     "the qualified draft id, its run and node, the verified claim with `path:line` at the "
     "basis commit, and the transcript command from the draft>",
@@ -5817,25 +5843,27 @@ _RELATED_TICKETS_GUIDANCE = (
     "<optional: leave this section out, heading and all, when it has no entries; never write "
     "`none`. Each entry is one bullet and nothing more: every ticket this one's "
     f"`{DEPENDENCY_FIELD}` names, marked `{Relation.DEPENDENCY}`, and each ticket that "
-    "contributes to the same broader problem but needs a fix of its own, at whatever status, "
+    "clearly addresses a similar root cause or suggests a similar fix, at whatever status, "
     f"marked `{Relation.RELATED}`. An item at `{board_option(Status.PROPOSED)}` or "
     f"`{board_option(Status.DEFERRED)}` is only ever `{Relation.RELATED}`. An entry is a link "
     "whose text is that ticket's title, never a bare URL, its mark, and exactly one sentence "
-    "saying why it is related to or different from this ticket — for a dependency, what this "
-    "ticket needs from it — never a restatement of the other ticket>\n\n"
-    f"- [<that ticket's title>](<its URL>) — {Relation.DEPENDENCY}: <one sentence: what this "
+    "saying why it is related to this ticket — for a dependency, what this "
+    "ticket needs from it — never a restatement of the other ticket. "
+    + RELATEDNESS_BAR
+    + ">\n\n"
+    + f"- [<that ticket's title>](<its URL>) — {Relation.DEPENDENCY}: <one sentence: what this "
     "ticket needs from it>\n"
     f"- [<that ticket's title>](<its URL>) — {Relation.RELATED}: <one sentence: why it is "
-    "related to or different from this ticket>"
+    "related to this ticket>"
 )
 
 
 def _example_body() -> str:
     """The body of the example ticket: every heading with its guidance, the optional ones too,
-    in :data:`HEADINGS`' order, so it closes with `## Duplicate search` and `## Evidence`."""
+    in :data:`HEADINGS`' order, so it closes with optional related work and Evidence."""
     sections = []
     for heading, guidance in zip(HEADINGS, _HEADING_GUIDANCE, strict=True):
-        if heading == DUPLICATE_SEARCH:
+        if heading == EVIDENCE:
             sections.append(f"## {RELATED_TICKETS}\n\n{_RELATED_TICKETS_GUIDANCE}")
         sections.append(f"## {heading}\n\n{guidance}")
         if heading == SUGGESTED_FIX:
@@ -6001,9 +6029,11 @@ def shape(run: str) -> dict[str, object]:
         "contributing_locations": f"`**{CONTRIBUTING_LOCATIONS}.**`",
         "location_shape": LOCATION_SHAPE,
         "plain_at": PLAIN_AT,
+        "search_retired_at": SEARCH_RETIRED_AT,
         "duplicate_search": DUPLICATE_SEARCH,
         "related_tickets": RELATED_TICKETS,
         "related_shape": RELATED_SHAPE,
+        "relatedness_bar": RELATEDNESS_BAR,
         "dependency_relation": Relation.DEPENDENCY.value,
         "related_relation": Relation.RELATED.value,
         "invariant_at": INVARIANT_AT,

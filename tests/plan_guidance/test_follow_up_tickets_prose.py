@@ -173,3 +173,25 @@ def test_budget_evidence_is_read_back_from_the_loopback_board(
             assert tickets.main(["re-estimate", "--board", "followups", item]) == tickets.SOUND
             done = _budget_cli(root, RUN, "--board", "followups")
             assert done.returncode == tickets.SOUND, done.stderr
+
+
+@pytest.mark.parametrize("feedback", [False, True])
+def test_relatedness_contract_and_current_example_agree_in_both_modes(feedback: bool) -> None:
+    task = _feedback_task() if feedback else _task()
+    example = task.split("````markdown\n", 1)[1].split("````", 1)[0]
+    assert example == tickets.ticket_example(RUN, "followups")
+    assert tickets.RELATEDNESS_BAR in _flat(task)
+    assert tickets.RELATEDNESS_BAR in _flat(example)
+    assert tickets.DUPLICATE_SEARCH not in example
+    assert "contributes to the same broader problem" not in task
+    assert "related to or different from" not in task
+    assert "different guarantee" not in task
+
+
+def test_candidate_locations_follow_the_plain_schema_boundary_without_repurposing_it() -> None:
+    task = _flat(_task())
+    assert tickets.PLAIN_AT == 11 and tickets.SCHEMA == 12
+    assert (
+        "under `## Suggested fix`'s `**Contributing locations.**` on a schema-11 or later "
+        "ticket, under `## Root cause`'s `**Contributing locations.**` on a schema-10 ticket"
+    ) in task

@@ -1073,7 +1073,10 @@ the implementation and naming no code, with every location contributing to it li
 suggested fix: one root cause when a single change to the rule removes every instance, even
 across several places, and two when each needs a fix that stands alone. So a run groups its
 drafts by invariant, and a ticket's sections a person decides from come first, its
-`## Duplicate search` and `## Evidence` last. The same-root-cause path is unchanged: an
+optional `## Related tickets` directly before the last `## Evidence`. Related entries
+clearly address a similar root cause, suggest a similar fix, or supply a dependency this
+ticket needs; mere shared area or a broader problem is insufficient. Omit an empty related
+section and never mention rejected irrelevant candidates or search logs anywhere in the body. The same-root-cause path is unchanged: an
 accepted item for a ticket's own root cause takes the run's evidence as a comment, never a
 dependency — and an open item at any status whose stated root cause meets that bar is the
 ticket's own root cause whatever its location and slug, whose slug the run's ticket then
