@@ -1540,6 +1540,25 @@ def test_the_settlement_the_spike_stage_waits_for_is_one_the_engine_writes(
     assert (spike_flow.DONE, spike_flow.PRESERVED) in engine_settlements, sorted(engine_settlements)
 
 
+def test_the_correction_the_spike_stage_also_reads_as_kept_is_the_engines_own_word() -> None:
+    """`orchestrator/spike_flow.py` also reads a spike `settle`d from evidence as kept.
+
+    A manager settles a spike whose session would not close from evidence once its branch is
+    kept on its origin, and the engine records that settlement on its own constant; a release
+    respelling it would stop every such plan at its spikes, each reported as not kept.
+    """
+    journal = _source(ONEPIPELINE, "journal.rs")
+    spelled = re.search(r'pub const SETTLED_FROM_EVIDENCE: &str = "([a-z-]+)";', journal)
+    assert spelled, (
+        f"onepipeline {ONEPIPELINE.ref} no longer declares SETTLED_FROM_EVIDENCE in "
+        "src/journal.rs, where this gate reads the word a settle records"
+    )
+    assert spelled.group(1) == spike_flow.SETTLED_FROM_EVIDENCE, (
+        f"onepipeline {ONEPIPELINE.ref} records a settle as {spelled.group(1)!r}, and "
+        f"orchestrator/spike_flow.py reads {spike_flow.SETTLED_FROM_EVIDENCE!r}"
+    )
+
+
 def test_the_statuses_the_spike_stage_names_a_skipped_dependent_by_are_ones_the_engine_writes() -> (
     None
 ):

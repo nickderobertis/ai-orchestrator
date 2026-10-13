@@ -13,7 +13,8 @@ Between them sit four questions only this host can answer, each a subcommand her
   nothing for a draft that wrote no spikes;
 * ``settled <run> [--spikes] [--project <project>]`` — whether a run, launched from that
   project when one is named, settled with every node `done`, and for the
-  spikes run every node's outcome `preserved`, read off the run's `result.json`: the ledger
+  spikes run every node's outcome `preserved` (or `settled-from-evidence`, a manager's
+  correction from evidence that the branch was kept), read off the run's `result.json`: the ledger
   record the engine rewrites whenever a driver closes out. A node a retry superseded is
   answered for by its replacement, which `tests/run_end_hooks/test_run_end_hooks_e2e.py`
   reads off a ledger the installed engine wrote over a real retry;
@@ -83,6 +84,12 @@ RunId = NewType("RunId", str)
 RESULT = "result.json"
 DONE = "done"
 PRESERVED = "preserved"
+#: What a manager's `settle` records: a spike whose session would not close, its branch kept on
+#: its origin by hand, reads `done` on this word rather than on `preserved`.
+SETTLED_FROM_EVIDENCE = "settled-from-evidence"
+#: Compared by equality, never hashed, so an outcome a malformed ledger spells as a list or a
+#: map is refused as not kept rather than raising.
+KEPT = (PRESERVED, SETTLED_FROM_EVIDENCE)
 FAILED = "failed"
 SKIPPED = "skipped"
 SUPERSEDED_BY = "superseded_by"
@@ -334,7 +341,7 @@ def settled(
             continue
         if node.status != DONE:
             unsettled.append(f"{node.id} {node.status}")
-        elif spikes and node.outcome != PRESERVED:
+        elif spikes and node.outcome not in KEPT:
             unsettled.append(f"{node.id} done with the outcome {node.outcome}, not {PRESERVED}")
         spike = node.id
         while spike in first:

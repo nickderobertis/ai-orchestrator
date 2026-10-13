@@ -118,11 +118,12 @@ def test_a_settled_spikes_run_answers_its_spikes_once_each_kept_its_branch(
             {"id": "spike-a", "status": "cancelled", "superseded_by": "spike-a-2"},
             {"id": "spike-a-2", "status": "done", "outcome": "preserved"},
             {"id": "spike-b", "status": "done", "outcome": "preserved"},
+            {"id": "spike-c", "status": "done", "outcome": "settled-from-evidence"},
         ],
     )
 
     assert spike_flow.main(["settled", "flow-spikes", "--spikes"]) == 0
-    assert capsys.readouterr().out.split() == ["spike-a-2", "spike-b"]
+    assert capsys.readouterr().out.split() == ["spike-a-2", "spike-b", "spike-c"]
 
 
 @pytest.mark.parametrize(
