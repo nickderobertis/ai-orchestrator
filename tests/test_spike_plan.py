@@ -352,3 +352,50 @@ def test_the_command_refuses_a_plan_whose_documents_cannot_be_read(
     said = capsys.readouterr()
     assert said.out == ""
     assert f"the documents of {PROJECT} could not be read: no project {PROJECT}" in said.err
+
+
+@pytest.mark.parametrize(
+    ("value", "reason"),
+    [
+        (None, "null"),
+        (3, "non-string"),
+        (" ", "blank"),
+        ("native", "malformed"),
+        ("a:", "malformed"),
+        (":b", "malformed"),
+        ("a:missing", "missing"),
+    ],
+)
+def test_explicit_visual_selection_never_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+    value: object,
+    reason: str,
+) -> None:
+    _store(monkeypatch, {spike_plan.VISUAL_REPORT_KEY: value}, "authoring:spike-visual-report")
+    with pytest.raises(OSError, match=reason):
+        spike_plan.current_visual_report(PROJECT, plan_store.read_documents(PROJECT))
+
+
+@pytest.mark.parametrize(
+    "selected",
+    ["authoring:cursor-plan-spike-visual-revision-report", "authoring:report:opaque"],
+)
+def test_selection_returns_the_actual_held_copy_and_refuses_ambiguity(
+    monkeypatch: pytest.MonkeyPatch,
+    selected: str,
+) -> None:
+    import dataclasses
+
+    _store(monkeypatch, {spike_plan.VISUAL_REPORT_KEY: selected})
+    report = dataclasses.replace(
+        _copied_report("board:reminted", selected, True), project="cursor-plan"
+    )
+    assert spike_plan.current_visual_report(PROJECT, [report]) is report
+    with pytest.raises(OSError, match="ambiguous"):
+        spike_plan.current_visual_report(PROJECT, [report, report])
+    with pytest.raises(OSError, match="wrong-project"):
+        spike_plan.current_visual_report(PROJECT, [dataclasses.replace(report, project="other")])
+    with pytest.raises(OSError, match="wrong-kind"):
+        spike_plan.current_visual_report(
+            PROJECT, [dataclasses.replace(report, metadata={plan_store.ORIGIN_KEY: selected})]
+        )

@@ -32,11 +32,24 @@ def main(argv: list[str]) -> int:
         print(f"visual_answers: {report} holds no visual changes or no assets", file=sys.stderr)
         return 2
     held = {str(asset["name"]): str(asset["path"]) for asset in assets}
-    answers = json.loads(staged.read_text(encoding="utf-8"))
+    answers = (
+        _store(binary, "document", "answers", argv[3])
+        if len(argv) > 3
+        else json.loads(staged.read_text(encoding="utf-8"))
+    )
     staged.write_text(json.dumps({**answers, "visual_changes": changes}), encoding="utf-8")
+    existing = {}
+    if len(argv) > 3:
+        existing = {
+            asset["name"]: asset["sha256"]
+            for asset in _store(binary, "document", "show", argv[3])["assets"]
+        }
+    report_digests = {asset["name"]: asset["sha256"] for asset in assets}
     for change in changes:
         for side in ("before", "after"):
-            print(held[change[side]])
+            name = change[side]
+            if existing.get(name) != report_digests[name]:
+                print(held[name])
     return 0
 
 

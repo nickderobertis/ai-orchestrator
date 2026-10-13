@@ -28,7 +28,7 @@ import pytest
 from plan_sources import read_default_sources, read_plan_sources
 from published_tools import ONETASKGRAPH_BIN
 
-from orchestrator import plan_store
+from orchestrator import plan_store, spike_plan
 from orchestrator.root import REPO_ROOT
 
 #: The documents that state where a plan of this repository lives.
@@ -432,3 +432,19 @@ def test_the_orchestration_table_gives_each_state_the_category_the_source_writes
 
 
 # llmlint: ignore-end[shell_test_tiers_stay_split]
+
+
+def test_visual_guidance_defers_selection_to_the_shared_resolver() -> None:
+    """Policy prose names the authority rather than prescribing only a canonical report."""
+    for filename in (
+        "personas/design-doc.yaml",
+        "templates/design-doc.md.j2",
+    ):
+        content = (REPO_ROOT / filename).read_text()
+        assert "orchestrator/spike_plan.py" in content, filename
+        assert "current" in content.lower(), filename
+    planner = (REPO_ROOT / "personas/planner.yaml").read_text()
+    assert "python -m orchestrator.spike_plan visual-report" in planner
+    assert spike_plan.VISUAL_REPORT_KEY in planner
+    assert "only changed images" in planner
+    assert "preserving the original report" in planner

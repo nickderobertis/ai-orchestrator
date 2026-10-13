@@ -332,9 +332,10 @@ answers = {
         f"The document is stored as a project document of `{plan}`, in the store that plan is "
         f"in, under the document id `{document}`, and is a rendering of the `{template}` "
         f"template: `{resolve}` piped into "
-        f"`onetaskgraph document create --id {document} --template-loader - --no-interactive` "
-        f"wrote it, which replaces a document the store already holds by that id whole, the "
-        f"answers it was rendered from included, so it records `onepipeline:{template}` "
+        f"`onetaskgraph document render <held-qualified-id> --template-loader - --answers <file> --no-interactive` "
+        f"updates an existing document, preserving its identity; document create is for a "
+        f"genuinely new document only. Supply only changed images with --asset on render; "
+        f"existing referenced assets persist. It records `onepipeline:{template}` "
         f"provenance and the answers it was rendered from.",
         rows_criterion,
         graph_criterion,
@@ -658,7 +659,7 @@ document_resolve=$("$python" -m orchestrator.design_chain "$plan_project") ||
     fail "which repository's layer the design document of $plan_project resolves through could not be read out of the plan store; the diagnostic above names why" \
         "repair what it names, then run this command again"
 
-# The plan's visual spike report, when its project holds one: the reserved id is
+# The plan's current visual report, when its project holds one: selection is
 # `orchestrator/spike_plan.py`'s, so it is asked rather than spelled here, and its
 # `visual_changes` answer and the store's path for each of its images are read now so the
 # writer's task can quote them and a report the store cannot answer for is refused before

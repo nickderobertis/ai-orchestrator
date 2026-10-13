@@ -162,7 +162,7 @@ RULES = {
     "sections": "In this order: What, Why, Visual changes, Architecture, Budgets, Acceptance",
     "one subsection per visual change": "One `### <name>` subsection per change the plan",
     "illustrative images": "illustrative captures from a throwaway, mocked spike",
-    "visual changes restate the report": "restates the plan's `spike-visual-report`, answer",
+    "visual changes restate the report": "restates the plan's current visual report, resolved by",
     "no visual section without a visual change": "has no Visual changes section",
     "budgets copy the writer's answers": "orchestrator.plan_budgets <project>` prints for the",
     "predates budgets": "This plan predates budgets: <reason>",

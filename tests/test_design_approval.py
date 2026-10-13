@@ -1580,7 +1580,7 @@ def _visual_report(qualified_id: str = "authoring:spike-visual-report") -> Store
     """The visual spike's report, as the plan's project holds it beside the design document."""
     return _document(
         qualified_id=qualified_id,
-        content="# Spike `spike-visual`\n\n## Visual changes\n",
+        content="# Spike `spike-visual`\n\n## Visual changes\n\n### Settings page\n",
         metadata=_provenance("", template=design_approval.SPIKE_REPORT_REFERENCE),
     )
 
@@ -1589,18 +1589,20 @@ def test_a_visual_plans_document_showing_no_visual_change_is_not_approved(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The report names the pictures; a document without its section is refused, naming it."""
+    monkeypatch.setattr(plan_store, "project_record", lambda _: {"metadata": {}})
     _holds(monkeypatch, _visual_report(), _document())
 
     assert design_approval.main(["authoring:demo"]) == 1
     refused = capsys.readouterr().err
-    assert "holds its visual spike's report authoring:spike-visual-report" in refused, refused
-    assert "authoring:demo-design renders no `## Visual changes` section" in refused, refused
-    assert "regenerate the document with its `visual_changes` answer" in refused, refused
+    assert "current visual evidence of authoring:spike-visual-report" in refused, refused
+    assert "authoring:demo-design does not show" in refused, refused
+    assert "selected report's complete entries and image bytes" in refused, refused
 
 
-def test_a_document_showing_its_visual_changes_or_a_plan_with_none_passes_the_visual_check() -> (
-    None
-):
+def test_a_document_showing_its_visual_changes_or_a_plan_with_none_passes_the_visual_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(plan_store, "project_record", lambda _: {"metadata": {}})
     shown = _document(content=f"{APPROVED_PROSE}\n## Visual changes\n\n### Settings page\n")
     copied = _visual_report("board:I_minted")
     copied = dataclasses.replace(
@@ -1704,11 +1706,25 @@ def test_an_image_is_read_the_same_from_a_local_file_and_a_served_record(
 ) -> None:
     """One picture's bytes give one digest whichever way its store holds it."""
     image = _png(1)
-    _shown_locally(tmp_path, monkeypatch, image)
+    path = _shown_locally(tmp_path, monkeypatch, image)
     (local,) = plan_store.read_documents("shown:demo")
     expected = {"architecture.png": hashlib.sha256(image).hexdigest()}
     assert design_approval.asset_digests(local) == expected
     assert design_approval.asset_digests(_served(expected)) == expected
+    served = _served(expected)
+    local_visual = dataclasses.replace(
+        local, content=local.content.replace("## Architecture", "## Visual changes")
+    )
+    served_visual = dataclasses.replace(
+        served, content=served.content.replace("## Architecture", "## Visual changes")
+    )
+    evidence = (
+        f"![How the two units hand a page over](architecture.png:{expected['architecture.png']})"
+    )
+    assert design_approval.visual_evidence(local_visual) == evidence
+    assert design_approval.visual_evidence(served_visual) == evidence
+    path.write_bytes(_png(2))
+    assert design_approval.visual_evidence(local_visual) != evidence
 
 
 def test_replacing_an_images_bytes_under_its_name_unapproves_the_document(

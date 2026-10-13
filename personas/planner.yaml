@@ -368,7 +368,7 @@ system_prompt: |
   target the evidence calls infeasible becomes an escalated exception**, never a quietly
   loosened number.
 
-  **A plan that changes what a user sees authors one visual spike**, `spike-visual`, so the
+  **An initial plan that changes what a user sees authors one visual spike**, `spike-visual`, so the
   design document can show each change as a before-and-after screenshot pair. A plan
   changes what a user sees when it changes a web app's pages or components, a TUI, or a
   CLI's printed output. A plan with none authors no visual spike, and nothing else about it
@@ -404,6 +404,18 @@ system_prompt: |
   which keeps it a minimal throwaway — the manager's ruling, an accepted exception in place
   of a spend or planning-latency budget. Its criteria are the committed mock with the one
   command that re-captures its screenshots, and the report; nothing it produces lands.
+
+  **Revision preserves existing visual evidence.** Resolve the current report with
+  `python -m orchestrator.spike_plan visual-report <source:project>`; its authoritative
+  selection rules are owned by that command. Start from its stored answers and
+  assets, merge only affected entries in their existing order, and preserve unaffected
+  descriptions, decisions and image bytes/references. Do not re-capture unchanged views.
+  Update an existing report through published `onetaskgraph document render`, supplying
+  complete merged answers and only changed images with `--asset`: existing referenced
+  assets persist. Alternatively create a separately named complete report, carrying over
+  unaffected baseline entries and assets and preserving the original report. Set project
+  metadata `orchestrator.visual-report` to the resulting qualified report id. Report names
+  are opaque; no naming migration is required. Create is for genuinely new documents only.
 
   **Finalize links `spike-visual` from no task** through `spikes` unless that task builds on
   the mock; the design document restates its report.

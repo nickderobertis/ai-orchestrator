@@ -18,8 +18,9 @@ defends for the plan-review gate beside this one:
 
 * **Only an approval is ever recorded.** There is no record of a rejection, so there is
   nothing to replay and nothing that could read as a decision nobody made.
-* **A record is authoritative.** Reading it is the whole check; nothing re-asks, because a
-  second opinion on identical content is how one plan comes to carry two verdicts.
+* **A record is authoritative for current evidence.** Before honoring it, both approval
+  and launch compare the selected visual report with the rendered design and its image
+  bytes. Nothing re-asks about identical content.
 * **There is no escape hatch** — no flag, no option, no environment variable. An escape
   here is reached under exactly the time pressure that makes skipping this a mistake.
 * **The key covers the bar as well as the content, and nothing else.** It is a digest of
@@ -915,22 +916,53 @@ def approve(project: str) -> Approved:
 
 
 def unshown(project: str, document: StoreDocument, documents: Sequence[StoreDocument]) -> None:
-    """Refuse a visual plan's design document that shows none of its visual changes.
+    """Refuse a design whose rendered visual entries or image bytes differ from current evidence.
 
-    A plan whose project holds its visual spike's report changes what a user sees, and
-    approval is the moment its before-and-after pictures are for; a document that lost them
-    is one a person would approve without seeing what it changes. Every other plan passes.
+    Read the selected report and the design themselves, including copies with no stored
+    answers. Nonvisual plans pass; invalid explicit selections refuse through the shared
+    resolver before any approval can be honored.
     """
-    report = spike_plan.visual_report(documents)
-    if report is None or VISUAL_HEADING.search(document.content):
+    report = spike_plan.current_visual_report(project, documents)
+    if report is None:
+        return
+    expected = visual_evidence(report)
+    if expected and visual_evidence(document) == expected:
         return
     raise OSError(
-        f"{project} holds its visual spike's report {report.qualified_id}, and its design "
-        f"document {document.qualified_id} renders no `## Visual changes` section, so a "
-        f"person would approve it without seeing what the plan changes; regenerate the "
-        f"document with its `visual_changes` answer restating that report's, each image "
-        f"given with `--asset`, then record the approval again"
+        f"{project}'s design document {document.qualified_id} does not show the current "
+        f"visual evidence of {report.qualified_id}; regenerate its `## Visual changes` "
+        f"section with the selected report's complete entries and image bytes, then "
+        f"record the approval again"
     )
+
+
+def visual_evidence(document: StoreDocument) -> str:
+    """Rendered visual content with image addresses normalized to names and byte digests.
+
+    Both templates render the same visual section. Copy URLs are store addresses rather
+    than content: the existing asset records recover their names and digests.
+    """
+    heading = VISUAL_HEADING.search(document.content)
+    if heading is None:
+        return ""
+    section = document.content[heading.end() :].split("\n## ", 1)[0].strip()
+    digests = asset_digests(document)
+    assets = document.metadata.get(plan_store.ASSETS_KEY)
+    urls = {
+        entry["url"]: name
+        for name, entry in (assets.items() if isinstance(assets, dict) else [])
+        if isinstance(entry, dict) and isinstance(entry.get("url"), str)
+    }
+
+    def image_identity(match: re.Match[str]) -> str:
+        target = match.group(1)
+        name = (
+            target.removeprefix(ASSET_PREFIX) if target.startswith(ASSET_PREFIX) else urls[target]
+        )
+        return match.group(0).replace(target, f"{name}:{digests[name]}")
+
+    section = ASSET_IMAGE.sub(image_identity, section)
+    return section
 
 
 def planned_rows(content: str) -> list[PlannedRow]:
@@ -1015,7 +1047,8 @@ def assess(project: str) -> Assessment:
     stamped = stamped_launch(project)
     note: str | None = None
     try:
-        documents = design_documents(project, plan_store.read_documents(project))
+        all_documents = plan_store.read_documents(project)
+        documents = design_documents(project, all_documents)
         if stamped is not None:
             held = frozenset(task.node_id for task in plan_store.read_tasks(project))
             beyond = tuple(sorted(held - stamped.nodes))
@@ -1024,6 +1057,7 @@ def assess(project: str) -> Assessment:
                 return Assessment(exemption=exemption(project, stamped.nodes, stamped.kind))
             note = lapsed(project, beyond, unheld, documents, stamped.kind)
         document = one_document(project, documents)
+        unshown(project, document, all_documents)
         repository = design_chain.plan_repository(project)
         key = approval_key(document, resolved_digest(TEMPLATE_ROOT, repository), repository)
     except OSError as exc:

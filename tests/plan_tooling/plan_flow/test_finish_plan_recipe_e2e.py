@@ -808,9 +808,10 @@ WRITER_OBLIGATIONS = (
     "--json` resolves state",
     # Stored through the pinned resolve piped into the store, as that plan's document.
     "`onepipeline template resolve design-doc --json` piped into `onetaskgraph document "
-    "create --id ",
-    "--template-loader - --no-interactive` wrote it, which replaces a document the store "
-    "already holds by that id whole",
+    "render <held-qualified-id>",
+    "updates an existing document, preserving its identity; document create is for a "
+    "genuinely new document only",
+    "Supply only changed images with --asset on render; existing referenced assets persist",
     # Every row's four derived columns, and the units, are the ones the task quotes.
     "answer has exactly the rows this task quotes, in that order, each with the `task`, "
     "`unit`, `depends_on` and `location` quoted for it",
@@ -1839,7 +1840,7 @@ def test_a_plan_with_no_visual_spike_has_its_writer_answer_no_visual_change(
     """No report to quote, so the task quotes none, and holds the answer to `[]`."""
     content = finished.design_task["content"]
     assert "visual spike" not in content, content
-    assert "--asset" not in content, content
+    assert "Answer `visual_changes` with exactly its entries" not in content, content
     criteria = content.split("## Acceptance criteria", 1)[1].split("\n## ", 1)[0]
     assert "The document\u2019s `visual_changes` answer is `[]`." in criteria, criteria
     assert criteria.count("visual_changes") == 1, criteria

@@ -52,7 +52,7 @@ variables:
     required: true
   visual_changes:
     description: >-
-      One object per visual change the plan expects, for the reserved `spike-visual` spike,
+      One object per visual change the plan expects, for an initial or revision visual spike,
       with four string keys: `name` (the change's short heading), `description` (what is
       changing, in plain words), `before` and `after` (each the bare file name of an image
       asset of this report, as its content references it with `./<name>`). `[]` for every
@@ -75,7 +75,7 @@ variables:
   than a table with a header and no rows. Its dependencies are not recorded here: they are
   the spikes project's own edges, and a report copying them would be a second graph.
 
-  A VISUAL SPIKE. The reserved `spike-visual` answers `visual_changes`, one entry per
+  A VISUAL SPIKE. The initial `spike-visual` or a revision visual spike answers `visual_changes`, one entry per
   expected change, and gives each image named there to the store with `--asset`; it answers
   `candidates: []` unless it also measured something. Every other spike leaves the answer
   out, and its report renders no `## Visual changes` section.

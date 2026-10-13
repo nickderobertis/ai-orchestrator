@@ -106,7 +106,7 @@ variables:
   visual_changes:
     description: >-
       One object per visual change the plan expects, in the order the plan's
-      `spike-visual-report` lists them, with four string keys: `name` (the change's short
+      current report (resolved by `orchestrator/spike_plan.py`) lists them, with four string keys: `name` (the change's short
       heading), `description` (what is changing, in plain words), `before` and `after` (each
       the bare file name of an image asset of this document, as its content references it
       with `./<name>`). `[]` for a plan with no visual change.
@@ -195,7 +195,8 @@ variables:
   The images are illustrative captures from a throwaway, mocked spike, not a preview of the
   finished work, which may differ where production concerns require.
 
-  The `visual_changes` answer restates the plan's `spike-visual-report`, answer for answer,
+  The `visual_changes` answer restates the plan's current visual report, resolved by
+  `orchestrator/spike_plan.py`, answer for answer,
   and each image it names is an asset of this document; the writer invents none. A plan
   with no visual change answers `[]` and this document has no Visual changes section.
 #}

@@ -35,11 +35,13 @@ plan's main run succeeds:
   each spike it builds on and every spike above it in that spike's stacking chain, never a
   dependency edge on a spike.
 * a plan is **visual** — it changes what a user sees — exactly when its spikes project holds
-  the reserved node :data:`VISUAL_SPIKE`, one per plan, whose report :data:`VISUAL_REPORT`
+  the initial node :data:`VISUAL_SPIKE`, whose canonical report :data:`VISUAL_REPORT`
   answers ``visual_changes`` with each expected change's before-and-after screenshots as
   assets of the report; the design document restates that answer, `scripts/finish-plan.sh`
   quotes it to the document's writer, and :mod:`orchestrator.design_approval` refuses to
-  approve a document of a visual plan that shows none of it. It is otherwise an ordinary
+  approve a document that differs from its current evidence, selected through
+  :func:`current_visual_report`. A revision may select a separately named complete report
+  or update the existing report in place. It is otherwise an ordinary
   spike.
 
 That section is what the check reads, rather than the store's stored answers: a store keeps
@@ -60,6 +62,7 @@ from typing import NamedTuple, NewType
 
 from orchestrator import design_approval, plan_store
 from orchestrator.plan_store import NodeId
+from orchestrator.project_store import qualified_id
 
 #: A spike's preserved branch, as `onevcs` names it with the host's prefix in front, and the
 #: id of a spike's report document, as the plan's project holds it.
@@ -341,6 +344,56 @@ def visual_report(
     )
 
 
+#: Optional project selection; absence retains the canonical report convention.
+VISUAL_REPORT_KEY = "orchestrator.visual-report"
+
+
+def current_visual_report(
+    project: str, documents: Sequence[plan_store.StoreDocument]
+) -> plan_store.StoreDocument | None:
+    """Resolve current evidence by full id or copy origin, refusing explicit bad selections.
+
+    Selections are opaque qualified document names, scoped to this project's documents.
+    Null, non-string, blank, malformed, missing, wrong-kind, wrong-project and ambiguous
+    selections fail closed; only an absent key delegates to :func:`visual_report`.
+    """
+    metadata = plan_store.project_record(project).get("metadata")
+    if not isinstance(metadata, Mapping) or VISUAL_REPORT_KEY not in metadata:
+        return visual_report(documents)
+    selected = metadata[VISUAL_REPORT_KEY]
+    reason: str | None
+    match selected:
+        case None:
+            reason = "null"
+        case str() if not selected.strip():
+            reason = "blank"
+        case str() if qualified_id(selected) is None:
+            reason = "malformed"
+        case str():
+            reason = None
+        case _:
+            reason = "non-string"
+    if reason:
+        raise OSError(f"{project}: {VISUAL_REPORT_KEY} {reason} selection {selected!r}")
+    matches = [
+        held
+        for held in documents
+        if selected in (str(held.qualified_id), held.metadata.get(plan_store.ORIGIN_KEY))
+    ]
+    match matches:
+        case []:
+            reason = "missing or wrong-project"
+        case [held] if held.project not in (project, project.partition(":")[2]):
+            reason = "wrong-project"
+        case [held] if not design_approval.is_spike_report(held):
+            reason = "wrong-kind"
+        case [held]:
+            return held
+        case _:
+            reason = "ambiguous"
+    raise OSError(f"{project}: {VISUAL_REPORT_KEY} {reason} selection {selected!r}")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Print the qualified id of a plan project's visual report, or nothing when it has none.
 
@@ -355,7 +408,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("project", metavar="SOURCE:PROJECT")
     args = parser.parse_args(argv)
     try:
-        held = visual_report(plan_store.read_documents(args.project))
+        held = current_visual_report(args.project, plan_store.read_documents(args.project))
     except OSError as exc:
         print(
             f"spike_plan: the documents of {args.project} could not be read: {exc}", file=sys.stderr

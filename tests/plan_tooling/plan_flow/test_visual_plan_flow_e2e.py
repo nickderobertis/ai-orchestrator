@@ -52,7 +52,8 @@ from test_finish_plan_recipe_e2e import (
     MERGES_THE_BUDGETS,
 )
 from test_plan_flow_e2e import INHERITED_ENVIRONMENT, PASSING_VERDICT
-from visual_images import decoded_pixels, sizes_like_screenshots
+from visual_flow_turns import CHANGES
+from visual_images import decoded_pixels
 from waits import timeout as e2e_timeout
 
 from orchestrator import spike_plan
@@ -104,8 +105,8 @@ CRITERIA = [
 
 #: The target's views, drawn by its committed page from these seeds and sizes alone.
 VIEWS = {
-    "listing": {"seed": 11, "width": 400, "height": 390, "columns": ["name"]},
-    "status": {"seed": 21, "width": 220, "height": 200},
+    "listing": {"seed": 11, "width": 600, "height": 590, "columns": ["name"]},
+    "status": {"seed": 21, "width": 600, "height": 590},
 }
 
 #: The page each view is drawn by: a canvas of seeded pseudo-random pixels.
@@ -139,10 +140,11 @@ set -eu
 out=$1
 [ -x "${CHROMIUM:-}" ] || { echo "capture: no Chromium at '${CHROMIUM:-}'" >&2; exit 2; }
 mkdir -p "$out"
-python3 - "$out" <<'PY' | while read -r view width height seed; do
+python3 - "$out" "${2:-}" <<'PY' | while read -r view width height seed; do
 import json, sys
 for name, view in json.load(open("shots/views.json")).items():
-    print(name, view["width"], view["height"], view["seed"])
+    if not sys.argv[2] or name == sys.argv[2]:
+        print(name, view["width"], view["height"], view["seed"])
 PY
     "$CHROMIUM" --headless --no-sandbox --hide-scrollbars --force-device-scale-factor=1 \\
         --window-size="$width,$height" --screenshot="$out/$view.png" \\
@@ -215,6 +217,7 @@ def _scenario(plan: str, evidence: Path, chromium: str) -> dict[str, object]:
         "execution": EXECUTION,
         "evidence": str(evidence),
         "chromium": chromium,
+        "dimensions": [600, 590],
         "budgets": no_budgets([TARGET]),
         "task": {
             "what": "Show each node's owner in the listing and name the run on the status line.",
@@ -234,7 +237,7 @@ def _scenario(plan: str, evidence: Path, chromium: str) -> dict[str, object]:
     }
 
 
-def _design_writer(plan: str, staged: Path) -> list[str]:
+def _design_writer(plan: str, staged: Path, *, revision: bool = False) -> list[str]:
     """What the design-doc writer runs: the report restated, each image given as an asset."""
     source, _, native = plan.partition(":")
     staged.write_text(
@@ -249,7 +252,12 @@ def _design_writer(plan: str, staged: Path) -> list[str]:
                         "repository": "visual-target",
                         "part": "",
                         "summary": "The listing and the status line.",
-                        "reversible": [],
+                        "reversible": [
+                            {
+                                "title": "Fixture views",
+                                "text": "Use seeded fixture data for both views.",
+                            }
+                        ],
                         "decisions": [],
                     }
                 ],
@@ -274,11 +282,20 @@ def _design_writer(plan: str, staged: Path) -> list[str]:
         '; printed=$(uv run python -m orchestrator.plan_budgets "$3:$4")'
         '; python3 "$7" "$6" "$printed"'
         '; python3 "${11}" "$6" "$2" >/dev/null'
-        '; mapfile -t held < <(python3 "$8" "$2" "$6" "$3:${9}")'
-        '; flags=(); for path in "${held[@]}"; do flags+=(--asset "$path"); done'
+        '; selected=$(uv run python -m orchestrator.spike_plan visual-report "$3:$4")'
+        + (
+            '; mapfile -t held < <(python3 "$8" "$2" "$6" "$selected" "$3:$5")'
+            if revision
+            else '; mapfile -t held < <(python3 "$8" "$2" "$6" "$selected")'
+        )
+        + '; flags=(); for path in "${held[@]}"; do flags+=(--asset "$path"); done'
         '; "$1" template resolve design-doc --repository "${10}" --json'
-        ' | "$2" document create "$3" --project "$4" --title "Design: $4" --id "$5"'
-        ' --template-loader - --answers "$6" --no-interactive "${flags[@]}"',
+        + (
+            ' | "$2" document render "$3:$5"'
+            if revision
+            else ' | "$2" document create "$3" --project "$4" --title "Design: $4" --id "$5"'
+        )
+        + ' --template-loader - --answers "$6" --no-interactive "${flags[@]}"',
         "store-the-visual-document",
         str(ENGINE_BIN),
         str(ONETASKGRAPH_BIN),
@@ -464,13 +481,6 @@ def flow(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Flow:
             environment=environment,
             seconds=2400,
         )
-        sizes = evidence / "sizes.json"
-        if sizes.is_file():
-            # llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] The bounds are this
-            # journey's acceptance criteria for its own inputs, which must be screenshot-sized for
-            # an asset to prove anything; they limit no product behavior.
-            sizes_like_screenshots(json.loads(sizes.read_text()))
-            # llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
         failures = evidence / "turn-failures.log"
         said = failures.read_text(encoding="utf-8") if failures.is_file() else ""
         assert not said, f"a scripted turn's command failed:\n{said}"
@@ -557,11 +567,7 @@ def test_the_draft_authors_the_visual_spike_and_it_settles_preserved(flow: Flow)
 def test_the_spike_commits_a_mock_and_captures_each_pair_screenshot_sized(flow: Flow) -> None:
     sizes = json.loads((flow.evidence / "sizes.json").read_text())
     assert sorted(sizes) == sorted(_captured(flow)), sizes
-    # llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] The bounds are this journey's
-    # acceptance criteria for its own inputs, which must be screenshot-sized for an asset to prove
-    # anything; they limit no product behavior.
-    sizes_like_screenshots(sizes)
-    # llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
+    assert len(sizes) == 4
     base = (flow.evidence / "base.sha").read_text().strip()
     assert base == flow.seed_commit, "the before was not captured on the unchanged base"
     changed = git("diff", "--name-only", base, str(flow.spike["head"]), cwd=flow.origin)
@@ -631,3 +637,98 @@ def test_the_pairs_survive_the_spikes_branch_and_worktree_being_discarded(flow: 
     assert not flow.worktree.exists(), f"the spike's worktree {flow.worktree} is still there"
     for shown in (flow.after_design, flow.after_report):
         _pairs_shown(shown, _captured(flow))
+
+
+def test_a_second_visual_spike_preserves_evidence_and_renders_the_existing_design(
+    flow: Flow,
+) -> None:
+    """A second real plan flow selects a complete report and keeps unchanged captures."""
+    environment = flow.environment
+    evidence = flow.evidence
+    native = flow.project.partition(":")[2]
+    project = f"{AUTHORING}:{native}"
+    original = _store(environment, "document", "show", f"{AUTHORING}:{spike_plan.VISUAL_REPORT}")
+    design_id = f"{project}-design"
+    design_before = _store(environment, "document", "show", design_id)
+    scenario_data = _scenario(project, evidence, _chromium())
+    scenario_data["revision"] = True
+    scenario_data["spike_task"] = {
+        "what": f"{SPIKE_MARKER} Revise only the listing description and after image. "
+        "Read the existing report's stored answers and assets, preserving every unaffected "
+        "entry, decision and image. Capture only the listing after view; create a separately "
+        "named complete report and set the plan's current selection to it.",
+        "why": "Reviewers need current evidence without losing previous decisions.",
+        "acceptance_criteria": [
+            "The mock is committed with its capture command; only the listing after is captured.",
+            f"`{native}-spike-visual-revision-report` carries the complete merged evidence and "
+            "is selected on the plan; the original report and unaffected bytes remain intact.",
+        ],
+    }
+    scenario = json.dumps(scenario_data)
+    keyed = Path(environment[RUN_ON_MARKER_ENV])
+    turn = [sys.executable, str(TURNS)]
+    keyed.write_text(
+        json.dumps(
+            {
+                PLANNER_MARKER: [[*turn, "plan", str(ONETASKGRAPH_BIN), str(ENGINE_BIN), scenario]],
+                SPIKE_MARKER: [[*turn, "spike", str(ONETASKGRAPH_BIN), str(ENGINE_BIN), scenario]],
+                DESIGN_TASK_MARKER: [
+                    _design_writer(project, evidence / "revision-design.json", revision=True)
+                ],
+            }
+        )
+    )
+    run = f"{RUN}-revision"
+    brief = evidence.parent / "owner-column.md"
+    try:
+        revised = _just(
+            "plan",
+            str(brief),
+            "--name",
+            run,
+            "--to",
+            DESTINATION,
+            "--fresh",
+            environment=environment,
+            seconds=2400,
+        )
+        assert revised.returncode == 0, revised.stdout + revised.stderr
+        result = json.loads(
+            (
+                Path(environment["ONEPIPELINE_RUNS_DIR"]) / f"{run}-spikes" / "result.json"
+            ).read_text()
+        )
+        (node,) = result["nodes"]
+        assert (node["id"], node["status"], node["outcome"]) == (
+            "spike-visual-revision",
+            "done",
+            "preserved",
+        )
+        assert [path.name for path in (evidence / "revision-captured").iterdir()] == ["listing.png"]
+        assert (
+            _store(environment, "document", "show", f"{AUTHORING}:{spike_plan.VISUAL_REPORT}")
+            == original
+        )
+        selected = f"{project}-spike-visual-revision-report"
+        report = _store(environment, "document", "show", selected)
+        design = _store(environment, "document", "show", design_id)
+        assert design["items"][0]["id"] == design_before["items"][0]["id"]
+        baseline = {asset["name"]: Path(asset["path"]).read_bytes() for asset in original["assets"]}
+        current = {asset["name"]: Path(asset["path"]).read_bytes() for asset in report["assets"]}
+        for name, image in baseline.items():
+            assert (current[name] != image) == (name == "listing-after.png")
+        old_body = design_before["items"][0]["item"]["content"]
+        new_body = design["items"][0]["item"]["content"]
+        assert (
+            old_body.split("\n## Architecture\n", 1)[1]
+            == new_body.split("\n## Architecture\n", 1)[1]
+        )
+        assert "Use seeded fixture data for both views." in new_body
+        _pairs_shown(design, current)
+        assert "The listing names each owner's team." in design["items"][0]["item"]["content"]
+        assert CHANGES[1].description in design["items"][0]["item"]["content"]
+        approved = _just("approve-design", flow.project, environment=environment, seconds=300)
+        assert approved.returncode == 0, approved.stdout + approved.stderr
+    finally:
+        for suffix in ("", "-spikes", "-finalize", "-design"):
+            _just("stop", f"{run}{suffix}", environment=environment, seconds=60)

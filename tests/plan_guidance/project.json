@@ -39,6 +39,7 @@
       "{workspaceRoot}/examples/**/*",
       "{workspaceRoot}/personas/follow-up.yaml",
       "{workspaceRoot}/personas/planner.yaml",
+      "{workspaceRoot}/personas/design-doc.yaml",
       "{workspaceRoot}/config/**/*",
       "{workspaceRoot}/scripts/**/*",
       "{workspaceRoot}/templates/**/*",

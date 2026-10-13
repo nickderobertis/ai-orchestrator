@@ -26,18 +26,20 @@ import json
 import os
 import shutil
 import subprocess
+import urllib.request
 from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
+from github_board import _serving_board
 from project_fixtures import ONEVCS_HOME, helper, register_stand_in, reviewed
 from published_tools import ONETASKGRAPH_BIN
 from visual_images import LARGE, TYPICAL, sized_like_screenshots, write_noise_png
 from waits import timeout as e2e_timeout
 
-from orchestrator import design_chain, spike_plan
+from orchestrator import design_chain, plan_store, spike_plan
 from orchestrator.design_approval import (
     PLAN_KIND,
     PLANNING,
@@ -2007,9 +2009,9 @@ def test_a_visual_plans_document_is_approved_only_once_it_shows_the_reported_cha
 
     refused = _just("approve-design", project, runs=runs)
     assert refused.returncode == 1, refused.stdout + refused.stderr
-    assert f"holds its visual spike's report {report}" in refused.stderr, refused.stderr
-    assert "renders no `## Visual changes` section" in refused.stderr, refused.stderr
-    assert "regenerate the document with its `visual_changes` answer" in refused.stderr
+    assert f"current visual evidence of {report}" in refused.stderr, refused.stderr
+    assert "does not show" in refused.stderr, refused.stderr
+    assert "selected report's complete entries and image bytes" in refused.stderr
     assert all(RECORD_KEY not in one["item"]["metadata"] for one in store.listed())
 
     answers = tmp_path / "design.answers.json"
@@ -2031,9 +2033,219 @@ def test_a_visual_plans_document_is_approved_only_once_it_shows_the_reported_cha
     assert approved.returncode == 0, approved.stdout + approved.stderr
     assert "recorded the approval" in approved.stdout, approved.stdout
 
+    # A text-only revision retains every screenshot and the held report's address.
+    in_place = [dict(change) for change in VISUAL_CHANGES]
+    in_place[0]["description"] = "The listing explains the owner's team without changing its view."
+    report_data = json.loads(report_answers.read_text())
+    report_answers.write_text(json.dumps({**report_data, "visual_changes": in_place}))
+    store._piped(
+        "document", "render", report, "--answers", str(report_answers), template="spike-report"
+    )
+    text_stale = _just("approve-design", project, runs=runs)
+    assert text_stale.returncode == 1, text_stale.stdout + text_stale.stderr
+    assert "current visual evidence" in text_stale.stderr
+    text_stale_launch = _launch(project, runs)
+    assert text_stale_launch.returncode == 1, text_stale_launch.stdout + text_stale_launch.stderr
+    assert "current visual evidence" in text_stale_launch.stderr
+    answers.write_text(json.dumps({**DESIGN, "visual_changes": in_place}))
+    store._piped(
+        "document",
+        "render",
+        f"{SOURCE}:{native}-design",
+        "--answers",
+        str(answers),
+        resolving=design_chain.resolve_arguments(None),
+    )
+    text_current = _just("approve-design", project, runs=runs)
+    assert text_current.returncode == 0, text_current.stdout + text_current.stderr
+
+    # Restore the baseline through render before selecting a separately named revision.
+    report_answers.write_text(json.dumps(report_data))
+    store._piped(
+        "document", "render", report, "--answers", str(report_answers), template="spike-report"
+    )
+    answers.write_text(json.dumps({**DESIGN, "visual_changes": VISUAL_CHANGES}))
+    store._piped(
+        "document",
+        "render",
+        f"{SOURCE}:{native}-design",
+        "--answers",
+        str(answers),
+        resolving=design_chain.resolve_arguments(None),
+    )
+    baseline = _just("approve-design", project, runs=runs)
+    assert baseline.returncode == 0, baseline.stdout + baseline.stderr
+
+    original = store._stored("document", "show", report)
+    revised = [dict(change) for change in VISUAL_CHANGES]
+    revised[0]["description"] = "The listing now names each owner's team."
+    replacement = images / revised[0]["after"]
+    current_bytes = write_noise_png(replacement, 91, TYPICAL)
+    report_data = json.loads(report_answers.read_text())
+    report_data["visual_changes"] = revised
+    report_answers.write_text(json.dumps(report_data))
+    revised_id = f"{native}-spike-visual-revision-report"
+    store._piped(
+        "document",
+        "create",
+        SOURCE,
+        "--project",
+        native,
+        "--title",
+        "Revised visual spike",
+        "--id",
+        revised_id,
+        "--answers",
+        str(report_answers),
+        *assets,
+        template="spike-report",
+    )
+    selected = f"{SOURCE}:{revised_id}"
+    store._stored(
+        "project", "metadata", "set", project, spike_plan.VISUAL_REPORT_KEY, json.dumps(selected)
+    )
+    stale = _just("approve-design", project, runs=runs)
+    assert stale.returncode == 1, stale.stdout + stale.stderr
+    assert "current visual evidence" in stale.stderr
+    stale_launch = _launch(project, runs)
+    assert stale_launch.returncode == 1, stale_launch.stdout + stale_launch.stderr
+    assert "current visual evidence" in stale_launch.stderr
+    assert store._stored("document", "show", report) == original
+    answers.write_text(json.dumps({**DESIGN, "visual_changes": revised}))
+    replacement.write_bytes(generated[revised[0]["after"]])
+    store._piped(
+        "document",
+        "render",
+        f"{SOURCE}:{native}-design",
+        "--answers",
+        str(answers),
+        "--asset",
+        str(replacement),
+        resolving=design_chain.resolve_arguments(None),
+    )
+    wrong_bytes = _just("approve-design", project, runs=runs)
+    assert wrong_bytes.returncode == 1, wrong_bytes.stdout + wrong_bytes.stderr
+    replacement.write_bytes(current_bytes)
+    store._piped(
+        "document",
+        "render",
+        f"{SOURCE}:{native}-design",
+        "--answers",
+        str(answers),
+        "--asset",
+        str(replacement),
+        resolving=design_chain.resolve_arguments(None),
+    )
+    current = _just("approve-design", project, runs=runs)
+    assert current.returncode == 0, current.stdout + current.stderr
+    generated[revised[0]["after"]] = current_bytes
+    store._piped(
+        "document",
+        "create",
+        SOURCE,
+        "--project",
+        "another-plan",
+        "--title",
+        "Other visual report",
+        "--id",
+        "other-report",
+        "--answers",
+        str(report_answers),
+        *assets,
+        template="spike-report",
+    )
+    for invalid in (
+        None,
+        3,
+        "",
+        "native-only",
+        f"{SOURCE}:missing",
+        f"{SOURCE}:other-report",
+        f"{SOURCE}:{native}-design",
+    ):
+        before = store._stored("document", "show", f"{SOURCE}:{native}-design")
+        store._stored(
+            "project", "metadata", "set", project, spike_plan.VISUAL_REPORT_KEY, json.dumps(invalid)
+        )
+        refused_selection = _just("approve-design", project, runs=runs)
+        assert refused_selection.returncode == 1, (
+            refused_selection.stdout + refused_selection.stderr
+        )
+        assert spike_plan.VISUAL_REPORT_KEY in refused_selection.stderr
+        assert store._stored("document", "show", f"{SOURCE}:{native}-design") == before
+    store._stored(
+        "project", "metadata", "set", project, spike_plan.VISUAL_REPORT_KEY, json.dumps(selected)
+    )
+
+    (duplicate,) = store._stored("document", "copy", selected, "--to", SOURCE)["items"]
+    assert duplicate["destination"] != selected, duplicate
+    duplicated = store._stored("document", "show", str(duplicate["destination"]))
+    duplicate_path = Path(duplicated["items"][0]["item"]["location"]["path"])
+    try:
+        ambiguous = _just("approve-design", project, runs=runs)
+        assert ambiguous.returncode == 1, ambiguous.stdout + ambiguous.stderr
+        assert "ambiguous selection" in ambiguous.stderr
+    finally:
+        duplicate_path.unlink()
+
+    empty_answers = tmp_path / "empty-report.answers.json"
+    empty_answers.write_text(json.dumps({**report_data, "visual_changes": []}))
+    store._piped(
+        "document",
+        "create",
+        SOURCE,
+        "--project",
+        native,
+        "--title",
+        "Empty visual spike",
+        "--id",
+        "empty-visual-report",
+        "--answers",
+        str(empty_answers),
+        template="spike-report",
+    )
+    store._stored(
+        "project",
+        "metadata",
+        "set",
+        project,
+        spike_plan.VISUAL_REPORT_KEY,
+        json.dumps(f"{SOURCE}:empty-visual-report"),
+    )
+    empty = _just("approve-design", project, runs=runs)
+    assert empty.returncode == 1, empty.stdout + empty.stderr
+    assert "current visual evidence" in empty.stderr
+    store._stored(
+        "project", "metadata", "set", project, spike_plan.VISUAL_REPORT_KEY, json.dumps(selected)
+    )
+
+    collision = tmp_path / "collision.md"
+    collision.write_text("A different project's notes.\n")
+    board._stored(
+        "document",
+        "create",
+        BOARD,
+        "--project",
+        "other",
+        "--title",
+        "Notes",
+        "--id",
+        revised_id,
+        "--body-file",
+        str(collision),
+    )
     copied = _just("copy-plan", project, "--to", BOARD, runs=runs)
     assert copied.returncode == 0, copied.stdout + copied.stderr
     landed = f"{BOARD}:{native}"
+    copied_reports = board._stored("document", "list", "--source", BOARD, "--project", native)[
+        "items"
+    ]
+    (copied_selected,) = [
+        one
+        for one in copied_reports
+        if one["item"]["metadata"].get("onetaskgraph.origin") == selected
+    ]
+    assert copied_selected["id"] != f"{BOARD}:{revised_id}"
     on_board = _just("approve-design", landed, runs=runs)
     assert on_board.returncode == 0, on_board.stdout + on_board.stderr
     assert "already carries an approval" in on_board.stdout, on_board.stdout
@@ -2058,13 +2270,91 @@ def test_a_visual_plans_document_is_approved_only_once_it_shows_the_reported_cha
     on_disk[VISUAL_CHANGES[0]["after"]].write_bytes(generated[VISUAL_CHANGES[1]["after"]])
     swapped = _launch(landed, runs)
     assert swapped.returncode == 1, swapped.stdout + swapped.stderr
-    assert "carries no approval for what it currently says" in swapped.stderr, swapped.stderr
+    assert "current visual evidence" in swapped.stderr, swapped.stderr
     reapproved = _just("approve-design", landed, runs=runs)
-    assert reapproved.returncode == 0, reapproved.stdout + reapproved.stderr
-    assert "recorded the approval" in reapproved.stdout, reapproved.stdout
+    assert reapproved.returncode == 1, reapproved.stdout + reapproved.stderr
+    store._piped(
+        "document",
+        "render",
+        str(shown["items"][0]["id"]),
+        "--answers",
+        str(answers),
+        "--asset",
+        str(replacement),
+        resolving=design_chain.resolve_arguments(None),
+    )
     relaunched = _launch(landed, runs)
     assert relaunched.returncode == 0, relaunched.stdout + relaunched.stderr
     # llmlint: ignore-end[shell_test_tiers_stay_split]
+
+    # tests/github_board.py simulates only the third-party hosted API. The pinned store
+    # uploads/copies real PNGs, and the real approve-design recipe and engine read its records.
+    # llmlint: ignore[e2e_not_mocked] Only GitHub API mocked; store/upload/copy/recipe/engine real.
+    with _serving_board() as remote, pytest.MonkeyPatch.context() as hosted:
+        for name, value in remote.items():
+            hosted.setenv(name, value)
+        uploaded = _just("copy-plan", project, "--to", "plans", runs=runs)
+        assert uploaded.returncode == 0, uploaded.stdout + uploaded.stderr
+        projects = store._stored("project", "list", "--source", "plans")["items"]
+        (remote_plan,) = [
+            one for one in projects if one["item"]["metadata"].get(plan_store.ORIGIN_KEY) == project
+        ]
+        remote_project = str(remote_plan["id"])
+        documents = store._stored(
+            "document", "list", "--source", "plans", "--project", remote_project.partition(":")[2]
+        )["items"]
+        (remote_design,) = [
+            one
+            for one in documents
+            if one["item"]["metadata"].get(PROVENANCE, {}).get("template") == DESIGN_REFERENCE
+        ]
+        (remote_report,) = [
+            one
+            for one in documents
+            if one["item"]["metadata"].get(plan_store.ORIGIN_KEY) == selected
+        ]
+        remote_design_id = str(remote_design["id"])
+        assert remote_design_id != f"plans:{native}-design"
+        assert remote_report["id"] != f"plans:{revised_id}"
+        design_images = remote_design["item"]["metadata"][plan_store.ASSETS_KEY]
+        report_images = remote_report["item"]["metadata"][plan_store.ASSETS_KEY]
+        assert set(design_images) == set(generated)
+        for name, image in generated.items():
+            assert design_images[name]["url"] != report_images[name]["url"]
+            for uploaded_image in (design_images[name], report_images[name]):
+                with urllib.request.urlopen(
+                    uploaded_image["url"], timeout=e2e_timeout(60)
+                ) as served:
+                    assert served.read() == image, name
+        remote_approval = _just("approve-design", remote_project, runs=runs)
+        assert remote_approval.returncode == 0, remote_approval.stdout + remote_approval.stderr
+        replacement.write_bytes(generated[revised[1]["after"]])
+        store._piped(
+            "document",
+            "render",
+            remote_design_id,
+            "--answers",
+            str(answers),
+            "--asset",
+            str(replacement),
+            resolving=design_chain.resolve_arguments(None),
+        )
+        outdated_image = _just("approve-design", remote_project, runs=runs)
+        assert outdated_image.returncode == 1, outdated_image.stdout + outdated_image.stderr
+        assert "current visual evidence" in outdated_image.stderr
+        replacement.write_bytes(current_bytes)
+        store._piped(
+            "document",
+            "render",
+            remote_design_id,
+            "--answers",
+            str(answers),
+            "--asset",
+            str(replacement),
+            resolving=design_chain.resolve_arguments(None),
+        )
+        repaired = _just("approve-design", remote_project, runs=runs)
+        assert repaired.returncode == 0, repaired.stdout + repaired.stderr
 
     plain = store.plan("approve-design-plain")
     store.document("approve-design-plain")

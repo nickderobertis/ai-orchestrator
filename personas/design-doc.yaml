@@ -54,6 +54,13 @@ system_prompt: |
   about the document, they win. Never edit the rendered body: change an answer and
   regenerate it.
 
+  Preserve the existing design document identity: use published `document render` with
+  complete merged answers to update it, and `document create` only for a new document.
+  Supply only changed images to render; existing referenced assets persist. Preserve
+  unaffected descriptions and decisions in their existing order when revising answers.
+  The current report selection is resolved by `orchestrator/spike_plan.py`; your task
+  quotes that selected report's complete evidence, including preserved entries and assets.
+
   The budget answers and `visual_changes` are the parts you do not compose. Your task names
   the command, `python -m orchestrator.plan_budgets <plan>`, whose output the budget answers
   are, and you copy its three values as they are — the plan's own answers and every budget

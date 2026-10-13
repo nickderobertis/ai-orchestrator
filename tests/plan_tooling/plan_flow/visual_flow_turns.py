@@ -33,7 +33,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from visual_images import sized_like_screenshots
+from visual_images import decoded_pixels
 
 from orchestrator import spike_plan
 
@@ -114,6 +114,39 @@ def plan(store: str, engine: str, scenario: dict[str, object]) -> None:
         _run([store, "task", "list", "--source", source, "--project", native, "--json"])
     )
     if listed["items"]:
+        if scenario.get("revision"):
+            old = json.loads(
+                _run([store, "task", "list", "--source", source, "--project", spikes, "--json"])
+            )["items"][0]
+            node = old["item"]["metadata"].get("onepipeline.id")
+            if node != "spike-visual-revision":
+                task = str(old["id"])
+                _run(
+                    [
+                        store,
+                        "task",
+                        "metadata",
+                        "set",
+                        task,
+                        "onepipeline.id",
+                        json.dumps("spike-visual-revision"),
+                    ]
+                )
+                _run(
+                    [
+                        store,
+                        "task",
+                        "render",
+                        task,
+                        "--template-loader",
+                        "-",
+                        "--answers",
+                        _answers(scenario["spike_task"]),
+                        "--no-interactive",
+                    ],
+                    stdin=_run([engine, "template", "resolve", "plan-task", "--json"]),
+                )
+                _run([store, "task", "status", "set", task, "todo"])
         return
     for held, goal in ((native, "Show who owns each node"), (spikes, "Picture it first")):
         _run(
@@ -169,11 +202,11 @@ def plan(store: str, engine: str, scenario: dict[str, object]) -> None:
     )
 
 
-def _capture(tree: Path, out: Path, chromium: str) -> None:
+def _capture(tree: Path, out: Path, chromium: str, view: str = "") -> None:
     """Run the target's committed capture command from ``tree`` into ``out``."""
     out.mkdir(parents=True, exist_ok=True)
     done = subprocess.run(
-        ["sh", "shots/capture.sh", str(out)],
+        ["sh", "shots/capture.sh", str(out), view],
         cwd=tree,
         env={**os.environ, "CHROMIUM": chromium},
         text=True,
@@ -218,11 +251,8 @@ def spike(store: str, engine: str, scenario: dict[str, object]) -> None:
             images[change.image(side)] = captured / side / f"{change.view}.png"
     sizes = {name: path.stat().st_size for name, path in images.items()}
     (evidence / "sizes.json").write_text(json.dumps(sizes))
-    # llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] The bounds are this journey's
-    # acceptance criteria for its own inputs, which must be screenshot-sized for an asset to prove
-    # anything; they limit no product behavior.
-    sized_like_screenshots({name: path.read_bytes() for name, path in images.items()})
-    # llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
+    for path in images.values():
+        assert list(decoded_pixels(path.read_bytes())[:2]) == scenario["dimensions"]
     kept = evidence / "captured"
     kept.mkdir(exist_ok=True)
     for name, path in images.items():
@@ -258,13 +288,74 @@ def spike(store: str, engine: str, scenario: dict[str, object]) -> None:
     )
 
 
+def revision(store: str, engine: str, scenario: dict[str, object]) -> None:
+    """Change one view, preserving the baseline report's other answers and asset bytes."""
+    source, _, native = str(scenario["plan"]).partition(":")
+    baseline = f"{source}:{spike_plan.VISUAL_REPORT}"
+    report = json.loads(_run([store, "document", "answers", baseline, "--json"]))
+    shown = json.loads(_run([store, "document", "show", baseline, "--json"]))
+    images = {asset["name"]: Path(asset["path"]) for asset in shown["assets"]}
+    worktree = Path.cwd()
+    views_path = worktree / "shots" / "views.json"
+    views = json.loads(views_path.read_text())
+    views["listing"]["seed"] += 2000
+    views["listing"]["columns"] = ["name", "owner", "team"]
+    views_path.write_text(json.dumps(views, indent=2) + "\n")
+    _run(["git", "add", "-A"])
+    _run(["git", *COMMITTER, "commit", "-qm", "feat: mock the owner's team"])
+    evidence = Path(str(scenario["evidence"]))
+    captured = evidence / "revision-captured"
+    _capture(worktree, captured, str(scenario["chromium"]), "listing")
+    changed = evidence / "listing-after.png"
+    shutil.copyfile(captured / "listing.png", changed)
+    images["listing-after.png"] = changed
+    report["visual_changes"][0]["description"] = "The listing names each owner's team."
+    report["spike"] = "spike-visual-revision"
+    report["branch"] = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"]).strip()
+    selected = f"{native}-spike-visual-revision-report"
+    _run(
+        [
+            store,
+            "document",
+            "create",
+            source,
+            "--project",
+            native,
+            "--title",
+            "Revised visual evidence",
+            "--id",
+            selected,
+            "--answers",
+            _answers(report),
+            "--template-loader",
+            "-",
+            "--no-interactive",
+        ]
+        + [flag for path in images.values() for flag in ("--asset", str(path))],
+        stdin=_run([engine, "template", "resolve", "spike-report", "--json"]),
+    )
+    _run(
+        [
+            store,
+            "project",
+            "metadata",
+            "set",
+            str(scenario["plan"]),
+            spike_plan.VISUAL_REPORT_KEY,
+            json.dumps(f"{source}:{selected}"),
+        ]
+    )
+
+
 def main(argv: list[str]) -> int:
     global _failures
     turn, store, engine, scenario = argv[0], argv[1], argv[2], json.loads(argv[3])
     evidence = Path(str(scenario["evidence"]))
     evidence.mkdir(parents=True, exist_ok=True)
     _failures = evidence / FAILURES
-    {"plan": plan, "spike": spike}[turn](store, engine, scenario)
+    {"plan": plan, "spike": revision if scenario.get("revision") else spike}[turn](
+        store, engine, scenario
+    )
     return 0
 
 

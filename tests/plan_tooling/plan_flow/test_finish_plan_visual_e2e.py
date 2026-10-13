@@ -124,9 +124,10 @@ def _report(
     images: dict[str, bytes],
     *,
     changes: list[dict[str, str]] = CHANGES,
+    report_id: str = spike_plan.VISUAL_REPORT,
 ) -> str:
     """Store the visual spike's report in the plan's project, each image an asset of it."""
-    directory = bench.tmp_path / f"report-{drafted.project}"
+    directory = bench.tmp_path / f"report-{drafted.project}-{report_id}"
     directory.mkdir()
     for name, image in images.items():
         (directory / name).write_bytes(image)
@@ -137,7 +138,7 @@ def _report(
     created = _store(
         bench,
         *("document", "create", source, "--project", project, "--title", "Visual spike"),
-        *("--id", spike_plan.VISUAL_REPORT, "--answers", str(answers)),
+        *("--id", report_id, "--answers", str(answers)),
         *("--template-loader", "-", "--no-interactive"),
         *assets,
         stdin=_loader("spike-report"),
@@ -177,7 +178,9 @@ def _images(tmp_path: Path) -> dict[str, bytes]:
     return images
 
 
-def _writes_the_visual_document(bench: Bench, drafted: Drafted, report: str) -> None:
+def _writes_the_visual_document(
+    bench: Bench, drafted: Drafted, report: str, *, revision: bool = False
+) -> None:
     """Script the commands the design-doc writer runs for a visual plan.
 
     The answers are the model's; restating the report's `visual_changes` and giving each of
@@ -198,11 +201,20 @@ def _writes_the_visual_document(bench: Bench, drafted: Drafted, report: str) -> 
                         '; printed=$(uv run python -m orchestrator.plan_budgets "$3:$4")'
                         '; python3 "$9" "$7" "$printed"'
                         '; python3 "${12}" "$7" "$2" >/dev/null'
-                        '; mapfile -t held < <(python3 "${10}" "$2" "$7" "${11}")'
-                        '; flags=(); for path in "${held[@]}"; do flags+=(--asset "$path"); done'
+                        + (
+                            '; mapfile -t held < <(python3 "${10}" "$2" "$7" "${11}" "$3:$6")'
+                            if revision
+                            else '; mapfile -t held < <(python3 "${10}" "$2" "$7" "${11}")'
+                        )
+                        + '; flags=(); for path in "${held[@]}"; do flags+=(--asset "$path"); done'
                         '; "$1" template resolve design-doc --json'
-                        ' | "$2" document create "$3" --project "$4" --title "$5" --id "$6"'
-                        ' --template-loader - --answers "$7" --no-interactive "${flags[@]}"',
+                        + (
+                            ' | "$2" document render "$3:$6"'
+                            if revision
+                            else ' | "$2" document create "$3" --project "$4"'
+                            ' --title "$5" --id "$6"'
+                        )
+                        + ' --template-loader - --answers "$7" --no-interactive "${flags[@]}"',
                         "store-the-visual-document",
                         str(ENGINE_BIN),
                         str(ONETASKGRAPH_BIN),
@@ -420,6 +432,9 @@ def test_a_copy_whose_destination_reminted_the_report_is_found_and_an_imposter_i
         assert ran.returncode == 0, (arguments, ran.stdout, ran.stderr)
         return json.loads(ran.stdout)
 
+    for source in ("drafting", "board"):
+        store("project", "create", source, "--id", "plan", "--title", "Plan")
+
     body = tmp_path / "imposter.md"
     body.write_text("Notes that happen to sit under the visual report's id.\n", encoding="utf-8")
     store(
@@ -452,3 +467,144 @@ def test_a_copy_whose_destination_reminted_the_report_is_found_and_an_imposter_i
     found = _visual_report_of("board:plan", environment)
     assert found.returncode == 0, found.stderr
     assert found.stdout == f"{reminted}\n", found.stdout
+
+    store(
+        "project",
+        "metadata",
+        "set",
+        "board:plan",
+        spike_plan.VISUAL_REPORT_KEY,
+        json.dumps(f"drafting:{spike_plan.VISUAL_REPORT}"),
+    )
+    explicit = _visual_report_of("board:plan", environment)
+    assert explicit.returncode == 0, explicit.stderr
+    assert explicit.stdout == f"{reminted}\n"
+
+
+def test_finish_quotes_selected_revision_and_refuses_invalid_selections(
+    tmp_path: Path,
+    oneharness_bin: str,
+) -> None:
+    """The real tail updates a design from complete current evidence and fails closed."""
+    bench = _bench(tmp_path, oneharness_bin, PASSES)
+    drafted = _draft("finish-selected-visual")
+    images = _images(tmp_path / "images")
+    original = _report(bench, drafted, images)
+    _writes_the_visual_document(bench, drafted, original)
+    brief = _brief(tmp_path, drafted, "selected-revision")
+    run = RunId("finish-selected-visual-initial")
+    revision_run = RunId("finish-selected-visual-revision")
+    try:
+        initial = _just(
+            "finish-plan",
+            str(brief),
+            "--name",
+            run,
+            "--to",
+            DESTINATION,
+            environment=bench.environment,
+        )
+        assert initial.returncode == OK, initial.stdout + initial.stderr
+        before = _store(bench, "document", "show", original)
+        design_id = f"{drafted.qualified.partition(':')[0]}:{drafted.document}"
+        design_before = _store(bench, "document", "show", design_id)
+        revised = [dict(change) for change in CHANGES]
+        revised[0]["description"] = "The listing names each owner's team."
+        updated = dict(images)
+        updated[revised[0]["after"]] = write_noise_png(tmp_path / "changed.png", 92, LARGE)
+        selected = _report(
+            bench,
+            drafted,
+            updated,
+            changes=revised,
+            report_id=f"{drafted.project}-spike-visual-revision-report",
+        )
+        _store(
+            bench,
+            "project",
+            "metadata",
+            "set",
+            drafted.qualified,
+            spike_plan.VISUAL_REPORT_KEY,
+            json.dumps(selected),
+        )
+        _writes_the_visual_document(bench, drafted, selected, revision=True)
+        finished = _just(
+            "finish-plan",
+            str(brief),
+            "--name",
+            revision_run,
+            "--to",
+            DESTINATION,
+            environment=bench.environment,
+        )
+        assert finished.returncode == OK, finished.stdout + finished.stderr
+        task = _design_task(bench, revision_run)
+        assert json.dumps(revised, ensure_ascii=False, indent=2) in task["content"]
+        assert f"`{selected}`" in task["content"]
+        design = _store(bench, "document", "show", design_id)
+        assert design["items"][0]["id"] == design_before["items"][0]["id"]
+        assert {
+            asset["name"]: Path(asset["path"]).read_bytes() for asset in design["assets"]
+        } == updated
+        assert _store(bench, "document", "show", original) == before
+        other_plan = _draft("finish-selection-other-plan")
+        other_report = _report(bench, other_plan, images, report_id="other-plan-report")
+        for index, value in enumerate(
+            (None, 4, " ", "native", "source:missing", other_report, design_id)
+        ):
+            _store(
+                bench,
+                "project",
+                "metadata",
+                "set",
+                drafted.qualified,
+                spike_plan.VISUAL_REPORT_KEY,
+                json.dumps(value),
+            )
+            invalid_run = RunId(f"finish-invalid-selection-{index}")
+            refused = _just(
+                "finish-plan",
+                str(brief),
+                "--name",
+                invalid_run,
+                "--to",
+                DESTINATION,
+                environment=bench.environment,
+            )
+            assert refused.returncode == UNRUNNABLE, refused.stdout + refused.stderr
+            assert spike_plan.VISUAL_REPORT_KEY in refused.stderr
+            assert not (bench.runs / f"{invalid_run}{DESIGN_RUN_SUFFIX}").exists()
+            assert _store(bench, "document", "show", design_id) == design
+        _store(
+            bench,
+            "project",
+            "metadata",
+            "set",
+            drafted.qualified,
+            spike_plan.VISUAL_REPORT_KEY,
+            json.dumps(selected),
+        )
+        source = selected.partition(":")[0]
+        (duplicate,) = _store(bench, "document", "copy", selected, "--to", source)["items"]
+        assert duplicate["destination"] != selected, duplicate
+        duplicated = _store(bench, "document", "show", str(duplicate["destination"]))
+        duplicate_path = Path(duplicated["items"][0]["item"]["location"]["path"])
+        try:
+            ambiguous = _just(
+                "finish-plan",
+                str(brief),
+                "--name",
+                "finish-ambiguous-selection",
+                "--to",
+                DESTINATION,
+                environment=bench.environment,
+            )
+            assert ambiguous.returncode == UNRUNNABLE, ambiguous.stdout + ambiguous.stderr
+            assert "ambiguous selection" in ambiguous.stderr
+            assert not (bench.runs / f"finish-ambiguous-selection{DESIGN_RUN_SUFFIX}").exists()
+        finally:
+            duplicate_path.unlink()
+    finally:
+        for name in (run, revision_run):
+            _stop(bench, f"{name}{DESIGN_RUN_SUFFIX}")
