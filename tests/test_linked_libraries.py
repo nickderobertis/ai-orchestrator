@@ -248,6 +248,12 @@ DISCARD_AND_GATE_RUN_ONEVCS_FLOOR = Release(0, 42, 0)
 ARTIFACTS_ONEAGENTGRAPH_FLOOR = Release(0, 4, 1)
 
 
+#: onevcs 0.48.0 adds `BaseMerge` and an armed `checks-unsettled` ending:
+#: https://github.com/nickderobertis/onevcs/pull/372. Both must reach dispatches,
+#: whose publications use the engine's linked library rather than the host CLI.
+BASE_MERGE_AND_ARMED_WAIT_ONEVCS_FLOOR = Release(0, 48, 0)
+
+
 def _linked_versions() -> dict[str, set[str]]:
     """Every crate the adopted engine wheel declares it links, as name → versions.
 
@@ -349,7 +355,7 @@ LINKED_VERSION_CLAIMS: dict[str, dict[str, tuple[str, ...]]] = {
         # constant gate below caught the rename, and nothing held the header sentence
         # that had just stopped naming the release the rename happened in.
         "docs/repo-lifecycle.md": (
-            "the **`onevcs` {version}** its `Cargo.lock` resolves",
+            "**`onevcs` {version}**, read from the installed engine wheel's SBOM",
             # This site used to be a *denial* — "`onevcs` {version} has none to open" —
             # and onevcs 0.18.0 made it false: a publication can now answer
             # `PublishOutcome::ChangeDraft`, which onepipeline settles a node
@@ -449,6 +455,16 @@ def test_the_linked_onevcs_runs_no_gate_of_its_own() -> None:
         f"the adopted engine links onevcs {linked}, below the {GATE_FREE_FLOOR} that "
         "removed the gate; a dispatch would publish through a release that still runs "
         "a tier of its own, and cannot read this host's version 3 rules file at all"
+    )
+
+
+def test_the_linked_onevcs_merges_bases_on_conflict_and_arms_elapsed_check_waits() -> None:
+    """Dispatches carry both settings and leave timed-out changes able to land."""
+    linked = Release.parse(_linked_version("onevcs"))
+    assert linked >= BASE_MERGE_AND_ARMED_WAIT_ONEVCS_FLOOR, (
+        f"the adopted engine links onevcs {linked}, below "
+        f"{BASE_MERGE_AND_ARMED_WAIT_ONEVCS_FLOOR}; dispatches would merge every moved "
+        "base and strand drafts when their check wait elapses instead of arming the merge"
     )
 
 
@@ -656,7 +672,7 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 LINKED_HARNESS_CORES = (
     LinkedCore(dependent="oneagentgraph", dependent_version="0.5.6", core="0.24.2"),
     LinkedCore(dependent="onejudge", dependent_version="0.19.0", core="0.24.2"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.66.0", core="0.24.2"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.68.1", core="0.24.2"),
 )
 
 #: How a crate names itself in a compiled binary: cargo embeds the registry source

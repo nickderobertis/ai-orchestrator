@@ -176,6 +176,7 @@ NODE_FIELDS = frozenset(
         "sets",
         "expects_no_diff",
         "context",
+        "classification",
         "amendment",
         "parked",
         "executor",

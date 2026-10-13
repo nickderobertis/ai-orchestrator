@@ -237,6 +237,15 @@ def _world(root: Path, oneharness_bin: str, worker: str) -> World:
     # stand-in goes on reporting the head the change request was opened at for ever, and
     # the re-dispatch's publication would watch for a head the host never reports.
     (host_state / "head-noticed-after").write_text("0", encoding="utf-8")
+    # The adopted host double refuses a visibility read until the world supplies it.
+    # This scratch repository is private, as are the hosted scratch rules elsewhere.
+    visibility = (
+        host_state
+        / "visibility"
+        / HOSTED_ORIGIN.removeprefix("https://github.com/").removesuffix(".git")
+    )
+    visibility.parent.mkdir(parents=True)
+    visibility.write_text("private\n", encoding="utf-8")
     # llmlint: ignore-end[e2e_not_mocked, tests_mirror_real_usage]
 
     environment = dict(os.environ)

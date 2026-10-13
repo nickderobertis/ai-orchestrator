@@ -294,7 +294,15 @@ def launched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
     root = tmp_path_factory.mktemp("repositories-field-dispatch")
-    identity = seeded(root, publication=PUBLICATION_ALIAS, execution=EXECUTION_ALIAS, origin=ORIGIN)
+    # The hosted origin exists only on disk. Declare it private so publication does
+    # not need a visibility probe of a GitHub repository that does not exist.
+    identity = seeded(
+        root,
+        publication=PUBLICATION_ALIAS,
+        execution=EXECUTION_ALIAS,
+        origin=ORIGIN,
+        visibility="private",
+    )
 
     environment = dict(os.environ)
     for name in LAUNCHER_ENVIRONMENT:

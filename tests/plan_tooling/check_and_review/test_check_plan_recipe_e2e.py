@@ -3189,7 +3189,13 @@ def tracked_override(tmp_path_factory: pytest.TempPathFactory) -> dict[str, str]
     manifest = root / "onevcs.checkouts"
     manifest.write_text("".join(f"{path}\n" for path in checkouts), encoding="utf-8")
     rules = root / "onevcs.rules.yml"
-    rules.write_text(rules_for_hosted("github.com", "nickderobertis"), encoding="utf-8")
+    # These producers are public scratch repositories, including UNRULED: unknown
+    # visibility is private under the adopted engine and would refuse its dependency
+    # before the registered adoption check could read its missing default target.
+    rules.write_text(
+        rules_for_hosted("github.com", "nickderobertis", visibility="public"),
+        encoding="utf-8",
+    )
     home = root / "onevcs"
     config_home = root / "xdg-config"
     config_home.mkdir()

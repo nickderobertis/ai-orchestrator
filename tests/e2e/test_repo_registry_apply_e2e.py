@@ -855,6 +855,52 @@ def test_local_direct_repositories_publish_locally(ruled: Path, identity: str) -
     assert reported(checked.stdout, "approvals") == "none"
 
 
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Keeps shared fixture ownership.
+def test_the_host_uses_the_shipped_base_merge_and_check_wait_defaults(
+    ruled: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The installed rules resolve defaults through the pinned CLI, without a host override."""
+    monkeypatch.delenv("ONEVCS_CHECKS_TIMEOUT_SECONDS", raising=False)
+    observer = onevcs(ruled, "rules", "check", PRINTOBSERVER)
+    assert observer.returncode == 0, observer.stderr
+    assert reported(observer.stdout, "base merge") == "on-conflict"
+    assert reported(observer.stdout, "checks wait") == "3600 s"
+    local = onevcs(ruled, "rules", "check", THIS_REPOSITORY)
+    assert local.returncode == 0, local.stderr
+    assert reported(local.stdout, "base merge") == "always"
+
+
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Keeps shared fixture ownership.
+def test_the_optional_base_merge_and_wait_keys_are_accepted_and_validated(
+    ruled: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The header's optional keys work through the CLI, and malformed policy is refused."""
+    monkeypatch.delenv("ONEVCS_CHECKS_TIMEOUT_SECONDS", raising=False)
+    home = tmp_path / "onevcs"
+    home.mkdir()
+    shutil.copyfile(ruled / "registry.json", home / "registry.json")
+    rules = home / "rules.yml"
+    configured = TRACKED_RULES.read_text(encoding="utf-8").replace(
+        "    publication: change-auto",
+        "    publication: change-auto\n    base_merge: always\n    checks: {wait_seconds: 7200}",
+    )
+    rules.write_text(configured, encoding="utf-8")
+    resolved = onevcs(home, "rules", "check", PRINTOBSERVER)
+    assert resolved.returncode == 0, resolved.stderr
+    assert reported(resolved.stdout, "base merge") == "always"
+    assert reported(resolved.stdout, "checks wait") == "7200 s"
+    rules.write_text(
+        configured.replace("base_merge: always", "base_merge: invalid"), encoding="utf-8"
+    )
+    refused = onevcs(home, "rules", "check", PRINTOBSERVER)
+    assert refused.returncode != 0
+    assert "invalid" in refused.stderr
+    rules.write_text(configured, encoding="utf-8")
+    recovered = onevcs(home, "rules", "check", PRINTOBSERVER)
+    assert recovered.returncode == 0, recovered.stderr
+    assert reported(recovered.stdout, "checks wait") == "7200 s"
+
+
 class DraftLifecycle(NamedTuple):
     """What `onevcs rules check` resolves for one identity's draft lifecycle."""
 

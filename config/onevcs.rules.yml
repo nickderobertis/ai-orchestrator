@@ -42,6 +42,11 @@
 # a green one becomes follows from `publication` and `approvals`, as onevcs's
 # `docs/contract.md` states (`onevcs rules check <repo>` prints the resolved lines).
 #
+# A rule may also carry `base_merge` and `checks: {wait_seconds}`. This file names
+# neither because the defaults fit this host: change-request identities merge a
+# moved base on conflict, local-direct ones always, and checks wait 3600 seconds.
+# `onevcs rules check <repo>` prints the resolved lines, as it does for `drafts:`.
+#
 # The verifier that remains is the repository's own, and it is the one that could
 # always refuse the merge:
 #

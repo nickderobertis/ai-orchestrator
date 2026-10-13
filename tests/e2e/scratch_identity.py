@@ -35,7 +35,7 @@ import shlex
 import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
 from conftest import git
 from waits import timeout as e2e_timeout
@@ -134,6 +134,7 @@ def seeded(
     publication: str = "publication",
     execution: str = "execution",
     origin: str | None = None,
+    visibility: Literal["public", "private"] = "private",
     workspaces: str | None = None,
     ignored: Sequence[str] = (),
 ) -> Identity:
@@ -148,6 +149,10 @@ def seeded(
     is the one shape the reserved `onepipeline.repo` key exists for. Given one, both
     clones are made from that host's ssh remote through the fake `ssh` the module
     docstring describes, and the rules file matches the identity by host and owner.
+
+    ``visibility`` declares the hosted scratch identity's visibility in its rule.
+    It defaults to private: the origin exists only on disk, so publication must not
+    probe GitHub for its visibility. A public-producer journey can override it.
 
     ``workspaces`` is installed into the scratch registry as its `workspaces.yml` by the
     same recipe, in place of the tracked `config/onevcs.workspaces.yml` that recipe
@@ -186,7 +191,7 @@ def seeded(
         # llmlint: ignore[e2e_not_mocked] only the transport to GitHub is substituted
         environment[GIT_SSH_COMMAND] = str(served)
         remote = f"git@{host}:{owner}/{name}.git"
-        rules = rules_for_hosted(host, owner)
+        rules = rules_for_hosted(host, owner, visibility=visibility)
     identity = Identity(
         publication=root / publication,
         execution=root / execution,
@@ -219,7 +224,9 @@ def _hosted(origin: str) -> tuple[str, str, str]:
     return host, owner, name
 
 
-def rules_for_hosted(host: str, owner: str) -> str:
+def rules_for_hosted(
+    host: str, owner: str, *, visibility: Literal["public", "private"] = "private"
+) -> str:
     """A rules file matching every identity of ``owner`` on ``host``, merged locally.
 
     `local-direct` for the reason :data:`RULES` is: it keeps the publication off `gh`,
@@ -227,7 +234,10 @@ def rules_for_hosted(host: str, owner: str) -> str:
     for. A hosted identity cannot be matched by `path`, so the rule names the two halves
     of its origin the way `config/onevcs.rules.yml` names this host's own.
     """
-    return RULES.replace('match: {path: "*"}', f"match: {{host: {host}, owner: {owner}}}")
+    rules = RULES.replace('match: {path: "*"}', f"match: {{host: {host}, owner: {owner}}}")
+    rules = rules.replace("version: 3", "version: 4")
+    rules = rules.replace("    publication:", f"    visibility: {visibility}\n    publication:")
+    return rules
 
 
 def _register(

@@ -200,8 +200,10 @@ evidence and where the branch stands on its remote, to be grown with new commits
 until its budget was spent. Read a refusal among them as a branch that exists,
 carries a tree the merge path would not pass, and has been worked several times — never
 as a node to `retry` blind, since a retry naming no branch cuts a fresh one beside
-committed work with the refusal still standing. **A conflict between a continued branch
-and its moved base is the dispatched worker's to resolve, under its judge**: the session
+committed work with the refusal still standing. A continued branch on a change-request
+identity merges its moved base only on
+conflict or when the host requires up-to-date branches (always on a `local-direct`
+one). **The conflict is the dispatched worker's to resolve, under its judge**: the session
 opens with the merge in progress and the task hands it over — a `change-auto` change
 request the host reports conflicting included, which returns at once as `sync-conflict`. A blocking
 `session-conflict` finding means the worker was dispatched into it until the node's
@@ -216,7 +218,10 @@ than as red. The required set is the one the host declares, and a declared conte
 no run yet is pending, so `checks-settled` is never recorded `passed` before every
 declared context has reported, and the reason names each one that had not started. A check concluded `skipped` is its own state, never read as passed: a
 publication a skipped required check let through records `checks-settled` with the
-verdict `passed-with-skipped`, naming that check, and its settlement says so. A change request the host merged after that watch stopped is reconciled on
+verdict `passed-with-skipped`, naming that check, and its settlement says so. A
+`checks-unsettled` whose wait onevcs left armed is re-read toward landing under the
+engine's merge-path read budget, with its merge armed on the host rather than a
+stranded draft. A change request the host merged after that watch stopped is reconciled on
 the next `status`, `release status` or publication that meets it — `onevcs` asks the
 host once and records the merge as the landing — so read `just work-status` before
 anything else; only a change still open or closed unmerged there is one whose check to

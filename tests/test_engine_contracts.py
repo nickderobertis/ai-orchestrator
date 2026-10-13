@@ -233,10 +233,11 @@ NODE_STATUS_WORD = re.compile(r"Self::(\w+)\s*=>\s*\"([a-z][a-z-]*)\",")
 #: `Failed` arm answers whatever `failure_of` decides — the residual, the unread
 #: merge path, or one of the preserving words — and each settles before the `Done`
 #: relay. Only these early returns decide which pairing is real, so the path through
-#: the preserving return is asserted rather than assumed.
+#: the preserving return is asserted rather than assumed. Since 0.68.1 it annotates
+#: the returned attempt with armed-wait evidence before returning the same failure.
 RELAY_GUARD = re.compile(
     r"if let onevcs::PublishOutcome::Failed \{[^}]*?\}\s*=\s*&published\.outcome\s*\{\s*"
-    r".*?return failed_publication\(",
+    r".*?let mut failed = failed_publication\(.*?return failed;",
     re.DOTALL,
 )
 
