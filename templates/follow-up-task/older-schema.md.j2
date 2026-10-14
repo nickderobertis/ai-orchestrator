@@ -10,7 +10,7 @@
     load, and `onepipeline template check` recomputes it in one fixed order.
 -#}
 <!-- llmlint: ignore-block[changed_behavior_has_e2e] Each clause is the agent's instruction for an edit the suite never scripts a verdict for — which fields a ticket already carries and what its evidence supports are its reading of the tree — so a journey can only drive the tooling around it, and does: `tests/plan_tooling/follow_ups/test_follow_ups_recipe_e2e.py`'s `test_a_feedback_re_dispatch_brings_a_schema_4_ticket_to_one_fix_updating_its_item` brings schema-4 tickets forward with the `## Repository` section removed, the options moved under `## Rejected fixes`, and `host` and `repositories` recorded, and `tests/plan_tooling/follow_ups/test_follow_ups_comment_answers_e2e.py` drives the rule in the feedback mode over schemas 4, 5 and 6 and another run's schema-6 item. Schemas 1 to 3 meet the same `validate` refusal those do, which `tests/test_follow_up_tickets.py` holds for schemas 1, 2, 3, 4 and 6; its `test_a_schema_9_ticket_of_this_run_brought_forward_validates_at_the_current_schema` drives a schema-9 ticket through `board-status` to the current schema, refused until its plain `## Root cause` and contributing locations are written and the search log removed, and `test_a_schema_10_ticket_of_this_run_brought_forward_validates_at_schema_12` a schema-10 one, and the comment-answers journey brings a schema-9 ticket forward beside the others. -->
-{% macro rule(shape, board, board_status, re_estimate) -%}
+{% macro rule(shape, board, board_status, re_estimate, settled=false) -%}
 - a ticket of an older schema is brought to the current shape before it is copied, its
   `repositories` listing every repository its fix changes, its `host` read from this machine
   with `hostname`, and its `## {{ shape.impact }}` section written from the evidence the ticket
@@ -19,19 +19,20 @@
   {{ shape.contributing_locations }}; its
   `## {{ shape.retired_headings[1] }}` rewritten as `## {{ shape.suggested_fix }}`, stating the one fix the ticket's
   evidence supports; and every other option it offered moved into `## {{ shape.rejected_fixes }}`,
-  with why each was not chosen; then it is validated once `{{ board_status }}` has written its
-  estimate, as the rule below states.
+  with why each was not chosen; then it is validated once {% if settled %}with `--pending`, this
+  run's settle step writing its estimate{% else %}`{{ board_status }}` has written its
+  estimate{% endif %}, as the rule below states.
 - a ticket of this run older than schema {{ shape.structure_at }} is brought to it by writing its
   `## {{ shape.impact }}` prose as its labelled parts, {{ shape.impact_parts }}, from the evidence it already
   carries, with both severities judged again by the rubric — an acceptable workaround
   lowers a severity above `low`, and one too costly to lower it is `{{ shape.no_workaround }}` — and its
   `## {{ shape.suggested_fix }}` as one opening paragraph and its unit subsections, headed
-  {{ shape.unit_heading }}; then `{{ board_status }} --board {{ board }} <path of the ticket>` records it at
+  {{ shape.unit_heading }}; then {% if settled %}this run's settle step records it{% else %}`{{ board_status }} --board {{ board }} <path of the ticket>` records it{% endif %} at
   schema {{ shape.schema }}. A schema-{{ shape.unestimated_schema }} ticket also records its `{{ shape.frequency_field }}` from that evidence first, and
-  `{{ board_status }}` writes its `{{ shape.estimate_field }}`, its `## {{ shape.impact }}` estimate line and its
-  `{{ shape.priority_field }}`, reading its schema-{{ shape.unestimated_schema }} board item as storing no estimate; validate it and
-  copy it. Another run's schema-{{ shape.unestimated_schema }} item is brought to schema {{ shape.estimate_at }} by `{{ re_estimate }} --board {{ board }} <its
-  id>` alone, and only when this run adds or edits its evidence comment there, or posts a
+  {% if settled %}settle{% else %}`{{ board_status }}`{% endif %} writes its `{{ shape.estimate_field }}`, its `## {{ shape.impact }}` estimate line and its
+  `{{ shape.priority_field }}`, reading its schema-{{ shape.unestimated_schema }} board item as storing no estimate; {% if settled %}validate it with `--pending`, and settle copies it{% else %}validate it and
+  copy it{% endif %}. Another run's schema-{{ shape.unestimated_schema }} item is brought to schema {{ shape.estimate_at }} by {% if settled %}settle's re-estimate{% else %}`{{ re_estimate }} --board {{ board }} <its
+  id>`{% endif %} alone, and only when this run adds or edits its evidence comment there, or posts a
   reply there marked `verdict="{{ shape.confirms }}"`; another run's item of schema {{ shape.estimate_at }} or later keeps its
   schema, and its body is that run's to restructure.
 - whenever this run rewrites its own older ticket, remove the retired search section and
@@ -49,7 +50,8 @@
   `## {{ shape.suggested_fix }}`'s {{ shape.contributing_locations }} part, after its opening paragraph and before its
   unit subsections; its `**{{ shape.owner_cost }}.**` part states the impact with no label naming
   which area decides; and `## {{ shape.evidence }}` moves to the end, directly after
-  optional `## {{ shape.related_tickets }}`. Then `{{ board_status }}` records it at schema {{ shape.schema }}; validate it and
-  copy it. Another run's item keeps its schema and its body.
+  optional `## {{ shape.related_tickets }}`. Then {% if settled %}validate it with `--pending`, and this run's settle step
+  records it at schema {{ shape.schema }} and copies it{% else %}`{{ board_status }}` records it at schema {{ shape.schema }}; validate it and
+  copy it{% endif %}. Another run's item keeps its schema and its body.
 {%- endmacro %}
 <!-- llmlint: ignore-end[changed_behavior_has_e2e] -->

@@ -78,8 +78,9 @@ def test_the_one_status_exception_is_stated_once_in_the_task_the_gathering_and_a
         "elsewhere, superseded, or its premise shown wrong, by the comment or by what "
         "investigating it found, whether or not the comment says so —",
         "that issue is this run's own item at `Proposal` (`Proposed` on Linear), withdraw it",
-        "run `board-status` with `--withdraw` on its ticket, write the word it prints as the "
-        "ticket's `status`, validate the ticket and copy it",
+        "write `cancelled` as its ticket's `status` and validate the ticket",
+        "the board is written once this run settles, and only while it still holds the item at "
+        "`Proposal`",
         "say in that comment's reply and account entry that the item was withdrawn and why",
         "A ticket at `Deferred` (`Backlog` on Linear) may have its content edited but is never "
         "withdrawn: where it is no longer relevant, the reply says so with its evidence and "
@@ -88,13 +89,14 @@ def test_the_one_status_exception_is_stated_once_in_the_task_the_gathering_and_a
         "withdrawn",
     ):
         assert said in exception, said
-    assert f"`{BOARD_STATUS} --board followups --withdraw <path of the ticket>`" in flat
+    assert "write `cancelled` as its `status` and validate it as step 1 says" in flat
+    assert f"`{BOARD_STATUS} --board followups --withdraw <path of the ticket>`" not in flat
     assert "**Never change a board item's status**," not in flat, "the old rule still stands"
     assert "clearly" not in exception, "an explicit request is no longer the trigger"
     assert exception not in _flat(_task(redispatch=True)), (
         "the initial mode withdraws by its own rule"
     )
-    preamble = comments.render(RUN, "followups", [], None)
+    preamble = comments.render(RUN, "followups", [], None, Path("/a/snapshot"))
     assert tickets.WITHDRAWAL_EXCEPTION in preamble
     agents = _flat((REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8"))
     assert (

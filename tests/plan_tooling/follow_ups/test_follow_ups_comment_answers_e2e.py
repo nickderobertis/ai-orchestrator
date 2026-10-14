@@ -1,23 +1,27 @@
-"""`just follow-ups <run> --feedback FILE --comments` answering what people asked, end to end.
+"""A comment dispatch answering what people asked, end to end.
 
-Everything below the recipe is real: `just follow-ups` and its script, the gathering
-`orchestrator/follow_up_comments.py` writes, the launch under the shipped
+Everything below the recipe is real: `just follow-ups-answer-comments --from <snapshot>` and
+its script, `orchestrator/follow_up_comments.py` launching from the snapshot and settling the
+pass, `just follow-ups --feedback FILE --comments` and the launch it makes under the shipped
 `graphs/follow-up.yaml`, the installed `onepipeline` driver, and the installed `onetaskgraph`
-every ticket, board item and comment is written and read through. The bench, the board — a
-`local-md` stand-in named with `--to`, never the live `followups` board — and the mirror
+every ticket, board item, comment and snapshot is written and read through. The bench, the
+board — the loopback GitHub served as `followups`, never the live board — and the mirror
 checkout are `tests/plan_tooling/follow_ups/test_follow_ups_recipe_e2e.py`'s and
 `tests/plan_tooling/follow_ups/test_follow_ups_answer_comments_recipe_e2e.py`'s, imported
 rather than restated. **`tests/e2e/fake_codex.py` stands in for the paid model alone**,
-running the commands the answering agent would choose through the real programs.
+running the commands the answering agent's task names through the real programs: each quoted
+issue read from the snapshot source, each ticket a comment changes edited in its file and
+validated, each reply posted with `--expect`, and the account written — and nothing else to
+the board, which the pass's settle writes from the tickets the agent left.
 
-The module fixture answers eleven comments in one dispatch: one asking a question whose answer
-shows the run's own `Proposal` is no longer relevant, which the dispatch withdraws though the
-comment asks for no withdrawal; one whose answer leaves another proposal relevant; the first
-again on an item a person deferred, which is never withdrawn; one asking for a corrected fix on
-a ticket of each older schema — schema 5 being the shape onepipeline#438 met, and schema 7 the
-one `validate` still reads as sound — and one on another run's older item. The credential
-journeys drive the recipe in both modes from a mirror checkout whose `.env` alone holds the
-board credential.
+The module fixture answers the comments of one gathering in one dispatch: one asking a question
+whose answer shows the run's own `Proposal` is no longer relevant, which the dispatch withdraws
+though the comment asks for no withdrawal; one whose answer leaves another proposal relevant;
+the first again on an item a person deferred, which settle never withdraws; one asking for a
+corrected fix on a ticket of each older schema — schema 5 being the shape onepipeline#438 met,
+and schema 7 the one `validate` still reads as sound — and one on another run's older item.
+The credential journeys drive the recipe in both modes from a mirror checkout whose `.env`
+alone holds the board credential.
 """
 
 from __future__ import annotations
@@ -33,28 +37,34 @@ from typing import NamedTuple
 
 import pytest
 from follow_up_ticket_shape import before_schema_10, before_schema_11, before_schema_12
+from github_board import _Operation
 from nx_workspace import WORKSPACE_INSTALL_MARKS
 from published_tools import ONETASKGRAPH_BIN
 from test_follow_ups_answer_comments_recipe_e2e import (
+    BOARD,
     BOARD_CREDENTIAL,
     ENGINE_STOP,
     PLANTED_CREDENTIAL,
     PROCESS_CREDENTIAL,
+    REPOSITORY,
     Mirror,
+    _answer,
     _commented,
     _filed,
     _handed,
+    _launching_checkout,
+    _marked,
     _mirror,
     _next_second,
+    _serving,
+    _settled_on_board,
 )
 from test_follow_ups_recipe_e2e import (
-    BOARD,
     FULL_SEVERITY,
     HOST,
     LOCATIONS,
     OK,
     REFUSED,
-    REPOSITORY,
     SUFFIX,
     UNIT,
     WORKAROUND,
@@ -63,12 +73,10 @@ from test_follow_ups_recipe_e2e import (
     _bench,
     _category,
     _comments,
-    _decided_and_copied,
     _draft,
     _item,
     _moved,
     _ran,
-    _re_estimate,
     _run,
     _script,
     _staged,
@@ -77,6 +85,7 @@ from test_follow_ups_recipe_e2e import (
 )
 from waits import timeout as e2e_timeout
 
+from orchestrator import follow_up_comments as comments
 from orchestrator import follow_up_tickets as tickets
 from orchestrator.plan_store import QualifiedTaskId
 from orchestrator.project_store import frontmatter
@@ -153,15 +162,16 @@ KEPT_UNSURE = (
     "file, so the ticket is still relevant and still right."
 )
 KEPT_DEFERRED = (
-    "Left the item's status as it is: a person deferred it, so the reply recommends they close "
-    "it, and `board-status --withdraw` refused."
+    "Asked for the item to be withdrawn: a person deferred it, so the reply recommends they "
+    "close it, and the pass's settle leaves it as they set it."
 )
-RE_ESTIMATED = "Counted this sighting as one more occurrence and re-estimated the item."
-CORRECTED = "Brought the ticket to the current schema with the corrected fix, and copied it."
+RE_ESTIMATED = "Counted this sighting as one more occurrence, which settle re-estimates."
+CORRECTED = "Brought the ticket to the current schema with the corrected fix."
 
-DEFERRED_WITNESS = "deferred-withdrawal.witness"
+#: What the agent's own `validate --pending` printed of each ticket it withdrew, with its exit.
+WITHDRAWAL_WITNESS = "withdrawal.witness"
 
-#: The agent's edit bringing an older ticket forward; the estimate is left to `board-status`.
+#: The agent's edit bringing an older ticket forward; the estimate is left to settle.
 BRING_FORWARD = """\
 import json, pathlib, re, subprocess, sys
 from orchestrator import follow_up_tickets as tickets
@@ -223,9 +233,13 @@ path.write_text(text, encoding="utf-8")
 """
 
 #: The answering agent's program; ``actions`` is keyed by issue, not by comment, and the reply
-#: on each issue in ``confirming`` is marked as confirming its root cause.
+#: on each issue in ``confirming`` is marked as confirming its root cause. As its task says: each
+#: quoted issue is read from the snapshot source by the snapshot id its `Issue` line names, and
+#: each reply posted with `--expect` the version that line gives, its id and URL recorded from
+#: that command's own answer.
 ANSWER_EACH_COMMENT = """\
 import json, re, subprocess, sys, tempfile
+from orchestrator import follow_up_comments as comments
 from orchestrator import follow_up_tickets as tickets
 
 log, run, store, actions, confirming = sys.argv[1:6]
@@ -237,12 +251,11 @@ account = re.search(r"account is a JSON document at `([^`]+)`", task)[1]
 gathered = re.search(r'"feedback": "([^"]+)"', task)[1]
 gathering = tickets.read_gathering(task.split("## The comments to answer", 1)[1])
 responses = []
-for section, one in zip(task.split("### Comment ")[1:], gathering.quoted, strict=True):
-    fields = dict(
-        line[2:].split(": ", 1) for line in section.splitlines() if line.startswith("- ")
-    )
+latest = {}
+for one, fields in zip(gathering.quoted, gathering.metadata, strict=True):
+    line = comments.ISSUE_VALUE.fullmatch(fields.issue)
     shown = json.loads(
-        subprocess.run([store, "task", "show", one.issue, "--json"], check=True,
+        subprocess.run([store, "task", "show", line["snapshot_id"], "--json"], check=True,
                        capture_output=True, text=True).stdout
     )
     cause = shown["items"][0]["item"]["metadata"][tickets.KEY]["root_cause"]
@@ -251,24 +264,28 @@ for section, one in zip(task.split("### Comment ")[1:], gathering.quoted, strict
         tickets.Verdict.CONFIRMS if one.issue in confirming else tickets.Verdict.DOES_NOT_CONFIRM
     )
     reply = tickets.render_reply(
-        run, cause, answers=one.comment, url=fields["URL"], author=fields["Author"],
+        run, cause, answers=one.comment, url=fields.url, author=fields.author,
         response=action, verdict=verdict,
     )
     with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as body:
         body.write(reply)
-    subprocess.run([store, "task", "comment", "add", one.issue, "--body-file", body.name],
-                   check=True)
-    listed = json.loads(
-        subprocess.run([store, "task", "comment", "list", one.issue, "--json"], check=True,
-                       capture_output=True, text=True).stdout
-    )["comments"]
-    (posted,) = [
-        held["id"] for held in listed
-        if (owner := tickets.comment_owner(held["body"])) is not None
-        and owner.run == run and owner.answers == one.comment
-    ]
+    # After a reply on the same issue, the version that reply's answer carried.
+    version = latest.get(line["issue"], line["version"])
+    expect = [] if version == comments.NO_VERSION else ["--expect", version]
+    posted = json.loads(
+        subprocess.run([store, "task", "comment", "add", line["issue"], "--body-file",
+                        body.name, *expect, "--json"], check=True, capture_output=True,
+                       text=True).stdout
+    )
+    if version != comments.NO_VERSION and (posted_result := posted.get("result")):
+        # An item changed within the last minute gets no version, so the next reply on it
+        # names none either.
+        latest[line["issue"]] = posted_result.get("version") or comments.NO_VERSION
+    fallback = posted.get("fallback")
     responses.append({
-        "comment": one.comment, "issue": one.issue, "action": action, "reply": posted,
+        "comment": one.comment, "issue": one.issue, "action": action, "reply": posted["id"],
+        "reply_url": posted.get("url"),
+        "reply_fallback": fallback.get("reason") if isinstance(fallback, dict) else None,
         "verdict": verdict.value,
     })
 with open(account, "w", encoding="utf-8") as stream:
@@ -312,12 +329,16 @@ class Answered(NamedTuple):
     result: subprocess.CompletedProcess[str]
     #: The node's task as the store holds it, read right after the launch.
     stored: Stored
+    #: Every command the answering agent's turn ran, as the provider's stand-in recorded it.
+    ran: str
+    #: Every request the board was sent from the launch to its settle's end, in order.
+    operations: list[_Operation]
+    #: What the agent's `validate --pending` printed of each ticket it withdrew, and its exit.
     witness: str
     proposed_after: dict[str, object]
     unsure_after: dict[str, object]
     deferred_after: dict[str, object]
     comments_after: dict[str, list[dict[str, object]]]
-    checked: subprocess.CompletedProcess[str]
     #: Each older ticket by the schema it was filed at.
     older: dict[int, Older]
     #: Another run's schema-6 item this run marked, before and after the dispatch.
@@ -327,75 +348,94 @@ class Answered(NamedTuple):
     protected_after: dict[str, object]
 
 
-#: A gathering for one run, composed from the module's own item reads and writer: every
-#: person's comment on the issues ``run`` owns or has marked with its own comment. It is
-#: composed here rather than by `just follow-ups-answer-comments`, whose routing sends a
-#: comment to the run owning its issue alone: this journey's subject is what the dispatch does
-#: with a gathering that also quotes another run's item, which `check-gathering` admits for a
-#: run that marked it and a manager may hand `just follow-ups --comments` directly. The
-#: stand-in board is listed here unnarrowed, because the recipe's own listing keeps this host's
-#: items alone and an older ticket's record names no host.
+# llmlint: ignore-block[tests_mirror_real_usage] The recipe routes a comment to the run
+# owning its issue alone, so no recipe gathering selects another run's item this run marked —
+# which `check-gathering` admits — and that dispatch is this journey's subject; the snapshot is
+# composed through the module's own copy and writer instead, and launched by the real recipe.
+#: A snapshot for one run, composed through the module's own copy and record writer: every
+#: person's comment on the issues ``run`` owns or has marked with its own comment. It is composed
+#: here rather than by `just follow-ups-answer-comments`' gathering, whose routing sends a comment
+#: to the run owning its issue alone: this journey's subject is what the dispatch and the pass
+#: do with a gathering that also quotes another run's item, which `check-gathering` admits for a
+#: run that marked it. The snapshot is then launched by the real recipe's `--from`, which is
+#: how a gathering reaches its launch and its settle.
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] A program text the launching
 # journeys below run, inside their own blocks for this rule; it launches nothing itself.
-GATHER_FOR = """\
-import sys
+COMPOSE_FOR = """\
+import json, sys
 from datetime import UTC, datetime
 from pathlib import Path
 from orchestrator import follow_up_comments as comments
 from orchestrator import follow_up_tickets as tickets
-from orchestrator import plan_store
 
-root, board, run = sys.argv[1:4]
-pages = plan_store.every_page(
-    "the stand-in board", plan_store.client().task_list, source=[board],
-    commented_since=sys.argv[4],
-)
-issues = [
-    comments.bound_issue(comments.QualifiedTaskId(held.id.model_dump()), None)
-    for page in pages
-    for held in page.items
+root, board, run, issues = sys.argv[1:5]
+issues = json.loads(issues)
+staged = comments._staged(Path(root))
+settings = comments.snapshot_settings(staged, board)
+copied = comments.copy_into_snapshot(staged, board, issues, settings)
+details = comments.shown_details([copied.held[one] for one in issues], settings)
+read = [
+    comments.snapshot_issue(detail, one, copied.held[one], None)
+    for one, detail in zip(issues, details, strict=True)
 ]
-chosen = [
-    comments.Selected(issue, comment.id, comments.comment_url(issue, comment),
-                      comment.author or comments.UNKNOWN_AUTHOR, comment.last_changed,
-                      comment.body)
-    for issue in issues
-    if issue.owner == run or any(
-        (owner := tickets.comment_owner(held.body)) is not None and owner.run == run
-        for held in issue.comments
+chosen = tuple(
+    comments.Chosen(
+        str(issue.id), str(comment.id), comments.instant(comment.last_changed),
+        comments.body_sha256(comment.body),
     )
+    for issue in read
     for comment in issue.comments
     if tickets.comment_owner(comment.body) is None
-]
-print(comments.write_feedback(Path(root), run, board, chosen, None, datetime.now(UTC)))
+)
+snapshot = comments.publish_snapshot(staged, comments.Snapshot(
+    directory=staged, queried_at=datetime.now(UTC), board=board,
+    boards=tickets.boards(board), named_board=False, scope=run, issue=None, starts={},
+    store=comments.store_version(), dry_run=True,
+    items=tuple(
+        comments.SnapshotItem(str(one.id), str(one.snapshot_id), one.version, one.title,
+                              one.owner, one.host, one.url)
+        for one in read
+    ),
+    boundaries={}, selection={run: chosen}, left=(),
+))
+print(snapshot.directory)
 """
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
-#: Before every comment these journeys write.
-GATHERED_SINCE = "2026-01-01T00:00:00Z"
 
-
-# llmlint: ignore-block[tests_mirror_real_usage] The recipe routes a comment to the run
-# owning its issue alone, so no recipe writes a gathering that also quotes another run's item
-# this run marked — which `check-gathering` admits and a manager may hand `just follow-ups
-# --comments` — and that dispatch is this journey's subject; the gathering is composed
-# through the recipe's own module reads and writer instead.
-def _gathered(bench: Bench, run: str, board: str = BOARD) -> Path:
-    """``run``'s comments on ``board``, gathered through the module the recipe gathers with."""
+def _composed(bench: Bench, run: str, issues: list[str]) -> Path:
+    """A snapshot of ``issues``, selecting every person's comment on them for ``run``."""
     written = _run(
         [
             str(REPO_ROOT / ".venv" / "bin" / "python3"),
             "-c",
-            GATHER_FOR,
+            COMPOSE_FOR,
             str(bench.drafts_root),
-            board,
+            BOARD,
             run,
-            GATHERED_SINCE,
+            json.dumps(issues),
         ],
         bench,
     )
     assert written.returncode == 0, written.stdout + written.stderr
     return Path(written.stdout.strip())
+
+
+def _gathered(bench: Bench, run: str, issues: list[str]) -> Path:
+    """The feedback the recipe's own steps write for ``run`` from a composed snapshot, launching
+    nothing: its gathering naming the snapshot with `--from`, then its launch step."""
+    module = [str(REPO_ROOT / ".venv" / "bin" / "python3"), "-m", "orchestrator.follow_up_comments"]
+    intent, plan = bench.tmp / f"intent-{run}.json", bench.tmp / f"plan-{run}.json"
+    snapshot = _composed(bench, run, issues)
+    for step in (
+        ["gather", "--root", str(bench.drafts_root), "--intent", str(intent)]
+        + ["--from", str(snapshot)],
+        ["launch", "--root", str(bench.drafts_root), "--intent", str(intent), "--plan", str(plan)],
+    ):
+        stepped = _run([*module, *step], bench)
+        assert stepped.returncode == 0, stepped.stdout + stepped.stderr
+    ((_, feedback),) = json.loads(plan.read_text(encoding="utf-8"))["runs"]
+    return Path(feedback)
 
 
 # llmlint: ignore-end[tests_mirror_real_usage]
@@ -563,42 +603,43 @@ def _file_older(bench: Bench, run: str, cause: str, schema: int) -> Filed:
         run,
         cause,
         (f"drafts:{run}/drafts/a-consumed-draft",),
-        f"some-service: {cause.replace('-', ' ')}",
+        f"oneharness: {cause.replace('-', ' ')}",
         f"Filed at schema {schema}",
         HOST,
         frequency=None,
+        repository=REPOSITORY,
     )
     path.write_text(_older(filed, schema), encoding="utf-8")
     copied = _run(
-        [str(ONETASKGRAPH_BIN), "task", "copy", tickets.qualified_id(run, cause), "--to", BOARD],
+        [str(ONETASKGRAPH_BIN), "task", "copy", tickets.qualified_id(run, cause), "--to", BOARD]
+        + ["--json"],
         bench,
     )
     assert copied.returncode == 0, copied.stdout + copied.stderr
-    issue = QualifiedTaskId(f"{BOARD}:{run}/tickets/{cause}")
+    (entry,) = json.loads(copied.stdout)["items"]
+    issue = QualifiedTaskId(str(entry["destination"]))
     return Filed(issue, path, _item(bench, issue), _impact(filed.body))
 
 
-def _withdrawal_refused(python: str, witness: Path, ticket: Path) -> list[str]:
-    """The agent's withdrawal of a ticket, copied only if `board-status --withdraw` allows it.
+def _withdrawn(python: str, witness: Path, ticket: Path) -> list[str]:
+    """The agent's withdrawal of its own ticket: its status set, then `validate --pending`.
 
-    What it printed and exited with goes to ``witness``, and the copy is chained on its
-    success, so a refusal is exactly what leaves the item as the board holds it.
+    The ticket's file is all the agent changes — the pass's settle makes the board write, and
+    only while the item is at `Proposal` — and what `validate --pending` printed and exited
+    with goes to ``witness``.
     """
-    decide = shlex.join(
-        [python, "-m", "orchestrator.follow_up_tickets", "board-status", "--board", BOARD]
+    validate = shlex.join(
+        [python, "-m", "orchestrator.follow_up_tickets", "validate", "--pending", str(ticket)]
     )
+    withdrawn = tickets.Status.WITHDRAWN.value
     quoted = shlex.quote(str(witness))
     return [
         "bash",
         "-c",
         f"set -uo pipefail\ncd {shlex.quote(str(REPO_ROOT))}\n"
-        f"if word=$({decide} --withdraw {shlex.quote(str(ticket))} 2>> {quoted}); then\n"
-        f'  echo "decided $word" >> {quoted}\n'
-        f"  {python} -m orchestrator.follow_up_tickets copy --board {BOARD} "
-        f"{shlex.quote(str(ticket))} && echo copied >> {quoted}\n"
-        f"else\n"
-        f'  echo "refused $?" >> {quoted}\n'
-        f"fi\n",
+        f"sed -i '0,/^status: .*$/s//status: \"{withdrawn}\"/' {shlex.quote(str(ticket))}\n"
+        f"{validate} >> {quoted} 2>&1\n"
+        f'echo "{ticket.stem} exit $?" >> {quoted}\n',
     ]
 
 
@@ -608,7 +649,8 @@ def _brought_forward(bench: Bench, python: str, witness: Path, held: Filed) -> l
     What `validate` printed and exited with goes to ``witness`` — the refusal naming the older
     schema the task keys its rule on — and the ticket is then edited in place, filling what
     its schema lacked: `host` from `hostname`, `repositories` from its record, and
-    ``held.impact`` as its `## Impact` section.
+    ``held.impact`` as its `## Impact` section; `validate --pending` then reads the result,
+    its exit going to ``witness`` too, before the pass's settle estimates and writes it.
     """
     ticket = held.ticket
     helper = _staged(bench, "bring-forward.py", BRING_FORWARD)
@@ -620,7 +662,9 @@ def _brought_forward(bench: Bench, python: str, witness: Path, held: Filed) -> l
         f"set -uo pipefail\ncd {shlex.quote(str(REPO_ROOT))}\n"
         f"{validate} >> {quoted} 2>&1\n"
         f'echo "exit $?" >> {quoted}\n'
-        f"{shlex.join([python, str(helper), str(ticket), REQUESTED_SECTION, held.impact])}\n",
+        f"{shlex.join([python, str(helper), str(ticket), REQUESTED_SECTION, held.impact])}\n"
+        f"{validate} --pending >> {quoted} 2>&1\n"
+        f'echo "pending exit $?" >> {quoted}\n',
     ]
 
 
@@ -656,148 +700,155 @@ def _answering(
 # launch reads. The fixture is module-scoped and spends one launch whose turn is the provider's
 # stand-in.
 @pytest.fixture(scope="module")
-def answered(tmp_path_factory: pytest.TempPathFactory) -> Answered:
+def answered(tmp_path_factory: pytest.TempPathFactory) -> Answered:  # noqa: PLR0915 - one dispatch's journey, step by step
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
     tmp = tmp_path_factory.mktemp("follow-ups-comment-answers")
     bench = _bench(tmp)
-    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
-    bench.environment["FAKE_CODEX_RUN_ON_MARKER"] = str(tmp / "commands.json")
-    bench.environment["FAKE_CODEX_RUN_ON_MARKER_LOG"] = str(tmp / "commands-ran.jsonl")
+    checkout = _launching_checkout(tmp)
+    log = tmp / "prompts.jsonl"
+    bench.environment.update(
+        {
+            # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
+            "FAKE_CODEX_RUN_ON_MARKER": str(tmp / "commands.json"),
+            "FAKE_CODEX_RUN_ON_MARKER_LOG": str(tmp / "commands-ran.jsonl"),
+            "FAKE_CODEX_PROMPT_LOG": str(log),
+            # The launching checkout's `uv run` would otherwise sync the environment it
+            # links, which is this checkout's own and never a journey's to rewrite.
+            "UV_NO_SYNC": "1",
+        }
+    )
     run = tickets.RunId(f"ca-main-{os.getpid()}")
     python = str(REPO_ROOT / ".venv" / "bin" / "python3")
     follow_up_run = f"{run}{SUFFIX}"
-    try:
-        proposed_issue = _filed(bench, run, PROPOSED_CAUSE)
-        unsure_issue = _filed(bench, run, UNSURE_CAUSE)
-        deferred_issue = _filed(bench, run, DEFERRED_CAUSE)
-        _moved(bench, deferred_issue, tickets.Status.DEFERRED.value)
-        older = {
-            schema: _file_older(bench, run, cause, schema) for schema, cause in OLDER_CAUSES.items()
-        }
-        protected = _file_older(
-            bench, f"ca-unrelated-{os.getpid()}", "archived-listing-problem", tickets.PLAIN_AT
-        )
-        # Another run's item, which this run marked with an evidence comment of its own.
-        other_run = _file_older(
-            bench, f"ca-other-{os.getpid()}", OTHER_RUN_CAUSE, tickets.UNESTIMATED_SCHEMA
-        )
-        _commented(
-            bench,
-            other_run.issue,
-            tickets.render_comment(run, OTHER_RUN_CAUSE, "Seen again in this run."),
-            None,
-        )
+    with _serving(bench):
+        try:
+            proposed_issue = _filed(bench, run, PROPOSED_CAUSE)
+            unsure_issue = _filed(bench, run, UNSURE_CAUSE)
+            deferred_issue = _filed(bench, run, DEFERRED_CAUSE)
+            _moved(bench, deferred_issue, tickets.Status.DEFERRED.value)
+            older = {
+                schema: _file_older(bench, run, cause, schema)
+                for schema, cause in OLDER_CAUSES.items()
+            }
+            protected = _file_older(
+                bench, f"ca-unrelated-{os.getpid()}", "archived-listing-problem", tickets.PLAIN_AT
+            )
+            # Another run's item, which this run marked with an evidence comment of its own.
+            other_run = _file_older(
+                bench, f"ca-other-{os.getpid()}", OTHER_RUN_CAUSE, tickets.UNESTIMATED_SCHEMA
+            )
+            _marked(
+                bench,
+                other_run.issue,
+                tickets.render_comment(run, OTHER_RUN_CAUSE, "Seen again in this run."),
+            )
 
-        # After the run last responded, so the gathering quotes each of these.
-        _next_second()
-        _commented(bench, proposed_issue, SUPERSEDING, REVIEWER)
-        _commented(bench, unsure_issue, ASKING, REVIEWER)
-        _commented(bench, deferred_issue, SUPERSEDING, REVIEWER)
-        for held in older.values():
-            _commented(bench, held.issue, CORRECTING, REVIEWER)
-        _commented(bench, other_run.issue, SEEN_AGAIN, REVIEWER)
-        gathering = _gathered(bench, run)
-
-        witness = tmp / DEFERRED_WITNESS
-        log = tmp / "prompts.jsonl"
-        actions = {
-            proposed_issue: WITHDREW,
-            unsure_issue: KEPT_UNSURE,
-            deferred_issue: KEPT_DEFERRED,
-            other_run.issue: RE_ESTIMATED,
-        }
-        commands = [
-            _decided_and_copied(
-                python, tickets.ticket_path(bench.drafts_root, run, PROPOSED_CAUSE), "--withdraw"
-            ),
-            _withdrawal_refused(
-                python, witness, tickets.ticket_path(bench.drafts_root, run, DEFERRED_CAUSE)
-            ),
-        ]
-        for schema, held in older.items():
-            commands += [
-                _brought_forward(bench, python, tmp / f"schema-{schema}.witness", held),
-                _decided_and_copied(python, held.ticket),
-            ]
-            actions[held.issue] = CORRECTED
-        _script(
-            bench,
-            run,
-            [
-                *commands,
-                _answering(bench, python, log, run, actions, (other_run.issue,)),
-                _re_estimate(python, other_run.issue),
-            ],
-        )
-        result = _run(
-            ["just", "follow-ups", run, "--feedback", str(gathering), "--comments", "--to", BOARD],
-            bench,
-            environment=bench.environment | {"FAKE_CODEX_PROMPT_LOG": str(log)},
-        )
-        stored = _stored(bench, follow_up_run)
-        checked = _run(
-            [python, "-m", "orchestrator.follow_up_tickets", "check-responses"]
-            + ["--board", BOARD, "--feedback", str(gathering), run],
-            bench,
-        )
-        return Answered(
-            bench=bench,
-            run=run,
-            proposed_issue=proposed_issue,
-            unsure_issue=unsure_issue,
-            deferred_issue=deferred_issue,
-            gathering=gathering,
-            result=result,
-            stored=stored,
-            witness=witness.read_text(encoding="utf-8") if witness.is_file() else "",
-            proposed_after=_item(bench, proposed_issue),
-            unsure_after=_item(bench, unsure_issue),
-            deferred_after=_item(bench, deferred_issue),
-            comments_after={
-                issue: _comments(bench, issue)
-                for issue in (
+            # After the run last responded, so the snapshot selects each of these.
+            _next_second()
+            _commented(bench, proposed_issue, SUPERSEDING, REVIEWER)
+            _commented(bench, unsure_issue, ASKING, REVIEWER)
+            _commented(bench, deferred_issue, SUPERSEDING, REVIEWER)
+            for held in older.values():
+                _commented(bench, held.issue, CORRECTING, REVIEWER)
+            _commented(bench, other_run.issue, SEEN_AGAIN, REVIEWER)
+            # Past the minute GitHub holds an item's change token back for, so the snapshot
+            # holds every item at a settled version each reply expects.
+            _settled_on_board()
+            snapshot = _composed(
+                bench,
+                run,
+                [
                     proposed_issue,
                     unsure_issue,
                     deferred_issue,
                     *(held.issue for held in older.values()),
                     other_run.issue,
+                ],
+            )
+
+            witness = tmp / WITHDRAWAL_WITNESS
+            actions: dict[str, str] = {
+                proposed_issue: WITHDREW,
+                unsure_issue: KEPT_UNSURE,
+                deferred_issue: KEPT_DEFERRED,
+                other_run.issue: RE_ESTIMATED,
+            }
+            commands = [
+                _withdrawn(python, witness, tickets.ticket_path(bench.drafts_root, run, cause))
+                for cause in (PROPOSED_CAUSE, DEFERRED_CAUSE)
+            ]
+            for schema, held in older.items():
+                commands.append(
+                    _brought_forward(bench, python, tmp / f"schema-{schema}.witness", held)
                 )
-            },
-            checked=checked,
-            older={
-                schema: Older(
-                    issue=held.issue,
-                    ticket=held.ticket,
-                    before=held.before,
-                    impact=held.impact,
-                    witness=(
-                        (tmp / f"schema-{schema}.witness").read_text(encoding="utf-8")
-                        if (tmp / f"schema-{schema}.witness").is_file()
-                        else ""
-                    ),
-                    after=_item(bench, held.issue),
-                    validated=_run(
-                        [
-                            python,
-                            "-m",
-                            "orchestrator.follow_up_tickets",
-                            "validate",
-                            str(held.ticket),
-                        ],
-                        bench,
-                    ),
-                )
-                for schema, held in older.items()
-            },
-            other_run=other_run,
-            other_run_after=_item(bench, other_run.issue),
-            protected_before=protected.before,
-            protected_after=_item(bench, protected.issue),
-        )
-    finally:
-        if (bench.runs / follow_up_run).exists():
-            _run(["just", "stop", follow_up_run], bench)
+                actions[held.issue] = CORRECTED
+            _script(
+                bench,
+                run,
+                [*commands, _answering(bench, python, log, run, actions, (other_run.issue,))],
+            )
+            launched = _answer(bench, checkout, tmp / "store-record.jsonl", "--from", str(snapshot))
+            (gathering,) = (bench.drafts_root / comments.FEEDBACK_DIRECTORY / run).glob("2*.md")
+            stored = _stored(bench, follow_up_run)
+            return Answered(
+                bench=bench,
+                run=run,
+                proposed_issue=proposed_issue,
+                unsure_issue=unsure_issue,
+                deferred_issue=deferred_issue,
+                gathering=gathering,
+                result=launched.result,
+                stored=stored,
+                ran=_ran(bench),
+                operations=launched.operations(),
+                witness=witness.read_text(encoding="utf-8") if witness.is_file() else "",
+                proposed_after=_item(bench, proposed_issue),
+                unsure_after=_item(bench, unsure_issue),
+                deferred_after=_item(bench, deferred_issue),
+                comments_after={
+                    issue: _comments(bench, issue)
+                    for issue in (
+                        proposed_issue,
+                        unsure_issue,
+                        deferred_issue,
+                        *(held.issue for held in older.values()),
+                        other_run.issue,
+                    )
+                },
+                older={
+                    schema: Older(
+                        issue=held.issue,
+                        ticket=held.ticket,
+                        before=held.before,
+                        impact=held.impact,
+                        witness=(
+                            (tmp / f"schema-{schema}.witness").read_text(encoding="utf-8")
+                            if (tmp / f"schema-{schema}.witness").is_file()
+                            else ""
+                        ),
+                        after=_item(bench, held.issue),
+                        validated=_run(
+                            [
+                                python,
+                                "-m",
+                                "orchestrator.follow_up_tickets",
+                                "validate",
+                                str(held.ticket),
+                            ],
+                            bench,
+                        ),
+                    )
+                    for schema, held in older.items()
+                },
+                other_run=other_run,
+                other_run_after=_item(bench, other_run.issue),
+                protected_before=protected.before,
+                protected_after=_item(bench, protected.issue),
+            )
+        finally:
+            for started in bench.runs.glob(f"{run}{SUFFIX}*") if bench.runs.is_dir() else ():
+                _run(["just", "stop", started.name], bench)
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
@@ -807,6 +858,17 @@ def _settled(answered: Answered) -> None:
     assert answered.result.returncode == OK, (
         answered.result.stdout + answered.result.stderr + _ran(answered.bench)
     )
+
+
+def _checked(answered: Answered) -> None:
+    """The pass's settle held the dispatch's account to its replies, and it passed."""
+    assert f"run {answered.run} (follow-up run {answered.run}{SUFFIX}): check-responses passed" in (
+        answered.result.stdout
+    ), answered.result.stdout
+
+
+def _report(answered: Answered) -> str:
+    return answered.result.stdout
 
 
 def _reply_to(answered: Answered, issue: str, text: str) -> tickets.CommentOwner:
@@ -843,7 +905,8 @@ def test_a_comment_showing_the_runs_own_proposal_no_longer_relevant_withdraws_it
     assert (
         _reply_to(answered, answered.proposed_issue, SUPERSEDING).kind is tickets.CommentKind.REPLY
     )
-    assert answered.checked.returncode == OK, answered.checked.stdout + answered.checked.stderr
+    _checked(answered)
+    assert f"{PROPOSED_CAUSE} exit {tickets.SOUND}" in answered.witness, answered.witness
     account = json.loads(tickets.responses_path(answered.gathering).read_text(encoding="utf-8"))
     withdrawn = [
         entry for entry in account["responses"] if entry["issue"] == answered.proposed_issue
@@ -862,19 +925,22 @@ def test_a_comment_whose_answer_leaves_a_proposal_relevant_is_answered_and_chang
     account = json.loads(tickets.responses_path(answered.gathering).read_text(encoding="utf-8"))
     kept = [entry for entry in account["responses"] if entry["issue"] == answered.unsure_issue]
     assert [entry["action"] for entry in kept] == [KEPT_UNSURE], account
-    assert answered.checked.returncode == OK, answered.checked.stdout + answered.checked.stderr
+    _checked(answered)
 
 
 def test_the_same_comment_on_a_deferred_item_leaves_its_status_as_a_person_set_it(
     answered: Answered,
 ) -> None:
-    """A deferred ticket no longer relevant is never withdrawn: `board-status --withdraw`
-    refuses an item a person deferred, so nothing is copied."""
+    """A deferred ticket no longer relevant is never withdrawn: the agent's ticket asks for it,
+    and settle writes a withdrawal only while the board holds the item at `Proposal`."""
     _settled(answered)
 
     assert _category(answered.deferred_after) == tickets.Status.DEFERRED.value
-    assert f"refused {tickets.PROTECTED}" in answered.witness, answered.witness
-    assert "copied" not in answered.witness, answered.witness
+    assert f"{DEFERRED_CAUSE} exit {tickets.SOUND}" in answered.witness, answered.witness
+    deferred = tickets.board_option(tickets.Status.DEFERRED)
+    assert f"  {answered.deferred_issue}: not withdrawn: the board holds it at {deferred}" in (
+        _report(answered)
+    ), _report(answered)
     assert (
         _reply_to(answered, answered.deferred_issue, SUPERSEDING).kind is tickets.CommentKind.REPLY
     )
@@ -887,7 +953,7 @@ def test_the_same_comment_on_a_deferred_item_leaves_its_status_as_a_person_set_i
 def test_a_comment_correcting_an_older_ticket_brings_it_to_the_current_schema_with_the_change(
     answered: Answered, schema: int
 ) -> None:
-    """Brought forward before it is decided, validated and copied, rather than left stale."""
+    """Brought forward by the agent and validated, then estimated and written by settle."""
     _settled(answered)
     older = answered.older[schema]
     before = older.before["metadata"]
@@ -903,6 +969,7 @@ def test_a_comment_correcting_an_older_ticket_brings_it_to_the_current_schema_wi
             "bring the ticket to the current shape"
         ) in older.witness, older.witness
         assert f"exit {tickets.UNSOUND}" in older.witness, older.witness
+    assert f"pending exit {tickets.SOUND}" in older.witness, older.witness
     retired = [f"## {heading}\n" for heading in tickets.RETIRED_HEADINGS]
     held_before = str(older.before["content"])
     assert all((heading in held_before) is (schema < tickets.RETIRED_AT) for heading in retired), (
@@ -926,26 +993,27 @@ def test_a_comment_correcting_an_older_ticket_brings_it_to_the_current_schema_wi
     assert f"Filed at schema {schema} (Examples)." in ticket.body, "the rest of the ticket moved"
     assert not any(heading in ticket.body for heading in retired), ticket.body
     assert ticket.frequency is tickets.Frequency.INTERMITTENT
-    assert ticket.priority_estimate is not None, "board-status wrote no estimate"
+    assert ticket.priority_estimate is not None, "settle wrote no estimate"
     assert ticket.host == HOST
     assert f"Verified on `{HOST}`." in ticket.body, ticket.body
     assert after["repositories"] == [REPOSITORY]
     impact = ticket.body.split(f"## {tickets.IMPACT}\n\n", 1)[1].split("\n\n## ", 1)[0]
     assert impact.startswith(older.impact), impact
-    assert f"- {tickets.ESTIMATE_LINE}:" in impact, "board-status wrote no estimate line"
+    assert f"- {tickets.ESTIMATE_LINE}:" in impact, "settle wrote no estimate line"
     assert older.validated.returncode == OK, older.validated.stdout + older.validated.stderr
     assert "is a sound ticket" in older.validated.stdout + older.validated.stderr
     assert _reply_to(answered, older.issue, CORRECTING).kind is tickets.CommentKind.REPLY
-    assert answered.checked.returncode == OK, answered.checked.stdout + answered.checked.stderr
+    _checked(answered)
 
 
 def test_another_runs_older_item_a_comment_asks_about_is_re_estimated_after_the_reply(
     answered: Answered,
 ) -> None:
-    """The rule's last clause on another run's item: `re-estimate` alone, after a confirming reply.
+    """The rule's last clause on another run's item: a re-estimate alone, after a confirming reply.
 
-    The item is brought to the schema that stores an estimate, given one, and nothing else of
-    it moves: its body is the other run's, less the estimate line `re-estimate` adds.
+    Settle makes it, counting the reply it verified: the item is brought to the schema that
+    stores an estimate, given one, and nothing else of it moves — its body is the other run's,
+    less the estimate line the re-estimate adds.
     """
     _settled(answered)
     before = answered.other_run.before
@@ -966,7 +1034,7 @@ def test_another_runs_older_item_a_comment_asks_about_is_re_estimated_after_the_
     reply = _reply_to(answered, answered.other_run.issue, SEEN_AGAIN)
     assert reply.kind is tickets.CommentKind.REPLY, reply
     assert reply.verdict is tickets.Verdict.CONFIRMS, reply
-    assert answered.checked.returncode == OK, answered.checked.stdout + answered.checked.stderr
+    _checked(answered)
 
 
 def test_the_dispatched_task_carries_the_investigation_exception_schema_and_dispute_rules(
@@ -996,6 +1064,43 @@ def test_the_dispatched_task_carries_the_investigation_exception_schema_and_disp
     )
     assert "## A comment disputing a severity or a priority" in task
     assert tickets.RUBRIC in task
+    # It reads the snapshot and replies with `--expect`, and the board writes are settle's.
+    assert "--expect <its version>" in flat
+    assert "validate --pending" in flat
+    for verb in ("board-status", "re-estimate", "copy"):
+        assert f"orchestrator.follow_up_tickets {verb} " not in answered.ran, answered.ran
+
+
+def test_from_its_launch_to_settle_the_dispatch_sends_the_board_nothing_but_its_replies(
+    answered: Answered,
+) -> None:
+    """`--from` reads no board; the turn's one board write is each reply, then settle reads once.
+
+    The snapshot was taken past the minute GitHub holds an item's change token back for, so it
+    holds every item at a settled version: each reply expects its item's, and not one request
+    precedes them. The replies then changed every item within the minute, so settle's one
+    batched read gives none a version, and each item settle writes is read once before its
+    writes: a field write where its priority or status moves, an issue write where its text or
+    record does.
+    """
+    _settled(answered)
+    quoted = len(tickets.quoted_comments(answered.gathering.read_text(encoding="utf-8")))
+    read, field, fields, issue = (
+        _Operation.ISSUE,
+        _Operation.UPDATE_FIELD,
+        _Operation.UPDATE_FIELDS,
+        _Operation.UPDATE_ISSUE,
+    )
+    assert answered.operations == (
+        [_Operation.ADD_COMMENT_WHOLE] * quoted
+        + [_Operation.ISSUE_DETAILS]
+        + [read, field, issue]
+        + [read, fields, issue]
+        + [read, field, issue] * 6
+        + [read, issue] * 4
+        + [read, field]
+        + [read, issue]
+    ), answered.operations
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
@@ -1048,20 +1153,21 @@ def _nothing_launched(mirror: Mirror) -> None:
     [(None, PLANTED_CREDENTIAL), (PROCESS_CREDENTIAL, PROCESS_CREDENTIAL)],
     ids=["from-the-file", "the-process-value-wins"],
 )
-def test_the_comments_mode_reads_the_board_with_the_credential_this_checkout_supplies(
+def test_the_comments_mode_hands_its_store_commands_the_credential_this_checkout_supplies(
     tmp_path: Path, held: str | None, handed: str
 ) -> None:
-    """`--comments` run directly: the gathering's board read is handed the `.env` token.
+    """`--comments` run directly: the store it asks about `--to` is handed the `.env` token.
 
     A manager running `just follow-ups … --comments` without the answer-comments recipe was
     refused for a missing `GH_PROJECTS_TOKEN` while the token sat in that file.
     """
-    mirror = _mirror(tmp_path, f"{BOARD_CREDENTIAL}={PLANTED_CREDENTIAL}\n")
-    gathering = _gathered(mirror.bench, mirror.run)
+    with _mirror(tmp_path, f"{BOARD_CREDENTIAL}={PLANTED_CREDENTIAL}\n") as mirror:
+        gathering = _gathered(mirror.bench, mirror.run, [mirror.issue])
+        mirror.trace.unlink(missing_ok=True)
 
-    result = _follow_ups_from(
-        mirror, held, "--feedback", str(gathering), "--comments", "--to", BOARD
-    )
+        result = _follow_ups_from(
+            mirror, held, "--feedback", str(gathering), "--comments", "--to", BOARD
+        )
 
     assert result.returncode == REFUSED, result.stdout + result.stderr
     assert _handed(mirror) == {handed}, mirror.trace.read_text(encoding="utf-8")
@@ -1085,10 +1191,11 @@ def test_the_initial_mode_hands_the_store_the_credential_this_checkout_supplies(
     checkout configures; its board reads come after, and the dispatch inherits the same
     environment.
     """
-    mirror = _mirror(tmp_path, f"{BOARD_CREDENTIAL}={PLANTED_CREDENTIAL}\n")
-    _draft(mirror.bench, mirror.run, "The cursor skips the last page")
+    with _mirror(tmp_path, f"{BOARD_CREDENTIAL}={PLANTED_CREDENTIAL}\n") as mirror:
+        _draft(mirror.bench, mirror.run, "The cursor skips the last page")
+        mirror.trace.unlink(missing_ok=True)
 
-    result = _follow_ups_from(mirror, held, "--to", BOARD)
+        result = _follow_ups_from(mirror, held, "--to", BOARD)
 
     assert result.returncode == REFUSED, result.stdout + result.stderr
     assert _handed(mirror) == {handed}, mirror.trace.read_text(encoding="utf-8")
@@ -1097,40 +1204,70 @@ def test_the_initial_mode_hands_the_store_the_credential_this_checkout_supplies(
     assert PLANTED_CREDENTIAL not in result.stdout + result.stderr, "a credential value was printed"
 
 
-def test_with_no_credential_anywhere_the_default_board_is_refused_by_the_store_and_nothing_runs(
+def test_with_no_credential_anywhere_the_comments_mode_reads_no_board_and_goes_ahead(
     tmp_path: Path,
 ) -> None:
-    """No token in the process, in `.env` or in the store's secrets file: the store says so.
+    """No token in the process, in `.env` or in the store's secrets file, and nothing refuses.
 
-    The gathering names the default `followups` board, which is the live one, so the read is
-    refused for its missing credential before anything leaves this host, and nothing launches.
+    A comment dispatch's checks read the gathering's snapshot, and the default `followups`
+    board is read by nothing before the launch: the recipe goes as far as the launch, where the
+    mirror's engine stops it, with no store refusing for the missing credential.
     """
-    mirror = _mirror(tmp_path, None)
-    shutil.copy2(REPO_ROOT / "onetaskgraph.yaml", mirror.checkout / "onetaskgraph.yaml")
-    standin = _gathered(mirror.bench, mirror.run).read_text(encoding="utf-8")
-    gathering = tmp_path / "followups-gathering.md"
-    gathering.write_text(
-        standin.replace(f"`{BOARD}`", f"`{tickets.BOARD}`").replace(
-            f"{BOARD}:", f"{tickets.BOARD}:"
-        ),
-        encoding="utf-8",
-    )
-    no_secrets = tmp_path / "no-secrets.env"
-    no_secrets.write_text("", encoding="utf-8")
+    with _mirror(tmp_path, None) as mirror:
+        gathering = _gathered(mirror.bench, mirror.run, [mirror.issue])
+        mirror.trace.unlink(missing_ok=True)
+        no_secrets = tmp_path / "no-secrets.env"
+        no_secrets.write_text("", encoding="utf-8")
 
-    result = _follow_ups_from(
-        mirror,
-        None,
-        "--feedback",
-        str(gathering),
-        "--comments",
-        environment={"ONETASKGRAPH_SECRETS_FILE": str(no_secrets)},
-    )
+        result = _follow_ups_from(
+            mirror,
+            None,
+            "--feedback",
+            str(gathering),
+            "--comments",
+            environment={"ONETASKGRAPH_SECRETS_FILE": str(no_secrets)},
+        )
 
     assert result.returncode == REFUSED, result.stdout + result.stderr
-    assert "GH_PROJECTS_TOKEN is missing or empty" in result.stderr, result.stderr
-    assert f"is not a gathering of '{tickets.BOARD}' this run could answer" in result.stderr
-    assert _handed(mirror) == {"<unset>"}, mirror.trace.read_text(encoding="utf-8")
+    assert ENGINE_STOP in result.stderr, result.stderr
+    assert "GH_PROJECTS_TOKEN" not in result.stderr, result.stderr
+    assert "is not a gathering" not in result.stderr, result.stderr
+    _nothing_launched(mirror)
+
+
+def test_a_gathering_naming_no_snapshot_is_refused_by_the_recipe_before_any_check_or_launch(
+    tmp_path: Path,
+) -> None:
+    """`--comments` over a feedback file whose snapshot line is gone: the helper exporting the
+    snapshot source refuses under the recipe's own name, saying why and what to gather instead,
+    and nothing is checked against the board or launched."""
+    with _mirror(tmp_path, f"{BOARD_CREDENTIAL}={PLANTED_CREDENTIAL}\n") as mirror:
+        gathering = _gathered(mirror.bench, mirror.run, [mirror.issue])
+        text = gathering.read_text(encoding="utf-8")
+        gathering.write_text(
+            "\n".join(
+                line
+                for line in text.splitlines()
+                if not line.startswith(comments.FEEDBACK_SNAPSHOT.partition("{")[0])
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        result = _follow_ups_from(
+            mirror, None, "--feedback", str(gathering), "--comments", "--to", BOARD
+        )
+
+    assert result.returncode == REFUSED, result.stdout + result.stderr
+    assert (
+        f"follow-ups: the snapshot '{gathering}' was gathered from could not be named: "
+    ) in result.stderr, result.stderr
+    assert "names no snapshot on its snapshot line" in result.stderr, result.stderr
+    assert (
+        "follow-ups: gather the board's comments again with 'just follow-ups-answer-comments', "
+        "which writes a feedback file naming its snapshot, then retry"
+    ) in result.stderr
+    assert ENGINE_STOP not in result.stderr, "the recipe went on past the refusal"
     _nothing_launched(mirror)
 
 
@@ -1139,7 +1276,8 @@ def _mode_arguments(mirror: Mirror, comments: bool) -> tuple[str, ...]:
     _draft(mirror.bench, mirror.run, "The cursor skips the last page")
     if not comments:
         return ("--to", BOARD)
-    return ("--feedback", str(_gathered(mirror.bench, mirror.run)), "--comments", "--to", BOARD)
+    gathering = _gathered(mirror.bench, mirror.run, [mirror.issue])
+    return ("--feedback", str(gathering), "--comments", "--to", BOARD)
 
 
 @pytest.mark.parametrize("comments", [False, True], ids=["initial", "comments"])
@@ -1154,12 +1292,12 @@ def test_a_credential_file_the_helper_refuses_stops_the_recipe_before_any_store_
     otherwise run without. No store command — the board read included — runs first.
     """
     malformed = "not-an-assignment-with-a-value-that-must-not-appear\n"
-    mirror = _mirror(tmp_path, malformed if shape == "malformed" else None)
-    env_file = mirror.checkout / ".env"
-    if shape == "not-a-file":
-        env_file.mkdir()
+    with _mirror(tmp_path, malformed if shape == "malformed" else None) as mirror:
+        env_file = mirror.checkout / ".env"
+        if shape == "not-a-file":
+            env_file.mkdir()
 
-    result = _follow_ups_from(mirror, None, *_mode_arguments(mirror, comments))
+        result = _follow_ups_from(mirror, None, *_mode_arguments(mirror, comments))
 
     assert result.returncode == REFUSED, result.stdout + result.stderr
     refused = (
@@ -1181,16 +1319,17 @@ def test_the_recipe_refuses_before_any_store_command_when_the_credentials_helper
     tmp_path: Path, comments: bool, sabotage: str
 ) -> None:
     """The one source of the credential gone or unreadable: refused naming it, in either mode."""
-    mirror = _mirror(tmp_path, f"{BOARD_CREDENTIAL}={PLANTED_CREDENTIAL}\n")
-    helper = mirror.checkout / "scripts" / "credentials-env.sh"
-    if sabotage == "missing":
-        helper.unlink()
-    else:
-        helper.chmod(0)
-        if os.access(helper, os.R_OK):
-            pytest.skip("this user reads a file with no permission bits: nothing is unreadable")
+    with _mirror(tmp_path, f"{BOARD_CREDENTIAL}={PLANTED_CREDENTIAL}\n") as mirror:
+        arguments = _mode_arguments(mirror, comments)
+        helper = mirror.checkout / "scripts" / "credentials-env.sh"
+        if sabotage == "missing":
+            helper.unlink()
+        else:
+            helper.chmod(0)
+            if os.access(helper, os.R_OK):
+                pytest.skip("this user reads a file with no permission bits: nothing is unreadable")
 
-    result = _follow_ups_from(mirror, None, *_mode_arguments(mirror, comments))
+        result = _follow_ups_from(mirror, None, *arguments)
 
     assert result.returncode == REFUSED, result.stdout + result.stderr
     assert (

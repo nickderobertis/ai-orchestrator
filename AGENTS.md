@@ -1004,15 +1004,34 @@ comment is a direct tweak; anything more goes back with `just follow-ups <run-id
 --feedback FILE`. On the `followups` board a run owns only the issues it created and the
 comments its marker names (`orchestrator/follow_up_tickets.py`).
 
-<!-- llmlint: ignore-block[agents_md_durable_and_terse] The plan that added the command requires this section to name it, its dry run, what it reads and how a comment is routed and answered, because those decide whether a manager runs it and what its cost scales with; the rule itself is stated once, in the module this points to. -->
-People's board comments are answered by `just follow-ups-answer-comments` (`--dry-run`
-launches nothing). `--issue <source>:<id>` reads that one item and its comments by id, and
-`--run <run-id>` the items that run's tickets are bound to, each listing nothing; unscoped,
-the store narrows its query to this host's items commented on since the board's watermark
-before any comment is read. It routes each comment to the run owning its issue, refuses an
-`--issue` no run here owns, and counts a comment answered once any run's reply names it;
-`orchestrator/follow_up_comments.py` states the rule.
-<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
+<!-- llmlint: ignore-block[agents_md_durable_and_terse, instruction_layer_localized] The plan that added the command requires this section to name it, its dry run, what it reads and how a comment is routed and answered, because those decide whether a manager runs it and what its cost scales with, and the plan that made it read the board once requires the snapshot, `--from`, settle's one read and writes, pending writes, the residual race and the watermark stated here as one statement with the module's; the rules themselves are stated once, in the module this points to. It is the manager's own loop rather than an `orchestrator/` implementation constraint: the manager runs this recipe, launches a dry run with `--from` or not, and acts on its needs-attention ending, and no nested instruction file is one the manager reads. -->
+People's board comments are answered by `just follow-ups-answer-comments`, which reads the
+board **once**: one plan-store copy into a snapshot under `<drafts root>/feedback/.snapshots/`,
+from which everything after it reads. `--issue <source>:<id>` copies that one item by id and
+`--run <run-id>` the items that run's tickets are bound to, each listing nothing; unscoped, the
+store narrows its query to this host's items commented on since the board's watermark. It
+routes each comment to the run owning its issue and refuses an `--issue` no run here owns.
+`--dry-run` writes that snapshot and nothing else — no feedback file, no watermark, nothing on
+the board — and prints the `just follow-ups-answer-comments --from <snapshot>` that launches
+exactly what it showed, with no board request before the launches, while the snapshot is
+younger than the module's `SNAPSHOT_LAUNCHABLE_FOR`; a snapshot already launched, or launched
+past by a later overlapping one, is refused naming the fresh dry run, and never because the
+board moved since. The dispatched agent reads only the
+snapshot and posts each reply with `--expect`. Settle then makes the pass's one batched board
+read, verifies every reply, and writes the tickets the agent changed, their re-estimates and
+any withdrawal as field-scoped `--expect` writes checked from their own responses — but for
+the one named `repositories` exception: a ticket whose `repositories` changed goes as one whole
+`--expect` copy, the one field `task update` cannot set, and the store's unreported read after
+such a copy is refused is named and counted as a fallback, until onetaskgraph ships a
+field-scoped repositories update (the follow-up "task update cannot set an item's
+repositories"); a person's edit since the snapshot withholds a ticket's
+write, and a person's edit in the seconds between that read and a write to the field it sets
+is overwritten, the accepted residual race. A write
+that did not certainly land goes to `feedback/pending.json`, the pass ends saying **needs
+attention**, and the next pass clears, retries or surfaces it. The watermark moves only for an
+unscoped snapshot whose every reply was verified, and a reply answers the version of a comment
+its gathering quoted. `orchestrator/follow_up_comments.py` states every rule.
+<!-- llmlint: ignore-end[agents_md_durable_and_terse, instruction_layer_localized] -->
 
 <!-- llmlint: ignore-block[agents_md_durable_and_terse] Which recipe selects which mode is
 a decision the manager makes before running either, and neither recipe's own help states
@@ -1060,15 +1079,19 @@ happens to quote a board comment does not narrow the dispatch silently.
   it investigates that one ticket, read-only but for targeted tests and builds, and says
   what would settle a question it cannot. It never changes a board item's status except
   by one withdrawal: this run's own item at `Proposal` (`Proposed` on Linear), when its
-  ticket is no longer relevant. The template's feedback mode states both bounds.
+  ticket is no longer relevant. The template's feedback mode states both bounds. It reads
+  every quoted issue from the snapshot, writes nothing to the board but its replies, and
+  leaves each ticket it changed, its estimate and a withdrawal to the pass's settle.
   `python -m orchestrator.follow_up_tickets check-responses` is what holds an account to
-  that, reading each reply it names back off the board. The pre-launch `check-gathering` read also refuses an issue the run neither
-  owns nor marked, and a comment whose marker says a run wrote it.
+  that, reading the account and the snapshot alone; settle's one batched read holds each
+  reply it names to the board. The pre-launch `check-gathering` holds the file to its
+  snapshot and also refuses an issue the run neither owns nor marked, and a comment whose
+  marker says a run wrote it.
 
 Initial dispatches correct their accounts with the local, board-less validator. An attached
 `just follow-ups` runs the sole board disposition check after settlement, including the
 comment recount for items this run created. Feedback dispatches require their reply validator
-green and the attached recipe re-runs that reply validator after settlement.
+green, and the recipe's settle re-runs it and verifies every reply on the board.
 <!-- llmlint: ignore-end[instruction_layer_localized] -->
 <!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 

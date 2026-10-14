@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -1346,33 +1347,22 @@ def test_check_dispositions_holds_another_runs_item_to_the_line_its_record_rende
 
 
 def _gathered(root: Path, issue: str, asked: str) -> Path:
-    """A gathering quoting the one comment ``asked`` on ``issue``, as the gatherer writes it."""
-    item = _shown(issue)
-    (held,) = [
-        one
-        for one in plan_store.sdk(plan_store.client().task_comment_list(issue)).comments
-        if one.id.model_dump() == asked
-    ]
-    location = item.get("location")
-    path = location.get("path") if isinstance(location, dict) else None
-    url = comments.comment_url_parts(
-        None, path if isinstance(path, str) else None, asked, held.url, issue
-    )
-    changed = comments.moment(held.updated_at or held.created_at, "the comment").strftime(
-        comments.MOMENT_FORMAT
-    )
-    directory = root / "feedback" / RUN
-    directory.mkdir(parents=True, exist_ok=True)
-    feedback = directory / "20260101T000000Z.md"
-    feedback.write_text(
-        comments.render(RUN, BOARD, [], None)
-        + f"{tickets.QUOTED_COMMENT_HEADING}1: on `{issue}`\n\n"
-        + f"{tickets.quoted_comment(issue, asked)}\n\n"
-        + f"- Comment id: {asked}\n- URL: {url}\n- Author: {held.author}\n"
-        + f"- Last changed: {changed}\n- Issue title: {item['title']}\n\n"
-        + f"````text\n{held.body.rstrip()}\n````\n",
-        encoding="utf-8",
-    )
+    """The feedback a gathering scoped to the run writes for ``asked`` on ``issue``.
+
+    The run's ticket is dated before the board's comments, so the boundary its last copy
+    gives stands behind every one of them, as it does for a ticket filed before a person
+    commented.
+    """
+    for ticket in (root / "tasks" / RUN / tickets.TICKETS).glob("*.md"):
+        os.utime(ticket, (0, 0))
+    said: list[str] = []
+    snapshot = comments.gather(root, BOARD, scope=tickets.RunId(RUN), host=HOST, say=said.append)
+    assert snapshot is not None
+    plan = comments.claim(root, snapshot.directory, fresh=True, detach=False, say=said.append)
+    assert len(plan.runs) == 1, said
+    ((_, feedback),) = plan.runs
+    quoted = tickets.quoted_comments(feedback.read_text(encoding="utf-8"))
+    assert [(one.issue, one.comment) for one in quoted] == [(issue, asked)], said
     return feedback
 
 
@@ -1389,6 +1379,8 @@ def _account(
         "issue": issue,
         "action": "Nothing to change; it confirms the root cause.",
         "reply": reply,
+        "reply_url": None,
+        "reply_fallback": None,
     }
     if verdict is not None:
         response["verdict"] = verdict
@@ -1410,18 +1402,24 @@ def _responses(feedback: Path, capsys: pytest.CaptureFixture[str]) -> tuple[int,
     return status, " ".join(capsys.readouterr().err.split())
 
 
-def test_check_responses_holds_each_verdict_to_its_marker_and_a_confirmation_to_its_recount(
-    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    issue = _copied(_write(drafts_root, _ticket()), capsys)
-    _evidence(issue, OTHER_RUN)
-    asked = _comment(issue, "Seen again on page 12.\n", author="a-person")
-    feedback = _gathered(drafts_root, issue, asked)
-    reply = _comment(
+def _settled(feedback: Path) -> tuple[int, str]:
+    """Settle the run the feedback launched, as the recipe does: its status and its report."""
+    snapshot = comments.recorded_snapshot(feedback.read_text(encoding="utf-8"))
+    assert snapshot is not None
+    plan = comments.Plan(
+        snapshot, detach=False, runs=(comments.Launch(tickets.RunId(RUN), feedback),)
+    )
+    said: list[str] = []
+    status = comments.settle(feedback.parents[2], plan, {RUN: "follow-up-1"}, say=said.append)
+    return status, " ".join(" ".join(said).split())
+
+
+def _confirming(issue: str, asked: str, cause: str = CAUSE) -> str:
+    return _comment(
         issue,
         tickets.render_reply(
             RUN,
-            CAUSE,
+            cause,
             answers=asked,
             url="u",
             author="a-person",
@@ -1429,6 +1427,19 @@ def test_check_responses_holds_each_verdict_to_its_marker_and_a_confirmation_to_
             verdict=tickets.Verdict.CONFIRMS,
         ),
     )
+
+
+def test_settle_holds_each_verdict_to_its_marker_and_writes_a_confirmations_recount(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The account's verdict is the dispatch's; settle's one read holds it to the reply's marker,
+    and a confirmation is one more occurrence, which settle writes into the issue's estimate
+    from the snapshot's comments and the reply it verified."""
+    issue = _copied(_write(drafts_root, _ticket()), capsys)
+    _evidence(issue, OTHER_RUN)
+    asked = _comment(issue, "Seen again on page 12.\n", author="a-person")
+    feedback = _gathered(drafts_root, issue, asked)
+    reply = _confirming(issue, asked)
 
     _account(feedback, issue, asked, reply, None)
     status, refused = _responses(feedback, capsys)
@@ -1441,38 +1452,22 @@ def test_check_responses_holds_each_verdict_to_its_marker_and_a_confirmation_to_
     assert "states the verdict 'maybe', where every response states one of" in refused
 
     _account(feedback, issue, asked, reply, "does-not-confirm")
-    status, refused = _responses(feedback, capsys)
-    assert status == tickets.UNSOUND
-    assert "states the verdict `does-not-confirm`, and its reply" in refused
-    assert "marker states `confirms`" in refused
+    assert _responses(feedback, capsys)[0] == tickets.SOUND, "the dispatch's check read the board"
+    status, said = _settled(feedback)
+    assert status == comments.UNANSWERED
+    assert "states the verdict `does-not-confirm`, and its reply" in said
+    assert "marker states `confirms`" in said
+    assert _held(issue)[tickets.ESTIMATE_FIELD] == "medium", "an unverified reply was counted"
 
     _account(feedback, issue, asked, reply, "confirms")
-    status, refused = _responses(feedback, capsys)
-    assert status == tickets.UNSOUND, "a confirmation left its issue's estimate as it was"
-    assert f"{issue}'s record stores the estimate 'medium', where its 3 occurrences" in refused
-
-    _re_estimated(issue, capsys)
-    assert _responses(feedback, capsys)[0] == tickets.SOUND
-
-    record = _held(issue) | {tickets.ESTIMATE_FIELD: "high"}
-    content = _shown(issue)["content"]
-    assert isinstance(content, str)
-    stale = drafts_root / "stale.md"
-    stale.write_text(
-        content.replace(
-            _line(content), tickets.estimate_line(Severity.MEDIUM, Frequency.CONSISTENT, 3)
-        ),
-        encoding="utf-8",
-    )
-    plan_store.sdk(plan_store.client().task_content_set(issue, file=str(stale)))
-    assert _held(issue) == record
-    status, refused = _responses(feedback, capsys)
-    assert status == tickets.UNSOUND
-    assert f"{issue}'s `## Impact` estimate line reads" in refused
-    assert "fires consistently" in refused
+    status, said = _settled(feedback)
+    assert status == comments.DONE, said
+    # Another run's evidence and the confirmation make three occurrences, which raise it.
+    assert _held(issue)[tickets.ESTIMATE_FIELD] == "high", said
+    assert tickets.board_estimate_problems(issue) == []
 
 
-def test_check_responses_refuses_a_verdict_its_legacy_reply_marker_does_not_state(
+def test_settle_refuses_a_verdict_its_legacy_reply_marker_does_not_state(
     board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A reply posted before markers carried a verdict states none, which no account matches."""
@@ -1494,73 +1489,46 @@ def test_check_responses_refuses_a_verdict_its_legacy_reply_marker_does_not_stat
     assert tickets.comment_owner(legacy) is not None, "the legacy marker names no run"
 
     _account(feedback, issue, asked, reply, "does-not-confirm")
-    status, refused = _responses(feedback, capsys)
-    assert status == tickets.UNSOUND
-    assert "states the verdict `does-not-confirm`, and its reply" in refused
-    assert "marker states none" in refused
+    status, said = _settled(feedback)
+    assert status == comments.UNANSWERED
+    assert "states the verdict `does-not-confirm`, and its reply" in said
+    assert "marker states none" in said
 
 
-def test_check_responses_refuses_an_account_written_to_the_schema_before_verdicts(
+def test_check_responses_refuses_an_account_written_to_the_schema_before_reply_urls(
     board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A schema-1 account states no verdict, so it answers nothing the current check reads.
+    """A schema-2 account names no reply URL, so it answers nothing the current check reads.
 
     It is refused by its schema rather than read for what it lacks, whatever its replies say.
     """
     issue = _copied(_write(drafts_root, _ticket()), capsys)
     asked = _comment(issue, "Seen again.\n", author="a-person")
     feedback = _gathered(drafts_root, issue, asked)
-    reply = _comment(
-        issue,
-        tickets.render_reply(
-            RUN,
-            CAUSE,
-            answers=asked,
-            url="u",
-            author="a-person",
-            response="It does not confirm the cause.",
-            verdict=tickets.Verdict.DOES_NOT_CONFIRM,
-        ),
-    )
+    reply = _confirming(issue, asked)
     prior = tickets.RESPONSES_SCHEMA - 1
-    assert prior == 1
+    assert prior == 2  # noqa: PLR2004 - the schema before reply URLs
 
-    _account(feedback, issue, asked, reply, None, schema=prior)
+    _account(feedback, issue, asked, reply, "confirms", schema=prior)
     status, refused = _responses(feedback, capsys)
     assert status == tickets.UNSOUND
     assert f"its `schema` is {prior}, and this reads schema {tickets.RESPONSES_SCHEMA}" in refused
 
-    _account(feedback, issue, asked, reply, "does-not-confirm")
+    _account(feedback, issue, asked, reply, "confirms")
     assert _responses(feedback, capsys)[0] == tickets.SOUND
 
 
-def test_check_responses_refuses_a_confirmation_whose_marker_names_another_root_cause(
+def test_settle_refuses_a_confirmation_whose_marker_names_another_root_cause(
     board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A reply naming another root cause is no occurrence of this one, so it confirms nothing.
-
-    Once the issue is re-estimated from what its comments do count, the account passes only
-    with the marker naming the root cause the issue's record describes.
-    """
+    """A reply naming another root cause is no occurrence of this one, so it confirms nothing."""
     issue = _copied(_write(drafts_root, _ticket()), capsys)
     asked = _comment(issue, "Seen again.\n", author="a-person")
     feedback = _gathered(drafts_root, issue, asked)
-    elsewhere = _comment(
-        issue,
-        tickets.render_reply(
-            RUN,
-            "another-cause",
-            answers=asked,
-            url="u",
-            author="a-person",
-            response="It confirms the cause.",
-            verdict=tickets.Verdict.CONFIRMS,
-        ),
-    )
-    _re_estimated(issue, capsys)
+    elsewhere = _confirming(issue, asked, "another-cause")
 
     _account(feedback, issue, asked, elsewhere, "confirms")
-    status, refused = _responses(feedback, capsys)
-    assert status == tickets.UNSOUND
-    assert f"its reply {elsewhere}'s marker names the root cause `another-cause`" in refused
-    assert f"record describes '{CAUSE}'; it confirms nothing there" in refused
+    status, said = _settled(feedback)
+    assert status == comments.UNANSWERED
+    assert f"its reply {elsewhere}'s marker names the root cause `another-cause`" in said
+    assert f"record describes '{CAUSE}'; it confirms nothing there" in said

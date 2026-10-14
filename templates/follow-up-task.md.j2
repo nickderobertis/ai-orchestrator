@@ -793,13 +793,26 @@ two tickets' reading rather than a re-verification of the run.
   name is answered by whatever your search path offers first, which on two real runs was
   another release — one filed its tickets as issues of the wrong repository, and one had
   every sound ticket refused by a validator reading an older record schema.
-- **The board.** Each comment below names the issue it sits on as `<its board>:<id>`: an
-  issue of the `{{ board }}` board, or of the Linear source one of its routes names. Read the
-  issue one comment sits on with
-  `{{ plan_store }} task show <id> --json`, read its comments with
-  `{{ plan_store }} task comment list <id>`, and add, edit or delete a comment with
-  `{{ plan_store }} task comment add|edit|delete`. Read only the issues the comments below
-  name, one at a time, and never list the board.
+- **The snapshot, never the board.** The comments below were gathered by one copy of the
+  board into a snapshot, which this launch's environment configures as the plan source
+  `snapshot`, and every read of a quoted issue goes there: nothing about the board may be
+  read in this dispatch. Each comment's `Issue` line names its issue's id on the board
+  (`<its board>:<id>`, an issue of the `{{ board }}` board or of the Linear source one of its
+  routes names), its id in the snapshot (`snapshot:<id>`) and the version the snapshot holds.
+  Read the issue with `{{ plan_store }} task show <its snapshot id> --json` and its comments with
+  `{{ plan_store }} task comment list <its snapshot id>`. Read only the issues the comments
+  below name, and never list the board or the snapshot.
+- **The one board write.** Post each reply with
+  `{{ plan_store }} task comment add <its board id> --expect <its version> --body-file <reply> --json`,
+  naming the version the comment's `Issue` line gives — or, once you have replied on that
+  issue, the `result.version` your last reply's answer carried, since that reply moved the
+  issue past the snapshot's — or with no `--expect` where that line names the version `none`
+  or that answer carried none, as an item changed within the last minute gets.
+  That command's answer carries the reply's id and URL, which the account records: nothing
+  looks a reply up afterwards. Write nothing else to the board —
+  no ticket copy, no status, no priority, no edit of any other comment: this run's settle
+  step writes the tickets you changed, their estimates and any withdrawal, after it has
+  read the board once.
 - **The ticket behind a commented issue.** The ticket behind an issue is at
   `{{ drafts_root }}/{{ shape.tasks_directory }}/<its run>/{{ shape.tickets_directory }}/<its root cause>{{ shape.ticket_suffix }}`, which the issue's
   `{{ shape.record_key }}` record names. Only the ticket of an issue a comment below sits on,
@@ -836,7 +849,7 @@ A ticket's priority is estimated from its facts and never set by hand here, so a
 saying a ticket's priority or severity is wrong is answered on its severities. Judge both
 again by the rubric below, against the ticket's own evidence and what the comment adds. Where
 the rubric supports another severity, change the `## {{ shape.impact }}` section's labelled parts and
-severity lines to match, and nothing else; `{{ board_status }}` then recomputes the estimate,
+severity lines to match, and nothing else; this run's settle step then recomputes the estimate,
 and the board item's priority follows it only while nobody has set it by hand. Where it does
 not, change nothing. Either way the reply names the impact area and the rubric's row or
 step that decided, and the workaround costs where the severity with the workaround is
@@ -893,30 +906,26 @@ For each comment quoted below, in the order it is quoted:
    <!-- llmlint: ignore-end[changed_behavior_has_e2e] -->
    A ticket whose
    record carries an older `schema` — which `{{ validate }}` refuses, naming it — is brought
-   forward first, by the rule the re-dispatch states for it:
+   forward first, by the rule the re-dispatch states for it, leaving its estimate to settle:
 
-{{ older_schema.rule(shape, board, board_status, re_estimate) | indent(3, true) }}
+{{ older_schema.rule(shape, board, board_status, re_estimate, settled=true) | indent(3, true) }}
 
-   Then, **for that one ticket**:
-   - run `{{ board_status }} --board {{ board }} <path of the ticket>` and write the word it prints
-     as the ticket's `status`, so a person's move of that item stands;
-   - run `{{ validate }} <path of the ticket>` and correct the ticket until it reports it sound;
-   - run `{{ copy }} --board {{ board }} <path of the ticket>`.
-
-   When any of those refuses, copy nothing for that ticket, keep what it printed for your
-   report and for the account, and go on to the next comment.
+   Then run `{{ validate }} --pending <path of the ticket>` and correct the ticket until it reports
+   it sound. Leave its `status`, `priority` and estimate as they stand, but for a withdrawal:
+   this run's settle step reads the board's status and priority, recounts the estimate from
+   the snapshot's comments and your replies, and copies the ticket's changed fields onto its
+   item — the whole ticket where its `repositories` changed. When the validation refuses, keep what it printed for your report and for the
+   account, and go on to the next comment.
 2. **Judge whether it confirms the root cause, and post its one reply**, naming the
    comment's id and carrying that verdict in its marker, as those rules state. The reply
    states what changed in the ticket and why, or why the ticket stands as it is: `{{ shape.confirms }}`
    when the comment is a new sighting of the issue's root cause or evidence that it is more
-   prevalent, `{{ shape.does_not_confirm }}` otherwise. Keep the id the store prints for it.
-3. **After every `{{ shape.confirms }}` reply, re-estimate the issue it sits on** with
-   `{{ re_estimate }} --board {{ board }} <the issue's id>`: the confirmation is one more
-   occurrence, and that command recounts them, stores the estimate and rewrites the
-   estimate line. It moves the issue's priority only where the board still holds the
-   estimate, so a priority a person set stays.
-4. **Record it** in the account at `{{ responses }}`, with its verdict, to the shape under "The
-   account of every comment" below.
+   prevalent, `{{ shape.does_not_confirm }}` otherwise. Post it with the one board write
+   "Where everything is" names, and keep the id and URL it answers. A `{{ shape.confirms }}`
+   reply is one more occurrence, which settle recounts into the issue's estimate: run no
+   re-estimate yourself.
+3. **Record it** in the account at `{{ responses }}`, with its verdict and the reply's id and
+   URL, to the shape under "The account of every comment" below.
 
 Then run `{{ check_responses }}` and correct the account until it reports it sound.
 
@@ -928,9 +937,9 @@ nothing, and the reply you posted for it.
 Never touch an issue, a comment or a ticket no comment below names: a person's move of an
 item to `Todo`, `Deferred` or `In Progress` stands whenever they made it, and a ticket this
 run left unfinished is the next verification dispatch's, not this one's. The withdrawal
-above is step 1's change to that comment's ticket: run
-`{{ board_status }} --board {{ board }} --withdraw <path of the ticket>`, then validate and copy
-it as step 1 says.
+above is step 1's change to that comment's ticket: write `{{ shape.withdrawn }}` as its `status`
+and validate it as step 1 says; settle writes it to the board only while the board still
+holds the item at `{{ shape.proposed_option }}`.
 
 {% include "follow-up-task/ownership.md.j2" %}
 
@@ -944,19 +953,21 @@ quoted comment, in that order:
 {{ response_example }}
 ````
 
-`action` is what you did before the reply went up, in your words; `reply` is the id of the
-reply you posted for that comment, which is the one the board gave it; and `verdict` is the
-verdict that reply's marker carries.
+`action` is what you did before the reply went up, in your words; `reply` and `reply_url`
+are the id and the URL the reply's own `task comment add --json` answered, which is the one
+record of where it is, with null for a URL that answer named none; `reply_fallback` is the
+reason that answer gave for reading the board before it wrote, under fallback, or null where
+it gave none, which the pass reports and counts; and `verdict` is the verdict that reply's
+marker carries.
 
-**`{{ check_responses }}` is what says the account is complete.** Run it, correct the document
-until it reports the local account sound. It exits {{ shape.exits.sound }} when every quoted
-comment carries exactly one response, in order, naming the issue the feedback quotes it on
-and its verdict, the board holds a reply of this run answering it whose marker carries that
-verdict, and every issue a `{{ shape.confirms }}` reply sits on stores the estimate its comments recount
-to and states it on its estimate line; and {{ shape.exits.unsound }} naming each comment that is absent,
-answered twice, out of order, or whose reply the board does not hold or marks with another
-verdict, and each issue whose estimate or estimate line disagrees — run `{{ re_estimate }}` on
-that issue. This dispatch is not finished while it refuses.
+**`{{ check_responses }}` is what says the account is complete.** It reads the account and the
+snapshot, and never the board. Run it, correct the document until it reports the account
+sound. It exits {{ shape.exits.sound }} when every quoted comment carries exactly one response, in
+order, naming the issue the feedback quotes it on, its verdict and its reply's id and URL,
+and every ticket of an issue it answers on reads as sound to `{{ validate }} --pending`; and
+{{ shape.exits.unsound }} naming each comment that is absent, answered twice or out of order, each
+response missing its reply's URL, and each unsound ticket. Whether each reply is on the board
+is settle's to verify, in the one read it makes. This dispatch is not finished while it refuses.
 
 {% endif %}
 {% endblock %}
@@ -979,18 +990,20 @@ that issue. This dispatch is not finished while it refuses.
 {% else %}
 - `{{ check_responses }}` reports the account at `{{ responses }}` sound: every comment quoted
   below carries exactly one response, in the order it is quoted, naming the issue the
-  comment is quoted on and its verdict, the board holds a reply of run `{{ run }}` answering it
-  whose marker carries that verdict, and every issue a `{{ shape.confirms }}` reply sits on stores the
-  estimate its comments recount to. Run it
-  last, after the final reply is posted and the final edit to that account, because a run
-  of it from before either says nothing about what you leave.
-- No issue, comment or ticket that no comment below names was created, edited, copied or
-  closed by this dispatch, and no ticket or board item a quoted comment does not sit on
-  was read.
-- No board item's status was changed but by withdrawing this run's own item at `Proposal`
-  whose ticket a quoted comment, or investigating it, showed is no longer relevant, and that
-  comment's reply and account entry say the item was withdrawn and why; no item at
-  `Deferred` or at an accepted status changed status.
+  comment is quoted on, its verdict, and the id and URL its reply's `task comment add`
+  answered. Run it last, after the final reply is posted and the final edit to that
+  account, because a run of it from before either says nothing about what you leave.
+- Every quoted issue and its comments were read from the snapshot source, and nothing was
+  read from the board; the only board writes this dispatch made are its replies, one per
+  quoted comment, each posted with `--expect` naming the version its `Issue` line gives or,
+  after a reply on the same issue, the version that reply's answer carried, and with none
+  where that version is none.
+- No issue, comment or ticket that no comment below names was created or edited by this
+  dispatch, and no ticket or board item a quoted comment does not sit on was read.
+- No ticket's status was changed but by withdrawing this run's own item at `Proposal` whose
+  ticket a quoted comment, or investigating it, showed is no longer relevant, and that
+  comment's reply and account entry say the item was withdrawn and why; no ticket of an item
+  at `Deferred` or at an accepted status was withdrawn.
 - Every quoted comment on an issue run `{{ run }}` created was weighed against that issue's
   ticket, whether or not it asked for an edit, and its reply states what changed in the
   ticket and why, or why the ticket stands as it is.

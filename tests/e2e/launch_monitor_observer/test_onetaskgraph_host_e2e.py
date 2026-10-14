@@ -89,6 +89,7 @@ from github_board import (
     _StatusOption,
     _wide_pages,
     _written_ticket,
+    planted_comment,
 )
 from onetaskgraph_sdk import CopyReport, QueryResponseOfQualifiedTask, TaskDetail
 from onetaskgraph_sdk._generated.copy_report import CopyOutcome
@@ -103,7 +104,7 @@ from sibling_facts import registered_checkouts
 from test_orchestrate_launch_e2e import _environment as _launch_environment
 from waits import timeout as e2e_timeout
 
-from orchestrator import follow_up_tickets, plan_check, plan_store, task_body
+from orchestrator import follow_up_comments, follow_up_tickets, plan_check, plan_store, task_body
 from orchestrator.project_store import PlanDocument, PlanNode, frontmatter, write_plan_project
 from orchestrator.root import REPO_ROOT
 
@@ -2529,15 +2530,17 @@ def _seeded_item(  # noqa: PLR0913 - each is one fact about the item a board alr
     status: follow_up_tickets.Status,
     origin: str | None,
     origin_in_body: bool,
+    host: str = "verifier.example",
 ) -> _Issue:
     """One follow-up item already on the `followups` stand-in, put there without a request.
 
     Written the way the store writes one — the ticket's body, then its metadata in the body's
     slot — with its origin in the board's origin field. ``origin_in_body`` says whether the
     slot carries that origin too, as the adopted store writes it; an item that reached the
-    board before the adoption carries it in the board field only.
+    board before the adoption carries it in the board field only. ``host`` is the machine its
+    ticket was verified on, which a comment pass narrows its search to.
     """
-    written = _follow_up_ticket(SIBLING_REPOSITORY, cause=cause)
+    written = _follow_up_ticket(SIBLING_REPOSITORY, cause=cause, verified_on=host)
     medium, frequency = follow_up_tickets.Severity.MEDIUM, written.frequency
     ticket = replace(
         written,
@@ -3066,9 +3069,14 @@ def test_one_tickets_filing_re_copy_withdrawal_and_comment_answer_read_only_thei
         assert recopied == {"action": "updated", "destination": issue}, recopied
         _lifecycle_step("re-copy", _step_cost("re-copying the ticket", bound=True))
 
-        # A person comments on it, and feedback mode answers: the gathering's read, the reply
-        # posted under the run's marker, and the item re-estimated.
+        # A person comments on it, and a comment pass answers: the gathering's one copy into a
+        # snapshot, the reply posted under the run's marker with `--expect` the version the
+        # snapshot holds, and settle's one batched read, the reply verified, and its writes.
         (item,) = [held for held in BOARD.issues if held.content_id == issue.split(":", 1)[1]]
+        # Dated by the wall clock, a second past the ticket's last write, which is what the run's
+        # boundary is: a comment the board's own counter dated would read as older than it.
+        BOARD.real_time = True
+        time.sleep(1.1)
         asked = tmp_path / "asked.md"
         asked.write_text("Is this still happening on the latest release?\n", encoding="utf-8")
         commented = _followups_command(
@@ -3084,21 +3092,42 @@ def test_one_tickets_filing_re_copy_withdrawal_and_comment_answer_read_only_thei
         # local folder, so the one board this measures is the one GitHub serves.
         routed_root = tmp_path / "routed-followups"
         routed_root.mkdir()
+        routed = environment | {
+            "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__PLUGIN": plan_store.WRITABLE_PLUGIN,
+            "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__CONFIG__ROOT": str(routed_root),
+            "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__REPOSITORIES": "github.com/petsinc/*",
+            "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__TO": "routedfollowups",
+        }
+        passing = [
+            str(ONETASKGRAPH_BIN.parent / "python3"),
+            "-m",
+            "orchestrator.follow_up_comments",
+        ]
+        intent, plan = tmp_path / "intent.json", tmp_path / "plan.json"
         gathering = _followups_command(
-            environment
-            | {
-                "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__PLUGIN": plan_store.WRITABLE_PLUGIN,
-                "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__CONFIG__ROOT": str(routed_root),
-                "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__REPOSITORIES": "github.com/petsinc/*",
-                "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__TO": "routedfollowups",
-            },
-            [str(ONETASKGRAPH_BIN.parent / "python3"), "-m", "orchestrator.follow_up_comments"]
-            + ["gather", "--root", str(drafts_root), "--plan", str(tmp_path / "plan.json")]
-            + ["--to", follow_up_tickets.BOARD, "--since", str(person["createdAt"]), "--dry-run"],
+            routed,
+            [*passing, "gather", "--root", str(drafts_root), "--intent", str(intent)]
+            + ["--to", follow_up_tickets.BOARD, "--since", str(person["createdAt"])],
         )
         assert gathering.returncode == 0, gathering.stdout + gathering.stderr
         assert str(person["url"]) in gathering.stdout, gathering.stdout
         assert "the narrowed query returned 1 item(s)" in gathering.stdout, gathering.stdout
+        launched = _followups_command(
+            routed,
+            [*passing, "launch", "--root", str(drafts_root), "--intent", str(intent)]
+            + ["--plan", str(plan)],
+        )
+        assert launched.returncode == 0, launched.stdout + launched.stderr
+        snapshot = follow_up_comments.read_snapshot(
+            Path(json.loads(plan.read_text(encoding="utf-8"))["snapshot"])
+        )
+        held = snapshot.item(issue)
+        assert held is not None, snapshot
+        written = sorted(
+            (drafts_root / follow_up_comments.FEEDBACK_DIRECTORY / PROPOSED_RUN).glob("*.md")
+        )
+        assert len(written) == 1, gathering.stdout + launched.stdout
+        (feedback,) = written
         reply = tmp_path / "reply.md"
         reply.write_text(
             follow_up_tickets.render_reply(
@@ -3112,25 +3141,53 @@ def test_one_tickets_filing_re_copy_withdrawal_and_comment_answer_read_only_thei
             ),
             encoding="utf-8",
         )
+        expect = [] if held.version is None else ["--expect", held.version]
         replied = _followups_command(
             environment,
             [str(ONETASKGRAPH_BIN), "task", "comment", "add", issue]
-            + ["--body-file", str(reply), "--json"],
+            + ["--body-file", str(reply), *expect, "--json"],
         )
         assert replied.returncode == 0, replied.stdout + replied.stderr
-        estimated = _follow_up_step(
-            environment, "re-estimate", "--board", follow_up_tickets.BOARD, issue
+        posted = json.loads(replied.stdout)
+        follow_up_tickets.responses_path(feedback).write_text(
+            json.dumps(
+                {
+                    "schema": follow_up_tickets.RESPONSES_SCHEMA,
+                    "run": PROPOSED_RUN,
+                    "feedback": feedback.name,
+                    "responses": [
+                        {
+                            "comment": str(person["id"]),
+                            "issue": issue,
+                            "action": "Answered it.",
+                            "reply": posted["id"],
+                            "reply_url": posted.get("url"),
+                            "reply_fallback": None,
+                            "verdict": follow_up_tickets.Verdict.DOES_NOT_CONFIRM.value,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
         )
-        assert estimated.returncode == 0, estimated.stdout + estimated.stderr
+        settled = _followups_command(
+            routed,
+            [*passing, "settle", "--root", str(drafts_root), "--plan", str(plan)]
+            + ["--launched", f"{PROPOSED_RUN}={PROPOSED_RUN}-follow-ups"],
+        )
+        assert settled.returncode == 0, settled.stdout + settled.stderr
+        assert "fallback reads: 0" in settled.stdout, settled.stdout
         answering = list(_GitHubFixture.requests)
         walked, _searched = _board_cost(answering)
         assert walked == [], f"answering a comment walked the board's items: {walked}"
         assert _wide_pages(answering) == [], "answering asked for a page wider than its answer"
         _GitHubFixture.requests.clear()
+        BOARD.real_time = False
         _lifecycle_step(
             "answering a comment",
             RequestCost(len(answering), sum(map(_request_points, answering))),
         )
+        _comment_pass_part("a pass answering one comment", _priced(answering), counted=False)
 
         # A withdrawal: decided with `--withdraw`, validated and copied, which closes it.
         assert _decided_status(environment, path, "--withdraw") == (
@@ -3407,6 +3464,399 @@ def test_a_realistic_follow_up_run_reads_and_writes_only_the_items_it_is_about( 
             counted=False,
             requests=cost.requests,
         )
+
+
+# llmlint: ignore-block[budgets_scoped_to_minimal_tree] The budget sits in orchestrator/budgets.yaml beside follow-up-run-points and ticket-lifecycle-points, whose journeys are this module's: all three price the loopback board through tests/github_board.py, and orchestrator:budgets reads the telemetry this project's test target records, an edge orchestrator/project.json states; orchestrator/ holds the package alone, as that budgets file says.  # noqa: E501 - llmlint reads a directive and its reason off one line
+#: The budget one realistic `just follow-ups-answer-comments` pass's board points are.
+COMMENT_PASS_BUDGET = "comment-answer-pass-points"
+#: The realistic comment pass: how many runs own the proposals people commented on, the
+#: proposals, the comments answered across them, and the other items of this host the board
+#: already holds, which its narrowed search lists without reading them.
+COMMENT_PASS_RUNS = 6
+COMMENT_PASS_PROPOSALS = 20
+COMMENT_PASS_COMMENTS = 40
+COMMENT_PASS_OTHER_ITEMS = 60
+
+
+class _PassPhase(StrEnum):
+    """The parts of a comment pass whose board points add up to its figure."""
+
+    GATHERING = "gathering"
+    LAUNCH = "launch and checks"
+    REPLIES = "replies"
+    SETTLE = "settle"
+
+
+def _priced(requests: list[_GraphQLRequest]) -> RequestCost:
+    return RequestCost(len(requests), sum(map(_request_points, requests)))
+
+
+def _comment_pass_part(label: str, cost: RequestCost, *, counted: bool = True) -> None:
+    budget_telemetry.record(
+        COMMENT_PASS_BUDGET,
+        label,
+        cost.points,
+        unit="points",
+        counted=counted,
+        requests=cost.requests,
+    )
+
+
+#: How many proposals' comments both confirm the root cause, and how many proposals' tickets
+#: the answering agent rewrites, of the twenty: what settle has to re-estimate and copy.
+COMMENT_PASS_CONFIRMED = 3
+COMMENT_PASS_CORRECTED = 2
+#: The sentence the agent adds to a corrected ticket's suggested fix.
+COMMENT_PASS_CORRECTION = "Cover the empty last page as well."
+
+
+def _ticket_step(environment: dict[str, str], *arguments: str) -> subprocess.CompletedProcess[str]:
+    """One `orchestrator.follow_up_tickets` command, as the recipe and its agent run it."""
+    return _followups_command(
+        environment,
+        [str(ONETASKGRAPH_BIN.parent / "python3"), "-m", "orchestrator.follow_up_tickets"]
+        + list(arguments),
+    )
+
+
+def _pass_step(environment: dict[str, str], *arguments: str) -> subprocess.CompletedProcess[str]:
+    """One `orchestrator.follow_up_comments` step, as `just follow-ups-answer-comments` runs it."""
+    return _followups_command(
+        environment,
+        [str(ONETASKGRAPH_BIN.parent / "python3"), "-m", "orchestrator.follow_up_comments"]
+        + list(arguments),
+    )
+
+
+def test_a_realistic_comment_pass_reads_the_board_once_before_its_replies_and_once_after(  # noqa: PLR0915 - one pass, step by step
+    tmp_path: Path,
+) -> None:
+    """A whole comment pass over a realistic board, priced as `comment-answer-pass-points`.
+
+    Six runs of this host own twenty proposals, and people left two comments on each — forty
+    to answer — on a board already holding sixty other items of this host, so the narrowed
+    search spans at least four pages. The pass runs as `just follow-ups-answer-comments`
+    and its dispatches run it, with this checkout's modules and the provisioned plan-store CLI:
+    the dry run's one copy into a snapshot; its `--from` launch, each run's `check-gathering`
+    and the snapshot source it reads, with no request; the agents' work — both comments on
+    three proposals confirming their root cause, two tickets' suggested fixes corrected in
+    their files and validated — and one reply per comment posted with `--expect` the version
+    its feedback names; each run's `check-responses`, with no request; and settle's one
+    batched read and its writes: each confirmed proposal re-estimated, each corrected ticket
+    copied. No write takes a fallback read. Each phase's points are the budget's parts, with
+    each run's replies, the cost per comment, the fallback reads, and a second gathering over
+    the unchanged board beside them.
+    """
+    environment, root = _followups_environment(tmp_path)
+    routed_root = tmp_path / "routed-followups"
+    routed_root.mkdir()
+    environment |= {
+        "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__PLUGIN": plan_store.WRITABLE_PLUGIN,
+        "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__CONFIG__ROOT": str(routed_root),
+        "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__REPOSITORIES": "github.com/petsinc/*",
+        "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__TO": "routedfollowups",
+    }
+    host = socket.gethostname()
+    statuses = list(SEEDED_STATES)
+    runs = [f"comment-pass-run-{at}" for at in range(COMMENT_PASS_RUNS)]
+    spent: dict[_PassPhase, list[_GraphQLRequest]] = {phase: [] for phase in _PassPhase}
+    with _serving_followups(environment, fields=True):
+        for at in range(COMMENT_PASS_OTHER_ITEMS):
+            _seeded_item(
+                at,
+                run=f"another-run-{at % 3}",
+                cause=f"another-cause-{at}",
+                status=statuses[at % len(statuses)],
+                origin=f"drafts:another-run-{at % 3}/tickets/another-cause-{at}",
+                origin_in_body=True,
+                host=host,
+            )
+        causes: dict[str, tuple[str, str]] = {}
+        for at in range(COMMENT_PASS_PROPOSALS):
+            run, cause = runs[at % COMMENT_PASS_RUNS], f"comment-pass-cause-{at}"
+            ticket = replace(
+                _follow_up_ticket(SIBLING_REPOSITORY, cause=cause, verified_on=host),
+                created_by_run=follow_up_tickets.RunId(run),
+                owning_runs=(follow_up_tickets.RunId(run),),
+                drafts=(follow_up_tickets.QualifiedDraftId(f"drafts:{run}/drafts/noticed"),),
+            )
+            path = _written_ticket(root, ticket)
+            assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
+            causes[str(_validated_and_copied(environment, path)["destination"])] = (run, cause)
+        # Each run last responded ten minutes ago, and people commented five minutes ago: long
+        # enough that the board gives every item a version a write can expect.
+        now = time.time()
+        for path in (root / follow_up_tickets.TASKS_DIRECTORY).rglob("*.md"):
+            os.utime(path, (now - 600, now - 600))
+        asked = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 300))
+        for issue in causes:
+            (row,) = [one for one in BOARD.issues if one.content_id == issue.split(":", 1)[1]]
+            for word in ("first", "second"):
+                planted_comment(
+                    row, f"The {word} question about this ticket?\n", "a-reviewer", asked
+                )
+
+        _GitHubFixture.requests.clear()
+        # The dry run: the board copied into a snapshot once, and the `--from` it prints.
+        previewed = _pass_step(
+            environment,
+            "gather",
+            "--root",
+            str(root),
+            "--intent",
+            str(tmp_path / "preview.json"),
+            "--dry-run",
+        )
+        assert previewed.returncode == 0, previewed.stdout + previewed.stderr
+        spent[_PassPhase.GATHERING] = list(_GitHubFixture.requests)
+        _GitHubFixture.requests.clear()
+        # Four pages of the narrowed search over this host's eighty items, twenty a page, and the
+        # twenty proposals commented on since copied in four batches: exactly, and nothing else.
+        assert [one.operation for one in spent[_PassPhase.GATHERING]] == (
+            [_Operation.SEARCH] * 4 + [_Operation.ISSUE_COPY_DETAILS] * 4
+        ), spent[_PassPhase.GATHERING]
+        printed = re.search(r"--from (\S+)$", previewed.stdout, re.M)
+        assert printed is not None, previewed.stdout
+        snapshot = printed[1]
+
+        # The launch from it: the claim and the feedback files, then each run's pre-launch
+        # check of its feedback against the snapshot, as `just follow-ups --comments` runs it.
+        intent, plan = tmp_path / "intent.json", tmp_path / "plan.json"
+        claimed = _pass_step(
+            environment, "gather", "--root", str(root), "--intent", str(intent), "--from", snapshot
+        )
+        assert claimed.returncode == 0, claimed.stdout + claimed.stderr
+        launched = _pass_step(
+            environment, "launch", "--root", str(root), "--intent", str(intent), "--plan", str(plan)
+        )
+        assert launched.returncode == 0, launched.stdout + launched.stderr
+        written = json.loads(plan.read_text(encoding="utf-8"))
+        assert sorted(run for run, _ in written["runs"]) == runs
+        dispatched: dict[str, dict[str, str]] = {}
+        for run, feedback_name in written["runs"]:
+            sourced = _pass_step(environment, "snapshot-env", "--feedback", feedback_name)
+            assert sourced.returncode == 0, sourced.stdout + sourced.stderr
+            dispatched[run] = environment | dict(
+                line.split("=", 1) for line in sourced.stdout.splitlines() if line
+            )
+            checked = _ticket_step(
+                dispatched[run],
+                "check-gathering",
+                "--board",
+                follow_up_tickets.BOARD,
+                "--feedback",
+                feedback_name,
+                run,
+            )
+            assert checked.returncode == follow_up_tickets.SOUND, checked.stdout + checked.stderr
+        spent[_PassPhase.LAUNCH] += _GitHubFixture.requests
+        _GitHubFixture.requests.clear()
+
+        # The answering agents: the comments on the first proposals confirm their root cause,
+        # and two further proposals' tickets are corrected in their files, as the comments ask.
+        ordered = sorted(causes)
+        confirmed = set(ordered[:COMMENT_PASS_CONFIRMED])
+        corrected = set(
+            ordered[COMMENT_PASS_CONFIRMED : COMMENT_PASS_CONFIRMED + COMMENT_PASS_CORRECTED]
+        )
+        for issue in sorted(corrected):
+            run, cause = causes[issue]
+            path = follow_up_tickets.ticket_path(root, run, cause)
+            heading = f"## {follow_up_tickets.SUGGESTED_FIX}\n\n"
+            text = path.read_text(encoding="utf-8")
+            assert text.count(heading) == 1, text
+            path.write_text(
+                text.replace(heading, f"{heading}{COMMENT_PASS_CORRECTION} "), encoding="utf-8"
+            )
+            validated = _ticket_step(dispatched[run], "validate", "--pending", str(path))
+            assert validated.returncode == follow_up_tickets.SOUND, (
+                validated.stdout + validated.stderr
+            )
+        fallbacks = 0
+        latest: dict[str, str] = {}
+        by_run: dict[str, list[_GraphQLRequest]] = {run: [] for run in runs}
+        quoted = 0
+        for run, feedback_name in written["runs"]:
+            feedback = Path(feedback_name)
+            gathering = follow_up_tickets.read_gathering(feedback.read_text(encoding="utf-8"))
+            responses = []
+            for one, fields in zip(gathering.quoted, gathering.metadata, strict=True):
+                line = follow_up_comments.ISSUE_VALUE.fullmatch(fields.issue)
+                assert line is not None and line["version"] != follow_up_comments.NO_VERSION, (
+                    fields.issue
+                )
+                verdict = (
+                    follow_up_tickets.Verdict.CONFIRMS
+                    if one.issue in confirmed
+                    else follow_up_tickets.Verdict.DOES_NOT_CONFIRM
+                )
+                action = (
+                    "Corrected the suggested fix."
+                    if one.issue in corrected
+                    else "Checked it; the ticket stands."
+                )
+                # After a reply on the same issue, the version that reply's answer carried.
+                expected = latest.get(line["issue"], line["version"])
+                reply = tmp_path / f"reply-{quoted}.md"
+                reply.write_text(
+                    follow_up_tickets.render_reply(
+                        run=run,
+                        root_cause=causes[one.issue][1],
+                        answers=str(one.comment),
+                        url=fields.url,
+                        author=fields.author,
+                        verdict=verdict,
+                        response=action,
+                    ),
+                    encoding="utf-8",
+                )
+                posted = _followups_command(
+                    environment,
+                    [str(ONETASKGRAPH_BIN), "task", "comment", "add", line["issue"]]
+                    + ["--body-file", str(reply), "--expect", expected, "--json"],
+                )
+                assert posted.returncode == 0, posted.stdout + posted.stderr
+                answer = json.loads(posted.stdout)
+                fallbacks += answer.get("fallback") is not None
+                # This board's items hold settled versions, so each answer carries the next.
+                latest[line["issue"]] = answer["result"]["version"]
+                responses.append(
+                    {
+                        "comment": str(one.comment),
+                        "issue": one.issue,
+                        "action": action,
+                        "reply": answer["id"],
+                        "reply_url": answer.get("url"),
+                        "reply_fallback": None,
+                        "verdict": verdict.value,
+                    }
+                )
+                quoted += 1
+            by_run[run] += _GitHubFixture.requests
+            spent[_PassPhase.REPLIES] += _GitHubFixture.requests
+            _GitHubFixture.requests.clear()
+            follow_up_tickets.responses_path(feedback).write_text(
+                json.dumps(
+                    {
+                        "schema": follow_up_tickets.RESPONSES_SCHEMA,
+                        "run": run,
+                        "feedback": feedback.name,
+                        "responses": responses,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            # The agent's last step: its account held to the snapshot, with no board read.
+            accounted = _ticket_step(
+                dispatched[run],
+                "check-responses",
+                "--board",
+                follow_up_tickets.BOARD,
+                "--feedback",
+                feedback_name,
+                run,
+            )
+            assert accounted.returncode == follow_up_tickets.SOUND, (
+                accounted.stdout + accounted.stderr
+            )
+            spent[_PassPhase.LAUNCH] += _GitHubFixture.requests
+            _GitHubFixture.requests.clear()
+        assert quoted == COMMENT_PASS_COMMENTS, quoted
+        # Each reply one write expecting a version it held, and no read before any of them.
+        assert [one.operation for one in spent[_PassPhase.REPLIES]] == (
+            [_Operation.ADD_COMMENT_WHOLE] * COMMENT_PASS_COMMENTS
+        ), spent[_PassPhase.REPLIES]
+        # The launch, every check of a feedback file and of an account read the snapshot alone.
+        assert spent[_PassPhase.LAUNCH] == [], spent[_PassPhase.LAUNCH]
+
+        settled = _pass_step(
+            environment,
+            "settle",
+            "--root",
+            str(root),
+            "--plan",
+            str(plan),
+            *(word for run in runs for word in ("--launched", f"{run}={run}-follow-ups")),
+        )
+        assert settled.returncode == 0, settled.stdout + settled.stderr
+        spent[_PassPhase.SETTLE] = list(_GitHubFixture.requests)
+        _GitHubFixture.requests.clear()
+        # Settle's one batched read, then each changed item's writes in the order it names
+        # them: a confirmed proposal's recounted estimate moves its priority and rewrites its
+        # estimate line and record, a field write and an issue write; a corrected ticket's new
+        # suggested fix is an issue write alone.
+        written_lines = [
+            line.split(": ticket-copy written ", 1)
+            for line in settled.stdout.splitlines()
+            if ": ticket-copy written " in line
+        ]
+        named = {issue.strip(): fields for issue, fields in written_lines}
+        assert named == {
+            **{issue: "(content, priority, record)" for issue in confirmed},
+            **{issue: "(content)" for issue in corrected},
+        }, settled.stdout
+        assert [one.operation for one in spent[_PassPhase.SETTLE]] == [_Operation.ISSUE_DETAILS] + [
+            operation
+            for issue, _ in written_lines
+            for operation in (
+                [_Operation.UPDATE_FIELD_WHOLE, _Operation.UPDATE_ISSUE_WHOLE]
+                if issue.strip() in confirmed
+                else [_Operation.UPDATE_ISSUE_WHOLE]
+            )
+        ], spent[_PassPhase.SETTLE]
+        writes = COMMENT_PASS_CONFIRMED + COMMENT_PASS_CORRECTED
+        # Settle's own fallback reads — the cache's, and the store's read after a refused
+        # whole copy — are counted beside the replies', as the recipe reports them.
+        counted = re.search(r"board writes: (\d+); fallback reads: (\d+)", settled.stdout)
+        assert counted is not None and int(counted[1]) == writes, settled.stdout
+        fallbacks += int(counted[2])
+        assert follow_up_comments.read_pending(root) == []
+        for issue in causes:
+            (row,) = [one for one in BOARD.issues if one.content_id == issue.split(":", 1)[1]]
+            # Each confirmed proposal now counts its evidence and both confirming replies.
+            assert ("3 occurrences" in row.body) is (issue in confirmed), (issue, row.body)
+            assert (COMMENT_PASS_CORRECTION in row.body) is (issue in corrected), issue
+        assert fallbacks == 0, "a reply or a settle write took a fallback read"
+
+        # The same board gathered again with nothing new on it: what an idle pass costs.
+        again = _pass_step(
+            environment,
+            "gather",
+            "--root",
+            str(root),
+            "--intent",
+            str(tmp_path / "again.json"),
+            "--dry-run",
+        )
+        assert again.returncode == 0, again.stdout + again.stderr
+        regathered = list(_GitHubFixture.requests)
+        _GitHubFixture.requests.clear()
+        assert "selected: " not in again.stdout, again.stdout
+
+    every = [one for phase in _PassPhase for one in spent[phase]]
+    walked, unnarrowed = _board_cost(every)
+    assert (walked, unnarrowed) == ([], []), (walked, unnarrowed)
+    assert _wide_pages(every) == [], "a search asked for a page wider than its answer"
+    for phase in _PassPhase:
+        _comment_pass_part(f"phase {phase.value}", _priced(spent[phase]))
+    for run in runs:
+        _comment_pass_part(f"run {run}'s replies", _priced(by_run[run]), counted=False)
+    total = _priced(every)
+    budget_telemetry.record(
+        COMMENT_PASS_BUDGET,
+        "per answered comment",
+        total.points / COMMENT_PASS_COMMENTS,
+        unit="points",
+        counted=False,
+        requests=total.requests / COMMENT_PASS_COMMENTS,
+    )
+    budget_telemetry.record(
+        COMMENT_PASS_BUDGET, "fallback reads", fallbacks, unit="reads", counted=False
+    )
+    _comment_pass_part("gathering again, nothing new", _priced(regathered), counted=False)
+
+
+# llmlint: ignore-end[budgets_scoped_to_minimal_tree]
 
 
 # llmlint: ignore-end[shell_test_tiers_stay_split]

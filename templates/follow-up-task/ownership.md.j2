@@ -5,7 +5,8 @@
 - **Ownership is by run.** An issue on `{{ board }}`, or on a board it routes to, belongs to the run its `{{ shape.record_key }}`
   record's `created_by_run` names. A comment belongs to the run named in its **last line**,
   whichever of the two kinds below it is. This run, `{{ run }}`, may create, edit (by copying
-  its ticket again) or close as not planned only issues whose `created_by_run` is `{{ run }}`,
+  its ticket again, which a comment dispatch's settle step does for a ticket the dispatch
+  changed) or close as not planned only issues whose `created_by_run` is `{{ run }}`,
   and may edit or delete only comments whose marker names `{{ run }}`. It never changes an
   issue or a comment belonging to another run, but for the one write below:
   {{ re_estimate_command }}.
@@ -17,7 +18,9 @@
   priority a person set stays. It changes nothing else about the issue, its status
   included. Run it on the issue each time this run adds or edits an evidence comment there,
   and each time it posts a reply marked `verdict="{{ shape.confirms }}"` there; never on any other
-  occasion.
+  occasion. A comment dispatch runs no re-estimate itself: its settle step makes the one each
+  of its confirming replies is owed, counting from the snapshot's comments and the replies it
+  verified rather than from a fresh read of the board's.
 - **An evidence comment** carries this run's evidence on another run's issue. Its last line
   is exactly
 
@@ -71,8 +74,9 @@
   cause. Its first line is visible to a reader: `{{ reply_opening }}`, or
   `{{ reply_opening_unattributed }}` when the feedback reports no author. After a blank line
   comes the response: what this run did about the comment and why, or why it did nothing;
-  after another blank line, the marker. Post it with `{{ plan_store }} task comment add`, after
-  the actions it reports.
+  after another blank line, the marker. Post it with `{{ plan_store }} task comment add` — in a
+  comment dispatch, with `--expect` and `--json` as its "Where everything is" says — after the
+  actions it reports.
 - **A reply is never edited to answer a different comment**, since every comment gets a
   reply of its own. A reply never counts as this run's one evidence comment, and never
   carries evidence in place of the ticket or the evidence comment.

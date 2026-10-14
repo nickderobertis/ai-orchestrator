@@ -20,7 +20,6 @@ import pytest
 from test_follow_up_comments import BOARD, _commented, _filed
 
 from orchestrator import follow_up_comments, plan_store
-from orchestrator import follow_up_tickets as tickets
 from orchestrator.plan_store import WRITABLE_PLUGIN
 from orchestrator.project_store import PlanNode, frontmatter, write_plan_project
 
@@ -154,7 +153,7 @@ def test_projects_and_documents_are_read_past_one_page(
 def test_the_narrowed_comment_listing_returns_an_issue_past_the_first_page(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The comment gathering's one listing, `commented_since` and all, read to its last page."""
+    """The comment gathering's one copy, `commented_since` and all, read to its last page."""
     drafts = tmp_path / "follow-ups"
     drafts.mkdir()
     monkeypatch.setenv(follow_up_variables.root_name(), str(drafts))
@@ -176,10 +175,11 @@ def test_the_narrowed_comment_listing_returns_an_issue_past_the_first_page(
     assert first.next is not None
     assert filed[-1] not in listed_first
 
-    issues = follow_up_comments.commented_issues(BOARD, since)
+    snapshot = follow_up_comments.gather(drafts, BOARD, since=since, say=lambda _: None)
 
-    assert [issue.id for issue in issues] == filed
-    assert [issue.owner for issue in issues] == [tickets.RunId(f"run-{i}") for i in range(5)]
+    assert snapshot is not None
+    assert sorted(one.id for one in snapshot.items) == sorted(filed)
+    assert sorted(str(one.owner) for one in snapshot.items) == [f"run-{i}" for i in range(5)]
 
 
 def test_a_listing_past_the_ceiling_is_refused_naming_it(

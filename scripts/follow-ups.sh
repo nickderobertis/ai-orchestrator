@@ -72,8 +72,10 @@
 #   * `--comments` says that file is a gathering of the board's own comments rather than a
 #     manager's prose, and renders the **feedback** mode instead — the narrow
 #     comment-answering task, with no inventory, no run-wide verification and no
-#     accepted-fix comparison, and no status decision or copy but for a ticket a quoted
-#     comment names. It is refused without `--feedback`, and
+#     accepted-fix comparison, reading every quoted issue from the snapshot the gathering
+#     names (exported here through `scripts/follow-up-env.sh`) and writing nothing to the
+#     board but its replies: the ticket copies, re-estimates and withdrawal are the settle
+#     step's of `orchestrator/follow_up_comments.py`. It is refused without `--feedback`, and
 #     `scripts/follow-ups-answer-comments.sh` is its one caller.
 #
 # **Which mode is the caller's to say, never the file's.** Sniffing a feedback file for
@@ -244,7 +246,7 @@ fi
 
 # The board credential from this checkout's `.env`, before the first board read in either
 # mode; a name the environment already defines wins.
-# llmlint: ignore-block[changed_behavior_has_e2e] Each outcome of these two lines is driven by `tests/plan_tooling/follow_ups/test_follow_ups_comment_answers_e2e.py`: in both modes, `.env` handed to the store and a defined name winning, a `.env` the helper refuses (malformed, or not a file), and the helper missing or unreadable; in `--comments` mode, the only one that reads the board before launching, no credential refused by the store. What they establish serves this recipe's own board reads before it launches; a dispatched worker's copy does not come from here but from the engine's dispatch environment hook, which `scripts/onepipeline.sh` names on every start and which re-runs `export_host_credentials` through `scripts/dispatch-env.sh` before each dispatch, unchanged by this recipe.
+# llmlint: ignore-block[changed_behavior_has_e2e] Each outcome of these two lines is driven by `tests/plan_tooling/follow_ups/test_follow_ups_comment_answers_e2e.py`: in both modes, `.env` handed to the store and a defined name winning, a `.env` the helper refuses (malformed, or not a file), and the helper missing or unreadable; in `--comments` mode, whose checks read the gathering's snapshot and no board, the launch going ahead whatever credential the store holds. What they establish serves this recipe's own board reads before it launches; a dispatched worker's copy does not come from here but from the engine's dispatch environment hook, which `scripts/onepipeline.sh` names on every start and which re-runs `export_host_credentials` through `scripts/dispatch-env.sh` before each dispatch, unchanged by this recipe.
 # shellcheck source=scripts/credentials-env.sh
 load credentials-env.sh
 export_host_credentials follow-ups || exit "$?"
@@ -425,6 +427,10 @@ store_cli="$checkout/.venv/bin/onetaskgraph"
 tickets_module=("$python" -m orchestrator.follow_up_tickets)
 if [ "$comments" -eq 1 ]; then
     mode=feedback
+    # The snapshot the gathering was written from is the dispatch's whole source for its
+    # quoted issues, so it is exported for the launch before anything reads it: the checks
+    # below and the agent read it, and never the board.
+    export_follow_up_snapshot follow-ups "$feedback" || exit "$?"
     # The file is embedded in the dispatched task verbatim and its acceptance criteria rest
     # on an account of the comments it quotes, so a file that is no gathering of this board
     # is one nothing should be launched over.

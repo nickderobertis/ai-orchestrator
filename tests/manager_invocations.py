@@ -171,7 +171,9 @@ _FOLLOW_UPS = (
     "Decide with the user whether to verify its drafts by hand with `just follow-ups <run-id>`"
 )
 _FEEDBACK = "anything more goes back with `just follow-ups <run-id> --feedback FILE`"
-_COMMENTS = "People's board comments are answered by `just follow-ups-answer-comments` (`--dry-run`"
+_COMMENTS = (
+    "People's board comments are answered by `just follow-ups-answer-comments`, which reads the"
+)
 _WORKTREE_READ = (
     "When a dispatch looks silent, read its worktree — its commits, its tree, the "
     "`.logs/` its innermost stage writes"
@@ -185,7 +187,7 @@ _DEV_TIER = (
 )
 _CLONE = "and so is `git clone`: a clone adds a checkout and changes no remote or base"
 _BARE = "Confirm `git config core.bare` is `false`"
-_GATHERING = "The pre-launch `check-gathering` read"
+_GATHERING = "The pre-launch `check-gathering` holds the file to its"
 _GIT_OUTPUT_UNGRANTED = "whose `--output` writes a file"
 _GIT_C_UNGRANTED = "A `git -C <path>` read is not granted, because Claude Code's `*` spans words"
 _CD = "an invocation written `cd <this checkout> && <verb>` passes on the verb's grant"
@@ -339,6 +341,11 @@ INVOCATIONS: tuple[Invocation, ...] = (
     _allow("follow-ups-feedback", "just follow-ups {run} --feedback {feedback}", _FEEDBACK),
     _allow("follow-ups-comments", "just follow-ups-answer-comments", _COMMENTS),
     _allow("follow-ups-comments-dry-run", "just follow-ups-answer-comments --dry-run", _COMMENTS),
+    _allow(
+        "follow-ups-comments-from",
+        "just follow-ups-answer-comments --from /home/me/follow-ups/feedback/.snapshots/x",
+        _COMMENTS,
+    ),
     _allow("supersessions", "uv run onepipeline supersessions {run} --record", _SUPERSESSIONS),
     _allow(
         "tickets-statuses",

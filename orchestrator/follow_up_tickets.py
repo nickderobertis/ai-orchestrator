@@ -86,7 +86,7 @@ from onetaskgraph_sdk._generated.query_response_of_qualified_task import Qualifi
 from orchestrator import follow_up_drafts as drafts
 from orchestrator import plan_store
 from orchestrator.plan_budgets import BUDGETS_FILE, Direction
-from orchestrator.plan_store import RECORD_COMPONENT
+from orchestrator.plan_store import RECORD_COMPONENT, QualifiedTaskId
 from orchestrator.project_store import TASKS_DIRECTORY, frontmatter, hosted_origin
 
 #: The plan-store source a ticket is stored in, and the directory beside a run's drafts it
@@ -372,28 +372,26 @@ _KEPT_OPEN = [
 #: (`follow_up_comments.render`). It names no command path, because a gathering reaches the
 #: task verbatim and is written before any command is resolved.
 # llmlint: ignore-block[changed_behavior_has_e2e] This is the task's prose, and what it binds
-# is driven where the tooling decides it: `board-status --withdraw` over a real `local-md`
-# board refuses every protected status (`tests/test_follow_up_tickets.py`'s
-# `test_a_withdrawal_of_a_ticket_a_person_accepted_or_deferred_is_refused_and_moves_nothing`,
-# parametrized over each), and
-# `tests/plan_tooling/follow_ups/test_follow_ups_comment_answers_e2e.py` drives a comment
-# dispatch withdrawing its own `Proposal` and being refused at `Deferred`. Whether a ticket
-# is still relevant is the agent's reading, which no journey scripts.
+# is driven where the tooling decides it: settle writes the withdrawal only while the batched
+# read shows the item at `Proposal`, which
+# `tests/plan_tooling/follow_ups/test_follow_ups_comment_answers_e2e.py` drives for a comment
+# dispatch withdrawing its own `Proposal`, and for an item a person moved on first. Whether a
+# ticket is still relevant is the agent's reading, which no journey scripts.
 WITHDRAWAL_EXCEPTION = (
     "**Never change a board item's status except by one withdrawal.** Where the ticket of the "
     "issue a quoted comment sits on is no longer relevant — handled elsewhere, superseded, or "
     "its premise shown wrong, by the comment or by what investigating it found, whether or "
     "not the comment says so — and that issue is this run's own item at "
     f"`{board_option(Status.PROPOSED)}` (`{linear_state(Status.PROPOSED)}` on Linear), withdraw "
-    "it: run `board-status` with `--withdraw` on "
-    "its ticket, write the word it prints as the ticket's `status`, validate the ticket and "
-    "copy it, and say in that comment's reply and account entry that the item was withdrawn "
-    "and why. A ticket at "
+    f"it: write `{Status.WITHDRAWN.value}` as its ticket's `status` and validate the ticket, "
+    "and say in that comment's reply and account entry that the item was withdrawn and why; "
+    "the board is written once this run settles, and only while it still holds the item at "
+    f"`{board_option(Status.PROPOSED)}`. A ticket at "
     f"`{board_option(Status.DEFERRED)}` (`{linear_state(Status.DEFERRED)}` on Linear) may have its "
     "content edited but is never withdrawn: where it is no longer relevant, the reply says so "
     "with its evidence and recommends the person close it. No item at "
     f"{', '.join(_KEPT_OPEN[:-1])} or {_KEPT_OPEN[-1]}, and no closed one, is ever withdrawn, "
-    "and `board-status --withdraw` refuses the ones a person decided on."
+    "and settle writes no withdrawal of an item a person moved on."
 )
 # llmlint: ignore-end[changed_behavior_has_e2e]
 
@@ -3431,6 +3429,42 @@ def re_estimate(board: str, issue: str) -> ReEstimated:
         )
     reads = BoardReads()
     item = reads.item(issue)
+    decided = re_estimate_decision(issue, item, reads)
+    client = plan_store.client()
+    # The stored estimate is written last, because it is what the next re-estimate compares
+    # the board's priority to: stored first, a refused priority write would leave it beside
+    # the old priority, which every later touch would read as a person's and never raise.
+    # Written last, a refusal leaves either the old priority beside the old estimate, still
+    # following, or the priority already at the new estimate, which a retry leaves as it is.
+    if decided.priority is not held_priority(item):
+        plan_store.sdk(client.task_priority_set(issue, decided.priority.value))
+    content = item.get("content")
+    if decided.content != (content if isinstance(content, str) else ""):
+        with tempfile.TemporaryDirectory(prefix="re-estimate-") as scratch:
+            written = Path(scratch) / "content.md"
+            written.write_text(decided.content, encoding="utf-8")
+            plan_store.sdk(client.task_content_set(issue, file=str(written)))
+    plan_store.sdk(client.task_metadata_set(issue, KEY, json.dumps(decided.record)))
+    return ReEstimated(issue, decided.estimated, decided.occurrences, decided.priority)
+
+
+class Reestimate(NamedTuple):
+    """What one item's re-estimate decides: its estimate and count, and the three values written."""
+
+    estimated: Priority
+    occurrences: int
+    priority: Priority
+    content: str
+    record: dict[str, object]
+
+
+def re_estimate_decision(issue: str, item: Mapping[str, object], reads: BoardReads) -> Reestimate:
+    """Decide one board item's estimate from ``item`` and the comments ``reads`` holds for it.
+
+    No read and no write: :func:`re_estimate` reads the item and writes what this decides, and
+    `follow_up_comments.settle` hands it the batched read and the snapshot's comments with the
+    pass's own replies. :class:`Refused` for an item that is no follow-up ticket this reads.
+    """
     held = _held_record(item)
     creator = held.get("created_by_run")
     schema = held.get("schema")
@@ -3505,27 +3539,16 @@ def re_estimate(board: str, issue: str) -> ReEstimated:
     frequency = _record_frequency(held, issue)
     count = occurrences(issue, str(creator), str(held["root_cause"]), reads)
     estimated = estimate(with_workaround, frequency, count)
-    board_priority = held_priority(item)
-    priority = follows_estimate(board_priority, stored_estimate(item), estimated)
-    client = plan_store.client()
-    # The stored estimate is written last, because it is what the next re-estimate compares
-    # the board's priority to: stored first, a refused priority write would leave it beside
-    # the old priority, which every later touch would read as a person's and never raise.
-    # Written last, a refusal leaves either the old priority beside the old estimate, still
-    # following, or the priority already at the new estimate, which a retry leaves as it is.
-    if priority is not board_priority:
-        plan_store.sdk(client.task_priority_set(issue, priority.value))
+    priority = follows_estimate(held_priority(item), stored_estimate(item), estimated)
     rewritten = with_estimate_line(text, estimate_line(with_workaround, frequency, count))
-    if rewritten != text:
-        with tempfile.TemporaryDirectory(prefix="re-estimate-") as scratch:
-            written = Path(scratch) / "content.md"
-            written.write_text(rewritten, encoding="utf-8")
-            plan_store.sdk(client.task_content_set(issue, file=str(written)))
     # Brought forward only as far as the estimate this writes: restructuring a body is the
     # owning run's, so a schema the estimate already reaches stays what it is.
-    record = {**held, "schema": max(schema, ESTIMATE_AT), ESTIMATE_FIELD: estimated.value}
-    plan_store.sdk(client.task_metadata_set(issue, KEY, json.dumps(record)))
-    return ReEstimated(issue, estimated, count, priority)
+    record = {
+        **held,
+        "schema": max(schema, ESTIMATE_AT),
+        ESTIMATE_FIELD: estimated.value,
+    }
+    return Reestimate(estimated, count, priority, rewritten, record)
 
 
 def status_before_copy(held: str | None, *, withdraw: bool) -> Status:
@@ -3750,12 +3773,20 @@ DISPOSITIONS_DIRECTORY = "dispositions"
 #: shape another program reads. The response artifact's schema 2 added each entry's
 #: `verdict`, the one its reply's marker carries.
 DISPOSITIONS_SCHEMA = 1
-RESPONSES_SCHEMA = 2
+RESPONSES_SCHEMA = 3
 
 DISPOSITION_KEYS = ("schema", "run", "drafts", "dispositions")
 DISPOSITION_ENTRY_KEYS = ("draft", "disposition", "root_causes", "detail")
 RESPONSE_KEYS = ("schema", "run", "feedback", "responses")
-RESPONSE_ENTRY_KEYS = ("comment", "issue", "action", "reply", "verdict")
+RESPONSE_ENTRY_KEYS = (
+    "comment",
+    "issue",
+    "action",
+    "reply",
+    "reply_url",
+    "reply_fallback",
+    "verdict",
+)
 
 RESPONSES_SUFFIX = ".responses.json"
 
@@ -3768,7 +3799,7 @@ class Quoted(NamedTuple):
     which the local stand-in really does.
     """
 
-    issue: str
+    issue: QualifiedTaskId
     comment: CommentId
 
 
@@ -3790,6 +3821,10 @@ class Response:
     action: str
     reply: CommentId
     verdict: Verdict
+    #: The reply's URL, as the store's answer to the reply's own `task comment add` gave it.
+    url: str | None = None
+    #: Why that write read the board first, as its answer's `fallback` said, or `None`.
+    fallback: str | None = None
 
 
 def quoted_comment(issue: str, comment: str) -> str:
@@ -3821,6 +3856,9 @@ class QuotedMetadata:
     author: str | None = None
     last_changed: str | None = None
     issue_title: str | None = None
+    #: The issue's board id, its snapshot id and the version the snapshot holds, as the
+    #: gathering's `follow_up_comments.ISSUE_LINE` spells them.
+    issue: str | None = None
 
 
 #: Each metadata field's label on its `- <label>: <value>` line, and the attribute it fills.
@@ -3829,6 +3867,7 @@ QUOTED_METADATA_FIELDS = {
     "Author": "author",
     "Last changed": "last_changed",
     "Issue title": "issue_title",
+    "Issue": "issue",
 }
 
 
@@ -3928,7 +3967,7 @@ def read_gathering(text: str) -> Gathering:
             continue
         matched = QUOTED_COMMENT_LINE.fullmatch(stripped)
         if matched is not None:
-            found.append(Quoted(matched["issue"], CommentId(matched["comment"])))
+            found.append(Quoted(QualifiedTaskId(matched["issue"]), CommentId(matched["comment"])))
             texts.append(None)
             metadata.append(QuotedMetadata())
             section_anchor = len(found) - 1
@@ -3986,99 +4025,128 @@ def quoted_comments(text: str) -> list[Quoted]:
     return list(read_gathering(text).quoted)
 
 
-def gathering_on_board(
-    gathering: Gathering, run: str, *, check_issue_title: bool = True
-) -> list[str]:
-    """Every comment a gathering quotes that the board does not hold where it says.
+def gathering_on_snapshot(gathering: Gathering, feedback: Path, run: str) -> list[str]:
+    """Every way a gathering disagrees with the snapshot it names, read through its source.
 
     The syntax alone cannot say a gathering is about anything real: a file written by hand,
-    or one left behind when its issues were closed and reopened elsewhere, quotes comments
-    the account below would then be held to answering and nobody could. So each issue is
-    asked for its comments, and a refusal to answer for an issue is that issue's finding
-    rather than an unreadable board.
+    or one whose snapshot is gone or was rewritten, quotes comments the account below would
+    then be held to answering and nobody could. So the file is held to the snapshot's own
+    record — the comments it selected for ``run``, in order, at the versions it holds — and to
+    the snapshot source it copied, every check the board was once asked made of that copy
+    instead: no board request. The contract is `follow_up_comments`'.
     """
-    from . import follow_up_comments
+    from . import follow_up_comments as comments
 
+    directory = comments.recorded_snapshot(gathering.preamble)
+    if directory is None:
+        return ["it names no snapshot, so nothing says which comments it was gathered from"]
+    try:
+        snapshot = comments.read_snapshot(directory)
+    except OSError as exc:
+        return [f"its snapshot is missing or malformed: {exc}"]
     found = []
-    for issue in sorted({one.issue for one in gathering.quoted}):
-        try:
-            item = plan_store.task_record(issue)
-            listed = plan_store.sdk(plan_store.client().task_comment_list(issue)).comments
-        except OSError as exc:
-            found.append(f"it quotes {issue}, which the board would not answer for: {exc}")
+    chosen = snapshot.selection.get(RunId(run), ())
+    if [(one.issue, one.comment) for one in chosen] != [
+        (one.issue, str(one.comment)) for one in gathering.quoted
+    ]:
+        found.append(
+            f"it quotes other comments than its snapshot {directory} selected for run {run}"
+        )
+    issues = sorted({one.issue for one in gathering.quoted})
+    held = {issue: item for issue in issues if (item := snapshot.item(issue)) is not None}
+    found.extend(
+        f"it quotes {issue}, which its snapshot does not hold"
+        for issue in issues
+        if issue not in held
+    )
+    try:
+        details = comments.shown_details(
+            [str(item.snapshot_id) for item in held.values()], snapshot.settings()
+        )
+        read = {
+            issue: comments.snapshot_issue(detail, issue, item.snapshot_id, None)
+            for (issue, item), detail in zip(held.items(), details, strict=True)
+        }
+    except OSError as exc:
+        return [*found, f"its snapshot's source could not be read: {exc}"]
+    versions = {(one.issue, one.comment): one for one in chosen}
+    settings = plan_store.configured_settings()
+    for one, body, fields in zip(
+        gathering.quoted, gathering.texts, gathering.metadata, strict=True
+    ):
+        if one.issue not in read:
             continue
-        if issue_owner(item) != run and not any(
-            may_change_comment(run, comment.body) for comment in listed
+        issue = read[one.issue]
+        item = held[one.issue]
+        if issue.owner != run and not any(
+            may_change_comment(run, comment.body) for comment in issue.comments
         ):
             found.append(
-                f"it quotes {issue}, which run {run} neither owns nor marked with its own comment"
+                f"it quotes {one.issue}, which run {run} neither owns nor marked with its own "
+                "comment"
             )
-        comments = {CommentId(comment.id.model_dump()): comment for comment in listed}
-        held = {identifier: comment.body for identifier, comment in comments.items()}
-        found.extend(
-            f"it quotes comment {one.comment} on {issue}, which that issue does not hold"
-            for one in gathering.quoted
-            if one.issue == issue and one.comment not in held
-        )
-        found.extend(
-            f"it quotes comment {one.comment} on {issue}, which a run marker owns"
-            for one in gathering.quoted
-            if one.issue == issue
-            and one.comment in held
-            and comment_owner(held[one.comment]) is not None
-        )
-        found.extend(
-            f"it quotes comment {one.comment} on {issue} with text different from the board"
-            for one, body in zip(gathering.quoted, gathering.texts, strict=True)
-            if one.issue == issue and one.comment in held and body != held[one.comment].rstrip()
-        )
-        location = item.get("location")
-        path = location.get("path") if isinstance(location, Mapping) else None
-        issue_url = item.get("url")
-        for one, fields in zip(gathering.quoted, gathering.metadata, strict=True):
-            if one.issue != issue or one.comment not in comments:
-                continue
-            comment = comments[one.comment]
-            author = comment.author or follow_up_comments.UNKNOWN_AUTHOR
-            if fields.author != author:
-                found.append(
-                    f"it quotes comment {one.comment} on {issue} with author {fields.author!r} "
-                    f"rather than the board's {author!r}"
-                )
-            url = follow_up_comments.comment_url_parts(
-                issue_url if isinstance(issue_url, str) else None,
-                path if isinstance(path, str) else None,
-                one.comment,
-                comment.url,
-                issue,
+        version = comments.expectable_version(one.issue, item.version, settings)
+        line = comments.issue_line(one.issue, item.snapshot_id, version)
+        if fields.issue != line:
+            found.append(
+                f"it names comment {one.comment}'s issue as {fields.issue!r} rather than its "
+                f"snapshot's {line!r}"
             )
-            if fields.url != url:
-                found.append(
-                    f"it quotes comment {one.comment} on {issue} with URL "
-                    f"{fields.url!r} rather than the board's {url!r}"
-                )
-            changed = follow_up_comments.moment(
-                comment.updated_at or comment.created_at,
-                f"comment {one.comment!r} on {issue}",
-            ).strftime(follow_up_comments.MOMENT_FORMAT)
-            if fields.last_changed != changed:
-                found.append(
-                    f"it quotes comment {one.comment} on {issue} as last changed "
-                    f"{fields.last_changed!r} rather than the board's {changed!r}"
-                )
-            if check_issue_title and fields.issue_title != item.get("title"):
-                found.append(
-                    f"it quotes {issue} with title {fields.issue_title!r} rather than "
-                    f"the board's {item.get('title')!r}"
-                )
+        comment = next(
+            (held_one for held_one in issue.comments if held_one.id == one.comment), None
+        )
+        if comment is None:
+            found.append(
+                f"it quotes comment {one.comment} on {one.issue}, which that issue does not hold"
+            )
+            continue
+        if comment_owner(comment.body) is not None:
+            found.append(f"it quotes comment {one.comment} on {one.issue}, which a run marker owns")
+        if body != comment.body.rstrip():
+            found.append(
+                f"it quotes comment {one.comment} on {one.issue} with text different from its "
+                "snapshot"
+            )
+        selected = versions.get((one.issue, one.comment))
+        if selected is not None and (
+            selected.body_sha256 != comments.body_sha256(comment.body)
+            or selected.last_changed != comments.instant(comment.last_changed)
+        ):
+            found.append(
+                f"its snapshot's source holds comment {one.comment} on {one.issue} other than its "
+                "record selected"
+            )
+        author = comment.author or comments.UNKNOWN_AUTHOR
+        if fields.author != author:
+            found.append(
+                f"it quotes comment {one.comment} on {one.issue} with author {fields.author!r} "
+                f"rather than the snapshot's {author!r}"
+            )
+        url = comments.comment_url(issue, comment)
+        if fields.url != url:
+            found.append(
+                f"it quotes comment {one.comment} on {one.issue} with URL {fields.url!r} rather "
+                f"than the snapshot's {url!r}"
+            )
+        changed = comments.instant(comment.last_changed)
+        if fields.last_changed != changed:
+            found.append(
+                f"it quotes comment {one.comment} on {one.issue} as last changed "
+                f"{fields.last_changed!r} rather than the snapshot's {changed!r}"
+            )
+        if fields.issue_title != issue.title:
+            found.append(
+                f"it quotes {one.issue} with title {fields.issue_title!r} rather than the "
+                f"snapshot's {issue.title!r}"
+            )
     return found
 
 
 def gathering_problems(gathering: Gathering, feedback: Path, board: str, run: str) -> list[str]:
     """Every way a file's own text is not a gathering of the comments of ``board``'s family.
 
-    What it says about itself, read without the board; :func:`gathering_on_board` is what
-    asks whether the comments it names are there.
+    What it says about itself, read without its snapshot; :func:`gathering_on_snapshot` is
+    what asks whether the comments it names are there.
     """
     found: list[str] = []
     for one, fields in zip(gathering.quoted, gathering.metadata, strict=True):
@@ -4097,9 +4165,12 @@ def gathering_problems(gathering: Gathering, feedback: Path, board: str, run: st
     from . import follow_up_comments
 
     boundary = follow_up_comments.recorded_boundary(gathering.preamble, str(feedback))
+    snapshot = follow_up_comments.recorded_snapshot(gathering.preamble)
     if (
         boundary is None
-        or gathering.preamble != follow_up_comments.render(run, board, [], boundary.moment).rstrip()
+        or snapshot is None
+        or gathering.preamble
+        != follow_up_comments.render(run, board, [], boundary.moment, snapshot).rstrip()
     ):
         found.append("its instructions before the first comment differ from the gathering")
     found.extend(
@@ -5470,6 +5541,19 @@ def _response(
             + ", ".join(one.issue for one in same_id)
         ]
     found = _prose(entry, "action", named) + _prose(entry, "reply", named)
+    url = entry.get("reply_url")
+    if url is not None and (not isinstance(url, str) or not ITEM_URL.fullmatch(url)):
+        found.append(
+            f"{named} names the reply URL {url!r}, where it records the `url` the reply's own "
+            "`task comment add --json` answered, or `null` where that answer named none"
+        )
+    fallback = entry.get("reply_fallback")
+    if fallback is not None and (not isinstance(fallback, str) or not fallback.strip()):
+        found.append(
+            f"{named} names the reply's fallback {fallback!r}, where it records the `fallback` "
+            "reason the reply's own `task comment add --json` answered, or `null` where it "
+            "answered none"
+        )
     verdict = entry.get("verdict")
     if verdict not in tuple(Verdict):
         found.append(
@@ -5483,6 +5567,8 @@ def _response(
         action=str(entry["action"]),
         reply=CommentId(str(entry["reply"])),
         verdict=Verdict(str(verdict)),
+        url=None if url is None else str(url),
+        fallback=None if fallback is None else str(fallback),
     ), []
 
 
@@ -5536,93 +5622,6 @@ def response_problems(
             f"{', '.join(one.comment for one in quoted)}"
         )
     return found, answered
-
-
-def replies_posted(run: str, answered: Sequence[Response]) -> list[str]:
-    """Every response whose reply the board does not hold, as it reads now.
-
-    The artifact says a reply was posted and gives its id; this asks the board for it. A
-    structured account of replies nobody posted is the one failure a shape check cannot
-    see, and an id that is not the reply's is an account nobody can follow back to it.
-    That the comment each reply answers is still there is :func:`gathering_on_board`'s
-    question, which `check-responses` asks first.
-
-    A comment a person edited after this run answered it is gathered again and owed a new
-    reply, so only the replies at or after the comment's last change — the gatherer's own
-    test of whether a reply answers it — are held to exactly one. That reply's marker states
-    the verdict its response states, and each issue a `confirms` reply sits on carries the
-    estimate its comments, that reply included, recount to (:func:`board_estimate_problems`).
-    """
-    from . import follow_up_comments
-
-    replies: dict[str, dict[CommentId, dict[CommentId, datetime]]] = {}
-    changed: dict[str, dict[CommentId, datetime]] = {}
-    # Keyed by issue as well as id: a board's comment ids may be unique within an issue alone.
-    verdicts: dict[tuple[str, CommentId], Verdict | None] = {}
-    causes: dict[tuple[str, CommentId], RootCause] = {}
-    for issue in sorted({one.comment.issue for one in answered}):
-        held: dict[CommentId, dict[CommentId, datetime]] = {}
-        dated: dict[CommentId, datetime] = {}
-        for comment in plan_store.sdk(plan_store.client().task_comment_list(issue)).comments:
-            identifier = CommentId(comment.id.model_dump())
-            dated[identifier] = follow_up_comments.moment(
-                comment.updated_at or comment.created_at, f"comment {identifier!r} on {issue}"
-            )
-            owner = comment_owner(comment.body)
-            if owner is not None and owner.run == run and owner.answers is not None:
-                held.setdefault(owner.answers, {})[identifier] = dated[identifier]
-                verdicts[issue, identifier] = owner.verdict
-                causes[issue, identifier] = owner.root_cause
-        replies[issue] = held
-        changed[issue] = dated
-    found = []
-    for one in answered:
-        # `gathering_on_board` has proven the comment is on its issue, so it is dated here.
-        since = changed[one.comment.issue][one.comment.comment]
-        every = replies[one.comment.issue].get(one.comment.comment, {})
-        posted = {reply for reply, at in every.items() if at >= since}
-        if not posted:
-            found.append(
-                f"the board holds no reply of run {run} answering comment {one.comment.comment} "
-                f"on {one.comment.issue}"
-            )
-        elif one.reply not in posted:
-            found.append(
-                f"the response to comment {one.comment.comment!r} names the reply {one.reply}, "
-                f"and the board holds run {run}'s reply to it as " + ", ".join(sorted(posted))
-            )
-        elif len(posted) != 1:
-            found.append(
-                f"the board holds {len(posted)} replies of run {run} answering comment "
-                f"{one.comment.comment} on {one.comment.issue}, and it owes exactly one"
-            )
-        elif (marked := verdicts[one.comment.issue, one.reply]) is not one.verdict:
-            found.append(
-                f"the response to comment {one.comment.comment!r} states the verdict "
-                f"`{one.verdict}`, and its reply {one.reply}'s marker states "
-                + ("none" if marked is None else f"`{marked}`")
-            )
-    if found:
-        return found
-    confirmed = sorted({one.comment.issue for one in answered if one.verdict is Verdict.CONFIRMS})
-    # A confirmation counts toward its issue's recount only when its marker names the root
-    # cause the issue's record describes, so one naming any other confirms nothing there.
-    cause = {
-        issue: _held_record(plan_store.task_record(issue)).get("root_cause") for issue in confirmed
-    }
-    for one in answered:
-        if (
-            one.verdict is Verdict.CONFIRMS
-            and (named := causes[one.comment.issue, one.reply]) != cause[one.comment.issue]
-        ):
-            found.append(
-                f"the response to comment {one.comment.comment!r} confirms, and its reply "
-                f"{one.reply}'s marker names the root cause `{named}`, where {one.comment.issue}'s "
-                f"record describes {cause[one.comment.issue]!r}; it confirms nothing there"
-            )
-    if found:
-        return found
-    return [problem for issue in confirmed for problem in board_estimate_problems(issue)]
 
 
 def board_estimate_problems(issue: str, reads: BoardReads | None = None) -> list[str]:
@@ -5984,7 +5983,9 @@ def response_example(run: str, feedback_file: str, plan_store: str) -> str:
         "<the comment id, exactly as the comment's section gives it>",
         "<the issue id, exactly as the comment's section gives it>",
         "<what this run did about the comment, or why it did nothing>",
-        f"<the id `{plan_store} task comment add` printed for the reply>",
+        f"<the id `{plan_store} task comment add --json` answered for the reply>",
+        f"<the URL `{plan_store} task comment add --json` answered for the reply, or null>",
+        f"<the fallback reason `{plan_store} task comment add --json` answered, or null>",
         f"<{Verdict.CONFIRMS} or {Verdict.DOES_NOT_CONFIRM}: the verdict the reply's marker "
         "carries>",
     )
@@ -6013,6 +6014,7 @@ def shape(run: str) -> dict[str, object]:
         "schema": SCHEMA,
         "prior_schema": PRIOR_SCHEMA,
         "proposed": Status.PROPOSED.value,
+        "proposed_option": board_option(Status.PROPOSED),
         "deferred": Status.DEFERRED.value,
         "withdrawn": Status.WITHDRAWN.value,
         "accepted": ", ".join(f"`{status}`" for status in Status if status.accepted),
@@ -6346,6 +6348,14 @@ def _parser() -> _Parser:
     commands = parser.add_subparsers(dest="command", required=True)
     root_help = "the drafts root the launch exported"
     validate = commands.add_parser("validate", help="validate ticket files through the store")
+    validate.add_argument(
+        "--pending",
+        action="store_true",
+        help=(
+            "leave the estimate line unchecked: a comment dispatch's ticket, whose estimate the "
+            "pass's settle writes"
+        ),
+    )
     validate.add_argument("paths", nargs="+", type=Path, metavar="PATH")
     check = commands.add_parser("check-run", help="validate every ticket a run holds")
     check.add_argument("--root", type=Path, required=True, help=root_help)
@@ -6595,12 +6605,13 @@ def _parser() -> _Parser:
     return parser
 
 
-def _validated(paths: Sequence[Path]) -> int:
+def _validated(paths: Sequence[Path], *, pending: bool = False) -> int:
     """Validate each ticket, one listing several repositories against where it is filed."""
     status = SOUND
     for path in paths:
         try:
-            if misfiled := filing_problems(read_ticket(path, for_copy=True), BOARD):
+            ticket = read_ticket(path, pending=pending, for_copy=True)
+            if misfiled := filing_problems(ticket, BOARD):
                 raise Refused(misfiled)
         except OSError as exc:
             status = UNRUNNABLE
@@ -6809,7 +6820,7 @@ def _gathered(arguments: argparse.Namespace) -> int:
         if not problems:
             problems = [
                 f"{feedback.name} is not a gathering: {problem}"
-                for problem in gathering_on_board(gathering, arguments.run)
+                for problem in gathering_on_snapshot(gathering, feedback, arguments.run)
             ]
     except OSError as exc:
         print(f"{PROG}: refused: {exc}", file=sys.stderr)
@@ -6827,17 +6838,20 @@ class Unanswered(NamedTuple):
     problems: list[str]
 
 
-def responses_unanswered(board: str, feedback: Path, run: str) -> Unanswered | None:
-    """What `check-responses` refuses a gathering's account for, or `None` when it is sound.
+def responses_checked(
+    board: str, feedback: Path, run: str
+) -> tuple[Unanswered | None, list[Response]]:
+    """What `check-responses` refuses a gathering's account for, and what the account answers.
 
-    :class:`OSError` or :class:`Refused` when the gathering or the board cannot be read at
-    all. `just follow-ups-answer-comments` asks this of every run it settled, in process,
-    and the `check-responses` command reports the same answer.
+    Read from the account and the snapshot the gathering names, and nothing else: no board
+    request. Whether each reply the account names is on the board is the one batched read's in
+    `follow_up_comments.settle`, which holds every reply to it. :class:`OSError` or
+    :class:`Refused` when the gathering or its snapshot cannot be read at all.
     """
     path = responses_path(feedback)
     gathering = read_gathering(_text(feedback))
     if problems := gathering_problems(gathering, feedback, board, run):
-        return Unanswered(feedback, problems)
+        return Unanswered(feedback, problems), []
     quoted = gathering.quoted
     if not path.is_file():
         return Unanswered(
@@ -6846,17 +6860,18 @@ def responses_unanswered(board: str, feedback: Path, run: str) -> Unanswered | N
                 "it does not exist, so nothing says what was done about the "
                 f"{len(quoted)} comment(s) {feedback.name} quotes"
             ],
-        )
+        ), []
     problems, answered = response_problems(_artifact(path), run, feedback, quoted)
-    # The gathering is held to the board first, so no issue it names is asked for its
-    # replies until the board says this run may answer there.
     if not problems:
-        problems = gathering_on_board(gathering, run, check_issue_title=False)
-    if not problems:
-        problems = replies_posted(run, answered)
+        problems = gathering_on_snapshot(gathering, feedback, run)
     if not problems:
         problems = answered_ticket_problems(feedback, run, answered)
-    return Unanswered(path, problems) if problems else None
+    return (Unanswered(path, problems), answered) if problems else (None, answered)
+
+
+def responses_unanswered(board: str, feedback: Path, run: str) -> Unanswered | None:
+    """What `check-responses` refuses a gathering's account for, or `None` when it is sound."""
+    return responses_checked(board, feedback, run)[0]
 
 
 def answered_ticket_problems(feedback: Path, run: str, answered: Sequence[Response]) -> list[str]:
@@ -6864,8 +6879,10 @@ def answered_ticket_problems(feedback: Path, run: str, answered: Sequence[Respon
     sound, for a gathering ``feedback`` under its drafts root.
 
     A comment may change that ticket, and the ticket a feedback dispatch leaves is held to the
-    shape its record declares as `validate` holds it. A ticket of a schema no reader accepts as
-    sound is one no answer brought forward, which its copy refuses, so it is left to that.
+    shape its record declares as `validate --pending` holds it: its estimate is settle's to
+    write. Which ticket an issue's is, and whether ``run`` owns it, is read off the snapshot's
+    record of the issue, never the board. A ticket of a schema no reader accepts as sound is one
+    no answer brought forward, which settle does not copy, so it is left to that.
     """
     from . import follow_up_comments
 
@@ -6874,18 +6891,26 @@ def answered_ticket_problems(feedback: Path, run: str, answered: Sequence[Respon
     ):
         return []
     root = feedback.parent.parent.parent
+    directory = follow_up_comments.recorded_snapshot(_text(feedback))
+    snapshot = None if directory is None else follow_up_comments.read_snapshot(directory)
     found: list[str] = []
     for issue in dict.fromkeys(one.comment.issue for one in answered):
-        item = plan_store.task_record(issue)
-        cause = _held_record(item).get("root_cause")
+        held = None if snapshot is None else snapshot.item(issue)
+        if snapshot is None or held is None or held.owner != run:
+            continue
+        # The root cause the snapshot's copy of the item records.
+        (detail,) = follow_up_comments.shown_details([held.snapshot_id], snapshot.settings())
+        cause = _held_record(follow_up_comments.detail_item(detail, held.snapshot_id)).get(
+            "root_cause"
+        )
         path = ticket_path(root, run, str(cause))
-        if issue_owner(item) != run or not _is_slug(cause) or not path.is_file():
+        if not _is_slug(cause) or not path.is_file():
             continue
         stored = stored_ticket(path)
         if _held_record(stored.item).get("schema") not in SOUND_SCHEMAS:
             continue
         try:
-            ticket_from(path, stored)
+            ticket_from(path, stored, pending=True, for_copy=True)
         except Refused as refusal:
             found.extend(
                 f"the ticket {qualified_id(run, str(cause))} of {issue}, which a comment it "
@@ -7069,7 +7094,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     match arguments.command:
         case "validate":
-            return _validated(arguments.paths)
+            return _validated(arguments.paths, pending=arguments.pending)
         case "board-status":
             return _placed(arguments)
         case "board-items":

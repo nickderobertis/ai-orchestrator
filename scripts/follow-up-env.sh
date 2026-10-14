@@ -105,3 +105,30 @@ export_follow_up_drafts() {
     fi
     export "$FOLLOW_UP_DRAFT_ENV=$wrapper"
 }
+
+# Export the snapshot source the comment gathering at $2 names, for a launch answering it:
+# every read the dispatched agent and its checks make of a quoted issue goes there, never to
+# the board. The names and the values are `orchestrator/follow_up_comments.py`'s, which states
+# the snapshot contract; this only exports what its `snapshot-env` prints. $1 names the
+# calling launcher so its diagnostics stay attributable.
+export_follow_up_snapshot() {
+    local caller=${1:?export_follow_up_snapshot: the name of the calling launcher is required, so its diagnostics stay attributable; pass it as the first argument, then retry}
+    local feedback=${2:?export_follow_up_snapshot: the feedback file whose snapshot to export is required; pass it as the second argument, then retry}
+    local here python printed line
+    # llmlint: ignore[changed_behavior_has_e2e] Reachable only when this helper's own directory stops being enterable between a caller sourcing it and calling this; no journey can produce that without racing the filesystem the test itself runs on.
+    if ! here=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd); then
+        echo "$caller: this checkout could not be resolved, so the snapshot source could not be established; run the launch from a readable checkout, then retry" >&2
+        return 2
+    fi
+    python="$here/.venv/bin/python3"
+    [ -x "$python" ] || python=python3
+    if ! printed=$(cd -- "$here" && PATH="$here/.venv/bin:$PATH" PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" "$python" -m orchestrator.follow_up_comments snapshot-env --feedback "$feedback" 2>&1); then
+        echo "$caller: the snapshot '$feedback' was gathered from could not be named: ${printed:-the module reported nothing}" >&2
+        echo "$caller: gather the board's comments again with 'just follow-ups-answer-comments', which writes a feedback file naming its snapshot, then retry" >&2
+        return 2
+    fi
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        export "${line?}"
+    done <<<"$printed"
+}

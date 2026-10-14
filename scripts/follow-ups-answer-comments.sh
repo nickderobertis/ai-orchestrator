@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # `just follow-ups-answer-comments [--dry-run] [--run RUN-ID | --issue QUALIFIED-ID]
-# [--to SOURCE] [--since RFC3339] [--detach]`: a thin script over
-# `orchestrator/follow_up_comments.py`, which states what is read, where each comment goes and
-# when the watermark moves. This only runs its steps with the launches between them, each
-# through `scripts/follow-ups.sh --comments`. The whole of it is one flow
-# (`scripts/launch-flow.sh`) holding the launching session until it exits, whose first lines
-# name the flow and the `just watch --flow <ID>` that watches it.
+# [--to SOURCE] [--since RFC3339] [--detach]`, or `just follow-ups-answer-comments --from
+# <snapshot> [--detach]`: a thin script over `orchestrator/follow_up_comments.py`, whose
+# docstring states the snapshot every step reads, what is read, where each comment goes, how
+# settle writes and when the watermark moves. This only runs its steps — gather into a
+# snapshot, claim it and write its feedback, launch, settle — with the launches between them,
+# each through `scripts/follow-ups.sh --comments`. A `--dry-run` stops after the gathering,
+# printing the `--from` that launches exactly what it showed; a `--from` reads no board before
+# its launches. The whole of it is one flow (`scripts/launch-flow.sh`) holding the launching
+# session until it exits, whose first lines name the flow and the `just watch --flow <ID>`
+# that watches it.
 set -euo pipefail
 
 fail() {
@@ -56,12 +60,17 @@ run_in_launch_flow follow-ups-answer-comments follow-ups-answer-comments \
 
 scratch=$(mktemp -d) || fail "a scratch directory for the gathering could not be created" "free disk space and retry"
 trap 'rm -rf "$scratch" || echo "follow-ups-answer-comments: the scratch directory $scratch could not be removed; delete it by hand" >&2' EXIT
+intent="$scratch/intent.json"
 plan="$scratch/plan.json"
 module=("$python" -m orchestrator.follow_up_comments)
 
-# A refusal here has launched nothing.
-# llmlint: ignore[tool_output_is_signal] The report of every comment the narrowed query returned, sent or left out with its reason, is this recipe's deliverable rather than noise around one: an operator reads it to know what was answered and why the rest was not.
-(cd -- "$checkout" && "${module[@]}" gather --root "$drafts_root" --plan "$plan" "$@")
+# A refusal here has launched nothing. `--from` reads nothing here: it only names the snapshot.
+# llmlint: ignore[tool_output_is_signal] The report of every comment the snapshot holds, sent or left out with its reason, is this recipe's deliverable rather than noise around one: an operator reads it to know what was answered and why the rest was not.
+(cd -- "$checkout" && "${module[@]}" gather --root "$drafts_root" --intent "$intent" "$@")
+# The claim, the boundaries and the feedback files, from the snapshot alone; a dry run and a
+# host nothing can be owed on leave nothing to claim.
+# llmlint: ignore[tool_output_is_signal] Each line is one the report owes: the item the snapshot could not capture, which the task requires the launch to name, and the feedback file each run answers, which is what an operator opens to read what it was asked.
+(cd -- "$checkout" && "${module[@]}" launch --root "$drafts_root" --intent "$intent" --plan "$plan")
 launches=$(cd -- "$checkout" && "${module[@]}" launches --root "$drafts_root" --plan "$plan")
 
 # Launched at once, each returning at its launch record, so no run waits on another's.
@@ -126,6 +135,6 @@ fi
 
 # Run rather than exec'd, so the trap above still removes the scratch directory after it.
 settled=0
-# llmlint: ignore[tool_output_is_signal] Each run's check, every reply's URL, the watermark and the store read are what the task asks the report to end with, so a reader can open every answer and knows which release answered the query.
+# llmlint: ignore[tool_output_is_signal] Each run's check, every reply's URL, every board write and fallback read, every pending write needing attention, the watermark and the store read are what the task asks the report to end with, so a reader can open every answer and knows which release answered the query.
 (cd -- "$checkout" && "${module[@]}" settle --root "$drafts_root" --plan "$plan" ${launched[@]+"${launched[@]}"}) || settled=$?
 exit "$settled"

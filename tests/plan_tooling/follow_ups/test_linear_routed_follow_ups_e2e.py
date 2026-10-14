@@ -176,8 +176,11 @@ held["dispositions"] = json.loads(sys.argv[2])
 path.write_text(json.dumps(held, indent=2), encoding="utf-8")
 """
 
-#: The answering agent's own program: read the gathering its run's task quotes, post one reply
-#: to each comment there on the issue holding it, and account for each reply.
+#: The answering agent's own program, as its task names the commands: read the gathering its
+#: run's task quotes, read each quoted issue from the snapshot source by the snapshot id the
+#: comment's `Issue` line names, post one reply to each comment on the issue holding it — with
+#: `--expect` the version that line gives, where it gives one — and account for each reply with
+#: the id, URL and any fallback that command's own answer reports.
 REPLY_PROGRAM = """\
 import json, re, subprocess, sys, tempfile
 from orchestrator import follow_up_comments as comments
@@ -191,24 +194,35 @@ account = re.search(r"account is a JSON document at `([^`]+)`", task)[1]
 gathered = re.search(r'"feedback": "([^"]+)"', task)[1]
 gathering = tickets.read_gathering(task.split("## The comments to answer", 1)[1])
 responses = []
-for section, one in zip(task.split("### Comment ")[1:], gathering.quoted, strict=True):
-    fields = dict(
-        line[2:].split(": ", 1) for line in section.splitlines() if line.startswith("- ")
-    )
-    shown = json.loads(subprocess.run([store, "task", "show", one.issue, "--json"], check=True,
-                                      capture_output=True, text=True).stdout)
+latest = {}
+for one, fields in zip(gathering.quoted, gathering.metadata, strict=True):
+    line = comments.ISSUE_VALUE.fullmatch(fields.issue)
+    shown = json.loads(subprocess.run([store, "task", "show", line["snapshot_id"], "--json"],
+                                      check=True, capture_output=True, text=True).stdout)
     cause = shown["items"][0]["item"]["metadata"][tickets.KEY]["root_cause"]
     reply = tickets.render_reply(
-        run, cause, answers=one.comment, url=fields["URL"], author=fields["Author"],
+        run, cause, answers=one.comment, url=fields.url,
+        author=None if fields.author == comments.UNKNOWN_AUTHOR else fields.author,
         response=response, verdict=tickets.Verdict.DOES_NOT_CONFIRM,
     )
     with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as body:
         body.write(reply)
+    # After a reply on the same issue, the version that reply's answer carried.
+    version = latest.get(line["issue"], line["version"])
+    expect = [] if version == comments.NO_VERSION else ["--expect", version]
     added = json.loads(subprocess.run(
-        [store, "task", "comment", "add", one.issue, "--body-file", body.name, "--json"],
-        check=True, capture_output=True, text=True).stdout)
+        [store, "task", "comment", "add", line["issue"], "--body-file", body.name, *expect,
+         "--json"], check=True, capture_output=True, text=True).stdout)
+    if version != comments.NO_VERSION and (posted_result := added.get("result")):
+        # An item changed within the last minute gets no version, so the next reply on it
+        # names none either.
+        latest[line["issue"]] = posted_result.get("version") or comments.NO_VERSION
+    fallback = added.get("fallback")
     responses.append({"comment": one.comment, "issue": one.issue, "action": response,
-                      "reply": added["id"], "verdict": tickets.Verdict.DOES_NOT_CONFIRM.value})
+                      "reply": added["id"], "reply_url": added.get("url"),
+                      "reply_fallback": fallback.get("reason") if isinstance(fallback, dict)
+                      else None,
+                      "verdict": tickets.Verdict.DOES_NOT_CONFIRM.value})
 with open(account, "w", encoding="utf-8") as stream:
     json.dump({"schema": tickets.RESPONSES_SCHEMA, "run": run, "feedback": gathered,
                "responses": responses}, stream, indent=2)

@@ -18,13 +18,13 @@ import dataclasses
 import json
 import re
 import shlex
+import shutil
 import socket
 import sys
 import time
-from collections.abc import Coroutine
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, get_type_hints
 
 import follow_up_variables
 import pytest
@@ -85,12 +85,6 @@ def test_comment_time_and_url_fallbacks_refuse_missing_answers() -> None:
     assert comments.comment_url(
         dataclasses.replace(issue, url=None), dataclasses.replace(comment, url=None)
     ).startswith("file:///tmp/issue.md#comment-")
-    qualified = comments.QualifiedTaskId(f"{BOARD}:x")
-    assert comments._location_path({"path": "/tmp/issue.md"}, qualified) == "/tmp/issue.md"
-    assert comments._location_path({}, qualified) is None
-    for path in (3, "", "/tmp/one\nfile:///elsewhere"):
-        with pytest.raises(OSError, match="which is not a path"):
-            comments._location_path({"path": path}, qualified)
     without_urls = dataclasses.replace(issue, url=None, location=None)
     with pytest.raises(OSError, match="no URL and no location"):
         comments.comment_url(without_urls, dataclasses.replace(comment, url=None))
@@ -194,31 +188,57 @@ def _next_second() -> None:
 EARLY = "2026-01-01T00:00:00Z"
 
 
+class Gathered(NamedTuple):
+    """One pass the script's first two steps took: its snapshot, and the plan launched from it."""
+
+    snapshot: comments.Snapshot
+    plan: comments.Plan
+
+    @property
+    def runs(self) -> tuple[comments.Launch, ...]:
+        return self.plan.runs
+
+    @property
+    def scope(self) -> str | None:
+        return self.snapshot.scope
+
+    @property
+    def since(self) -> datetime:
+        return min(one.since for one in self.snapshot.starts.values())
+
+
+def _steps(root: Path, *arguments: str) -> tuple[int, Path, Path]:
+    """`gather` with ``arguments``, then `launch` from what it gathered, as the script runs them."""
+    intent = root.parent / f"intent-{time.monotonic_ns()}.json"
+    plan = root.parent / f"plan-{time.monotonic_ns()}.json"
+    status = comments.main(["gather", "--root", str(root), "--intent", str(intent), *arguments])
+    if status == comments.DONE:
+        status = comments.main(
+            ["launch", "--root", str(root), "--intent", str(intent), "--plan", str(plan)]
+        )
+    return status, intent, plan
+
+
 def _gathered(
     root: Path,
     capsys: pytest.CaptureFixture[str],
     *arguments: str,
     since: str | None = EARLY,
-) -> tuple[str, comments.Plan | None]:
-    """One `gather` over the stand-in board: its report, and the plan it wrote, if any."""
-    plan = root.parent / f"plan-{time.monotonic_ns()}.json"
-    status = comments.main(
-        [
-            "gather",
-            "--root",
-            str(root),
-            "--plan",
-            str(plan),
-            "--to",
-            BOARD,
-            *(["--since", since] if since is not None else []),
-            *arguments,
-        ]
+) -> tuple[str, Gathered | None]:
+    """One `gather` and `launch` over the stand-in board: the report, and what was launched.
+
+    ``None`` for a dry run or a host nothing can be owed on, which claim no snapshot.
+    """
+    status, intent, plan = _steps(
+        root, "--to", BOARD, *(["--since", since] if since is not None else []), *arguments
     )
     captured = capsys.readouterr()
     assert status == comments.DONE, captured.err
-    written = plan.read_text(encoding="utf-8")
-    return captured.out, comments.read_plan(plan, root) if written else None
+    named = json.loads(intent.read_text(encoding="utf-8"))["snapshot"]
+    if named is None:
+        return captured.out, None
+    launched = comments.read_plan(plan, root)
+    return captured.out, Gathered(comments.read_snapshot(launched.snapshot), launched)
 
 
 def _written(
@@ -234,6 +254,20 @@ def _written(
     ((named, path),) = [one for one in plan.runs if one.run == run]
     assert path.parent == root / comments.FEEDBACK_DIRECTORY / run, path
     return path.read_text(encoding="utf-8")
+
+
+def _read_by_id(root: Path, items: list[str]) -> list[comments.Issue]:
+    """``items`` copied by id into a snapshot source of their own and read back, as a scoped
+    gathering reads them: through the store's own copy, with no host narrowing."""
+    directory = root.parent / f"read-{time.monotonic_ns()}"
+    (directory / comments.SNAPSHOT_ITEMS).mkdir(parents=True)
+    settings = comments.snapshot_settings(directory, BOARD)
+    copied = comments.copy_into_snapshot(directory, BOARD, items, settings)
+    details = comments.shown_details([copied.held[one] for one in items], settings)
+    return [
+        comments.snapshot_issue(detail, one, copied.held[one], WRITABLE_PLUGIN)
+        for one, detail in zip(items, details, strict=True)
+    ]
 
 
 def _snapshot(root: Path) -> dict[str, bytes]:
@@ -419,13 +453,10 @@ def test_comments_on_items_no_run_here_answers_are_each_left_out_with_their_one_
 
     # An item read by id is not narrowed by host, so the reasons for those three still hold
     # wherever one is read: in their order, each before every later reason.
-    read = {
-        item: comments.bound_issue(comments.QualifiedTaskId(item), WRITABLE_PLUGIN)
-        for item in (elsewhere, hostless, unowned)
-    }
-    selection = comments.select(list(read.values()), {}, HOST, {tickets.RunId(RUN)})
+    read = _read_by_id(drafts_root, [elsewhere, hostless, unowned])
+    selection = comments.select(read, {}, HOST, {tickets.RunId(RUN)})
     assert selection.chosen == {}
-    reasons = {(str(left.issue.id), left.id): left.reason for left in selection.left}
+    reasons = {(str(left.issue), left.id): left.reason for left in selection.left}
     assert reasons == {
         (elsewhere, on_elsewhere): "ticket verified on host another-host",
         (hostless, on_hostless): "ticket verified on host (none recorded)",
@@ -435,7 +466,7 @@ def test_comments_on_items_no_run_here_answers_are_each_left_out_with_their_one_
     }
 
 
-def test_a_dry_run_reports_what_would_go_where_and_writes_nothing(
+def test_a_dry_run_reports_what_would_go_where_and_writes_only_its_snapshot(
     drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     own = _filed(drafts_root, RUN, CAUSE)
@@ -447,10 +478,17 @@ def test_a_dry_run_reports_what_would_go_where_and_writes_nothing(
 
     assert plan is None
     assert _id_line(report, own, asked).endswith(f"would go to run {RUN}")
-    assert _snapshot(drafts_root) == before, "a dry run wrote under the drafts root"
-    assert report.splitlines()[-1] == (
+    # The snapshot is the one thing it writes: no feedback file, no boundary, no watermark.
+    (snapshot,) = comments.snapshots_directory(drafts_root).iterdir()
+    written = {path: held for path, held in _snapshot(drafts_root).items() if path not in before}
+    assert written and all(Path(path).is_relative_to(snapshot) for path in written), written
+    assert comments.launched_record(snapshot) is None, "a dry run claimed its snapshot"
+    assert report.splitlines()[-2] == (
         f"plan store: {comments.store_version()}; the narrowed query returned 1 item(s) "
         f"commented on since {EARLY}"
+    )
+    assert report.splitlines()[-1] == (
+        f"launch exactly this with: just {comments.PROG} --from {snapshot}"
     )
 
 
@@ -665,7 +703,7 @@ def test_a_boundary_a_feedback_file_records_that_is_no_moment_is_unrunnable(
         comments.boundary_line(None) + "\n", encoding="utf-8"
     )
 
-    gather = ["gather", "--root", str(drafts_root), "--plan", str(drafts_root.parent / "p.json")]
+    gather = ["gather", "--root", str(drafts_root), "--intent", str(drafts_root.parent / "i.json")]
     status = comments.main([*gather, "--to", BOARD, "--since", EARLY])
 
     assert status == comments.UNRUNNABLE
@@ -689,23 +727,38 @@ def test_the_feedback_file_asks_for_an_action_a_reply_and_a_report_per_comment(
     listed = comment.model_dump(mode="json")
     assert f"- Comment id: {identifier}\n- URL: file://" in written
     assert f"- Author: {PERSON}\n- Last changed: {listed['updated_at']}\n" in written
+    snapshot = comments.recorded_snapshot(written)
+    assert snapshot is not None and comments.read_snapshot(snapshot).items[0].id == own
+    (held,) = comments.read_snapshot(snapshot).items
     for said in (
-        "Gathered by `just follow-ups-answer-comments`",
-        "each is quoted verbatim below with its id, its URL, its author and when it last changed",
-        '1. **Act on it** under "Ownership on the board" above: decide whether the ticket of '
+        "Gathered by `just follow-ups-answer-comments` into the snapshot at "
+        f"`{snapshot}`, each is quoted verbatim below with its id, its URL, its author, when it "
+        "last changed, and its issue's id on the board, in the snapshot source `snapshot` and "
+        "the version the snapshot holds.",
+        "1. **Read it** from the snapshot source, never from the board: the issue with `task "
+        "show <its snapshot id> --json` and its comments with `task comment list <its snapshot "
+        "id>`.",
+        '2. **Act on it** under "Ownership on the board" above: decide whether the ticket of '
         "the issue it sits on should change in light of it and of anything investigating it "
-        "found, whether or not it asks for an edit, make that change, and perform whatever else "
-        "it calls for.",
-        "2. **Post its one reply**, naming the comment's id, as those rules state, and saying "
-        "what changed in the ticket and why, or why the ticket stands as it is.",
-        "3. **Report** the comment's URL beside what you did about it, or why you did nothing.",
+        "found, whether or not it asks for an edit, and make that change in the ticket's file; "
+        "the board is written from it once this run settles.",
+        "3. **Post its one reply**, naming the comment's id, as those rules state, with `task "
+        "comment add <its board id> --expect <its version> --json` — after a reply of yours on "
+        "that issue, expecting the version that reply's answer carried, and with no `--expect` "
+        f"where its version is `{comments.NO_VERSION}` or that answer carried none — saying what "
+        "changed in the ticket and why, or why the ticket stands as it is, and record the reply's "
+        "id and URL from that command's answer.",
+        "4. **Report** the comment's URL beside what you did about it, or why you did nothing.",
         " ".join(tickets.WITHDRAWAL_EXCEPTION.split())
         + " Never touch a ticket or an issue no comment above names",
+        # The stand-in board's source keeps no cache, which a reply's `--expect` needs, so the
+        # feedback names no version though the snapshot holds one.
+        f"- Issue: {own}, read from {held.snapshot_id} at version {comments.NO_VERSION}",
     ):
         assert said in flat, said
     # The anchor sits with the comment it names, so the account's order is the file's.
     assert tickets.quoted_comments(written) == [tickets.Quoted(own, identifier)], written
-    assert written.index("1. **Act on it**") < written.index("2. **Post its one reply**")
+    assert written.index("2. **Act on it**") < written.index("3. **Post its one reply**")
     # A run with no response has no boundary, and an unnamed author is said to be one.
     assert "changed after" not in written
 
@@ -729,13 +782,26 @@ def test_a_comment_before_the_runs_last_ticket_copy_is_not_selected_and_one_afte
     assert f"- Author: {comments.UNKNOWN_AUTHOR}" in written
 
 
-def test_two_feedback_files_in_one_second_are_both_kept(tmp_path: Path) -> None:
+def test_two_snapshots_in_one_second_are_both_kept_and_a_feedback_file_is_never_rewritten(
+    drafts_root: Path, board: Path, tmp_path: Path
+) -> None:
+    _commented(_filed(drafts_root, RUN, CAUSE), "Please add page 9.\n")
     now = datetime(2026, 1, 1, tzinfo=UTC)
+    said: list[str] = []
+    since = datetime(2025, 1, 1, tzinfo=UTC)
 
-    first = comments.write_feedback(tmp_path, RUN, BOARD, [], None, now)
-    second = comments.write_feedback(tmp_path, RUN, BOARD, [], None, now)
+    first = comments.gather(drafts_root, BOARD, since=since, now=lambda: now, say=said.append)
+    second = comments.gather(drafts_root, BOARD, since=since, now=lambda: now, say=said.append)
 
-    assert (first.name, second.name) == ("20260101T000000Z.md", "20260101T000000Z-2.md")
+    assert first is not None and second is not None
+    assert (first.directory.name, second.directory.name) == (
+        "20260101T000000Z",
+        "20260101T000000Z-2",
+    )
+    feedback = comments.write_feedback(tmp_path / "f.md", "first")
+    with pytest.raises(FileExistsError):
+        comments.write_feedback(feedback, "second")
+    assert feedback.read_text(encoding="utf-8") == "first"
 
 
 def test_with_no_watermark_the_start_is_the_earliest_bound_local_records_give(
@@ -771,17 +837,17 @@ def test_a_run_whose_records_give_no_bound_is_refused_naming_it_and_since(
 ) -> None:
     _filed(drafts_root, RUN, CAUSE)
     tickets.ticket_path(drafts_root, RUN, CAUSE).unlink()
-    plan = drafts_root.parent / "plan.json"
 
-    status = comments.main(
-        ["gather", "--root", str(drafts_root), "--plan", str(plan), "--to", BOARD]
-    )
+    status, intent, _ = _steps(drafts_root, "--to", BOARD)
 
     refusal = capsys.readouterr().err
     assert status == comments.UNRUNNABLE
     assert f"run(s) {RUN} under {drafts_root}" in refusal
     assert "run it again with --since <RFC3339>" in refusal
-    assert not plan.exists()
+    assert not intent.exists()
+    assert not comments.snapshots_directory(drafts_root).exists() or not any(
+        comments.snapshots_directory(drafts_root).iterdir()
+    )
 
 
 def test_a_host_where_no_run_filed_a_ticket_reads_nothing(
@@ -842,13 +908,13 @@ def test_a_watermark_is_read_back_as_written_and_any_other_shape_is_refused(
 
 
 def _answered_run(
-    root: Path, capsys: pytest.CaptureFixture[str], *, reply: bool
-) -> tuple[comments.Plan, Path, str]:
+    root: Path, capsys: pytest.CaptureFixture[str], *arguments: str, reply: bool
+) -> tuple[Gathered, Path, str]:
     """A gathering of one comment on the run's issue, and its account, answered or not."""
     own = _filed(root, RUN, CAUSE)
     tickets.ticket_path(root, RUN, CAUSE).unlink()
     asked = _commented(own, "Please add page 9.\n")
-    _, plan = _gathered(root, capsys)
+    _, plan = _gathered(root, capsys, *arguments)
     assert plan is not None
     ((_, feedback),) = plan.runs
     posted = _replied(own, asked) if reply else "a-reply-never-posted"
@@ -864,6 +930,9 @@ def _answered_run(
                         "issue": own,
                         "action": "Copied the ticket again.",
                         "reply": posted,
+                        # A folder of Markdown answers a comment with no address of its own.
+                        "reply_url": None,
+                        "reply_fallback": None,
                         "verdict": tickets.Verdict.DOES_NOT_CONFIRM.value,
                     }
                 ],
@@ -880,35 +949,45 @@ def test_a_settled_run_answered_soundly_reports_its_replies_and_advances_the_wat
     plan, _, posted = _answered_run(drafts_root, capsys, reply=True)
     lines: list[str] = []
 
-    status = comments.settle(drafts_root, plan, {RUN: "follow-up-1"}, say=lines.append)
+    status = comments.settle(drafts_root, plan.plan, {RUN: "follow-up-1"}, say=lines.append)
 
     assert status == comments.DONE, lines
-    assert lines[0] == f"run {RUN} (follow-up run follow-up-1): check-responses passed"
-    assert lines[1].startswith("  reply: file://") and lines[1].endswith(f"#comment-{posted}")
-    assert comments.read_watermark(drafts_root, BOARD) == plan.queried_at - comments.OVERLAP
-    assert lines[-1].startswith(f"plan store: {plan.store}; the narrowed query returned 1 ")
+    assert lines[0] == "verified on the board with one batched read of 1 item(s)"
+    assert lines[1] == f"run {RUN} (follow-up run follow-up-1): check-responses passed"
+    assert lines[2].startswith("  reply: file://") and lines[2].endswith(f"#comment-{posted}")
+    queried = plan.snapshot.queried_at
+    assert comments.read_watermark(drafts_root, BOARD) == queried - comments.OVERLAP
+    assert "board writes: 0; fallback reads: 0" in lines
+    assert lines[-1].startswith(
+        f"plan store: {plan.snapshot.store}; the narrowed query returned 1 "
+    )
 
 
 def test_a_run_not_answered_soundly_is_named_and_leaves_the_watermark_where_it_was(
     drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    plan, feedback, _ = _answered_run(drafts_root, capsys, reply=False)
+    plan, feedback, posted = _answered_run(drafts_root, capsys, reply=False)
     lines: list[str] = []
 
-    status = comments.settle(drafts_root, plan, {RUN: "follow-up-1"}, say=lines.append)
+    status = comments.settle(drafts_root, plan.plan, {RUN: "follow-up-1"}, say=lines.append)
 
     assert status == comments.UNANSWERED
-    assert lines[0] == f"run {RUN} (follow-up run follow-up-1): check-responses failed"
-    assert any("the board holds no reply of run" in line for line in lines), lines
+    # The account is sound on its own: what it names is not on the board, which the one
+    # batched read is what says.
+    assert lines[1] == f"run {RUN} (follow-up run follow-up-1): its replies are not on the board"
+    assert any(f"the board holds no reply {posted} of run" in line for line in lines), lines
     assert "watermark: left as it was, because a launched run was not answered soundly" in lines
     assert comments.read_watermark(drafts_root, BOARD) is None
     # A gathering that cannot be read at all is one more way it is not answered.
     feedback.unlink()
     lines.clear()
-    assert comments.settle(drafts_root, plan, {RUN: "x"}, say=lines.append) == (comments.UNANSWERED)
+    assert comments.settle(drafts_root, plan.plan, {RUN: "x"}, say=lines.append) == (
+        comments.UNANSWERED
+    )
+    assert lines[0] == f"run {RUN} (follow-up run x): check-responses failed"
     # A run whose launch failed is unanswered too, and says which file it owed.
     lines.clear()
-    assert comments.settle(drafts_root, plan, {}, say=lines.append) == comments.UNANSWERED
+    assert comments.settle(drafts_root, plan.plan, {}, say=lines.append) == comments.UNANSWERED
     assert lines[0] == f"run {RUN}: its follow-up run did not launch, so {feedback} is unanswered"
 
 
@@ -918,7 +997,7 @@ def test_detached_and_run_scoped_settlements_leave_the_watermark_and_say_why(
     plan, feedback, _ = _answered_run(drafts_root, capsys, reply=True)
     lines: list[str] = []
 
-    detached = dataclasses.replace(plan, detach=True)
+    detached = dataclasses.replace(plan.plan, detach=True)
     assert comments.settle(drafts_root, detached, {RUN: "fu-1"}, say=lines.append) == comments.DONE
 
     check = shlex.join(
@@ -930,9 +1009,41 @@ def test_detached_and_run_scoped_settlements_leave_the_watermark_and_say_why(
         f"settles, check it with: {check}"
     )
     assert "watermark: left as it was, because the launched runs have not been checked" in lines
+    assert comments.read_watermark(drafts_root, BOARD) is None
     lines.clear()
-    scoped = dataclasses.replace(plan, scope=tickets.RunId(RUN))
-    assert comments.settle(drafts_root, scoped, {RUN: "fu-1"}, say=lines.append) == comments.DONE
+    _next_second()
+    own = plan.snapshot.items[0].id
+    # Bound again, so a gathering scoped to the run reads its item by that binding.
+    _bound(drafts_root, RUN, CAUSE, _native_of(own))
+    asked = _commented(own, "And page 10?\n")
+    _, scoped = _gathered(drafts_root, capsys, "--run", RUN)
+    assert scoped is not None and scoped.scope == RUN
+    ((_, scoped_feedback),) = scoped.runs
+    reply = _replied(own, asked)
+    tickets.responses_path(scoped_feedback).write_text(
+        json.dumps(
+            {
+                "schema": tickets.RESPONSES_SCHEMA,
+                "run": RUN,
+                "feedback": scoped_feedback.name,
+                "responses": [
+                    {
+                        "comment": asked,
+                        "issue": own,
+                        "action": "Answered it.",
+                        "reply": reply,
+                        "reply_url": None,
+                        "reply_fallback": None,
+                        "verdict": tickets.Verdict.DOES_NOT_CONFIRM.value,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert comments.settle(drafts_root, scoped.plan, {RUN: "fu-2"}, say=lines.append) == (
+        comments.DONE
+    ), lines
     assert (
         f"watermark: left as it was, because the gathering was scoped to run {RUN}'s comments"
         in lines
@@ -944,17 +1055,13 @@ def test_the_script_steps_hand_the_plan_between_them(
     drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """`launches` names each launch as the script reads it, and `settle` reads the plan back."""
-    plan_path = drafts_root.parent / "plan.json"
     _commented(_filed(drafts_root, RUN, CAUSE), "Please add page 9.\n")
     tickets.ticket_path(drafts_root, RUN, CAUSE).unlink()
     for detach, mode in ((False, "attach"), (True, "detach")):
-        assert (
-            comments.main(
-                ["gather", "--root", str(drafts_root), "--plan", str(plan_path), "--to", BOARD]
-                + ["--since", EARLY, *(["--detach"] if detach else [])]
-            )
-            == comments.DONE
+        status, _, plan_path = _steps(
+            drafts_root, "--to", BOARD, "--since", EARLY, *(["--detach"] if detach else [])
         )
+        assert status == comments.DONE
         capsys.readouterr()
         assert (
             comments.main(["launches", "--root", str(drafts_root), "--plan", str(plan_path)])
@@ -972,7 +1079,11 @@ def test_the_script_steps_hand_the_plan_between_them(
     assert status == comments.DONE
     assert "launched follow-up run fu" in capsys.readouterr().out
     # A dry run hands the script an empty plan, which both later steps read as nothing to do.
-    plan_path.write_text("", encoding="utf-8")
+    status, intent, plan_path = _steps(drafts_root, "--to", BOARD, "--since", EARLY, "--dry-run")
+    assert status == comments.DONE
+    assert json.loads(intent.read_text(encoding="utf-8"))["snapshot"] is None
+    capsys.readouterr()
+    assert plan_path.read_text(encoding="utf-8") == ""
     assert (
         comments.main(["launches", "--root", str(drafts_root), "--plan", str(plan_path)])
         == comments.DONE
@@ -984,43 +1095,33 @@ def test_the_script_steps_hand_the_plan_between_them(
 
 
 def test_a_watermark_that_cannot_be_written_is_refused_by_settle(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    root = tmp_path / "a-file-not-a-root"
-    root.write_text("", encoding="utf-8")
-    plan = tmp_path / "plan.json"
-    plan.write_text(
-        json.dumps(
-            {
-                "board": BOARD,
-                "boards": [BOARD],
-                "named_board": True,
-                "since": EARLY,
-                "queried_at": EARLY,
-                "scope": None,
-                "detach": False,
-                "store": "onetaskgraph test",
-                "items": 0,
-                "runs": [],
-                "issues": {},
-            }
-        ),
-        encoding="utf-8",
-    )
+    # A gathering that selects nothing settles sound, so its next step is the watermark.
+    _filed(drafts_root, RUN, CAUSE)
+    status, _, plan_path = _steps(drafts_root, "--to", BOARD, "--since", EARLY)
+    assert status == comments.DONE
+    capsys.readouterr()
+    plan = comments.read_plan(plan_path, drafts_root)
+    held = comments.watermark_path(drafts_root, BOARD)
+    held.mkdir(parents=True)
 
-    status = comments.main(["settle", "--root", str(root), "--plan", str(plan)])
+    status = comments.main(
+        ["settle", "--root", str(drafts_root), "--plan", str(plan_path)]
+        + [f"--launched={run}=fu" for run, _ in plan.runs]
+    )
 
     assert status == comments.UNRUNNABLE
     refused = capsys.readouterr().err
     assert refused.startswith(f"{comments.PROG}: refused: ")
-    assert "is not a plan `gather` wrote" not in refused, refused
+    assert "is not a plan `launch` wrote" not in refused, refused
 
 
 def test_an_invocation_that_cannot_run_is_its_own_status(
     drafts_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    plan = str(drafts_root.parent / "plan.json")
-    gather = ["gather", "--root", str(drafts_root), "--plan", plan]
+    intent = str(drafts_root.parent / "intent.json")
+    gather = ["gather", "--root", str(drafts_root), "--intent", intent]
     assert comments.main([*gather, "--run", "a/b"]) == comments.UNRUNNABLE
     assert "--run 'a/b' is not a run id" in capsys.readouterr().err
     assert comments.main([*gather, "--since", "yesterday"]) == comments.UNRUNNABLE
@@ -1050,7 +1151,7 @@ def test_naming_no_board_reads_the_followups_board(
     ticket.write_text("x", encoding="utf-8")
 
     status = comments.main(
-        ["gather", "--root", str(drafts_root), "--plan", str(drafts_root.parent / "p.json")]
+        ["gather", "--root", str(drafts_root), "--intent", str(drafts_root.parent / "i.json")]
     )
 
     assert status == comments.UNRUNNABLE
@@ -1063,31 +1164,19 @@ def test_a_plan_or_a_launch_the_script_did_not_write_is_refused_naming_it(
     """The steps read only what the one before wrote; anything else is refused by name."""
     plan = tmp_path / "plan.json"
     root = str(tmp_path / "root")
-    written = {
-        "board": BOARD,
-        "boards": [BOARD],
-        "named_board": True,
-        "since": EARLY,
-        "queried_at": EARLY,
-        "scope": None,
-        "detach": False,
-        "store": "onetaskgraph test",
-        "items": 0,
-        "runs": [],
-        "issues": {},
-    }
+    snapshot = (
+        f"{root}/{comments.FEEDBACK_DIRECTORY}/{comments.SNAPSHOTS_DIRECTORY}/20260101T000000Z"
+    )
+    written = {"snapshot": snapshot, "detach": False, "runs": []}
     for broken in (
         "not json",
         json.dumps({key: value for key, value in written.items() if key != "runs"}),
-        json.dumps({key: value for key, value in written.items() if key != "boards"}),
+        json.dumps(written | {"snapshot": "/elsewhere/20260101T000000Z"}),
         json.dumps(written | {"runs": [["not a run/id", "f.md"]]}),
         json.dumps(written | {"runs": [[RUN, "/etc/passwd"]]}),
         json.dumps(written | {"runs": [[RUN, f"/elsewhere/feedback/{RUN}/20260101T000000Z.md"]]}),
-        json.dumps(written | {"issues": {"elsewhere:one": [None, None]}}),
         json.dumps(written | {"runs": [["one"]]}),
-        json.dumps(written | {"scope": "not a run/id"}),
-        json.dumps(written | {"items": True}),
-        json.dumps(written | {"issues": {f"{BOARD}:has a space": [None, None]}}),
+        json.dumps(written | {"detach": "no"}),
         json.dumps(written | {"runs": [[RUN, f"{root}/feed\tback/{RUN}/20260101T000000Z.md"]]}),
     ):
         plan.write_text(broken, encoding="utf-8")
@@ -1105,7 +1194,10 @@ def test_a_plan_or_a_launch_the_script_did_not_write_is_refused_naming_it(
 
     assert status == comments.UNRUNNABLE
     assert "--launched takes RUN=FOLLOW-UP" in capsys.readouterr().err
-    gather = ["gather", "--root", root, "--plan", str(plan), "--to", "../elsewhere"]
+    # A plan naming a snapshot that is not there is refused by the snapshot's own reader.
+    assert comments.main(["launches", "--root", root, "--plan", str(plan)]) == comments.UNRUNNABLE
+    assert f"{snapshot} holds no {comments.SNAPSHOT_RECORD}" in capsys.readouterr().err
+    gather = ["gather", "--root", root, "--intent", str(plan), "--to", "../elsewhere"]
     assert comments.main(gather) == comments.UNRUNNABLE
     assert "--to '../elsewhere' is not a source name" in capsys.readouterr().err
 
@@ -1124,30 +1216,18 @@ def test_a_title_spanning_lines_is_refused_since_it_would_open_a_field_of_its_ow
     plan_store.sdk(plan_store.client().task_copy([tickets.qualified_id(RUN, CAUSE)], to=BOARD))
     _commented(own, "A person's comment.\n")
 
-    status = comments.main(
-        ["gather", "--root", str(drafts_root), "--plan", str(drafts_root.parent / "p.json")]
-        + ["--to", BOARD, "--since", EARLY]
-    )
+    status, _, _ = _steps(drafts_root, "--to", BOARD, "--since", EARLY)
 
     assert status == comments.UNRUNNABLE
     assert f"{own} reports a title spanning lines" in capsys.readouterr().err
+    assert list(comments.snapshots_directory(drafts_root).iterdir()) == [], (
+        "a refused gathering left its staged snapshot behind"
+    )
 
 
 def test_a_plans_fields_are_the_ones_its_reader_holds_it_to() -> None:
     """The plan's record, its written document and the reader's schema are one field list."""
-    plan = comments.Plan(
-        board=BOARD,
-        boards=(BOARD,),
-        named_board=False,
-        since=datetime(2026, 1, 1, tzinfo=UTC),
-        queried_at=datetime(2026, 1, 1, tzinfo=UTC),
-        scope=None,
-        detach=False,
-        store="onetaskgraph test",
-        items=0,
-        runs=(),
-        issues={},
-    )
+    plan = comments.Plan(snapshot=Path("/x"), detach=False, runs=())
     fields = [field.name for field in dataclasses.fields(comments.Plan)]
 
     assert list(comments.PLAN_FIELDS) == fields
@@ -1161,22 +1241,9 @@ def test_a_written_plan_meets_its_readers_schema_and_reads_back_as_itself(
     root = tmp_path / "root"
     feedback = root / comments.FEEDBACK_DIRECTORY / RUN / "20260101T000000Z.md"
     plan = comments.Plan(
-        board=BOARD,
-        boards=(BOARD, ROUTED),
-        named_board=True,
-        since=datetime(2026, 1, 1, tzinfo=UTC),
-        queried_at=datetime(2026, 1, 1, 0, 15, tzinfo=UTC),
-        scope=tickets.RunId(RUN),
+        snapshot=comments.snapshots_directory(root) / "20260101T000000Z",
         detach=True,
-        store="onetaskgraph test",
-        items=3,
         runs=(comments.Launch(tickets.RunId(RUN), feedback),),
-        issues={
-            f"{BOARD}:{RUN}/tickets/{CAUSE}": comments.IssueLink(
-                "https://example.invalid/issue", "/tmp/issue.md"
-            ),
-            f"{ROUTED}:{RUN}/tickets/{ROUTED_CAUSE}": comments.IssueLink(LINEAR_ISSUE_URL, None),
-        },
     )
     written = json.loads(json.dumps(comments._plan_document(plan)))
     path = tmp_path / "plan.json"
@@ -1185,26 +1252,6 @@ def test_a_written_plan_meets_its_readers_schema_and_reads_back_as_itself(
     for key, kind in comments.PLAN_FIELDS.items():
         assert isinstance(written[key], kind), (key, written[key])
     assert comments.read_plan(path, root) == plan
-    for link in (["not a url", None], [None, "relative/issue.md"]):
-        path.write_text(
-            json.dumps(written | {"issues": {f"{BOARD}:{RUN}/tickets/{CAUSE}": link}}),
-            encoding="utf-8",
-        )
-        with pytest.raises(OSError, match="is not a plan `gather` wrote"):
-            comments.read_plan(path, root)
-    # The boards are the family the root names first, each one source name, and every quoted
-    # issue is on one of them.
-    for boards in ([], [ROUTED, BOARD], [BOARD, "not one word"], [BOARD, 3]):
-        path.write_text(json.dumps(written | {"boards": boards}), encoding="utf-8")
-        with pytest.raises(OSError, match="is not a plan `gather` wrote"):
-            comments.read_plan(path, root)
-    path.write_text(json.dumps(written | {"boards": [BOARD]}), encoding="utf-8")
-    with pytest.raises(OSError, match="is not a plan `gather` wrote"):
-        comments.read_plan(path, root)
-    # The store label is printed as the report's last line, so it is held to one.
-    path.write_text(json.dumps(written | {"store": "onetaskgraph 1\nforged"}), encoding="utf-8")
-    with pytest.raises(OSError, match="is not a plan `gather` wrote"):
-        comments.read_plan(path, root)
 
 
 @pytest.fixture
@@ -1221,13 +1268,16 @@ def routed(board: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path
     return root
 
 
+@pytest.mark.parametrize("passed_since", [False, True], ids=["alone", "a-later-pass-moved-it"])
 def test_a_gathering_reads_every_board_of_the_family_each_from_its_own_watermark(
-    drafts_root: Path, routed: Path, capsys: pytest.CaptureFixture[str]
+    drafts_root: Path, routed: Path, capsys: pytest.CaptureFixture[str], passed_since: bool
 ) -> None:
     """One gathering answers comments on the root board and on the board it routes to.
 
     The root board has a watermark and the routed one has none yet, so each is read from its
-    own start; a sound settlement then gives each board a watermark of its own.
+    own start; a sound settlement then gives each board a watermark of its own. Where a later
+    pass settled first and moved the root board's watermark past this one's query, it stays
+    where that pass left it, and the report says it was kept rather than advanced.
     """
     own = _filed(drafts_root, RUN, CAUSE)
     routed_issue = _filed(drafts_root, RUN, ROUTED_CAUSE, repository=ROUTED_REPOSITORY)
@@ -1248,7 +1298,7 @@ def test_a_gathering_reads_every_board_of_the_family_each_from_its_own_watermark
     assert lines[1].endswith(f"(derived from local records: run {RUN}'s ticket files' last write)")
     assert _id_line(report, own, on_own).endswith(f"goes to run {RUN}")
     assert _id_line(report, routed_issue, on_routed).endswith(f"goes to run {RUN}")
-    assert plan is not None and plan.boards == (BOARD, ROUTED)
+    assert plan is not None and plan.snapshot.boards == (BOARD, ROUTED)
     ((_, feedback),) = plan.runs
     quoted = tickets.quoted_comments(feedback.read_text(encoding="utf-8"))
     assert [(one.issue, one.comment) for one in quoted] == [
@@ -1268,6 +1318,8 @@ def test_a_gathering_reads_every_board_of_the_family_each_from_its_own_watermark
                         "issue": one.issue,
                         "action": "Answered it.",
                         "reply": reply,
+                        "reply_url": None,
+                        "reply_fallback": None,
                         "verdict": tickets.Verdict.DOES_NOT_CONFIRM.value,
                     }
                     for one, reply in zip(quoted, replies, strict=True)
@@ -1277,15 +1329,28 @@ def test_a_gathering_reads_every_board_of_the_family_each_from_its_own_watermark
         encoding="utf-8",
     )
     said: list[str] = []
+    later = plan.snapshot.queried_at + timedelta(hours=1)
+    if passed_since:
+        comments.write_watermark(drafts_root, BOARD, later)
 
-    assert comments.settle(drafts_root, plan, {RUN: "follow-up-1"}, say=said.append) == (
+    assert comments.settle(drafts_root, plan.plan, {RUN: "follow-up-1"}, say=said.append) == (
         comments.DONE
     ), said
-    for named in (BOARD, ROUTED):
-        assert comments.read_watermark(drafts_root, named) == (
-            plan.queried_at - comments.OVERLAP
-        ), named
-    assert sum(line.startswith("watermark: advanced to") for line in said) == 2, said
+    queried = plan.snapshot.queried_at - comments.OVERLAP
+    root_since = later - comments.OVERLAP if passed_since else queried
+    assert comments.read_watermark(drafts_root, BOARD) == root_since
+    assert comments.read_watermark(drafts_root, ROUTED) == queried
+    kept = [line for line in said if line.startswith("watermark: kept at")]
+    if passed_since:
+        assert kept == [
+            f"watermark: kept at {comments.instant(root_since)} in "
+            f"{comments.watermark_path(drafts_root, BOARD)}, already past this pass's query less "
+            "the overlap"
+        ], said
+    else:
+        assert kept == [], said
+    advanced = sum(line.startswith("watermark: advanced to") for line in said)
+    assert advanced == (1 if passed_since else 2), said
 
 
 #: Two comments on one Linear issue as onetaskgraph-linear's recorded fixture
@@ -1391,74 +1456,6 @@ CROWD = 200
 OTHER_HOST = "another-host"
 
 
-class Request(NamedTuple):
-    """One request made through the store client: the method, and what it was asked."""
-
-    method: str
-    arguments: tuple[object, ...]
-    keywords: dict[str, object]
-
-    def on_board(self) -> bool:
-        """Whether it reads the stand-in board: an item or its comments by id, or a page."""
-        if self.method == "task_list":
-            return BOARD in (self.keywords.get("source") or [])
-        return bool(self.arguments) and str(self.arguments[0]).startswith(f"{BOARD}:")
-
-
-class _Counted:
-    """The real store client, recording every request made through it before making it."""
-
-    def __init__(self, real: object, requests: list[Request]):
-        self._real = real
-        self._requests = requests
-
-    def __getattr__(self, name: str) -> object:
-        method = getattr(self._real, name)
-
-        def recorded(*arguments: object, **keywords: object) -> object:
-            self._requests.append(Request(name, arguments, keywords))
-            return method(*arguments, **keywords)
-
-        return recorded
-
-
-class BoardReads(NamedTuple):
-    """The requests one pass made of the stand-in board, by what each read."""
-
-    items: int
-    comment_lists: int
-    pages: int
-
-    @property
-    def total(self) -> int:
-        return self.items + self.comment_lists + self.pages
-
-    def __str__(self) -> str:
-        return (
-            f"{self.total} ({self.items} item read(s), {self.comment_lists} comment-list "
-            f"read(s), {self.pages} listing page(s))"
-        )
-
-
-def _board_reads(requests: list[Request]) -> BoardReads:
-    """Count the requests that read the stand-in board: an item, a comment list, or a page."""
-    read = [request.method for request in requests if request.on_board()]
-    return BoardReads(
-        items=read.count("task_show"),
-        comment_lists=read.count("task_comment_list"),
-        pages=read.count("task_list"),
-    )
-
-
-@pytest.fixture
-def counted(monkeypatch: pytest.MonkeyPatch) -> list[Request]:
-    """Every request the module makes through its store client, recorded as it is made."""
-    requests: list[Request] = []
-    real = plan_store.client
-    monkeypatch.setattr(plan_store, "client", lambda: _Counted(real(), requests))
-    return requests
-
-
 def _crowd(board: Path, at: datetime) -> None:
     """Put :data:`CROWD` unrelated items on the stand-in board, each carrying one comment.
 
@@ -1499,12 +1496,9 @@ def _selected(report: str) -> list[str]:
 
 
 def _crowded_passes(
-    drafts_root: Path,
-    board: Path,
-    capsys: pytest.CaptureFixture[str],
-    counted: list[Request],
-) -> dict[str, BoardReads]:
-    """What an unscoped, an `--issue` and a `--run` dry run each read of a crowded board.
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> dict[str, list[str]]:
+    """The items an unscoped, an `--issue` and a `--run` dry run each copied off a crowded board.
 
     One issue a run here owns has one comment waiting, and :data:`CROWD` unrelated items were
     commented on since the watermark too; each pass selects that one comment.
@@ -1515,45 +1509,44 @@ def _crowded_passes(
     _crowd(board, datetime.now(UTC))
     comments.write_watermark(drafts_root, BOARD, datetime(2026, 1, 1, 0, 15, tzinfo=UTC))
 
-    reads: dict[str, BoardReads] = {}
+    copied: dict[str, list[str]] = {}
     selected: dict[str, list[str]] = {}
     for name, arguments in (
         ("unscoped", ()),
         ("--issue", ("--issue", own)),
         ("--run", ("--run", RUN)),
     ):
-        counted.clear()
         report, plan = _gathered(drafts_root, capsys, "--dry-run", *arguments, since=None)
         assert plan is None
-        reads[name] = _board_reads(counted)
-        selected[name] = _selected(report)
-    assert selected["unscoped"] == [
-        f"selected: {_id_line(selected['unscoped'][0], own, waiting).removeprefix('selected: ')}"
-    ]
+        (directory,) = [
+            line.removeprefix("snapshot: ")
+            for line in report.splitlines()
+            if line.startswith("snapshot: ")
+        ]
+        snapshot = comments.read_snapshot(Path(directory))
+        copied[name] = [one.id for one in snapshot.items]
+        assert len(list((snapshot.directory / comments.SNAPSHOT_ITEMS).rglob("*.md"))) == len(
+            snapshot.items
+        ), "the snapshot's source holds items its record does not name"
+        # Each snapshot's copy has its own file address, so what is compared is the rest.
+        selected[name] = [line.partition("#comment-")[2] for line in _selected(report)]
+    assert selected["unscoped"] == [f"{waiting} on {own} would go to run {RUN}"], selected
     assert selected["--issue"] == selected["unscoped"] == selected["--run"], selected
-    return reads
+    return copied
 
 
 def test_a_pass_about_one_issue_reads_that_item_alone_however_crowded_the_board(
-    drafts_root: Path,
-    board: Path,
-    capsys: pytest.CaptureFixture[str],
-    counted: list[Request],
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """`--issue` and `--run` read one item and its comments; unscoped reads only owned items.
+    """`--issue` and `--run` copy one item and its comments; unscoped copies only owned items.
 
     A pass scoped to the one issue a run here owns, or to that run, selects the comment an
-    unscoped pass selects, reads that one item and its comment list by id and lists no page;
-    and the unscoped pass, narrowed by host at the store, reads that one item's comments alone.
+    unscoped pass selects and copies that one item by id; and the unscoped pass, narrowed by
+    host at the store, copies that one item too, of the board's two hundred commented ones.
     """
-    reads = _crowded_passes(drafts_root, board, capsys, counted)
-    for name in ("--issue", "--run"):
-        assert reads[name] == BoardReads(items=1, comment_lists=1, pages=0), (
-            name,
-            str(reads[name]),
-        )
-    assert reads["unscoped"].comment_lists == 1, str(reads["unscoped"])
-    assert reads["unscoped"].pages == 1, str(reads["unscoped"])
+    copied = _crowded_passes(drafts_root, board, capsys)
+    for name in ("unscoped", "--issue", "--run"):
+        assert copied[name] == [f"{BOARD}:{RUN}/tickets/{CAUSE}"], (name, copied[name])
 
 
 def _bound(root: Path, run: str, cause: str, native: str | None) -> None:
@@ -1590,7 +1583,8 @@ def test_an_issue_scoped_gathering_sends_its_comments_to_the_run_bound_to_it(
 
     assert plan is not None and plan.scope == RUN
     assert [run for run, _ in plan.runs] == [RUN]
-    assert list(plan.issues) == [own]
+    assert [one.id for one in plan.snapshot.items] == [own]
+    assert plan.snapshot.issue == own
     assert _id_line(report, own, asked).endswith(f"goes to run {RUN}")
     assert others not in report
     assert (
@@ -1601,17 +1595,18 @@ def test_an_issue_scoped_gathering_sends_its_comments_to_the_run_bound_to_it(
 def _refused(
     root: Path, capsys: pytest.CaptureFixture[str], *arguments: str, since: str | None = EARLY
 ) -> str:
-    plan = root.parent / f"plan-{time.monotonic_ns()}.json"
-    status = comments.main(
-        ["gather", "--root", str(root), "--plan", str(plan), "--to", BOARD]
-        + (["--since", since] if since is not None else [])
-        + list(arguments)
+    snapshots = comments.snapshots_directory(root)
+    before = sorted(snapshots.iterdir()) if snapshots.exists() else []
+    status, intent, plan = _steps(
+        root, "--to", BOARD, *(["--since", since] if since is not None else []), *arguments
     )
     captured = capsys.readouterr()
     assert status == comments.UNRUNNABLE, captured
-    assert not plan.exists(), "a refused gathering wrote a plan to launch from"
+    assert not intent.exists() and not plan.exists(), "a refused gathering wrote what to launch"
     written = list((root / comments.FEEDBACK_DIRECTORY).glob("*/*.md"))
     assert written == [], "a refused gathering wrote feedback"
+    after = sorted(snapshots.iterdir()) if snapshots.exists() else []
+    assert after == before, "a refused gathering left a snapshot"
     return captured.err
 
 
@@ -1619,20 +1614,19 @@ def test_an_issue_no_run_of_this_host_owns_is_refused_naming_why_and_nothing_is_
     drafts_root: Path,
     board: Path,
     capsys: pytest.CaptureFixture[str],
-    counted: list[Request],
 ) -> None:
     _filed(drafts_root, RUN, CAUSE)
     stranger = _filed(drafts_root, THIRD_RUN, "a-strangers-cause")
     tickets.ticket_path(drafts_root, THIRD_RUN, "a-strangers-cause").unlink()
     _commented(stranger, "Nobody here holds this.\n")
-    counted.clear()
 
     said = _refused(drafts_root, capsys, "--issue", stranger)
 
     assert f"--issue {stranger}: no run of this host owns it, because no ticket under " in said
     assert f"is bound to it (no record's `{tickets.BINDING_FIELD}` names it" in said
     assert said.rstrip().endswith("nothing was launched")
-    assert _board_reads(counted).total == 0, "an issue no ticket here is bound to was read"
+    # Refused before anything was copied, so no snapshot directory was even made.
+    assert not comments.snapshots_directory(drafts_root).exists()
 
     said = _refused(drafts_root, capsys, "--issue", f"elsewhere:{_native_of(stranger)}")
     assert f"because it is no item of {BOARD!r} or a board it routes to ({BOARD})" in said
@@ -1663,7 +1657,7 @@ def test_an_issue_no_run_of_this_host_owns_is_refused_naming_why_and_nothing_is_
     # Bound to an item the board no longer holds: refused by the store's own answer.
     _bound(drafts_root, RUN, "bound-to-a-deleted-item", "deleted/item")
     said = _refused(drafts_root, capsys, "--issue", f"{BOARD}:deleted/item")
-    assert "refused: onetaskgraph: no task with that id" in said, said
+    assert f"no item with the id {BOARD}:deleted/item" in said, said
 
     # Two runs' tickets bound to one item: no one run owns its comments.
     _bound(drafts_root, OTHER_RUN, "also-bound", _native_of(unrecorded))
@@ -1694,7 +1688,7 @@ def test_a_run_scoped_gathering_says_which_of_its_tickets_is_bound_to_no_item(
     assert f"run {RUN}'s ticket never-copied is bound to no board item; nothing read" in report
     assert _id_line(report, own, asked).endswith(f"would go to run {RUN}")
     assert "nowhere" not in report
-    assert report.splitlines()[-1].endswith(
+    assert report.splitlines()[-2].endswith(
         f"read 1 item(s) run {RUN}'s tickets are bound to, each directly, and listed none"
     ), report
 
@@ -1710,30 +1704,23 @@ def test_a_run_scoped_gathering_says_which_of_its_tickets_is_bound_to_no_item(
         assert "which is not a board item's native id" in said, said
 
 
-def test_an_item_read_by_id_that_the_store_answers_other_than_as_asked_is_refused(
-    drafts_root: Path, board: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A real store refuses a missing id itself; no item, two, or another item is refused here."""
-    own = _filed(drafts_root, RUN, CAUSE)
-    shown = plan_store.sdk(plan_store.client().task_show(own, no_comments=True))
-    (item,) = shown.items
-    other = item.model_copy(update={"id": item.id.__class__(f"{BOARD}:another/item")})
-    for items, refusal in (
-        ([], f"answered 0 items for {re.escape(own)}"),
-        ([item, item], f"answered 2 items for {re.escape(own)}"),
-        ([other], f"answered '{BOARD}:another/item' when asked for {re.escape(own)}"),
+def test_a_snapshot_item_the_store_answers_other_than_as_copied_is_refused() -> None:
+    """A real store answers a copied item as it copied it; an error, another count, or an item
+    naming another origin is refused here, since it would quote another item's comments."""
+    item = {"title": "t", "status": {"category": "backlog", "name": "backlog"}}
+    origin = {"metadata": {comments.ORIGIN_KEY: f"{BOARD}:another/item"}}
+    for detail, refusal in (
+        ({"items": [], "errors": []}, "could not be read"),
+        ({"items": [{"item": item}, {"item": item}]}, "could not be read"),
+        ({"items": [{"item": item}], "errors": [{"error": "gone"}]}, "could not be read"),
+        ({"items": [{"no": "item"}]}, "answered no item"),
+        (
+            {"items": [{"id": f"{comments.SNAPSHOT_SOURCE}:one", "item": item | origin}]},
+            "names 'commentboard:another/item' as its origin",
+        ),
     ):
-        answer = shown.model_copy(update={"items": items})
-
-        def answered(
-            awaitable: Coroutine[object, object, object], answer: object = answer
-        ) -> object:
-            awaitable.close()
-            return answer
-
-        monkeypatch.setattr(plan_store, "sdk", answered)
         with pytest.raises(OSError, match=refusal):
-            comments.bound_issue(comments.QualifiedTaskId(own), WRITABLE_PLUGIN)
+            comments.snapshot_issue(detail, f"{BOARD}:one", f"{comments.SNAPSHOT_SOURCE}:one", None)
 
 
 def test_scoped_gatherings_read_a_ticket_bound_on_the_board_its_repository_routes_to(
@@ -1752,7 +1739,7 @@ def test_scoped_gatherings_read_a_ticket_bound_on_the_board_its_repository_route
         assert plan is None
         assert _id_line(report, routed_issue, asked).endswith(f"would go to run {RUN}"), report
         assert f"read {routed_issue} and its comments directly" in report, report
-        assert report.splitlines()[-1].endswith("each directly, and listed none"), report
+        assert report.splitlines()[-2].endswith("each directly, and listed none"), report
 
 
 def test_a_first_gathering_scoped_to_a_run_quotes_again_what_its_evidence_elsewhere_answered(
@@ -1802,3 +1789,883 @@ def test_a_scoped_gathering_takes_no_start_so_no_watermark_or_unbounded_run_refu
         assert plan is None
         assert _id_line(report, own, asked).endswith(f"would go to run {RUN}"), report
         assert "for comments since" not in report, report
+
+
+def _previewed(root: Path, capsys: pytest.CaptureFixture[str], *arguments: str) -> Path:
+    """A dry run's snapshot: the directory its report names."""
+    report, plan = _gathered(root, capsys, "--dry-run", *arguments)
+    assert plan is None
+    (named,) = [line for line in report.splitlines() if line.startswith("snapshot: ")]
+    return Path(named.removeprefix("snapshot: "))
+
+
+def _launched_from(
+    root: Path, capsys: pytest.CaptureFixture[str], snapshot: Path, *arguments: str
+) -> tuple[int, str]:
+    """`--from` the snapshot, as the recipe takes it: the exit and what it refused with."""
+    intent = root.parent / f"intent-{time.monotonic_ns()}.json"
+    plan = root.parent / f"plan-{time.monotonic_ns()}.json"
+    status = comments.main(
+        ["gather", "--root", str(root), "--intent", str(intent), "--from", str(snapshot)]
+        + list(arguments)
+    )
+    if status == comments.DONE:
+        status = comments.main(
+            ["launch", "--root", str(root), "--intent", str(intent), "--plan", str(plan)]
+        )
+    return status, capsys.readouterr().err
+
+
+def test_the_snapshot_is_written_as_its_contract_states_and_read_back_as_itself(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The directory, its copy, its record and its claim, each where and how the module says."""
+    own = _filed(drafts_root, RUN, CAUSE)
+    tickets.ticket_path(drafts_root, RUN, CAUSE).unlink()
+    asked = _commented(own, "Please add page 9.\n")
+    snapshot = _previewed(drafts_root, capsys)
+
+    assert snapshot.parent == drafts_root / "feedback" / ".snapshots"
+    assert comments.SNAPSHOT_NAME.fullmatch(snapshot.name)
+    record = json.loads((snapshot / comments.SNAPSHOT_RECORD).read_text(encoding="utf-8"))
+    assert sorted(record) == sorted(comments.SNAPSHOT_KEYS)
+    assert record["schema"] == comments.SNAPSHOT_SCHEMA and record["dry_run"] is True
+    (item,) = record["items"]
+    assert sorted(item) == sorted(comments.SnapshotItem._fields)
+    assert item["id"] == own and item["snapshot_id"].startswith(f"{comments.SNAPSHOT_SOURCE}:")
+    held = comments.read_snapshot(snapshot)
+    assert comments._snapshot_document(held) == record, "the record reads back as itself"
+    (chosen,) = held.selection[RUN]
+    assert (chosen.issue, chosen.comment) == (own, asked)
+    assert chosen.body_sha256 == comments.body_sha256("Please add page 9.\n")
+    copied = list((snapshot / comments.SNAPSHOT_ITEMS).rglob("*.md"))
+    assert len(copied) == 1
+    text = copied[0].read_text(encoding="utf-8")
+    assert f"onetaskgraph.origin: {own}" in text and "onetaskgraph.copied_version:" in text
+    assert f'id="{asked}"' in text and f'task="{own}"' in text
+    assert comments.launched_record(snapshot) is None
+
+    status, _ = _launched_from(drafts_root, capsys, snapshot)
+
+    assert status == comments.DONE
+    claimed = comments.launched_record(snapshot)
+    assert claimed is not None and claimed["launch"] == "from"
+    (feedback,) = (drafts_root / "feedback" / RUN).glob("*.md")
+    assert feedback.name == f"{snapshot.name}.md"
+    assert (snapshot / comments.SNAPSHOT_LAUNCHED).stat().st_mtime_ns <= feedback.stat().st_mtime_ns
+    written = feedback.read_text(encoding="utf-8")
+    assert comments.recorded_snapshot(written) == snapshot
+    assert item["version"] is not None
+    assert f"- Issue: {comments.issue_line(own, item['snapshot_id'], None)}\n" in written
+    (selected,) = record["selection"][RUN]
+    for broken in (
+        [],
+        {"schema": 2},
+        record | {"schema": 2},
+        record | {"items": [{"id": own}]},
+        # A selection naming an item the snapshot did not capture, or a comment of no digest
+        # or no instant, and a scope or a start that is no run id or no time.
+        record | {"items": []},
+        record | {"selection": {RUN: [selected | {"body_sha256": "not-a-digest"}]}},
+        record | {"selection": {RUN: [selected | {"last_changed": "yesterday"}]}},
+        record | {"scope": 3},
+        record | {"queried_at": "now"},
+        record | {"boundaries": {"a/run": {"boundary": None, "computed": True}}},
+        record | {"items": [item | {"id": f"another-board:{own.partition(':')[2]}"}]},
+        # An owner that is no run id, and an issue, scoped or left out, that is no task id.
+        record | {"items": [item | {"owner": "a/run"}]},
+        record | {"issue": "not qualified"},
+        record | {"left": [{"issue": "not qualified", "comment": None, "reason": "why"}]},
+        record | {"left": [{"issue": own, "comment": "", "reason": "why"}]},
+        # One item recorded twice, or one comment selected twice.
+        record | {"items": [item, item]},
+        record | {"selection": {RUN: [selected, selected]}},
+    ):
+        (snapshot / comments.SNAPSHOT_RECORD).write_text(json.dumps(broken), encoding="utf-8")
+        with pytest.raises(OSError, match="is not a schema-1 snapshot"):
+            comments.read_snapshot(snapshot)
+
+
+def test_check_gathering_holds_a_feedback_file_to_its_snapshot_and_its_source_by_name(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A feedback file, `snapshot.json` and the snapshot source that disagree are refused."""
+    own = _filed(drafts_root, RUN, CAUSE)
+    tickets.ticket_path(drafts_root, RUN, CAUSE).unlink()
+    _commented(own, "Please add page 9.\n")
+    _, plan = _gathered(drafts_root, capsys)
+    assert plan is not None
+    ((_, feedback),) = plan.runs
+    snapshot = plan.snapshot.directory
+    command = ["check-gathering", "--board", BOARD, "--feedback", str(feedback), RUN]
+    assert tickets.main(command) == tickets.SOUND
+    capsys.readouterr()
+    written = feedback.read_text(encoding="utf-8")
+    record = (snapshot / comments.SNAPSHOT_RECORD).read_text(encoding="utf-8")
+    (copy,) = (snapshot / comments.SNAPSHOT_ITEMS).rglob("*.md")
+    source = copy.read_text(encoding="utf-8")
+    (held,) = plan.snapshot.items
+
+    def refused(said: str) -> None:
+        assert tickets.main(command) == tickets.UNSOUND
+        assert said in capsys.readouterr().err, said
+
+    feedback.write_text(
+        written.replace(f"at version {comments.NO_VERSION}", "at version md1|another"),
+        encoding="utf-8",
+    )
+    refused("rather than its snapshot's")
+    feedback.write_text(written, encoding="utf-8")
+    copy.write_text(source.replace("Please add page 9.", "Please add page 10."), encoding="utf-8")
+    refused("with text different from its snapshot")
+    copy.write_text(source, encoding="utf-8")
+    (snapshot / comments.SNAPSHOT_RECORD).write_text(
+        record.replace(comments.body_sha256("Please add page 9.\n"), "0" * 64), encoding="utf-8"
+    )
+    refused("other than its record selected")
+    selected = json.loads(record)["selection"][RUN][0]["last_changed"]
+    (snapshot / comments.SNAPSHOT_RECORD).write_text(
+        record.replace(selected, "2026-01-01T00:00:00Z"), encoding="utf-8"
+    )
+    refused("other than its record selected")
+    (snapshot / comments.SNAPSHOT_RECORD).write_text("{", encoding="utf-8")
+    refused("its snapshot is missing or malformed")
+    (snapshot / comments.SNAPSHOT_RECORD).unlink()
+    refused(f"{snapshot} holds no {comments.SNAPSHOT_RECORD}")
+    feedback.write_text(
+        written.replace(comments.FEEDBACK_SNAPSHOT.format(snapshot=snapshot) + "\n", ""),
+        encoding="utf-8",
+    )
+    refused("its instructions before the first comment differ from the gathering")
+
+
+def test_each_reason_from_refuses_a_snapshot_writes_nothing_and_names_a_fresh_dry_run(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    own = _filed(drafts_root, RUN, CAUSE)
+    _commented(own, "Please add page 9.\n")
+    first = _previewed(drafts_root, capsys, "--run", RUN)
+    second = _previewed(drafts_root, capsys)
+    fresh = f"`just {comments.PROG} --dry-run"
+
+    def nothing_written() -> None:
+        assert not (drafts_root / "feedback" / RUN).exists()
+        assert not comments.boundary_path(drafts_root, RUN).exists()
+
+    for flag in (
+        ["--since", EARLY],
+        ["--run", RUN],
+        ["--issue", own],
+        ["--to", BOARD],
+        ["--dry-run"],
+    ):
+        status, said = _launched_from(drafts_root, capsys, second, *flag)
+        assert status == comments.UNRUNNABLE, flag
+        assert f"{flag[0]} cannot be named beside it" in said, said
+    nothing_written()
+
+    # A snapshot another drafts root keeps is no snapshot of this one's to claim.
+    elsewhere = drafts_root.parent / "elsewhere" / second.name
+    shutil.copytree(second, elsewhere)
+    status, said = _launched_from(drafts_root, capsys, elsewhere)
+    assert status == comments.UNRUNNABLE
+    assert f"{elsewhere} is no snapshot under {comments.snapshots_directory(drafts_root)}" in said
+    assert comments.launched_record(elsewhere) is None
+    nothing_written()
+
+    held = json.loads((second / comments.SNAPSHOT_RECORD).read_text(encoding="utf-8"))
+    (second / comments.SNAPSHOT_RECORD).write_text(json.dumps(held | {"store": 3}), "utf-8")
+    status, said = _launched_from(drafts_root, capsys, second)
+    assert status == comments.UNRUNNABLE
+    assert "the snapshot is malformed" in said and fresh in said
+    (second / comments.SNAPSHOT_RECORD).write_text(json.dumps(held), "utf-8")
+    nothing_written()
+
+    stale = comments.read_snapshot(first)
+    old = dataclasses.replace(
+        stale, queried_at=datetime.now(UTC) - comments.SNAPSHOT_LAUNCHABLE_FOR - timedelta(1)
+    )
+    (first / comments.SNAPSHOT_RECORD).write_text(
+        json.dumps(comments._snapshot_document(old)), "utf-8"
+    )
+    status, said = _launched_from(drafts_root, capsys, first)
+    assert status == comments.UNRUNNABLE
+    assert f"more than {comments.SNAPSHOT_LAUNCHABLE_FOR} ago" in said
+    assert f"{fresh} --run {RUN} --to {BOARD}`" in said, said
+    (first / comments.SNAPSHOT_RECORD).write_text(
+        json.dumps(comments._snapshot_document(stale)), "utf-8"
+    )
+    nothing_written()
+
+    status, _ = _launched_from(drafts_root, capsys, second)
+    assert status == comments.DONE
+    claimed = comments.launched_record(second)
+    assert claimed is not None
+    feedback = list((drafts_root / "feedback" / RUN).glob("*.md"))
+
+    status, said = _launched_from(drafts_root, capsys, second)
+    assert status == comments.UNRUNNABLE
+    assert f"it was already launched at {claimed['claimed_at']}" in said and fresh in said
+    status, said = _launched_from(drafts_root, capsys, first)
+    assert status == comments.UNRUNNABLE
+    assert f"the later snapshot {second}" in said and "was launched since" in said, said
+    assert list((drafts_root / "feedback" / RUN).glob("*.md")) == feedback
+
+
+def test_a_dry_run_moves_no_watermark_and_a_sound_from_launch_moves_it_never_backward(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    own = _filed(drafts_root, RUN, CAUSE)
+    tickets.ticket_path(drafts_root, RUN, CAUSE).unlink()
+    _commented(own, "Please add page 9.\n")
+    later = (datetime.now(UTC) + timedelta(days=1)).replace(microsecond=0)
+    comments.write_watermark(drafts_root, BOARD, later)
+    held = comments.watermark_path(drafts_root, BOARD).read_bytes()
+
+    snapshot = _previewed(drafts_root, capsys)
+    assert comments.watermark_path(drafts_root, BOARD).read_bytes() == held
+    status, _ = _launched_from(drafts_root, capsys, snapshot)
+    assert status == comments.DONE
+    plan = comments.read_plan(sorted(drafts_root.parent.glob("plan-*.json"))[-1], drafts_root)
+    ((_, feedback),) = plan.runs
+    tickets.responses_path(feedback).write_text(
+        json.dumps(
+            {
+                "schema": tickets.RESPONSES_SCHEMA,
+                "run": RUN,
+                "feedback": feedback.name,
+                "responses": [
+                    {
+                        "comment": tickets.quoted_comments(feedback.read_text("utf-8"))[0].comment,
+                        "issue": own,
+                        "action": "Answered it.",
+                        "reply": _replied(
+                            own, tickets.quoted_comments(feedback.read_text("utf-8"))[0].comment
+                        ),
+                        "reply_url": None,
+                        "reply_fallback": None,
+                        "verdict": tickets.Verdict.DOES_NOT_CONFIRM.value,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    said: list[str] = []
+
+    assert comments.settle(drafts_root, plan, {RUN: "fu"}, say=said.append) == comments.DONE
+    assert comments.read_watermark(drafts_root, BOARD) == later - comments.OVERLAP, (
+        "a sound launch moved the watermark backward"
+    )
+    comments.watermark_path(drafts_root, BOARD).unlink()
+    assert comments.settle(drafts_root, plan, {RUN: "fu"}, say=said.append) == comments.DONE
+    queried = comments.read_snapshot(snapshot).queried_at
+    assert comments.read_watermark(drafts_root, BOARD) == queried - comments.OVERLAP, said
+
+
+def test_a_reply_answers_the_version_its_gathering_quoted_and_one_with_no_account_the_time_rule(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A comment edited after its snapshot is selected again, though its reply came later.
+
+    The reply was posted after the edit, so by its time alone it would answer the edit; this
+    host's account says it answered the version the snapshot quoted, which is older. With no
+    account of it here, the time rule decides, as for a reply another host posted.
+    """
+    own = _filed(drafts_root, RUN, CAUSE)
+    tickets.ticket_path(drafts_root, RUN, CAUSE).unlink()
+    asked = _commented(own, "Please add page 9.\n")
+    _, plan = _gathered(drafts_root, capsys)
+    assert plan is not None
+    ((_, feedback),) = plan.runs
+    _next_second()
+    _edited(own, asked, "Please add pages 9 and 10.\n")
+    _next_second()
+    reply = _replied(own, asked)
+    tickets.responses_path(feedback).write_text(
+        json.dumps(
+            {
+                "schema": tickets.RESPONSES_SCHEMA,
+                "run": RUN,
+                "feedback": feedback.name,
+                "responses": [
+                    {
+                        "comment": asked,
+                        "issue": own,
+                        "action": "Answered it.",
+                        "reply": reply,
+                        "reply_url": None,
+                        "reply_fallback": None,
+                        "verdict": tickets.Verdict.DOES_NOT_CONFIRM.value,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    quoted = comments.moment(plan.snapshot.selection[RUN][0].last_changed, "the quoted version")
+    assert comments.quoted_versions(drafts_root) == {(own, reply): quoted}
+
+    report, _ = _gathered(drafts_root, capsys, "--dry-run")
+    assert _id_line(report, own, asked).endswith(f"would go to run {RUN}"), report
+
+    tickets.responses_path(feedback).unlink()
+    report, _ = _gathered(drafts_root, capsys, "--dry-run")
+    assert _id_line(report, own, asked).endswith(f": answered by reply {reply}"), report
+
+
+def _answering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, printed: str, exit: int = 0
+) -> None:
+    """The store answering every command with ``printed`` and ``exit``: what no real store says."""
+    script = tmp_path / f"store-{time.monotonic_ns()}"
+    script.write_text(f"#!/bin/sh\ncat <<'EOF'\n{printed}\nEOF\nexit {exit}\n", encoding="utf-8")
+    script.chmod(0o755)
+    # llmlint: ignore[e2e_not_mocked, tests_mirror_real_usage] Each answer here is one no real store gives — an unreadable document, an entry naming no source, a detail missing for an id — so the published CLI is stood in for at the one seam this module reads it through, `plan_store.locked_binary`, and nothing above it.  # noqa: E501 - a directive is one line
+    monkeypatch.setattr(plan_store, "locked_binary", lambda interpreter=None: script)
+
+
+def test_answers_no_real_store_gives_are_refused_by_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _answering(tmp_path, monkeypatch, "not json")
+    assert comments.store_command(["task", "show", "x"]).document is None
+    with pytest.raises(OSError, match="names no default status mapping"):
+        comments._local_md_defaults()
+    mapping = {"plugin_config": {comments.SNAPSHOT_PLUGIN: {"properties": {"status_mapping": {}}}}}
+    for default in (["backlog"], {"Proposal": 3}):
+        mapping["plugin_config"][comments.SNAPSHOT_PLUGIN]["properties"]["status_mapping"] = {
+            "default": default
+        }
+        _answering(tmp_path, monkeypatch, json.dumps(mapping))
+        with pytest.raises(OSError, match="names no default status mapping"):
+            comments._local_md_defaults()
+    _answering(tmp_path, monkeypatch, '{"items": [{"action": "created"}]}')
+    with pytest.raises(OSError, match="answered an entry naming no source"):
+        comments.copy_into_snapshot(tmp_path, BOARD, [f"{BOARD}:x"], [])
+    unasked = {"source": f"{BOARD}:z", "destination": f"{comments.SNAPSHOT_SOURCE}:z"}
+    _answering(tmp_path, monkeypatch, json.dumps({"items": [unasked]}))
+    with pytest.raises(OSError, match=f"answered {BOARD}:z, which it was not asked for"):
+        comments.copy_into_snapshot(tmp_path, BOARD, [f"{BOARD}:x"], [])
+    with pytest.raises(OSError, match=f"answered {BOARD}:z, which it was not asked for"):
+        comments.copy_into_snapshot(tmp_path, BOARD, ["--source", "another-board"], [])
+    twice = {"source": f"{BOARD}:x", "destination": f"{comments.SNAPSHOT_SOURCE}:x"}
+    _answering(tmp_path, monkeypatch, json.dumps({"items": [twice, twice]}))
+    with pytest.raises(OSError, match=f"answered {BOARD}:x more than once"):
+        comments.copy_into_snapshot(tmp_path, BOARD, [f"{BOARD}:x"], [])
+    onto_one = [twice, twice | {"source": f"{BOARD}:y"}]
+    _answering(tmp_path, monkeypatch, json.dumps({"items": onto_one}))
+    with pytest.raises(OSError, match="answered two items copied to one task"):
+        comments.copy_into_snapshot(tmp_path, BOARD, [f"{BOARD}:x", f"{BOARD}:y"], [])
+    _answering(tmp_path, monkeypatch, json.dumps({"items": [twice]}))
+    partly = comments.copy_into_snapshot(tmp_path, BOARD, [f"{BOARD}:x", f"{BOARD}:y"], [])
+    assert partly.failed == {f"{BOARD}:y": "the copy answered nothing for it"}, partly
+    copied_elsewhere = {"source": f"{BOARD}:x", "destination": f"{BOARD}:y", "action": "created"}
+    _answering(tmp_path, monkeypatch, json.dumps({"items": [copied_elsewhere]}))
+    with pytest.raises(OSError, match="which is no task of the snapshot source"):
+        comments.copy_into_snapshot(tmp_path, BOARD, [f"{BOARD}:x"], [])
+    _answering(tmp_path, monkeypatch, '{"failure": {"message": "no such source"}}', exit=1)
+    with pytest.raises(OSError, match="was refused: no such source"):
+        comments.copy_into_snapshot(tmp_path, BOARD, [f"{BOARD}:x"], [])
+    _answering(tmp_path, monkeypatch, '{"details": []}')
+    with pytest.raises(OSError, match=f"`task show-many` of {BOARD}:x answered"):
+        comments.shown_details([f"{BOARD}:x"])
+    assert comments.shown_details([]) == []
+    _answering(tmp_path, monkeypatch, "", exit=1)
+    lost = comments.outcome(comments.store_command(["task", "update", "x"]), "x")
+    assert (lost.state, lost.error) == ("unknown", "the store printed no response")
+
+
+def test_a_boards_status_names_are_read_off_its_configuration_and_one_two_boards_split_refused(
+    board: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    resolved = plan_store.configured_settings()
+    prefix = f"sources.{BOARD}.config.status_mapping"
+    assert comments._status_mapping(
+        {
+            f"{prefix}.backlog": "Proposal",
+            f"{prefix}.draft.task": "Later",
+            f"{prefix}.draft.project": "Idea",
+            f"{prefix}.x": 3,
+        },
+        BOARD,
+        {"backlog", "draft"},
+    ) == {"proposal": "backlog", "later": "draft"}
+    # A `local-md` board's mapping is keyed by name; a value naming no category is held at no
+    # item, as a folder standing in for a board configured the other way round reads.
+    assert comments._status_mapping(
+        {
+            f"sources.{BOARD}.plugin": plan_store.WRITABLE_PLUGIN,
+            f"{prefix}.Proposal": "backlog",
+            f"{prefix}.cancelled": "Canceled",
+        },
+        BOARD,
+        {"backlog", "cancelled"},
+    ) == {"proposal": "backlog"}
+    assert comments.snapshot_status_names(BOARD)["in progress"] == "in-progress"
+    for names, refused in (
+        (
+            {
+                f"sources.{BOARD}.plugin": "github-projects",
+                f"{prefix}.backlog": "Shared",
+                # The routed board is a `local-md` folder, whose mapping is keyed by name.
+                f"sources.{ROUTED}.plugin": plan_store.WRITABLE_PLUGIN,
+                f"sources.{ROUTED}.config.status_mapping.Shared": "todo",
+            },
+            "read the status 'shared' as 'backlog' and 'todo'",
+        ),
+        (
+            {f"sources.{BOARD}.plugin": "github-projects", f"{prefix}.backlog": "a.dotted name"},
+            "names a status 'a.dotted name'",
+        ),
+    ):
+        monkeypatch.setattr(
+            plan_store,
+            "configured_settings",
+            lambda names=names: {**resolved, f"sources.{BOARD}.routes.0.to": ROUTED, **names},
+        )
+        with pytest.raises(OSError, match=re.escape(refused)):
+            comments.snapshot_status_names(BOARD)
+    with pytest.raises(OSError, match="answered no status the store names"):
+        comments._status({})
+    with pytest.raises(OSError, match="answered no status the store names"):
+        comments._status({"status": {"category": ["backlog"]}})
+    assert comments._status({"status": {"category": "draft"}}) == ("draft", "")
+
+
+def test_a_snapshot_staged_where_none_was_staged_is_refused_rather_than_published(
+    drafts_root: Path,
+) -> None:
+    snapshot = comments.Snapshot(
+        directory=drafts_root,
+        queried_at=datetime(2026, 1, 1, tzinfo=UTC),
+        board=BOARD,
+        boards=(BOARD,),
+        named_board=True,
+        scope=None,
+        issue=None,
+        starts={},
+        store="onetaskgraph test",
+        dry_run=False,
+        items=(),
+        boundaries={},
+        selection={},
+        left=(),
+    )
+    # Staged where its parent will take no rename: refused as the filesystem refused it.
+    parent = drafts_root / "locked"
+    staged = parent / ".staging-x"
+    staged.mkdir(parents=True)
+    parent.chmod(0o555)
+    try:
+        with pytest.raises(PermissionError):
+            comments.publish_snapshot(staged, snapshot)
+    finally:
+        parent.chmod(0o755)
+
+
+def test_local_accounts_this_cannot_read_map_no_reply_and_leave_it_to_the_time_rule(
+    drafts_root: Path,
+) -> None:
+    directory = drafts_root / "feedback" / RUN
+    directory.mkdir(parents=True)
+    (directory / f"a{tickets.RESPONSES_SUFFIX}").write_text("{", encoding="utf-8")
+    (directory / f"b{tickets.RESPONSES_SUFFIX}").write_text("[]", encoding="utf-8")
+    (directory / f"c{tickets.RESPONSES_SUFFIX}").write_text("{}", encoding="utf-8")
+    (directory / "d.md").write_text(
+        f"{tickets.QUOTED_COMMENT_HEADING}1: on `{BOARD}:x`\n\n"
+        f"{tickets.quoted_comment(f'{BOARD}:x', 'c-1')}\n\n- Comment id: c-1\n"
+        "- Last changed: 2026-01-01T00:00:00Z\n\n```text\nA comment.\n```\n",
+        encoding="utf-8",
+    )
+    (directory / f"d{tickets.RESPONSES_SUFFIX}").write_text(
+        json.dumps(
+            {
+                "responses": [
+                    "not an entry",
+                    {"issue": f"{BOARD}:x", "comment": "c-1", "reply": "r-1"},
+                    {"issue": f"{BOARD}:x", "comment": "c-9", "reply": "r-9"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert comments.quoted_versions(drafts_root) == {
+        (f"{BOARD}:x", "r-1"): datetime(2026, 1, 1, tzinfo=UTC)
+    }
+
+
+def test_the_fresh_dry_run_a_refusal_names_is_the_gathering_the_snapshot_was() -> None:
+    held = comments.Snapshot(
+        directory=Path("/x"),
+        queried_at=datetime(2026, 1, 1, tzinfo=UTC),
+        board=BOARD,
+        boards=(BOARD,),
+        named_board=False,
+        scope=tickets.RunId(RUN),
+        issue=f"{BOARD}:x",
+        starts={},
+        store="onetaskgraph test",
+        dry_run=True,
+        items=(),
+        boundaries={},
+        selection={},
+        left=(),
+    )
+
+    assert comments.dry_run_command(held) == f"just {comments.PROG} --dry-run --issue {BOARD}:x"
+    assert comments.dry_run_command(dataclasses.replace(held, issue=None)) == (
+        f"just {comments.PROG} --dry-run --run {RUN}"
+    )
+    assert comments.dry_run_command(dataclasses.replace(held, issue=None, scope=None)) == (
+        f"just {comments.PROG} --dry-run"
+    )
+
+
+def test_a_claim_that_finds_its_snapshot_claimed_or_its_source_moved_is_refused(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    own = _filed(drafts_root, RUN, CAUSE)
+    tickets.ticket_path(drafts_root, RUN, CAUSE).unlink()
+    _commented(own, "Please add page 9.\n")
+    snapshot = _previewed(drafts_root, capsys)
+    (copy,) = (snapshot / comments.SNAPSHOT_ITEMS).rglob("*.md")
+    copy.write_text(
+        copy.read_text(encoding="utf-8").replace("Please add page 9.", "Please add page 10."),
+        encoding="utf-8",
+    )
+
+    status, said = _launched_from(drafts_root, capsys, snapshot)
+    assert status == comments.UNRUNNABLE
+    assert "other than its snapshot.json recorded" in said
+    # Refused before anything was written, so nothing claims it and no feedback was left.
+    assert comments.launched_record(snapshot) is None
+    assert not (drafts_root / "feedback" / RUN).exists()
+
+    other = _previewed(drafts_root, capsys)
+    (other / comments.SNAPSHOT_LAUNCHED).write_text("{", encoding="utf-8")
+    assert comments.launched_record(other) == {"claimed_at": "(unreadable)"}
+    (other / comments.SNAPSHOT_LAUNCHED).write_text("[]", encoding="utf-8")
+    assert comments.launched_record(other) == {"claimed_at": "(unreadable)"}
+    (other / comments.SNAPSHOT_LAUNCHED).unlink()
+    with pytest.raises(comments.Unlaunchable, match="another launch claimed it first"):
+        comments.claim(drafts_root, other, fresh=True, detach=False, say=lambda _: None)
+        comments.claim(drafts_root, other, fresh=True, detach=False, say=lambda _: None)
+
+
+def test_a_launched_snapshot_whose_record_is_unreadable_is_passed_over_by_the_overlap_check(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    own = _filed(drafts_root, RUN, CAUSE)
+    _commented(own, "Please add page 9.\n")
+    first = _previewed(drafts_root, capsys)
+    later = _previewed(drafts_root, capsys)
+    earlier = comments.read_snapshot(first)
+    (first / comments.SNAPSHOT_LAUNCHED).write_text("{}", encoding="utf-8")
+    assert (
+        comments.launchable_problem(comments.read_snapshot(later), drafts_root, datetime.now(UTC))
+        is None
+    ), "an earlier snapshot launched refused a later one"
+    (first / comments.SNAPSHOT_LAUNCHED).unlink()
+    del earlier
+    (later / comments.SNAPSHOT_LAUNCHED).write_text("{}", encoding="utf-8")
+    (later / comments.SNAPSHOT_RECORD).write_text("{", encoding="utf-8")
+    (comments.snapshots_directory(drafts_root) / "not-a-snapshot").mkdir()
+
+    assert (
+        comments.launchable_problem(comments.read_snapshot(first), drafts_root, datetime.now(UTC))
+        is None
+    )
+
+
+def test_pending_writes_of_any_other_shape_are_refused_rather_than_lost(drafts_root: Path) -> None:
+    path = comments.pending_path(drafts_root)
+    path.parent.mkdir(parents=True)
+    entry = {
+        "snapshot": "/x",
+        "run": RUN,
+        "item": f"{BOARD}:x",
+        "write": "priority",
+        "state": "failed",
+        "snapshot_version": None,
+        "seen_version": "v",
+        "intended": {"priority": "high"},
+        "parts": [],
+        "error": "refused",
+        "recorded_at": "2026-01-01T00:00:00Z",
+    }
+    path.write_text(json.dumps({"schema": 1, "entries": [entry]}), encoding="utf-8")
+    (held,) = comments.read_pending(drafts_root)
+    assert held.intended == {"priority": "high"}
+    for broken in (
+        "{",
+        json.dumps([]),
+        json.dumps({"schema": 2, "entries": []}),
+        json.dumps({"schema": 1, "entries": [entry | {"write": "comment"}]}),
+        json.dumps({"schema": 1, "entries": [entry | {"intended": {"color": "red"}}]}),
+        json.dumps({"schema": 1, "entries": [entry | {"parts": ["landed"]}]}),
+        json.dumps({"schema": 1, "entries": [{"item": "x"}]}),
+        # A value of another type, a field the write does not set, an empty intent, a part
+        # it does not describe, or an item, run or instant that is none.
+        json.dumps({"schema": 1, "entries": [entry | {"intended": {"priority": 3}}]}),
+        json.dumps({"schema": 1, "entries": [entry | {"intended": {"title": "x"}}]}),
+        json.dumps({"schema": 1, "entries": [entry | {"intended": {}}]}),
+        json.dumps(
+            {
+                "schema": 1,
+                "entries": [entry | {"write": "ticket-copy", "intended": {"repositories": [3]}}],
+            }
+        ),
+        json.dumps({"schema": 1, "entries": [entry | {"parts": [{"part": 1}]}]}),
+        json.dumps({"schema": 1, "entries": [entry | {"item": "x"}]}),
+        json.dumps({"schema": 1, "entries": [entry | {"run": "a/run"}]}),
+        json.dumps({"schema": 1, "entries": [entry | {"recorded_at": "now"}]}),
+    ):
+        path.write_text(broken, encoding="utf-8")
+        with pytest.raises(OSError, match=str(path)):
+            comments.read_pending(drafts_root)
+    path.write_bytes(b"\xff")
+    with pytest.raises(OSError, match="could not be read"):
+        comments.read_pending(drafts_root)
+    comments.write_pending(drafts_root, [])
+    assert not path.exists()
+    assert comments.read_pending(drafts_root) == []
+    # Something other than a file where the record lives is no record that nothing is pending.
+    path.mkdir()
+    with pytest.raises(OSError, match="could not be read.*repair it rather than lose a write"):
+        comments.read_pending(drafts_root)
+    path.rmdir()
+    path.symlink_to(drafts_root / "nothing-here")
+    with pytest.raises(OSError, match="is a link to nothing"):
+        comments.read_pending(drafts_root)
+
+
+def test_what_a_pending_write_intends_is_held_to_the_fields_settle_projects() -> None:
+    """`Intended` declares each field at the type `Projected` does, and each write's fields."""
+    assert get_type_hints(comments.Intended) == get_type_hints(comments.Projected)
+    assert set().union(*comments.WRITE_FIELDS.values()) <= set(comments.FIELDS)
+    assert set(comments.WRITE_FIELDS) == set(comments.WRITES)
+    with pytest.raises(ValueError, match="a priority write sets no title"):
+        comments.as_intended("priority", {"title": "x"})
+
+
+def test_a_write_response_that_does_not_say_what_it_wrote_is_unknown() -> None:
+    """A part it does not describe, or a success naming no part and no task, is no landing."""
+    written = f"{BOARD}:x"
+    undescribed = comments.outcome(
+        comments.StoreAnswer(0, {"result": {"parts": [{"part": 1, "outcome": "landed"}]}}, ""),
+        written,
+    )
+    assert undescribed.state == "unknown" and "a part was not described" in str(undescribed.error)
+    bare = comments.outcome(comments.StoreAnswer(0, {"result": {"parts": ["landed"]}}, ""), written)
+    assert bare.state == "unknown" and "a part was not described" in str(bare.error)
+    nested = {"items": [{"destination": written, "action": "updated", "result": ["landed"]}]}
+    assert comments.outcome(comments.StoreAnswer(0, nested, ""), written).state == "unknown"
+    for result in ({"parts": "landed"}, ["landed"], {"parts": []}):
+        malformed = comments.outcome(
+            comments.StoreAnswer(0, {"id": written, "result": result}, ""), written
+        )
+        assert malformed.state == "unknown" and "the result was not described" in str(
+            malformed.error
+        )
+    silent = comments.outcome(comments.StoreAnswer(0, {}, ""), written)
+    assert (silent.state, silent.error) == ("unknown", f"the response named None, not {written}")
+    plain = comments.outcome(comments.StoreAnswer(0, {"id": written, "written": []}, ""), written)
+    assert plain.state is None, "a write sent with no --expect answers with the task it wrote"
+    other = comments.outcome(
+        comments.StoreAnswer(0, {"id": f"{BOARD}:y", "written": []}, ""), written
+    )
+    assert other.state == "unknown", "a response about another task is no landing of this one"
+    refused = comments.outcome(
+        comments.StoreAnswer(
+            1,
+            {
+                "result": {
+                    "parts": [
+                        {"part": "issue", "outcome": "rejected", "error": {"message": "stale"}},
+                        {"part": "fields", "outcome": "rejected", "error": None},
+                    ]
+                }
+            },
+            "",
+        ),
+        written,
+    )
+    assert (refused.state, refused.error) == ("failed", "stale")
+    assert refused.parts == (
+        comments.WritePart("issue", "rejected", "stale"),
+        comments.WritePart("fields", "rejected", None),
+    )
+
+
+def test_a_write_response_reporting_only_some_requested_parts_is_no_landing() -> None:
+    """A response whose landed parts leave out a part a requested field rides on is `partial`."""
+    written = f"{BOARD}:x"
+
+    def answered(*parts: str) -> comments.StoreAnswer:
+        reported = [{"part": part, "outcome": "landed", "fields": {}} for part in parts]
+        return comments.StoreAnswer(0, {"id": written, "result": {"parts": reported}}, "")
+
+    requested = {"title": "T", "priority": "high"}
+    short = comments.outcome(answered("fields"), written, requested)
+    assert short.state == "partial"
+    assert short.error == "the response reported no landed issue part"
+    assert comments.outcome(answered("fields", "issue"), written, requested).state is None
+    assert comments.outcome(answered("fields"), written, {"priority": "high"}).state is None
+    assert comments.outcome(answered("issue"), written, {"repositories": ["r"]}).state is None
+
+
+def test_a_plain_write_answering_a_task_without_every_requested_value_is_no_landing() -> None:
+    """A write sent with no `--expect` answers with the task it wrote, held to what was asked."""
+    written = f"{BOARD}:x"
+    task = {
+        "id": "x",
+        "title": "T",
+        "content": None,
+        "priority": "high",
+        "status": {"category": "backlog", "name": "Proposal"},
+        "metadata": {},
+    }
+
+    def answered(said: list[str], **fields: object) -> comments.StoreAnswer:
+        return comments.StoreAnswer(0, {"id": written, "task": task | fields, "written": said}, "")
+
+    requested = {"title": "T", "priority": "urgent"}
+    short = comments.outcome(answered(["title"]), written, requested)
+    assert (short.state, short.error) == (
+        "partial",
+        "the task it answered does not hold the requested priority",
+    )
+    assert comments.outcome(answered([], title="Old"), written, requested).state == "failed"
+    assert (
+        comments.outcome(answered(["title"], priority="urgent"), written, requested).state is None
+    )
+    odd = comments.outcome(answered(["title"], title=3), written, requested)
+    assert odd.state == "unknown" and "at another type" in str(odd.error)
+    bare = comments.StoreAnswer(0, {"id": written, "written": ["title"]}, "")
+    assert comments.outcome(bare, written, requested) == comments.Outcome(
+        "unknown", None, (), "the response showed neither the task nor its parts", None
+    )
+
+    def copied(action: str) -> comments.StoreAnswer:
+        entry = {"source": "drafts:t", "destination": written, "action": action}
+        return comments.StoreAnswer(0, {"items": [entry]}, "")
+
+    withdrawal = {"status": "cancelled"}
+    for category, state in (("cancelled", None), ("backlog", "failed")):
+        alone = {"id": written, "status": {"category": category, "name": category}}
+        said = comments.outcome(comments.StoreAnswer(0, alone, ""), written, withdrawal)
+        assert said.state == state, (category, said)
+    priority = {"id": written, "priority": "high"}
+    assert comments.outcome(
+        comments.StoreAnswer(0, priority, ""), written, {"priority": "high"}
+    ) == (comments.Outcome(None, None, (), None, None))
+    unnamed = {"id": written, "status": {"category": "elsewhere"}}
+    lost = comments.outcome(comments.StoreAnswer(0, unnamed, ""), written, withdrawal)
+    assert lost.state == "unknown" and "no status the store names" in str(lost.error)
+
+    for action in sorted(comments.COPIED):
+        assert comments.outcome(copied(action), written, requested).state is None, action
+    assert comments.outcome(copied("created"), written, requested).state == "unknown"
+
+
+def test_an_item_or_its_comments_answered_in_another_shape_are_refused_by_name() -> None:
+    board_id, snapshot_id = f"{BOARD}:x", f"{comments.SNAPSHOT_SOURCE}:x"
+    for held in (None, [{"id": "c1"}], [{"id": 1, "body": "b"}], ["c1"]):
+        with pytest.raises(OSError, match=f"the comments of {snapshot_id} could not be read"):
+            comments.detail_comments({"comments": held}, snapshot_id)
+    item = {
+        "metadata": {comments.ORIGIN_KEY: board_id},
+        "title": "A title",
+        "status": {"category": "backlog", "name": "Proposal"},
+    }
+
+    def detail(**fields: object) -> dict[str, object]:
+        return {"items": [{"id": snapshot_id, "item": item | fields}], "comments": []}
+
+    with pytest.raises(OSError, match=f"{snapshot_id} was answered with the task 'another'"):
+        comments.detail_item({"items": [{"id": "another", "item": item}]}, snapshot_id)
+    with pytest.raises(OSError, match="answered no status the store names"):
+        comments.snapshot_issue(
+            detail(status={"category": "nonsense"}), board_id, snapshot_id, None
+        )
+    with pytest.raises(OSError, match="answered a field settle writes at another type"):
+        comments.project(item | {"repositories": "github.com/a/b"})
+
+    with pytest.raises(OSError, match=f"{snapshot_id} answered no title"):
+        comments.snapshot_issue(detail(title=None), board_id, snapshot_id, None)
+    no_origin = detail() | {"comments": [{"id": "c1", "body": "b", "origin": {"id": ""}}]}
+    with pytest.raises(OSError, match=f"a comment {snapshot_id} holds names no origin id"):
+        comments.snapshot_issue(no_origin, board_id, snapshot_id, None)
+    two_lines = detail() | {"comments": [{"id": "c1", "body": "b", "author": "a\n- URL: x"}]}
+    with pytest.raises(OSError, match="comment 'c1''s author spanning lines"):
+        comments.snapshot_issue(two_lines, board_id, snapshot_id, None)
+    # An item kept nowhere a path names — a board's — reads as located nowhere.
+    assert comments.snapshot_issue(detail(), board_id, snapshot_id, None).location is None
+    for path in ("", "a\nb", 3):
+        with pytest.raises(OSError, match="which is not a path"):
+            comments.snapshot_issue(detail(location={"path": path}), board_id, snapshot_id, None)
+    no_time = detail() | {"comments": [{"id": "c1", "body": "b", "updated_at": 3}]}
+    with pytest.raises(OSError, match="reports no time"):
+        comments.snapshot_issue(no_time, board_id, snapshot_id, None)
+
+
+def test_an_intent_file_of_another_shape_is_refused_and_launches_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    intent = tmp_path / "intent.json"
+    plan = tmp_path / "plan.json"
+    for broken in ("{", "[]", '{"snapshot": null, "fresh": "yes", "detach": false}'):
+        intent.write_text(broken, encoding="utf-8")
+        with pytest.raises(OSError, match=str(intent)):
+            comments.read_intent(intent)
+        status = comments.main(
+            ["launch", "--root", str(tmp_path), "--intent", str(intent), "--plan", str(plan)]
+        )
+        assert status == comments.UNRUNNABLE
+        assert "nothing was written and nothing was launched" in capsys.readouterr().err
+        assert not plan.exists()
+
+
+def test_snapshot_env_prints_the_source_a_feedback_file_names_or_refuses_by_name(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    feedback = tmp_path / "20260101T000000Z.md"
+    feedback.write_text(
+        comments.FEEDBACK_SNAPSHOT.format(snapshot="/a/snapshot") + "\n", encoding="utf-8"
+    )
+    assert comments.main(["snapshot-env", "--feedback", str(feedback)]) == comments.DONE
+    assert capsys.readouterr().out.splitlines() == [
+        f"{comments.SNAPSHOT_PLUGIN_ENV}={comments.SNAPSHOT_PLUGIN}",
+        f"{comments.SNAPSHOT_ROOT_ENV}=/a/snapshot/{comments.SNAPSHOT_ITEMS}",
+    ]
+    feedback.write_text("No snapshot line.\n", encoding="utf-8")
+    assert comments.main(["snapshot-env", "--feedback", str(feedback)]) == comments.UNRUNNABLE
+    assert "names no snapshot on its snapshot line" in capsys.readouterr().err
+    assert (
+        comments.main(["snapshot-env", "--feedback", str(tmp_path / "missing.md")])
+        == comments.UNRUNNABLE
+    )
+    assert "could not be read" in capsys.readouterr().err
+
+
+def test_a_run_scoped_gathering_whose_tickets_are_all_unbound_copies_nothing(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _bound(drafts_root, RUN, "never-copied", None)
+
+    report, plan = _gathered(drafts_root, capsys, "--run", RUN)
+
+    assert plan is not None and plan.snapshot.items == () and plan.runs == ()
+    assert f"run {RUN}'s ticket never-copied is bound to no board item; nothing read" in report
+
+
+def test_writing_a_title_names_it_and_nothing_else(tmp_path: Path) -> None:
+    assert comments._update_words(f"{BOARD}:x", {"title": "A title"}, tmp_path) == [
+        "task",
+        "update",
+        f"{BOARD}:x",
+        "--title",
+        "A title",
+    ]

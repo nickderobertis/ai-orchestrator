@@ -16,7 +16,7 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -680,6 +680,14 @@ class _Board:
         self.attachments: dict[str, bytes] = {}
         #: Whether the board carries the `Host` text field, which one journey takes away.
         self.has_host_field = True
+        #: How many of an issue's comments one page answers, or `None` for every one on the
+        #: first page: GitHub pages an issue's comments, and a reader that reads past the first
+        #: page reads an issue that can change between its pages.
+        self.comment_page: int | None = None
+        #: Whether a comment a write adds is dated by the wall clock, as GitHub dates one, rather
+        #: than by the board's own counter: what a journey reasoning about when things happened
+        #: — a boundary, a watermark — needs, and what a priced journey's fixed answers do not.
+        self.real_time = False
 
     def issues_created_and_kept(self) -> list[_Issue]:
         return [issue for issue in self.created if issue in self.issues]
@@ -1158,24 +1166,32 @@ class _Board:
             }
         }
 
-    def comments_response(self, node_id: object) -> dict[str, object]:
-        """One issue's comments, oldest first, as its `comments` connection lists them."""
-        listed = {
-            "nodes": self._issue(node_id).comments,
-            "pageInfo": {"hasNextPage": False, "endCursor": None},
+    def _comment_page(self, issue: _Issue, after: object = None) -> dict[str, object]:
+        """One page of ``issue``'s comments after the cursor ``after``, as GitHub pages them."""
+        start = int(str(after)) if isinstance(after, str) and after.isdigit() else 0
+        size = self.comment_page or max(len(issue.comments), 1)
+        end = start + size
+        more = end < len(issue.comments)
+        return {
+            "nodes": issue.comments[start:end],
+            "pageInfo": {"hasNextPage": more, "endCursor": str(end) if more else None},
         }
+
+    def comments_response(self, node_id: object, after: object = None) -> dict[str, object]:
+        """One issue's comments, oldest first, as its `comments` connection lists them."""
+        listed = self._comment_page(self._issue(node_id), after)
         return {"data": {"node": {"__typename": "Issue", "comments": listed}}}
 
-    def _detail(self, node_id: object, comments: bool) -> dict[str, object] | None:
-        """One issue by its own node id with, when asked, the first page of its comments."""
+    def _detail(
+        self, node_id: object, comments: bool, after: object = None
+    ) -> dict[str, object] | None:
+        """One issue by its own node id with, when asked, the page of its comments after
+        ``after``: the first, unless a reader paging them names its cursor."""
         for issue in self.issues:
             if issue.content_id == node_id:
                 answered = issue.board_issue()
                 if comments:
-                    answered["comments"] = {
-                        "nodes": issue.comments,
-                        "pageInfo": {"hasNextPage": False, "endCursor": None},
-                    }
+                    answered["comments"] = self._comment_page(issue, after)
                 return answered
         return None
 
@@ -1226,9 +1242,9 @@ class _Board:
 
         return answered
 
-    def detail_response(self, node_id: object) -> dict[str, object]:
-        """One issue and its first page of comments, which `task show` reads in one request."""
-        return {"data": {"node": self._detail(node_id, comments=True)}}
+    def detail_response(self, node_id: object, after: object = None) -> dict[str, object]:
+        """One issue and a page of its comments, which `task show` reads in one request."""
+        return {"data": {"node": self._detail(node_id, comments=True, after=after)}}
 
     def details_response(self, variables: dict[str, object]) -> dict[str, object]:
         """A fixed batch of aliased issue reads, `i<n>` answering the issue `$id<n>` names."""
@@ -1245,7 +1261,11 @@ class _Board:
             raise ValueError("addComment requires an input object with a body")
         issue = self._issue(payload.get("subjectId"))
         self.commented += 1
-        moment = f"2026-08-26T00:{self.commented // 60:02d}:{self.commented % 60:02d}Z"
+        moment = (
+            datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+            if self.real_time
+            else f"2026-08-26T00:{self.commented // 60:02d}:{self.commented % 60:02d}Z"
+        )
         comment: dict[str, object] = {
             "id": f"IC_fixture_{self.commented}",
             "author": {"login": "fixture-token-account"},
@@ -1584,6 +1604,13 @@ class _GitHubFixture(BaseHTTPRequestHandler):
     #: How many of `refused_operation` are served before the one refused, so a refusal can
     #: land on a later write of the same kind — the record's, after the body's.
     refused_after: ClassVar[int] = 0
+    #: What a person does on the board the moment the next request of an operation arrives,
+    #: before it is answered — an edit landing between a caller's read and its write. Each
+    #: runs once, for the first such request.
+    before_operation: ClassVar[dict[_Operation, Callable[[], None]]] = {}
+    #: One operation whose response is lost: the connection closes with no answer, after the
+    #: write was applied (`"after"`) or before it reached the board (`"before"`), or `None`.
+    dropped_operation: ClassVar[tuple[_Operation, Literal["before", "after"]] | None] = None
     #: The board this handler answers for. A class attribute rather than an argument
     #: because the stdlib constructs a handler per request; a second board is served by
     #: a subclass of this one carrying its own board and its own request log, which is
@@ -1627,6 +1654,22 @@ class _GitHubFixture(BaseHTTPRequestHandler):
         self.requests.append(request)
         if self.refusal is not None:
             self._send(self.refusal.status, self.refusal.body)
+            return
+        try:
+            operation: _Operation | None = request.operation
+        except ValueError:
+            operation = None
+        edit = _GitHubFixture.before_operation.pop(operation, None) if operation else None
+        if edit is not None:
+            edit()
+        dropped = _GitHubFixture.dropped_operation
+        if dropped is not None and dropped[0] is operation:
+            _GitHubFixture.dropped_operation = None
+            if dropped[1] == "after":
+                self._answer(request)
+            # The connection closes without an answer: after the write was applied for `after`,
+            # before it reached the board for `before`.
+            self.close_connection = True
             return
         self._send(200, self._answer(request))
 
@@ -1680,13 +1723,17 @@ class _GitHubFixture(BaseHTTPRequestHandler):
             case _Operation.ISSUE:
                 return self.board.node_response(request.variables.get("id"))
             case _Operation.ISSUE_DETAIL:
-                return self.board.detail_response(request.variables.get("id"))
+                return self.board.detail_response(
+                    request.variables.get("id"), request.variables.get("after")
+                )
             case _Operation.ISSUE_DETAILS:
                 return self.board.details_response(request.variables)
             case _Operation.SUB_ISSUES:
                 return self.board.sub_issues_response(request.variables.get("id"))
             case _Operation.COMMENTS:
-                return self.board.comments_response(request.variables.get("id"))
+                return self.board.comments_response(
+                    request.variables.get("id"), request.variables.get("after")
+                )
             case _Operation.ADD_COMMENT:
                 return self.board.add_comment(request.variables)
             case _Operation.CLEAR_FIELD:
@@ -1788,6 +1835,8 @@ def _serving_board(
         _GitHubFixture.refusal = None
         _GitHubFixture.refused_operation = None
         _GitHubFixture.refused_after = 0
+        _GitHubFixture.before_operation = {}
+        _GitHubFixture.dropped_operation = None
 
 
 @contextmanager
@@ -2357,3 +2406,33 @@ def _bounded_step(
     assert _wide_pages(requests) == [], (label, "a search asked for a page wider than its answer")
     _GitHubFixture.requests.clear()
     return cost
+
+
+def planted_comment(
+    issue: _Issue, body: str, author: str | None, at: str | None = None
+) -> dict[str, object]:
+    """A comment a person wrote on GitHub, dated ``at`` or now: what a write here never adds.
+
+    The board answers every comment a write adds as the token's own account, so a person or an
+    app commenting on the live board is planted on the row instead, signed as they would be.
+    """
+    issue.held_by.commented += 1
+    moment = at or datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    identifier = f"IC_planted_{issue.held_by.commented}"
+    comment: dict[str, object] = {
+        "id": identifier,
+        "author": None if author is None else {"login": author},
+        "createdAt": moment,
+        "updatedAt": moment,
+        "body": body,
+        "url": f"{issue.content()['url']}#issuecomment-{identifier}",
+    }
+    issue.comments.append(comment)
+    return comment
+
+
+def planted_edit(issue: _Issue, identifier: str, body: str, at: str | None = None) -> None:
+    """A person's edit of one comment on GitHub, which the board answers no mutation for."""
+    (comment,) = [one for one in issue.comments if one["id"] == identifier]
+    comment["body"] = body
+    comment["updatedAt"] = at or datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")

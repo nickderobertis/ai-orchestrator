@@ -28,6 +28,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1260,18 +1261,20 @@ INITIAL_CRITERIA = (
 FEEDBACK_CRITERIA = (
     f"`{CHECK_RESPONSES}` reports the account at `{RESPONSES}` sound: every comment quoted "
     "below carries exactly one response, in the order it is quoted, naming the issue the "
-    f"comment is quoted on and its verdict, the board holds a reply of run `{RUN}` answering it "
-    "whose marker carries that verdict, and every issue a `confirms` reply sits on stores the "
-    "estimate its comments recount to. Run it last, after the final reply is posted and the "
-    "final edit to that account, because a run of it from before either says nothing about "
-    "what you leave.",
-    "No issue, comment or ticket that no comment below names was created, edited, copied or "
-    "closed by this dispatch, and no ticket or board item a quoted comment does not sit on "
-    "was read.",
-    "No board item's status was changed but by withdrawing this run's own item at `Proposal` "
-    "whose ticket a quoted comment, or investigating it, showed is no longer relevant, and that "
-    "comment's reply and account entry say the item was withdrawn and why; no item at "
-    "`Deferred` or at an accepted status changed status.",
+    "comment is quoted on, its verdict, and the id and URL its reply's `task comment add` "
+    "answered. Run it last, after the final reply is posted and the final edit to that "
+    "account, because a run of it from before either says nothing about what you leave.",
+    "Every quoted issue and its comments were read from the snapshot source, and nothing was "
+    "read from the board; the only board writes this dispatch made are its replies, one per "
+    "quoted comment, each posted with `--expect` naming the version its `Issue` line gives or, "
+    "after a reply on the same issue, the version that reply's answer carried, and with none "
+    "where that version is none.",
+    "No issue, comment or ticket that no comment below names was created or edited by this "
+    "dispatch, and no ticket or board item a quoted comment does not sit on was read.",
+    "No ticket's status was changed but by withdrawing this run's own item at `Proposal` whose "
+    "ticket a quoted comment, or investigating it, showed is no longer relevant, and that "
+    "comment's reply and account entry say the item was withdrawn and why; no ticket of an "
+    "item at `Deferred` or at an accepted status was withdrawn.",
     f"Every quoted comment on an issue run `{RUN}` created was weighed against that issue's "
     "ticket, whether or not it asked for an edit, and its reply states what changed in the "
     "ticket and why, or why the ticket stands as it is.",
@@ -1623,7 +1626,8 @@ def test_the_task_states_the_reply_rules_once_and_every_other_text_points_to_the
         f"`{tickets.reply_opening(RUN, '<comment URL>', '<author>')}`",
         f"`{tickets.reply_opening(RUN, '<comment URL>', None)}` when the feedback reports no "
         "author",
-        f"Post it with `{PLAN_STORE} task comment add`, after the actions it reports.",
+        f"Post it with `{PLAN_STORE} task comment add` — in a comment dispatch, with `--expect` "
+        'and `--json` as its "Where everything is" says — after the actions it reports.',
         "**A reply is never edited to answer a different comment**",
         "A reply never counts as this run's one evidence comment, and never carries evidence in "
         "place of the ticket or the evidence comment.",
@@ -4535,64 +4539,123 @@ GATHERED = "20260101T000000Z.md"
 QUOTED_ISSUE = f"{BOARD}:one"
 
 
-def _gathering(root: Path, quoted: list[tuple[str, str]]) -> Path:
-    """A gathered feedback file quoting ``quoted`` in order, as `follow_up_comments` writes it."""
+#: A snapshot no gathering wrote, which a gathering of issues the board does not hold names.
+ABSENT_SNAPSHOT = "20260101T000000Z"
 
-    def fields_on_board(issue: str, identifier: str) -> tuple[str, str, str, str, str]:
-        try:
-            item = plan_store.task_record(issue)
-            listed = plan_store.sdk(plan_store.client().task_comment_list(issue)).comments
-        except OSError:
-            return (
-                "Something a person wrote.",
-                "https://example.invalid/comment",
-                "a-person",
-                "never",
-                "An issue",
+
+def _gathering(root: Path, quoted: list[tuple[str, str]]) -> Path:
+    """A gathered feedback file quoting ``quoted`` in order, as `follow_up_comments` writes it.
+
+    Where every quoted issue is on the board, it is the module's own: the issues copied into
+    a snapshot by the store, the snapshot's record selecting exactly ``quoted`` for this run at
+    the versions the copy holds, and the file rendered from that copy. Where one is not, the
+    file names a snapshot no gathering wrote, and every field is a stand-in: such a file is read
+    for its shape alone.
+    """
+    issues = list(dict.fromkeys(issue for issue, _ in quoted))
+    try:
+        for issue in issues:
+            plan_store.task_record(issue)
+    except OSError:
+        directory = comments.snapshots_directory(root) / ABSENT_SNAPSHOT
+        read: dict[str, comments.Issue] = {}
+    else:
+        staged = comments._staged(root)
+        settings = comments.snapshot_settings(staged, BOARD)
+        copied = comments.copy_into_snapshot(staged, BOARD, issues, settings)
+        details = comments.shown_details([copied.held[one] for one in issues], settings)
+        read = {
+            one: comments.snapshot_issue(detail, one, copied.held[one], WRITABLE_PLUGIN)
+            for one, detail in zip(issues, details, strict=True)
+        }
+        chosen = []
+        for issue, identifier in quoted:
+            held = {comment.id: comment for comment in read[issue].comments}.get(identifier)
+            chosen.append(
+                comments.Chosen(
+                    issue,
+                    identifier,
+                    # A comment the board does not hold is recorded at a stand-in instant
+                    # and text, which are of the record's shape and match nothing.
+                    comments.instant(held.last_changed) if held else "2026-01-01T00:00:00Z",
+                    comments.body_sha256(held.body if held else ""),
+                )
             )
-        held = next((one for one in listed if one.id.model_dump() == identifier), None)
-        if held is None:
-            return (
-                "Something a person wrote.",
-                "https://example.invalid/comment",
-                "a-person",
-                "never",
-                str(item["title"]),
-            )
-        location = item.get("location")
-        path = location.get("path") if isinstance(location, Mapping) else None
-        url = item.get("url")
-        return (
-            held.body.rstrip(),
-            comments.comment_url_parts(
-                url if isinstance(url, str) else None,
-                path if isinstance(path, str) else None,
-                identifier,
-                held.url,
-                issue,
+        snapshot = comments.publish_snapshot(
+            staged,
+            comments.Snapshot(
+                directory=staged,
+                queried_at=datetime.now(UTC),
+                board=BOARD,
+                boards=(BOARD,),
+                named_board=True,
+                scope=None,
+                issue=None,
+                starts={},
+                store="onetaskgraph test",
+                dry_run=False,
+                items=tuple(
+                    comments.SnapshotItem(
+                        one.id,
+                        str(one.snapshot_id),
+                        one.version,
+                        one.title,
+                        one.owner,
+                        one.host,
+                        one.url,
+                    )
+                    for one in read.values()
+                ),
+                boundaries={},
+                selection={RUN: tuple(chosen)},
+                left=(),
             ),
-            held.author or comments.UNKNOWN_AUTHOR,
-            comments.moment(
-                held.updated_at or held.created_at, f"comment {identifier!r} on {issue}"
-            ).strftime(comments.MOMENT_FORMAT),
-            str(item["title"]),
         )
+        directory = snapshot.directory
+        read = {one.id: one for one in comments.snapshot_issues(comments.read_snapshot(directory))}
 
     def section(at: int, issue: str, identifier: str) -> str:
-        body, url, author, changed, title = fields_on_board(issue, identifier)
+        held = read.get(issue)
+        comment = (
+            None
+            if held is None
+            else next((one for one in held.comments if one.id == identifier), None)
+        )
+        if held is None or comment is None:
+            body, url, author, changed = (
+                "Something a person wrote.",
+                "https://example.invalid/comment",
+                "a-person",
+                "never",
+            )
+        else:
+            body = comment.body.rstrip()
+            url = comments.comment_url(held, comment)
+            author = comment.author or comments.UNKNOWN_AUTHOR
+            changed = comments.instant(comment.last_changed)
+        title = "An issue" if held is None else held.title
+        line = (
+            comments.issue_line(issue, f"{comments.SNAPSHOT_SOURCE}:x", None)
+            if held is None
+            else comments.issue_line(
+                issue,
+                str(held.snapshot_id),
+                comments.expectable_version(issue, held.version, plan_store.configured_settings()),
+            )
+        )
         return (
             f"{tickets.QUOTED_COMMENT_HEADING}{at}: on `{issue}`\n\n"
             f"{tickets.quoted_comment(issue, identifier)}\n\n"
             f"- Comment id: {identifier}\n- URL: {url}\n- Author: {author}\n"
-            f"- Last changed: {changed}\n- Issue title: {title}\n\n"
+            f"- Last changed: {changed}\n- Issue title: {title}\n- Issue: {line}\n\n"
             f"````text\n{body}\n````\n"
         )
 
-    directory = root / "feedback" / RUN
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / GATHERED
+    feedback = root / "feedback" / RUN
+    feedback.mkdir(parents=True, exist_ok=True)
+    path = feedback / GATHERED
     path.write_text(
-        comments.render(RUN, BOARD, [], None)
+        comments.render(RUN, BOARD, [], None, directory)
         + "\n".join(
             section(at, issue, comment) for at, (issue, comment) in enumerate(quoted, start=1)
         ),
@@ -4630,6 +4693,9 @@ def _response(issue: str, comment: str, **departures: object) -> dict[str, objec
         "issue": issue,
         "action": "Added the missing example to the ticket and copied it again.",
         "reply": "a-reply",
+        # A folder of Markdown answers a comment with no address of its own.
+        "reply_url": None,
+        "reply_fallback": None,
         "verdict": tickets.Verdict.DOES_NOT_CONFIRM.value,
     } | departures
 
@@ -4681,22 +4747,38 @@ def test_a_response_account_answering_every_quoted_comment_with_its_reply_is_sou
     assert f"answers every comment {GATHERED} quotes" in capsys.readouterr().out
 
 
+def _settled(feedback: Path) -> tuple[int, list[str]]:
+    """Settle the one run ``feedback`` launched, as the recipe does once it has run."""
+    snapshot = comments.recorded_snapshot(feedback.read_text(encoding="utf-8"))
+    assert snapshot is not None
+    plan = comments.Plan(
+        snapshot, detach=False, runs=(comments.Launch(tickets.RunId(RUN), feedback),)
+    )
+    said: list[str] = []
+    return comments.settle(feedback.parents[2], plan, {RUN: "follow-up-1"}, say=said.append), said
+
+
 def test_two_replies_to_one_quoted_comment_are_refused(
     board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """Settle's one read holds every reply: a comment owes exactly one since its snapshot."""
     issue = _filed(drafts_root, RUN, CAUSE, "the cursor skips the last page")
     asked = _person_said(issue, "Please add page 9.\n")
+    feedback = _gathering(drafts_root, [(issue, asked)])
     replied = _run_replied(issue, asked)
     _run_replied(issue, asked)
-    feedback = _gathering(drafts_root, [(issue, asked)])
     tickets.responses_path(feedback).write_text(
         json.dumps(_answered(_response(issue, asked, reply=replied))), encoding="utf-8"
     )
 
-    status = tickets.main(["check-responses", "--board", BOARD, "--feedback", str(feedback), RUN])
+    status, said = _settled(feedback)
 
-    assert status == tickets.UNSOUND
-    assert f"holds 2 replies of run {RUN} answering comment {asked}" in capsys.readouterr().err
+    assert status == comments.UNANSWERED
+    assert any(
+        f"holds 2 replies of run {RUN} answering comment {asked} on {issue} since the snapshot"
+        in line
+        for line in said
+    ), said
 
 
 def test_a_comment_edited_after_its_reply_is_owed_one_reply_to_its_current_text(
@@ -4714,27 +4796,28 @@ def test_a_comment_edited_after_its_reply_is_owed_one_reply_to_its_current_text(
     plan_store.sdk(
         plan_store.client().task_comment_edit(issue, asked, body="Please add pages 9 and 10.\n")
     )
+    feedback = _gathering(drafts_root, [(issue, asked)])
     time.sleep(1.1)
     replied = _run_replied(issue, asked)
-    feedback = _gathering(drafts_root, [(issue, asked)])
     account = tickets.responses_path(feedback)
     account.write_text(
         json.dumps(_answered(_response(issue, asked, reply=replied))), encoding="utf-8"
     )
-    command = ["check-responses", "--board", BOARD, "--feedback", str(feedback), RUN]
 
-    assert tickets.main(command) == tickets.SOUND, capsys.readouterr().err
-    assert f"answers every comment {GATHERED} quotes" in capsys.readouterr().out
+    status, said = _settled(feedback)
+    assert status == comments.DONE, said
 
     account.write_text(
         json.dumps(_answered(_response(issue, asked, reply=earlier))), encoding="utf-8"
     )
 
-    assert tickets.main(command) == tickets.UNSOUND
-    assert (
-        f"names the reply {earlier}, and the board holds run {RUN}'s reply to it as " + (replied)
-        in capsys.readouterr().err
-    )
+    status, said = _settled(feedback)
+    assert status == comments.UNANSWERED
+    assert any(
+        f"names the reply {earlier}, which predates the snapshot, and the board holds run "
+        f"{RUN}'s reply to it since as {replied}" in line
+        for line in said
+    ), said
 
 
 def test_a_quoted_comment_the_board_holds_no_reply_of_this_run_to_is_refused(
@@ -4742,48 +4825,57 @@ def test_a_quoted_comment_the_board_holds_no_reply_of_this_run_to_is_refused(
 ) -> None:
     """A structured account of replies nobody posted is the one failure a shape check misses.
 
-    So the account is read against the board, and a reply another run left answering the
-    same comment is not this run's.
+    So settle reads every reply an account names in its one batched read, and a reply another
+    run left answering the same comment is not this run's.
     """
     issue = _filed(drafts_root, RUN, CAUSE, "the cursor skips the last page")
     asked = _person_said(issue, "Please add page 9.\n")
-    _run_replied(issue, asked, run=OTHER_RUN)
     feedback = _gathering(drafts_root, [(issue, asked)])
+    _run_replied(issue, asked, run=OTHER_RUN)
     tickets.responses_path(feedback).write_text(
         json.dumps(_answered(_response(issue, asked))), encoding="utf-8"
     )
 
-    status = tickets.main(["check-responses", "--board", BOARD, "--feedback", str(feedback), RUN])
+    assert (
+        tickets.main(["check-responses", "--board", BOARD, "--feedback", str(feedback), RUN])
+        == tickets.SOUND
+    ), "the dispatch's own check read the board"
+    status, said = _settled(feedback)
 
-    assert status == tickets.UNSOUND
-    assert f"holds no reply of run {RUN} answering comment {asked}" in capsys.readouterr().err
+    assert status == comments.UNANSWERED
+    assert any(
+        f"holds no reply a-reply of run {RUN} answering comment {asked}" in line for line in said
+    ), said
 
 
-def test_a_reply_to_a_comment_the_board_no_longer_holds_is_refused(
+def test_a_comment_its_snapshot_does_not_hold_is_refused_and_one_deleted_since_is_not(
     board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The comment is asked for again, before the reply is.
+    """The snapshot, not the board, is what a gathering is held to.
 
-    The recipe checks a gathering against the board before it launches, but this command
-    is also run on its own, and a person may delete a comment after it was gathered: a
-    reply of this run answering it would otherwise pass as an answer to something nobody
-    can read.
+    A comment the snapshot never held is one nobody can answer, so a gathering quoting it is
+    refused; a comment a person deleted on the board after the snapshot was taken is still
+    the one the snapshot quoted, and the dispatch reading the snapshot answers it.
     """
     issue = _filed(drafts_root, RUN, CAUSE, "the cursor skips the last page")
     asked = _person_said(issue, "Please add page 9.\n")
-    replied = _run_replied(issue, asked)
     feedback = _gathering(drafts_root, [(issue, asked)])
+    replied = _run_replied(issue, asked)
     tickets.responses_path(feedback).write_text(
         json.dumps(_answered(_response(issue, asked, reply=replied))), encoding="utf-8"
     )
     plan_store.sdk(plan_store.client().task_comment_delete(issue, asked))
+    command = ["check-responses", "--board", BOARD, "--feedback", str(feedback), RUN]
 
-    status = tickets.main(["check-responses", "--board", BOARD, "--feedback", str(feedback), RUN])
+    assert tickets.main(command) == tickets.SOUND, capsys.readouterr().err
 
-    assert status == tickets.UNSOUND
-    assert f"quotes comment {asked} on {issue}, which that issue does not hold" in (
-        capsys.readouterr().err
+    absent = _gathering(drafts_root, [(issue, "a-comment-nobody-wrote")])
+    tickets.responses_path(absent).write_text(
+        json.dumps(_answered(_response(issue, "a-comment-nobody-wrote"))), encoding="utf-8"
     )
+
+    assert tickets.main(command) == tickets.UNSOUND
+    assert "on " + issue + ", which that issue does not hold" in capsys.readouterr().err
 
 
 def test_an_absent_response_account_is_refused_naming_how_many_comments_it_owes(
@@ -4833,6 +4925,19 @@ def test_an_absent_response_account_is_refused_naming_how_many_comments_it_owes(
             _answered(_response(QUOTED_ISSUE, "c-2", reply=3), _response(QUOTED_ISSUE, "c-1")),
             "states no `reply`",
         ),
+        (
+            _answered(
+                _response(QUOTED_ISSUE, "c-2", reply_url="not a url"),
+                _response(QUOTED_ISSUE, "c-1"),
+            ),
+            "names the reply URL 'not a url'",
+        ),
+        (
+            _answered(
+                _response(QUOTED_ISSUE, "c-2", reply_fallback=" "), _response(QUOTED_ISSUE, "c-1")
+            ),
+            "names the reply's fallback ' '",
+        ),
         (_answered({"comment": "c-2"}, _response(QUOTED_ISSUE, "c-1")), "entry 0 is missing keys"),
         (_answered() | {"responses": 3}, "`responses` is not a list"),
     ],
@@ -4845,6 +4950,8 @@ def test_an_absent_response_account_is_refused_naming_how_many_comments_it_owes(
         "a-comment-on-another-issue",
         "a-response-stating-no-action",
         "a-response-naming-no-reply",
+        "a-reply-url-that-is-no-url",
+        "a-reply-fallback-stating-nothing",
         "an-entry-missing-keys",
         "responses-not-a-list",
     ],
@@ -4914,11 +5021,23 @@ def test_the_feedback_mode_task_carries_the_gathering_and_none_of_the_ticket_seq
     assert f"````json\n{tickets.response_example(RUN, FEEDBACK_FILE.name, PLAN_STORE)}\n````" in (
         task
     )
-    # The three commands that change **one** ticket stay, because a quoted comment may ask
-    # for a change to the ticket behind the issue it sits on.
-    for named in (BOARD_STATUS, VALIDATE, COPY):
-        assert named in task, named
+    # A quoted comment may ask for a change to the ticket behind the issue it sits on, which
+    # the dispatch makes in the ticket's file and validates; the board is written from it by
+    # the pass's settle step, so the commands that read the board or write it are not named.
+    flat = _flat(task)
+    assert f"`{VALIDATE} --pending <path of the ticket>`" in flat
+    for said in (
+        f"`{PLAN_STORE} task show <its snapshot id> --json`",
+        f"`{PLAN_STORE} task comment list <its snapshot id>`",
+        f"`{PLAN_STORE} task comment add <its board id> --expect <its version> --body-file "
+        "<reply> --json`",
+        "nothing about the board may be read in this dispatch",
+    ):
+        assert said in flat, said
     for absent in (
+        BOARD_STATUS,
+        COPY,
+        f"{PLAN_STORE} task show <id>",
         BOARD_ITEMS,
         "This is a re-dispatch",
         "Record the basis first",
@@ -5101,18 +5220,28 @@ def test_the_older_schema_rule_is_one_source_rendered_into_both_tasks() -> None:
 
     A comment asking to change a schema-5 ticket ended at `board-status`'s schema refusal
     because only the re-dispatch carried the rule, so the feedback task now includes the same
-    file, at the step that edits the ticket, before that ticket's status, validation and copy.
+    file, at the step that edits the ticket, before that ticket's validation. A comment
+    dispatch writes nothing to the board but its replies, so the same macro renders it with the
+    board-status, re-estimate and copy each pass's settle step makes in their place.
     """
     rule = _older_schema_rule(_task(redispatch=True))
     step = _section(_feedback_task(), "What to do, in order")
     step = _flat(
         step.split("1. **Keep the ticket right in light of it**", 1)[1].split("\n2. ", 1)[0]
     )
+    settled = step[step.index("- a ticket of an older schema") : step.index("Then run `")]
 
     assert rule.startswith("- a ticket of an older schema is brought to the current shape"), rule
-    assert rule in step, step
-    assert step.index(rule) < step.index(f"run `{BOARD_STATUS} --board followups <path"), step
-    assert step.index(rule) < step.index(f"run `{COPY} --board followups"), step
+    assert settled.startswith("- a ticket of an older schema is brought to the current shape")
+    assert step.index(settled) < step.index(f"run `{VALIDATE} --pending <path"), step
+    for command in (BOARD_STATUS, COPY, RE_ESTIMATE):
+        assert command not in settled, (command, settled)
+    assert "this run's settle step records it at schema" in settled, settled
+    assert "settle's re-estimate alone" in settled, settled
+    # The two renderings differ only where a command is named: every bullet opens alike.
+    assert [bullet.split(",", 1)[0] for bullet in re.split(r"(?:^| )- a ", rule)] == [
+        bullet.split(",", 1)[0] for bullet in re.split(r"(?:^| )- a ", settled.strip())
+    ]
     # One wording: each of the rule's bullets opens exactly once across everything a task is
     # rendered from, which is the included file itself.
     written = OLDER_SCHEMA_RULE.read_text(encoding="utf-8")
@@ -5292,14 +5421,15 @@ def test_each_task_asks_for_facts_verdicts_and_the_re_estimate_never_a_priority(
         assert required in initial, required
     for required in (
         "carrying that verdict in its marker",
-        "**After every `confirms` reply, re-estimate the issue it sits on** with "
-        f"{re_estimate} <the issue's id>`",
+        "A `confirms` reply is one more occurrence, which settle recounts into the issue's "
+        "estimate: run no re-estimate yourself.",
         'verdict="<confirms or does-not-confirm>"',
         "`verdict` is this run's judgment of the comment: `confirms` when it confirms",
         "`verdict` is the verdict that reply's marker carries",
         '"verdict": "<confirms or does-not-confirm: the verdict the reply\'s marker carries>"',
-        "and every issue a `confirms` reply sits on stores the estimate its comments recount to",
-        'each time it posts a reply marked `verdict="confirms"` there',
+        "A comment dispatch runs no re-estimate itself: its settle step makes the one each of "
+        "its confirming replies is owed, counting from the snapshot's comments and the replies "
+        "it verified",
         "a comment saying a ticket's priority or severity is wrong is answered on its "
         "severities. Judge both again by the rubric below",
         "Where the rubric supports another severity, change the `## Impact` section's labelled "
@@ -5307,6 +5437,10 @@ def test_each_task_asks_for_facts_verdicts_and_the_re_estimate_never_a_priority(
         _flat(tickets.RUBRIC),
     ):
         assert required in feedback, required
+    # The comment dispatch writes nothing to the board but its replies, so the commands that
+    # would write anything else are named nowhere it is told to run them.
+    for absent in (f"{re_estimate} <the issue's id>`", f"`{BOARD_STATUS} --board followups <path"):
+        assert absent not in feedback, absent
 
 
 def test_a_response_naming_a_reply_that_is_not_the_boards_is_refused_naming_both(
@@ -5316,24 +5450,25 @@ def test_a_response_naming_a_reply_that_is_not_the_boards_is_refused_naming_both
 
     A shape check cannot tell a real reply id from any other non-empty string, and the
     account's whole use to a reader is following `reply` back to the comment the run
-    posted. So the board is asked for the reply it holds, and an id that is not it is
-    refused naming both.
+    posted. So settle's read holds the reply the account names, and an id it does not hold is
+    refused naming it.
     """
     issue = _filed(drafts_root, RUN, CAUSE, "the cursor skips the last page")
     asked = _person_said(issue, "Please add page 9.\n")
-    posted = _run_replied(issue, asked)
     feedback = _gathering(drafts_root, [(issue, asked)])
+    _run_replied(issue, asked)
     tickets.responses_path(feedback).write_text(
         json.dumps(_answered(_response(issue, asked, reply="a-reply-nobody-posted"))),
         encoding="utf-8",
     )
 
-    status = tickets.main(["check-responses", "--board", BOARD, "--feedback", str(feedback), RUN])
+    status, said = _settled(feedback)
 
-    assert status == tickets.UNSOUND
-    refusal = capsys.readouterr().err
-    assert "names the reply a-reply-nobody-posted" in refusal
-    assert f"the board holds run {RUN}'s reply to it as {posted}" in refusal
+    assert status == comments.UNANSWERED
+    assert any(
+        f"holds no reply a-reply-nobody-posted of run {RUN} answering comment {asked}" in line
+        for line in said
+    ), said
 
 
 def test_a_gathering_quoting_another_boards_issue_is_refused_before_the_account_is_read(
@@ -5651,7 +5786,7 @@ def test_a_gathering_whose_quoted_body_differs_from_the_board_is_refused(
 
     assert status == tickets.UNSOUND
     assert (
-        f"quotes comment {asked} on {issue} with text different from the board"
+        f"quotes comment {asked} on {issue} with text different from its snapshot"
         in capsys.readouterr().err
     )
 
@@ -5816,7 +5951,7 @@ def test_a_gathering_is_checked_against_the_board_before_anything_is_composed_ov
 
     for quoted, refusal in (
         ([(issue, "a-comment-nobody-wrote")], "which that issue does not hold"),
-        ([(f"{BOARD}:no-such/issue", asked)], "which the board would not answer for"),
+        ([(f"{BOARD}:no-such/issue", asked)], "holds no snapshot.json, so it is no snapshot"),
         ([], "it quotes no comment"),
     ):
         feedback.write_text(
@@ -8958,3 +9093,67 @@ def test_schema_12_board_status_and_validation_end_in_evidence(
 
 
 # llmlint: ignore-end[shell_test_tiers_stay_split]
+
+
+def test_a_gathering_and_its_snapshot_disagreeing_in_any_way_is_named(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Every way the file, the snapshot's record and its source can part is its own finding."""
+    issue = _filed(drafts_root, RUN, CAUSE, "the cursor skips the last page")
+    asked = _person_said(issue, "Please add page 9.\n")
+    other = _person_said(issue, "And page 10.\n")
+    feedback = _gathering(drafts_root, [(issue, asked), (issue, other)])
+    text = feedback.read_text(encoding="utf-8")
+    gathering = tickets.read_gathering(text)
+    snapshot = comments.recorded_snapshot(text)
+    assert snapshot is not None
+    assert tickets.gathering_on_snapshot(gathering, feedback, RUN) == []
+
+    record = json.loads((snapshot / comments.SNAPSHOT_RECORD).read_text(encoding="utf-8"))
+    swapped = record | {"selection": {RUN: record["selection"][RUN][::-1]}}
+    (snapshot / comments.SNAPSHOT_RECORD).write_text(json.dumps(swapped), encoding="utf-8")
+    assert any(
+        "quotes other comments than its snapshot" in one
+        for one in tickets.gathering_on_snapshot(gathering, feedback, RUN)
+    )
+    # A snapshot selects only on what it captured, so one holding no item selects nothing.
+    (snapshot / comments.SNAPSHOT_RECORD).write_text(
+        json.dumps(record | {"items": [], "selection": {}}), encoding="utf-8"
+    )
+    assert f"it quotes {issue}, which its snapshot does not hold" in (
+        tickets.gathering_on_snapshot(gathering, feedback, RUN)
+    )
+    (snapshot / comments.SNAPSHOT_RECORD).write_text(json.dumps(record), encoding="utf-8")
+    shutil.rmtree(snapshot / comments.SNAPSHOT_ITEMS / "tasks")
+    assert any(
+        "its snapshot's source could not be read" in one
+        for one in tickets.gathering_on_snapshot(gathering, feedback, RUN)
+    )
+    bare = tickets.read_gathering(text.split("\n", 2)[2])
+    assert tickets.gathering_on_snapshot(bare, feedback, RUN) == [
+        "it names no snapshot, so nothing says which comments it was gathered from"
+    ]
+
+
+def test_an_answered_issue_another_run_owns_holds_no_ticket_of_this_run_to_its_shape(
+    board: Path, drafts_root: Path
+) -> None:
+    """The ticket an answer is held to is this run's alone, read off the snapshot's record."""
+    issue = _filed(drafts_root, OTHER_RUN, CAUSE, "the cursor skips the last page")
+    asked = _person_said(issue, "Please add page 9.\n")
+    feedback = _gathering(drafts_root, [(issue, asked)])
+    answered = [
+        tickets.Response(
+            tickets.Quoted(issue, tickets.CommentId(asked)),
+            "Answered it.",
+            tickets.CommentId("a-reply"),
+            tickets.Verdict.DOES_NOT_CONFIRM,
+        )
+    ]
+    path = tickets.ticket_path(drafts_root, RUN, CAUSE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("not a ticket", encoding="utf-8")
+
+    assert tickets.answered_ticket_problems(feedback, RUN, answered) == []
+    feedback.write_text("No snapshot line.\n", encoding="utf-8")
+    assert tickets.answered_ticket_problems(feedback, RUN, answered) == []

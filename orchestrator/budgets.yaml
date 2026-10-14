@@ -21,6 +21,18 @@ budgets:
     unit: points
     direction: max
     threshold: 160
+  - id: comment-answer-pass-points
+    description: >-
+      Modelled GitHub GraphQL points one realistic comment-answer pass, the
+      `follow-ups-answer-comments` recipe's, spends on the followups board — 40 comments on
+      20 proposals of 6 runs, beside 60 other items of this host — priced on the loopback
+      stand-in. It protects the same shared
+      allowance against a pass that reads the board more than once on each side of its replies.
+    measure: reported
+    command: ["uv", "run", "--directory", "..", "python", "-m", "tests.budget_telemetry"]
+    unit: points
+    direction: max
+    threshold: 60
   - id: ticket-lifecycle-points
     description: >-
       Modelled GitHub GraphQL points one follow-up ticket's whole life spends on the
