@@ -645,6 +645,22 @@ rateLimit { used } }'` reported 251.
 <!-- llmlint: ignore-end[agents_md_durable_and_terse, determinism_vs_judgment] -->
 Record the plan-store CLI's version beside any board measurement, because a board read
 that does not name the release it was taken on is a read about whichever binary answered.
+<!-- llmlint: ignore-block[agents_md_durable_and_terse, contracts_have_one_source_or_a_drift_gate] The task that turned the cache on requires this paragraph to say, per board reader on this host, whether its reads are pinned, and where the cache lives and how it is cleared: it is the one statement of where the savings land and that no reader is exposed to stale data, which neither the configuration nor the code says. The store's rules it restates, and that no read in this host's own code passes a pin, are held by the test it names; the engine's write-back is the one reader with no source here to read, so it stands on the adopted engine's own contract. -->
+**The store caches the four board sources** (`cache.enabled` in `onetaskgraph.yaml`), for
+every board reader on this host, the engine included. It serves only a read pinned to a
+change token the store already received, at zero quota when the item is unchanged, and
+freshness comes only from such tokens, so the cache cannot make a reader see stale data; an
+unpinned read costs what it did. Pinned: a plan copy's member loads
+(`just copy-plan`, `just finish-plan`), by its own listing; and, once `comment-snapshot`
+lands, the follow-ups comment pass's gathering copy, every later read of which goes to its
+per-snapshot local copy instead. Unpinned: settlement write-backs, and
+`orchestrator/plan_store.py`'s single-item reads, `board-status` among them. Linear is never
+served from it until the store's Linear live lane proves what its token covers. It lives at
+`${XDG_CACHE_HOME:-$HOME/.cache}/onetaskgraph/<source identity digest>`, shared per host,
+and `onetaskgraph cache clear` empties it.
+`tests/e2e/launch_monitor_observer/test_onetaskgraph_host_e2e.py` holds the store's rules
+and this host's own reads to it.
+<!-- llmlint: ignore-end[agents_md_durable_and_terse, contracts_have_one_source_or_a_drift_gate] -->
 
 ## Your loop as manager
 

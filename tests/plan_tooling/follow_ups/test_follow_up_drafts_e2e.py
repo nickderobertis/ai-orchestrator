@@ -30,6 +30,7 @@ import subprocess
 from pathlib import Path
 
 import follow_up_variables
+import plan_store_cache
 import pytest
 from onetaskgraph_sdk import TaskDetail
 from published_tools import ONETASKGRAPH_BIN
@@ -76,7 +77,7 @@ def _path(*extra: str | None) -> str:
 
 def _environment(**stated: str) -> dict[str, str]:
     """A curated environment: what a journey states, never what an enclosing launch set."""
-    return {"PATH": _path(), "HOME": str(Path.home()), **stated}
+    return {"PATH": _path(), "HOME": str(Path.home()), **plan_store_cache.handed(), **stated}
 
 
 def _exported(
@@ -752,7 +753,12 @@ def test_a_checkout_that_cannot_run_the_command_says_how_to_provision_it(
     refused = subprocess.run(  # noqa: S603 - the real drafting command, in an unprovisioned checkout
         [str(command), "--title", TITLE, "--repository", REPOSITORY],
         cwd=tmp_path,
-        env={"PATH": path, "HOME": str(Path.home()), **_drafting(tmp_path)},
+        env={
+            "PATH": path,
+            "HOME": str(Path.home()),
+            **plan_store_cache.handed(),
+            **_drafting(tmp_path),
+        },
         input=BODY,
         text=True,
         capture_output=True,

@@ -39,6 +39,7 @@ import os
 import subprocess
 from pathlib import Path
 
+import plan_store_cache
 import pytest
 from waits import timeout as e2e_timeout
 
@@ -99,6 +100,7 @@ def _state(tmp_path: Path) -> dict[str, str]:
     return {
         "PATH": os.environ["PATH"],
         "HOME": str(tmp_path / "home"),
+        **plan_store_cache.handed(),
         "XDG_STATE_HOME": str(state),
         "ONEPIPELINE_RUNS_DIR": str(runs),
     }

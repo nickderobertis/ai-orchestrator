@@ -28,6 +28,7 @@ import onejudge_bundle
 import onevcs_state_snapshot
 import plan_fixture_source
 import plan_root_variable
+import plan_store_cache
 import pytest
 import pytest_temp_root
 from nx_inputs import (
@@ -368,6 +369,52 @@ def _isolated_plan_store_roots(tmp_path_factory: pytest.TempPathFactory) -> Iter
             root.mkdir()
             patched.setenv(variable, str(root))
         yield
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolated_plan_store_cache(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+    """Hold every plan-store cache this process and its children reach under pytest's base.
+
+    `tests/plan_store_cache.py` is the rule; this is where it is switched on. Session scope
+    and by mutating the environment, for the reason the plan-store roots above give.
+    """
+    host = plan_store_cache.host_cache_home(os.environ)
+    with pytest.MonkeyPatch.context() as patched:
+        for variable, directory in plan_store_cache.KEPT.items():
+            if host is not None and not os.environ.get(variable):
+                patched.setenv(variable, str(host / directory))
+        for key in tuple(os.environ):
+            if plan_store_cache.CACHE_DIR_VARIABLE.match(key):
+                patched.delenv(key)
+        patched.setenv(plan_store_cache.CACHE_HOME_ENV, str(tmp_path_factory.mktemp("cache")))
+        plan_store_cache.guard(tmp_path_factory.getbasetemp())
+        try:
+            yield
+        finally:
+            plan_store_cache.release()
+
+
+def _own_plan_store_cache(factory: pytest.TempPathFactory) -> Iterator[None]:
+    """A cache home of its own under pytest's base, for as long as the fixture holds."""
+    with pytest.MonkeyPatch.context() as patched:
+        patched.setenv(plan_store_cache.CACHE_HOME_ENV, str(factory.mktemp("cache")))
+        yield
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _module_plan_store_cache(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+    """A cache home of each module's own, for what its module-scoped fixtures start."""
+    yield from _own_plan_store_cache(tmp_path_factory)
+
+
+@pytest.fixture(autouse=True)
+def _test_plan_store_cache(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+    """A cache home of each test's own.
+
+    The loopback boards repeat their ids and change tokens from one journey to the next, so
+    two journeys sharing a cache home could be served each other's entries.
+    """
+    yield from _own_plan_store_cache(tmp_path_factory)
 
 
 @pytest.fixture(scope="session", autouse=True)

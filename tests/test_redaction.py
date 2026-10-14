@@ -15,6 +15,7 @@ import subprocess
 import time
 from pathlib import Path
 
+import plan_store_cache
 import pytest
 
 from orchestrator.redaction import SECRET_NAME, SECRET_NAME_PATTERN, redact, secret_values
@@ -61,7 +62,7 @@ def _shell_redact(text: str, environ: dict[str, str]) -> str:
     proc = subprocess.run(
         ["bash", "-c", f'set -euo pipefail; source "{HELPER}"; redact_secrets'],
         input=text,
-        env={"PATH": "/usr/bin:/bin", **environ},
+        env={"PATH": "/usr/bin:/bin", **plan_store_cache.handed(), **environ},
         text=True,
         capture_output=True,
         check=True,

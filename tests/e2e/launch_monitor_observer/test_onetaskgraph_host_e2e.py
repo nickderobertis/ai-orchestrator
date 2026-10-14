@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ast
+import inspect
 import json
 import os
 import re
@@ -18,6 +20,7 @@ from typing import ClassVar, Literal, NamedTuple, NewType, TypedDict
 import budget_telemetry
 import jsonschema
 import plan_root_variable
+import plan_store_cache
 import pytest
 from fake_backend import PROMPT_LOG_ENV, TURN_GATE_ENV, TURN_GATE_REACHED, TURN_GATE_RELEASED
 from github_board import (
@@ -100,7 +103,7 @@ from sibling_facts import registered_checkouts
 from test_orchestrate_launch_e2e import _environment as _launch_environment
 from waits import timeout as e2e_timeout
 
-from orchestrator import follow_up_tickets, plan_check, plan_store
+from orchestrator import follow_up_tickets, plan_check, plan_store, task_body
 from orchestrator.project_store import PlanDocument, PlanNode, frontmatter, write_plan_project
 from orchestrator.root import REPO_ROOT
 
@@ -2176,11 +2179,12 @@ def _claimed_by_a_deliverer(issue: _Issue) -> None:
     second board and this journey is about what a *re-copy* does to the result.
     """
     issue.status = QUEUED.name
-    issue.body = issue.body.replace(
-        '{"onetaskgraph.item_kind"',
-        f'{{"{DELIVERED_BY_KEY}":["{DELIVERER}"],"onetaskgraph.item_kind"',
-        1,
-    )
+    # The block is decoded and recomposed rather than matched on its first key, because which
+    # key sorts first moves with what a copy records: the store's own `onetaskgraph.copied_*`
+    # keys sort ahead of every other one.
+    content, block = issue.body.split(task_body.METADATA_SEPARATOR + task_body.METADATA_OPEN, 1)
+    encoded = block.removesuffix(task_body.METADATA_CLOSE)
+    issue.body = task_body.compose(content, {**json.loads(encoded), DELIVERED_BY_KEY: [DELIVERER]})
 
 
 def test_a_queued_followups_item_reads_back_claimed_and_a_re_copy_keeps_it_queued(
@@ -2281,6 +2285,197 @@ def test_a_draft_ticket_onto_a_followups_board_without_a_deferred_option_is_refu
     assert _status_writes(_GitHubFixture.requests) == [], (
         "a board without the option had some other Status option written instead"
     )
+
+
+def _listed_version(environment: dict[str, str], qualified: str) -> str:
+    """The change token the `followups` listing carries for ``qualified``: what a reader holds."""
+    listed = _followups_command(
+        environment,
+        [str(ONETASKGRAPH_BIN), "task", "list", "--source", follow_up_tickets.BOARD, "--json"],
+    )
+    assert listed.returncode == 0, listed.stdout + listed.stderr
+    (row,) = [row for row in json.loads(listed.stdout)["items"] if row["id"] == qualified]
+    version = row["item"].get("version")
+    assert isinstance(version, str) and version, f"the listing gave no change token: {row}"
+    return version
+
+
+def _pinned_show(
+    environment: dict[str, str], qualified: str, version: str
+) -> tuple[Mapping[str, object], list[_GraphQLRequest]]:
+    """One `task show --pin` of ``qualified`` at ``version``: its answer and what it sent.
+
+    The answer is the whole response, because the `cache` member saying how the read was
+    served sits beside the items rather than in one.
+    """
+    sent_before = len(_GitHubFixture.requests)
+    shown = _followups_command(
+        environment,
+        [str(ONETASKGRAPH_BIN), "task", "show", qualified, "--pin", version, "--json"],
+    )
+    assert shown.returncode == 0, shown.stdout + shown.stderr
+    answer = json.loads(shown.stdout)
+    assert len(answer["items"]) == 1, answer
+    return answer, _GitHubFixture.requests[sent_before:]
+
+
+def _cached_entries(cache_home: Path) -> dict[str, list[Path]]:
+    """The store's entries under ``cache_home``, by the source-identity directory holding each."""
+    root = cache_home / "onetaskgraph"
+    return {
+        held.name: sorted(path for path in held.rglob("*") if path.is_file())
+        for held in (root.iterdir() if root.is_dir() else ())
+        if held.is_dir()
+    }
+
+
+def test_a_pinned_read_of_an_unchanged_ticket_is_served_from_the_hosts_cache_at_no_request(
+    tmp_path: Path,
+) -> None:
+    """A read pinned to a token the store holds costs nothing; a changed ticket is read again.
+
+    The checkout's own `onetaskgraph.yaml` turns the cache on for `followups`, and the locked
+    install is the store that reads it, so this is the read a follow-up pass makes once it
+    pins: the first read at the listed version fills the entry, and the second is answered
+    from it with no request. Then a person moves the ticket on the board: the listing's token
+    moves with it, and a read pinned to the new token goes to the board and reports the move,
+    which is the whole of why the cache cannot hand a reader stale data. The entries land in
+    one source-identity directory under `onetaskgraph/` in the cache home this suite hands
+    every process — or under `$HOME/.cache` when no cache home is named — and `cache clear`
+    empties them, after which the same pinned read goes to the board again.
+    """
+    environment, drafts_root = _followups_environment(tmp_path)
+    _written_ticket(drafts_root, _follow_up_ticket(SIBLING_REPOSITORY))
+    with _serving_followups(environment):
+        copied = _copied_ticket(environment, "--json")
+        assert copied.returncode == 0, copied.stdout + copied.stderr
+        (entry,) = json.loads(copied.stdout)["items"]
+        qualified = str(entry["destination"])
+        version = _listed_version(environment, qualified)
+        first, _ = _pinned_show(environment, qualified, version)
+        second, sent = _pinned_show(environment, qualified, version)
+        (created,) = BOARD.created
+        # llmlint: ignore-block[tests_mirror_real_usage] A person moving the card on the live
+        # board is the change under test, and no test may reach that board; the fixture's row
+        # is where that move leaves it. Every read before and after is the locked CLI unchanged.
+        created.status = "Todo"
+        # llmlint: ignore-end[tests_mirror_real_usage]
+        moved = _listed_version(environment, qualified)
+        reread, reread_sent = _pinned_show(environment, qualified, moved)
+        cache_home = Path(environment[plan_store_cache.CACHE_HOME_ENV])
+        filled = _cached_entries(cache_home)
+        cleared = _followups_command(
+            environment, [str(ONETASKGRAPH_BIN), "cache", "clear", follow_up_tickets.BOARD]
+        )
+        emptied = _cached_entries(cache_home)
+        after_clear, after_clear_sent = _pinned_show(environment, qualified, moved)
+        home = tmp_path / "home"
+        home.mkdir()
+        unnamed = {
+            **{k: v for k, v in environment.items() if k != plan_store_cache.CACHE_HOME_ENV},
+            "HOME": str(home),
+        }
+        _pinned_show(unnamed, qualified, moved)
+        fallen_back = _cached_entries(home / ".cache")
+
+    assert first["items"][0]["item"]["version"] == version, first
+    assert sent == [], f"a pinned read of an unchanged ticket went to the board: {sent}"
+    assert second.get("cache") == {"served": "cache", "bypassed": None}, second
+    assert second["items"] == first["items"], "the cache answered other than the board did"
+
+    assert moved != version, "moving the ticket on the board did not move its change token"
+    assert reread_sent, "a read pinned to a token the cache does not hold sent no request"
+    assert reread.get("cache") == {"served": "remote", "bypassed": None}, reread
+    assert _category(first["items"][0]["item"]) == "backlog", first
+    assert _category(reread["items"][0]["item"]) == "todo", reread
+
+    assert cache_home.is_relative_to(tmp_path.parent.parent), (
+        f"the cache home handed to the store, {cache_home}, is outside pytest's base"
+    )
+    assert len(filled) == 1 and next(iter(filled.values())), (
+        f"the store did not keep `followups` in one source-identity directory: {filled}"
+    )
+    assert cleared.returncode == 0, cleared.stdout + cleared.stderr
+    assert all(not entries for entries in emptied.values()), f"`cache clear` left {emptied}"
+    assert after_clear_sent, "a pinned read after `cache clear` was answered from nothing"
+    assert after_clear.get("cache") == {"served": "remote", "bypassed": None}, after_clear
+    assert fallen_back.keys() == filled.keys() and next(iter(fallen_back.values())), (
+        f"with no cache home named, the store did not cache under $HOME/.cache: {fallen_back}"
+    )
+
+
+def _expected_write(
+    environment: dict[str, str], qualified: str, version: str, *verb: str
+) -> tuple[str, list[_GraphQLRequest]]:
+    """One write of ``qualified`` the caller knows at ``version``: its new version, its requests.
+
+    `--expect` is what sends a mutation as its whole twin, whose answer the store keeps.
+    """
+    sent_before = len(_GitHubFixture.requests)
+    written = _followups_command(
+        environment, [str(ONETASKGRAPH_BIN), "task", *verb, "--expect", version, "--json"]
+    )
+    assert written.returncode == 0, written.stdout + written.stderr
+    answer = json.loads(written.stdout)
+    (row,) = answer.get("items", [answer])
+    result = row.get("result") or answer.get("result")
+    assert isinstance(result, dict), f"the write reported no result: {answer}"
+    assert all(part["outcome"] == "landed" for part in result["parts"]), result
+    return str(result["version"]), _GitHubFixture.requests[sent_before:]
+
+
+def test_the_board_answers_the_stores_whole_issue_writes_and_its_copy_detail_read(
+    tmp_path: Path,
+) -> None:
+    """Each document the store sends only for its cache — reached through the locked CLI.
+
+    A write the caller knows the ticket at (`--expect`) sends each mutation as its twin that
+    answers with the whole issue, and the store keeps that answer: a read pinned to the
+    version the write reports then sends nothing. A copy out of the board reads the tasks it
+    carries in one batch with their comments and their edges. Each is answered here as GitHub
+    answers it, so a board that could not would fail the write or the copy by name.
+    """
+    environment, drafts_root = _followups_environment(tmp_path)
+    _written_ticket(drafts_root, _follow_up_ticket(SIBLING_REPOSITORY))
+    content = tmp_path / "content.md"
+    content.write_text("A person rewrote this ticket.\n", encoding="utf-8")
+    comment = tmp_path / "comment.md"
+    comment.write_text("Seen again.\n", encoding="utf-8")
+    with _serving_followups(environment, fields=True):
+        copied = _copied_ticket(environment, "--json")
+        assert copied.returncode == 0, copied.stdout + copied.stderr
+        (entry,) = json.loads(copied.stdout)["items"]
+        qualified = str(entry["destination"])
+        version = _listed_version(environment, qualified)
+        # A pinned read is what fills the entry the first write then takes its ids from.
+        _pinned_show(environment, qualified, version)
+        sends: list[tuple[_Operation, list[_GraphQLRequest]]] = []
+        for operation, verb in (
+            (_Operation.ADD_COMMENT_WHOLE, ("comment", "add", qualified, "--body-file", comment)),
+            (_Operation.UPDATE_FIELD_WHOLE, ("status", "set", qualified, "todo")),
+            (_Operation.UPDATE_ISSUE_WHOLE, ("content", "set", qualified, "--file", content)),
+            (_Operation.UPDATE_FIELD_WHOLE, ("priority", "set", qualified, "high")),
+            (_Operation.CLEAR_FIELD_WHOLE, ("priority", "set", qualified, "none")),
+        ):
+            version, sent = _expected_write(environment, qualified, version, *map(str, verb))
+            sends.append((operation, sent))
+        kept, kept_sent = _pinned_show(environment, qualified, version)
+        out = _followups_command(
+            environment,
+            [str(ONETASKGRAPH_BIN), "task", "copy", qualified, "--to", AUTHORING_SOURCE, "--json"],
+        )
+        copy_sent = [request.operation for request in _GitHubFixture.requests]
+
+    for operation, sent in sends:
+        assert operation in [request.operation for request in sent], (operation, sent)
+    assert kept_sent == [], f"the store kept no whole answer of its last write: {kept_sent}"
+    assert kept.get("cache") == {"served": "cache", "bypassed": None}, kept
+    (shown,) = kept["items"]
+    assert shown["item"]["content"].startswith("A person rewrote this ticket."), shown
+    assert _category(shown["item"]) == "todo", shown
+    assert [body["body"] for body in kept["comments"]] == ["Seen again.\n"], kept["comments"]
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert _Operation.ISSUE_COPY_DETAILS in copy_sent, copy_sent
 
 
 def test_a_queued_ticket_onto_a_followups_board_without_a_queued_option_is_refused_by_name(
@@ -2519,6 +2714,60 @@ def test_two_carriers_of_one_ticket_are_resolved_by_the_native_origin_query_alon
         assert (walked, unnarrowed) == ([], []), (
             f"settling two carriers read the whole board: walked {walked}, searched {unnarrowed}"
         )
+
+
+#: What the adopted store's README says of its cache, which `AGENTS.md`'s plan-store section
+#: restates per reader on this host: a listing pins the reads after it in one command, a plain
+#: read by id goes to the source, and no Linear read is served from the cache.
+STORE_CACHE_RULES = (
+    "the version a listing, a search or a `--commented-since` result carries pins the reads "
+    "that follow it in that command",
+    "An **unpinned** read by id, a plain `task show <ID>`, reads the source as it always did",
+    "every Linear read today, whose tasks carry no token",
+)
+
+
+@pytest.mark.reads_checkouts
+def test_the_cache_rules_agents_md_restates_are_the_adopted_stores_and_this_host_pins_nothing() -> (
+    None
+):
+    """The rules hold at the adopted tag, and no read in `orchestrator/` pins one.
+
+    So `orchestrator/plan_store.py`'s single-item reads stay unpinned, as the section says,
+    until a change that pins one moves this test with it.
+    """
+    checkout = registered_checkouts()["github.com/nickderobertis/onetaskgraph"]
+    readme = subprocess.run(
+        ["git", "-C", str(checkout), "show", f"v{ADOPTED}:README.md"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert readme.returncode == 0, (
+        f"the onetaskgraph checkout is behind its origin: cannot read v{ADOPTED}: {readme.stderr}"
+    )
+    said = " ".join(readme.stdout.split())
+    assert [rule for rule in STORE_CACHE_RULES if rule not in said] == []
+    # Every SDK read that takes a pin, read off the installed client's own signatures.
+    pinned_reads = {
+        name
+        for name, member in inspect.getmembers(plan_store.client(), callable)
+        if not name.startswith("_") and "pin" in inspect.signature(member).parameters
+    }
+    assert "task_show" in pinned_reads, pinned_reads
+    pinned = []
+    for module in sorted((REPO_ROOT / "orchestrator").glob("*.py")):
+        for node in ast.walk(ast.parse(module.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Constant) and node.value == "--pin":
+                pinned.append(f"{module.name}:{node.lineno}")
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in pinned_reads
+                and any(keyword.arg == "pin" for keyword in node.keywords)
+            ):
+                pinned.append(f"{module.name}:{node.lineno}")
+    assert pinned == [], f"a store read in orchestrator/ is pinned now: {pinned}"
 
 
 @pytest.mark.reads_checkouts

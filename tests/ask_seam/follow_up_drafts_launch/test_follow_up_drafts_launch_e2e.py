@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import NamedTuple, cast
 
 import follow_up_variables
+import plan_store_cache
 import pytest
 import short_state
 from fake_backend import (
@@ -367,6 +368,7 @@ def _store_item(launched: Launched) -> dict[str, object]:
         env={
             "PATH": os.environ["PATH"],
             "HOME": str(Path.home()),
+            **plan_store_cache.handed(),
             root: _given(launched.worker, root, WORKER),
             plugin: _given(launched.worker, plugin, WORKER),
         },

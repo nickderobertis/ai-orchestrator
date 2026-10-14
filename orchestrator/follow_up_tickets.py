@@ -3270,11 +3270,13 @@ def copied_to(report: CopyReport, board: str, bound: BoardItemId | None) -> Copi
     """
     entries = report.items
     outcome = entries[0].root if len(entries) == 1 else None
-    if outcome is None or outcome.destination is None:
+    # A `failed` outcome carries its error and no destination, so it is refused here too.
+    destination = getattr(outcome, "destination", None)
+    if outcome is None or destination is None:
         raise OSError(f"the copy onto {board} answered {entries!r}, naming no item")
     match str(outcome.action):
         case "created" | "updated" | "unchanged" as action:
-            copied = Copied(action, _native(outcome.destination.root, board), board)
+            copied = Copied(action, _native(destination.root, board), board)
         case action:
             raise OSError(
                 f"the copy onto {board} answered {action!r} for this ticket, which is no copy of it"

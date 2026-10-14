@@ -28,6 +28,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import NamedTuple
 
+import plan_store_cache
 import pytest
 from nx_inputs import SELECTED_TARGETS, UNCONDITIONAL_TARGETS
 from nx_workspace import (
@@ -2905,7 +2906,8 @@ def test_cache_check_refuses_a_cache_directory_it_cannot_place(cache_home: str) 
     env["XDG_CACHE_HOME"] = cache_home
     env.pop("HOME", None)
 
-    result = _run("bash", "scripts/check-nx-cache.sh", env=env)
+    with plan_store_cache.unguarded("the check's refusal of an unplaceable cache is the subject"):
+        result = _run("bash", "scripts/check-nx-cache.sh", env=env)
 
     assert result.returncode != 0
     assert "must name an absolute directory" in result.stderr

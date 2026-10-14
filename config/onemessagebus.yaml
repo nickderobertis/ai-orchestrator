@@ -42,7 +42,7 @@ profile: planner-channel
 # `@` pin to the protocol the installed onejudge speaks, against a bundle derived from
 # that release, and the resolved layout to the four queues the engine writes.
 schemas:
-  - "https://raw.githubusercontent.com/nickderobertis/onepipeline/v0.69.0/schemas/planner-channel.json@1"
+  - "https://raw.githubusercontent.com/nickderobertis/onepipeline/v0.70.1/schemas/planner-channel.json@1"
   - "https://raw.githubusercontent.com/nickderobertis/onejudge/onejudge-v0.19.0/schemas/judge-seat-frames.json@8"
 authors:
   # The channel's authors, as the bus's Contract A has a configuration declare them: the
@@ -55,7 +55,8 @@ authors:
   # work. `refusals` gives every other op the reason a refusal reads back with, in the
   # channel's own words (`'<op>' is not an op the monitor may issue: <reason>. Surface it to
   # the planner instead`), verbatim from the profile the bus built in before it stopped
-  # naming the monitor, so a refusal the monitor meets reads exactly as it did.
+  # naming the monitor, so a refusal the monitor meets reads exactly as it did; `rework` and
+  # `retitle` postdate that profile, so their reasons are this host's own, in the same form.
   monitor:
     capabilities: [retry, requeue, cancel, finding, add]
     refusals:
@@ -66,6 +67,8 @@ authors:
       amend: "what a node is judged against is a decomposition decision the planner owns"
       note: "a note may bind a criterion the node's judge decides against, which is the planner's decision rather than an observation"
       settle: "settling a node from evidence declares an outcome this run never observed, which is the planner's decision rather than an observation"
+      rework: "reworking a review draft answers its reviewers with new instructions, which is the planner's decision rather than an observation"
+      retitle: "a change request's title is the subject that lands on the base, which is the planner's decision rather than an observation"
 validators:
   # Task prose in an envelope is criteria. Every reply carrying commands is held to the
   # criteria bar — the deterministic tier, then the judged one — before anything is

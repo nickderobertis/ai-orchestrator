@@ -342,9 +342,12 @@ class CopyOptions(TypedDict, total=False):
 
 
 #: The SDK project-copy parameters this recipe deliberately does not expose: the public-boundary
-#: check's term scope, which no copy this host makes has a reason to narrow. Named rather than
-#: left out of the reconciliation, so a parameter the SDK adds later still fails it by name.
-UNEXPOSED: frozenset[str] = frozenset({"term_scope"})
+#: check's term scope, which no copy this host makes has a reason to narrow; `comments`, because
+#: a plan's tasks are authored in the `authoring` source, which holds no comments to carry; and
+#: `no_link`, because the link a copy records is what lets a re-copy update the same issue and
+#: board item rather than file a second. Named rather than left out of the reconciliation, so a
+#: parameter the SDK adds later still fails it by name.
+UNEXPOSED: frozenset[str] = frozenset({"comments", "no_link", "term_scope"})
 
 
 def _copy_options(arguments: Sequence[str]) -> CopyOptions:

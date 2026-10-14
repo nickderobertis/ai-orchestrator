@@ -2714,6 +2714,21 @@ def test_copy_refuses_a_ticket_it_cannot_read_and_a_report_naming_no_item(
     assert _copied(unsound, capsys)[0] == tickets.UNRUNNABLE
     with pytest.raises(OSError, match="naming no item"):
         tickets.copied_to(CopyReport(items=[]), BOARD, None)
+    failed = {
+        "class": "refused",
+        "kind": "refused",
+        "message": "the board refused the write",
+        "retry_after_seconds": None,
+        "source": BOARD,
+    }
+    with pytest.raises(OSError, match="naming no item"):
+        tickets.copied_to(
+            CopyReport.model_validate(
+                {"items": [{"source": "drafts:a", "action": "failed", "error": failed}]}
+            ),
+            BOARD,
+            None,
+        )
     with pytest.raises(OSError, match="which is not an item of"):
         tickets.copied_to(
             CopyReport.model_validate(

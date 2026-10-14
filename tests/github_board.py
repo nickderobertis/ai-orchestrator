@@ -13,14 +13,14 @@ import re
 import subprocess
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import ClassVar, NamedTuple, NewType
+from typing import ClassVar, Literal, NamedTuple, NewType
 
 import follow_up_variables
 from follow_up_ticket_shape import FIX, current_section, impact_prose
@@ -275,6 +275,44 @@ BOARD_PROJECT_TITLE = "Board-authored plan"
 BOARD_TASK_TITLE = "Read the board back"
 
 
+class _IssueState(NamedTuple):
+    """What an issue's own `updatedAt` moves for: what a person edits on the issue itself."""
+
+    title: str
+    body: str
+    state: str
+    state_reason: str | None
+    parent: _IssueNodeId | None
+    sub_issues: int
+    repository: _Repository
+
+
+class _RowState(NamedTuple):
+    """What a board row's `updatedAt` moves for: the values of its fields."""
+
+    status: str
+    priority: str | None
+    origin: str | None
+    host: str | None
+
+
+class _Edge(NamedTuple):
+    """One relationship an issue's timeline counts: an edge either way, or its board."""
+
+    kind: Literal["blocked-by", "blocking", "board"]
+    node: str
+
+
+#: When every issue of the stand-in was created, and last changed before any comment.
+ISSUE_CREATED_AT = "2026-08-26T00:00:00Z"
+
+
+def _one_second_after(moment: str) -> str:
+    """The RFC 3339 instant one second after ``moment``, as GitHub spells one."""
+    later = datetime.fromisoformat(moment) + timedelta(seconds=1)
+    return later.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 @dataclass
 class _Issue:
     """One issue on the board, under the two node ids GitHub gives it.
@@ -338,6 +376,50 @@ class _Issue:
     #: its membership is filed under are the *holding* board's, so an issue that read a
     #: module-level board would answer for whichever was reset last.
     board: _Board | None = None
+    #: When the issue and its board row last changed, and how many relationship events its
+    #: timeline holds: three of the five parts of the change token the adopted store builds a
+    #: task's `version` from (`docs/plugin-protocol.md` §4.13d), which it then serves its
+    #: cache against. Moved by `_observed` whenever what each part covers differs from what it
+    #: last answered — however that came about, a write or a journey planting a state on the
+    #: fixture — and only ever forward, so a cache entry a journey filled is never served for
+    #: an issue that has since changed.
+    changed_at: str = field(default=ISSUE_CREATED_AT, compare=False)
+    item_changed_at: str = field(default=ISSUE_CREATED_AT, compare=False)
+    relationship_events: int = field(default=0, compare=False)
+    _seen: _IssueState | None = field(default=None, compare=False, repr=False)
+    _seen_row: _RowState | None = field(default=None, compare=False, repr=False)
+    _seen_edges: frozenset[_Edge] | None = field(default=None, compare=False, repr=False)
+
+    def _observed(self) -> None:
+        """Move each token part whose subject changed since it was last answered.
+
+        A first answer records what it saw and moves nothing: that is the issue as created.
+        """
+        state = _IssueState(
+            self.title,
+            self.body,
+            self.state,
+            self.state_reason,
+            self.parent_id,
+            self.sub_issues,
+            self.repository,
+        )
+        row = _RowState(self.status, self.priority, self.origin, self.host)
+        edges = frozenset(
+            {_Edge("blocked-by", str(held)) for held in self.blocked_by}
+            | {
+                _Edge("blocking", str(other.content_id))
+                for other in (self.board.issues if self.board is not None else ())
+                if self.content_id in other.blocked_by
+            }
+            | ({_Edge("board", str(self.board.node_id))} if self.board is not None else set())
+        )
+        if self._seen is not None and state != self._seen:
+            self.changed_at = _one_second_after(self.updated_at())
+        if self._seen_row is not None and row != self._seen_row:
+            self.item_changed_at = _one_second_after(self.item_changed_at)
+        self.relationship_events += len(edges ^ (self._seen_edges or frozenset()))
+        self._seen, self._seen_row, self._seen_edges = state, row, edges
 
     @property
     def held_by(self) -> _Board:
@@ -407,6 +489,7 @@ class _Issue:
 
     def content(self) -> dict[str, object]:
         """The issue itself, as every document that reaches it selects it."""
+        self._observed()
         return {
             "__typename": "Issue",
             "id": self.content_id,
@@ -426,6 +509,10 @@ class _Issue:
             "repository": {"nameWithOwner": str(self.repository)},
             "parent": None if self.parent_id is None else {"id": self.parent_id},
             "subIssuesSummary": {"total": self.sub_issues},
+            # The two counts the store's `BoardIssue` fragment selects under these aliases for
+            # the change token.
+            "commentCount": {"totalCount": len(self.comments)},
+            "relationshipEvents": {"totalCount": self.relationship_events},
             "labels": {"nodes": [], "pageInfo": {"hasNextPage": False}},
         }
 
@@ -435,14 +522,22 @@ class _Issue:
         The board-scoped search answering a `commented_since` query narrows on it, so an issue
         that kept the moment it was created would never be found commented on.
         """
-        return max([ISSUE_CREATED_AT, *(str(comment["updatedAt"]) for comment in self.comments)])
+        return max(
+            [
+                ISSUE_CREATED_AT,
+                self.changed_at,
+                *(str(comment["updatedAt"]) for comment in self.comments),
+            ]
+        )
 
     def item(self) -> dict[str, object]:
         """This issue as a row of the board's own `items` connection."""
+        content = self.content()
         return {
             "id": self.item_id,
+            "updatedAt": self.item_changed_at,
             "fieldValues": self.field_values(),
-            "content": self.content(),
+            "content": content,
         }
 
     def board_issue(self) -> dict[str, object]:
@@ -459,6 +554,7 @@ class _Issue:
                 "nodes": [
                     {
                         "id": self.item_id,
+                        "updatedAt": self.item_changed_at,
                         "project": {"id": self.held_by.node_id, "number": self.held_by.number},
                         "fieldValues": self.field_values(),
                     }
@@ -1083,6 +1179,53 @@ class _Board:
                 return answered
         return None
 
+    def copy_details_response(self, variables: dict[str, object]) -> dict[str, object]:
+        """A copy's batch of the tasks it carries: each with its comments and its `blockedBy`."""
+        slots = sorted(int(name[2:]) for name in variables if re.fullmatch(r"id\d+", name))
+        answer: dict[str, object] = {}
+        for n in slots:
+            detail = self._detail(variables[f"id{n}"], comments=True)
+            if detail is not None:
+                blockers = self._issue(detail["id"]).blocked_by
+                detail["blockedBy"] = {
+                    "nodes": [self._issue(held).content() for held in blockers],
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                }
+            answer[f"i{n}"] = detail
+        return {"data": answer}
+
+    def whole_answer(
+        self, root: str, write: Callable[[dict[str, object]], dict[str, object]]
+    ) -> Callable[[dict[str, object]], dict[str, object]]:
+        """``write``, answered as its whole twin answers: with the issue it left behind.
+
+        Applied first and rendered after, so the issue answered carries the change token its
+        write moved — the version the store advances its cache entry to.
+        """
+
+        def answered(variables: dict[str, object]) -> dict[str, object]:
+            data = write(variables)["data"]
+            assert isinstance(data, dict)
+            payload = data[root]
+            assert isinstance(payload, dict)
+            match root:
+                case "addComment":
+                    subject = payload["subject"]
+                    assert isinstance(subject, dict)
+                    payload["subject"] = self._detail(subject["id"], comments=True)
+                case "updateIssue":
+                    issue = payload["issue"]
+                    assert isinstance(issue, dict)
+                    payload["issue"] = self._detail(issue["id"], comments=True)
+                case _:
+                    item = payload["projectV2Item"]
+                    assert isinstance(item, dict)
+                    content = self._row(item["id"]).content_id
+                    item["content"] = self._detail(content, comments=True)
+            return {"data": {root: payload}}
+
+        return answered
+
     def detail_response(self, node_id: object) -> dict[str, object]:
         """One issue and its first page of comments, which `task show` reads in one request."""
         return {"data": {"node": self._detail(node_id, comments=True)}}
@@ -1241,6 +1384,12 @@ class _GraphQLRequest:
 
     @property
     def operation(self) -> _Operation:
+        # A whole twin carries the comment page its answer selects, whose marker is tried
+        # before any mutation's, so it is told by its own mutation's marker first.
+        whole = self.is_mutation and WHOLE_ISSUE_SELECTION in self.query
+        for marker, operation in _OPERATIONS.items():
+            if whole and operation in _WHOLE_TWINS and marker in self.query:
+                return _WHOLE_TWINS[operation]
         for marker, operation in _OPERATIONS.items():
             if marker in self.query:
                 return operation
@@ -1298,6 +1447,11 @@ class _Operation(StrEnum):
     ADD_BLOCKED_BY = "addBlockedBy"
     UPDATE_ISSUE = "updateIssue"
     DELETE_ISSUE = "deleteIssue"
+    ISSUE_COPY_DETAILS = "issueCopyDetails"
+    ADD_COMMENT_WHOLE = "addCommentWhole"
+    UPDATE_ISSUE_WHOLE = "updateIssueWhole"
+    UPDATE_FIELD_WHOLE = "updateFieldWhole"
+    CLEAR_FIELD_WHOLE = "clearFieldWhole"
 
 
 #: Each operation's marker in the document the source sends, in the order they are
@@ -1320,6 +1474,12 @@ _OPERATIONS: dict[str, _Operation] = {
     # Before the dependency read's own marker, which this read of one item also carries: it
     # answers the item's `blockedBy` beside the boards it sits on.
     "boards:projectItems(": _Operation.ISSUE,
+    # Before the batched detail read's own marker, which this batch's aliases also carry: a
+    # copy's read of the tasks it carries, each with its comments unconditionally and its
+    # `blockedBy`.
+    "i0:node(id:$id0){__typename ...BoardIssue ... on Issue{comments(first:$first){nodes{": (
+        _Operation.ISSUE_COPY_DETAILS
+    ),
     # Both before the comment listing's own marker, which each also carries: the issue read
     # with its first page of comments, alone and in a fixed batch of aliased reads.
     "i0:node(id:$id0)": _Operation.ISSUE_DETAILS,
@@ -1341,6 +1501,19 @@ _OPERATIONS: dict[str, _Operation] = {
 }
 
 
+#: What the adopted store selects under a mutation that answers with the whole issue it left
+#: behind — its `whole_issue!` — and the twin each plain mutation is sent as while a write the
+#: store's cache expects runs (its `graphql::whole_twin`). A twin applies exactly what its
+#: plain document does; only its answer is wider.
+WHOLE_ISSUE_SELECTION = "__typename ...BoardIssue ... on Issue{comments(first:$first){nodes{"
+_WHOLE_TWINS: dict[_Operation, _Operation] = {
+    _Operation.ADD_COMMENT: _Operation.ADD_COMMENT_WHOLE,
+    _Operation.UPDATE_ISSUE: _Operation.UPDATE_ISSUE_WHOLE,
+    _Operation.UPDATE_FIELD: _Operation.UPDATE_FIELD_WHOLE,
+    _Operation.CLEAR_FIELD: _Operation.CLEAR_FIELD_WHOLE,
+}
+
+
 #: The field qualifier the source narrows a board search with, the quoted phrases after
 #: it, and the two characters GitHub's quoting grammar gives a meaning inside a quoted
 #: phrase. All are the source's own spelling: it escapes a backslash and a double quote
@@ -1356,10 +1529,6 @@ _PHRASE = re.compile(r'"(?P<phrase>(?:[^"\\]|\\.)*)"')
 
 #: The qualifier a `commented_since` query narrows the board's issue search with.
 _UPDATED_QUALIFIER = re.compile(r"updated:>=(?P<since>\S+)")
-
-
-#: When every issue of the stand-in was created, and last changed before any comment.
-ISSUE_CREATED_AT = "2026-08-26T00:00:00Z"
 
 
 #: The board field filter an origin lookup narrows the board's items with.
@@ -1544,6 +1713,24 @@ class _GitHubFixture(BaseHTTPRequestHandler):
                 return self.board.add_blocked_by(request.variables)
             case _Operation.DELETE_ISSUE:
                 return self.board.delete_issue(request.variables)
+            case _Operation.ISSUE_COPY_DETAILS:
+                return self.board.copy_details_response(request.variables)
+            case _Operation.ADD_COMMENT_WHOLE:
+                return self.board.whole_answer("addComment", self.board.add_comment)(
+                    request.variables
+                )
+            case _Operation.UPDATE_ISSUE_WHOLE:
+                return self.board.whole_answer("updateIssue", self.board.update_issue)(
+                    request.variables
+                )
+            case _Operation.UPDATE_FIELD_WHOLE:
+                return self.board.whole_answer(
+                    "updateProjectV2ItemFieldValue", self.board.set_field
+                )(request.variables)
+            case _Operation.CLEAR_FIELD_WHOLE:
+                return self.board.whole_answer(
+                    "clearProjectV2ItemFieldValue", self.board.clear_field
+                )(request.variables)
 
     @staticmethod
     def _repository(named: _Repository) -> dict[str, object]:
@@ -1984,6 +2171,11 @@ REQUEST_PRICES: dict[_Operation, DocumentPrice] = {
     _Operation.DELETE_ISSUE: DocumentPrice("DELETE_ISSUE", 1),
     _Operation.COMMENTS: DocumentPrice("ISSUE_COMMENTS", 1),
     _Operation.ADD_COMMENT: DocumentPrice("ADD_COMMENT", 1),
+    _Operation.ISSUE_COPY_DETAILS: DocumentPrice("ISSUE_COPY_DETAILS", 1),
+    _Operation.ADD_COMMENT_WHOLE: DocumentPrice("ADD_COMMENT_WHOLE", 1),
+    _Operation.UPDATE_ISSUE_WHOLE: DocumentPrice("UPDATE_ISSUE_WHOLE", 1),
+    _Operation.UPDATE_FIELD_WHOLE: DocumentPrice("UPDATE_FIELD_WHOLE", 1),
+    _Operation.CLEAR_FIELD_WHOLE: DocumentPrice("CLEAR_FIELD_WHOLE", 1),
 }
 
 

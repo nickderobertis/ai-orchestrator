@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, TypeIs, get_args
 
+import plan_store_cache
 from waits import timeout as e2e_timeout
 from waits import until
 
@@ -667,7 +668,8 @@ def test_a_list_or_an_environment_the_recipe_cannot_work_from_provisions_nothing
     assert absent.returncode == 2
     assert "does not exist" in absent.stderr
 
-    relative_cache = _run(tmp_path, listing, XDG_CACHE_HOME="relative/cache")
+    with plan_store_cache.unguarded("the recipe's refusal of a relative cache home is the subject"):
+        relative_cache = _run(tmp_path, listing, XDG_CACHE_HOME="relative/cache")
     assert relative_cache.returncode == 2
     assert "XDG_CACHE_HOME must be an absolute path" in relative_cache.stderr
 

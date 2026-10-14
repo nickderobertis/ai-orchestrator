@@ -12,6 +12,7 @@
     "support-onevcs-state-snapshot",
     "support-plan-fixture-source",
     "support-plan-root-variable",
+    "support-plan-store-cache",
     "support-pytest-temp-root",
     "support-registered-checkouts",
     "support-short-state",

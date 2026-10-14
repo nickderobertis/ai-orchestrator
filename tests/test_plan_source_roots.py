@@ -265,6 +265,32 @@ def test_each_board_source_resolves_queued_to_an_option_of_its_own(source: str) 
 #: The `Priority` option each priority a follow-up ticket carries is written to on the
 #: `followups` board. Stated here for the reason :data:`MAPPED_OPTIONS` is: the other party
 #: is the live board, so what is held is the mapping the installed CLI resolves.
+#: The sources the store keeps its per-host cache of: the four boards, and nothing local.
+CACHED_SOURCES = {"plans", "followups", "hellopatient", "hellopatient-followups"}
+
+
+@pytest.mark.reads_checkouts
+def test_the_cache_is_on_for_the_four_boards_alone_at_its_default_directory() -> None:
+    """Exactly the board sources resolve `cache.enabled`, and none names a `cache.dir`.
+
+    Read through the installed CLI's own resolution, because a key the store does not
+    resolve turns nothing on. No `cache.dir`, because the default is the one directory every
+    process on this host configuring the same remote shares.
+    """
+    resolved = _resolved_configuration()
+    enabled = {
+        key.split(".")[1]
+        for key, value in resolved.items()
+        if key.endswith(".cache.enabled") and value is True
+    }
+    assert enabled == CACHED_SOURCES, (
+        f"onetaskgraph.yaml turns the cache on for {sorted(enabled)}, and this host caches "
+        f"{sorted(CACHED_SOURCES)}"
+    )
+    named = sorted(key for key, value in resolved.items() if key.endswith(".cache.dir") and value)
+    assert named == [], f"a source moves its cache off the shared default directory: {named}"
+
+
 FOLLOWUPS_PRIORITIES = {"urgent": "Urgent", "high": "High", "medium": "Medium", "low": "Low"}
 
 

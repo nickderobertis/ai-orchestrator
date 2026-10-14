@@ -37,6 +37,7 @@ from typing import NamedTuple
 
 import follow_up_variables
 import plan_root_variable
+import plan_store_cache
 import pytest
 from published_tools import ONETASKGRAPH_BIN
 
@@ -79,6 +80,7 @@ def _drive(
         env={
             "PATH": path or f"{REPO_ROOT / '.venv' / 'bin'}:/usr/bin:/bin",
             "HOME": str(Path.home()),
+            **plan_store_cache.handed(),
             **environment,
         },
         text=True,
@@ -332,6 +334,7 @@ def test_the_helper_exports_the_authoring_plugin_beside_the_root(tmp_path: Path)
             env={
                 "PATH": f"{REPO_ROOT / '.venv' / 'bin'}:/usr/bin:/bin",
                 "HOME": str(Path.home()),
+                **plan_store_cache.handed(),
                 **root,
                 **inherited,
             },
@@ -438,6 +441,7 @@ def _report_from_another_repository(tmp_path: Path, **environment: str) -> Repor
         env={
             "PATH": f"{REPO_ROOT / '.venv' / 'bin'}:/usr/bin:/bin",
             "HOME": str(Path.home()),
+            **plan_store_cache.handed(),
             plan_root_variable.name(): str(tmp_path / "plans"),
             follow_up_variables.root_name(): str(tmp_path / "drafts"),
             **environment,
@@ -476,6 +480,7 @@ def test_a_spike_in_another_repository_writes_its_report_into_the_plans_own_proj
         env={
             "PATH": f"{REPO_ROOT / '.venv' / 'bin'}:/usr/bin:/bin",
             "HOME": str(Path.home()),
+            **plan_store_cache.handed(),
             plan_root_variable.name(): str(root),
         },
         text=True,

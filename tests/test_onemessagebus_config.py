@@ -65,7 +65,8 @@ BINDING = "monitor"
 #: The monitor's refused ops, each with the reason the bus's built-in profile gave it
 #: before this host declared the monitor itself (onemessagebus 0.4.0's
 #: `crates/onemessagebus-agent/src/channel.rs`), verbatim, so a refusal the monitor meets
-#: reads exactly as it did.
+#: reads exactly as it did. `rework` and `retitle` postdate that profile, so their reasons
+#: are this host's own, in the same form.
 REFUSED = {
     "complete": "whether the run is finished is the planner's verdict, not an observation",
     "attest": "a human action is attested by the person who took it, never by a watcher",
@@ -76,6 +77,10 @@ REFUSED = {
     "planner's decision rather than an observation",
     "settle": "settling a node from evidence declares an outcome this run never observed, "
     "which is the planner's decision rather than an observation",
+    "rework": "reworking a review draft answers its reviewers with new instructions, which is "
+    "the planner's decision rather than an observation",
+    "retitle": "a change request's title is the subject that lands on the base, which is the "
+    "planner's decision rather than an observation",
 }
 
 

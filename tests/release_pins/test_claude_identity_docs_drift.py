@@ -14,6 +14,7 @@ import re
 import subprocess
 import tomllib
 
+import plan_store_cache
 import pytest
 
 from orchestrator.root import REPO_ROOT
@@ -48,7 +49,7 @@ def _helper_defaults() -> dict[str, str]:
         ["bash", "-c", script, "claude-identity-docs", str(HELPER)],
         text=True,
         capture_output=True,
-        env={"PATH": "/usr/bin:/bin", "HOME": "/nonexistent-home"},
+        env={"PATH": "/usr/bin:/bin", "HOME": "/nonexistent-home", **plan_store_cache.handed()},
         check=True,
     )
     return dict(line.split(" ", 1) for line in listed.stdout.splitlines())
