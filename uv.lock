@@ -43,10 +43,10 @@ requires-dist = [
     { name = "oneharness-cli", specifier = "==0.22.0" },
     { name = "onejudge", specifier = "==0.19.0" },
     { name = "onemessagebus-cli", specifier = "==0.9.0" },
-    { name = "onepipeline-api-cli", specifier = "==0.33.0" },
-    { name = "onepipeline-cli", specifier = "==0.70.1" },
+    { name = "onepipeline-api-cli", specifier = "==0.35.0" },
+    { name = "onepipeline-cli", specifier = "==0.71.1" },
     { name = "onetaskgraph-sdk", specifier = "==0.6.0" },
-    { name = "onevcs-cli", specifier = "==0.49.0" },
+    { name = "onevcs-cli", specifier = "==0.50.1" },
     { name = "pyyaml", specifier = "==6.0.3" },
 ]
 
@@ -417,26 +417,25 @@ wheels = [
 
 [[package]]
 name = "onepipeline-api-cli"
-version = "0.33.0"
+version = "0.35.0"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/29/77/2c6dd3cd0f92c86d55a40b449af7383c7269a7f8c479000a55f969d4fedf/onepipeline_api_cli-0.33.0-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:a7956b550b8b99203c9ad1405c193b74e5c3513a610e3a41c8320e6159943180", size = 18851798, upload-time = "2026-10-14T02:32:04.523Z" },
-    { url = "https://files.pythonhosted.org/packages/37/10/0927ddd9be5f6fc42aca5258fdf05038c43fd784ec18569160486149365f/onepipeline_api_cli-0.33.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:ea6ac6e14dacf955cb4c909fd9f07b54586ec65d56d7c93a311d30f951e263a4", size = 17575591, upload-time = "2026-10-14T02:32:06.839Z" },
-    { url = "https://files.pythonhosted.org/packages/b8/71/4501a7a52512b68da8d6c5e326d83e19e6809fc05b746062b8f33b3c4063/onepipeline_api_cli-0.33.0-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:9d0c3034bf4cd49960ab5ec297ba4810fd62f2ba4ac0a80c1dba0e40aa9b98ed", size = 20371273, upload-time = "2026-10-14T02:32:09.177Z" },
-    { url = "https://files.pythonhosted.org/packages/2f/34/30e1d1adc0d6585adfb9e9368af4927094e6efda157c1acfcc49a3033b1a/onepipeline_api_cli-0.33.0-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:2b3dd9ffd55b19d1cd8bdf7632761ae9722b96a713753415b063737d5df17fbf", size = 21462935, upload-time = "2026-10-14T02:32:11.237Z" },
-    { url = "https://files.pythonhosted.org/packages/a5/01/b1efd7004adcbe97171722918ba462c957298f848f8a629fba6b93e4025f/onepipeline_api_cli-0.33.0-py3-none-win_amd64.whl", hash = "sha256:a8d6defd611d0be045e63583ecec721e193c873871b274af6a37d8662ca4921e", size = 20828540, upload-time = "2026-10-14T02:32:13.581Z" },
+    { url = "https://files.pythonhosted.org/packages/d8/29/ee9a2af5495b16fbcbdc8cdca22b10bdf95536c8a3103fa22808f8e16963/onepipeline_api_cli-0.35.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:030f811854e389896ede1c219a483f41a08945349e917a209b8dbec1eec1b4eb", size = 17675842, upload-time = "2026-10-14T06:50:32.694Z" },
+    { url = "https://files.pythonhosted.org/packages/fa/3b/6e51948a2d89e911ed3e25dffd30b0a5495b141bd8f4c1f5dbdc9bf05752/onepipeline_api_cli-0.35.0-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:5556238287fdfc315c2fb5a13666b90948b41cc3545a5fca742bc788834a4d0c", size = 20466970, upload-time = "2026-10-14T06:50:35.71Z" },
+    { url = "https://files.pythonhosted.org/packages/5c/c5/817f7ee7a5540c6fcc6b385184ad1ce9b92a33e9083a2e612fbf7c8932d4/onepipeline_api_cli-0.35.0-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:e1a7c6e21b070b12dff3d426d6d7223b53161a58a5e8a224e71bdc9dcd94457b", size = 21575194, upload-time = "2026-10-14T06:50:38.717Z" },
+    { url = "https://files.pythonhosted.org/packages/46/f0/bc4fa97358e1ec7ffd4e4fa60437a7e9d6b3de69133b12f6eb9148d88b43/onepipeline_api_cli-0.35.0-py3-none-win_amd64.whl", hash = "sha256:571e5aca32a6c5a22077b2ef6f20d4ffe7101b3964b9a94bf94eec6a2210874b", size = 20964674, upload-time = "2026-10-14T06:50:42.01Z" },
 ]
 
 [[package]]
 name = "onepipeline-cli"
-version = "0.70.1"
+version = "0.71.1"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0f/76/aee4eb5f909ebbbafca2b125c7c0fe5bd9649587ae706deeaf3d8b8fcb10/onepipeline_cli-0.70.1-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:083c4f2f06f51b6fa1807dd1f73b45d357d42750c45220ae40626db6d8b77248", size = 17596194, upload-time = "2026-10-13T17:26:47.555Z" },
-    { url = "https://files.pythonhosted.org/packages/d0/2e/bc3779f6a0b8e3b79cccd41aa7a014492bbeb7f345614e3c9a1c12a762e6/onepipeline_cli-0.70.1-py3-none-macosx_11_0_arm64.whl", hash = "sha256:035cf88185ea48dea7ad3a664d745a3aa3da218788223bc851efb05e5d62d03c", size = 16381398, upload-time = "2026-10-13T17:26:49.978Z" },
-    { url = "https://files.pythonhosted.org/packages/74/bd/128d8fea2b81a9da9118c72f5586647179626bbecb3bc2ae2d23620258f6/onepipeline_cli-0.70.1-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:54e13b9c1c71fa24d03dbb4b28786b4497c011f1000d15e48f121333f2af1261", size = 19153944, upload-time = "2026-10-13T17:26:52.447Z" },
-    { url = "https://files.pythonhosted.org/packages/f7/08/b500d5142493ae769fb454f6d059e34cd5ad535347c077930d2a6e26e705/onepipeline_cli-0.70.1-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:5f351711d5c4cf0db14af6d082a402bc5dc346ca5020f5360c2e2a5f5237aa02", size = 20168766, upload-time = "2026-10-13T17:26:55.043Z" },
-    { url = "https://files.pythonhosted.org/packages/d2/02/176261def05a6f77d950b75b5c10eedaf52049c219d586df4ea4fbf3b3a6/onepipeline_cli-0.70.1-py3-none-win_amd64.whl", hash = "sha256:0da91fb8446734cc2046b5efd030ec6b5f92243d75cef6a4ee2ac244f1af229b", size = 19435112, upload-time = "2026-10-13T17:26:58.005Z" },
+    { url = "https://files.pythonhosted.org/packages/b5/a9/d06198f03e71e57653acc268294d14c30878fbb9cd3a702a0e2603dd344c/onepipeline_cli-0.71.1-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:e7b75f7818d3698e6cb6f7c9329c696a5ebbcdcaafeaed394fb24113499c1216", size = 17711338, upload-time = "2026-10-14T05:24:22.468Z" },
+    { url = "https://files.pythonhosted.org/packages/ef/70/9d179a950116ed94e44a3986b36965c0ec88f7bb3798ce3d30ab987535ed/onepipeline_cli-0.71.1-py3-none-macosx_11_0_arm64.whl", hash = "sha256:f64c5d756dbfc15b02b76454c5a5d1f3940c42beb33b0d3f6be31e38a7be455a", size = 16478331, upload-time = "2026-10-14T05:24:25.869Z" },
+    { url = "https://files.pythonhosted.org/packages/25/73/43098233f9f918b9e5f328b3364d8d8a41a2c8dbdd65cdaeacf72999aaf6/onepipeline_cli-0.71.1-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:7a76c024fa580ce8d2e1f8f2a544e3d288e399bc8f9bea29d2aba8c55a725085", size = 19251707, upload-time = "2026-10-14T05:24:29.227Z" },
+    { url = "https://files.pythonhosted.org/packages/f7/48/c39b6b718c0e84a533337c344164531d422e2bf18152f8b4247cab62ffe3/onepipeline_cli-0.71.1-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:9408aa8905a6ccb1d73f88d034f2f566a4ab811d20eaa038928c0f609c9a0e0f", size = 20275016, upload-time = "2026-10-14T05:24:32.212Z" },
+    { url = "https://files.pythonhosted.org/packages/3e/03/d74c10da405e1a1e4aafa964e0648fd57714a84beb27631707b62432d90c/onepipeline_cli-0.71.1-py3-none-win_amd64.whl", hash = "sha256:87caf9d546706da906ffd943ef038225000d90721c8709bb2b95ed007a957fff", size = 19570829, upload-time = "2026-10-14T05:24:35.386Z" },
 ]
 
 [[package]]
@@ -466,14 +465,14 @@ wheels = [
 
 [[package]]
 name = "onevcs-cli"
-version = "0.49.0"
+version = "0.50.1"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/77/21/22c6d64fb41e22d5c3d5bd2397c687d21d019f3c682d3512c1022b3a7ecd/onevcs_cli-0.49.0-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:7d1977aa763a0df5f87a1ae6d98fc59bb3a3b4ec9f85cdb206e641d9cd9849fa", size = 4190666, upload-time = "2026-10-13T01:22:02.515Z" },
-    { url = "https://files.pythonhosted.org/packages/66/3d/a34022fd89c501c62f6c5ac0821734d6913e5084f84c26be36d9491f5691/onevcs_cli-0.49.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:80d655e4a9d04ea2ac39e9a2ad7429f25551988d09fc29f7ba10a39cb5401ab1", size = 3888425, upload-time = "2026-10-13T01:22:04.453Z" },
-    { url = "https://files.pythonhosted.org/packages/84/a8/5f965b8e9b3775fc8bcd06a5676d6536ce9a154a92d47332a9007affcc2d/onevcs_cli-0.49.0-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:b07947b368cfadbcdd4319f960ab29a8ba12d4f3051a25526a7bf90d55082758", size = 4000519, upload-time = "2026-10-13T01:22:05.954Z" },
-    { url = "https://files.pythonhosted.org/packages/e3/8b/921820531dd78a4b3ace27ecc580110e10b7a07948e829a3b1b0e9b3fa91/onevcs_cli-0.49.0-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:a6750ad2dd5d4a10b6d18b77ba92592f67428f92df437f060a2c8d67f3fb00ab", size = 4289650, upload-time = "2026-10-13T01:22:07.339Z" },
-    { url = "https://files.pythonhosted.org/packages/d2/f6/3d3eb13220037b8678211d6a057f505294dd2f8ddd0e5dc2fbd26a8a94d8/onevcs_cli-0.49.0-py3-none-win_amd64.whl", hash = "sha256:e1e3c5f6f1f8f63fdf6e6ec94e370063fbdfa3f86b6ab3d54988a58d199bcee2", size = 4482080, upload-time = "2026-10-13T01:22:09.203Z" },
+    { url = "https://files.pythonhosted.org/packages/47/e4/3e04eca7aace8c1af9fd3d2673bb6f1935555432a9c940646e4eb004be05/onevcs_cli-0.50.1-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:8c3a8a17ebf9738f65769bb78f7abe0e9b4dd2c677219042ccefbb6a5a46bfc7", size = 4226851, upload-time = "2026-10-14T01:06:09.352Z" },
+    { url = "https://files.pythonhosted.org/packages/b3/c5/64e67aa6b3957168dc49dad45d4eeded5f7a54063741916f3bfefd69139a/onevcs_cli-0.50.1-py3-none-macosx_11_0_arm64.whl", hash = "sha256:7f7472de69c717b01bbd75802b1241707dd0616edf5d92c70eca426cbb2d30bb", size = 3924402, upload-time = "2026-10-14T01:06:11.073Z" },
+    { url = "https://files.pythonhosted.org/packages/b5/78/3f8bfd1c97996c85fe045c564767d257523a4999aa5858e6d21eb032acda/onevcs_cli-0.50.1-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:6ef46405a36fa9a31879550608ba6b11011c94a0fd7beb060440cf6ea6d187f1", size = 4034471, upload-time = "2026-10-14T01:06:12.532Z" },
+    { url = "https://files.pythonhosted.org/packages/46/6f/39d06b56fb3300aa8a777dd732734e362feb2e2f45c5eecb3c34632c5e9b/onevcs_cli-0.50.1-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:facd5f39e73d98c90a55d58ef5e0d8e702a67ac399b68f3b9c2cb8d7575fdc55", size = 4323866, upload-time = "2026-10-14T01:06:13.795Z" },
+    { url = "https://files.pythonhosted.org/packages/c4/17/c295be3d6732ec9cbb765dee7e933137cd55ccf2bd2cf6a522678866b1f9/onevcs_cli-0.50.1-py3-none-win_amd64.whl", hash = "sha256:95932a7010a814ca9cf43c4fb807e4cc31aa39846f150c107685e3a161e4c7fa", size = 4524318, upload-time = "2026-10-14T01:06:15.223Z" },
 ]
 
 [[package]]
