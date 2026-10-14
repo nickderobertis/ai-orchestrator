@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 import re
 
-from orchestrator import unfinished, unpublished
+from orchestrator import unfinished
 from orchestrator.root import REPO_ROOT
 
 ORCHESTRATION = REPO_ROOT / "docs" / "orchestration.md"
@@ -23,7 +23,6 @@ STATUS_PARAGRAPH = re.compile(
 )
 BACKTICKED_CODE = re.compile(r"`(\d+)`")
 UNFINISHED_OPTION = re.compile(r"just unfinished((?: --[a-z-]+(?: [A-Z]+)?)*)")
-UNPUBLISHED_OPTION = re.compile(r"just unpublished((?: --[a-z-]+(?: <[^>]+>| \"[^\"]+\")?)*)")
 
 
 def _section() -> str:
@@ -46,16 +45,12 @@ def test_the_statuses_the_section_states_are_the_ones_declared() -> None:
     assert stated == declared - {unfinished.UNANSWERED}
 
 
-def test_every_flag_the_prose_names_is_one_the_recipes_accept() -> None:
+def test_every_flag_the_prose_names_is_one_the_recipe_accepts() -> None:
     accepted_unfinished = _options(unfinished._parser())
-    accepted_unpublished = _options(unpublished._parser())
     for name, prose in (("orchestration", _section()), ("AGENTS.md", MANAGER.read_text("utf-8"))):
         for flags in UNFINISHED_OPTION.findall(prose):
             named = set(re.findall(r"--[a-z-]+", flags))
             assert named <= accepted_unfinished, f"{name} names {sorted(named)}"
-        for flags in UNPUBLISHED_OPTION.findall(prose):
-            named = set(re.findall(r"--[a-z-]+", flags))
-            assert named <= accepted_unpublished, f"{name} names {sorted(named)}"
 
 
 def test_the_watch_rule_names_the_read_a_turn_ends_on_and_its_ways_out() -> None:
@@ -65,6 +60,6 @@ def test_the_watch_rule_names_the_read_a_turn_ends_on_and_its_ways_out() -> None
     assert "`just unfinished`" in first
     assert f"answers `{unfinished.NOTHING_OWED}`" in first
     assert "just unpublished --acknowledge" in first and "--reason" in first
-    # The way out a superseded row prints first, as the recipe `unpublished.RECIPES` renders
-    # onevcs's `reclaim` in, beside the acknowledgement for work deliberately kept.
-    assert f"`just {unpublished.RECIPES['reclaim']} <branch> --repo <checkout>`" in first
+    # And the two the engine's listing prints beside it: the landing and the reclaim.
+    assert "land the branch with the command its row prints" in first
+    assert "reclaim a superseded one with the reclaim line its row prints" in first

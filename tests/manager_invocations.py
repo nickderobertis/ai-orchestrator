@@ -102,8 +102,8 @@ _AFTER_LAUNCH = "After `just orchestrate`, use **only** `just channel-next`, `ju
 _WATCH = "`just watch` is invoked directly, with no loop around it"
 _UNFINISHED = "Before you end a turn, `just unfinished` answers what you still owe"
 _UNPUBLISHED = (
-    "For every identity from anywhere, or for the sessions your own runs opened, with "
-    "what each costs in disk, read `just unpublished` instead"
+    "For every identity from anywhere, or for the sessions your own runs opened, read "
+    "`just unpublished` instead"
 )
 _ENVELOPE = (
     "write the envelope to `scratch/envelopes/<run-id>.json` with your own file-write tool, "
@@ -273,13 +273,10 @@ INVOCATIONS: tuple[Invocation, ...] = (
     _allow("runs", "just runs", _VIEWS),
     _allow("monitor", "just monitor {run}", _AFTER_LAUNCH),
     _allow("unwatched", "just unwatched", _AFTER_LAUNCH, codex=CODEX_EXACT),
+    _allow("unpublished", "just unpublished", _UNPUBLISHED, codex=CODEX_EXACT),
     _allow("unpublished-host", "just unpublished --host", _UNPUBLISHED, codex=CODEX_EXACT),
     _allow("unfinished", "just unfinished", _UNFINISHED, codex=CODEX_EXACT),
     _allow("unfinished-json", "just unfinished --json", _UNFINISHED, codex=CODEX_EXACT),
-    _allow("unfinished-surface", "just unfinished --print-surface", _UNFINISHED, codex=CODEX_EXACT),
-    _allow(
-        "unpublished-surface", "just unpublished --print-surface", _UNPUBLISHED, codex=CODEX_EXACT
-    ),
     _allow("host", "just host", _VIEWS),
     _allow("results", "just results {run}", _VIEWS),
     _allow("transcript", "just transcript {run} {node}", _VIEWS),

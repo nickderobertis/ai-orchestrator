@@ -4,20 +4,20 @@
 # neither landed nor acknowledged with a reason. The thin half: this resolves the
 # interpreter, establishes the manager session both halves are asked about, and hands
 # the arguments to `orchestrator/unfinished.py`, which is where the contract lives — the
-# two halves, the headings, the `--json` object and the exit statuses.
-# `--print-surface` prints that status vocabulary, one line per status.
+# two halves, the headings, the `--json` object and the exit statuses. Both halves are the
+# engine's own verbs, `onepipeline unwatched` and `onepipeline unpublished`; the module
+# decides neither.
 #
-# Not `uv run`, for the reason `scripts/unpublished.sh` gives: `uv` takes an exclusive
-# lock on the project environment. This checkout's own interpreter first and the system
-# one after it, which the module is stdlib-only to make possible; `PYTHONPATH` is this
-# checkout's root and nothing else.
+# Not `uv run`: `uv` takes an exclusive lock on the project environment. This checkout's
+# own interpreter first and the system one after it, which the module is stdlib-only to
+# make possible; `PYTHONPATH` is this checkout's root and nothing else.
 #
 # llmlint: ignore-file[boundary_inputs_validated] Every argument is forwarded whole to the
 # module, whose argparse is the one thing that judges it: a refusal here would be a second
 # grammar to keep in step with the first, and the module answers `2` for what it refuses.
 set -euo pipefail
 
-# llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own directory stops being enterable between its launch and its first line; no journey can produce that without racing the filesystem the test itself runs on. `scripts/unpublished.sh` carries the same directive for the same arm.
+# llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own directory stops being enterable between its launch and its first line; no journey can produce that without racing the filesystem the test itself runs on. `scripts/recoverable.sh` carries the same directive for the same arm.
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || {
   printf 'unfinished: the checkout this recipe was run from could not be resolved; run it from a checkout, so the interpreter it names is that checkout'"'"'s\n' >&2
   exit 1

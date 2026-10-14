@@ -36,13 +36,15 @@ SETTINGS = REPO_ROOT / ".claude" / "settings.json"
 #: Claude Code wiring, named by path out of this checkout's locked install — through
 #: `$CLAUDE_PROJECT_DIR`, which is what makes one registration work from every worktree of
 #: this repository — with nothing of this repository's between the harness and the verb.
-#: Its one declared `--source` sits below the verb, which consults it: the preserved-branch
-#: view's own `--stop-verdict`, answering the question the verb does not ask itself.
+#: `--unpublished` has the verb ask, in its own process, whether the session owes a
+#: preserved branch, under this host's acknowledgement directory and drafter graph; no
+#: `--source` is declared.
 STOP_HOOK = (
     '"$CLAUDE_PROJECT_DIR/.venv/bin/onepipeline" stop-guard '
-    "--wake-budget 2100 --format claude-code "
-    """--source '"$CLAUDE_PROJECT_DIR/scripts/unpublished.sh" --stop-verdict' """
-    "--source-timeout 20"
+    "--wake-budget 2100 --format claude-code --unpublished "
+    '--unpublished-acknowledgements "${XDG_STATE_HOME:-$HOME/.local/state}/'
+    'ai-orchestrator/stop-unfinished/acknowledged" '
+    '--unpublished-pr-author-graph "$CLAUDE_PROJECT_DIR/graphs/pr-author.yaml"'
 )
 #: The `SessionStart` hook, as registered before the allowlist moved to its own source:
 #: the sync that now writes this file holds only the permission lists, so this is the
@@ -59,9 +61,9 @@ SESSION_START_HOOKS = [
         ],
     }
 ]
-#: Seconds the declared source has, which the hook's own bound must exceed, or the harness
-#: kills the whole guard before the verb can report a source that ran past its bound.
-SOURCE_TIMEOUT = 20
+#: The hook's own bound, in seconds. Fixed rather than floored: the guard answers well inside
+#: it, and raising a deadline is not how a slow verdict is answered here.
+HOOK_TIMEOUT = 30
 #: The recipes that act on runs or record an approval, each withheld so that every use is
 #: approved on its own: `stop` ends a run, `shutdown` at `--host` acts on runs this session
 #: does not own, and `approve-design` records the user's own approval.
@@ -375,7 +377,7 @@ def test_the_grant_changes_the_manager_ruled_are_in_force() -> None:
 #: Every option `just unfinished` accepts, all of them reads. The recipe carries no wildcard
 #: grant — the session-targeted read is approved per use — so this set is what any future
 #: grant would have to be reviewed against, and a new option fails here until it is.
-UNFINISHED_READ_ONLY_OPTIONS = {"-h", "--help", "--session", "--json", "--print-surface"}
+UNFINISHED_READ_ONLY_OPTIONS = {"-h", "--help", "--session", "--json"}
 
 
 def test_no_wildcard_grant_covers_just_unfinished() -> None:
@@ -420,7 +422,7 @@ def test_the_stop_hook_asks_which_runs_nothing_is_watching() -> None:
     documented wiring and nothing more, and with a bound of its own: a killed hook is a
     stop that was never guarded, so the harness's bound is kept as the page keeps it.
     `tests/unwatched/test_unwatched_and_stop_hook_e2e.py` runs this command, and
-    `tests/unfinished/test_unfinished_e2e.py` runs it over its declared source.
+    `tests/unfinished/test_unfinished_e2e.py` runs it over real labelled sessions.
     """
     hooks = _settings()["hooks"]
     assert "SessionStart" in hooks, "the session-setup hook is gone, so this is not that file"
@@ -442,6 +444,6 @@ def test_the_stop_hook_asks_which_runs_nothing_is_watching() -> None:
     assert all(isinstance(bound, int) and bound > 0 for bound in bounds), (
         f"the Stop hook is registered without a bound of its own: {bounds}"
     )
-    assert all(bound > SOURCE_TIMEOUT for bound in bounds), (
-        f"the Stop hook's bound {bounds} does not outlast its source's {SOURCE_TIMEOUT}s"
+    assert bounds == [HOOK_TIMEOUT], (
+        f"the Stop hook's bound is {bounds}, and it is registered at {HOOK_TIMEOUT}s"
     )

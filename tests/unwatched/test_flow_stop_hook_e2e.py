@@ -112,7 +112,6 @@ COPIED_SCRIPTS = (
     "review-plan.sh",
     "run-ended.sh",
     "template-env.sh",
-    "unpublished.sh",
 )
 COPIED_FILES = (
     *(f"scripts/{script}" for script in COPIED_SCRIPTS),

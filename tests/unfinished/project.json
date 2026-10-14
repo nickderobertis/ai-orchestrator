@@ -27,15 +27,17 @@
       "{workspaceRoot}/config/onepipeline.version",
       "{workspaceRoot}/.claude/settings.json",
       "{workspaceRoot}/scripts/unfinished.sh",
-      "{workspaceRoot}/scripts/unpublished.sh",
       "{workspaceRoot}/scripts/launcher-session.sh",
       "{workspaceRoot}/scripts/follow-up-env.sh",
       "{workspaceRoot}/scripts/plan-root-env.sh",
       "{workspaceRoot}/orchestrator/unfinished.py",
-      "{workspaceRoot}/orchestrator/unpublished.py",
       "{workspaceRoot}/orchestrator/root.py",
       "{workspaceRoot}/tests/unfinished/project.json",
-      "{workspaceRoot}/tests/unfinished/test_unfinished_e2e.py"
+      "{workspaceRoot}/tests/unfinished/test_unfinished_e2e.py",
+      "{workspaceRoot}/scripts/onepipeline.sh",
+      "{workspaceRoot}/scripts/template-env.sh",
+      "{workspaceRoot}/scripts/host-sweep.sh",
+      "{workspaceRoot}/graphs/pr-author.yaml"
     ]
   },
   "targets": {

@@ -1,44 +1,48 @@
 """`just unfinished`: what one manager session still owes before its turn can end.
 
-Two questions, one verdict. **Unwatched**: a run this session launched that nothing is
-watching — the installed engine's own `onepipeline unwatched --session <ID>`. **Unpublished**:
-a branch a run this session launched left preserved, neither landed nor acknowledged
-with a reason — `orchestrator/unpublished.py`'s own-sessions target, `--own --session
-<ID> --no-disk`, run in this process. Both are asked about the same manager session:
-the `--session` value, else `ONEPIPELINE_LAUNCHER_SESSION` as `scripts/launcher-session.sh`
-establishes it, which is the identity both halves are keyed on. Both reads are live
-every time; nothing is memoized.
+Two questions, one verdict, and both are the engine's to answer. **Unwatched**: a run this
+session launched that nothing is watching — the installed engine's own `onepipeline
+unwatched --session <ID>`. **Unpublished**: a branch a run this session launched left
+preserved, neither landed nor acknowledged with a reason — the engine's own `onepipeline
+unpublished --session <ID> --format json`, under the acknowledgement directory and drafter
+graph `just unpublished` and the `Stop` hook name (:func:`acknowledgements` and
+:data:`PR_AUTHOR_GRAPH`, which `tests/test_unfinished.py` holds to both). This module
+decides neither: it reads each verb's exit status and passes on what it
+wrote. Both are asked about the same manager session: the `--session` value, else
+`ONEPIPELINE_LAUNCHER_SESSION` as `scripts/launcher-session.sh` establishes it. Both reads
+are live every time; nothing is memoized.
 
 Standard output carries both halves, each under a heading naming the question it
 answers; `--json` emits them as one object, `{"unwatched": [<the verb's lines>],
-"unpublished": [<the view's rows>]}`. Everything either half could not resolve goes to
-standard error, where it changes no status.
+"unpublished": <the engine's document>}`, the document being `onepipeline unpublished
+--format json`'s whole: `{target, verdict, rows, unresolved}`. Everything either half could
+not resolve goes to standard error, where it changes no status.
 
-**This module is the one declaration of the status vocabulary** (:data:`EXIT_STATUSES`),
-which `scripts/unfinished.sh --print-surface` prints. `6` is the engine's own `unwatched`
-status, kept as the word for that half, and `7` is `just unpublished`'s counted status;
-`tests/test_unfinished.py` reconciles the first against the installed engine over a
-built run root and the second against `scripts/unpublished.sh --print-surface`, so
-neither number is a copy nothing checks.
+**This module is the one declaration of the status vocabulary** (:data:`EXIT_STATUSES`).
+`6` is the engine's own `unwatched` status and `7` the engine's own `unpublished` status for
+a counted branch, each kept as the word for its half; `tests/test_unfinished.py` reconciles
+the first against the installed engine over a built run root and the second against the
+exit statuses onepipeline's contract declares at the pinned release, so neither number is a
+copy nothing checks.
 
-Stdlib-only, and importable with `PYTHONPATH` at the checkout root and nothing else, as
-`orchestrator/unpublished.py` is: no `uv run`, because `uv` takes an exclusive lock on
-the project environment.
+Stdlib-only, and importable with `PYTHONPATH` at the checkout root and nothing else: no
+`uv run`, because `uv` takes an exclusive lock on the project environment.
 """
 
 from __future__ import annotations
 
 import argparse
-import io
 import json
 import os
+import re
 import shlex
+import shutil
 import subprocess
 import sys
 from collections.abc import Sequence
-from typing import NamedTuple
+from pathlib import Path
+from typing import NamedTuple, NewType, Protocol
 
-from orchestrator import unpublished
 from orchestrator.root import REPO_ROOT
 
 __all__ = [
@@ -49,7 +53,6 @@ __all__ = [
     "UNPUBLISHED",
     "UNWATCHED",
     "main",
-    "print_surface",
 ]
 
 #: Nothing is owed: every run this session launched is watched, and no branch its runs
@@ -58,8 +61,8 @@ NOTHING_OWED = 0
 #: At least one run this session launched is unwatched, and no branch is counted. The
 #: engine's own `unwatched` status, kept as the word for that half.
 UNWATCHED = 6
-#: At least one branch this session's runs left is counted, and no run is unwatched.
-#: `just unpublished`'s own counted status.
+#: At least one branch this session's runs left is counted, and no run is unwatched. The
+#: engine's own `unpublished` status for a counted branch.
 UNPUBLISHED = 7
 #: Both: a run is unwatched and a branch is counted.
 BOTH = 8
@@ -78,8 +81,7 @@ class Status(NamedTuple):
     phrase: str
 
 
-#: The exit-status vocabulary, one entry per status. `scripts/unfinished.sh
-#: --print-surface` prints each as `status <code> <name>`.
+#: The exit-status vocabulary, one entry per status.
 EXIT_STATUSES: tuple[Status, ...] = (
     Status(NOTHING_OWED, "nothing-owed", "no run is unwatched and no branch is counted"),
     Status(UNWATCHED, "unwatched", "at least one owned run is unwatched; no branch is counted"),
@@ -95,9 +97,27 @@ UNPUBLISHED_HEADING = (
 )
 EVERY_RUN_WATCHED = "no run this session launched is unwatched"
 
-#: How long the engine's `unwatched` is given, so a wedged read answers
-#: :data:`UNANSWERED` rather than holding the caller open for ever.
-UNWATCHED_TIMEOUT_SECONDS = 60
+#: The environment variable `scripts/launcher-session.sh` exports the manager session as.
+LAUNCHER_SESSION_ENV = "ONEPIPELINE_LAUNCHER_SESSION"
+#: The shape a session id has, as `scripts/launcher-session.sh` judges it.
+SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}")
+
+#: Where this host keeps a manager session's acknowledgements, under the state home: the
+#: directory `just unpublished` and the `Stop` hook both hand the engine.
+ACKNOWLEDGEMENTS_UNDER = ("ai-orchestrator", "stop-unfinished", "acknowledged")
+#: The drafter graph every landing command the engine prints runs.
+PR_AUTHOR_GRAPH = REPO_ROOT / "graphs" / "pr-author.yaml"
+
+#: How long each half is given, so a wedged read answers :data:`UNANSWERED` rather than
+#: holding the caller open for ever.
+HALF_TIMEOUT_SECONDS = 60
+
+
+class Writer(Protocol):
+    """Where this module writes: the stream a caller hands it, or the process's own."""
+
+    def write(self, text: str, /) -> object:
+        """Take ``text``; what a stream answers with is its own business."""
 
 
 class Unanswered(Exception):
@@ -111,44 +131,67 @@ class Half(NamedTuple):
     lines: list[str]
 
 
-def print_surface(out: unpublished.Writer | None = None) -> None:
-    """The vocabulary a consumer reads from `scripts/unfinished.sh --print-surface`."""
-    out = sys.stdout if out is None else out
-    for status in EXIT_STATUSES:
-        print(f"status {status.code} {status.name}", file=out)
+class Unpublished(NamedTuple):
+    """The unpublished half's answer, beside the engine's own document it was read from."""
+
+    half: Half
+    document: object
 
 
-def _unwatched(session: str, err: unpublished.Writer) -> Half:
-    """The engine's `unwatched --session <session>`: `0` nothing, `6` its lines.
-
-    Reached as the installed binary — this checkout's `.venv/bin` first, the search path
-    after — and never through `uv run`. Whatever it writes to standard error is passed
-    through, where it changes no status.
-    """
-    binary = unpublished._binary("onepipeline")
-    if binary is None:
-        raise Unanswered(
-            f"found no `onepipeline` to ask, at {REPO_ROOT / '.venv' / 'bin' / 'onepipeline'} "
-            "or on the search path; run `just bootstrap` from the checkout root"
-        )
-    command = [binary, "unwatched", "--session", session]
+def _run(command: list[str], err: Writer) -> subprocess.CompletedProcess[str]:
+    """Run one half's command, passing its standard error through."""
     try:
-        done = subprocess.run(
+        done = subprocess.run(  # noqa: S603 - an argv this module composes, never a shell
             command,
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
-            timeout=UNWATCHED_TIMEOUT_SECONDS,
+            timeout=HALF_TIMEOUT_SECONDS,
             check=False,
         )
     except subprocess.TimeoutExpired as expired:
         raise Unanswered(
-            f"`{shlex.join(command)}` ran past its {UNWATCHED_TIMEOUT_SECONDS}s bound"
+            f"`{shlex.join(command)}` ran past its {HALF_TIMEOUT_SECONDS}s bound"
         ) from expired
     except OSError as failure:
         raise Unanswered(f"could not run `{shlex.join(command)}`: {failure}") from failure
     for line in done.stderr.splitlines():
         print(line, file=err)
+    return done
+
+
+def acknowledgements() -> Path:
+    """The acknowledgement directory, resolved as the recipe's and the hook's shell does.
+
+    `${XDG_STATE_HOME:-$HOME/.local/state}`: an unset or empty state home falls back.
+    """
+    state = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+    return Path(state).joinpath(*ACKNOWLEDGEMENTS_UNDER)
+
+
+def _binary(name: str) -> str | None:
+    """This checkout's installed ``name``, else the one on the search path, else `None`."""
+    installed = REPO_ROOT / ".venv" / "bin" / name
+    return str(installed) if os.access(installed, os.X_OK) else shutil.which(name)
+
+
+def _engine() -> str:
+    binary = _binary("onepipeline")
+    if binary is None:
+        raise Unanswered(
+            f"found no `onepipeline` to ask, at {REPO_ROOT / '.venv' / 'bin' / 'onepipeline'} "
+            "or on the search path; run `just bootstrap` from the checkout root"
+        )
+    return binary
+
+
+def _unwatched(session: str, err: Writer) -> Half:
+    """The engine's `unwatched --session <session>`: `0` nothing, `6` its lines.
+
+    Reached as the installed binary and never through `uv run`.
+    """
+    command = [_engine(), "unwatched", "--session", session]
+    done = _run(command, err)
     lines = [line for line in done.stdout.splitlines() if line.strip()]
     if done.returncode == NOTHING_OWED:
         return Half(owed=False, lines=lines)
@@ -162,18 +205,107 @@ def _unwatched(session: str, err: unpublished.Writer) -> Half:
     )
 
 
-def _unpublished(session: str, as_json: bool, err: unpublished.Writer) -> Half:
-    """The view's own-sessions target for ``session``, in this process: `0` or `7`."""
-    arguments = ["--own", "--session", session, "--no-disk", *(["--json"] if as_json else [])]
-    out = io.StringIO()
-    status = unpublished.main(arguments, out=out, err=err)
-    if status == unpublished.NOTHING_COUNTED:
-        return Half(owed=False, lines=out.getvalue().splitlines())
-    if status == unpublished.COUNTED:
-        return Half(owed=True, lines=out.getvalue().splitlines())
-    raise Unanswered(
-        f"`just unpublished {shlex.join(arguments)}` exited {status}; its standard error is above"
+def _unpublished(session: str, err: Writer) -> Unpublished:
+    """The engine's `unpublished --session <session> --format json`: `0` or `7`, and its
+    document. Any other status — `1` unanswered, `2` refused — is this half not answering.
+    """
+    command = [
+        _engine(),
+        "unpublished",
+        "--session",
+        session,
+        "--format",
+        "json",
+        "--acknowledgements",
+        str(acknowledgements()),
+        "--pr-author-graph",
+        str(PR_AUTHOR_GRAPH),
+    ]
+    done = _run(command, err)
+    if done.returncode not in (NOTHING_OWED, UNPUBLISHED):
+        raise Unanswered(
+            f"`{shlex.join(command)}` exited {done.returncode}; its standard error is above"
+        )
+    try:
+        document: object = json.loads(done.stdout)
+    except json.JSONDecodeError as failure:
+        raise Unanswered(
+            f"`{shlex.join(command)}` exited {done.returncode} without the one JSON document "
+            f"it writes: {failure}"
+        ) from failure
+    match document:
+        case {"rows": list(rows)}:
+            lines = [_row(row, command).line() for row in rows]
+        case _:
+            raise Unanswered(f"`{shlex.join(command)}` wrote a document with no `rows` list")
+    return Unpublished(
+        half=Half(owed=done.returncode == UNPUBLISHED, lines=lines), document=document
     )
+
+
+#: A branch name as the engine's row names it.
+Branch = NewType("Branch", str)
+#: A repository identity as the engine's row names it.
+Identity = NewType("Identity", str)
+
+
+class Row(NamedTuple):
+    """The fields of one of the engine's rows this module renders, read whole or not at all."""
+
+    branch: Branch
+    identity: Identity
+    counted: bool
+    in_flight: bool
+    land_command: tuple[str, ...]
+    reason: str | None
+
+    def line(self) -> str:
+        """The row as one line: its branch, and what the engine decided about it."""
+        where = f"{self.branch} [{self.identity}]"
+        if self.counted and self.land_command:
+            return f"{where} counted; land it: {shlex.join(self.land_command)}"
+        if self.counted:
+            return f"{where} counted"
+        if self.in_flight:
+            return f"{where} in flight"
+        return f"{where} acknowledged: {self.reason}"
+
+
+def _row(value: object, command: list[str]) -> Row:
+    """One row of the engine's document, or :class:`Unanswered` naming what was malformed.
+
+    A row this module cannot read whole is the half not answering rather than a line that
+    misstates it: an uncounted row is in flight or acknowledged with a reason, and nothing
+    else.
+    """
+    match value:
+        case {
+            "branch": str(branch),
+            "identity": str(identity),
+            "counted": bool(counted),
+            "in_flight": bool(in_flight),
+            "land_command": list(words),
+            "acknowledgement": acknowledgement,
+        } if all(isinstance(word, str) for word in words):
+            pass
+        case _:
+            raise Unanswered(f"`{shlex.join(command)}` wrote a row it could not read: {value!r}")
+    reason: str | None
+    match acknowledgement:
+        case {"reason": str(stated)}:
+            reason = stated
+        case None:
+            reason = None
+        case _:
+            raise Unanswered(
+                f"`{shlex.join(command)}` wrote an acknowledgement it could not read: {value!r}"
+            )
+    if not counted and not in_flight and reason is None:
+        raise Unanswered(
+            f"`{shlex.join(command)}` wrote a row neither counted, in flight nor "
+            f"acknowledged: {value!r}"
+        )
+    return Row(Branch(branch), Identity(identity), counted, in_flight, tuple(words), reason)
 
 
 def _session(value: str | None) -> str:
@@ -181,10 +313,10 @@ def _session(value: str | None) -> str:
     if not value:
         raise ValueError(
             "no manager session identifies this shell, so there is nothing to ask about: name "
-            f"one with `--session <ID>`; {unpublished.LAUNCHER_SESSION_ENV} is set by the "
-            "harness this is run under"
+            f"one with `--session <ID>`; {LAUNCHER_SESSION_ENV} is set by the harness this is "
+            "run under"
         )
-    if unpublished.SESSION_ID.fullmatch(value) is None:
+    if SESSION_ID.fullmatch(value) is None:
         raise ValueError(
             f"{value!r} is not the shape a session id has (1-200 characters of letters, digits, "
             "dot, underscore or hyphen, starting with a letter or digit)"
@@ -201,12 +333,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--session",
         metavar="ID",
-        help=f"the manager session to ask about; default {unpublished.LAUNCHER_SESSION_ENV}",
+        help=f"the manager session to ask about; default {LAUNCHER_SESSION_ENV}",
     )
     parser.add_argument("--json", action="store_true", help="emit both halves as one object")
-    parser.add_argument(
-        "--print-surface", action="store_true", help="print the exit-status vocabulary and exit"
-    )
     return parser
 
 
@@ -220,66 +349,61 @@ def _status(unwatched_half: Half, unpublished_half: Half) -> int:
 
 def main(
     argv: Sequence[str] | None = None,
-    out: unpublished.Writer | None = None,
-    err: unpublished.Writer | None = None,
+    out: Writer | None = None,
+    err: Writer | None = None,
 ) -> int:
     out = sys.stdout if out is None else out
     err = sys.stderr if err is None else err
     arguments = _parser().parse_args(argv)
-    if arguments.print_surface:
-        if arguments.session is not None or arguments.json:
-            print("unfinished: refused: `--print-surface` answers on its own", file=err)
-            return REFUSED
-        print_surface(out)
-        return NOTHING_OWED
     # An explicit `--session` is judged as given, an empty one included: falling back to
     # the environment would answer for a session the caller did not name.
     named = arguments.session
     if named is None:
-        named = os.environ.get(unpublished.LAUNCHER_SESSION_ENV)
+        named = os.environ.get(LAUNCHER_SESSION_ENV)
     try:
         session = _session(named)
     except ValueError as refusal:
         print(f"unfinished: refused: {refusal}", file=err)
         return REFUSED
-    halves: dict[str, Half] = {}
-    failed = False
-    for name in ("unwatched", "unpublished"):
-        try:
-            halves[name] = (
-                _unwatched(session, err)
-                if name == "unwatched"
-                else _unpublished(session, arguments.json, err)
-            )
-        except Unanswered as failure:
-            print(f"unfinished: the {name} half could not answer: {failure}", file=err)
-            failed = True
+    unwatched_half: Half | None = None
+    unpublished_half: Half | None = None
+    document: object = None
+    try:
+        unwatched_half = _unwatched(session, err)
+    except Unanswered as failure:
+        print(f"unfinished: the unwatched half could not answer: {failure}", file=err)
+    try:
+        answer = _unpublished(session, err)
+        unpublished_half, document = answer.half, answer.document
+    except Unanswered as failure:
+        print(f"unfinished: the unpublished half could not answer: {failure}", file=err)
     if arguments.json:
-        if failed:
+        if unwatched_half is None or unpublished_half is None:
             return UNANSWERED
-        document: dict[str, object] = {
-            "unwatched": halves["unwatched"].lines,
-            # llmlint: ignore[boundary_inputs_validated] Not a boundary: the text is what
-            # `unpublished.main` just wrote to this process's own buffer under `--json`,
-            # which is `json.dumps` of a list of `ROW_FIELDS` rows, and a status other than
-            # `0` or `7` was already refused as unanswered above.
-            "unpublished": json.loads("\n".join(halves["unpublished"].lines)),
-        }
-        print(json.dumps(document, indent=2), file=out)
-        return _status(halves["unwatched"], halves["unpublished"])
-    if "unwatched" in halves:
+        print(
+            json.dumps({"unwatched": unwatched_half.lines, "unpublished": document}, indent=2),
+            file=out,
+        )
+        return _status(unwatched_half, unpublished_half)
+    if unwatched_half is not None:
         print(UNWATCHED_HEADING, file=out)
-        for line in halves["unwatched"].lines or [EVERY_RUN_WATCHED]:
+        for line in unwatched_half.lines or [EVERY_RUN_WATCHED]:
             print(line, file=out)
-    if "unpublished" in halves:
-        if "unwatched" in halves:
+    if unpublished_half is not None:
+        if unwatched_half is not None:
             print(file=out)
         print(UNPUBLISHED_HEADING, file=out)
-        for line in halves["unpublished"].lines:
+        for line in unpublished_half.lines or ["no preserved branch of this session's runs"]:
             print(line, file=out)
-    if failed:
+        if unpublished_half.owed:
+            print(
+                "acknowledge one: just unpublished --acknowledge <branch> --reason "
+                '"<why it is deliberately left>"',
+                file=out,
+            )
+    if unwatched_half is None or unpublished_half is None:
         return UNANSWERED
-    return _status(halves["unwatched"], halves["unpublished"])
+    return _status(unwatched_half, unpublished_half)
 
 
 if __name__ == "__main__":

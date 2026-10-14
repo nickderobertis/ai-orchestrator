@@ -259,7 +259,6 @@ def test_every_caller_sources_this_one_definition() -> None:
     callers = (
         REPO_ROOT / "scripts" / "onepipeline.sh",
         REPO_ROOT / "scripts" / "telemetry-server.sh",
-        REPO_ROOT / "scripts" / "unpublished.sh",
     )
 
     for caller in callers:

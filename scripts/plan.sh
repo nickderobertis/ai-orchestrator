@@ -772,9 +772,10 @@ if [ "$spikes_launched" -eq 1 ] || [ -e "$runs_root/$spikes_run" ]; then
         stop "the branches run $spikes_run kept could not be read; the line above names why" spikes
     acknowledged_branches=()
     while IFS=$'\t' read -r spike branch; do
-        # The view answers 0 or 7 once the acknowledgement is recorded — 7 saying some other
-        # branch still counts, which is every spike after this one until each is reached —
-        # and 1 or 2 when it could not record one (`scripts/unpublished.sh --print-surface`).
+        # The engine's `onepipeline unpublished --acknowledge` answers 0 or 7 once the
+        # acknowledgement is recorded — 7 saying some other branch still counts, which is every
+        # spike after this one until each is reached — and 1 unanswered or 2 refused when it
+        # recorded none (the exit statuses onepipeline's `docs/contract-divergences.md` states).
         acknowledged=0
         recipe unpublished --acknowledge "$branch" --reason "kept as the spike $spike of the plan $declared_project until the plan's main run succeeds, whose success hook discards it; its retries and recovery may need it until then" >/dev/null || acknowledged=$?
         case "$acknowledged" in

@@ -319,8 +319,8 @@ def _branches(flow: Flow) -> list[str]:
 
 def _acknowledged(flow: Flow) -> dict[str, str]:
     """Each branch this session acknowledged, and the reason it gave, from `just unpublished`."""
-    listed = _just(flow, "unpublished", "--host", "--json", "--no-disk")
-    rows = json.loads(listed.stdout) if listed.stdout.strip() else []
+    listed = _just(flow, "unpublished", "--host", "--format", "json")
+    rows = json.loads(listed.stdout)["rows"] if listed.stdout.strip() else []
     return {
         str(row["branch"]): str(row["acknowledgement"]["reason"])
         for row in rows

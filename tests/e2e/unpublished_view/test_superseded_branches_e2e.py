@@ -4,9 +4,10 @@ The lifecycle retires a branch that provably holds no work beyond its base by it
 leaves a branch a landed retry replaced — one that still differs from its base — for the
 manager to decide on. What a manager touches is this repository's recipes: `just
 unpublished` lists the superseded branch with what superseded it, where that landed and
-which paths differ, and offers `just reclaim-branch`; `just recoverable` renders onevcs's
-`Reclaim:` line as that recipe; the recipe deletes the branch everywhere it is held and
-refuses a branch still carrying unmerged work; and `just sweep` retires a lossless branch
+which paths differ, and offers onevcs's own `reclaim` first, which `just reclaim-branch`
+runs; `just recoverable` renders onevcs's `Reclaim:` line as that recipe; the printed
+reclaim deletes the branch everywhere it is held, and the recipe refuses a branch still
+carrying unmerged work; and `just sweep` retires a lossless branch
 the listing never showed. So these journeys drive those recipes as subprocesses and read
 what came back, and the state they read is what the real `onevcs` recorded.
 
@@ -40,7 +41,12 @@ from unpublished_registry import BASE, ORPHAN_BRANCH, Registry, commit, git, see
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
-from orchestrator.unpublished import COUNTED, NOTHING_COUNTED, SUPERSEDED_WITH_CHANGES
+
+#: `just unpublished`'s exit statuses — the engine's own `onepipeline unpublished` — for at
+#: least one counted row and for none.
+COUNTED, NOTHING_COUNTED = 7, 0
+#: `onevcs`'s retirement class for a branch a landed retry replaced that still differs.
+SUPERSEDED_WITH_CHANGES = "superseded-with-changes"
 
 #: A reader of the toolchain this checkout provisioned: every step here runs its tool
 #: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
@@ -181,14 +187,14 @@ def _recipe(seed: Superseded, *arguments: str) -> subprocess.CompletedProcess[st
     )
 
 
-# `Any` because a row is the view's own JSON, read back as parsed: its values are strings,
+# `Any` because a row is the engine's own JSON, read back as parsed: its values are strings,
 # booleans, nulls and nested objects by field, and the journeys index into them by the
-# names `ROW_FIELDS` declares rather than through a second model of that shape.
+# names the engine's contract declares rather than through a second model of that shape.
 def _rows(done: subprocess.CompletedProcess[str]) -> dict[str, dict[str, Any]]:
-    """`just unpublished … --json`'s rows by branch."""
+    """`just unpublished … --format json`'s rows by branch."""
     parsed = json.loads(done.stdout)
-    assert isinstance(parsed, list), f"--json did not emit an array: {done.stdout!r}"
-    return {row["branch"]: row for row in parsed}
+    assert isinstance(parsed, dict), f"--format json did not emit an object: {done.stdout!r}"
+    return {row["branch"]: row for row in parsed["rows"]}
 
 
 def _holds(repository: Path, branch: str) -> bool:
@@ -213,8 +219,8 @@ def test_a_superseded_branch_is_listed_with_its_evidence_and_reclaimed_everywher
 ) -> None:
     """Listed, counted, with its evidence and reclaim line; the printed command reclaims it."""
     checkout = str(seed.registry.checkout)
-    as_json = _recipe(seed, "unpublished", "--session", seed.token, "--no-disk", "--json")
-    listed = _recipe(seed, "unpublished", "--session", seed.token, "--no-disk")
+    as_json = _recipe(seed, "unpublished", "--token", seed.token, "--format", "json")
+    listed = _recipe(seed, "unpublished", "--token", seed.token)
     recoverable = _recipe(seed, "recoverable", "--repo", checkout)
 
     assert as_json.returncode == COUNTED, as_json.stderr
@@ -232,11 +238,8 @@ def test_a_superseded_branch_is_listed_with_its_evidence_and_reclaimed_everywher
         f"    superseded by:   {SUPERSEDING_BRANCH} (node {SUPERSEDING_NODE}), "
         f"landed at {seed.landing}\n"
         "    differs in:      feature.txt, notes.txt\n"
-        f"    reclaim it:      just reclaim-branch {seed.branch} --repo {checkout}\n"
-        f"    or acknowledge:  just unpublished --acknowledge {seed.branch} "
-        '--reason "<why it is deliberately kept>"\n'
-    ) in listed.stdout
-    assert "land it:" not in listed.stdout
+        f"    reclaim it:      onevcs reclaim {seed.branch} --repo {seed.registry.identity}\n"
+    ) in listed.stdout, listed.stdout
     assert recoverable.returncode == 0, recoverable.stderr
     assert f"Reclaim: just reclaim-branch {seed.branch} --repo {checkout}" in recoverable.stdout
     assert "onevcs reclaim" not in recoverable.stdout
@@ -245,8 +248,21 @@ def test_a_superseded_branch_is_listed_with_its_evidence_and_reclaimed_everywher
     assert _on_origin(seed, seed.branch)
 
     command = _reclaim_line(listed.stdout)
-    assert command[:2] == ["just", "reclaim-branch"]
-    reclaimed = _recipe(seed, *command[1:])
+    assert command[:2] == ["onevcs", "reclaim"]
+    # Run exactly as printed, with this checkout's locked `onevcs` first on the search path,
+    # which is the one `just reclaim-branch` runs too.
+    reclaimed = subprocess.run(
+        command,
+        cwd=REPO_ROOT,
+        env={
+            **seed.registry.environment,
+            "PATH": f"{REPO_ROOT / '.venv' / 'bin'}:{seed.registry.environment['PATH']}",
+        },
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(900),
+        check=False,
+    )
 
     assert reclaimed.returncode == 0, reclaimed.stdout + reclaimed.stderr
     assert not _holds(seed.registry.checkout, seed.branch)
@@ -257,14 +273,14 @@ def test_a_superseded_branch_is_listed_with_its_evidence_and_reclaimed_everywher
     assert (seed.slot / "slot.json").is_file(), "the pool slot was removed, not returned"
     pool = seed.registry.onevcs("pool", "status", checkout)
     assert "slot 1: idle" in pool, pool
-    after = _recipe(seed, "unpublished", "--session", seed.token, "--no-disk", "--json")
+    after = _recipe(seed, "unpublished", "--token", seed.token, "--format", "json")
     assert after.returncode == NOTHING_COUNTED, after.stdout + after.stderr
     assert seed.branch not in _rows(after)
 
 
 def test_a_lossless_branch_is_never_listed_and_the_sweep_retires_it(seed: Superseded) -> None:
     """A branch whose every changed path is on the base: no row, then gone after a sweep."""
-    before = _recipe(seed, "unpublished", "--host", "--no-disk", "--json")
+    before = _recipe(seed, "unpublished", "--host", "--format", "json")
 
     assert before.returncode in (COUNTED, NOTHING_COUNTED), before.stderr
     assert seed.lossless not in _rows(before)
@@ -281,12 +297,14 @@ def test_a_branch_holding_unmerged_work_keeps_its_landing_line_and_is_not_reclai
 ) -> None:
     """Listed with today's `land it:` line, and refused by the reclaim recipe."""
     checkout = str(seed.registry.checkout)
-    listed = _recipe(seed, "unpublished", "--host", "--no-disk")
+    listed = _recipe(seed, "unpublished", "--host")
 
     assert listed.returncode == COUNTED, listed.stderr
+    drafter = REPO_ROOT / "graphs" / "pr-author.yaml"
     assert (
-        f"    land it:         just publish-branch {ORPHAN_BRANCH} --repo {checkout}"
-    ) in listed.stdout
+        f"    land it:         onepipeline publish-branch {ORPHAN_BRANCH} --repo {checkout} "
+        f"--pr-author-graph {drafter}\n"
+    ) in listed.stdout, listed.stdout
 
     refused = _recipe(seed, "reclaim-branch", ORPHAN_BRANCH, "--repo", checkout)
 

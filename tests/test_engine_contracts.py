@@ -3451,30 +3451,43 @@ def test_the_workspaces_overlay_composes_the_keys_the_linked_onevcs_declares() -
     assert _struct_fields(source, "WorkspaceDefault") == workspaces_overlay.RULE_KEYS - {"match"}
 
 
-#: The engine's declaration of one session label: `SESSION_<KEY>_LABEL` and its value.
-SESSION_LABEL_CONSTANT = re.compile(r'pub const SESSION_([A-Z]+)_LABEL: &str = "([^"]*)";')
+#: The JSON block onepipeline's `docs/contract-divergences.md` closes its unpublished entry
+#: with: the one statement of that verb's document, acknowledgement and exit statuses.
+UNPUBLISHED_CONTRACT = re.compile(
+    r'```json\n(\{\n  "document_fields": '
+    r'\["target", "verdict", "rows", "unresolved"\].*?\n\})\n```',
+    re.DOTALL,
+)
 
 
-def test_the_session_label_keys_the_view_filters_on_are_the_ones_the_engine_stamps() -> None:
-    """`just unpublished`'s own-sessions target filters on the label the engine stamps.
-
-    `orchestrator/unpublished.py` declares the three keys a row's `run`, `node` and
-    `manager_session` are read under, and `launcher` is the one `recoverable --label`
-    filters on. The engine declares the same three in `src/executor.rs` and stamps them
-    on every session a node opens, so a key renamed there would leave the own target
-    answering nothing, as a manager whose runs left nothing. Read at the adopted pin,
-    because that engine is what opens a dispatch's session.
+def test_what_this_host_reads_of_the_unpublished_verdict_is_the_engines_declared_contract() -> None:
+    """`just unfinished` branches on the engine's unpublished exit statuses and reads its
+    document's `rows`, and every acknowledgement a manager recorded before the engine took
+    the decision over is version 1. Each is read off the contract the adopted engine
+    declares, so a release that moved any of them fails here rather than as a manager whose
+    acknowledgements stopped standing.
     """
-    from orchestrator import unpublished
+    from orchestrator import unfinished
 
-    declared = dict(SESSION_LABEL_CONSTANT.findall(_source(ONEPIPELINE, "executor.rs")))
-    assert declared == {
-        "RUN": unpublished.LABEL_RUN,
-        "NODE": unpublished.LABEL_NODE,
-        "LAUNCHER": unpublished.LABEL_LAUNCHER,
-    }, (
-        f"onepipeline {ONEPIPELINE.ref}'s executor.rs declares the session labels {declared}, "
-        f"and orchestrator/unpublished.py reads {unpublished.SESSION_LABELS}"
+    declared = UNPUBLISHED_CONTRACT.search(_source(ONEPIPELINE_DOCS, "contract-divergences.md"))
+    assert declared is not None, (
+        f"onepipeline {ONEPIPELINE_DOCS.ref}'s contract-divergences.md no longer closes the "
+        "unpublished entry with its JSON block; re-read where the verb's contract now lives"
+    )
+    contract = json.loads(declared.group(1))
+    assert contract["exit"] == {
+        "none": unfinished.NOTHING_OWED,
+        "owed": unfinished.UNPUBLISHED,
+        "unanswered": unfinished.UNANSWERED,
+        "refused": unfinished.REFUSED,
+    }, contract["exit"]
+    assert "rows" in contract["document_fields"]
+    assert {"branch", "identity", "counted", "in_flight", "land_command", "acknowledgement"} <= set(
+        contract["row_fields"]
+    ), contract["row_fields"]
+    assert contract["acknowledgement_version"] == 1, (
+        "every acknowledgement this host recorded is version 1, and the adopted engine "
+        f"declares version {contract['acknowledgement_version']}"
     )
 
 

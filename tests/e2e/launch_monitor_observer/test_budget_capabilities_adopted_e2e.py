@@ -122,8 +122,8 @@ printf '{{"started_ms": %s, "ended_ms": %s, "pushed": "%s"}}\\n' \\
 #: discard must leave in place.
 UNRELATED_BRANCH = "unrelated/keep-me"
 
-#: `just unpublished`'s exit status when a row is counted, as `scripts/unpublished.sh
-#: --print-surface` names it, and `onevcs reclaim`'s when the class is not permitted.
+#: `just unpublished`'s exit status when a row is counted — the engine's own `onepipeline
+#: unpublished` status — and `onevcs reclaim`'s when the class is not permitted.
 UNPUBLISHED_COUNTED = 7
 RECLAIM_REFUSED = 4
 
@@ -262,7 +262,7 @@ class HookRun(NamedTuple):
 
 
 class UnpublishedRow(NamedTuple):
-    """One row of `just unpublished --json`, the fields this journey reads of it."""
+    """One row of `just unpublished --format json`, the fields this journey reads of it."""
 
     branch: str
     counted: bool
@@ -446,7 +446,7 @@ def preserved(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> 
     _launched(PRESERVE_RUN, _plan(root, PRESERVE_RUN, identity.publication, node), environment)
     settled = _settled(PRESERVE_RUN, PRESERVE_NODE, environment)
     changes = _changes(PRESERVE_RUN, environment)
-    unpublished = _just("unpublished", "--json", "--no-disk", environment=environment)
+    unpublished = _just("unpublished", "--format", "json", environment=environment)
 
     branch = str(settled.node.branch)
     origin_head = _head(origin, branch)
@@ -559,7 +559,7 @@ def test_unpublished_counts_the_kept_branch(preserved: Preserved) -> None:
     assert listed.returncode == UNPUBLISHED_COUNTED, (
         f"`just unpublished` exited {listed.returncode}:\n{listed.stdout}\n{listed.stderr}"
     )
-    rows = [UnpublishedRow.parse(row) for row in json.loads(listed.stdout)]
+    rows = [UnpublishedRow.parse(row) for row in json.loads(listed.stdout)["rows"]]
     kept = [row for row in rows if row.branch == preserved.settled.node.branch]
     assert len(kept) == 1 and kept[0].counted, f"the kept branch is not counted: {rows}"
 

@@ -2003,27 +2003,25 @@ identity. Reach for the train when several finished branches must land on one ba
 an order, and for `publish-branch` when there is one.
 
 `just unpublished` asks the same question from the other end: not *which row is this
-branch on* but *what is this host still holding, and what is it costing*. It answers
-for every registered identity under `--host`, from any directory — the gap that
+branch on* but *what is this host still holding, and what does a manager session still
+owe*. It is the engine's own `onepipeline unpublished`, passed through untouched. It
+answers for every registered identity under `--host`, from any directory — the gap that
 matters, because `just recoverable` run inside a checkout answers for that identity
-alone — for named `onevcs` sessions under
-repeated `--session <s-token>`, and by default for the sessions your own runs opened,
-found by the `launcher` label the engine stamps on each (`--own`, or `--session <manager
-session id>` for another manager's). A session opened before the labelling engine was
-adopted carries none, so that target never reaches what it preserved and nothing
-backfills it, while `--host` and an explicit `--session <s-token>` still do. A row's `--json` keys are `identity`, `branch`, `base`, `provenance`, `landed`,
-`change_url`, `stopped_because`, `session`, `run`, `node`, `manager_session`,
-`resume_command` (the landing command in its `just` form), `retirement` (`onevcs`'s own
-classification, as `recoverable --json` states it), `in_flight`, `counted`,
-`acknowledgement` and `disk` — the run root's bytes and each build-output directory under
-its worktree on its own, which is the reason to reach for it, because the number a person
-acts on is the disk rather than the branch count. A counted row `onevcs` classes
+alone — for named `onevcs` sessions under repeated `--token <s-token>`, and by default for
+the sessions your own runs opened, found by the `launcher` label the engine stamps on each
+(`--session <manager session id>` for another manager's). A session opened before the
+labelling engine was adopted carries none, so that target never reaches what it preserved,
+while `--host` and `--token` still do. Its rows, its JSON document (`--format json`) and
+its counting rule are the engine's, stated in onepipeline's `docs/contract-divergences.md`;
+each counted row prints the engine's landing command, drafting through
+`graphs/pr-author.yaml`, and `--disk` adds the run root's bytes and each build-output
+directory under its worktree, which is the reason to reach for it, because the number a
+person acts on is the disk rather than the branch count. A counted row `onevcs` classes
 `superseded-with-changes` is listed with what superseded it, where that landed and which
-paths still differ, and offers `just reclaim-branch` before the acknowledgement. It
-reclaims nothing, lands nothing and closes nothing itself; the verbs above stay where
-they are. `--acknowledge <branch> --reason
-"<why>"` drops a branch out of the count without landing it — acknowledging is never
-landing.
+paths still differ, and offers the reclaim before the acknowledgement. It reclaims
+nothing, lands nothing and closes nothing itself; the verbs above stay where they are.
+`--acknowledge <branch> --reason "<why>"` drops a branch out of the count without landing
+it — acknowledging is never landing.
 
 Every row of that table reads the branch from the identity's **publication
 checkout**, never from wherever a session happens to be working. So a branch that

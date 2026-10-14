@@ -6,9 +6,9 @@ schema_version: 1
 budgets:
   - id: own-sessions-read-seconds
     description: >-
-      Wall clock of `just unpublished --own --no-disk --json` over a registry at this host's
-      scale. It protects the read the Stop hook and a manager wait through before a turn may
-      end.
+      Wall clock of `just unpublished --session <manager> --format json`, the engine's own
+      decision, over a registry at this host's scale. It protects the read the Stop hook and
+      a manager wait through before a turn may end.
     labels: [host]
     measure: reported
     command: ["uv", "run", "--directory", "../..", "python", "-m", "tests.budget_telemetry"]

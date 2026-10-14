@@ -175,6 +175,16 @@ RETIRED: dict[str, str] = {
         "the engine's `onepipeline publish-branch` / `repo-recover`, drafting the body through "
         "`--pr-author-graph graphs/pr-author.yaml` as the run path does"
     ),
+    "scripts/unpublished.sh": (
+        "the engine's own `onepipeline unpublished`, which the `just unpublished` recipe runs "
+        "through scripts/onepipeline.sh with this host's acknowledgement directory and drafter "
+        "graph and every caller argument forwarded"
+    ),
+    "orchestrator/unpublished.py": (
+        "`onepipeline unpublished` and `onepipeline stop-guard --unpublished`, which decide, "
+        "render and acknowledge what a manager session owes in the engine, the `Stop` hook in "
+        ".claude/settings.json calling the guard directly with no `--source`"
+    ),
     "scripts/land-branch.sh": (
         "`onepipeline publish-branch` / `repo-recover`, which the two landing recipes run "
         "through scripts/onepipeline.sh with every caller argument forwarded"

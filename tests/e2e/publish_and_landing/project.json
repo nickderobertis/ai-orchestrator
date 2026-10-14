@@ -35,10 +35,12 @@
     "support-short-state",
     "support-sibling-facts",
     "support-test-linked-libraries",
+    "support-unpublished-registry",
     "support-waits"
   ],
   "namedInputs": {
     "publishAndLandingWorkspace": [
+      "{workspaceRoot}/.claude/settings.json",
       "{workspaceRoot}/.githooks/**/*",
       "{workspaceRoot}/.github/pull_request_template.md",
       "{workspaceRoot}/.gitignore",
@@ -132,6 +134,7 @@
             "support-short-state",
             "support-sibling-facts",
             "support-test-linked-libraries",
+            "support-unpublished-registry",
             "support-waits"
           ]
         }
@@ -173,6 +176,7 @@
             "support-short-state",
             "support-sibling-facts",
             "support-test-linked-libraries",
+            "support-unpublished-registry",
             "support-waits"
           ]
         }

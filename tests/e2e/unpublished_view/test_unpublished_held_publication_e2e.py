@@ -2,13 +2,14 @@
 
 `publish-branch` and `recover` publish a branch no session holds, so before onevcs 0.40.0
 a branch whose publication was running at that moment read as idle preserved work: `just
-unpublished` counted it, and the `Stop` hook's verdict source refused a manager's turn
-over a publication that was doing exactly what it should. onevcs now reports that branch
-`held_by` with `holding: "publication-running"` and a `null` token — the one holding that
-names no session — and this view reads any `held_by` as in flight.
+unpublished` counted it, and the `Stop` hook refused a manager's turn over a publication
+that was doing exactly what it should. onevcs now reports that branch `held_by` with
+`holding: "publication-running"` and a `null` token — the one holding that names no
+session — and the engine's unpublished decision reads any `held_by` as in flight.
 
-So these journeys drive what a manager and the hook both touch — `just unpublished` and
-`scripts/unpublished.sh --stop-verdict` — over a real registry, a real closed session's
+So these journeys drive what a manager and the hook both touch — `just unpublished` and the
+`Stop` command `.claude/settings.json` declares, run through `sh -c` with Claude Code's
+payload — over a real registry, a real closed session's
 preserved branch and the installed `onevcs`, and hold the real publication lease that
 `onevcs`'s `publishing::Lease::take` holds while it runs. Nothing is doubled: the
 `publication-running` row is the installed CLI's own answer, and the journey reads it
@@ -33,7 +34,9 @@ from unpublished_registry import Registry, Session, seeded
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
-from orchestrator.unpublished import COUNTED, NOTHING_COUNTED
+
+#: `just unpublished`'s exit statuses — the engine's own — for a counted row and for none.
+COUNTED, NOTHING_COUNTED = 7, 0
 
 #: A reader of the toolchain this checkout provisioned: every step here runs its tool
 #: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
@@ -42,9 +45,6 @@ pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 #: The manager session whose run left the branch, and the one the stop verdict is asked for.
 MANAGER = "manager-session-held-publication"
-
-#: The warning the view gives a `held_by` it could not read whole.
-UNREADABLE_HOLDER = "its holder could not be read whole"
 
 
 def _digest(value: str) -> str:
@@ -127,28 +127,35 @@ def _unpublished(
     )
 
 
-def _stop_verdict(registry: Registry, state: Path) -> dict[str, str]:
-    """The `Stop` hook's verdict source, run as the hook runs it, for the manager's session."""
+def _stop(registry: Registry, state: Path) -> str | None:
+    """The `Stop` command the settings file declares, run as Claude Code runs it, for the
+    manager's session: the reason it blocked with, or `None` when it let the turn end."""
+    settings = json.loads((REPO_ROOT / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    [command] = [hook["command"] for entry in settings["hooks"]["Stop"] for hook in entry["hooks"]]
+    payload = {"session_id": MANAGER, "hook_event_name": "Stop", "stop_hook_active": False}
+    environment = _environment(registry, state)
+    del environment["ONEPIPELINE_LAUNCHER_SESSION"]
     answered = subprocess.run(
-        [str(REPO_ROOT / "scripts" / "unpublished.sh"), "--stop-verdict"],
-        input=json.dumps({"session": MANAGER}),
+        ["/bin/sh", "-c", command],
+        input=json.dumps(payload),
         cwd=REPO_ROOT,
-        env=_environment(registry, state),
+        env={**environment, "CLAUDE_PROJECT_DIR": str(REPO_ROOT)},
         text=True,
         capture_output=True,
-        timeout=e2e_timeout(900),
+        timeout=e2e_timeout(60),
         check=False,
     )
     assert answered.returncode == 0, answered
-    [line] = answered.stdout.splitlines()
-    verdict: dict[str, str] = json.loads(line)
-    assert UNREADABLE_HOLDER not in answered.stderr, answered.stderr
-    return verdict
+    if answered.stdout == "":
+        return None
+    decision = json.loads(answered.stdout)
+    assert decision["decision"] == "block", decision
+    return str(decision["reason"])
 
 
 # `Any` because a row is the view's own JSON, read back as parsed.
 def _row(done: subprocess.CompletedProcess[str], branch: str) -> dict[str, Any]:
-    rows = {row["branch"]: row for row in json.loads(done.stdout)}
+    rows = {row["branch"]: row for row in json.loads(done.stdout)["rows"]}
     assert branch in rows, done.stdout
     row: dict[str, Any] = rows[branch]
     return row
@@ -160,10 +167,10 @@ def test_a_branch_a_running_publication_holds_is_in_flight_and_owes_nothing(
     registry, session = left
     state = tmp_path / "state"
 
-    idle = _unpublished(registry, state, "--json", "--no-disk")
+    idle = _unpublished(registry, state, "--format", "json")
     assert idle.returncode == COUNTED, idle.stderr
     assert _row(idle, session.branch)["in_flight"] is False
-    assert _stop_verdict(registry, state)["verdict"] == "block"
+    assert session.branch in (_stop(registry, state) or "")
 
     with _running_publication(registry, session.branch, tmp_path / "publication-run") as work:
         reported = json.loads(registry.onevcs("recoverable", "--repo", registry.identity, "--json"))
@@ -174,21 +181,20 @@ def test_a_branch_a_running_publication_holds_is_in_flight_and_owes_nothing(
             "worktree": str(work),
         }, record
 
-        held = _unpublished(registry, state, "--json", "--no-disk")
+        held = _unpublished(registry, state, "--format", "json")
         assert held.returncode == NOTHING_COUNTED, held.stderr
         row = _row(held, session.branch)
         assert (row["in_flight"], row["counted"]) == (True, False), row
-        assert UNREADABLE_HOLDER not in held.stderr, held.stderr
+        assert json.loads(held.stdout)["unresolved"] == [], held.stdout
 
-        listed = _unpublished(registry, state, "--no-disk")
+        listed = _unpublished(registry, state)
         assert listed.returncode == NOTHING_COUNTED, listed.stderr
         [line] = [line for line in listed.stdout.splitlines() if session.branch in line]
-        assert line.rstrip().endswith("in flight"), listed.stdout
-        assert UNREADABLE_HOLDER not in listed.stderr, listed.stderr
+        assert "in flight" in line, listed.stdout
 
-        assert _stop_verdict(registry, state) == {"verdict": "none"}
+        assert _stop(registry, state) is None
 
-    finished = _unpublished(registry, state, "--json", "--no-disk")
+    finished = _unpublished(registry, state, "--format", "json")
     assert finished.returncode == COUNTED, finished.stderr
     assert _row(finished, session.branch)["in_flight"] is False
-    assert _stop_verdict(registry, state)["verdict"] == "block"
+    assert session.branch in (_stop(registry, state) or "")

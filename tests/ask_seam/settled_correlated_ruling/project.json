@@ -75,8 +75,6 @@
       "{workspaceRoot}/graphs/design-doc.yaml",
       "{workspaceRoot}/graphs/follow-up.yaml",
       "{workspaceRoot}/orchestrator/unfinished.py",
-      "{workspaceRoot}/orchestrator/unpublished.py",
-      "{workspaceRoot}/scripts/unpublished.sh",
       "{workspaceRoot}/.claude/settings.json",
       "{workspaceRoot}/config/onevcs.version",
       "{workspaceRoot}/config/onepipeline.version"

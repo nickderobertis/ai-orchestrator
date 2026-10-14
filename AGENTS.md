@@ -131,9 +131,9 @@ the scope before reading a short result as nothing to recover. It omits a branch
 already landed — unconditionally for a `local-direct` identity, and for a remote one
 only while this host's record of the landing survives, a `may have landed` row being
 the verb reporting no record rather than an unpublished branch. For every identity from
-anywhere, or for the sessions your own runs opened, with what each costs in disk, read
-`just unpublished` instead: `--host` for the host, and its default for your own runs'
-branches, which you land or acknowledge with a reason.
+anywhere, or for the sessions your own runs opened, read `just unpublished` instead — the
+engine's own `onepipeline unpublished`, which decides what is owed — and land or
+acknowledge with a reason each branch it counts.
 **A branch that provably holds no work beyond its base retires itself** — at session
 close, in `just sweep`, and on the engine's idle maintenance — and a pool slot is never
 removed, only returned. A superseded branch that still differs from its base is your
@@ -1266,10 +1266,9 @@ do not just re-arm.
    The `Stop` hook `.claude/settings.json` registers — the
    engine's own `onepipeline stop-guard` — refuses to end a turn while this session owes
    what `just unfinished` names: an unwatched run of its own, or a branch its runs left
-   preserved and unpublished, the second asked of the verdict source that registration
-   declares. Never answer the hook twice: arm `just watch` on each run, land the branch,
-   reclaim a superseded one with the `just reclaim-branch <branch> --repo <checkout>` its
-   row prints, or acknowledge work deliberately kept with `just unpublished --acknowledge
+   preserved and unpublished, which `just unpublished` names. Never answer the hook
+   twice: arm `just watch` on each run, land the branch with the command its row prints,
+   reclaim a superseded one with the reclaim line its row prints, or acknowledge work deliberately kept with `just unpublished --acknowledge
    <branch> --reason "<why>"`, until `just unfinished` answers `0`. A run is owed until
    it is closed, not until it settles; a settled run needs closure rather than a watch.
 2. **The watch emits on every terminal state**, not just the happy path. Silence must

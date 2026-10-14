@@ -845,19 +845,27 @@ host *args:
 recoverable *args:
     @./scripts/recoverable.sh "$@"
 
-# The preserved-but-unpublished branches this host is holding onto, what each costs in
-# disk, and the `just` command that lands each one. `just unpublished --help` names the
-# targets and flags and `scripts/unpublished.sh --print-surface` the exit statuses;
-# `orchestrator/unpublished.py` is the one statement of the contract.
-# llmlint: ignore[tool_output_is_signal] the requested unpublished-branch inventory is this viewing command's product.
+# The preserved-but-unpublished branches a manager session's runs left, and the command
+# that lands each one: the engine's own `onepipeline unpublished`, which decides what is
+# owed, renders it and records an acknowledgement. Every argument, the output and the
+# exit status are the verb's (`0` nothing counted, `7` at least one counted, `1`
+# unanswered, `2` refused); `onepipeline unpublished --help` names the targets and flags
+# and onepipeline's `docs/contract-divergences.md` its contract. `--session <ID>` is a
+# manager session and defaults to the one `scripts/launcher-session.sh` establishes,
+# `--host` is every registered identity, and an onevcs `s-` session token is `--token`.
+# This recipe names only what is this host's: the acknowledgement directory, the one the
+# `Stop` hook in `.claude/settings.json` reads, and `graphs/pr-author.yaml`, so every
+# landing command it prints drafts its change request's body.
+# llmlint: ignore-block[tool_output_is_signal] the requested unpublished-branch inventory is this viewing command's product, and its exit status is the verb's own, so `just` adds no line of its own about it; a block because `just` takes no comment between an attribute and its recipe.
+[no-exit-message]
 unpublished *args:
-    @./scripts/unpublished.sh "$@"
+    @./scripts/onepipeline.sh unpublished --acknowledgements "${XDG_STATE_HOME:-$HOME/.local/state}/ai-orchestrator/stop-unfinished/acknowledged" --pr-author-graph "{{ repo_root }}/graphs/pr-author.yaml" "$@"
+# llmlint: ignore-end[tool_output_is_signal]
 
 # What this manager session still owes before its turn can end: `just unfinished
-# [--session ID] [--json]`. Stacks `onepipeline unwatched` and `just unpublished --own
-# --no-disk` for the same session, each half under its own heading. Its exit status is
-# the whole of what a caller branches on: `scripts/unfinished.sh --print-surface` prints
-# that vocabulary, and `orchestrator/unfinished.py` is its one declaration.
+# [--session ID] [--json]`. Stacks `onepipeline unwatched` and `just unpublished` for the
+# same session, each half under its own heading. Its exit status is the whole of what a
+# caller branches on, and `orchestrator/unfinished.py` is its one declaration.
 # llmlint: ignore[tool_output_is_signal] the two headed halves are this viewing command's product.
 unfinished *args:
     @./scripts/unfinished.sh "$@"

@@ -3663,8 +3663,8 @@ page](https://github.com/nickderobertis/onepipeline/blob/main/docs/stop-guard.md
 Codex; the `Stop` entry `.claude/settings.json` registers is that page's Claude Code
 wiring — `onepipeline stop-guard --format claude-code`, named by path out of this
 checkout's `.venv/bin` through `$CLAUDE_PROJECT_DIR`, with its timeout kept — and nothing
-of this repository's sits between the harness and the verb. That entry also declares the
-one `--source` the verb consults below it, which the next section describes. A manager
+of this repository's sits between the harness and the verb. That entry also names the
+verb's `--unpublished`, which the next section describes, and declares no `--source`. A manager
 launched from Codex reads the same page for its own wiring. What the guard answers is the page's: the session
 comes off the Stop payload and never out of the environment, so a dispatched worker — who
 inherits both this tracked settings file and its manager's launcher session, while its
@@ -3681,162 +3681,78 @@ environment.
 
 `just unfinished` is one verdict on what a manager session owes before its turn can end:
 the runs it launched that nothing is watching — the engine's `onepipeline unwatched` —
-and the branches those runs left preserved, neither landed nor acknowledged — `just
-unpublished`'s own-sessions target, below. Both are asked about the same session: the
+and the branches those runs left preserved, neither landed nor acknowledged — the
+engine's `onepipeline unpublished`, below. Both are asked about the same session: the
 `--session` value, else the one `scripts/launcher-session.sh` establishes. Both reads are
-live every time.
+live every time, and `orchestrator/unfinished.py` decides neither: it reads each verb's
+exit status and passes on what it wrote.
 
 ```sh
 just unfinished                   # this session, from the ownership environment
 just unfinished --session ID      # a session named
-just unfinished --json            # {"unwatched": [<lines>], "unpublished": [<rows>]}
+just unfinished --json            # {"unwatched": [<lines>], "unpublished": <the engine's document>}
 ```
 
-Standard output carries each half under a heading naming its question; everything
-either half could not resolve goes to standard error, where it changes no status. **The
-status is the whole of what a caller branches on**: `0` nothing is owed, `6` a run is
-unwatched and no branch is counted — the engine's own `unwatched` status, kept as the
-word for that half — `7` a branch is counted and no run is unwatched, `8` both, `2` a
-refused invocation, and any other status a half that could not answer, which is never
-`0`. `orchestrator/unfinished.py` is the one declaration of that vocabulary and
-`scripts/unfinished.sh --print-surface` prints it.
+Standard output carries each half under a heading naming its question, the unpublished
+half one line per row the engine listed — counted with the command that lands it, in
+flight, or acknowledged with its reason; everything either half could not resolve goes to
+standard error, where it changes no status. **The status is the whole of what a caller
+branches on**: `0` nothing is owed, `6` a run is unwatched and no branch is counted — the
+engine's own `unwatched` status, kept as the word for that half — `7` a branch is counted
+and no run is unwatched — the engine's own `unpublished` status — `8` both, `2` a refused
+invocation, and any other status a half that could not answer, which is never `0`.
+`orchestrator/unfinished.py` is the one declaration of that vocabulary.
 
-**Every counted row names its two ways out**: the `just` command that lands it, and
-`just unpublished --acknowledge <branch> --reason "<why>"`, which drops it out of the
-count for this session until the branch moves past the acknowledged tip. Acknowledging is
-the escape hatch for a branch whose next step is a question to the user rather than a
-landing; it lands nothing. A *may have landed* row is counted until it is landed or
-acknowledged.
-
-**The `Stop` hook answers this same question.** The command `.claude/settings.json`
-registers is still the engine's `onepipeline stop-guard` alone, and it composes one
-verdict from two questions: `unwatched`, which it asks itself, and the unpublished half,
-which it asks the one `--source` that registration declares — `scripts/unpublished.sh
---stop-verdict`, the preserved-branch view rendering its own-sessions target as the
-verb's neutral verdict. That source reads the verb's input, `{"session": …,
-"continuation": …}`, on standard input and answers `block` with the view's own listing,
-each counted branch's two ways out included, or `none`; input naming no session, a
-listing `onevcs` cannot produce, or one with a row the view had to leave out — which may be
-the session's own — is a `block` saying why. It never asks `unwatched`, so
-where both hold the one verdict carries each once, the verb's reason first. A source the
-verb cannot consult — absent, exiting non-zero, silent, answering outside the vocabulary,
-or past the registration's `--source-timeout` — refuses the turn, the reason naming the
-source's command and what went wrong, and never lets it end as if nothing were owed. Block
-once per condition is the verb's, per source: a continuation over an unchanged verdict
-ends the turn. An acknowledgement needs no further wiring: it drops the branch out of the
-view, and so out of the verdict. `tests/unfinished/test_unfinished_e2e.py` drives the
-registered command over a Stop payload in each of those states and holds its verdict to
-what `just unfinished` says the session owes.
+**The `Stop` hook answers this same question, in the engine.** The command
+`.claude/settings.json` registers is the engine's `onepipeline stop-guard` alone, with
+`--unpublished`: the verb asks `unwatched` and the unpublished decision itself, in its own
+process and concurrently, under the acknowledgement directory and drafter graph the
+registration names — the same two `just unpublished` names, so an acknowledgement
+recorded through the recipe stands for the hook. `owed` blocks with the engine's listing,
+each counted branch's landing and acknowledging commands included; `none` adds nothing;
+and a decision that could not be read blocks naming why, never a warning and never
+silence. Block once per condition is the verb's: a continuation over an unchanged verdict
+ends the turn. onepipeline's [stop-guard page](https://github.com/nickderobertis/onepipeline/blob/main/docs/stop-guard.md) and its `docs/contract-divergences.md`
+entry on `unpublished` state that contract; `tests/unfinished/test_unfinished_e2e.py`
+drives the registered command over a Stop payload in each of those states.
 
 ### The preserved branches this host is holding onto
 
-`just unpublished` is the inventory beside the listing below: what this host is still
-holding, what each branch costs in disk, and the `just` command that lands it. It is a
-view over `onevcs` verbs — `recoverable --json` for the rows, `repos` for the registered
-identities and `session holders --json` for the worktree a closed session's disk
-reading needs — and never a
-re-derivation from `git` or a walk of
-`events.jsonl`; the one `git` it runs is a `rev-parse` that keys an acknowledgement and
-decides nothing about what is unpublished. `orchestrator/unpublished.py` is the one
-statement of the contract: the row shape, the counting rule, the exit statuses, the
-acknowledgement file, and the session-label keys.
+`just unpublished` is the engine's own `onepipeline unpublished`: what a manager
+session's runs left preserved and unlanded, what this host is holding across every
+identity, and the command that lands each one. The recipe passes every argument, the
+output and the exit status through untouched, and names only what is this host's: the
+acknowledgement directory, `$XDG_STATE_HOME/ai-orchestrator/stop-unfinished/acknowledged`,
+which the `Stop` hook reads too, and `graphs/pr-author.yaml`, so every landing command it
+prints is the engine's `publish-branch` or `repo-recover` drafting the change request's
+body. The decision — which rows count, how an acknowledgement stands, the row and
+document shapes, the exit statuses — is the engine's, stated in onepipeline's
+`docs/contract-divergences.md` at the adopted release, and nothing here restates it;
+`tests/test_engine_contracts.py` holds the exit statuses and the acknowledgement version
+this host reads to that declaration.
 
 ```sh
 just unpublished                              # the branches this session's runs left
 just unpublished --session ID                 # the branches a named manager session's runs left
 just unpublished --host                       # every registered identity
-just unpublished --session s-0123456789ab …   # one session token, repeatable
-just unpublished --host --json                # the rows, for something other than a person
-just unpublished --host --no-disk             # skip the walk
+just unpublished --token s-0123456789ab …     # one session's token, repeatable
+just unpublished --host --format json         # one document, for something other than a person
+just unpublished --host --disk                # add each row's disk reading
 just unpublished --acknowledge BRANCH --reason "why it is deliberately left"
-just reclaim-branch BRANCH --repo CHECKOUT    # the way out a superseded row names first
 ```
 
-**Three targets.** The **own-sessions** target — the default, `--own`, and a `--session`
-naming a manager session id rather than an `s-` token — is one read of `onevcs
-recoverable` filtered on the label `launcher=<session>`: the branches of every session the engine
-opened for a run that manager session launched, found by the session labels (`run`,
-`node`, `launcher`) the engine stamps and `onevcs` filters on. The session is the
-`--session` value, else the one `scripts/launcher-session.sh` establishes — the identity
-`just unwatched --session` is keyed on — and with neither the target is refused.
-`--host` answers for every registered identity from any directory, asking each one by
-name, which is the visibility gap: `just recoverable` run inside a checkout answers for
-that identity alone. `--session <s-token>` is `onevcs recoverable --json --session
-<s-token>`, the branches those sessions hold or held; a token no session record names is
-refused by name. **A session opened before the labelling engine was adopted carries no
-labels**, so the own-sessions target never reaches a branch it preserved and nothing
-backfills them: `--host` does, and so does its `--session <s-token>`.
-
-**What a row carries** is what `onevcs` states — the identity, the branch and its base,
-the provenance, the `landed` object, the change URL, why the workstream stopped, and the
-`onevcs` session token that preserved it (`null` for a branch no session record names) —
-with `run`, `node` and `manager_session` read off that session's labels, `null` for a
-session that carries none.
-Beside that it carries the resume command **in its `just` form**, because the raw
-`onevcs publish-branch` line lands with an empty description; whether the row is in
-flight; whether it is counted; its acknowledgement; and the disk — the run root, clone
-and worktree together, and each build-output directory under the worktree
-(`target`, `node_modules`, `.venv`, `.nx`, `dist`) called out on its own. The walk
-counts allocated file bytes and follows no symbolic link, so a sparse file does not
-claim its apparent length as disk cost. The default rendering is that table plus a
-trailer stating the counted total and the bytes held by build output, with both ways
-out named beside each counted row.
-
-**A row `onevcs` reports a `held_by` for is shown, marked in flight, and never counted**
-— a publication landing that branch this moment is exactly what a consumer of this view
-must not refuse a turn over. It is the presence of `held_by` that decides it rather than
-which `holding` value it carries: every variant of that enum is a session that has not
-finished with the branch, so one `onevcs` adds is in flight without anything here moving. Every `landed.state` the listing carries counts: `no`, `unknown`
-(the *may have landed* rows) and `in-part`.
-
-**A superseded row is the manager's call, with its evidence beside it.** Every row
-carries `onevcs`'s own `retirement` object as `recoverable --json` states it. A branch
-that provably holds no work beyond its base never reaches the listing: `recoverable`
-omits it, and `onevcs session close`, `just sweep` and the engine's idle maintenance
-delete it. A counted row `onevcs` classes `superseded-with-changes` — a retry replaced it
-and landed, and it still differs from its base — is listed with what superseded it (its
-branch and node) and where that landed, the paths that still differ, and then its ways
-out, reclaim first:
-
-```text
-    reclaim it:      just reclaim-branch <branch> --repo <checkout>
-    or acknowledge:  just unpublished --acknowledge <branch> --reason "<why it is deliberately kept>"
-```
-
-`just reclaim-branch` is `onevcs reclaim`, which deletes the branch from every checkout,
-run clone and origin holding it, returns any pool slot rather than removing it, and
-refuses with exit `4` a branch it classes `keep` or that anything live holds. A `keep`
-whose reason is `unknown` is the fail-safe answer to a read that failed, and since onevcs
-0.39.0 (https://github.com/nickderobertis/onevcs/pull/290) it names that read — the
-operation, its subject and the error — in the verb's output and as the `retirement`
-object's `cause` (`null` for every other class), so fix what it names before reclaiming.
-The acknowledgement is for work deliberately kept. The counting rule is unchanged: such a row
-counts until it is reclaimed or acknowledged, and `just unfinished` and the `Stop` hook
-print the same lines, because they render the same table. The class, the evidence and
-the verb are `onevcs`'s; this view detects nothing and runs no `git` of its own for it.
-
-**Acknowledging is never landing.** `--acknowledge <branch> --reason "<text>"` records
-that the calling manager session has seen and deliberately left that branch; the row
-still shows, marked with its reason, with `counted` false. It is keyed on that session
-and on **what the branch stands at**, so a branch that moves past the recorded tip counts
-again, and it is invisible to every other session. A missing or blank reason is refused,
-because an acknowledgement carrying only a branch is indistinguishable downstream from
-one nobody meant, and so is a branch no row of the host-level reading names. The record
-lives under `$XDG_STATE_HOME/ai-orchestrator/stop-unfinished/acknowledged/`, one file per
-session; nothing in the tree or the runs root is written.
-
-**The exit status is the whole of what a consumer branches on**: `7` when at least one
-row is counted — preserved, not in flight, not acknowledged at its current tip — `0`
-when none is, `2` on a refused invocation, and any other non-zero when the view could not
-answer, which it says on standard error. Everything it could not resolve goes there too,
-where it changes no status. An acknowledgement answers for the host-level target it was
-looked up in, read after the write: `7` while any other branch there still counts, since
-one branch left deliberately says nothing about the rest. A wrapper that cannot load its
-helper or interpreter also returns the could-not-answer status, with the failed prerequisite on standard error.
-`scripts/unpublished.sh --print-surface` prints that
-vocabulary for a consumer to read rather than restate. The view reclaims no disk, lands
-no branch and closes no session: `just sweep`, the three landing verbs and `onevcs
-session close` stay where they are.
+**What this host relies on.** A row the engine counts is preserved, held by no live
+session, not landed — `landed` `no`, `unknown` or `in-part` — and not acknowledged at its
+current tip, so a branch that moves past its acknowledgement counts again. The session
+target selects by the `launcher` label the engine stamps on every session it opens, so a
+session opened before the labelling engine was adopted is reached by `--host` and
+`--token` alone. `0` is nothing counted, `7` at least one counted, `1` unanswered — never
+read as nothing — and `2` refused. Every acknowledgement a manager recorded before the
+engine took the decision over is in the version-1 format the engine adopted, under the
+same directory, and still stands. A counted row the engine's linked `onevcs` classes
+`superseded-with-changes` is listed with its evidence and the reclaim line first;
+`just reclaim-branch` is that `onevcs reclaim`. The view reclaims no disk, lands no branch
+and closes no session.
 
 ### Preserved work that has not been published
 

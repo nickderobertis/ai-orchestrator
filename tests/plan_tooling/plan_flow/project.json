@@ -79,7 +79,6 @@
       "{workspaceRoot}/scripts/review-plan.sh",
       "{workspaceRoot}/scripts/run-ended.sh",
       "{workspaceRoot}/scripts/template-env.sh",
-      "{workspaceRoot}/scripts/unpublished.sh",
       "{workspaceRoot}/graphs/**/*",
       "{workspaceRoot}/config/**/*",
       "{workspaceRoot}/templates/**/*",

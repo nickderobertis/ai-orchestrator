@@ -1,7 +1,7 @@
 """A scratch `onevcs` registry holding every branch state `just unpublished` reads.
 
-Both the unit tier over `orchestrator/unpublished.py` and the journey over the recipe
-need the same thing: a registered identity, made from nothing, on which the real
+The unit tier over `orchestrator/unfinished.py` and the journeys over the recipes and the
+`Stop` hook need the same thing: a registered identity, made from nothing, on which the real
 `onevcs` has preserved a branch each way a run can leave one — a session that committed
 and closed, a session still held by a live process, and a branch no session record names
 — under a scratch `ONEVCS_HOME`, so nothing this host has registered is read or moved.
@@ -23,7 +23,7 @@ llmlint: ignore-file[shell_test_tiers_stay_split] This module is infrastructure 
 tiers that read it, and which tier each of them is decides where it can live: the recipe
 half is split out into `tests/e2e/unpublished_view/test_unpublished_e2e.py`, the
 `unpublished-view` project keyed on `unpublishedViewWorkspace`, while
-`tests/test_unpublished.py` must stay in `orchestrator:test` because
+`tests/test_unfinished.py` must stay in `orchestrator:test` because
 `orchestrator/project.json` runs `test-recipes` with `--no-cov` and gives `coverage` a
 `dependsOn` of `test` alone — so that is the one tier whose measurement the 100% floor over
 `orchestrator/` is read from. Moving this helper into that project's directory would not
