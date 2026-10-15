@@ -621,10 +621,11 @@ DELEGATIONS = (
         ("claude/work", "--repo", "/checkout", "--from", "/run/clone", "--as", "claude/work-2"),
         "uv run onevcs import claude/work --repo /checkout --from /run/clone --as claude/work-2",
     ),
+    # llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Which Nx project owns this table is the tree's and unchanged; this row only follows the recipe to the engine verb it now reaches.  # noqa: E501 - a directive is one line
     Delegation(
         "integrate",
         ("claude/a", "claude/b", "--push"),
-        "uv run onevcs integrate claude/a claude/b --push",
+        "uv run onepipeline integrate claude/a claude/b --push",
     ),
     Delegation("sync", ("main",), "uv run onevcs sync main"),
     # The line `just unpublished` prints for a superseded branch; every argument, the

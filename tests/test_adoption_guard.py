@@ -747,8 +747,10 @@ def test_the_raising_face_reports_the_first_refusal_with_its_field(
 #: and its refusal spells every word it would have accepted, which is the vocabulary.
 NOT_AN_ADOPTION = "when-somebody-remembers"
 
-#: How that refusal names the accepted words: ``expected `fast` or `published```.
-EXPECTED_WORDS = re.compile(r"expected ((?:`[a-z-]+`(?:, | or )?)+)")
+#: How that refusal names the accepted words: ``expected `fast` or `published``` through
+#: earlier onevcs releases, and ``expected one of fast, published`` from the onevcs the
+#: adopted engine links, whose release-targets reader spells the list without quoting it.
+EXPECTED_WORDS = re.compile(r"expected (?:one of )?((?:`?[a-z-]+`?(?:, | or )?)+)")
 
 
 def _override(root: Path, adoption: str) -> subprocess.CompletedProcess[str]:
@@ -827,7 +829,8 @@ def test_the_adoption_vocabulary_is_the_one_the_installed_onevcs_accepts(tmp_pat
     )
     spelled = EXPECTED_WORDS.search(refused.stdout + refused.stderr)
     assert spelled is not None, refused.stdout + refused.stderr
-    assert set(re.findall(r"`([a-z-]+)`", spelled[1])) == {one.value for one in Adoption}, (
+    words = {word.strip("`") for word in re.split(r", | or ", spelled[1].strip(", "))}
+    assert words == {one.value for one in Adoption}, (
         f"the installed onevcs accepts {spelled[1]}, which is not this module's vocabulary"
     )
 

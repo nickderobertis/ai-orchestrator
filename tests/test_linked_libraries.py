@@ -670,9 +670,9 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 #: third dependent appears — and it is the shape that survived the split collapsing,
 #: because it never counted the cores in the first place.
 LINKED_HARNESS_CORES = (
-    LinkedCore(dependent="oneagentgraph", dependent_version="0.5.6", core="0.24.2"),
+    LinkedCore(dependent="oneagentgraph", dependent_version="0.5.7", core="0.24.2"),
     LinkedCore(dependent="onejudge", dependent_version="0.19.0", core="0.24.2"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.71.1", core="0.24.2"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.72.0", core="0.24.2"),
 )
 
 #: How a crate names itself in a compiled binary: cargo embeds the registry source

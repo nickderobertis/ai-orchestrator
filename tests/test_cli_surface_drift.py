@@ -222,6 +222,10 @@ def _delegation(body: list[str]) -> Recipe:
             path: tuple[str, ...] = ()
             for token in text[reached.end() :].split():
                 word = token.strip(TRIM)
+                if not word:
+                    # The closing quote of a quoted wrapper path,
+                    # `"{{repo_root}}/scripts/onepipeline.sh" integrate`: not a word.
+                    continue
                 if word not in surface.subcommands(path):
                     break
                 path = (*path, word)

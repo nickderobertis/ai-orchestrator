@@ -1319,6 +1319,12 @@ do not just re-arm.
    is read, and re-arm from its cursor on every one, a new run joining included. While
    the flow lives that watch covers its runs; once it has exited, a run still open is
    owed on its own, as is a `--detach` launch's run.
+8. **A landing you start is a flow too.** `just publish-branch`, `just repo-recover` and
+   `just integrate` register in this session's flow before they act and print it; arm
+   `just watch --flow <ID>` on it. Its default wakes on milestones and blockers only;
+   read every step with `just monitor --flow <ID> --filter detailed`. While it runs, no
+   acknowledgement of its run, flow or branch is accepted, whatever was acknowledged
+   before; close a refused or dead one with `just unwatched --acknowledge-flow`.
 
 Supervising several runs still requires a qualifying watch for each owed run and flow.
 Every run this session launched stays owed until closed: the `complete` verdict, `just

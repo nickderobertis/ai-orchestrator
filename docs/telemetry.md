@@ -22,7 +22,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.71.1 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.72.0 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -315,7 +315,7 @@ by it.
 The onejudge half then moved to 0.19.0 with the engine, on the same terms:
 `crates/onejudge/src/report.rs` and `crates/onejudge/src/usage.rs` are
 unchanged between `v0.17.2` and `onejudge-v0.19.0`, and the engine wheel links
-`oneharness-core` 0.24.2 for itself, onejudge 0.19.0 and oneagentgraph 0.5.6, read off its
+`oneharness-core` 0.24.2 for itself, onejudge 0.19.0 and oneagentgraph 0.5.7, read off its
 own SBOM. It was re-taken on four real judge turns the adopted onejudge ran through
 `oneharness.judge.toml` and `oneharness.design-doc-judge.toml`, two on Codex and two on
 Claude Code: each record's `usage` block is the same five keys and nothing else.
@@ -448,7 +448,7 @@ served them.
    `just telemetry-server` — or by `just dag-ui`, which is the same published server
    with the browser view built into it answering on the same origin) is the structured
    view. Measured against real runs on
-   **`onepipeline-api` 0.35.0**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.36.0**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
    what re-opens this paragraph: `telemetry_schema_version` 21 on the envelope, where
    0.13.0 served 20 and

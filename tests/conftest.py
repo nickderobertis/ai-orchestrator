@@ -300,6 +300,24 @@ DISPATCH_SELECTION_ENV = (
     "ONEHARNESS_HARNESSES",
     "ONEHARNESS_MODEL",
 )
+#: Who is acting, and where runs and flows are kept, as an enclosing dispatch exports them:
+#: the engine's launcher identity and runs root, the flow and run it is inside, and every
+#: harness session id `scripts/launcher-session.sh` derives a launcher from — held to that
+#: helper's own source by `tests/test_launcher_session.py`. Inherited,
+#: they make a landing a test runs through a recipe the *dispatching manager's*
+#: supervised work, registered as a flow in that host's real runs root — which its Stop
+#: hook then owes. A test that needs an owner or a runs root names its own.
+OWNERSHIP_ENV = (
+    "ONEPIPELINE_LAUNCHER",
+    "ONEPIPELINE_LAUNCHER_SESSION",
+    "ONEPIPELINE_FLOW",
+    "ONEPIPELINE_RUN_ID",
+    "ONEPIPELINE_RUNS_DIR",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_SESSION_ID",
+    "CODEX_THREAD_ID",
+    "CODEX_SESSION_ID",
+)
 #: The namespace of oneharness's history settings — whether a turn is recorded, where,
 #: under which labels, and which pointer file indexes it. The engine sets them for every
 #: dispatch it runs, so this suite run from inside one inherits them; reconciled against
@@ -576,6 +594,19 @@ def _isolate_dispatch_selection(monkeypatch: pytest.MonkeyPatch) -> None:
     choice instead of their own.
     """
     for key in DISPATCH_SELECTION_ENV:
+        monkeypatch.delenv(key, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_launcher_ownership(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep an enclosing manager's identity and runs root out of everything a test runs.
+
+    A manager landing — `just publish-branch`, `just repo-recover`, `just integrate` — is
+    registered as supervised work of whichever session the environment names, in the runs
+    root it names; run from a suite inside a dispatch, that was the dispatching manager's
+    session on the host's real runs root.
+    """
+    for key in OWNERSHIP_ENV:
         monkeypatch.delenv(key, raising=False)
 
 

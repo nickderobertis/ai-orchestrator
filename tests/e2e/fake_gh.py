@@ -23,6 +23,18 @@ Every call is appended to
 to `FAKE_GH_STATE/pr-<n>.body` — byte for byte, because "the change request carries
 exactly the drafted body" is a claim about characters and an assertion against
 anything but the recorded file would be a claim about this program instead.
+
+**A journey may give the base required checks, and decide when the host merges.** Named
+by `FAKE_GH_CHECKS`, a file of one check a line — `<name> <status> <conclusion>
+<required|advisory>`, `<status>` being `queued`, `in_progress` or `completed` and
+`<conclusion>` `-` until it is completed — is what the base's ruleset requires (its
+`required` lines) and what every change request's `statusCheckRollup` reports, re-read at
+each call, so a journey moves a check by rewriting the file. `pr merge --squash --auto`
+then arms the change rather than merging it, and the host merges it — squashing the head's
+tree onto the base in the bare origin, as GitHub does, so the merge commit it reports is
+one real git put there — at the first call that finds `FAKE_GH_STATE/merge` written.
+Unset, the host is the unprotected one above, or the `checks.json` one when that is
+scripted instead; the two scripts are never combined in one journey.
 """
 
 from __future__ import annotations
@@ -33,7 +45,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Literal, NamedTuple, NotRequired, TypedDict, cast
+from typing import Literal, NamedTuple, TypedDict, cast, get_args
 
 #: Where each call's argv is appended, one JSON list per line.
 CALLS_ENV = "FAKE_GH_CALLS"
@@ -44,6 +56,15 @@ STATE_ENV = "FAKE_GH_STATE"
 ORIGIN_ENV = "FAKE_GH_ORIGIN"
 #: The repository every URL this host mints is under.
 REPOSITORY = "acme-corp/hosted"
+#: The check script the paragraph above describes; unset, nothing is required.
+CHECKS_ENV = "FAKE_GH_CHECKS"
+#: The file under the state directory a journey writes to let the host merge what it armed.
+MERGE_PERMIT = "merge"
+#: `startedAt` for every check that has started while the change is a draft, and for the
+#: run a workflow on `ready_for_review` starts once it is lifted: a later run, which is how
+#: `onevcs` tells a run attached after a lift from the draft's.
+CHECK_STARTED = "2026-01-01T00:00:00Z"
+CHECK_RERUN_STARTED = "2026-01-01T00:05:00Z"
 
 
 # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] These restate `gh`'s answers
@@ -122,7 +143,67 @@ class Change(TypedDict):
     head: str
     base: str
     title: str
-    mergeCommit: NotRequired[MergeCommit]
+    #: Whether `pr merge --auto` armed it, for the host to merge once it may.
+    armed: bool
+    #: The commit the host's squash put on the base, once it merged.
+    mergeCommit: MergeCommit | None
+    mergedAt: str | None
+
+
+#: Where a check run stands, in the words the check script and GitHub's API use.
+CheckStatus = Literal["queued", "in_progress", "completed"]
+#: How a completed check run concluded, as GitHub's API words it, or `-` before then.
+CheckConclusion = Literal[
+    "-", "success", "failure", "neutral", "cancelled", "skipped", "timed_out", "stale"
+]
+
+
+class Check(NamedTuple):
+    """One line of the check script, as the host reports it."""
+
+    name: str
+    status: CheckStatus
+    conclusion: CheckConclusion
+    required: bool
+
+    def rollup(self, *, lifted: bool) -> dict[str, str]:
+        """The check as `gh pr view --json statusCheckRollup` reports it.
+
+        `conclusion` is absent rather than null until the check completes, which is what
+        the real rollup does and what `onevcs` reads as "not decided yet".
+        """
+        entry = {"__typename": "CheckRun", "name": self.name, "status": self.status.upper()}
+        if self.status != "queued":
+            entry["startedAt"] = CHECK_RERUN_STARTED if lifted else CHECK_STARTED
+        if self.status == "completed":
+            entry["conclusion"] = self.conclusion.upper()
+        return entry
+
+
+def _checks() -> list[Check]:
+    """The check script, read now; none when the journey named none."""
+    named = os.environ.get(CHECKS_ENV, "")
+    if not named:
+        return []
+    checks = []
+    for line in Path(named).read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        name, status, conclusion, blocks = line.split()
+        assert status in get_args(CheckStatus), line
+        assert conclusion in get_args(CheckConclusion), line
+        assert (conclusion == "-") == (status != "completed"), line
+        assert blocks in ("required", "advisory"), line
+        # Each word was checked against its alias just above; `split` alone loses the type.
+        checks.append(
+            Check(
+                name,
+                cast(CheckStatus, status),
+                cast(CheckConclusion, conclusion),
+                blocks == "required",
+            )
+        )
+    return checks
 
 
 def _call(argv: list[str]) -> Call:
@@ -188,6 +269,9 @@ def _create(call: Call, *, draft: bool) -> int:
         "head": call.head,
         "base": call.base,
         "title": call.title,
+        "armed": False,
+        "mergeCommit": None,
+        "mergedAt": None,
     }
     (state / f"pr-{number}.json").write_text(json.dumps(opened), encoding="utf-8")
     sys.stdout.write(f"https://github.com/{REPOSITORY}/pull/{number}\n")
@@ -197,16 +281,22 @@ def _create(call: Call, *, draft: bool) -> int:
 # llmlint: ignore-end[e2e_not_mocked]
 
 
-# Scripted checks are GitHub responses at the task-authorized ONEVCS_GH boundary.
-# The recipe, engine, linked onevcs and git remain real.
-# llmlint: ignore-block[e2e_not_mocked] See the boundary explanation above.
+# llmlint: ignore-block[e2e_not_mocked] This file is the `gh` boundary AGENTS.md permits doubling — the published CLI `onevcs` delegates to, through the `ONEVCS_GH` seam it publishes for this — and the checks, mergeability and merge it reports are the host's own answers there, so `onevcs`, the recipes and git stay real.  # noqa: E501 - a directive is one line
 def _view(number: str, call: Call) -> int:
     """Exactly the fields the call asked for, as `gh` answers."""
+    path = _state() / f"pr-{number}.json"
     # `cast` for the same reason as in `_remembered`: `_create` wrote this file.
-    record = cast(Change, json.loads((_state() / f"pr-{number}.json").read_text(encoding="utf-8")))
+    record = cast(Change, json.loads(path.read_text(encoding="utf-8")))
+    if record["armed"] and record["state"] == "OPEN" and (_state() / MERGE_PERMIT).exists():
+        record = _merge_now(path, record)
     # Projected off a plain mapping of the record, because which fields `--json` names is
     # the caller's to choose and a fixed field cannot stand in for a chosen one.
-    remembered = dict(record)
+    remembered: dict[str, object] = {
+        **record,
+        "statusCheckRollup": [check.rollup(lifted=not record["isDraft"]) for check in _checks()],
+        "mergeable": "MERGEABLE",
+        "mergeStateStatus": "CLEAN",
+    }
     script = _state() / "checks.json"
     if script.exists() and "statusCheckRollup" in call.fields:
         # The journey writes these typed fixtures; only their JSON round trip loses the type.
@@ -222,8 +312,6 @@ def _view(number: str, call: Call) -> int:
         }
         with (_state() / "polls.jsonl").open("a", encoding="utf-8") as log:
             log.write(json.dumps(observation) + "\n")
-    remembered.setdefault("mergeable", "MERGEABLE")
-    remembered.setdefault("mergeStateStatus", "CLEAN")
     sys.stdout.write(json.dumps({field: remembered.get(field) for field in call.fields}) + "\n")
     return 0
 
@@ -243,6 +331,96 @@ def _ready(number: str) -> int:
             (_state() / "poll").read_text(encoding="utf-8"), encoding="utf-8"
         )
     path.write_text(json.dumps(record), encoding="utf-8")
+    return 0
+
+
+# llmlint: ignore-end[e2e_not_mocked]
+
+
+# llmlint: ignore-block[e2e_not_mocked] This file is the `gh` boundary AGENTS.md permits doubling — the published CLI `onevcs` delegates to, through the `ONEVCS_GH` seam it publishes for this — and the merge it performs is the host's own, done with real git in the bare origin, so `onevcs`, the recipes and git stay real.  # noqa: E501 - a directive is one line
+def _merge(number: str, *, auto: bool) -> int:
+    """`pr merge --squash [--auto]`: merge now when the host may, otherwise arm it."""
+    path = _state() / f"pr-{number}.json"
+    # `cast` for the same reason as in `_remembered`: `_create` wrote this file.
+    record = cast(Change, json.loads(path.read_text(encoding="utf-8")))
+    if record["state"] != "OPEN":
+        return 0
+    if auto and not (_state() / MERGE_PERMIT).exists():
+        record["armed"] = True
+        path.write_text(json.dumps(record), encoding="utf-8")
+        return 0
+    _merge_now(path, record)
+    return 0
+
+
+def _merge_now(path: Path, record: Change) -> Change:
+    """Squash the head's tree onto the base in the bare origin, and record the merge."""
+    origin = os.environ[ORIGIN_ENV]
+
+    def plumbing(*args: str) -> str:
+        return subprocess.run(
+            ["git", "--git-dir", origin, *args], text=True, capture_output=True, check=True
+        ).stdout.strip()
+
+    base = plumbing("rev-parse", f"refs/heads/{record['base']}")
+    tree = plumbing("rev-parse", f"refs/heads/{record['head']}^{{tree}}")
+    squashed = plumbing(
+        "-c",
+        "user.name=fake-host",
+        "-c",
+        "user.email=host@example.com",
+        "commit-tree",
+        tree,
+        "-p",
+        base,
+        "-m",
+        f"{record['title']} (#{record['number']})",
+    )
+    plumbing("update-ref", f"refs/heads/{record['base']}", squashed, base)
+    record["state"] = "MERGED"
+    record["armed"] = False
+    record["mergeCommit"] = {"oid": squashed}
+    record["mergedAt"] = "2026-01-01T00:10:00Z"
+    path.write_text(json.dumps(record), encoding="utf-8")
+    return record
+
+
+def _pr_checks(argv: list[str]) -> int:
+    """`pr checks N [--required] --json …`: which checks block the merge, or where each ran.
+
+    A base requiring nothing is answered as `gh` answers it — exit 1, nothing on stdout,
+    and the line `onevcs` reads as that answer.
+    """
+    checks = _checks()
+    if "--required" in argv:
+        required = [{"name": check.name} for check in checks if check.required]
+        if not required:
+            sys.stderr.write("no required checks reported on the head branch\n")
+            return 1
+        sys.stdout.write(json.dumps(required) + "\n")
+        return 0
+    links = [
+        {"name": check.name, "link": f"https://github.com/{REPOSITORY}/actions/runs/1/job/{index}"}
+        for index, check in enumerate(checks, start=1)
+    ]
+    sys.stdout.write(json.dumps(links) + "\n")
+    return 0
+
+
+def _rules() -> int:
+    """The base's ruleset: the script's required checks, or no rule at all."""
+    required = sorted({check.name for check in _checks() if check.required})
+    rules = (
+        [
+            {
+                "type": "required_status_checks",
+                "parameters": {"required_status_checks": [{"context": name} for name in required]},
+            }
+        ]
+        if required
+        else []
+    )
+    sys.stdout.write(json.dumps(rules) + "\n")
     return 0
 
 
@@ -274,9 +452,8 @@ def main(argv: list[str]) -> int:
             sys.stdout.write("tester\n")
             return 0
         case ["api", path, *_] if path.startswith(f"repos/{REPOSITORY}/rules/branches/"):
-            # No ruleset applies to the base, so none of its rules requires a check.
-            sys.stdout.write("[]\n")
-            return 0
+            # Unscripted, no ruleset applies to the base, so none of its rules requires a check.
+            return _rules()
         case ["api", path, *_] if path.startswith(
             f"repos/{REPOSITORY}/branches/"
         ) and path.endswith("/protection/required_status_checks"):
@@ -292,13 +469,13 @@ def main(argv: list[str]) -> int:
         case ["api", path, *_] if "/check-suites?" in path:
             sys.stdout.write('{"total_count": 0, "check_suites": []}\n')
             return 0
-        case ["pr", "checks", *_] if "--required" in argv:
+        case ["pr", "checks", *_] if "--required" in argv and (_state() / "checks.json").exists():
             sys.stdout.write('[ {"name": "aggregate"} ]\n')
             return 0
-        case ["pr", "merge", number, *_]:
-            path = _state() / f"pr-{number}.json"
+        case ["pr", "merge", number, *_] if (_state() / "checks.json").exists():
+            record_path = _state() / f"pr-{number}.json"
             # `_create` wrote this Change; deserialization alone loses its type.
-            record = cast(Change, json.loads(path.read_text(encoding="utf-8")))
+            record = cast(Change, json.loads(record_path.read_text(encoding="utf-8")))
             if record["isDraft"]:
                 sys.stderr.write("cannot merge a draft\n")
                 return 1
@@ -315,7 +492,7 @@ def main(argv: list[str]) -> int:
             )
             record["state"] = "MERGED"
             record["mergeCommit"] = {"oid": record["headRefOid"]}
-            path.write_text(json.dumps(record), encoding="utf-8")
+            record_path.write_text(json.dumps(record), encoding="utf-8")
             return 0
         case ["pr", "create", *_]:
             return _create(call, draft="--draft" in argv)
@@ -325,6 +502,15 @@ def main(argv: list[str]) -> int:
             return _view(number, call)
         case ["pr", "ready", number, *_]:
             return _ready(number)
+        case ["run", "view", *_] if "--log" in argv:
+            # The log `onevcs` keeps beside a check it records; its content is not this
+            # host's to decide, only that the host produced one.
+            sys.stdout.write(f"log of {argv[argv.index('--job') + 1]}\n")
+            return 0
+        case ["pr", "checks", _number, *_]:
+            return _pr_checks(argv)
+        case ["pr", "merge", number, *_] if "--squash" in argv:
+            return _merge(number, auto="--auto" in argv)
     sys.stderr.write(f"fake gh: nothing here answers {argv}\n")
     return 1
 

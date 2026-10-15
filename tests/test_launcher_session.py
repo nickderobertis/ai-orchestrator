@@ -27,6 +27,7 @@ import subprocess
 from typing import NamedTuple
 
 import pytest
+from conftest import OWNERSHIP_ENV
 
 from orchestrator.root import REPO_ROOT
 
@@ -195,6 +196,24 @@ def test_the_markers_held_here_are_exactly_the_ones_the_helper_reads() -> None:
         f"{HELPER.name}'s ladder reads {sorted(read)} and this module holds "
         f"{sorted(variable for variable, _ in MARKERS)}. Add the row for whichever marker "
         "the helper gained, so the claim it makes is driven rather than assumed"
+    )
+
+
+def test_the_suite_keeps_every_identity_the_helper_reads_or_exports_out_of_its_tests() -> None:
+    """`tests/conftest.py` scrubs each name the helper derives an owner from.
+
+    Inherited by a test, any one of them makes a landing that test runs through a recipe
+    the dispatching manager's supervised work, on that host's real runs root. The names
+    are read off the helper rather than restated: the markers its ladder reads, which the
+    test above holds `MARKERS` to, and the two it exports.
+    """
+    source = HELPER.read_text(encoding="utf-8")
+    exported = set(re.findall(r"export ([A-Z][A-Z0-9_]*)=", source))
+    assert exported == {"ONEPIPELINE_LAUNCHER", "ONEPIPELINE_LAUNCHER_SESSION"}, exported
+    missing = ({variable for variable, _ in MARKERS} | exported) - set(OWNERSHIP_ENV)
+    assert not missing, (
+        f"tests/conftest.py's OWNERSHIP_ENV does not scrub {sorted(missing)}, which "
+        f"{HELPER.name} derives an owner from; add each to it"
     )
 
 

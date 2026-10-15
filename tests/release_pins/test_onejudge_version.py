@@ -104,8 +104,11 @@ PUBLISHED_VERSION_REFERENCE_COUNTS: dict[str, dict[Path, int]] = {
     # is the release's, and a stale number describes an outage nobody would recognise.
     # The tenth and eleventh are the release whose adopting driver replays the envelopes a
     # dead one claimed, and whose `cancel` preempts a live note its node never answered:
-    # two more behavioural literals, re-opened by a bump for the same reason.
-    "onepipeline": {Path("docs/orchestration.md"): 11},
+    # two more behavioural literals, re-opened by a bump for the same reason. The twelfth
+    # is the release from which `just publish-branch`, `just repo-recover` and `just
+    # integrate` register each landing as supervised work of the session that started it,
+    # a behavioural literal re-opened by a bump for the same reason.
+    "onepipeline": {Path("docs/orchestration.md"): 12},
 }
 
 

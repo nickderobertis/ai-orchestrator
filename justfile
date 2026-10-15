@@ -597,18 +597,24 @@ replan *args:
 # Update, verify, fast-forward, and optionally push completed workstream branches:
 # `just integrate claude/a claude/b --push`.
 #
+# The engine's own `onepipeline integrate`, which runs the linked `onevcs integrate`
+# with every argument in order and supervises it in this session's flow, exactly as
+# `publish-branch` and `repo-recover` above are supervised: the owning `just watch`
+# wakes on the train's milestones and blockers and the Stop hook holds while it runs.
+# The wrapper is named by `repo_root` because the identity is the registered checkout
+# the recipe runs *inside* (`just --working-directory <checkout> integrate …`).
 # The branches have to be named. `onevcs integrate` takes a required `<BRANCHES>...`,
 # so the auto-discovery this recipe used to do when given none is gone — omitting
 # them is a usage error rather than a train over everything outstanding. `just
 # recoverable` is where that discovery lives now: it lists every preserved
 # unpublished branch and the command that lands each one, and its output is what
 # feeds this argument list.
-# It queues for the identity's merge-queue lock like every other publication here, so it
-# sources `scripts/lock-timeout.sh` for the bound derived from how long this identity's
-# gate last took; a caller who exported one of their own keeps it.
+# It queues for the identity's merge-queue lock like every other publication here, so
+# `scripts/onepipeline.sh` exports the bound `scripts/lock-timeout.sh` derives from how
+# long this identity's gate last took; a caller who exported one of their own keeps it.
 # llmlint: ignore[tool_output_is_signal] the requested readable per-branch train summary is this verb's product.
 integrate *args:
-    @. "{{repo_root}}/scripts/lock-timeout.sh" && export_lock_timeout integrate && uv run onevcs integrate "$@"
+    @"{{repo_root}}/scripts/onepipeline.sh" integrate "$@"
 
 # List recorded tracked-graph runs, who launched them, and their latest status,
 # **grouped by the project each was launched from** — the engine's own default from the
