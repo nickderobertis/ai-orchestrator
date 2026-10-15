@@ -39,6 +39,7 @@ from typing import NamedTuple, cast
 
 import follow_up_variables
 import plan_store_cache
+import plan_store_user_layer
 import pytest
 import short_state
 from fake_backend import (
@@ -369,6 +370,7 @@ def _store_item(launched: Launched) -> dict[str, object]:
             "PATH": os.environ["PATH"],
             "HOME": str(Path.home()),
             **plan_store_cache.handed(),
+            **plan_store_user_layer.handed(),
             root: _given(launched.worker, root, WORKER),
             plugin: _given(launched.worker, plugin, WORKER),
         },

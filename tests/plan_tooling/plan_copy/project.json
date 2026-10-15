@@ -18,6 +18,7 @@
     "support-plan-fixture-source",
     "support-plan-root-variable",
     "support-plan-sources",
+    "support-plan-store-user-layer",
     "support-project-fixtures",
     "support-published-tools",
     "support-registered-checkouts",

@@ -31,6 +31,7 @@ from pathlib import Path
 
 import follow_up_variables
 import plan_store_cache
+import plan_store_user_layer
 import pytest
 from onetaskgraph_sdk import TaskDetail
 from published_tools import ONETASKGRAPH_BIN
@@ -77,7 +78,13 @@ def _path(*extra: str | None) -> str:
 
 def _environment(**stated: str) -> dict[str, str]:
     """A curated environment: what a journey states, never what an enclosing launch set."""
-    return {"PATH": _path(), "HOME": str(Path.home()), **plan_store_cache.handed(), **stated}
+    return {
+        "PATH": _path(),
+        "HOME": str(Path.home()),
+        **plan_store_cache.handed(),
+        **plan_store_user_layer.handed(),
+        **stated,
+    }
 
 
 def _exported(
@@ -757,6 +764,7 @@ def test_a_checkout_that_cannot_run_the_command_says_how_to_provision_it(
             "PATH": path,
             "HOME": str(Path.home()),
             **plan_store_cache.handed(),
+            **plan_store_user_layer.handed(),
             **_drafting(tmp_path),
         },
         input=BODY,

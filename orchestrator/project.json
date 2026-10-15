@@ -183,6 +183,7 @@
             "support-plan-root-variable",
             "support-plan-sources",
             "support-plan-store-cache",
+            "support-plan-store-user-layer",
             "support-pytest-temp-root",
             "support-registered-checkouts",
             "support-short-state",

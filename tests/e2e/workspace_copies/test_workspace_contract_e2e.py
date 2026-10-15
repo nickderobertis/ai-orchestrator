@@ -971,23 +971,18 @@ def _waits_on_flock(lock: Path, installer: int) -> bool:
     return False
 
 
-def _naps_between_polls(installer: int) -> bool:
-    """Whether the `flock`-less installer is napping between two tries at a held mutex.
+def _naps_between_polls(naps: Path, installer: int) -> int:
+    """How many naps the `flock`-less installer has started between tries at a held mutex.
 
     The fallback's wait is a loop of a failed `mkdir` and a `sleep`, and that nap is the
-    only child it starts there, so a `sleep` child of the installer is the loop waiting.
+    only `sleep` it starts there, so a `sleep` whose parent is the installer is the loop
+    waiting. Read from the record `_flockless_env`'s `sleep` writes as each nap starts
+    rather than by finding the nap in `/proc`: a 0.2s nap is shorter than a scan of the
+    process table takes on a loaded host, so a scan missed every one.
     """
-    for entry in Path("/proc").iterdir():
-        if not entry.name.isdigit():
-            continue
-        try:
-            stat = (entry / "stat").read_text(encoding="utf-8")
-        except OSError:
-            continue
-        name = stat.partition("(")[2].rpartition(")")[0]
-        if name == "sleep" and _parent_of(int(entry.name)) == installer:
-            return True
-    return False
+    if not naps.exists():
+        return 0
+    return naps.read_text(encoding="utf-8").split().count(str(installer))
 
 
 def _holding_installs(release: Path) -> int:
@@ -1305,13 +1300,33 @@ def _path_without(root: Path, tool: str) -> Path:
     return directory
 
 
+def _nap_record(tmp_path: Path) -> Path:
+    """Where `_flockless_env`'s `sleep` records the parent of each nap it starts."""
+    return tmp_path / "naps"
+
+
 def _flockless_env(checkout: Path, tmp_path: Path, trace: Path, **overrides: str) -> dict[str, str]:
     """The wrapper environment on a platform that ships no `flock`.
 
     Stated rather than assumed: every journey below passes under `flock` too, so
     without establishing it is gone each would prove the `flock` path a second time.
+
+    Its `sleep` is the host's own, reached through a script that first appends its
+    parent's pid to `_nap_record`, so a journey reads every nap the fallback's wait
+    takes however short it is; the nap itself is the real one, for as long as asked.
     """
-    stripped = os.pathsep.join((str(checkout / "bin"), str(_path_without(tmp_path, "flock"))))
+    naps = tmp_path / "recorded-sleep"
+    naps.mkdir()
+    sleep = naps / "sleep"
+    real_sleep = shutil.which("sleep")
+    assert real_sleep is not None, "this host has no sleep for the fallback to nap with"
+    sleep.write_text(
+        f'#!/bin/sh\necho "$PPID" >>"{_nap_record(tmp_path)}"\nexec "{real_sleep}" "$@"\n'
+    )
+    sleep.chmod(0o755)
+    stripped = os.pathsep.join(
+        (str(checkout / "bin"), str(naps), str(_path_without(tmp_path, "flock")))
+    )
     resolves = subprocess.run(
         ["bash", "-c", "command -v flock"],
         env={"PATH": stripped},
@@ -1367,8 +1382,11 @@ def test_the_workspace_installer_serializes_without_flock_through_the_shared_fal
         for waiter in racing[1:]:
 
             def polls(waiter: subprocess.Popen[str] = waiter) -> bool:
-                assert _holding_installs(release) == 1, "a second install ran Bun beside the first"
-                return _naps_between_polls(waiter.pid)
+                assert _holding_installs(release) == 1, (
+                    "a second install ran Bun beside the first while it held the first "
+                    "install's mutex, so that caller never waited on it"
+                )
+                return _naps_between_polls(_nap_record(tmp_path), waiter.pid) > 0
 
             _await_installer_waiting(waiter, "first install's mutex", trace, polls)
     finally:
@@ -1434,16 +1452,21 @@ def test_a_forced_install_in_a_copy_holds_both_trees_locks_without_flock_and_rel
         stderr=subprocess.PIPE,
     )
     try:
+        naps = _nap_record(tmp_path)
         for held, whose in ((owner_held, "owner's"), (copy_held, "copy's own")):
+            before = 0
             if held is copy_held:
                 # The run re-makes the owner's mutex once this journey removes it, and
-                # only after its last nap on it has ended, so a nap seen from here on is
-                # one it took waiting on its own. One that exits here took the owner's
-                # and never waited on its own.
+                # only after its last nap on it has started, so a nap recorded from here
+                # on is one it took waiting on its own. One that exits here took the
+                # owner's and never waited on its own.
                 _await_installer_waiting(process, "copy's own mutex", trace, owner_held.is_dir)
-            _await_installer_waiting(
-                process, f"{whose} mutex", trace, lambda: _naps_between_polls(process.pid)
-            )
+                before = _naps_between_polls(naps, process.pid)
+
+            def napped(before: int = before) -> bool:
+                return _naps_between_polls(naps, process.pid) > before
+
+            _await_installer_waiting(process, f"{whose} mutex", trace, napped)
             assert not trace.exists(), f"the forced run ran Bun while the {whose} mutex was held"
             assert modules.is_symlink(), (
                 f"the forced run discarded the link while the {whose} mutex was held"

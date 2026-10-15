@@ -29,6 +29,7 @@ import onevcs_state_snapshot
 import plan_fixture_source
 import plan_root_variable
 import plan_store_cache
+import plan_store_user_layer
 import pytest
 import pytest_temp_root
 from nx_inputs import (
@@ -115,6 +116,12 @@ install_default_bounds()
 # against that identity's real origin. `tests/onevcs_state_snapshot.py` is the
 # measurement and the rule.
 onevcs_state_snapshot.snapshot()
+
+# Every plan-store read and write this process and its children make resolves no user
+# layer of the invoking user's, which the store reads beneath every project document from
+# the configuration home and would otherwise decide what a fixture's write does. At import
+# for the reason the snapshot above is. `tests/plan_store_user_layer.py` is the rule.
+plan_store_user_layer.isolate()
 
 # Every verb that loads `config/onemessagebus.yaml` resolves its schema link first, and the
 # link names a bundle onejudge publishes on GitHub. So this process and every subprocess it
