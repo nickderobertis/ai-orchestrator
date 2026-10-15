@@ -45,10 +45,11 @@ import stat
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, TypedDict, cast
 
 import pytest
 import short_state
+from fake_gh import CheckRun, Poll
 from harness_indirections import established_indirections
 from nx_workspace import WORKSPACE_INSTALL_MARKS
 from project_fixtures import helper
@@ -226,6 +227,15 @@ class OpenedChange(NamedTuple):
     body: str
     #: Whether the host still holds it as a draft once the publication answered.
     draft: bool = False
+
+
+class VcsEvent(TypedDict):
+    """The envelope fields these journeys inspect in onevcs's publication stream."""
+
+    stream: str
+    seq: int
+    kind: str
+    payload: dict[str, object]
 
 
 class Hosted(NamedTuple):
@@ -1154,6 +1164,99 @@ def _hosted(tmp_path: Path, *, answers: list[str], pre_push: str | None = None) 
     )
     assert registered.returncode == 0, registered.stderr + registered.stdout
     return Hosted(checkout, origin, environment, state, calls, prompts)
+
+
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The task that adopted the draft hold requires this journey to drive `just publish-branch` through the real engine, its linked onevcs and tests/e2e/fake_gh.py, which is exactly what this project's key names; it reuses this module's `_hosted` identity and adds no project or edge, and a project of its own would re-key the whole publication path for one parametrized journey.  # noqa: E501
+@pytest.mark.parametrize("running", [True, False], ids=["needs-gated", "skipped-idle"])
+def test_draft_lift_waits_for_head_activity(tmp_path: Path, running: bool) -> None:
+    """The real landing recipe holds a busy draft and lifts an idle skipped one early."""
+    hosted = _hosted(tmp_path, answers=[])
+    home = Path(hosted.environment["ONEVCS_HOME"])
+    rules = home / "rules.yml"
+    rules.write_text(
+        rules.read_text()
+        .replace("change-open", "change-auto")
+        .replace("approvals: required", "approvals: none"),
+        encoding="utf-8",
+    )
+    _finished_branch(hosted.checkout)
+    busy: CheckRun = {
+        "__typename": "CheckRun",
+        "name": "build",
+        "status": "IN_PROGRESS",
+        "conclusion": None,
+    }
+    passed: CheckRun = {
+        "__typename": "CheckRun",
+        "name": "aggregate",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS",
+    }
+    skipped: CheckRun = {**passed, "conclusion": "SKIPPED"}
+    stages = [[busy]] * 8 + [[passed]] if running else [[skipped]] * 8 + [[passed]]
+    # Only GitHub responses are scripted at ONEVCS_GH, as this task requires.
+    # The publish-branch recipe, engine, linked onevcs and git remain real.
+    # llmlint: ignore[e2e_not_mocked] See the boundary explanation above.
+    (hosted.gh_state / "checks.json").write_text(json.dumps(stages), encoding="utf-8")
+    hosted.environment.update(
+        ONEVCS_DRAFT_CHECKS_GRACE_SECONDS="0.1",
+        ONEVCS_CHECKS_POLL_SECONDS="0.1",
+        ONEVCS_CHECKS_WAIT_SECONDS="10",
+    )
+    published = _just(
+        "publish-branch",
+        FINISHED_BRANCH,
+        "--repo",
+        str(hosted.checkout),
+        "--no-draft",
+        environment=hosted.environment,
+    )
+    # The fake host writes Poll records; their JSON round trip alone loses the type.
+    polls = [
+        cast(Poll, json.loads(line))
+        for line in (hosted.gh_state / "polls.jsonl").read_text().splitlines()
+    ]
+    ready_poll = int((hosted.gh_state / "ready-poll").read_text())
+    if running:
+        assert all(poll["draft"] for poll in polls[:8]), ("draft lifted while build ran", polls)
+        assert polls[7]["time"] - polls[0]["time"] > 0.1, polls
+        assert ready_poll >= 9, polls
+    else:
+        assert ready_poll < 9, ("idle skipped draft was not lifted early", polls)
+        calls = [json.loads(line) for line in hosted.gh_calls.read_text().splitlines()]
+        assert any("/actions/runs?" in str(call) for call in calls), calls
+        assert any("/check-suites?" in str(call) for call in calls), calls
+    assert published.returncode == (0 if running else 1), published.stdout + published.stderr
+    if not running:
+        assert "checks unsettled" in published.stderr, published.stderr
+    streams = list((home / "streams").glob("publish-branch-*.ndjson"))
+    assert len(streams) == 1, streams
+    # The real onevcs writes these envelopes; deserialization alone loses their type.
+    events = [cast(VcsEvent, json.loads(line)) for line in streams[0].read_text().splitlines()]
+    assert all(event["stream"] == streams[0].stem for event in events), events
+    lifts = [event for event in events if event["kind"] == "draft-lifted"]
+    assert len(lifts) == 1, events
+    early = [event for event in events if event["kind"] == "draft-lifted-early"]
+    assert len(early) == (0 if running else 1), events
+    checks = [
+        event
+        for event in events
+        if event["kind"] == "change-check"
+        and event["payload"].get("name") == "aggregate"
+        and event["payload"].get("required") is True
+        and event["payload"].get("state") == ("passed" if running else "skipped")
+    ]
+    assert len(checks) == 1 and checks[0]["seq"] < lifts[0]["seq"], events
+    settled = [event for event in events if event["kind"] == "checks-settled"]
+    if running:
+        assert len(settled) == 1 and settled[0]["payload"].get("verdict") == "passed", events
+    else:
+        assert not settled and early[0]["payload"].get("awaited") == ["aggregate"], events
+    if running:
+        assert PUBLISHED_FILE in _git("ls-tree", "--name-only", BASE, cwd=hosted.origin)
+    else:
+        assert PUBLISHED_FILE not in _git("ls-tree", "--name-only", BASE, cwd=hosted.origin)
+    assert not _opened_change_requests(hosted)[0].draft
 
 
 def _opened_change_requests(hosted: Hosted) -> list[OpenedChange]:

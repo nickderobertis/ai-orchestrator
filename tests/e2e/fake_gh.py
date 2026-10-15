@@ -11,10 +11,14 @@ real recipe.
 What it answers is the calls opening a change request makes: who is authenticated,
 which changes already exist for a head and base, the `pr create` itself, the head
 commit of what was just created, whether it is a draft, which checks its base
-requires, and the `pr ready` that lifts one. The base is unprotected — no ruleset and
-no classic protection — because these journeys are about what a publication drafts and
-opens, and a host that says completely that nothing is required is one `onevcs`'s
-watch reads as green at once rather than waiting a grace window out. Every call is appended to
+requires, and the `pr ready` that lifts one. The base is unprotected unless
+`FAKE_GH_STATE/checks.json` scripts a watch.
+That file contains one `statusCheckRollup` list per poll, with the last repeated;
+classic protection then requires `aggregate`. The draft journeys model a workflow
+whose aggregate waits on other jobs and which has no `ready_for_review` trigger:
+lifting changes only the draft flag and never starts another run. Workflow-runs
+and check-suites reads return GitHub's empty-list shapes for that idle head.
+Every call is appended to
 `FAKE_GH_CALLS` as JSON argv, and the body of each opened change request is written
 to `FAKE_GH_STATE/pr-<n>.body` — byte for byte, because "the change request carries
 exactly the drafted body" is a claim about characters and an assertion against
@@ -27,8 +31,9 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
-from typing import NamedTuple, TypedDict, cast
+from typing import Literal, NamedTuple, NotRequired, TypedDict, cast
 
 #: Where each call's argv is appended, one JSON list per line.
 CALLS_ENV = "FAKE_GH_CALLS"
@@ -39,6 +44,32 @@ STATE_ENV = "FAKE_GH_STATE"
 ORIGIN_ENV = "FAKE_GH_ORIGIN"
 #: The repository every URL this host mints is under.
 REPOSITORY = "acme-corp/hosted"
+
+
+# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] These restate `gh`'s answers
+# because this file is the `gh` double; the real `onevcs` parsing them is the check, since a
+# shape it no longer reads fails the journey. GitHub's own schema needs a credential no test uses.
+CheckRun = TypedDict(
+    "CheckRun",
+    {"__typename": Literal["CheckRun"], "name": str, "status": str, "conclusion": str | None},
+)
+
+
+class Poll(TypedDict):
+    """The host's observation of a check poll, used to prove when a draft was lifted."""
+
+    time: float
+    draft: bool
+    checks: list[CheckRun]
+
+
+class MergeCommit(TypedDict):
+    """The commit GitHub names when it reports a merged change."""
+
+    oid: str
+
+
+# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
 
 def _state() -> Path:
@@ -91,6 +122,7 @@ class Change(TypedDict):
     head: str
     base: str
     title: str
+    mergeCommit: NotRequired[MergeCommit]
 
 
 def _call(argv: list[str]) -> Call:
@@ -165,6 +197,9 @@ def _create(call: Call, *, draft: bool) -> int:
 # llmlint: ignore-end[e2e_not_mocked]
 
 
+# Scripted checks are GitHub responses at the task-authorized ONEVCS_GH boundary.
+# The recipe, engine, linked onevcs and git remain real.
+# llmlint: ignore-block[e2e_not_mocked] See the boundary explanation above.
 def _view(number: str, call: Call) -> int:
     """Exactly the fields the call asked for, as `gh` answers."""
     # `cast` for the same reason as in `_remembered`: `_create` wrote this file.
@@ -172,8 +207,28 @@ def _view(number: str, call: Call) -> int:
     # Projected off a plain mapping of the record, because which fields `--json` names is
     # the caller's to choose and a fixed field cannot stand in for a chosen one.
     remembered = dict(record)
+    script = _state() / "checks.json"
+    if script.exists() and "statusCheckRollup" in call.fields:
+        # The journey writes these typed fixtures; only their JSON round trip loses the type.
+        stages = cast(list[list[CheckRun]], json.loads(script.read_text(encoding="utf-8")))
+        counter = _state() / "poll"
+        poll = int(counter.read_text()) if counter.exists() else 0
+        remembered["statusCheckRollup"] = stages[min(poll, len(stages) - 1)]
+        counter.write_text(str(poll + 1), encoding="utf-8")
+        observation: Poll = {
+            "time": time.monotonic(),
+            "draft": record["isDraft"],
+            "checks": stages[min(poll, len(stages) - 1)],
+        }
+        with (_state() / "polls.jsonl").open("a", encoding="utf-8") as log:
+            log.write(json.dumps(observation) + "\n")
+    remembered.setdefault("mergeable", "MERGEABLE")
+    remembered.setdefault("mergeStateStatus", "CLEAN")
     sys.stdout.write(json.dumps({field: remembered.get(field) for field in call.fields}) + "\n")
     return 0
+
+
+# llmlint: ignore-end[e2e_not_mocked]
 
 
 # llmlint: ignore-block[e2e_not_mocked] This file is the `gh` boundary AGENTS.md permits doubling — the published CLI `onevcs` delegates to, through the `ONEVCS_GH` seam it publishes for this — and what it adds answers the calls the pinned `onevcs` now makes there, so `onevcs`, the recipes and git stay real.  # noqa: E501 - a directive is one line
@@ -183,6 +238,10 @@ def _ready(number: str) -> int:
     # `cast` for the same reason as in `_remembered`: `_create` wrote this file.
     record = cast(Change, json.loads(path.read_text(encoding="utf-8")))
     record["isDraft"] = False
+    if (_state() / "checks.json").exists():
+        (_state() / "ready-poll").write_text(
+            (_state() / "poll").read_text(encoding="utf-8"), encoding="utf-8"
+        )
     path.write_text(json.dumps(record), encoding="utf-8")
     return 0
 
@@ -221,9 +280,43 @@ def main(argv: list[str]) -> int:
         case ["api", path, *_] if path.startswith(
             f"repos/{REPOSITORY}/branches/"
         ) and path.endswith("/protection/required_status_checks"):
+            if (_state() / "checks.json").exists():
+                sys.stdout.write(json.dumps({"contexts": ["aggregate"], "checks": []}) + "\n")
+                return 0
             # GitHub's own 404 for a branch with no classic protection, which is an answer.
             sys.stderr.write("gh: Branch not protected (HTTP 404)\n")
             return 1
+        case ["api", path, *_] if "/actions/runs?" in path:
+            sys.stdout.write('{"total_count": 0, "workflow_runs": []}\n')
+            return 0
+        case ["api", path, *_] if "/check-suites?" in path:
+            sys.stdout.write('{"total_count": 0, "check_suites": []}\n')
+            return 0
+        case ["pr", "checks", *_] if "--required" in argv:
+            sys.stdout.write('[ {"name": "aggregate"} ]\n')
+            return 0
+        case ["pr", "merge", number, *_]:
+            path = _state() / f"pr-{number}.json"
+            # `_create` wrote this Change; deserialization alone loses its type.
+            record = cast(Change, json.loads(path.read_text(encoding="utf-8")))
+            if record["isDraft"]:
+                sys.stderr.write("cannot merge a draft\n")
+                return 1
+            subprocess.run(
+                [
+                    "git",
+                    "--git-dir",
+                    os.environ[ORIGIN_ENV],
+                    "update-ref",
+                    f"refs/heads/{record['base']}",
+                    record["headRefOid"],
+                ],
+                check=True,
+            )
+            record["state"] = "MERGED"
+            record["mergeCommit"] = {"oid": record["headRefOid"]}
+            path.write_text(json.dumps(record), encoding="utf-8")
+            return 0
         case ["pr", "create", *_]:
             return _create(call, draft="--draft" in argv)
         case ["pr", "list", *_]:

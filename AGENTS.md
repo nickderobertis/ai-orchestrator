@@ -80,7 +80,9 @@ red there arrives as `checks-failed` and is retried onto the same branch. Liftin
 one-way: later commits never re-draft a lifted change. A draft somebody asked for —
 `onepipeline.draft: true`, a release-awaiting pin, a worker's own `--draft` while it holds
 it — is never lifted by green checks. A repository whose CI skips drafts is lifted before
-green, with a warning, so its checks run. The rules file's two per-identity levers are
+green, with a warning, only after the grace window and when nothing on its head
+commit is still running, so its checks run. Workflows that run on drafts need no
+`ready_for_review` trigger. The rules file's two per-identity levers are
 `drafts: {disabled: true}`, opening change requests ready as before, and `drafts:
 {warn_on_early_lift: false}`, silencing that warning; onevcs's `docs/contract.md` is the
 authority, and `onevcs rules check <repo>` shows the resolved behaviour.

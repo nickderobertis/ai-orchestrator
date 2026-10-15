@@ -1372,7 +1372,10 @@ lands it after a reconcile.
   leaves the draft and settles `checks-failed`. A required check concluded `skipped`
   is never read as passed: a publication it let through records `checks-settled`
   with the verdict `passed-with-skipped`, naming it. `drafts: {disabled: true}` in the rules file opens
-  the change request ready instead, as before the lifecycle.
+  the change request ready instead, as before the lifecycle. After the grace window,
+  an absent or skipped required check permits an early lift only when nothing on the
+  head commit is still running. Workflows that run on drafts need no
+  `ready_for_review` trigger.
   The rest take a ticket in the identity's merge queue first. The default policy is
   GitHub **native auto-merge** (`gh pr merge --auto`), which by construction gates
   on required checks and ignores optional ones — so a non-blocking check never

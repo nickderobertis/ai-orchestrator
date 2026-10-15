@@ -863,6 +863,16 @@ FOLLOW_UP_FIXES_LANDINGS = (
     ),
 )
 
+#: The engine landing of the draft-hold plan, linking onevcs's head-activity watch.
+DRAFT_HOLD_LANDINGS = (
+    Landing(
+        node="engine-links-draft-hold",
+        change_request=875,
+        commit="7681b6ed7b994cdeaa4b8aaee8a346f71e664eec",
+        did="link the onevcs release that keeps drafts while head checks are running",
+    ),
+)
+
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
     Landing("op-host-view", 861, "61194ef", "bound the host view and publish its JSON reading"),
@@ -912,6 +922,7 @@ LANDINGS = (
     *PROJECT_ROLE_LANDINGS,
     *IMAGE_ASSETS_LANDINGS,
     *FOLLOW_UP_FIXES_LANDINGS,
+    *DRAFT_HOLD_LANDINGS,
 )
 
 
