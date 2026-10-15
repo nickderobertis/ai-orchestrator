@@ -133,9 +133,13 @@ HELLOPATIENT: RepoIdentity = "github.com/petsinc/hellopatient"
 ONEBUDGETSPEC: RepoIdentity = "github.com/nickderobertis/onebudgetspec"
 ONEBUDGETSPEC_TARGET = "pypi"
 ONEBUDGETSPEC_ARTIFACT = "pypi:onebudgetspec-cli"
-#: The shared pruner each Rust repository's declared pool maintenance runs, spelled out
-#: for the same reason: a single-owner sibling this host installs nothing from.
+#: The single-owner siblings this host installs nothing from and registers so plans can
+#: dispatch into them, spelled out for the same reason: the shared pruner each Rust
+#: repository's declared pool maintenance runs, and the library answering a GraphQL
+#: document's node count and rate-limit points that other repositories' query gates
+#: depend on.
 PRUNER: RepoIdentity = "github.com/nickderobertis/cargo-prune-superseded"
+GRAPHQL_NODE_COUNT: RepoIdentity = "github.com/nickderobertis/github-graphql-node-count"
 
 RepoType = Literal["single-owner", "team"]
 Workflow = Literal["local", "remote"]
@@ -1528,18 +1532,22 @@ def test_the_tracked_registration_routes_onebudgetspec_and_names_the_wheel_its_r
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, test_tiers_split_by_project_not_by_marker]  # noqa: E501 - llmlint reads a directive's rule list off one line
 # A sibling of the routing journeys above, for the reason their directive states: every
 # journey of `just repos-apply` lives in this module, in the tier it already runs in.
-def test_the_tracked_registration_routes_the_pruner_through_its_own_rule(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    "identity", [PRUNER, GRAPHQL_NODE_COUNT], ids=["pruner", "graphql-node-count"]
+)
+def test_the_tracked_registration_routes_a_sibling_through_its_own_rule(
+    tmp_path: Path, identity: RepoIdentity
 ) -> None:
-    """Both tracked spellings of the pruner's checkout, registered, reach its own rule.
+    """Both tracked spellings of the sibling's checkout, registered, reach its own rule.
 
     `change-auto` with no approvals by a rule rather than `default:`, read off the real
     `onevcs rules check` for the identity and for each alias a node could name.
     """
-    entries = tracked_checkouts_of("cargo-prune-superseded")
+    host, owner, name = identity.split("/")
+    entries = tracked_checkouts_of(name)
     assert len(entries) == 2, entries
 
-    origin = f"https://{PRUNER}.git"
+    origin = f"https://{identity}.git"
     paths = [checkout(tmp_path / "checkouts" / Path(entry).name, origin) for entry in entries]
     manifest = tmp_path / "checkouts.list"
     manifest.write_text("".join(f"{path}\n" for path in paths), encoding="utf-8")
@@ -1549,11 +1557,12 @@ def test_the_tracked_registration_routes_the_pruner_through_its_own_rule(
     assert applied.returncode == 0, applied.stdout + applied.stderr
 
     ruled = ruled_identities()
-    assert ruled.count(PRUNER) == 1, ruled
-    host, owner, name = PRUNER.split("/")
-    expected_rule = f"rule {ruled.index(PRUNER) + 1} {{host: {host}, owner: {owner}, name: {name}}}"
+    assert ruled.count(identity) == 1, ruled
+    expected_rule = (
+        f"rule {ruled.index(identity) + 1} {{host: {host}, owner: {owner}, name: {name}}}"
+    )
 
-    for argument in (PRUNER, *(Path(entry).name for entry in entries)):
+    for argument in (identity, *(Path(entry).name for entry in entries)):
         checked = onevcs(home, "rules", "check", argument)
         assert checked.returncode == 0, checked.stdout + checked.stderr
         assert reported(checked.stdout, "publication") == "change-auto", checked.stdout

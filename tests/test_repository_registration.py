@@ -411,79 +411,116 @@ def test_onebudgetspec_is_listed_and_ruled_to_publish_like_its_siblings() -> Non
     assert rule.at < registration.rules.index(FALLTHROUGH)
 
 
-#: The shared pruner each Rust repository's declared pool maintenance runs, routed like
-#: its single-owner siblings so its changes land through its own merge path. Listed in
-#: both host layouts, because each host registers the spelling it has.
-PRUNER: RepoIdentity = f"github.com/{OWNER}/cargo-prune-superseded"
-PRUNER_CHECKOUTS = (
-    f"{DISPATCHED_ROOT}/{OWNER}__cargo-prune-superseded",
-    "~/projects/cargo-prune-superseded",
+class SingleOwnerSibling(NamedTuple):
+    """A repository this host installs nothing from, registered so plans can dispatch into it.
+
+    Listed in both host layouts, because each host registers the spelling it has, and
+    routed like its single-owner siblings so its changes land through its own merge path.
+    """
+
+    identity: RepoIdentity
+    checkouts: tuple[str, ...]
+    rule_block: str
+
+
+def single_owner_sibling(name: str) -> SingleOwnerSibling:
+    """The identity, both checkout spellings and the rule block for one of `OWNER`'s repos."""
+    return SingleOwnerSibling(
+        identity=f"github.com/{OWNER}/{name}",
+        checkouts=(f"{DISPATCHED_ROOT}/{OWNER}__{name}", f"~/projects/{name}"),
+        rule_block=(
+            f"  - match: {{host: github.com, owner: {OWNER}, name: {name}}}\n"
+            "    publication: change-auto\n"
+            "    approvals: none\n"
+        ),
+    )
+
+
+#: The shared pruner each Rust repository's declared pool maintenance runs, and the
+#: library answering a GraphQL document's node count and rate-limit points, which other
+#: repositories' query gates depend on.
+SIBLINGS = (
+    single_owner_sibling("cargo-prune-superseded"),
+    single_owner_sibling("github-graphql-node-count"),
 )
-PRUNER_RULE_BLOCK = (
-    f"  - match: {{host: github.com, owner: {OWNER}, name: cargo-prune-superseded}}\n"
-    "    publication: change-auto\n"
-    "    approvals: none\n"
+sibling_cases = pytest.mark.parametrize(
+    "sibling", SIBLINGS, ids=[sibling.identity.rsplit("/", 1)[1] for sibling in SIBLINGS]
 )
 
 
-def pruner_complaints(registration: Registration) -> list[str]:
-    """Every way the two files fail to register the pruner as its siblings are."""
+def sibling_complaints(registration: Registration, sibling: SingleOwnerSibling) -> list[str]:
+    """Every way the two files fail to register `sibling` as its siblings are."""
+    identity = sibling.identity
     entries = listed(registration.checkouts)
     found = [
         f"config/onevcs.checkouts does not list {entry!r}"
-        for entry in PRUNER_CHECKOUTS
+        for entry in sibling.checkouts
         if entry not in entries
     ]
-    matching = [rule for rule in rules_of(registration.rules) if rule.identity == PRUNER]
+    matching = [rule for rule in rules_of(registration.rules) if rule.identity == identity]
     if len(matching) != 1:
-        return [*found, f"config/onevcs.rules.yml states {len(matching)} rules for {PRUNER}"]
+        return [*found, f"config/onevcs.rules.yml states {len(matching)} rules for {identity}"]
     (rule,) = matching
     if rule.fields != EXPECTED_POLICY:
-        found.append(f"config/onevcs.rules.yml gives {PRUNER} {rule.fields}")
+        found.append(f"config/onevcs.rules.yml gives {identity} {rule.fields}")
     if rule.at > registration.rules.index(FALLTHROUGH):
-        found.append(f"config/onevcs.rules.yml states the rule for {PRUNER} below `default:`")
+        found.append(f"config/onevcs.rules.yml states the rule for {identity} below `default:`")
     return found
 
 
-def test_the_pruner_is_listed_in_both_layouts_and_ruled_like_its_siblings() -> None:
+@sibling_cases
+def test_a_sibling_is_listed_in_both_layouts_and_ruled_like_the_others(
+    sibling: SingleOwnerSibling,
+) -> None:
     """Both checkout spellings, and one rule above `default:` stating the sibling policy."""
-    assert pruner_complaints(tracked()) == []
+    assert sibling_complaints(tracked(), sibling) == []
 
 
-@pytest.mark.parametrize("entry", PRUNER_CHECKOUTS)
-def test_a_pruner_checkout_going_absent_is_refused(entry: str) -> None:
+@sibling_cases
+@pytest.mark.parametrize("layout", [0, 1], ids=["dispatched-root", "projects"])
+def test_a_sibling_checkout_going_absent_is_refused(
+    sibling: SingleOwnerSibling, layout: int
+) -> None:
     """Either spelling dropped leaves the host using that layout with nothing to register."""
+    entry = sibling.checkouts[layout]
     registration = tracked()
     defective = registration._replace(checkouts=registration.checkouts.replace(f"{entry}\n", ""))
 
-    assert f"config/onevcs.checkouts does not list {entry!r}" in pruner_complaints(defective)
+    assert f"config/onevcs.checkouts does not list {entry!r}" in sibling_complaints(
+        defective, sibling
+    )
 
 
-def test_a_pruner_rule_going_absent_is_refused() -> None:
+@sibling_cases
+def test_a_sibling_rule_going_absent_is_refused(sibling: SingleOwnerSibling) -> None:
     """With no rule it falls through to the reviewed default."""
     registration = tracked()
-    defective = registration._replace(rules=registration.rules.replace(PRUNER_RULE_BLOCK, ""))
+    defective = registration._replace(rules=registration.rules.replace(sibling.rule_block, ""))
 
-    assert any("states 0 rules" in found for found in pruner_complaints(defective))
+    assert any("states 0 rules" in found for found in sibling_complaints(defective, sibling))
 
 
-def test_a_pruner_rule_below_the_default_is_refused() -> None:
+@sibling_cases
+def test_a_sibling_rule_below_the_default_is_refused(sibling: SingleOwnerSibling) -> None:
     """First match wins, so a rule after `default:` is one nothing reads."""
     registration = tracked()
-    moved = registration.rules.replace(PRUNER_RULE_BLOCK, "", 1)
-    defective = registration._replace(rules=f"{moved}\n{PRUNER_RULE_BLOCK}")
+    moved = registration.rules.replace(sibling.rule_block, "", 1)
+    defective = registration._replace(rules=f"{moved}\n{sibling.rule_block}")
 
-    assert any("below `default:`" in found for found in pruner_complaints(defective))
+    assert any("below `default:`" in found for found in sibling_complaints(defective, sibling))
 
 
-def test_a_pruner_rule_carrying_another_policy_is_refused() -> None:
+@sibling_cases
+def test_a_sibling_rule_carrying_another_policy_is_refused(sibling: SingleOwnerSibling) -> None:
     """The reviewed pair would hold every change there for a review nobody asked for."""
     registration = tracked()
     defective = registration._replace(
         rules=registration.rules.replace(
-            PRUNER_RULE_BLOCK,
-            PRUNER_RULE_BLOCK.replace("change-auto", "change-open").replace("none", "required"),
+            sibling.rule_block,
+            sibling.rule_block.replace("change-auto", "change-open").replace("none", "required"),
         )
     )
 
-    assert any(f"gives {PRUNER}" in found for found in pruner_complaints(defective))
+    assert any(
+        f"gives {sibling.identity}" in found for found in sibling_complaints(defective, sibling)
+    )

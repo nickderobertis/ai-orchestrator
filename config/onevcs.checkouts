@@ -57,6 +57,13 @@
 ~/.ai-orchestrator/repos/nickderobertis__cargo-prune-superseded
 ~/projects/cargo-prune-superseded
 
+# `github-graphql-node-count`, the library answering a GraphQL document's node count and
+# rate-limit points, which other repositories' query gates depend on. Each of those
+# repositories installs its pinned release itself, so this host installs nothing from it;
+# it is registered so plans can dispatch work into it. Listed under both layouts.
+~/.ai-orchestrator/repos/nickderobertis__github-graphql-node-count
+~/projects/github-graphql-node-count
+
 # Other repositories dispatched against from this host.
 ~/.ai-orchestrator/repos/nickderobertis__allowlister
 ~/.ai-orchestrator/repos/nickderobertis__allowlister-remote

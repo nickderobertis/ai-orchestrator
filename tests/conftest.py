@@ -401,6 +401,35 @@ def _isolated_plan_store_cache(tmp_path_factory: pytest.TempPathFactory) -> Iter
             plan_store_cache.release()
 
 
+#: The directory under the config home the plan store reads its user layer from.
+PLAN_STORE_USER_LAYER = "onetaskgraph"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolated_plan_store_user_layer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+    """Keep the host's plan-store user layer out of every store this process starts.
+
+    The store reads `${XDG_CONFIG_HOME:-$HOME/.config}/onetaskgraph/config.yaml` beneath
+    every project document, so a host that declares sources, routes or a source's
+    `visibility` there changes what each journey's fixture store accepts: a host marking
+    `authoring` private refused every fixture project write for want of a public boundary
+    check. The config home is also where `gh`, uv and this checkout's own host files live,
+    so it is moved to a mirror of the host's — each entry linked back — with the store's
+    directory alone left out. Session scope and by mutating the environment, for the
+    reason the plan-store roots above give; a journey stating its own config home is
+    unaffected.
+    """
+    host = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    mirror = tmp_path_factory.mktemp("config-home")
+    if host.is_dir():
+        for entry in host.iterdir():
+            if entry.name != PLAN_STORE_USER_LAYER:
+                (mirror / entry.name).symlink_to(entry)
+    with pytest.MonkeyPatch.context() as patched:
+        patched.setenv("XDG_CONFIG_HOME", str(mirror))
+        yield
+
+
 def _own_plan_store_cache(factory: pytest.TempPathFactory) -> Iterator[None]:
     """A cache home of its own under pytest's base, for as long as the fixture holds."""
     with pytest.MonkeyPatch.context() as patched:
