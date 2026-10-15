@@ -35,4 +35,3 @@
 - image retention: Existing authoring storage keeps assets; no retention or deletion policy is added.
 - upload bandwidth: Largest copies upload 12 MB on existing transports, without bandwidth control.
 
-**Repo-wide effects:** `ai-orchestrator` / `gate-time`: ai-orchestrator's gate grows a few seconds against its 1800 s gate-time budget.

@@ -37,10 +37,11 @@ from criteria_examples import (
     RELEASED_ELSEWHERE_IN_PROSE,
     STATES_THE_PROPERTY_INSTEAD,
 )
-from project_fixtures import described, no_budgets
+from project_fixtures import budget_section, described, no_budgets
 
 from orchestrator import (
     criteria_guard,
+    plan_budgets,
     plan_check,
     plan_review,
     plan_store,
@@ -1011,12 +1012,12 @@ def test_an_engine_whose_every_role_forbids_changes_says_so_rather_than_offering
     assert "move the editing into a node of its own" in str(refused.value)
 
 
-def _reviewable(**metadata: object) -> plan_store.StoreTask:
+def _reviewable(content: str = "", **metadata: object) -> plan_store.StoreTask:
     return plan_store.StoreTask(
         qualified_id="authoring:probe/probe",
         node_id="probe",
         title="feat: probe",
-        content="## What\n\nProbe.\n",
+        content=f"## What\n\nProbe.\n{content}",
         metadata={"onepipeline.id": "probe", **metadata},
         repositories=[],
         deps=(),
@@ -1044,11 +1045,17 @@ def test_the_command_refuses_a_task_nothing_has_reviewed(
     assert "just review-plan authoring:probe" in reported, reported
 
 
-def _recorded() -> plan_store.StoreTask:
-    """A task carrying a record for exactly its own content."""
-    task = _reviewable()
+def _recorded(budgets: list[dict[str, object]] | None = None) -> plan_store.StoreTask:
+    """A task carrying a record for exactly its own content, and ``budgets`` when given.
+
+    A budgets record comes with the section the pinned store renders from it, as a planner's
+    task carries it, so the task's own budgets agree with its body.
+    """
+    owned = {} if budgets is None else {plan_budgets.TASK_RECORD: budgets}
+    content = "" if budgets is None else f"\n{budget_section(budgets)}"
+    task = _reviewable(content, **owned)
     key = plan_review.review_key(task, plan_review.bar_fingerprint())
-    return _reviewable(**{plan_review.RECORD_KEY: {"key": key}})
+    return _reviewable(content, **owned, **{plan_review.RECORD_KEY: {"key": key}})
 
 
 def test_the_command_accepts_a_recorded_pass_without_spending_a_judged_turn(
@@ -1485,22 +1492,65 @@ def test_the_criteria_fingerprint_reads_the_files_the_deterministic_bar_is(
         before = moved
 
 
+#: One budget a task records, breaking no budget rule; its `file_change` is each test's own.
+BUDGET: dict[str, object] = {
+    "id": "probe-latency",
+    "name": "Time to the probe's answer",
+    "basis": "measured",
+    "repository": "github.com/acme/app",
+    "file": "budgets.yaml",
+    "file_change": "add",
+    "measure": "time to the probe's answer",
+    "inner_measure_reason": "",
+    "unit": "ms",
+    "direction": "max",
+    "threshold": 800,
+    "workload": "2,000 records",
+    "evidence": "spike-probe: p50 420 ms",
+    "command": "bun run measure:probe",
+}
+
+
+def _unanalysed(
+    record: dict[str, object], plan: dict[str, object], task: plan_store.StoreTask
+) -> None:
+    """``record`` as the store answers a project with no plan-level analysis, reviewed whole.
+
+    Its description is the pinned store's rendering of the overview alone, which is what such
+    a project is created from, and its plan-level review key is over the absent record and
+    ``task``'s budgets, as `just review-plan` keys it.
+    """
+    record["content"] = plan_budgets.render_description({"overview": "A fixture plan."})
+    owned = plan_review.owned_by_node([task])
+    key = plan_review.plan_key(plan, plan_review.plan_bar_fingerprint(), None, owned)
+    record["metadata"] = {
+        "onetaskgraph.template": {"template": plan_budgets.DESCRIPTION_REFERENCE},
+        plan_review.RECORD_KEY: {"key": key, "by": plan_review.BY_REVIEW},
+    }
+
+
+@pytest.mark.parametrize("change", ["add", "change"])
 def test_the_command_refuses_a_plan_carrying_no_plan_level_budget_answers_naming_them(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     project_record: dict[str, object],
+    change: str,
 ) -> None:
     """The direct path reads the budgets the spawned check reads, and says the same thing.
 
-    Every record is in place and the project holds no plan-level budget answers, which is a
-    plan with nowhere stating its budgets: refused naming the record it lacks, in the words
-    the spawned check uses.
+    Every record is in place, a task adds or changes a budget, and the project holds no
+    plan-level budget answers, which is a plan with nowhere stating the analysis that budget
+    owes: refused naming the record it lacks, in the words the spawned check uses.
     """
-    plan = _plan(persona="engineer", task=_task(COMPLETE))
-    monkeypatch.setattr(plan_store, "read_project", lambda _: (plan, [_recorded()]))
-    # Reviewed whole as it stands, with no plan-level answers, so only the budgets refuse.
-    key = plan_review.plan_key(plan, plan_review.plan_bar_fingerprint())
-    project_record["metadata"] = {plan_review.RECORD_KEY: {"key": key}}
+    budgets = [{**BUDGET, "file_change": change}]
+    plan = _plan(
+        persona="engineer",
+        task=f"{_task(COMPLETE)}\n{budget_section(budgets)}",
+        metadata={plan_budgets.TASK_RECORD: budgets},
+    )
+    recorded = _recorded(budgets)
+    monkeypatch.setattr(plan_store, "read_project", lambda _: (plan, [recorded]))
+    _unanalysed(project_record, plan, recorded)
 
     assert check_directly("authoring:probe") == 1
     captured = capsys.readouterr()
@@ -1509,3 +1559,20 @@ def test_the_command_refuses_a_plan_carrying_no_plan_level_budget_answers_naming
     ]
     assert captured.err == f"check-plan: budgets: {spawned['reason']}\n", captured.err
     assert "carries no `orchestrator.plan-budgets` metadata" in captured.err
+
+
+@pytest.mark.parametrize("change", ["none", None], ids=["unchanged-budget", "no-budget"])
+def test_the_command_accepts_a_plan_adding_or_changing_no_budget_with_no_analysis(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    project_record: dict[str, object],
+    change: str | None,
+) -> None:
+    """A plan adding or changing no budget owes no plan-level analysis on the direct path."""
+    budgets = None if change is None else [{**BUDGET, "file_change": change}]
+    plan = _plan(persona="engineer", task=_task(COMPLETE))
+    recorded = _recorded(budgets)
+    monkeypatch.setattr(plan_store, "read_project", lambda _: (plan, [recorded]))
+    _unanalysed(project_record, plan, recorded)
+
+    assert check_directly("authoring:probe") == 0, capsys.readouterr().err

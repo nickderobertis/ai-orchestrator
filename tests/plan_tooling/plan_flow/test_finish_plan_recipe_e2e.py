@@ -269,8 +269,8 @@ def _draft(
     journey would produce. ``repositories`` gives the plan one task per origin, each naming
     that one repository; with none, its one task names no repository.
 
-    The plan carries its plan-level budget answers, as every plan does: one needing no
-    budget unless ``budgets`` gives its answers, and none at all when it is ``False``. Its
+    The plan carries its plan-level budget answers: one needing no budget unless
+    ``budgets`` gives its answers, and none at all when it is ``False``. Its
     first task owns ``owned``: its body carries their `## Budgets` section and its
     `orchestrator.budgets` record holds them.
     """
@@ -313,6 +313,14 @@ def _draft(
             written,
             no_budgets(repositories) if budgets is True else budgets,
             {**os.environ, variable: str(root)},
+        )
+    else:
+        budgeted(
+            source,
+            written,
+            {"overview": "Deliver the paginated listing."},
+            {**os.environ, variable: str(root)},
+            analysis=False,
         )
     return Drafted(
         project=native,

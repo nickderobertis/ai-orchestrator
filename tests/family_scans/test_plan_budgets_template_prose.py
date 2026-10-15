@@ -107,3 +107,43 @@ def test_the_breakdown_field_the_guidance_names_is_the_installed_libraries_own()
         _descriptions(PARTIAL)["budgets"],
     ):
         assert "reporter's `detail`" in " ".join(text.split())
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "AGENTS.md",
+        "docs/budgets.md",
+        "docs/orchestration.md",
+        "personas/planner.yaml",
+        "personas/design-doc.yaml",
+        "config/plan-checklist.llmlint.yml",
+        "config/budgets-migration.yaml",
+    ],
+)
+def test_current_guidance_points_to_the_single_design_visibility_rule(path: str) -> None:
+    text = (REPO_ROOT / path).read_text(encoding="utf-8")
+    if path == "config/budgets-migration.yaml":
+        text = "\n".join(line for line in text.splitlines() if line.startswith("#"))
+    assert ("docs/budgets.md" if path == "AGENTS.md" else "budgets_guidance") in text, path
+    assert "This plan predates budgets:" not in text, path
+    assert "named root effect shows no" not in text, path
+    assert "with no budget still shows" not in text, path
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "AGENTS.md",
+        "docs/budgets.md",
+        "docs/orchestration.md",
+        "personas/planner.yaml",
+        "config/plan-checklist.llmlint.yml",
+    ],
+)
+def test_current_planning_guidance_requires_the_budget_need_decision_first(path: str) -> None:
+    text = " ".join((REPO_ROOT / path).read_text(encoding="utf-8").casefold().split())
+    assert "first decides" in text or "first decide" in text, path
+    if path != "AGENTS.md":
+        assert "overview alone" in text, path
+        assert "existing" in text and "analysis" in text, path

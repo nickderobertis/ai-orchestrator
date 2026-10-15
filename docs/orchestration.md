@@ -742,14 +742,14 @@ directions of it.
 
 ### A plan's budgets
 
-Every plan states its measurable requirements — its budgets — in two homes: each budget on
-the task that owns it, as its `orchestrator.budgets` metadata rendered as the task's
-`## Budgets` section, and the plan-level answers as the project's `orchestrator.plan-budgets`
-metadata, rendered as its own description from `templates/plan-description.md.j2`. `just
-review-plan` reads them, `just check-plan` refuses a plan carrying no plan-level answers or a
-body that is not its record's rendering, and the design document summarizes them, linking
-each budget to its task. [`budgets.md`](budgets.md) states the principles and the convention, and
-`config/budgets-migration.yaml` is the one list of plans that predate the requirement.
+The planner first decides whether work adds/changes a task budget. Only then does it
+perform budget analysis, recording each task budget as `orchestrator.budgets` with its
+rendered section and full project analysis as `orchestrator.plan-budgets` with its
+`plan-description` rendering. With none and no existing analysis, overview alone suffices.
+Existing analysis remains validated; task records and sections are always checked. The
+single design rendering rule is `templates/design-doc.md.j2`'s `budgets_guidance`.
+[`budgets.md`](budgets.md) states the convention; `config/budgets-migration.yaml` keeps
+existing migration exemptions.
 
 ### Spikes: measuring before the plan is final
 

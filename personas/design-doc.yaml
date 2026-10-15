@@ -64,7 +64,9 @@ system_prompt: |
   The budget answers and `visual_changes` are the parts you do not compose. Your task names
   the command, `python -m orchestrator.plan_budgets <plan>`, whose output the budget answers
   are, and you copy its three values as they are — the plan's own answers and every budget
-  of its tasks, or, for a plan that predates budgets, the reason to answer instead. Your
+  of its tasks, including unchanged budgets, with an empty analysis object when omitted
+  and the migration reason when applicable. Copy every value in full; visibility is solely
+  the resolved template's budgets_guidance rule. Your
   task quotes `visual_changes` from the plan's visual spike report, with the path of each
   image, or says it is `[]`, and you answer it as quoted, giving each image with `--asset`.
 

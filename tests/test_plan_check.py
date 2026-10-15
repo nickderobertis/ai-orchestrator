@@ -20,7 +20,7 @@ from types import SimpleNamespace
 
 import pytest
 from criteria_examples import RELEASED_ELSEWHERE
-from project_fixtures import described, no_budgets
+from project_fixtures import budget_section, described, no_budgets
 
 from orchestrator import (
     criteria_guard,
@@ -88,8 +88,8 @@ def _planned(record: dict[str, object], document: dict[str, object]) -> dict[str
 UNIT = {"orchestrator.unit": "Listing route"}
 
 
-def _task(criteria: str = COMPLETE) -> str:
-    return f"## What\n\nAdd it.\n\n## Acceptance criteria\n\n{criteria}\n\n{APPENDIX}"
+def _task(criteria: str = COMPLETE, budgets: str = "") -> str:
+    return f"## What\n\nAdd it.\n\n{budgets}## Acceptance criteria\n\n{criteria}\n\n{APPENDIX}"
 
 
 def _node(**fields: object) -> dict[str, object]:
@@ -106,6 +106,53 @@ def _node(**fields: object) -> dict[str, object]:
     }
     node.update(fields)
     return node
+
+
+#: One budget a task records, breaking no budget rule; its `file_change` is each test's own.
+BUDGET: dict[str, object] = {
+    "id": "route-latency",
+    "name": "Time to the route's answer",
+    "basis": "measured",
+    "repository": "github.com/acme/app",
+    "file": "budgets.yaml",
+    "file_change": "add",
+    "measure": "time to the route's answer",
+    "inner_measure_reason": "",
+    "unit": "ms",
+    "direction": "max",
+    "threshold": 800,
+    "workload": "2,000 records",
+    "evidence": "spike-route: p50 420 ms",
+    "command": "bun run measure:route",
+}
+
+
+def _budgeting(change: str) -> dict[str, object]:
+    """The node, recording one budget whose `file_change` is ``change`` and carrying its section.
+
+    The section is the pinned store's rendering of the record, as a planner's task carries it,
+    so the only refusal a plan holding this node can earn about budgets is a plan-level one.
+    """
+    budgets = [{**BUDGET, "file_change": change}]
+    node = _node(task=_task(budgets=budget_section(budgets)))
+    metadata = node["metadata"]
+    assert isinstance(metadata, dict)
+    node["metadata"] = {**metadata, plan_budgets.TASK_RECORD: budgets}
+    return node
+
+
+def _unanalysed(record: dict[str, object]) -> None:
+    """``record`` as the store answers a project recording no plan-level budget analysis.
+
+    Its description is the pinned store's `plan-description` rendering of the overview alone,
+    which is what such a project is created from, and its metadata keeps that provenance.
+    """
+    metadata = record["metadata"]
+    assert isinstance(metadata, dict)
+    record["metadata"] = {
+        key: value for key, value in metadata.items() if key != plan_budgets.PLAN_RECORD
+    }
+    record["content"] = plan_budgets.render_description({"overview": "A fixture plan."})
 
 
 def _reviewed(node: dict[str, object]) -> dict[str, object]:
@@ -300,12 +347,11 @@ def test_a_shipped_example_breaking_any_other_rule_is_still_refused(
     (criteria,) = plan_check.refusals(_document(_node(task=_task(outside))), project)
     assert (criteria["node"], criteria["field"]) == ("route", "task")
 
-    metadata = project_record["metadata"]
-    assert isinstance(metadata, dict)
-    project_record["metadata"] = {
-        key: value for key, value in metadata.items() if key != plan_budgets.PLAN_RECORD
-    }
-    (budgets,) = plan_check.refusals(_document(_node()), project)
+    _unanalysed(project_record)
+    # Only a plan adding a budget owes the plan-level analysis, so one adding none is not
+    # refused for lacking it, and the same plan adding one is.
+    assert plan_check.refusals(_document(_node()), project) == []
+    (budgets,) = plan_check.refusals(_document(_budgeting("add")), project)
     assert (budgets["node"], budgets["field"]) == (None, "budgets")
     assert f"carries no `{plan_budgets.PLAN_RECORD}` metadata" in budgets["reason"]
 
@@ -865,14 +911,16 @@ def test_a_require_rendered_answer_that_is_neither_true_nor_false_is_refused_bef
     assert plan_check.REQUIRE_RENDERED_ENV in reported and "'yes'" in reported, reported
 
 
+@pytest.mark.parametrize("change", ["add", "change"])
 def test_a_plan_carrying_no_plan_level_budget_answers_is_refused_against_the_plan(
-    monkeypatch: pytest.MonkeyPatch, project_record: dict[str, object]
+    project_record: dict[str, object], change: str
 ) -> None:
     """Refused about the plan rather than a node, on the `budgets` field, naming the record.
 
-    And refused in the answer's own shape, so the verb renders it beside the loader's.
+    Refused only because a task adds or changes a budget, which is what owes the analysis;
+    and refused in the answer's own shape, so the verb renders it beside the loader's.
     """
-    document = _document(_reviewed(_node()))
+    document = _document(_reviewed(_budgeting(change)))
     # Reviewed whole as it stands, with no plan-level answers, so only the budgets refuse.
     key = plan_review.plan_key(document, plan_review.plan_bar_fingerprint())
     project_record["metadata"] = {plan_review.RECORD_KEY: {"key": key}}
@@ -883,6 +931,26 @@ def test_a_plan_carrying_no_plan_level_budget_answers_is_refused_against_the_pla
     assert refusal["field"] == "budgets"
     assert "authoring:probe carries no `orchestrator.plan-budgets` metadata" in refusal["reason"]
     assert "config/budgets-migration.yaml" in refusal["reason"]
+
+
+@pytest.mark.parametrize("budgets", ["none", None], ids=["unchanged-budget", "no-budget"])
+def test_a_plan_adding_or_changing_no_budget_owes_no_plan_level_budget_answers(
+    project_record: dict[str, object], budgets: str | None
+) -> None:
+    """With no budget added or changed, the absent analysis is no refusal at all.
+
+    The description is the overview alone, as `plan-description` renders a project with no
+    analysis, and the task's own record and section are still read and found consistent.
+    """
+    document = _document(_reviewed(_node() if budgets is None else _budgeting(budgets)))
+    _unanalysed(project_record)
+    # Reviewed whole as it stands, keyed over the absent plan-level record as the check reads it.
+    key = plan_review.plan_key(document, plan_review.plan_bar_fingerprint())
+    metadata = project_record["metadata"]
+    assert isinstance(metadata, dict)
+    metadata[plan_review.RECORD_KEY] = {"key": key, "by": plan_review.BY_REVIEW}
+
+    assert plan_check.refusals(document, "authoring:probe") == []
 
 
 def test_a_check_handed_no_project_reads_no_budgets(project_record: dict[str, object]) -> None:

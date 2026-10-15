@@ -1,8 +1,8 @@
 ---
 onetaskgraph_template: 1
 description: >-
-  A plan's own description: its overview, then every plan-level budget answer in full. The
-  planner writes it as the plan project's body, and records the same answers as the
+  A plan's own description: its overview, then any stored plan-level budget analysis in
+  full. The planner writes it as the plan project's body, and records full analysis as the
   project's `orchestrator.plan-budgets` metadata, which `just check-plan`, `just
   review-plan` and the design-document writer read.
 variables:
@@ -24,19 +24,19 @@ variables:
       The short "What we're sizing for" paragraph a person reads first: the realistic
       usage the plan's budgets hold at, in a sentence or two, at most 600 characters.
     type: text
-    required: true
+    required: false
   workload:
     description: >-
       The full realistic workload the plan's budgets hold at, with numbers: data volume and
       shape, concurrency, items per run.
     type: text
-    required: true
+    required: false
   ten_x_summary:
     description: >-
       What the product owner notices getting worse first at 10x realistic usage, on one
       line of at most 240 characters.
     type: text
-    required: true
+    required: false
   ten_x:
     description: >-
       The full answer to "at 10x realistic usage, what does the product owner notice
@@ -45,7 +45,7 @@ variables:
       a whole run's quota headroom or a latency someone waits through, never one step's
       share of it, which is telemetry its budget reports as its breakdown.
     type: text
-    required: true
+    required: false
   checklist:
     description: >-
       One object per feature concern with `in_scope` (boolean) and four string keys: `concern`
@@ -60,7 +60,7 @@ variables:
       repo_wide_effects, governed by existing root budgets.
     type: list
     items: object
-    required: true
+    required: false
   repo_wide_effects:
     description: >-
       Only actual expected effects on existing root budgets of changed repositories,
@@ -72,7 +72,7 @@ variables:
       records retain their historical rules.
     type: list
     items: object
-    required: true
+    required: false
   realistic_data:
     description: >-
       One object per kind of data the plan makes realistic, or `[]`, with five string keys:
@@ -103,7 +103,12 @@ variables:
   THE READERS. A person opening the plan, the plan review and the plan check. The project's
   `orchestrator.plan-budgets` metadata holds these same answers, and the plan check holds
   this body to being their rendering; the design document restates only each answer's
-  summary and links each budget to the task that owns it.
+  summary under the rendering rule in `design-doc` budgets_guidance.
+
+  BUDGET NEED. First decide whether the work adds or changes a task budget. Only then
+  perform the full budget analysis and record every answer as `orchestrator.plan-budgets`.
+  With no add/change budget and no existing analysis, supply overview alone and omit that
+  metadata. Retain and validate existing full analysis records; never discard them.
 
   THIS TEMPLATE. Guidance is always a Jinja comment, never an HTML comment, so a rendered
   description carries none of it. `docs/budgets.md` states the principles the answers are
@@ -111,6 +116,7 @@ variables:
 -#}
 {{ overview }}
 
+{% if sizing %}
 ## Budgets
 
 **What we're sizing for.** {{ sizing }}
@@ -156,3 +162,4 @@ This plan makes no data realistic.
 {% else %}
 No spike finding changed this plan.
 {% endfor %}
+{% endif %}

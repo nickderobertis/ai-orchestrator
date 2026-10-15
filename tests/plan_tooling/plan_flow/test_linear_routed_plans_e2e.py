@@ -784,7 +784,9 @@ def test_modern_budget_links_are_recomputed_after_a_routed_copy(
     bench, _ = gated
     name = f"test-{os.getpid()}-modern-budget-links"
     project = _draft(bench, name, MIXED)
-    for node in MIXED[:2]:
+    # One budget added and one changed, the two `file_change`s a design document lists and
+    # links; an unchanged one is presentation-filtered out of the section these links are in.
+    for node, change in zip(MIXED[:2], ("add", "change"), strict=True):
         budget = {
             "id": f"{node.id}-copy-seconds",
             "name": f"{node.id} copy time",
@@ -794,7 +796,7 @@ def test_modern_budget_links_are_recomputed_after_a_routed_copy(
             "basis": "design",
             "repository": PETSINC,
             "file": "apps/web/budgets.yaml",
-            "file_change": "none",
+            "file_change": change,
             "measure": "elapsed seconds of loopback copy",
             "inner_measure_reason": "",
             "unit": "seconds",
@@ -885,6 +887,7 @@ def test_modern_budget_links_are_recomputed_after_a_routed_copy(
             capture_output=True,
             check=True,
         ).stdout
+        assert "## Budgets\n" in rendered, rendered
         for index, budget in enumerate(writer["budgets"], 1):
             fragment = (
                 f"#user-content-{budget['id']}"

@@ -1,4 +1,6 @@
-"""`just finish-plan` carries a plan's budgets into its design document — or says it predates them.
+"""`just finish-plan` carries a plan's budgets into its design document.
+
+Omitted analysis is supported.
 
 Journeys through the real recipe, with only the paid provider doubled:
 
@@ -10,12 +12,13 @@ Journeys through the real recipe, with only the paid provider doubled:
 * the same plan, its writer changing a target, omitting the budget or naming a wrong owner:
   the flow refuses the document after the writer and before anything is copied, naming the
   difference;
-* a new plan the migration list does not name, carrying no plan-level answers: the plan
-  check refuses it naming the record it lacks, and nothing is launched;
+* a newly authored plan with omitted analysis and zero add/change budgets: the writer
+  copies all three answers exactly, unchanged task records included, and no budget section
+  renders; an invented migration answer is refused before copy;
 * a plan the migration list names, with no budget answers and a design document approved
   under the template chain in force before budgets existed: once the requirement is in
   force it passes the review and the plan check, the flow launches its design document,
-  which renders the predates-budgets line, the user's re-approval is recorded, and the
+  which omits Budgets but keeps the reason as an answer; user re-approval is recorded, and the
   launch gate then admits it.
 
 The doubled writer acts as a real one would: it reads its own task out of the plan store,
@@ -58,7 +61,6 @@ from test_finish_plan_recipe_e2e import (
     ENGINE_BIN,
     OK,
     PASSES,
-    PLAN_REFUSED,
     PLAN_UNIT,
     Bench,
     Drafted,
@@ -74,6 +76,7 @@ from test_finish_plan_recipe_e2e import (
 )
 from waits import timeout as e2e_timeout
 
+from orchestrator import plan_budgets, plan_store
 from orchestrator.root import REPO_ROOT
 
 #: The source plans are drafted in here: this process's own fixture store.
@@ -322,16 +325,21 @@ def test_a_document_whose_budget_answers_differ_is_refused_before_anything_is_co
 
 
 @pytest.mark.xdist_group("finish-plan")
-def test_a_new_plan_with_no_budget_answers_is_refused_and_nothing_is_launched(
-    tmp_path: Path, oneharness_bin: str
+@pytest.mark.parametrize("unchanged", [False, True])
+@pytest.mark.parametrize("change", ["none", "invented-predates"])
+def test_omitted_analysis_finishes_and_copies_exact_answers_or_refuses_a_mismatch(
+    tmp_path: Path, oneharness_bin: str, unchanged: bool, change: str
 ) -> None:
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
     bench = _bench(tmp_path, oneharness_bin, PASSES)
-    drafted = _draft("finish-plan-unbudgeted", budgets=False)
-    run = RunId("finish-plan-e2e-unbudgeted")
+    name = f"omitted-{'unchanged' if unchanged else 'no-budget'}-{change}"
+    owned = [{**BUDGET, "file_change": "none"}] if unchanged else []
+    drafted = _draft(f"finish-plan-{name}", budgets=False, owned=owned)
+    run = RunId(f"finish-plan-e2e-{name}")
+    _writes_from_its_task(bench, drafted, run, change)
     try:
-        refused = _just(
+        finished = _just(
             "finish-plan",
             str(_brief(tmp_path, drafted)),
             "--name",
@@ -342,14 +350,83 @@ def test_a_new_plan_with_no_budget_answers_is_refused_and_nothing_is_launched(
         )
     finally:
         _stop(bench, f"{run}{DESIGN_RUN_SUFFIX}")
-
-    assert refused.returncode == PLAN_REFUSED, f"{refused.stdout}\n{refused.stderr}"
-    assert f"{drafted.qualified} carries no `orchestrator.plan-budgets` metadata" in (
-        refused.stderr
-    ), refused.stderr
-    assert "no design document was launched and nothing was copied" in refused.stderr
-    assert not (bench.runs / f"{run}{DESIGN_RUN_SUFFIX}").exists(), _records(bench.runs)
-    assert _records(bench.destination) == [], _records(bench.destination)
+    assert finished.returncode == (OK if change == "none" else DOCUMENT_REFUSED), (
+        finished.stdout + finished.stderr
+    )
+    assert "## Budgets" not in drafted.document_path.read_text(encoding="utf-8")
+    if change != "none":
+        assert "its `predates_budgets` answer is not what" in finished.stderr
+        assert _records(bench.destination) == []
+        return
+    printed = subprocess.run(
+        ["uv", "run", "python", "-m", "orchestrator.plan_budgets", drafted.qualified],
+        cwd=REPO_ROOT,
+        env=bench.environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert printed.returncode == 0, printed.stderr
+    expected = json.loads(printed.stdout)
+    answers = plan_store.sdk(
+        plan_store.client().document_answers(f"{FIXTURE_SOURCE}:{drafted.document}")
+    ).model_dump()
+    assert {key: answers[key] for key in plan_budgets.DESIGN_ANSWERS} == expected
+    assert expected["predates_budgets"] == "" and expected["plan_budgets"] == {}
+    assert len(expected["budgets"]) == len(owned)
+    assert _records(bench.destination), "nothing was copied"
+    copied = subprocess.run(
+        [str(ONETASKGRAPH_BIN), "project", "show", f"{DESTINATION}:{drafted.project}", "--json"],
+        cwd=REPO_ROOT,
+        env=bench.environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert copied.returncode == 0, copied.stderr
+    (item,) = json.loads(copied.stdout)["items"]
+    assert plan_budgets.PLAN_RECORD not in item["item"]["metadata"]
+    assert item["item"]["content"].strip() == "Deliver the paginated listing."
+    documents = subprocess.run(
+        [
+            str(ONETASKGRAPH_BIN),
+            "document",
+            "list",
+            "--source",
+            DESTINATION,
+            "--project",
+            drafted.project,
+            "--json",
+        ],
+        cwd=REPO_ROOT,
+        env=bench.environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert documents.returncode == 0, documents.stderr
+    (document,) = json.loads(documents.stdout)["items"]
+    assert "## Budgets" not in document["item"]["content"]
+    tasks = subprocess.run(
+        [
+            str(ONETASKGRAPH_BIN),
+            "task",
+            "list",
+            "--source",
+            DESTINATION,
+            "--project",
+            drafted.project,
+            "--json",
+        ],
+        cwd=REPO_ROOT,
+        env=bench.environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert tasks.returncode == 0, tasks.stderr
+    (task,) = json.loads(tasks.stdout)["items"]
+    assert task["item"]["metadata"].get(plan_budgets.TASK_RECORD, []) == owned
 
 
 #: The design-doc template as it stood before budgets existed: the chain a plan approved
@@ -496,7 +573,8 @@ def test_a_listed_plan_predating_budgets_is_documented_as_such_and_re_approved(
     finally:
         _stop(bench, f"{run}{DESIGN_RUN_SUFFIX}")
     stored = drafted.document_path.read_text(encoding="utf-8")
-    assert f"## Budgets\n\nThis plan predates budgets: {REASON}\n" in stored, stored
+    assert "## Budgets" not in stored, stored
+    assert "This plan predates budgets" not in stored, stored
     assert "What we're sizing for" not in stored, stored
 
     # Re-approving the document the new chain rendered is the user's act, and it admits it.

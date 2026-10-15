@@ -1,6 +1,6 @@
 """A plan's budgets: where each answer lives, its one shape, and what `just check-plan` refuses.
 
-Every plan states its measurable requirements, its **budgets**, in two homes, and this
+A plan adding or changing a task budget states its analysis in two homes, and this
 module states the shape of both once. `docs/budgets.md` states the principles, and the
 templates, `docs/budgets.md` and `personas/planner.yaml` restate this shape;
 `tests/test_plan_budgets_template.py` fails the moment a restatement parts from it.
@@ -11,7 +11,9 @@ templates, `docs/budgets.md` and `personas/planner.yaml` restate this shape;
   as the task's `## Budgets` section through the partial `templates/plan-task-budgets.md.j2`.
 * **The plan-level answers** are the project's `orchestrator.plan-budgets` metadata
   (:data:`PLAN_RECORD`): one :class:`PlanAnswers`, the resolved answers of the
-  `plan-description` template the project's own description is rendered from.
+  `plan-description` template the project's own description is rendered from. With no
+  add/change task budget, absent analysis is allowed and the description is overview alone.
+  Existing records retain their complete shape and validation.
 
 **The metadata records are authoritative**, because a copy carries metadata and never
 answers, so a record is what every reader reads, on authoring and board copies alike. The
@@ -296,7 +298,7 @@ class WriterAnswers(TypedDict):
 
     #: The migration list's reason when it names the plan, and `""` otherwise.
     predates_budgets: str
-    #: The plan's :data:`PLAN_RECORD`, or `{}` for a plan that predates budgets.
+    #: The plan's :data:`PLAN_RECORD`, or `{}` when project analysis is absent.
     plan_budgets: Mapping[str, object]
     #: Every budget of every task, each with its owning node and that task's location.
     budgets: list[dict[str, object]]
@@ -889,6 +891,8 @@ def description_refusals(project: str, held: Mapping[str, object]) -> list[Refus
     record = metadata.get(PLAN_RECORD)
     content = held.get("content")
     content = content if isinstance(content, str) else ""
+    if record is None:
+        record = {"overview": content.strip()}
     found: list[Refusal] = []
     provenance = metadata.get(design_approval.PROVENANCE)
     provenance = provenance if isinstance(provenance, Mapping) else {}
@@ -953,6 +957,15 @@ def owned_budgets(tasks: Sequence[TaskBudgets]) -> dict[str, tuple[Budget, ...]]
         except BudgetsError:
             continue
     return owned
+
+
+def needs_analysis(owned: Mapping[str, Sequence[Budget]]) -> bool:
+    """Whether any task adds or changes a budget, using the authoritative file-change field."""
+    return any(
+        budget.file_change in (FileChange.ADD, FileChange.CHANGE)
+        for budgets in owned.values()
+        for budget in budgets
+    )
 
 
 def migration_entries(path: Path | None = None) -> list[MigrationEntry]:
@@ -1020,7 +1033,8 @@ def refusals(
     when not given — the document the engine's `plan check` hands the registered check
     carries them, and the path reading the store hands its records instead. Every task's
     `## Budgets` section is held to its record whatever the plan; the plan-level answers are
-    required of every plan but one the migration list names or an exempt launch's project.
+    required when a task adds/changes a budget, except for migrated or exempt plans.
+    Existing analysis is always validated for non-exempt plans.
     """
     tasks = tasks_of_plan(plan) if tasks is None else tasks
     found: list[Refusal] = []
@@ -1033,28 +1047,30 @@ def refusals(
     except (OSError, ValueError) as exc:
         return [*found, Refusal(None, "budgets", f"{project}'s budgets could not be read: {exc}")]
     metadata = held.get("metadata")
+    present = isinstance(metadata, Mapping) and PLAN_RECORD in metadata
     record = metadata.get(PLAN_RECORD) if isinstance(metadata, Mapping) else None
-    if record is None:
+    if not present and needs_analysis(owned_budgets(tasks)):
         return [
             *found,
             Refusal(
                 None,
                 "budgets",
                 f"{project} carries no `{PLAN_RECORD}` metadata holding its plan-level budget "
-                f"answers, and every plan states them there and renders them as its "
+                f"answers, and a plan adding/changing a budget states them there and renders its "
                 f"description from the `{DESCRIPTION_TEMPLATE}` template (`docs/budgets.md`); "
                 f"a plan that predates the requirement is one `config/budgets-migration.yaml` "
                 f"names",
             ),
         ]
     try:
-        answers = parse_plan(record)
+        answers = parse_plan(record) if present else None
     except BudgetsError as exc:
         return [
             *found,
             Refusal(None, "budgets", f"{project}'s plan-level answers are malformed: {exc}"),
         ]
-    found.extend(plan_rule_refusals(answers, owned_budgets(tasks), plan))
+    if answers is not None:
+        found.extend(plan_rule_refusals(answers, owned_budgets(tasks), plan))
     try:
         found.extend(description_refusals(project, held))
     except OSError as exc:
@@ -1070,21 +1086,17 @@ def writer_answers(project: str) -> WriterAnswers:
     The migration list's reason when it names the plan; otherwise the plan's
     :data:`PLAN_RECORD`, and every budget of every task, each with its owning node id and the
     location the plan store reports for that task, sorted by node. Raises
-    :class:`BudgetsError` for a plan with no plan-level record, which `just check-plan` has
-    refused before any writer is launched.
+    :class:`BudgetsError` for missing analysis when a task adds/changes a budget.
+    With no such budget, absent analysis returns an empty object and all task budgets.
     """
     reason = migrated(project)
     if reason is not None:
         return WriterAnswers(predates_budgets=reason, plan_budgets={}, budgets=[])
     record = plan_store.project_record(project).get("metadata")
+    present = isinstance(record, Mapping) and PLAN_RECORD in record
     held = record.get(PLAN_RECORD) if isinstance(record, Mapping) else None
-    if held is None:
-        raise BudgetsError(
-            f"{project} carries no `{PLAN_RECORD}` metadata and `config/budgets-migration.yaml` "
-            f"does not name it, so there is nothing for its design document's budget summary "
-            f"to restate; `just check-plan {project}` refuses it for the same reason"
-        )
-    parse_plan(held)
+    if present:
+        parse_plan(held)
     budgets: list[dict[str, object]] = []
     for task in sorted(plan_store.read_tasks(project), key=lambda task: task.node_id):
         record = task_record(task.metadata)
@@ -1095,7 +1107,12 @@ def writer_answers(project: str) -> WriterAnswers:
             {"node": task.node_id, "location": location, **dataclasses.asdict(budget)}
             for budget in parse_budgets(record)
         )
-    return WriterAnswers(predates_budgets="", plan_budgets=held, budgets=budgets)
+    if not present and any(budget["file_change"] in ("add", "change") for budget in budgets):
+        raise BudgetsError(
+            f"{project} carries no `{PLAN_RECORD}` metadata for its added/changed budgets; "
+            f"`just check-plan {project}` refuses it for the same reason"
+        )
+    return WriterAnswers(predates_budgets="", plan_budgets=held or {}, budgets=budgets)
 
 
 #: The design document's three budget answers, whose values :func:`writer_answers` states.

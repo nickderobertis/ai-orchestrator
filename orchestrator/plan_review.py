@@ -1176,6 +1176,9 @@ A plan that omits the adoption its goal needs is refused with a finding whose
 `fast` where the release is needed, a `consumes` on a node of this repository, a
 version literal — is refused with a finding whose `criterion` names the node's id.
 
+First decide whether the work needs an added/changed task budget. Only then is full budget
+analysis required; with none and no existing analysis, overview alone suffices. Preserve
+and validate existing analysis. Design rendering follows `design-doc` budgets_guidance.
 On the budgets, ask what the plan is **missing**, not only whether each answer was
 filled in. The plan-level answers state what the plan is sized for, the realistic
 workload, a checklist of concerns each answered with a budget or a "n/a because ...",

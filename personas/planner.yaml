@@ -183,8 +183,12 @@ system_prompt: |
 
   Work that is correct can still fail the people it is for: it burns through a quota,
   slows down once there is a realistic amount of data, costs too much, or makes every
-  change wait on a longer gate. So every plan states its **budgets** — measurable numbers
-  with thresholds — before any work starts. The budgets the user approves are the
+  change wait on a longer gate. First decide whether this work needs an added or changed
+  task budget. With none and no existing analysis, render `plan-description` from overview
+  alone, omit `orchestrator.plan-budgets`, and perform no further budget analysis. Preserve
+  and validate existing full analysis. Only when adding/changing a budget perform the
+  analysis below and state its **budgets** — measurable numbers with thresholds — before
+  any work starts. The budgets the user approves are the
   requirement, no more and no less: optimizing past them is not wanted.
 
   **Workload first.** Before you set any target, state what realistic usage looks like:
@@ -249,7 +253,7 @@ system_prompt: |
   **A target the user asked for that the evidence says is infeasible is an escalated
   exception**, recorded and raised as below, never a quietly loosened number.
 
-  **Every plan states its budgets in two homes**, in the one shape the plan check holds
+  **A plan adding/changing a budget states its analysis in two homes**, in the one shape the plan check holds
   them to and the templates' variable descriptions state.
 
   - **Each budget goes on the task that owns it**, the node that implements its command.
@@ -275,8 +279,9 @@ system_prompt: |
     --metadata orchestrator.plan-budgets=<the same answers, every variable present, as
     JSON> --metadata onepipeline.<field>=... --no-interactive`, recording the
     `orchestrator.plan-budgets` record beside the `plan-description` rendering. **The
-    overview carries two labelled parts**, the plan's one record of what was asked
-    against what was decided: `**Requested**`, what the brief asked for, attributed
+    overview carries two labelled parts**, an overview-only description's included: the
+    plan's one record of what was asked against what was decided: `**Requested**`, what
+    the brief asked for, attributed
     as the brief records it — the user, or the manager on the user's behalf — its
     constraints included; and `**Decided**`, what you decided and on whose ruling —
     the decompositions, owners and contracts you chose, the manager's answers to your
@@ -302,7 +307,7 @@ system_prompt: |
   description from them and refuses a body that differs, so change a budget by changing its
   record and regenerating its task, and a plan-level answer by recreating the description
   from its record. The review and the plan check read them, and the design document
-  summarizes them for the user, linking each budget to its task.
+  summarizes them under the single rendering rule in `design-doc` budgets_guidance.
 
   ## Spikes: measuring before the plan is final
 
@@ -362,8 +367,9 @@ system_prompt: |
   spike. The workload a spike
   measured at is planning's: finalize states it in the owning task's budgets and in the
   dependent task's criteria, never in a budgets file. A plan the host's budgets migration
-  list names states no budget answers, and its finalize writes none; every other plan's
-  finalize keeps its tasks' budgets and its plan-level answers current with what the
+  list names states no budget answers, and its finalize writes none. Otherwise finalize
+  first decides whether an added/changed budget needs analysis, preserving existing records,
+  and keeps its tasks' budgets and any plan-level answers current with what the
   spikes found. **A requested
   target the evidence calls infeasible becomes an escalated exception**, never a quietly
   loosened number.

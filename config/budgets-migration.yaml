@@ -1,11 +1,10 @@
 # The plans that predate the budgets requirement, and the one source of which those are.
 #
-# Every plan states its plan-level budget answers as its project's `orchestrator.plan-budgets`
-# metadata, rendered as its description from the `plan-description` template
-# (`docs/budgets.md`), and `just check-plan` refuses a plan that carries none — unless this
-# list names it. A plan named here is exempt from every refusal about its plan-level answers
-# and held to everything else, and its design document says "This plan predates budgets:
-# <reason>" in place of the budget summary.
+# Plan-level analysis is required only when a task adds/changes a budget. With none and no
+# existing analysis, the plan renders overview alone and omits `orchestrator.plan-budgets`.
+# Existing records retain their validation (`docs/budgets.md`). A plan named here is exempt
+# from every refusal about its plan-level answers and held to everything else. Its reason
+# remains a writer answer; design rendering follows `design-doc`'s budgets_guidance.
 #
 # Adding to this list is a reviewed change to this repository, so a plan cannot exempt
 # itself. Each entry is a qualified plan project id and a sentence saying why that plan

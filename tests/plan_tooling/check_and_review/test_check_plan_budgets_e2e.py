@@ -3,7 +3,8 @@
 Every plan states each budget on the task that owns it — the task's `orchestrator.budgets`
 metadata, rendered as its `## Budgets` section — and its plan-level answers as its project's
 `orchestrator.plan-budgets` metadata, rendered as its description from the
-`plan-description` template. The check refuses a plan that carries no plan-level answers,
+`plan-description` template. The check refuses a plan adding/changing a budget that carries
+no plan-level answers,
 whose answers break a rule, or whose bodies are not their records' renderings — naming the
 rule — while a plan keeping them all passes, and so does a project of a plan kind exempt from
 design approval, with no answers at all.
@@ -180,6 +181,10 @@ def _drafted(
         owning(plan_fixture_source.SOURCE, native, "paging", second)
     if answers is not None:
         budgeted(plan_fixture_source.SOURCE, native, answers)
+    else:
+        budgeted(
+            plan_fixture_source.SOURCE, native, {"overview": "Page the listing."}, analysis=False
+        )
     return reviewed(f"{plan_fixture_source.SOURCE}:{native}")
 
 
@@ -231,8 +236,9 @@ def test_a_plan_whose_budgets_keep_every_rule_passes(tmp_path: Path) -> None:
     assert "carries no `plan check`" in directly.stdout, directly.stdout
 
 
-def test_a_plan_carrying_no_plan_level_answers_is_refused_naming_the_record() -> None:
-    project = _drafted(None)
+@pytest.mark.parametrize("change", ["add", "change"])
+def test_a_plan_carrying_no_plan_level_answers_is_refused_naming_the_record(change: str) -> None:
+    project = _drafted(None, [{**BUDGET, "file_change": change}])
 
     checked = _check(project)
 
@@ -666,7 +672,7 @@ def test_budget_links_escape_ids_and_fall_back_for_legacy_and_other_hosts(tmp_pa
 
 
 @pytest.mark.parametrize("modern", [True, False])
-def test_summary_omits_unscoped_and_unnamed_legacy_facts_without_losing_scoped_facts(
+def test_summary_keeps_scoped_omissions_with_added_budgets_and_omits_all_effects(
     tmp_path: Path, modern: bool
 ) -> None:
     base = json.loads((REPO_ROOT / "tests/fixtures/design_doc/modern-answers.json").read_text())
@@ -720,14 +726,72 @@ def test_summary_omits_unscoped_and_unnamed_legacy_facts_without_losing_scoped_f
     loader.write_text(resolved.stdout, encoding="utf-8")
     rendered = plan_store.sdk(
         plan_store.client().template_render(
-            template_loader=str(loader), answers={**base, "plan_budgets": record, "budgets": []}
+            template_loader=str(loader),
+            answers={
+                **base,
+                "plan_budgets": record,
+                "budgets": [
+                    {**BUDGET, "node": NODE, "location": "https://github.com/acme/app/issues/1"}
+                ],
+            },
         )
     ).body
-    assert "## Budgets" in rendered and "Expected gate effect." in rendered
+    assert "## Budgets" in rendered and "Expected gate effect." not in rendered
     assert (
         "Retention stays unchanged." in rendered
         if modern
         else "Retention stays unchanged." not in rendered
     )
     assert "EXCLUDED" not in rendered
-    assert "Realistic data" not in rendered and "| Budget |" not in rendered
+    assert "Realistic data" not in rendered and "| Budget |" in rendered
+
+
+@pytest.mark.parametrize("unchanged", [False, True])
+def test_omitted_analysis_accepts_overview_only_and_preserves_task_budgets(
+    tmp_path: Path, unchanged: bool
+) -> None:
+    budgets = [{**BUDGET, "file_change": "none"}] if unchanged else []
+    project = _drafted(None, budgets)
+    for environment in (None, _narrower(tmp_path)):
+        checked = _check(project, environment)
+        assert checked.returncode == 0, checked.stdout + checked.stderr
+    held = plan_store.project_record(project)
+    assert plan_budgets.PLAN_RECORD not in held["metadata"]
+    assert held["content"].strip() == "Page the listing."
+    printed = subprocess.run(
+        ["uv", "run", "python", "-m", "orchestrator.plan_budgets", project],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert printed.returncode == 0, printed.stderr
+    answers = json.loads(printed.stdout)
+    assert answers["predates_budgets"] == "" and answers["plan_budgets"] == {}
+    assert len(answers["budgets"]) == len(budgets)
+    if unchanged:
+        (task,) = plan_store.read_tasks(project)
+        assert answers["budgets"] == [
+            {
+                **BUDGET,
+                "file_change": "none",
+                "node": NODE,
+                "location": task.location or str(task.qualified_id),
+            }
+        ]
+
+
+@pytest.mark.parametrize("fault", ["record", "section"])
+def test_task_validation_survives_omitted_project_analysis(fault: str) -> None:
+    unchanged = [{**BUDGET, "file_change": "none"}]
+    project = _drafted(
+        None,
+        unchanged,
+        record="malformed" if fault == "record" else None,
+        section="" if fault == "section" else None,
+    )
+    checked = _check(project)
+    assert checked.returncode == 1, checked.stdout + checked.stderr
+    assert (
+        "metadata is malformed" if fault == "record" else "two state different budgets"
+    ) in checked.stderr

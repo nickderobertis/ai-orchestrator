@@ -165,9 +165,9 @@ RULES = {
     "visual changes restate the report": "restates the plan's current visual report, resolved by",
     "no visual section without a visual change": "has no Visual changes section",
     "budgets copy the writer's answers": "orchestrator.plan_budgets <project>` prints for the",
-    "predates budgets": "This plan predates budgets: <reason>",
+    "presentation only": "Filtering is presentation only",
     "no budget detail": "So this section carries none of that detail",
-    "no budget section without a budget change": "renders no Budgets section at all",
+    "no budget section without a budget change": "renders no Budgets section",
     "no alert blocks": "No GitHub alert blocks",
     "guidance is never rendered": "never an HTML comment",
     "what and why": "carry no interface detail and no implementation detail",
@@ -665,7 +665,7 @@ def test_the_1568_fixture_renders_the_summary_a_person_approves(
     body = _render(loader, {**ANSWERS, **_budget_answers()}, tmp_path)
     section = _section(body)
 
-    assert section == SUMMARY.read_text(encoding="utf-8"), section
+    assert section.rstrip("\n") == SUMMARY.read_text(encoding="utf-8").rstrip("\n"), section
     sections = re.findall(r"^## (.+)$", body, re.MULTILINE)
     assert sections == ["What", "Why", "Architecture", "Budgets", "Acceptance criteria"] + [
         "Planned tasks"
@@ -702,32 +702,72 @@ def test_a_minimum_budget_and_a_cell_breaking_answer_stay_one_row(
     assert row.startswith("| [Pages \\| per second][1] | ≥2 requests | measured | "), row
 
 
-def test_a_plan_that_predates_budgets_renders_one_line_in_place_of_the_summary(
-    tmp_path: Path, loader: str
+@pytest.mark.parametrize("case", ["predates", "none", "effects-only", "no-budget"])
+def test_without_added_or_changed_budgets_the_whole_section_is_omitted(
+    tmp_path: Path, loader: str, case: str
 ) -> None:
-    reason = "It was approved before plans carried budgets."
-    body = _render(loader, {**ANSWERS, "predates_budgets": reason}, tmp_path)
-
-    assert _section(body) == f"## Budgets\n\nThis plan predates budgets: {reason}\n\n"
-
-
-@pytest.mark.parametrize(
-    "budgets",
-    ["none", "absent"],
-)
-def test_informative_omissions_and_effects_render_without_a_feature_budget_change(
-    tmp_path: Path, loader: str, budgets: str
-) -> None:
-    """Omissions and root effects remain visible even without feature registration."""
     answers = _budget_answers()
-    unchanged = [{**entry, "file_change": "none"} for entry in answers["budgets"]]
-    held = {**answers, "budgets": unchanged if budgets == "none" else []}
-    body = _render(loader, {**ANSWERS, **held}, tmp_path)
+    plan = answers["plan_budgets"]
+    plan["spike_findings"] = [
+        {"spike": "s", "finding": "f", "changed": "c", "summary": "Hidden finding."}
+    ]
+    answers["budgets"] = (
+        [{**entry, "file_change": "none"} for entry in answers["budgets"]] if case == "none" else []
+    )
+    if case == "predates":
+        answers["predates_budgets"] = "Approved before budgets."
+    if case == "no-budget":
+        plan["repo_wide_effects"] = []
+    body = _render(loader, {**ANSWERS, **answers}, tmp_path)
+    for text in (
+        "## Budgets",
+        "Sizing",
+        "At 10×",
+        "| Budget |",
+        "Not budgeted",
+        "Repo-wide effects",
+        "Spike findings",
+        "Hidden finding.",
+        "Approved before budgets.",
+    ):
+        assert text not in body, text
 
-    assert "## Budgets" in body
-    assert "Not budgeted" in body and "Repo-wide effects" in body
-    assert "Realistic data" not in _section(body)
-    assert ("| Budget |" in body) == (budgets == "none")
+
+@pytest.mark.parametrize("changes", [("add",), ("change",), ("none", "add", "none", "change")])
+def test_only_added_changed_budgets_have_sequential_links_and_modern_anchors(
+    tmp_path: Path, loader: str, changes: tuple[str, ...]
+) -> None:
+    answers = _budget_answers()
+    budgets = [
+        {
+            **answers["budgets"][0],
+            "id": f"target-{i}",
+            "name": f"Target {i}",
+            "location": f"https://github.com/acme/app/issues/{i + 1}",
+            "file_change": change,
+        }
+        for i, change in enumerate(changes)
+    ]
+    answers["plan_budgets"]["spike_findings"] = [
+        {"spike": "s", "finding": "f", "changed": "c", "summary": "Visible finding."}
+    ]
+    section = _section(_render(loader, {**ANSWERS, **answers, "budgets": budgets}, tmp_path))
+    displayed = [entry for entry in budgets if entry["file_change"] in {"add", "change"}]
+    for index, entry in enumerate(displayed, 1):
+        assert f"[{entry['name']}][{index}]" in section
+        assert f"[{index}]: {entry['location']}#user-content-{entry['id']}\n" in section
+    for entry in budgets:
+        if entry["file_change"] == "none":
+            assert entry["name"] not in section and entry["location"] not in section
+    for text in (
+        "**Sizing.**",
+        "**At 10×.**",
+        "**Not budgeted:**",
+        "**Spike findings:**",
+        "Visible finding.",
+    ):
+        assert text in section
+    assert "Repo-wide effects" not in section
 
 
 def test_a_plan_with_only_not_applicable_answers_renders_no_budgets_section(
@@ -765,24 +805,16 @@ def test_spike_findings_render_one_line_each_only_when_there_are_any(
     ), section
 
 
-def test_a_repository_with_an_effect_is_never_also_listed_as_unaffected(
-    tmp_path: Path, loader: str
-) -> None:
-    """One repository stating an effect and a `none` is affected; two named alike list once."""
+def test_root_effects_remain_answers_without_design_output(tmp_path: Path, loader: str) -> None:
     answers = _budget_answers()
-    effects = [
-        {"repository": "github.com/acme/app", "budget": "gate-time", "effect": "+5 s"}
-        | {"summary": "The gate grows by 5 s."},
-        {"repository": "github.com/acme/app", "budget": "cycle-time", "effect": "none"}
-        | {"summary": ""},
-        {"repository": "github.com/acme/docs", "budget": "", "effect": "none", "summary": ""},
-        {"repository": "gitlab.com/other/docs", "budget": "", "effect": "none", "summary": ""},
-    ]
-    plan = {**answers["plan_budgets"], "repo_wide_effects": effects}
-    section = _section(_render(loader, {**ANSWERS, **answers, "plan_budgets": plan}, tmp_path))
-
-    (line,) = [one for one in section.splitlines() if one.startswith("**Repo-wide effects:**")]
-    assert line == "**Repo-wide effects:** `app` / `gate-time`: The gate grows by 5 s.", line
+    effects = answers["plan_budgets"]["repo_wide_effects"]
+    assert effects
+    section = _section(_render(loader, {**ANSWERS, **answers}, tmp_path))
+    assert "Repo-wide effects" not in section
+    for effect in effects:
+        if effect["summary"]:
+            assert effect["summary"] not in section
+    assert answers["plan_budgets"]["repo_wide_effects"] == effects
 
 
 def test_modern_architecture_description_restates_the_reader_models() -> None:

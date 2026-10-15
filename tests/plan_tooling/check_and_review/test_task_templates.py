@@ -317,7 +317,11 @@ def test_a_tasks_why_asks_for_impact_and_forbids_attributing_the_request(
 def test_the_plan_descriptions_overview_carries_what_was_requested_and_what_was_decided(
     launch_environment: dict[str, str],
 ) -> None:
-    """Requested against decided has one home, the overview, in two labelled parts."""
+    """Requested against decided has one home, the overview, in two labelled parts.
+
+    Including the overview a plan adding or changing no budget renders its description from
+    alone, which carries the same record and nothing of the budget analysis it does not owe.
+    """
     variables = _variables(launch_environment, "plan-description")
     described = " ".join(str(variables["overview"]["description"]).split())
     planner = _planner()
@@ -334,6 +338,7 @@ def test_the_plan_descriptions_overview_carries_what_was_requested_and_what_was_
             assert phrase in stated, (phrase, stated)
     assert "two labelled parts" in described, described
     assert "The overview carries two labelled parts" in planner, planner
+    assert "an overview-only description's included" in planner, planner
 
 
 def test_the_planner_records_each_tasks_unit_once_as_task_metadata() -> None:

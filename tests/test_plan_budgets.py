@@ -160,6 +160,10 @@ def _plan(
         owning(plan_fixture_source.SOURCE, native, NODE, held)
     if answers is not None:
         budgeted(plan_fixture_source.SOURCE, native, answers)
+    else:
+        budgeted(
+            plan_fixture_source.SOURCE, native, {"overview": "Page the listing."}, analysis=False
+        )
     return f"{plan_fixture_source.SOURCE}:{native}"
 
 
@@ -819,7 +823,17 @@ def test_the_plan_kinds_design_approval_exempts_are_exempt_here_on_the_same_boun
     assert plan_budgets.exempt_kind(project, {NODE, "more"}) is None
     held = loaded["tasks"]
     assert isinstance(held, list)
-    grown = {**loaded, "tasks": [*held, {"id": "more"}]}
+    grown = {
+        **loaded,
+        "tasks": [
+            *held,
+            {
+                "id": "more",
+                "task": budget_section([BUDGET]),
+                "metadata": {plan_budgets.TASK_RECORD: [BUDGET]},
+            },
+        ],
+    }
     assert [refused.field for refused in plan_budgets.refusals(project, grown)] == ["budgets"]
 
 
@@ -1278,3 +1292,62 @@ def test_a_modern_plan_record_of_another_version_is_refused(version: object) -> 
     answers = {**ANSWERS, "schema_version": version, "checklist": [], "repo_wide_effects": []}
     with pytest.raises(plan_budgets.BudgetsError, match="integer literal 2"):
         plan_budgets.parse_plan(answers)
+
+
+@pytest.mark.parametrize("unchanged", [False, True])
+def test_absent_analysis_keeps_the_three_answer_contract(
+    capsys: pytest.CaptureFixture[str], unchanged: bool
+) -> None:
+    budgets = [_budget(file_change="none")] if unchanged else []
+    project = _plan(None, budgets=budgets)
+    assert _checked(project) == []
+    (task,) = plan_store.read_tasks(project)
+    assert _writer(project, capsys) == {
+        "predates_budgets": "",
+        "plan_budgets": {},
+        "budgets": [{"node": NODE, "location": task.location, **entry} for entry in budgets],
+    }
+    assert plan_budgets.plan_record(project) is None
+
+
+def test_effects_only_full_analysis_keeps_its_record_validation_and_description(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    answers = _broken(checklist=[ANSWERS["checklist"][1]])
+    project = _plan(answers, budgets=[])
+    assert _checked(project) == []
+    assert _writer(project, capsys)["plan_budgets"] == answers
+    held = plan_store.project_record(project)
+    assert held["content"] == plan_budgets.render_description(answers)
+    assert "Repo-wide effects" in held["content"]
+    assert answers["repo_wide_effects"][0]["effect"] in held["content"]
+    malformed = _plan({**answers, "sizing": ""}, budgets=[])
+    assert any("`sizing` answer is empty" in refusal.reason for refusal in _checked(malformed))
+
+
+@pytest.mark.parametrize("record", [None, {}, [], "invalid"])
+def test_stored_malformed_analysis_is_never_treated_as_omitted(
+    capsys: pytest.CaptureFixture[str], record: object
+) -> None:
+    project = _plan(None, budgets=[])
+    stored = subprocess.run(
+        [
+            str(ONETASKGRAPH_BIN),
+            "project",
+            "metadata",
+            "set",
+            project,
+            plan_budgets.PLAN_RECORD,
+            json.dumps(record),
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert stored.returncode == 0, stored.stderr
+    (refused,) = _checked(project)
+    assert "plan-level answers are malformed" in refused.reason
+    assert plan_budgets.main([project]) == 2
+    assert "does not hold exactly" in capsys.readouterr().err
+    assert plan_budgets.PLAN_RECORD in plan_store.project_record(project)["metadata"]

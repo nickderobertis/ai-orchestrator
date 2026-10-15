@@ -2910,7 +2910,9 @@ def test_the_planner_is_told_how_to_state_its_budgets_in_general_terms() -> None
         "**A target the user asked for that the evidence says is infeasible is an escalated "
         "exception**",
         "never a quietly loosened number",
-        "**Every plan states its budgets in two homes**",
+        "**A plan adding/changing a budget states its analysis in two homes**",
+        "First decide whether this work needs an added or changed task budget",
+        "perform no further budget analysis",
         "`orchestrator.budgets`",
         "`orchestrator.plan-budgets`",
     ):

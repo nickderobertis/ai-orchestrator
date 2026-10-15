@@ -196,12 +196,15 @@ def budgeted(
     native: str,
     answers: Mapping[str, object],
     environment: Mapping[str, str] | None = None,
+    *,
+    analysis: bool = True,
 ) -> str:
     """State ``native``'s plan-level budget ``answers`` the way a planner writes them.
 
     The pinned engine's `template resolve plan-description` piped into the pinned store's
     `project create --id`, which replaces the project's description with the rendering and
     keeps its metadata, beside `--metadata orchestrator.plan-budgets=<the same answers>`.
+    With ``analysis=False``, render overview alone without recording project analysis.
     The project keeps its title. Answers the project's qualified id.
     """
     shown = subprocess.run(
@@ -221,7 +224,11 @@ def budgeted(
         created = subprocess.run(
             [str(ONETASKGRAPH_BIN), "project", "create", source, "--id", native]
             + ["--title", title, "--template-loader", "-", "--answers", written.name]
-            + ["--metadata", f"{plan_budgets.PLAN_RECORD}={json.dumps(answers)}"]
+            + (
+                ["--metadata", f"{plan_budgets.PLAN_RECORD}={json.dumps(answers)}"]
+                if analysis
+                else []
+            )
             + ["--no-interactive"],
             cwd=REPO_ROOT,
             env=None if environment is None else dict(environment),

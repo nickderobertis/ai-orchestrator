@@ -171,7 +171,10 @@ def test_the_description_declares_the_plan_level_answers_in_the_models_order(
 
     assert tuple(declared) == plan_budgets.MODERN_PLAN_VARIABLES
     for name in plan_budgets.PLAN_TEXTS:
-        assert (declared[name]["type"], declared[name]["required"]) == ("text", True), name
+        assert (declared[name]["type"], declared[name]["required"]) == (
+            "text",
+            name == "overview",
+        ), name
     for name, model in plan_budgets.PLAN_LISTS.items():
         assert (declared[name]["type"], declared[name]["items"]) == ("list", "object"), name
         described = " ".join(str(declared[name]["description"]).split())
@@ -217,10 +220,10 @@ def test_a_description_with_no_data_or_finding_says_so(loader: str, tmp_path: Pa
 def test_a_required_plan_answer_left_out_is_refused_by_the_store(
     loader: str, tmp_path: Path
 ) -> None:
-    unanswered = {key: value for key, value in ANSWERS.items() if key != "ten_x_summary"}
+    unanswered = {key: value for key, value in ANSWERS.items() if key != "overview"}
     refused = _render(loader, unanswered, tmp_path)
     assert refused.returncode == 2
-    assert "ten_x_summary" in refused.stderr
+    assert "overview" in refused.stderr
 
 
 def test_the_task_template_declares_the_partials_budgets_variable(task_loader: str) -> None:
@@ -446,3 +449,9 @@ RETIRED = re.compile(
 
 #: The installed onebudgetspec CLI, the authority for the result a budget's analysis writes.
 CHECKER = REPO_ROOT / ".venv" / "bin" / "onebudgetspec"
+
+
+def test_overview_alone_needs_no_analysis_answers(loader: str, tmp_path: Path) -> None:
+    rendered = _render(loader, {"overview": "Change the wording."}, tmp_path)
+    assert rendered.returncode == 0, rendered.stderr
+    assert rendered.stdout.strip() == "Change the wording."

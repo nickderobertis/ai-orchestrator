@@ -136,6 +136,9 @@ rules:
       include: ["**/*.md"]
     relevance: false
 
+  # First decide whether work needs an added/changed task budget; only then perform budget
+  # analysis. With none and no existing analysis, overview alone is sufficient. Existing
+  # full analysis stays validated. Design rendering is `design-doc` budgets_guidance's.
   # The rules a plan alone answers to: what its tasks, its budgets and its description must
   # state before any of its work exists. Each is worded here and nowhere else.
   - name: plan_criteria_satisfiable_inside_the_dispatch

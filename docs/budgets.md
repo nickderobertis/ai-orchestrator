@@ -1,8 +1,9 @@
 # Budgets
 
 A **budget** is a measurable requirement with a threshold: how slow a page may be, how much
-of a quota a run may spend, how long a gate may take. A plan states its budgets before any
-work starts, the user approves them in the plan's design document, and the merge path holds
+of a quota a run may spend, how long a gate may take. A plan first decides whether its work
+adds or changes a budget. Only then does it perform the budget analysis and state its
+budgets before any work starts, the user approves them in the plan's design document, and the merge path holds
 the work to them. This is how a feature that turns out slow, quota-hungry or expensive once
 it meets realistic use is caught before it lands rather than after.
 
@@ -79,8 +80,11 @@ adopted engine. This is what such a command may rely on.
 ## How a plan states its budgets
 
 <!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This restates the data model `orchestrator/plan_budgets.py` states once, which a planner reads here; `tests/test_plan_budgets_template.py` fails the moment its records, vocabularies or caps part from that module's own. -->
-A plan states its budgets in two homes, and `orchestrator/plan_budgets.py` states the shape
-of both once.
+A plan first decides whether it needs an added/changed task budget. With none and no
+existing analysis, it renders `plan-description` from overview alone and omits
+`orchestrator.plan-budgets`; it performs no further budget analysis. Existing analysis
+records are preserved and validated in full. When analysis is needed, it lives in two homes,
+and `orchestrator/plan_budgets.py` states the shape of both once.
 
 - **Each budget lives on the task that owns it.** The node that implements a budget owns its
   command and its registration, so its task carries the budget: the task's
@@ -132,21 +136,11 @@ of both once.
   answers, so the records are what every reader reads, on the board as where the plan was
   drafted. `just check-plan` renders each task's `## Budgets` section and the plan's
   description from their records and refuses a body that is not that rendering.
-- **The design document summarizes them.** It shows what the plan is sizing for, what
-  breaks first at 10×, linked budget names, targets, basis, direct/telemetry measurement
-  mode and approximate check seconds. Each GitHub issue destination links to its explicit
-  `user-content-<budget id>` anchor; the template HTML-escapes the authoritative id and
-  percent-encodes the fragment. Destination comes from current task.location, never the
-  budget repository. Legacy sections have no new anchor: their summary uses the task URL,
-  a compatibility limitation. Linear and local destinations use task URLs too; Linear's
-  anchor capability remains unverified. No URL is persisted in budget metadata.
-  Only explicitly in-scope n/a summaries and actual named root effects appear — never a budget's workload, evidence, command or
-  budgets file, which a reader follows the link for. A plan with no budget still shows
-  its named root effects, with its omissions beside them. A plan with no budget and no
-  named root effect shows no Budgets section, however many concerns it answered n/a; those
-  answers stay in its description and each task's `## Budgets` section. The writer copies
-  these answers from `python -m orchestrator.plan_budgets <project>`, and `just
-  finish-plan` refuses a document whose answers differ.
+- **The design document summarizes introduced or modified targets.** The template's
+  `budgets_guidance` is the single rendering rule. The writer copies all three
+  answers from `python -m orchestrator.plan_budgets <project>` in full; `just finish-plan`
+  refuses a document whose answers differ. Task records and existing project analysis,
+  including repo-wide effects, remain intact regardless of what the design document shows.
 - **Only an approved design document changes a budgets file.** A plan proposes its changes
   to each budgets file on the tasks that own them, the design document puts them to the
   user, and approving the design document approves them.
@@ -172,14 +166,13 @@ of both once.
 `config/budgets-migration.yaml` is the one list of plans written before this requirement.
 Each entry is a qualified plan project id and the reason it predates budgets. A plan named
 there is exempt from every refusal about its plan-level answers and held to everything
-else, and its design document says *"This plan predates budgets: <reason>"* in place of the
-budget summary. Adding to the list is a reviewed change to this repository, so a plan cannot
-exempt itself. The plan kinds exempt from design approval — a planning launch's project and
+else. Its migration reason remains a writer answer; design rendering follows the
+template guidance above. Adding to the list is a reviewed change to this repository, so a
+plan cannot exempt itself. The plan kinds exempt from design approval — a planning launch's project and
 a follow-ups launch's — are exempt here too.
 
 Exact current key sets are the implicit legacy format. Version 2 selects modern records;
 unknown versions, extra keys, partial fields and malformed types are refused. Legacy
 metadata, rendered task/project bodies, copied records and digests stay unchanged, without
-invented source/runtime facts. Newly rendered legacy summaries say `not recorded` for both,
-omit ambiguous legacy n/a entries and exclude unnamed/none effects. Existing migration
+invented source/runtime facts. Design rendering follows the template guidance above. Existing migration
 exemptions remain unchanged. `orchestrator/plan_budgets.py` is the schema authority.

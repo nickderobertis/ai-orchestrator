@@ -447,6 +447,9 @@ def note(
         )
     else:
         budgets = (
+            "First decide whether the finalized work adds/changes a task budget. Only then "
+            "perform full analysis; with none and no existing analysis, render overview alone "
+            "and omit project analysis metadata. Preserve existing full records. "
             "Keep the plan's budgets current with what the spikes found: each budget on the "
             "task that owns it, regenerated with its `budgets` answer and its "
             f"`{plan_budgets.TASK_RECORD}` metadata alike, and the plan-level answers, the "
