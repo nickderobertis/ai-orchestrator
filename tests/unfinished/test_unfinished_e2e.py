@@ -840,8 +840,8 @@ def test_the_own_sessions_read_lists_only_its_own_branches_at_this_hosts_scale(
 
 
 def _scratch_checkout(root: Path, helper: str | None = None) -> Path:
-    """A checkout holding the real justfile, the wrapper, the helper, the module and the
-    drafter graph, and no `.venv`.
+    """A checkout holding the real justfile, the wrapper, the helper, the modules
+    `unfinished.py` loads and the drafter graph, and no `.venv`.
 
     With no `.venv/bin` beside the module, the interpreter is the `python3` on the search
     path and the engine the `onepipeline` there — the one place a journey can hand it an
@@ -864,7 +864,9 @@ def _scratch_checkout(root: Path, helper: str | None = None) -> Path:
             real if helper is None else helper, encoding="utf-8"
         )
     # llmlint: ignore-end[e2e_not_mocked]
-    for module in ("unfinished.py", "root.py"):
+    # `unfinished.py` reads the spike-brief receipts through `spike_brief.py`, which reads
+    # run state through `run_reading.py`; both load under the system interpreter as well.
+    for module in ("unfinished.py", "spike_brief.py", "run_reading.py", "root.py"):
         shutil.copy2(REPO_ROOT / "orchestrator" / module, root / "orchestrator" / module)
     return root / "scripts" / "unfinished.sh"
 

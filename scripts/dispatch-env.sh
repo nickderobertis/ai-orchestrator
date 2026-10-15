@@ -153,6 +153,7 @@ declare -A DISPATCH_ENVIRONMENT_KEPT_NAMES=(
     [TRACE_FILE]="where this repository's own stand-in binaries record the command lines they were given; the recipe-delegation journeys drive the real wrappers and read that file, and a launch that could not hand it on would trace nothing at all"
     [IDENTITY_RECORDINGS]="where this repository's Claude-identity journey has the stand-ins at every entry point's hand-off record the identity environment they were given; a launch that could not hand it on would record nothing, and the journey could not tell a dropped indirection from a hand-off never reached"
     [REAL_PLAN_STORE]="the real plan-store CLI this repository's older-plan-store stand-in delegates to from inside a dispatched turn; the follow-up recipe journeys put that stand-in ahead of the checkout's, and without this name it refuses every command the turn runs"
+    [HELLOPATIENT_LINEAR_API_KEY]="the plan store's Linear credential, which every copy onto 'plans' needs to build the source its route names, a run hook's copy included; which roles keep it is the oneharness configs' to decide, as for the board credential the GH_ family carries"
     [OBSERVER_ENVIRONMENT_PATH]="where this repository's observer journeys have the dag-scope graph record the environment it was given; the observer graph never runs the dispatch-env hook, so the driver's environment is the only way it arrives"
 )
 

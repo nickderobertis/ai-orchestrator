@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "plan_project": "authoring:preview",
+  "board_project": null,
+  "parent_run": "preview",
+  "spikes_run": "preview-spikes",
+  "writer_run": "preview-spike-brief",
+  "manager_session": "manager-session",
+  "brief": null,
+  "approval": null
+}

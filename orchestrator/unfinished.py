@@ -43,6 +43,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import NamedTuple, NewType, Protocol
 
+from orchestrator import spike_brief
 from orchestrator.root import REPO_ROOT
 
 __all__ = [
@@ -377,13 +378,19 @@ def main(
         unpublished_half, document = answer.half, answer.document
     except Unanswered as failure:
         print(f"unfinished: the unpublished half could not answer: {failure}", file=err)
+    brief_items, brief_diagnostics = spike_brief.items(session)
+    for diagnostic in brief_diagnostics:
+        print(diagnostic, file=err)
     if arguments.json:
         if unwatched_half is None or unpublished_half is None:
             return UNANSWERED
-        print(
-            json.dumps({"unwatched": unwatched_half.lines, "unpublished": document}, indent=2),
-            file=out,
-        )
+        combined: dict[str, object] = {
+            "unwatched": unwatched_half.lines,
+            "unpublished": document,
+        }
+        if brief_items:
+            combined["spike_briefs"] = brief_items
+        print(json.dumps(combined, indent=2), file=out)
         return _status(unwatched_half, unpublished_half)
     if unwatched_half is not None:
         print(UNWATCHED_HEADING, file=out)
@@ -399,6 +406,14 @@ def main(
             print(
                 "acknowledge one: just unpublished --acknowledge <branch> --reason "
                 '"<why it is deliberately left>"',
+                file=out,
+            )
+    if brief_items:
+        print("\n== spike briefs: optional user approval (advisory) ==", file=out)
+        for brief_item in brief_items:
+            print(
+                f"{brief_item['plan_project']}: {brief_item['url']} "
+                f"({brief_item['approve_command']})",
                 file=out,
             )
     if unwatched_half is None or unpublished_half is None:

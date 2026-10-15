@@ -376,6 +376,11 @@ review-plan *args:
 #
 # `scripts/plan-store.sh` establishes this checkout's own board credential first; its
 # header is the one account of why.
+[doc("Record express user approval of the current surfaced spike brief.")]
+approve-spikes *args:
+    @./scripts/plan-store.sh uv run python -m orchestrator.spike_brief "$@"
+
+[group("planning")]
 [doc("Record the user's approval of one plan project's design document.")]
 approve-design *args:
     @./scripts/plan-store.sh uv run orchestrator-approve-design "$@"

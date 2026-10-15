@@ -73,14 +73,19 @@ DEFAULT_LEAVES = {
     "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR": ".claude",
 }
 
-#: Every ROLE config this repository ships. Only files declaring a `harnesses` chain
-#: are runnable; the shared parents `oneharness*.toml` also matches declare none, and
-#: `oneharness run` refuses them before reaching the indirection under test here.
-ROLE_CONFIGS = tuple(
+#: Every ROLE config this repository ships whose chain names a Claude identity. Only files
+#: declaring a `harnesses` chain are runnable; the shared parents `oneharness*.toml` also
+#: matches declare none, and `oneharness run` refuses them before reaching the indirection
+#: under test here. A Codex-only chain, the spike brief's, never reads a Claude
+#: indirection, so the real CLI has nothing to refuse it for.
+CLAUDE_ROLE_CONFIGS = tuple(
     sorted(
         path.name
         for path in REPO_ROOT.glob("oneharness*.toml")
-        if "harnesses" in tomllib.loads(path.read_text(encoding="utf-8"))
+        if any(
+            identity.startswith("claude-code")
+            for identity in tomllib.loads(path.read_text(encoding="utf-8")).get("harnesses", [])
+        )
     )
 )
 
@@ -202,7 +207,7 @@ def _run(
     )
 
 
-@pytest.mark.parametrize("config", ROLE_CONFIGS)
+@pytest.mark.parametrize("config", CLAUDE_ROLE_CONFIGS)
 @pytest.mark.parametrize("missing", NEW_INDIRECTIONS)
 def test_the_real_cli_refuses_a_run_whose_new_claude_indirection_is_unset(
     tmp_path: Path, oneharness_bin: str, config: str, missing: str

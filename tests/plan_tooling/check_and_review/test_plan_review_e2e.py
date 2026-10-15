@@ -2796,8 +2796,12 @@ def test_a_plan_the_checklist_passes_is_recorded_and_its_run_is_the_flows_review
             str(REPO_ROOT / ".venv" / "bin" / "onebudgetspec"),
             "check",
             str(REPO_ROOT / "orchestrator" / "budgets.yaml"),
-            "--label",
-            "planning",
+            # By id: the `planning` label also selects the spike brief's budgets, which
+            # measure a flow's spike brief, and this flow has none.
+            "--id",
+            plan_checklist_budgets.ADDED_SECONDS,
+            "--id",
+            plan_checklist_budgets.TOKENS,
             "--json",
         ],
         cwd=REPO_ROOT,

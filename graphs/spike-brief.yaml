@@ -1,0 +1,12 @@
+# The task names a local authoring project; this graph never publishes it.
+version: 1
+name: spike-brief
+members:
+  worker:
+    kind: onejudge
+    base_config: ../config/onejudge.base.yaml
+    agent:
+      oneharness_config: ../oneharness.spike-brief.toml
+    judge:
+      oneharness_config: ../oneharness.spike-brief.toml
+    mode: bypass

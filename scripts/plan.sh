@@ -736,6 +736,9 @@ if [ ! -e "$runs_root/$spikes_run" ]; then
         [ "$checked" -eq 0 ] ||
             stop "the check above refused or could not read $checked_project (status $checked); correct what it named in that project" spikes "$checked"
     done
+    # This detached preview is advisory; the engine's success hook performs publication.
+    "$python" -m orchestrator.spike_brief_flow launch "$declared_project" "$name" "$spikes_run" ||
+        echo "plan: spike brief launch could not be read; planning proceeds; retry with 'python -m orchestrator.spike_brief_flow launch $declared_project $name $spikes_run'" >&2
     handover=""
     if [ "$detached" -eq 1 ]; then
         handover="; $DETACH_FLAG hands back before the spikes have run, so once run $spikes_run has settled, carry the flow on with: $(resume_command spikes)"
@@ -756,6 +759,10 @@ if [ ! -e "$runs_root/$spikes_run" ]; then
         exit 0
     fi
 fi
+
+# Resume only incomplete copy/delivery; this never waits on the writer.
+"$python" -m orchestrator.spike_brief_flow resume "$name" ||
+    echo "plan: spike brief resume could not be read; planning proceeds; retry with 'python -m orchestrator.spike_brief_flow resume $name'" >&2
 
 # Read how the spikes settled — every node `done`, as `preserved` — and acknowledge each
 # branch they kept, discovered by this plan's naming contract in each spike's repository. A

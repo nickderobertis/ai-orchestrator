@@ -690,7 +690,8 @@ SMALL_MEASURED = (
     "-q -k 'test_labels.py or test_recoverable_resume_commands_e2e.py or "
     "test_every_role_has_a_committed_record or test_lock_timeout_bound_e2e.py or "
     "test_credential_file_ignored_e2e.py or test_comparison_base_takes_the_base_the_lifecycle or "
-    "test_the_tracked_checkout_list_holds_every_pre_adoption_checkout'"
+    "test_the_tracked_checkout_list_holds_every_pre_adoption_checkout or "
+    "test_receipt_reader_refuses_foreign_or_malformed_contract_fields'"
 )
 #: Every other measuring tier: the subject projects, whose modules drive tools a copy of this
 #: checkout does not install, so their data is a collection's, replayed from the cache.
@@ -1040,6 +1041,7 @@ SKIPPABLE_TIERS = frozenset(
         ("budget-gate", CODE_SCOPED),
         ("registry-and-recipes", CODE_SCOPED),
         ("suite-helpers", CODE_SCOPED),
+        ("spike-brief", CODE_SCOPED),
         # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
         # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This set is the catalog of
         # tiers a documentation push may skip, derived again from the graph by this journey, so

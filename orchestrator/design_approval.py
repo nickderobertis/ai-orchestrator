@@ -93,7 +93,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Literal, NamedTuple, NewType, TypedDict
+from typing import Literal, NamedTuple, NewType, TypedDict, cast
 
 from orchestrator import design_chain, plan_store, spike_plan
 from orchestrator.plan_store import NodeId, StoreDocument
@@ -176,6 +176,10 @@ DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 #: convention). Known by the template its rendering records, which travels with every copy
 #: where an id does not.
 SPIKE_REPORT_REFERENCE = "onepipeline:spike-report"
+
+# The spike-brief leaf holds this to its rendering identity. Keeping this reference here
+# avoids importing the receipt lifecycle into every existing plan-check fixture.
+SPIKE_BRIEF_REFERENCE = "onepipeline:spike-brief"
 
 
 #: Where image syntax starts in a document's content: Markdown's `![` and HTML's `<img`.
@@ -736,7 +740,16 @@ def design_documents(project: str, documents: Sequence[StoreDocument]) -> list[S
     designs = [document for document in documents if is_design_document(document)]
     if designs:
         return designs
-    return [document for document in documents if not is_spike_report(document)]
+    return [
+        document
+        for document in documents
+        if not is_spike_report(document)
+        and not (
+            isinstance(document.metadata.get(PROVENANCE), dict)
+            and cast(dict[str, object], document.metadata[PROVENANCE]).get("template")
+            == SPIKE_BRIEF_REFERENCE
+        )
+    ]
 
 
 def design_document(project: str) -> StoreDocument:

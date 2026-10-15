@@ -2481,12 +2481,13 @@ class BoardRecipe(NamedTuple):
 
 
 #: Which board recipes read the plan store, and the argument each takes. `just plans` is
-#: the reader, the other three are this repository's own commands over the same store.
+#: the reader, the other four are this repository's own commands over the same store.
 BOARD_RECIPES = (
     BoardRecipe("plans", ("project", "list")),
     BoardRecipe("check-plan", ("plans:example",)),
     BoardRecipe("copy-plan", ("authoring:example",)),
     BoardRecipe("approve-design", ("plans:example",)),
+    BoardRecipe("approve-spikes", ("authoring:example",)),
 )
 
 

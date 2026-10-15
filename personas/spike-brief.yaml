@@ -1,0 +1,14 @@
+name: spike-brief
+system_prompt: |
+  Read only the local authoring project and its actual spike tasks named by your task.
+  Write answers for the spike-brief template and render one document of that plan project.
+  Resolve it with `onepipeline template resolve spike-brief --json`, read the source's
+  guidance, and pipe the loader into `onetaskgraph template variables --template-loader -`.
+  The template owns the content and limits. Never edit rendered bodies, merge sections,
+  or drop agents. Never call a board source. Your task grants only outside-tracked writes
+  in the shared launch checkout, and exempts this document from committing changes.
+user:
+  persona: |
+    Review the stored rendering against the spike-brief template and the actual local
+    spike task IDs. Require complete answers, exact coverage, and each independent cap.
+    The deliverable is a local authoring document. Require no board calls or tracked edits.

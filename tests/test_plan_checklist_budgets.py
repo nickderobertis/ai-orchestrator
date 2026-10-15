@@ -37,7 +37,7 @@ from typing import NamedTuple
 import pytest
 
 from orchestrator import plan_checklist_budgets as budgets
-from orchestrator import plan_review
+from orchestrator import plan_review, spike_brief_budgets
 from orchestrator.root import REPO_ROOT
 
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "plan-checklist-budgets"
@@ -283,8 +283,10 @@ def test_the_check_reports_each_figure_through_onebudgetspec(runs: Path) -> None
             str(Path(sys.executable).with_name("onebudgetspec")),
             "check",
             str(REPO_ROOT / "orchestrator" / "budgets.yaml"),
-            "--label",
-            "planning",
+            "--id",
+            budgets.ADDED_SECONDS,
+            "--id",
+            budgets.TOKENS,
             "--json",
         ],
         cwd=REPO_ROOT,
@@ -303,6 +305,38 @@ def test_the_check_reports_each_figure_through_onebudgetspec(runs: Path) -> None
     assert set(reported) == {budgets.ADDED_SECONDS, budgets.TOKENS}, checked.stdout + checked.stderr
     assert reported[budgets.ADDED_SECONDS]["actual"] == pytest.approx(FLOW_SECONDS)
     assert reported[budgets.TOKENS]["actual"] == FLOW_TOKENS
+
+
+def test_the_planning_label_selects_the_checklist_budgets() -> None:
+    """`finish-plan` checks `--label planning`, so both checklist budgets carry that label.
+
+    Read with the pinned onebudgetspec's `list`, which runs no command: the label also
+    selects the spike brief's budgets, which measure a flow's spike brief rather than its
+    checklist, so the figures above are taken by id over a fixture flow that has none.
+    """
+    listed = subprocess.run(
+        [
+            str(Path(sys.executable).with_name("onebudgetspec")),
+            "list",
+            str(REPO_ROOT / "orchestrator" / "budgets.yaml"),
+            "--label",
+            "planning",
+            "--json",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=120,
+        check=True,
+    )
+
+    selected = {budget["id"] for budget in json.loads(listed.stdout)["budgets"]}
+    assert selected == {
+        budgets.ADDED_SECONDS,
+        budgets.TOKENS,
+        spike_brief_budgets.DELIVERY,
+        spike_brief_budgets.TOKENS,
+    }, listed.stdout
 
 
 def _pointer(history: Path, labels: dict[str, str], identifier: str = "h") -> str:

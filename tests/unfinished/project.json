@@ -32,6 +32,8 @@
       "{workspaceRoot}/scripts/plan-root-env.sh",
       "{workspaceRoot}/orchestrator/unfinished.py",
       "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/orchestrator/run_reading.py",
+      "{workspaceRoot}/orchestrator/spike_brief.py",
       "{workspaceRoot}/tests/unfinished/project.json",
       "{workspaceRoot}/tests/unfinished/test_unfinished_e2e.py",
       "{workspaceRoot}/scripts/onepipeline.sh",

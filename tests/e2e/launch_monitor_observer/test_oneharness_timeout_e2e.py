@@ -148,11 +148,20 @@ DESIGN_DOC_REVIEWER_CHAIN = [
     "claude-code:primary",
 ]
 
-#: The identity order every side resolves. Two orders cover all twelve configs: the worker,
-#: its board-live copy and the design-doc reviewer lead with the Claude subscriptions, every
-#: other side with Codex, and all of them name the same six identities with the
-#: primary-backup Claude subscription immediately before the primary one, which is last
-#: everywhere.
+#: The spike-brief role's graph and member, whose agent and judge sides share
+#: `oneharness.spike-brief.toml`: a bounded preview of a plan's spikes, written and reviewed
+#: on the Codex identities alone so it draws no Claude subscription the spikes it previews
+#: are about to spend, under one finite deadline both sides keep.
+SPIKE_BRIEF_GRAPH = REPO_ROOT / "graphs" / "spike-brief.yaml"
+SPIKE_BRIEF_MEMBER = "worker"
+SPIKE_BRIEF_DEADLINE_SECONDS = 300
+SPIKE_BRIEF_CHAIN = ["codex:primary", "codex:alternate"]
+
+#: The identity order every side resolves. Two orders cover twelve of the thirteen configs:
+#: the worker, its board-live copy and the design-doc reviewer lead with the Claude
+#: subscriptions, every other side with Codex, and all twelve name the same six identities
+#: with the primary-backup Claude subscription immediately before the primary one, which is
+#: last everywhere. The spike brief is the one Codex-only chain, as its constant says.
 INTENDED_CHAINS = {
     "worker": DESIGN_DOC_REVIEWER_CHAIN,
     "board-live worker": DESIGN_DOC_REVIEWER_CHAIN,
@@ -166,6 +175,7 @@ INTENDED_CHAINS = {
     "design-doc writer": DESIGN_DOC_WRITER_CHAIN,
     "design-doc reviewer": DESIGN_DOC_REVIEWER_CHAIN,
     "follow-up": DESIGN_DOC_WRITER_CHAIN,
+    "spike-brief": SPIKE_BRIEF_CHAIN,
 }
 
 #: The indirection each Claude identity reads its `CLAUDE_CONFIG_DIR` from, as
@@ -475,7 +485,7 @@ def test_timeout_kills_process_tree_and_preserves_real_partial_telemetry(
 def test_every_side_resolves_its_intended_effective_deadline(
     oneharness_bin: str,
 ) -> None:
-    """Prove all twelve turn configs together from oneharness's effective values."""
+    """Prove all thirteen turn configs together from oneharness's effective values."""
     monitor = _named_config(DAG_SCOPE_GRAPH, MONITOR_MEMBER, "agent.oneharness_config")
     pacemaker = _named_config(DAG_SCOPE_GRAPH, "check-in", "oneharness_config")
     drafter = _named_config(PR_AUTHOR_GRAPH, PR_AUTHOR_MEMBER, "oneharness_config")
@@ -517,6 +527,9 @@ def test_every_side_resolves_its_intended_effective_deadline(
         "design-doc writer": writer,
         "design-doc reviewer": design_doc_reviewer,
         "follow-up": follow_up,
+        "spike-brief": _named_config(
+            SPIKE_BRIEF_GRAPH, SPIKE_BRIEF_MEMBER, "agent.oneharness_config"
+        ),
     }
     effective = {
         side: _effective_config(oneharness_bin, config) for side, config in configs.items()
@@ -535,8 +548,8 @@ def test_every_side_resolves_its_intended_effective_deadline(
     for side, config in configs.items():
         assert effective[side]["harnesses"]["value"] == INTENDED_CHAINS[side], (
             f"{config.name} resolves {effective[side]['harnesses']['value']}, not "
-            f"{INTENDED_CHAINS[side]}; every chain names all six identities, with "
-            "claude-code:primary-backup immediately before claude-code:primary"
+            f"{INTENDED_CHAINS[side]}; every chain but the spike brief's names all six "
+            "identities, with claude-code:primary-backup immediately before claude-code:primary"
         )
         variants = _without_sources(effective[side]["harness"]["claude-code"]["variant"])
         alternate, backup, primary = (
@@ -686,6 +699,18 @@ def test_every_side_resolves_its_intended_effective_deadline(
             "identities with the primary Claude subscription last, so a dropped one is a "
             "quota this host loses entirely"
         )
+
+    assert (
+        _named_config(SPIKE_BRIEF_GRAPH, SPIKE_BRIEF_MEMBER, "judge.oneharness_config")
+        == configs["spike-brief"]
+    ), "both sides of the spike brief run under its one config"
+    assert effective["spike-brief"]["timeout"] == {
+        "value": SPIKE_BRIEF_DEADLINE_SECONDS,
+        "source": str(configs["spike-brief"]),
+    }, (
+        f"the spike-brief role must retain its explicit finite {SPIKE_BRIEF_DEADLINE_SECONDS}-"
+        "second deadline: it is one bounded preview that planning never waits on"
+    )
 
     assert effective["follow-up"]["timeout"] == {
         "value": FOLLOW_UP_DEADLINE_SECONDS,

@@ -83,6 +83,7 @@
       "!{workspaceRoot}/tests/e2e/publish_and_landing/test_*.py",
       "!{workspaceRoot}/tests/e2e/registry_and_recipes/test_*.py",
       "!{workspaceRoot}/tests/e2e/suite_helpers/test_*.py",
+      "!{workspaceRoot}/tests/e2e/spike_brief/test_*.py",
       "!{workspaceRoot}/tests/e2e/workspace_copies/test_*.py",
       "!{workspaceRoot}/tests/e2e/launch_monitor_observer/oneharness_resolved/**/*"
     ]
@@ -126,11 +127,11 @@
       ]
     },
     "coverage": {
-      "command": "rm -f .coverage && env -u FORCE_COLOR NO_COLOR=1 uv run coverage combine --keep .coverage.parallel .coverage.budget-gate .coverage.dispatch-bar .coverage.e2e-root .coverage.family-scans .coverage.launch-monitor-observer .coverage.manager-guidance .coverage.plan-guidance .coverage.plan-tooling-check-and-review .coverage.plan-tooling-follow-ups .coverage.plan-tooling-plan-copy .coverage.plan-tooling-plan-flow .coverage.publish-and-landing .coverage.registry-and-recipes .coverage.release-pins .coverage.tree-scans .coverage.workspace-copies && env -u FORCE_COLOR NO_COLOR=1 uv run coverage report",
+      "command": "rm -f .coverage && env -u FORCE_COLOR NO_COLOR=1 uv run coverage combine --keep .coverage.parallel .coverage.budget-gate .coverage.dispatch-bar .coverage.e2e-root .coverage.family-scans .coverage.launch-monitor-observer .coverage.manager-guidance .coverage.plan-guidance .coverage.plan-tooling-check-and-review .coverage.plan-tooling-follow-ups .coverage.plan-tooling-plan-copy .coverage.plan-tooling-plan-flow .coverage.publish-and-landing .coverage.registry-and-recipes .coverage.release-pins .coverage.spike-brief .coverage.tree-scans .coverage.workspace-copies && env -u FORCE_COLOR NO_COLOR=1 uv run coverage report",
       "options": {
         "cwd": "."
       },
-      "//": "llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier, expensive_tests_stay_behind_their_own_edge] The floor is judged on every tier that measures orchestrator/, which tests/tree_scans/test_nx_cache_scope.py holds this list to, so it waits on each journey, plan-tooling and drift-gate project that measures into its own .coverage.<project name>: this combine is the floor's one enforcement, so each file it names has to exist when it runs. Each edge is a cache replay when that project's key is unchanged, and a run only when its key changed, which the diff selection already runs it for. That includes publish-and-landing:test and the session-reuse journey there that installs a released engine from PyPI. The same edge ran to the whole of orchestrator-e2e before the journeys were split, and moving the costly and external-service journeys out of the measuring tiers is a change of its own. Letting the combine skip a missing file instead would report a floor over lines nobody measured. JSON has no comment to scope this to the keys it is about.",
+      "//": "llmlint: ignore-block[external_service_suite_stays_out_of_the_affected_tier, expensive_tests_stay_behind_their_own_edge] The floor is judged on every tier that measures orchestrator/, which tests/tree_scans/test_nx_cache_scope.py holds this list to, so it waits on each journey, plan-tooling and drift-gate project that measures into its own .coverage.<project name>: this combine is the floor's one enforcement, so each file it names has to exist when it runs. The spike-brief leaf measures its own receipt and launch boundaries into .coverage.spike-brief, so it too feeds this floor through its own test edge. Each edge is a cache replay when that project's key is unchanged, and a run only when its key changed, which the diff selection already runs it for. That includes publish-and-landing:test and the session-reuse journey there that installs a released engine from PyPI. The same edge ran to the whole of orchestrator-e2e before the journeys were split, and moving the costly and external-service journeys out of the measuring tiers is a change of its own. Letting the combine skip a missing file instead would report a floor over lines nobody measured. The existing 100% invariant measures every journey project; this block spans only its dependency list.",
       "dependsOn": [
         "test",
         {"projects": ["budget-gate"], "target": "test"},
@@ -147,9 +148,11 @@
         {"projects": ["publish-and-landing"], "target": "test"},
         {"projects": ["registry-and-recipes"], "target": "test"},
         {"projects": ["release-pins"], "target": "test"},
+        {"projects": ["spike-brief"], "target": "test"},
         {"projects": ["tree-scans"], "target": "test-docs"},
         {"projects": ["workspace-copies"], "target": "test"}
-      ]
+      ],
+      "// end": "llmlint: ignore-end[external_service_suite_stays_out_of_the_affected_tier, expensive_tests_stay_behind_their_own_edge]"
     },
     "test-docs": {
       "command": "rm -rf .telemetry/orchestrator/test-docs && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/orchestrator/test-docs NO_COLOR=1 uv run pytest --ignore=tests/plan_tooling --ignore=tests/session_setup --ignore=tests/host_sweep --ignore=tests/session_setup_pypi --ignore=tests/ask_seam --ignore=tests/dag_ui --ignore=tests/unwatched --ignore=tests/merge_policy --ignore=tests/writeback_budget --ignore=tests/run_end_hooks --ignore=tests/host_views --ignore=tests/project_store_race --ignore=tests/plan_store_assets --ignore=tests/render_diagram --ignore=tests/e2e --ignore=tests/unfinished --ignore=tests/graceful_cancel --ignore=tests/session_open_conflict --ignore=tests/manager_allowlist --ignore=tests/dispatch_bar --ignore=tests/family_scans --ignore=tests/manager_guidance --ignore=tests/plan_guidance --ignore=tests/release_pins --ignore=tests/tree_scans -m reads_docs --no-cov -n 4 --dist loadgroup",

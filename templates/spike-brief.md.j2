@@ -1,0 +1,39 @@
+---
+onetaskgraph_template: 1
+description: A concise preview of the measurements a draft's actual spike agents will make.
+variables:
+  overview:
+    description: >-
+      Nonempty prose stating the phase, what is being measured and why. Use a few lines;
+      at most 250 whitespace-separated words. No placeholder answers.
+    type: string
+    required: true
+  spikes:
+    description: >-
+      One object for each actual spike-agent ID, with nonempty string fields spike,
+      question and use. State the question measured and how its answer will be used,
+      in one or two lines per agent. Each rendered headed section, including its heading,
+      has its own 250-whitespace-word cap. No grouped, missing or duplicate agents.
+    type: list
+    items: object
+    required: true
+---
+{% block brief_guidance %}
+{# Overview first, then one identified question/use section per actual spike agent.
+   Answer from the local draft and spike tasks. Omit architecture, budgets, scheduling
+   and design approval. All fields contain substantive answers rather than placeholders.
+   Overview and each headed section have independent caps; there is no total word cap. #}
+{% endblock %}
+{% block overview %}
+{{ overview }}
+{% endblock %}
+{% block spikes %}
+{% for item in spikes %}
+## {{ item.spike }}
+
+Question: {{ item.question }}
+
+Use: {{ item.use }}
+
+{% endfor %}
+{% endblock %}

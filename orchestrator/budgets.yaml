@@ -123,3 +123,24 @@ budgets:
     direction: max
     threshold: 1350
   # llmlint: ignore-end[budgets_track_product_owner_outcomes]
+  - id: spike-brief-delivery-seconds
+    description: >-
+      Seconds from a plan's spikes becoming eligible until the manager is handed the readable
+      spike brief link, split into writing, board publication and channel delivery. It
+      protects the time people have to stop an unneeded measurement before it spends quota.
+    measure: reported
+    command: ["uv", "run", "--directory", "..", "python", "-m", "orchestrator.spike_brief_budgets", "--measure", "spike-brief-delivery-seconds"]
+    unit: seconds
+    direction: max
+    threshold: 300
+    labels: [host, planning]
+  - id: spike-brief-model-tokens
+    description: >-
+      Input plus output tokens one spike brief spends on both sides of its conversation,
+      failed attempts included. It protects the subscription quota planning draws on.
+    measure: reported
+    command: ["uv", "run", "--directory", "..", "python", "-m", "orchestrator.spike_brief_budgets", "--measure", "spike-brief-model-tokens"]
+    unit: tokens
+    direction: max
+    threshold: 100000
+    labels: [host, planning]

@@ -165,6 +165,7 @@ def test_the_engine_lists_this_hosts_names_through_the_launch_environment(
         "design-doc",
         "plan-description",
         "spike-report",
+        "spike-brief",
     }, by_name
     assert (by_name["plan-task"]["layer"], by_name["plan-task"]["path"]) == (
         "host",
@@ -174,7 +175,8 @@ def test_the_engine_lists_this_hosts_names_through_the_launch_environment(
     assert by_name["design-doc"]["role"] == "document"
     assert by_name["plan-description"]["role"] == "project"
     assert by_name["spike-report"]["role"] == "document"
-    for name in ("follow-up-task", "design-doc", "plan-description", "spike-report"):
+    assert by_name["spike-brief"]["role"] == "document"
+    for name in ("follow-up-task", "design-doc", "plan-description", "spike-report", "spike-brief"):
         assert by_name[name]["description"].strip(), by_name[name]
 
 

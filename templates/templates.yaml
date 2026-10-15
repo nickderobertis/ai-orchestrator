@@ -16,3 +16,6 @@ templates:
   spike-report:
     role: document
     description: A spike's report, stored as the document `<spike id>-report` of the plan's own project.
+  spike-brief:
+    role: document
+    description: A local draft preview, with one question and use per actual spike agent.

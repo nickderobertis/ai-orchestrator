@@ -1,0 +1,10 @@
+# Both sides of the bounded brief conversation use the inherited Codex model.
+extends = "oneharness.identities.toml"
+timeout = 300
+harnesses = ["codex:primary", "codex:alternate"]
+
+# The writer reads only local authoring records and makes no board call, so the plan
+# store's credentials stop here, stated per role for the reason `oneharness.check-in.toml`
+# gives at this same variant.
+[harness.codex.variant.primary]
+unset_env = ["GH_PROJECTS_TOKEN", "HELLOPATIENT_LINEAR_API_KEY"]

@@ -3776,6 +3776,20 @@ just unfinished --session ID      # a session named
 just unfinished --json            # {"unwatched": [<lines>], "unpublished": <the engine's document>}
 ```
 
+A planning flow with spikes also launches a detached local spike-brief writer. Its
+document travels with the whole draft through ordinary `just copy-plan`, and the
+parent planning channel receives the returned board-project link. Relay that link
+immediately and repeat it while `just unfinished` lists the brief under its separate
+advisory heading. JSON adds `spike_briefs` only when items are present. Optional
+`just approve-spikes authoring:<project>` records express user approval of the current
+surfaced content; managers never run it on a user's behalf. Approval steers no work:
+only cancel, drop, retry and amend do. Terminal spikes retire the item. A writer that
+finishes after spikes end still takes the ordinary copy and sends the board link, as a
+retrospective check-in that offers no approval and leaves no item. Neither an unapproved brief
+nor a brief failure changes the owed-work
+verdict or delays finalize, review or design. An unreadable receipt or run status remains
+an unresolved advisory diagnostic.
+
 Standard output carries each half under a heading naming its question, the unpublished
 half one line per row the engine listed — counted with the command that lands it, in
 flight, or acknowledged with its reason; everything either half could not resolve goes to
