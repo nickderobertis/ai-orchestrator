@@ -56,7 +56,7 @@ TRACKED_RULES = REPO_ROOT / "config" / "onevcs.rules.yml"
 #: which of a producer's targets a consumer naming none waits for.
 TRACKED_RELEASES = REPO_ROOT / "config" / "onevcs.releases.yml"
 #: The tracked workspaces file the recipe installs as the fourth, which sizes each
-#: identity's pool of warm worktree slots and names what maintains them.
+#: identity's pool of warm worktree slots and what a return clears.
 TRACKED_WORKSPACES = REPO_ROOT / "config" / "onevcs.workspaces.yml"
 #: What that file says every identity no rule names gets, which is the shared default
 #: for a pool every host starts from: one warm slot, and sessions past it admitted
@@ -407,20 +407,24 @@ def test_apply_installs_the_tracked_workspaces_file_and_the_pool_resolves_from_i
     assert capacity["overflow"] == SHARED_OVERFLOW, capacity
 
 
-#: A host's overlay: a bigger default pool than the shared one, and one rule that
-#: replaces the tracked rule with the same `match` — `onevcs` is a Rust identity the
-#: tracked file maintains, and the host says what its rule is instead.
+#: A host's overlay: a bigger default pool than the shared one, a rule of its own for an
+#: identity the tracked file has none for, and then a rule that replaces the tracked rule
+#: with the same `match` — `ai-orchestrator`'s, which deletes `.logs/` on every return —
+#: so the host says what that rule is instead.
 HOST_OVERLAY_TEXT = (
     "version: 1\n"
     "default:\n"
     "  pool: 3\n"
     "rules:\n"
     "  - match: {host: github.com, owner: nickderobertis, name: onevcs}\n"
+    "    pool: 2\n"
+    "  - match: {host: github.com, owner: nickderobertis, name: ai-orchestrator}\n"
     "    pool: 4\n"
     "    overflow: 2\n"
 )
 
 
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] An existing journey of `just repos-apply`, retargeted at the one tracked rule left; every journey of that recipe lives in this module, and the module docstring's ignore of `shell_test_tiers_stay_split` says why moving them to a project of their own is a change for all of them at once rather than this edit's.  # noqa: E501
 def test_the_hosts_overlay_is_composed_onto_the_tracked_file_and_installed(
     tmp_path: Path,
 ) -> None:
@@ -431,7 +435,9 @@ def test_the_hosts_overlay_is_composed_onto_the_tracked_file_and_installed(
     the host's default over the tracked one, and the report says both sources. The
     tracked file itself is untouched, which is the point of the overlay.
     """
-    present = checkout(tmp_path / "onevcs", "https://github.com/nickderobertis/onevcs.git")
+    present = checkout(
+        tmp_path / "ai-orchestrator", "https://github.com/nickderobertis/ai-orchestrator.git"
+    )
     other = checkout(tmp_path / "onejudge", "https://github.com/nickderobertis/onejudge.git")
     manifest = tmp_path / "checkouts"
     manifest.write_text(f"{present}\n{other}\n", encoding="utf-8")
@@ -451,15 +457,15 @@ def test_the_hosts_overlay_is_composed_onto_the_tracked_file_and_installed(
     ) in result.stdout
     assert TRACKED_WORKSPACES.read_bytes() == tracked_before
     assert installed.read_bytes() != tracked_before
-    ruled = json.loads(onevcs(home, "pool", "status", "onevcs", "--json").stdout)["capacity"]
-    assert (ruled["pool"], ruled["overflow"]) == (4, 2), ruled
+    ruled = json.loads(onevcs(home, "pool", "status", "ai-orchestrator", "--json").stdout)
+    assert (ruled["capacity"]["pool"], ruled["capacity"]["overflow"]) == (4, 2), ruled
     unruled = json.loads(onevcs(home, "pool", "status", "onejudge", "--json").stdout)["capacity"]
     assert (unruled["pool"], unruled["overflow"]) == (3, SHARED_OVERFLOW), unruled
-    # The rule replaced the tracked one in place rather than being appended after it,
-    # so first-match-wins still reads the file in the tracked order.
+    # The rule replaced the tracked one in place rather than being appended after the
+    # host's own new rule, so first-match-wins still reads the file in the tracked order.
     text = installed.read_text(encoding="utf-8")
-    assert text.count("name: onevcs}") == 1, text
-    assert text.index("name: onevcs}") < text.index("name: allowlister}"), text
+    assert text.count("name: ai-orchestrator}") == 1, text
+    assert text.index("name: ai-orchestrator}") < text.index("name: onevcs}"), text
 
     again = apply_registry(manifest, home, config_home=config_home)
 

@@ -302,7 +302,9 @@ empties the idle ones. A node the engine cannot place is **held**, not failed:
 `workspace-wait` is a non-blocking surface re-read until the identity admits the node,
 never a stall and never a settlement. An idle driver maintains idle slots on the
 cadence `config/onepipeline.maintenance.yaml` names, which `scripts/onepipeline.sh`
-hands every `start`, and a sweep that ran something is the `pool-maintenance` record
+hands every `start`, running the command each repository declares in its own tracked
+`onevcs.toml` — this host declares none for any repository, so one declaring nothing is
+not maintained — and a sweep that ran something is the `pool-maintenance` record
 `just results` names. A dispatched session is placed by the `onevcs` the engine links,
 so `config/onepipeline.version` governs where a node works while `config/onevcs.version`
 governs the pool verbs you run.
@@ -1754,7 +1756,10 @@ prefer different identities, and a `journal:` line as the one that makes the res
 unprovable. Both `just status` and `just host` print the engine's own `free space:`
 line for every filesystem a run writes to, and `--no-providers` keeps it, so a watch still
 sees it — read it, and leave acting on a filling disk to whoever owns what is filling
-it. Answer a run's questions through `just channel-next` on that run, and read a
+it. A run that settled with every node done has had its dispatch scratch removed; one
+that ended otherwise or paused keeps it, and `just status` and `just results` print a
+`scratch kept:` line naming its size, which `uv run --no-sync onepipeline scratch discard
+<run-id>` removes once the run has ended. Answer a run's questions through `just channel-next` on that run, and read a
 blocking surface the bus marks `abandoned` as one nobody is waiting on now. A run's journal holds a dispatch's own evidence —
 every tool call and its output — beside the run and outliving the worktree, and `just
 transcript` renders it: reach for it when a settled node's evidence seems missing from
@@ -1815,7 +1820,10 @@ envelope on `just channel-reply`'s standard input writes no file at all. A
 log*` also passed `git -C <path> merge log-fix`, and neither is a `git log`, `diff` or
 `show` here, whose `--output` writes a file, so those reads go to the classifier. Of `onevcs`'s own verbs, the release reads and
 acknowledgement, `rules check` and `pool status` are granted, and `onevcs session close
-<session>` closes a session you opened. The development tier — this repository's own
+<session>` closes a session you opened. `uv run --no-sync onepipeline scratch discard
+<run-id>` is granted because it deletes only the regenerable scratch of a run whose
+status word says it ended, never follows a link out of it, and refuses a paused, driven
+or unknown run. The development tier — this repository's own
 recipes, `uv sync` and `uv lock` over its lockfile, `llmlint`, the `onejudge` and
 `oneharness` reads, and `onemessagebus status` over a run's channel — is granted, and so
 is `git clone`: a clone adds a checkout and changes no remote or base.

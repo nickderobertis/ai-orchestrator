@@ -1,14 +1,13 @@
 """What a registered sibling repository decides about itself, and how this suite settles it.
 
 Several reconciliations here compare this repository's registration — the override's
-``default_target`` per producer, the table of what this host installs, the workspaces
-file's ``maintain`` rules — with what another repository declares: its
-`release-targets.toml`, whether it is a Rust workspace. Those facts are the sibling's to
+``default_target`` per producer, the table of what this host installs — with what another
+repository declares in its `release-targets.toml`. Those facts are the sibling's to
 decide, and they move in the sibling's own repository with no change here, so nothing in
 this suite restates them. They are read from the checkout this host holds, at its fetched
 base, every time they are asked.
 
-**What a disagreement fails.** A producer gaining a target, a language or an artifact is
+**What a disagreement fails.** A producer gaining a target or an artifact is
 normal development and is no disagreement at all. A true contradiction — an override
 ``default_target`` the producer's declaration no longer carries, a row whose artifact the
 producer now calls something else — is one, and it refuses exactly the change that edits
@@ -70,8 +69,6 @@ COMPARISON_BASE = REPO_ROOT / "scripts" / "comparison-base.sh"
 
 #: A repository's own release declaration, at its root.
 DECLARATION = "release-targets.toml"
-#: What makes a repository a Rust one for the workspaces file's purposes.
-CARGO_MANIFEST = "Cargo.toml"
 
 #: How a checkout's fetched base is resolved. `origin/HEAD` is the remote's own answer
 #: and is asked first; the fallbacks are for a clone that never recorded one. A
@@ -234,19 +231,6 @@ def declaring_identities(manifest: Path = TRACKED_CHECKOUTS) -> Declaring:
         identity: len(declared) for identity, declared in read.found.items() if declared is not None
     }
     return Declaring(counts, [*discovered.unreadable, *read.unreadable])
-
-
-def is_rust(checkout: Path) -> bool:
-    """Whether ``checkout``'s repository carries a root `Cargo.toml` at its fetched base.
-
-    A checkout with no fetched base is asked of its working tree, which is all it has.
-    Raises :class:`UnreadableSibling` where ``checkout`` cannot be read at all, since that
-    answers neither way.
-    """
-    base = fetched_base(checkout)
-    if base is None:
-        return (checkout / CARGO_MANIFEST).is_file()
-    return sibling_git(checkout, "cat-file", "-e", f"{base}:{CARGO_MANIFEST}").returncode == 0
 
 
 def override_default_targets(text: str) -> dict[RepoIdentity, str]:

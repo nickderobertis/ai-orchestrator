@@ -56,11 +56,11 @@ DELETED_ON_RETURN = ".logs/"
 LEAKED_LOG = Path(".logs") / "check.log"
 #: What the identity's `maintain` command leaves in a slot's worktree, so that the
 #: command ran there is observable; the command itself is `touch`, spawned with no
-#: shell exactly as the workspaces file's `cargo sweep` would be.
+#: shell exactly as a repository's declared command would be.
 MAINTAINED = "maintained.marker"
 #: A workspaces file pooling every seeded identity at two slots, deleting the log on
-#: every return and maintaining idle slots with a marker: the shape of this host's own
-#: rule for a Rust identity, with a command a scratch worktree can run.
+#: every return and maintaining idle slots with a marker: a host `maintain`, which onevcs
+#: runs for a repository declaring none, with a command a scratch worktree can run.
 POOLED_WITH_RULES = (
     "version: 1\n"
     "default:\n"
@@ -267,6 +267,34 @@ def test_a_return_deletes_what_the_rule_names_and_maintenance_runs_in_the_idle_s
             {"number": 1, "outcome": {"not-due": {"last_maintained": stamped["last_maintained"]}}}
         ]
     }, again.stdout
+
+
+#: An identity this host's workspaces file once maintained with `cargo sweep` by a rule of
+#: its own, seeded under that origin so the tracked rule for it, were there one, would match.
+FORMERLY_SWEPT = "github.com/nickderobertis/onevcs"
+
+
+def test_this_host_supplies_no_maintenance_for_a_repository_that_declares_none(
+    tmp_path: Path,
+) -> None:
+    """The workspaces file `just repos-apply` composes names no maintenance of its own.
+
+    Each repository declares its pool maintenance in its own tracked `onevcs.toml`, and
+    this host adds none. So an identity whose checkout carries no `onevcs.toml`, registered
+    with the tracked file composed over an empty host overlay, resolves no command: the
+    pinned `onevcs pool status` says `maintenance: none declared`. The identity is one a
+    tracked rule used to give `cargo sweep`, so a rule or a `default:` naming a `maintain`
+    again would show here as that command.
+    """
+    # llmlint: ignore[e2e_not_mocked] Only the transport to GitHub is substituted, as `scratch_identity.seeded` states: the identity has to be filed under a hosted origin for a tracked rule to match it, and git, the recipe, the registry and `onevcs pool status` all run for real.  # noqa: E501
+    identity = seeded(tmp_path, origin=FORMERLY_SWEPT)
+    assert not (identity.publication / "onevcs.toml").exists()
+
+    status = _onevcs(identity, "pool", "status", EXECUTION_ALIAS)
+
+    assert status.returncode == 0, status.stderr
+    assert f"identity: {FORMERLY_SWEPT}" in status.stdout, status.stdout
+    assert "maintenance: none declared" in status.stdout.splitlines(), status.stdout
 
 
 def test_a_full_identity_refuses_the_next_open_by_its_own_code_until_a_slot_returns(

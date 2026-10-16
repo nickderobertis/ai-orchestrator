@@ -10,8 +10,11 @@ registered checkout in `orchestrator:test-checkouts`.
 
 from __future__ import annotations
 
+import importlib.metadata
+from pathlib import Path
+
 import pytest
-from test_linked_libraries import LINKED_VERSION_CLAIMS, _linked_version
+from test_linked_libraries import ENGINE_DISTRIBUTION, LINKED_VERSION_CLAIMS, _linked_version
 
 from orchestrator.root import REPO_ROOT
 
@@ -47,3 +50,38 @@ def test_claims_about_a_linked_library_name_the_linked_version(
             f"the adopted engine links {crate} {linked}, so re-read the claim against "
             "that and update the one site in the same change"
         )
+
+
+#: The view lines the documents quote from the adopted engine, each as the binary spells
+#: it, and the documents that quote it: what `status` and `results` print for scratch a
+#: run kept, the discard verb that line names, and what `results` prints for space a
+#: maintenance pass freed.
+ENGINE_VIEW_LINES: dict[str, tuple[str, ...]] = {
+    "scratch kept: ": ("AGENTS.md", "docs/host-setup.md", "docs/orchestration.md"),
+    "onepipeline scratch discard ": (
+        "AGENTS.md",
+        "docs/host-setup.md",
+        "docs/orchestration.md",
+        "docs/repo-lifecycle.md",
+    ),
+    "pool maintenance: freed ": ("docs/repo-lifecycle.md",),
+}
+
+
+def test_the_engine_prints_the_scratch_and_maintenance_lines_the_documents_quote() -> None:
+    """Each line a document quotes from the engine's views is one the installed binary
+    carries, so a release that respells it fails here rather than leaving the documents
+    naming a line no view prints."""
+    distribution = importlib.metadata.distribution(ENGINE_DISTRIBUTION)
+    binaries = [entry for entry in (distribution.files or ()) if Path(entry).name == "onepipeline"]
+    assert len(binaries) == 1, f"{ENGINE_DISTRIBUTION} installs {binaries}, not one engine"
+    carried = Path(str(distribution.locate_file(binaries[0]))).read_bytes()
+
+    for spelling, documents in ENGINE_VIEW_LINES.items():
+        assert spelling.encode() in carried, (
+            f"the installed onepipeline no longer carries {spelling!r}, which {documents} "
+            "quote; re-read the engine's views and update each document"
+        )
+        for document in documents:
+            text = " ".join((REPO_ROOT / document).read_text(encoding="utf-8").split())
+            assert spelling.strip() in text, f"{document} no longer quotes {spelling!r}"

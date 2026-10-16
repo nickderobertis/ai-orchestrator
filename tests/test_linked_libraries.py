@@ -254,6 +254,23 @@ ARTIFACTS_ONEAGENTGRAPH_FLOOR = Release(0, 4, 1)
 BASE_MERGE_AND_ARMED_WAIT_ONEVCS_FLOOR = Release(0, 48, 0)
 
 
+#: onevcs 0.52.0, the release this host's declared-maintenance adoption names: it runs, in
+#: a repository's idle slots, the command that repository declares in its own tracked
+#: `onevcs.toml` (https://github.com/nickderobertis/onevcs/pull/400, first cut as 0.50.0)
+#: and carries onevcs's own declaration (https://github.com/nickderobertis/onevcs/pull/419).
+#: `config/onevcs.workspaces.yml` names no `maintain` for any repository on the strength of
+#: it, so an engine linking a copy without it would maintain nothing at all.
+DECLARED_MAINTENANCE_ONEVCS_FLOOR = Release(0, 52, 0)
+#: onepipeline 0.74.1, the release this host's scratch adoption names: it removes a
+#: successful run's dispatch scratch, reports what any other ending keeps, and adds
+#: `onepipeline scratch discard <run-id>`
+#: (https://github.com/nickderobertis/onepipeline/pull/910), and its idle maintenance runs
+#: each repository's declared command (https://github.com/nickderobertis/onepipeline/pull/911).
+#: The lines the documents quote from its views are held to the binary by
+#: `tests/release_pins/test_linked_libraries_prose.py`.
+SCRATCH_RECLAIM_ENGINE_FLOOR = Release(0, 74, 1)
+
+
 def _linked_versions() -> dict[str, set[str]]:
     """Every crate the adopted engine wheel declares it links, as name → versions.
 
@@ -547,6 +564,45 @@ def test_the_linked_onevcs_records_gate_runs_and_discards_a_kept_branch() -> Non
     )
 
 
+def _engine_release() -> Release:
+    """The adopted engine's own release, read as the subject of its wheel's SBOM."""
+    distribution = importlib.metadata.distribution(ENGINE_DISTRIBUTION)
+    sboms = [entry for entry in (distribution.files or ()) if SBOM_DIRECTORY in Path(entry).parts]
+    document = json.loads(Path(str(distribution.locate_file(sboms[0]))).read_text("utf-8"))
+    subject = document.get("metadata", {}).get("component", {})
+    assert subject.get("name") == "onepipeline", (
+        f"{ENGINE_DISTRIBUTION}'s SBOM names {subject.get('name')!r} as its subject, not the "
+        "engine, so nothing here can read which engine release the wheel carries"
+    )
+    return Release.parse(subject["version"])
+
+
+def test_the_engine_reclaims_scratch_and_links_onevcs_running_declared_maintenance() -> None:
+    """Above both floors, the disk reclamation this host relies on is the engine's own.
+
+    `config/onevcs.workspaces.yml` declares no maintenance for any repository, because
+    each repository declares its own in `onevcs.toml`, and the engine's idle maintenance
+    runs that through the copy it links rather than the CLI `config/onevcs.version` pins.
+    The documents here also tell a manager that a successful run's scratch is removed and
+    that `onepipeline scratch discard` clears an ended run's. Below either floor the
+    warm pool and run scratch grow with nothing reclaiming them, while every pin reads
+    current.
+    """
+    engine = _engine_release()
+    linked = Release.parse(_linked_version("onevcs"))
+
+    assert engine >= SCRATCH_RECLAIM_ENGINE_FLOOR, (
+        f"the adopted engine is onepipeline {engine}, below the {SCRATCH_RECLAIM_ENGINE_FLOOR} "
+        "that removes a successful run's scratch, reports what other endings keep and adds "
+        "'onepipeline scratch discard'"
+    )
+    assert linked >= DECLARED_MAINTENANCE_ONEVCS_FLOOR, (
+        f"the adopted engine links onevcs {linked}, below the "
+        f"{DECLARED_MAINTENANCE_ONEVCS_FLOOR} that runs each repository's declared pool "
+        "maintenance; with no host maintain rule, idle slots would be maintained by nothing"
+    )
+
+
 def test_the_linked_onejudge_lets_a_workers_judge_side_be_a_list() -> None:
     """Above the floor, a graph naming `judges:` reaches a onejudge that can run it.
 
@@ -672,7 +728,7 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 LINKED_HARNESS_CORES = (
     LinkedCore(dependent="oneagentgraph", dependent_version="0.5.7", core="0.24.2"),
     LinkedCore(dependent="onejudge", dependent_version="0.19.0", core="0.24.2"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.73.0", core="0.24.2"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.74.1", core="0.24.2"),
 )
 
 #: How a crate names itself in a compiled binary: cargo embeds the registry source

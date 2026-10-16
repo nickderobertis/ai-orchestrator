@@ -1044,12 +1044,12 @@ def test_a_row_running_a_program_through_a_pipe_or_substitution_is_named() -> No
         first._replace(id="piped", command="just status {run} | tee out"),
         first._replace(id="substituted", command="just watch $(cat cursor)"),
         first._replace(id="sequenced", command="cd {checkout} && just status {run}"),
-        first._replace(id="newlined", command="just status {run}\nrm -r {checkout}"),
+        first._replace(id="newlined", command="just status {run}\nshred -u {checkout}"),
     )
 
     assert probe.unrecorded(rows) == [
         "piped (a pipe, substitution or subshell)",
-        "rm",
+        "shred",
         "substituted (a pipe, substitution or subshell)",
     ]
 
@@ -1202,3 +1202,26 @@ def test_the_wrapper_hands_the_probe_s_own_verdict_through(tmp_path: Path) -> No
     assert probed.returncode == 2, probed.stdout + probed.stderr
     assert "allowlist-probe.py --tool codex" in probed.stdout
     assert probed.stderr == ""
+
+
+def test_the_discard_grant_lets_the_verb_through_and_its_widened_row_s_deletion_is_recorded(
+    tmp_path: Path,
+) -> None:
+    """The discard row is read as let through, and a deletion chained after it reaches the
+    `rm` recorder rather than a real `rm`: a double that runs every command makes the
+    widened row's deletion run, which only the recorder can report as let through."""
+    rows = ("scratch-discard", "scratch-discard-and-rm")
+    for side in ("claude", "codex"):
+        (tmp_path / side).mkdir()
+
+    claude, _ = _probe(tmp_path / "claude", "rm -rf", False, rows=rows)
+    codex = _run_probe(
+        tmp_path / "codex", "codex", rows, {**_codex_logins(tmp_path), "FAKE_CODEX_RUN_ALL": "1"}
+    )
+
+    assert claude.returncode == 0, claude.stdout + claude.stderr
+    assert "let through  ok" in _line(claude.stdout, "scratch-discard")
+    assert "refused      ok" in _line(claude.stdout, "scratch-discard-and-rm")
+    assert codex.returncode == 1, codex.stdout + codex.stderr
+    assert "let through  ok" in _line(codex.stdout, "scratch-discard")
+    assert "let through  MISMATCH" in _line(codex.stdout, "scratch-discard-and-rm")

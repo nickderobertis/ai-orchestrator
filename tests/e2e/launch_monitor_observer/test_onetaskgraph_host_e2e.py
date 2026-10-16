@@ -2805,7 +2805,8 @@ def test_two_carriers_of_one_ticket_are_resolved_by_the_native_origin_query_alon
 STORE_CACHE_RULES = (
     "the version a listing, a search or a `--commented-since` result carries pins the reads "
     "that follow it in that command",
-    "`project show <ID> --pin VERSION` and `document show <ID> --pin VERSION`",
+    "`project show <ID> --pin VERSION`, `project deps <ID> --pin VERSION` and "
+    "`document show <ID> --pin VERSION`",
     "An **unpinned** read by id, a plain `task show <ID>`, reads the source as it always did",
     "A **Linear** item's token is `lin1`: its `updatedAt` and a digest of its facets",
 )

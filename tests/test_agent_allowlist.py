@@ -290,14 +290,25 @@ def test_a_row_held_on_claude_code_alone_is_one_codex_cannot_hold(invocation: In
     ids=lambda invocation: invocation.id,
 )
 def test_no_rule_lets_a_refused_or_ungranted_row_through(invocation: Invocation) -> None:
-    """Neither whole, nor by a rule that is a prefix of its deciding command."""
+    """Neither whole, nor by a rule that is a prefix of its deciding command.
+
+    A row's deciding commands are its parts other than a `cd` and other than a command the
+    table itself allows as a row of its own: a refused row that widens an allowed command
+    with a second one is decided by that second one, which no rule may match.
+    """
     rules = _allowed()
     for tool in invocation.tools:
         assert not _covered(invocation, rules, tool), (
             f"{invocation.id} (`{_filled(invocation)}`) is {invocation.verdict} and "
             f"{SOURCE.name} lets it through on {tool}"
         )
-    deciding = [part for part in _parts(_filled(invocation)) if not part.startswith("cd ")]
+    allowed = {_filled(row) for row in INVOCATIONS if row.verdict == "allow"}
+    deciding = [
+        part
+        for part in _parts(_filled(invocation))
+        if not part.startswith("cd ") and part not in allowed
+    ]
+    assert deciding, f"{invocation.id} is {invocation.verdict} and every part of it is allowed"
     prefixes = [
         rule
         for rule in rules

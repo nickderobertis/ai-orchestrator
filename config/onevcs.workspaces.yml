@@ -1,4 +1,4 @@
-# How many warm worktree slots each repository keeps, and what maintains them: the
+# How many warm worktree slots each repository keeps, and what a return clears: the
 # shared default every host starts from, never the last word on any one host.
 #
 # `onevcs` reads a workspaces file from `$ONEVCS_HOME/workspaces.yml`
@@ -40,12 +40,8 @@
 #     because surplus is measured against this file's `pool` alone.
 #   - `delete` names worktree-relative paths removed on every return: state that would
 #     otherwise leak from one session into the next on the same slot.
-#   - `maintain` is the argv `onevcs pool maintain` runs in each idle slot's worktree, no
-#     shell, under `timeout` (default `30m`); the adopted engine's idle branch calls it
-#     on the schedule `config/onepipeline.maintenance.yaml` names, and stamps the attempt
-#     on the slot as `last_maintained`. A command the host lacks would fail on every
-#     such tick, which is why `scripts/session-setup.sh` installs `cargo-sweep` and
-#     `tests/test_workspaces_file.py` holds every command's first word to `PATH`.
+#   - `maintain` is the one key this file never names, on any rule or on `default:`; see
+#     below.
 #
 # ## The lender consequence
 #
@@ -59,16 +55,23 @@
 # overflows into a run root; a host that alternates both gives this identity `pool: 2`
 # in its host file, one warm slot each.
 #
-# ## The Rust identities
+# ## Maintenance is each repository's own
 #
-# Every rule carrying `maintain` names an identity whose registered checkout carries a
-# `Cargo.toml` at its root — read off this host's checkouts, not assumed, by
-# `tests/test_workspaces_file.py`'s `reads_checkouts` tier. A Rust identity this file
-# gives no rule is reported there by name as drift and never fails: a sibling becoming
-# Rust in its own repository is not a defect here, and the rule-less maintenance that
-# would follow it is `onevcs`'s to derive, so the rules below are the list.
-# `cargo sweep --time 7` removes build artifacts a week unused, which is what keeps a
-# warm `target/` from turning the disk-wear fix into a disk-space problem.
+# A repository declares its own pool maintenance in its tracked `onevcs.toml`, which
+# `onevcs pool maintain` reads from the publication checkout's base and runs in each idle
+# slot, on the schedule `config/onepipeline.maintenance.yaml` names; `onevcs pool
+# declaration <root>` reads it back. Failing that, onevcs runs a
+# host `maintain` from this file, and failing that, nothing: it has no default and knows
+# no build tool. This host adds no `maintain` for any repository, so a repository that
+# declares none is not maintained, and no host rule deletes a repository's output under a
+# rule that repository never declared.
+#
+# llmlint: ignore-block[comments_earn_their_place] The task that retired these rules requires this header to say why: a host maintainer reading a file with no maintenance in it would otherwise put `cargo sweep` back, and the reason it never worked is not in any code here.
+# The `cargo sweep --time 7` rules this file carried for every Rust identity are retired:
+# they reclaimed nothing here, because `cargo sweep --time` judges a build artifact by its
+# access time, which cargo's own fingerprint reads refresh under `relatime`, so no
+# artifact ever looked a week unused.
+# llmlint: ignore-end[comments_earn_their_place]
 version: 1
 default:
   pool: 1
@@ -78,46 +81,3 @@ rules:
     # The innermost stage's log under `.logs/`, which is gitignored and would otherwise
     # read as the next session's own.
     delete: [".logs/"]
-
-  - match: {host: github.com, owner: nickderobertis, name: llmlint}
-    maintain: {command: ["cargo", "sweep", "--time", "7"], timeout: 30m}
-  - match: {host: github.com, owner: nickderobertis, name: oneagentgraph}
-    maintain: {command: ["cargo", "sweep", "--time", "7"], timeout: 30m}
-  - match: {host: github.com, owner: nickderobertis, name: oneharness}
-    maintain: {command: ["cargo", "sweep", "--time", "7"], timeout: 30m}
-  - match: {host: github.com, owner: nickderobertis, name: oneharness-ui}
-    maintain: {command: ["cargo", "sweep", "--time", "7"], timeout: 30m}
-  - match: {host: github.com, owner: nickderobertis, name: onejudge}
-    maintain: {command: ["cargo", "sweep", "--time", "7"], timeout: 30m}
-  - match: {host: github.com, owner: nickderobertis, name: onemessagebus}
-    maintain: {command: ["cargo", "sweep", "--time", "7"], timeout: 30m}
-  - match: {host: github.com, owner: nickderobertis, name: onepipeline}
-    maintain: {command: ["cargo", "sweep", "--time", "7"], timeout: 30m}
-  - match: {host: github.com, owner: nickderobertis, name: onepipeline-ui}
-    maintain: {command: ["cargo", "sweep", "--time", "7"], timeout: 30m}
-  - match: {host: github.com, owner: nickderobertis, name: onevcs}
-    maintain: {command: ["cargo", "sweep", "--time", "7"], timeout: 30m}
-  - match: {host: github.com, owner: nickderobertis, name: allowlister}
-    maintain: {command: ["cargo", "sweep", "--time", "7"], timeout: 30m}
-  - match: {host: github.com, owner: nickderobertis, name: allowlister-remote}
-    maintain: {command: ["cargo", "sweep", "--time", "7"], timeout: 30m}
-  - match: {host: github.com, owner: nickderobertis, name: crozier}
-    maintain: {command: ["cargo", "sweep", "--time", "7"], timeout: 30m}
-  - match: {host: github.com, owner: nickderobertis, name: onetaskgraph}
-    maintain: {command: ["cargo", "sweep", "--time", "7"], timeout: 30m}
-  - match: {host: github.com, owner: nickderobertis, name: printobserver}
-    maintain: {command: ["cargo", "sweep", "--time", "7"], timeout: 30m}
-  - match: {host: github.com, owner: nickderobertis, name: screencomp}
-    maintain: {command: ["cargo", "sweep", "--time", "7"], timeout: 30m}
-  - match: {host: github.com, owner: nickderobertis, name: notignored}
-    maintain: {command: ["cargo", "sweep", "--time", "7"], timeout: 30m}
-  - match: {host: github.com, owner: nickderobertis, name: allowlister-terminal-approval-plugin}
-    maintain: {command: ["cargo", "sweep", "--time", "7"], timeout: 30m}
-  - match: {host: github.com, owner: nickderobertis, name: github-secrets}
-    maintain: {command: ["cargo", "sweep", "--time", "7"], timeout: 30m}
-  - match: {host: github.com, owner: nickderobertis, name: skilltest}
-    maintain: {command: ["cargo", "sweep", "--time", "7"], timeout: 30m}
-  - match: {host: github.com, owner: nickderobertis, name: onebudgetspec}
-    maintain: {command: ["cargo", "sweep", "--time", "7"], timeout: 30m}
-  - match: {host: github.com, owner: petsinc, name: hellopatient}
-    maintain: {command: ["cargo", "sweep", "--time", "7"], timeout: 30m}

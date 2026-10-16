@@ -45,12 +45,6 @@ idempotent. It:
   `scripts/workspace-install.sh` — the only install a worktree gets, which `AGENTS.md`
   states once under "The checks";
 <!-- llmlint: ignore-end[no_redundant_instruction_pointers] -->
-- installs `cargo-sweep` through `cargo install` when it is absent or at another
-  release — pinned in one place in the script, `CARGO_SWEEP_VERSION` — because it is
-  the `maintain` command `config/onevcs.workspaces.yml` names for every Rust identity's
-  warm worktree slots, and a command the host lacks would fail on every idle tick the
-  engine sweeps the pool on. Optional: a host without `cargo` is told and never failed,
-  since it has no Rust slot to maintain;
 - wires allowlister's codex `repo-write` PreToolUse hook — **only if allowlister is
   already installed** (see [step 6](#6-install-allowlister-nothing-automates-this));
 - persists the session's `PATH` (and `LLMLINT_ONEHARNESS_BIN`) into Claude Code's
@@ -69,8 +63,13 @@ exactly what the rest of this document is.
 
 `just sweep` — `onevcs sweep` then `oneagentgraph sweep` — is the only automatic caller
 on this host of the dead publication and recovery workspaces, the session records beside
-them, and a dispatch's scratch: the engine's idle maintenance returns pool slots and
-retires finished branches, and reaches none of those. Session setup once ran it in the
+them, and oneagentgraph's own scratch: the engine's idle maintenance returns pool slots
+and retires finished branches, and reaches none of those. It does not reach a
+dispatch's scratch, which is the engine's: removed when its run settles with every node
+done, and kept by a run that ended any other way or paused, whose `just status` and
+`just results` print a `scratch kept:` line naming each directory and its size. Once
+such a run has ended, `onepipeline scratch discard <run-id>` removes that scratch and
+nothing else of the run. Session setup once ran `just sweep` in the
 SessionStart hook's foreground, and when onevcs 0.34's finished-branches pass took
 longer than the hook's timeout, every session and every dispatch waited out the timeout
 and skipped the steps after the sweep.
@@ -461,22 +460,36 @@ just repos-apply
   `default_target` naming no target — is refused by name and replaces nothing.
 - **`config/onevcs.workspaces.yml`** — the workspaces file, installed to
   `$ONEVCS_HOME/workspaces.yml`. It sizes each identity's pool of warm worktree slots
-  and names what maintains them: the shared default pools every identity at one slot
-  with unbounded overflow, deletes this repository's `.logs/` on every return, and
-  names `cargo sweep --time 7` as the maintenance of every registered identity whose
-  checkout carries a root `Cargo.toml` — the file's header lists them, and
-  `tests/test_workspaces_file.py` reconciles the list against this host's checkouts
-  and holds each command's first word to `PATH`. **A host sets its own pool size in
+  and says what a return clears: the shared default pools every identity at one slot
+  with unbounded overflow, and this repository's `.logs/` is deleted on every return.
+  **It names no pool maintenance for any repository.** Each repository declares its own
+  maintenance command in a tracked `onevcs.toml`, in the shape onevcs's own contract
+  states, which `onevcs pool declaration <root>` reads back and the engine's idle
+  maintenance runs in that repository's idle slots; a host `maintain` in a workspaces file still applies to a
+  repository that declares none, and this host uses it for none, so such a repository is
+  not maintained.
+  <!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The task adopting declared maintenance requires this page to say how a Rust repository's maintenance is installed, so a maintainer does not reinstall a tool here; each repository's own `onevcs.toml` is the source, read back by the `onevcs pool declaration <root>` named above, and those declarations land in their own repositories, where no gate here can read them yet. -->
+  Each Rust repository's declaration runs the released `cargo-prune-superseded` through
+  a recipe of its own, installed by that repository's own `just bootstrap`, which `just
+  repos-bootstrap` runs, so this host installs nothing for it.
+  <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
+  **A host sets its own pool size in
   `${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/workspaces.yml`, never by
   editing the tracked file**: that file — beside `claude-identities.env`, outside every
   checkout — has the same schema and version and is partial, its `default` keys
   replacing the tracked `default`'s key by key and each of its `rules` replacing the
-  tracked rule with an identical `match` or being appended; the recipe composes the
+  tracked rule with an identical `match` whole or being appended; the recipe composes the
   two (`orchestrator/workspaces_overlay.py` states the rule) and installs the tracked
   file alone when the host file is absent. An identity with several execution
   checkouts spends its pool one slot per lender, so size `pool` per lender you
   alternate — this repository alternates two, so a host that wants both warm gives
-  it `pool: 2` there. The composed document is what is validated through `onevcs pool
+  it `pool: 2` there. A host overlay written while the tracked file maintained Rust
+  identities with `cargo sweep` copied that `maintain` into each rule it sized, because a
+  rule replaces the tracked one whole; retire those once the repositories' own
+  declarations have landed by deleting every `maintain:` line from the overlay, deleting a
+  rule left with nothing but its `match`, keeping `delete: [".logs/"]` on a rule for this
+  repository, and re-running `just repos-apply`. The composed document is what is
+  validated through `onevcs pool
   status` in the same scratch home, so a malformed value, a `delete` climbing out of
   the worktree, or a default admitting no session is refused by name and replaces
   nothing, and a host file off the schema is refused by the composer before that.

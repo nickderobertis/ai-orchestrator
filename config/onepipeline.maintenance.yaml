@@ -11,9 +11,11 @@
 #
 # The schedule is a pure function of this file and the stamp `onevcs` keeps on each
 # slot: a driver that finds itself idle sweeps every registered identity through
-# `onevcs pool maintain <identity> --older-than <every>`, which runs the identity's
-# `maintain` command from `config/onevcs.workspaces.yml` in each idle slot not
-# maintained within `every` and records the attempt on the slot as `last_maintained`.
+# `onevcs pool maintain <identity> --older-than <every>`, which runs the command that
+# repository declares in its own tracked `onevcs.toml` in each idle slot not maintained
+# within `every` and records the attempt on the slot as `last_maintained`. This host
+# names no `maintain` of its own in `config/onevcs.workspaces.yml`, so a repository that
+# declares none is not maintained.
 # Nothing here keeps state, so late is fine, nothing runs twice, two drivers on one host
 # are safe by the same fact, and between runs nothing runs and nothing needs to. A sweep
 # that did something is journalled once as a `pool-maintenance` record, which `just
@@ -23,8 +25,12 @@
 # `every` is a `Span` — digits then one of `s`, `m`, `h`, `d`, no spaces, no zero — and
 # is the only key `default` or a rule may carry: no `at`, no cron shape. `rules` match
 # an identity the way the rules file does, first match wins, and there are none yet:
-# every identity is maintained on the default, a week, which is the `--time 7` the
-# Rust identities' `cargo sweep` keeps a warm `target/` to.
+# every identity is maintained on the default, a day. A repository's maintenance that
+# keeps recent builds by a window of days wants a daily pass, since a weekly one lets
+# superseded builds pile up for most of a week past that window.
+#
+# The known limit: the engine maintains only while some run is live and idle, so a host
+# with no live run maintains nothing, however long ago a slot was last maintained.
 #
 # llmlint: ignore[changed_behavior_has_e2e] What an idle driver does with this schedule
 # — sweep every registered identity through `onevcs pool maintain` on its cadence and
@@ -38,5 +44,5 @@
 # stamps it (`tests/e2e/publish_and_landing/test_worktree_pool_e2e.py`).
 version: 1
 default:
-  every: 7d
+  every: 1d
 rules: []

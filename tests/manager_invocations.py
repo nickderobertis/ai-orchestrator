@@ -151,6 +151,11 @@ _RELEASE_STATUS = "the adopted `onevcs` has the first `release status` that deci
 _POOL = "`onevcs pool status <repo>` reads them"
 _SESSION_CLOSE = "`onevcs session close <session>` closes a session you opened"
 _SUPERSESSIONS = "`uv run --no-sync onepipeline supersessions <run-id> --record`, run once by hand"
+_SCRATCH_DISCARD = (
+    "`uv run --no-sync onepipeline scratch discard <run-id>` is granted because it deletes "
+    "only the regenerable scratch of a run whose status word says it ended, never follows a "
+    "link out of it, and refuses a paused, driven or unknown run"
+)
 _TICKETS = (
     "`python -m orchestrator.follow_up_tickets statuses` prints the vocabulary every agent reads"
 )
@@ -347,6 +352,9 @@ INVOCATIONS: tuple[Invocation, ...] = (
         "supersessions", "uv run --no-sync onepipeline supersessions {run} --record", _SUPERSESSIONS
     ),
     _allow(
+        "scratch-discard", "uv run --no-sync onepipeline scratch discard {run}", _SCRATCH_DISCARD
+    ),
+    _allow(
         "tickets-statuses",
         "uv run --no-sync python -m orchestrator.follow_up_tickets statuses",
         _TICKETS,
@@ -453,6 +461,13 @@ INVOCATIONS: tuple[Invocation, ...] = (
     _refuse("gh-api-write", "gh api -X POST repos/{owner}/{name}/issues -f title=probe", _BYPASS),
     _refuse("gh-run-cancel", "gh run cancel {ci_run}", _FORBIDDEN),
     _refuse("kill", "kill {pid}", _KILL),
+    # The discard grant widened by a second command deleting a path: each part of a compound
+    # command is held to a rule of its own, and none grants the deletion.
+    _refuse(
+        "scratch-discard-and-rm",
+        "uv run --no-sync onepipeline scratch discard {run} && rm -rf {workspace}",
+        _SCRATCH_DISCARD,
+    ),
     _refuse(
         "shared-envelope-edit", "{checkout}/scratch/envelope.json", _SHARED_ENVELOPE, kind="write"
     ),

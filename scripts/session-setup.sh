@@ -37,15 +37,10 @@
 #      without revalidating). Never fatal: each link is reported by name with the
 #      version it stored, or why it could not be warmed, and a cold link is fetched on
 #      first use instead.
-#  10. `cargo-sweep`, pinned below, is installed through `cargo install` when absent or
-#      at another version: it is the `maintain` command `config/onevcs.workspaces.yml`
-#      names for every Rust identity's warm worktree slots, and a command the host lacks
-#      would fail on every idle tick the engine sweeps the pool on. Optional — a host
-#      without `cargo` pools nothing Rust — so it never changes the exit status.
-#  11. `scripts/host-sweep.sh --detach`, which starts `just sweep` as this hook's own
+#  10. `scripts/host-sweep.sh --detach`, which starts `just sweep` as this hook's own
 #      detached job and never waits on it; docs/host-setup.md, "The host sweep", is the
 #      account of when it starts one and what it reports.
-#  12. Last, `just repos-bootstrap --detach`: every registered sibling checkout's own
+#  11. Last, `just repos-bootstrap --detach`: every registered sibling checkout's own
 #      `just bootstrap`, memoized per checkout, started as a job detached from this
 #      hook so the gate a dispatch publishes through gets its tools however long they
 #      take to fetch. Last because it is the one step about other repositories, and a
@@ -89,9 +84,6 @@ ADOPTED_ONEHARNESS_VERSION="$(tr -d '[:space:]' <"$ONEHARNESS_VERSION_FILE")"
 readonly ADOPTED_ONEHARNESS_VERSION
 readonly BIN_DIR="$HOME/.local/bin"
 readonly CARGO_BIN="$HOME/.cargo/bin"
-# The one place the `cargo-sweep` release this host maintains its pool with is pinned;
-# `tests/test_workspaces_file.py` reads it from here and holds the installed binary to it.
-readonly CARGO_SWEEP_VERSION="0.8.0"
 # The floor `ensure_just` installs `rust-just` at when no `just` resolves: the release
 # this justfile's recipes are exercised under on this host. A floor rather than a pin,
 # so `uv tool` takes the newest release above it.
@@ -391,48 +383,6 @@ verify_bun() {
   return 0
 }
 
-install_cargo_sweep() {
-  if verify_cargo_sweep >/dev/null 2>&1; then
-    return 0
-  fi
-  if ! command -v cargo >/dev/null 2>&1; then
-    log "cannot install optional cargo-sweep: cargo is not installed; the pool's Rust slots go unmaintained until it is"
-    return 1
-  fi
-  log "installing cargo-sweep $CARGO_SWEEP_VERSION via cargo"
-  if ! cargo install cargo-sweep --version "$CARGO_SWEEP_VERSION" >&2; then
-    log "cargo-sweep cargo install failed"
-    return 1
-  fi
-  hash -r
-  if verify_cargo_sweep; then
-    log "cargo-sweep ready ($CARGO_SWEEP_VERSION)"
-    return 0
-  fi
-  log "optional cargo-sweep is unavailable after cargo install"
-  return 1
-}
-
-# `cargo-sweep --version` answers `cargo-sweep <version>`, and the pin is what is
-# verified: a release other than the pinned one is reinstalled rather than kept, so the
-# command every Rust slot is maintained with is the one this repository adopted.
-verify_cargo_sweep() {
-  local binary actual
-  if ! binary="$(command -v cargo-sweep 2>/dev/null)"; then
-    log "cargo-sweep verification failed: no binary is on PATH"
-    return 1
-  fi
-  if ! actual="$("$binary" --version 2>&1)" || [ -z "$actual" ]; then
-    log "cargo-sweep verification failed: $binary could not report its version"
-    return 1
-  fi
-  if [ "${actual#cargo-sweep }" != "$CARGO_SWEEP_VERSION" ]; then
-    log "cargo-sweep verification failed: $binary reports '$actual', not the pinned $CARGO_SWEEP_VERSION"
-    return 1
-  fi
-  return 0
-}
-
 ensure_codex_gate() {
   # allowlister gates codex's tool calls via its PreToolUse hook, so codex can run
   # in `--oneharness-mode bypass` (needed where its OS sandbox can't initialize —
@@ -503,7 +453,7 @@ fi
 # proven in onevcs's repository, and `tests/family_scans/test_upstream_workaround_rule.py` keeps
 # the retired lease from returning. A journey here would re-test a published CLI.
 # `--provision-only` is the checkout's own toolchain and nothing else: steps 0, 1-3, 5
-# and 6, verified, with no host sweep, sibling bootstrap, codex, cargo-sweep, llmlint or
+# and 6, verified, with no host sweep, sibling bootstrap, codex, llmlint or
 # session environment. It is what `.githooks/pre-push` runs in a publication worktree,
 # which no session start ever provisioned; the follow-up "onevcs provisions a session or
 # publication worktree when it opens one" tracks moving that call into onevcs.
@@ -528,7 +478,7 @@ if [ "$provision_only" -eq 1 ]; then
   exit "$toolchain_failed"
 fi
 create_plan_root || toolchain_failed=1
-# The host sweep, detached (step 11 above): never waited on, and a report from it — the
+# The host sweep, detached (step 10 above): never waited on, and a report from it — the
 # last sweep having failed — never touches `toolchain_failed`.
 if [ -f "$REPO_ROOT/justfile" ] && command -v just >/dev/null 2>&1; then
   bash "$SCRIPT_DIR/host-sweep.sh" --detach \
@@ -541,9 +491,6 @@ if install_bun; then
 else
   toolchain_failed=1
 fi
-# Optional, and reported rather than counted: the pool's maintenance command for a
-# Rust identity, which a host without cargo has no slots to run in.
-install_cargo_sweep || log "cargo-sweep unavailable; a Rust identity's idle slots are not maintained until it is (continuing)"
 ensure_codex
 ensure_codex_gate
 persist_session_env
@@ -576,7 +523,7 @@ if ! verify_bun; then
   log "bun is required — the oneharness sdk-check gate will fail until setup succeeds"
   toolchain_failed=1
 fi
-# The sibling gates, detached (step 12 above). A non-zero exit is a report to relay,
+# The sibling gates, detached (step 11 above). A non-zero exit is a report to relay,
 # never a reason for this session to be without a toolchain: it never touches
 # `toolchain_failed`.
 if [ -f "$REPO_ROOT/justfile" ] && command -v just >/dev/null 2>&1; then

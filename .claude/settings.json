@@ -115,6 +115,7 @@
       "Bash(uv run --no-sync python -m orchestrator.follow_up_tickets check-dispositions:*)",
       "Bash(uv run --no-sync python -m orchestrator.follow_up_tickets check-responses:*)",
       "Bash(uv run --no-sync python -m orchestrator.follow_up_tickets check-gathering:*)",
+      "Bash(uv run --no-sync onepipeline scratch discard:*)",
       "Bash(git status)",
       "Bash(git config core.bare)",
       "Bash(git clone:*)",

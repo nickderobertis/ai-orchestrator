@@ -8,8 +8,8 @@ per tool, whether the row was let through or refused, against what the table say
 
 Nothing real is stopped, pushed, merged or signalled, by construction rather than by
 hope. The scratch project carries its own `justfile`, so `just` resolves every recipe to
-a stub before it could climb to a real one; `onevcs`, `gh`, `git` and `uv` are stubs
-first on `PATH`, which Codex keeps because its scratch home turns the login shell off;
+a stub before it could climb to a real one; `onevcs`, `gh`, `git`, `uv` and `rm` are
+stubs first on `PATH`, which Codex keeps because its scratch home turns the login shell off;
 `cat`, `tail` and `grep` are recorders that then run the real reader; the one `kill`
 targets a `sleep` this probe started; every other target is a path inside the scratch
 tree. Each stub appends its own argv to a marker file outside the project only when it
@@ -108,7 +108,7 @@ def _finished(said: str) -> bool:
 #: Rows per Claude turn by default, so a long list does not outrun one turn's attention.
 BATCH = 24
 #: Programs replaced outright by a recorder, and readers recorded and then run for real.
-STUBBED = ("onevcs", "gh", "git", "uv", "onejudge", "oneharness", "onemessagebus", "llmlint")
+STUBBED = ("onevcs", "gh", "git", "uv", "onejudge", "oneharness", "onemessagebus", "llmlint", "rm")
 READERS = ("cat", "tail", "grep")
 RECORDED = (*STUBBED, "just", *READERS)
 #: Readers Claude Code's own shell replaces with a function that runs its bundled search

@@ -128,6 +128,8 @@ allowed_tools = [
     "Bash(uv run --no-sync python -m orchestrator.follow_up_tickets check-responses:*)",
     "Bash(uv run --no-sync python -m orchestrator.follow_up_tickets check-gathering:*)",
     # llmlint: ignore-end[least_privilege_grants]
+    # llmlint: ignore[least_privilege_grants] `uv run --no-sync onepipeline scratch discard`: the suffix is only the run id the one verb names, which Claude Code has no narrower pattern for, and the verb bounds it — it deletes only the regenerable scratch of a run whose status word says it ended, never follows a link out of it, and refuses a paused, driven or unknown run with nothing deleted.
+    "Bash(uv run --no-sync onepipeline scratch discard:*)",
 
     "Bash(git status)",
     "Bash(git config core.bare)",
