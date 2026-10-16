@@ -22,7 +22,7 @@
       "{workspaceRoot}/scripts/nx.sh",
       "{workspaceRoot}/scripts/workspace-install.sh",
       "{workspaceRoot}/scripts/install-lock.sh",
-      "{workspaceRoot}/scripts/python-install.sh",
+      "{workspaceRoot}/scripts/require-provisioned.sh",
       "{workspaceRoot}/scripts/preserved-log.sh",
       "{workspaceRoot}/orchestrator/root.py",
       "{workspaceRoot}/tests/e2e/toolchain_isolation/**/*"

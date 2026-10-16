@@ -31,7 +31,7 @@ items were replaced by three recipe-coverage items.
 | `tests/test_dispatch_environment_contract.py` | Keep all | Reconciles this checkout's wrappers, hook, and isolation fixture. |
 | `tests/test_labels.py` | Keep all | Unit contract for surviving `orchestrator/labels.py`. |
 | `tests/test_llmlint_oneharness_wrapper.py` | Keep all | Proves this checkout's llmlint harness routing. |
-| `tests/tree_scans/test_nx_cache_scope.py` | Keep all | Unit drift gates for this checkout's Nx keys. |
+| `tests/tree_scans/test_nx_cache_scope.py` | Convert | Keeps the static drift gates over this checkout's Nx keys and tiers; its scans of which tier a diff can deselect are removed with the journeys they kept valid. |
 | `tests/test_oneharness_usage_wrapper.py` | Keep all | Proves this checkout's usage/fallback wrapper. |
 | `tests/release_pins/test_onejudge_version.py` | Keep all | Drift gate over this checkout's adopted pin. |
 | `tests/test_published_tools.py` | Keep all | Drift gate from this checkout's four pins to dependencies and installed entry points. |
@@ -41,15 +41,13 @@ items were replaced by three recipe-coverage items.
 | `tests/dag_ui/test_dag_ui_serving_e2e.py` | Keep all | Drives this checkout's two serving recipes over the published `onepipeline-api serve [--ui]`, which answers the view and its data on one origin. UI behavior itself is not asserted. |
 | `tests/e2e/registry_and_recipes/test_delegated_recipes_e2e.py` | Convert | Keeps every existing journey, adds the previously absent real `repo-policy` delegation and `lint-llm-validate` validator journey. |
 | `tests/e2e/workspace_copies/test_gate_selection_e2e.py` | Keep all | Drives this checkout's comparison-base script and pre-push hook. |
-| `tests/e2e/workspace_copies/test_llmlint_cache_e2e.py` | Keep all | Required real Nx cached-verdict journey. |
-| `tests/e2e/workspace_copies/test_llmlint_two_path_verdict_e2e.py` | Keep all | Required real llmlint two-judge-path journey. |
-| `tests/e2e/workspace_copies/test_nx_cache_scope_e2e.py` | Keep all | Required real-Nx, linked-worktree cache-key journey. |
+| `tests/e2e/workspace_copies/test_llmlint_cache_e2e.py` | Convert | Keeps the journeys over what this checkout's llmlint recipe and target refuse, report and pass on; its replay and re-run journeys are removed, because which change replays or re-runs a target is Nx's behaviour over this checkout's configuration. |
 | `tests/e2e/launch_monitor_observer/test_oneharness_timeout_e2e.py` | Keep | Drives the real wrapper and real oneharness CLI timeout boundary. |
 | `tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` | Convert; details below | Retains configuration/adoption proof and removes three `onepipeline` semantic re-proofs. |
 | `tests/e2e/launch_monitor_observer/test_quota_fallthrough_e2e.py` | Keep all | Required real oneharness fallback-chain journey. |
 | `tests/e2e/test_repo_registry_apply_e2e.py` | Keep all | Drives this checkout's tracked checkout/rules installer; it does not re-prove onevcs lifecycle behavior. |
 | `tests/session_setup_pypi/test_session_setup_e2e.py` | Keep all | Required real PyPI installation journey for adopted releases. |
-| `tests/e2e/workspace_copies/test_workspace_contract_e2e.py` | Convert | Keeps every existing test and adds the missing non-recursive proof of the `test-e2e` entry point; all other cases still drive this checkout's quality, bootstrap, log, and workspace wrappers. |
+| `tests/e2e/workspace_copies/test_workspace_contract_e2e.py` | Convert | Adds the missing non-recursive proof of the `test-e2e` entry point and drops the journeys of the removed cross-worktree Nx check; all other cases still drive this checkout's quality, bootstrap, log, and workspace wrappers. |
 
 Helper modules (`conftest.py`, `published_tools.py`, `nx_inputs.py`, and the e2e
 helpers) contain no tests and remain because the kept journeys import them.

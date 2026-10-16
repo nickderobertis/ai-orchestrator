@@ -2,8 +2,8 @@
 # The one source of this workspace's locked Bun install.
 #
 # Nx lives in `node_modules/.bin`, so no Nx target can run in a freshly created
-# worktree until this has. `scripts/nx.sh` heals through it before every
-# invocation and `just bootstrap` forces it, so no caller has to decide.
+# worktree until this has. Session setup runs it, and `just bootstrap` forces it;
+# nothing else installs (AGENTS.md, "The checks").
 #
 # Bun itself is the guard: `bun install --frozen-lockfile` reconciles the
 # installed tree against the committed lockfile and installs only the difference,

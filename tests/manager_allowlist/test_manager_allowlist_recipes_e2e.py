@@ -43,6 +43,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 #: What the recipe reads and writes, copied into a scratch checkout of its own.
 SYNCED = (
     Path("justfile"),
+    # The provisioning check the recipe depends on, satisfied by the `.venv` linked below.
+    Path("scripts") / "require-provisioned.sh",
     Path("config") / "manager-allowlist.toml",
     Path(".claude") / "settings.json",
     Path(".codex") / "rules" / "oneharness.rules",

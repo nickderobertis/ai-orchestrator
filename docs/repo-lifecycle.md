@@ -935,10 +935,10 @@ input that exits non-zero as *no contribution* rather than as an error, so a
 fingerprint the caller can break does not fail the tier — it silently shrinks the
 key to the tree and the base. That is the worse half: a re-roll only costs a judge
 call, while a degraded key replays a verdict the judge configuration has since
-moved on from. Both directions are held by `tests/e2e/workspace_copies/test_llmlint_cache_e2e.py`,
-and a cache hit alone is not the proof — a failing fingerprint produces one too,
-so the ambient-`PATH` journey reads the fingerprint itself and requires it to
-resolve, and to the same digest, under either caller llmlint.
+moved on from. Which change re-runs or replays the target is Nx's behaviour over
+that key, and no test here re-proves it against real Nx;
+`tests/e2e/workspace_copies/test_llmlint_cache_e2e.py` holds the fingerprint to
+naming a judge toolchain it cannot use rather than resolving to nothing.
 
 One residual is worth knowing when reading that helper: it *prepends*
 `.venv/bin`, but `scripts/setup-llmlint.sh` installs llmlint with `uv tool` into
@@ -1043,27 +1043,15 @@ changed what is being published, so the worker's clearance never covered it. To
 keep that honest rather than silent, a passing `just gate` reports which base
 commit was judged and whether the verdict was judged now or replayed from the
 cache — green is always a claim about one specific base commit. That provenance is
-read out of Nx's own cache reporting, not out of a side-channel marker; the
-journeys below assert both wordings, so an Nx upgrade that renames the line fails
-the suite instead of quietly calling every run freshly judged.
+read out of Nx's own cache reporting, not out of a side-channel marker, and
+`tests/e2e/workspace_copies/test_workspace_contract_e2e.py` holds each phrase the
+recipe matches to what the installed Nx prints, so an Nx upgrade that renames one
+fails the suite instead of quietly calling every run freshly judged.
 
-None of that is provable from one checkout, which is where this went wrong once:
-`tests/e2e/workspace_copies/test_llmlint_cache_e2e.py` asks twice from the same tree, and
-production never does. `tests/e2e/workspace_copies/test_llmlint_two_path_verdict_e2e.py` runs the
-tier's recipe from both callers instead — a worker worktree carrying the
-`LLMLINT_ONEHARNESS_BIN` a dispatch inherits, and a detached scratch worktree
-rebuilt by a squash merge carrying only the comparison identity a publishing push
-does, both cut from one clone — and counts how many times the judge was rolled for
-one content and one base. For a green the answer has to be once. Run it against the
-fingerprint as it stood before `2ba9685` and it is twice: the merge path re-judges
-work that had already been cleared. The failing-verdict journey asserts the other
-half — a red is rolled again on the merge path and still refused — so the cost of
-the trade is stated by the suite rather than assumed. The three invalidations are
-asserted across the two paths for the same reason, because a fix that made them
-agree by hashing less would replay a verdict for a tree nobody judged. The
-publishing push those verdicts decide is not restaged there;
-`tests/e2e/publish_and_landing/test_publish_branch_e2e.py` drives it through the real verb against a
-real `pre-push` hook, which since onevcs 0.11.0 is the only verifier in that path.
+The publishing push those verdicts decide is
+`tests/e2e/publish_and_landing/test_publish_branch_e2e.py`'s to drive, through the
+real verb against a real `pre-push` hook, which since onevcs 0.11.0 is the only
+verifier in that path.
 
 Forcing a real re-judge is deliberately **per tier and per invocation**:
 
@@ -1083,9 +1071,8 @@ per-repository shared cache root these entries actually live in, so a bare
 `nx reset` would clear Nx's default location and leave the stale green in place.
 
 An ambient global Nx cache skip (`NX_SKIP_NX_CACHE` / `NX_DISABLE_NX_CACHE`) is
-reported and ignored by that recipe and by `scripts/check-nx-cache.sh`. Exporting
-one re-rolls the judge from every unrelated command and breaks the checks whose
-contract *is* cache replay, so it is not a supported way to re-judge this tier.
+reported and ignored by that recipe. Exporting one re-rolls the judge from every
+unrelated command, so it is not a supported way to re-judge this tier.
 Every other Nx target still honours it.
 
 ### When a cached verdict may stand in for a verdict on this tree
@@ -1176,15 +1163,15 @@ split at those seams rather than at convenient ones:
   Each family is a project of its own because Nx keys and `nx affected` are per
   project; `E2E_JOURNEYS` in `tests/nx_inputs.py` says how each key was derived.
 
-`just check` runs these in three phases, because Nx takes one selection per invocation,
+`just check` runs these in two phases, because Nx takes one selection per invocation,
 with budgets labelled `host` running on every check and the others running when a
 change touches what they measure:
 the diff selection (`format-check`, `lint`, `typecheck`, `test`, `test-docs`,
-`test-recipes` over the projects `scripts/nx-selection.sh` picks), the unconditional
-`test-checkouts` and `coverage`, and `workspace:check-nx-cache`. Every phase runs
-whatever an earlier one returned, all three write one `.logs/check.log`, and the recipe
-fails if any phase did, naming each that failed — so one run reports every failing
-target rather than the first phase's alone. One tier is outside all three:
+`test-recipes` and `budgets` over the projects `scripts/nx-selection.sh` picks), and the
+unconditional `test-checkouts`, `coverage`, `validate-budgets` and `budgets-host`. The
+second phase runs whatever the first returned, both write one `.logs/check.log`, and the
+recipe fails if either phase did, naming each that failed — so one run reports every
+failing target rather than the first phase's alone. One tier is outside both:
 `session-setup-pypi:test-pypi`, the journeys that run real session setup in a fixture
 repository and install the adopted published tools from PyPI. It is a project of its own
 because an outside service is no diff's to charge, and `just test` and `just upgrade`
@@ -1207,11 +1194,6 @@ Nx's edges are per project. So an edit to a helper invalidates exactly the tiers
 `nx affected` selects them through the reverse edges, and each tier's own key lives in
 its own `project.json`, leaving `nx.json` only the keys every project shares.
 
-`workspace:check-nx-cache` is narrowed on the same principle rather than by tier:
-it builds two linked worktrees out of `tests/fixtures/nx-cache/` and drives the
-real `scripts/nx.sh` in both, so `nxCacheCheck` carries that fixture, those
-scripts, and the root manifest — and nothing else.
-
 Where a literal cannot be told from a read the key is deliberately the wider one —
 the fixture records `.githooks/pre-push` as a journal detail *value* and never
 opens it, and the key carries it anyway. The two errors are not symmetric. A key
@@ -1220,10 +1202,7 @@ false green above.
 
 Each half of every one of those claims is load bearing. A key must still invalidate
 on what its tier reads, and must still replay on what it does not; a key that
-covers less than its check reads fails *open*, which is the false green above. That
-is exactly how `nxCacheCheck` first shipped — named on its scripts but not on the
-fixture the check is built from, so editing the fixture replayed a verdict for a
-tree the check had never seen.
+covers less than its check reads fails *open*, which is the false green above.
 
 Soundness here cannot be a reviewer's recollection — the enumerated list above went
 stale exactly that way. So each declaration is enforced where it is made: autouse
@@ -1236,23 +1215,21 @@ real tool the whole tree copies the tree first, and copying is itself a read.
 but documentation and the front end falls outside the code key, that every tier of the
 suite depends on exactly the test-support units its modules import and takes exactly
 those into its key, that no configuration names a path that does not exist, that the
-recipe key covers every module routing a test into it and stays inside the code key, that the
-cache-check key carries every `$root/` path its script names, and that every
+recipe key covers every module routing a test into it and stays inside the code key, and that every
 repository file the browser tier's fixture stack imports or names is part of
 `dagUiServerSurface`. That last one is the browser tier's `conftest.py`: a runtime
 guard cannot see an import, so the reads are reconciled from the fixture's own
 import closure, and a fixture that starts loading Python outside the surface fails
-with the named input it has to widen. `tests/e2e/workspace_copies/test_nx_cache_scope_e2e.py` then
-proves each one against real Nx over a copy of this checkout: for every key, an
-edit inside it must miss and an edit outside it must replay.
+with the named input it has to widen. How Nx then misses or replays on each key is
+Nx's own behaviour over those declarations, and nothing here re-proves it against
+real Nx.
 
-One more thing has to hold for a replayed test verdict to be usable, and it is
-proved in the same place: the measuring tiers declare their coverage data files as
+One more thing has to hold for a replayed test verdict to be usable, and the same scan
+holds it: the measuring tiers declare their coverage data files as
 Nx `outputs`, so a cache hit **restores** `.coverage.parallel` and each test project's
 `.coverage.<project name>` — each journey project's among them — rather than leaving the
-uncached combine with nothing. Delete them, replay the tiers, and `orchestrator:coverage`
-still combines and reports — a dropped `outputs`
-declaration turns every replayed commit's gate into a failure instead of a saving.
+uncached combine with nothing; a dropped `outputs` declaration turns every replayed
+commit's gate into a failure instead of a saving.
 
 Three tiers, one answer, and none of them lenient: a recorded llmlint **failure**
 replays as a failure, and a tree the suite would fail can no longer replay a pass.

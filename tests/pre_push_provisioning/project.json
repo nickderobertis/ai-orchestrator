@@ -1,0 +1,54 @@
+{
+  "name": "pre-push-provisioning",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/pre_push_provisioning",
+  "tags": [
+    "scope:pre-push-provisioning",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-nx-workspace",
+    "support-offline-installs"
+  ],
+  "namedInputs": {
+    "prePushProvisioningWorkspace": [
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/package.json",
+      "{workspaceRoot}/bun.lock",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/.githooks/pre-push",
+      "{workspaceRoot}/budgets.yaml",
+      "{workspaceRoot}/scripts/session-setup.sh",
+      "{workspaceRoot}/scripts/comparison-base.sh",
+      "{workspaceRoot}/scripts/pre-push-smoke-needed.sh",
+      "{workspaceRoot}/scripts/gate-budgets.sh",
+      "{workspaceRoot}/scripts/lock-timeout.sh",
+      "{workspaceRoot}/scripts/workspace-install.sh",
+      "{workspaceRoot}/scripts/install-lock.sh",
+      "{workspaceRoot}/scripts/preserved-log.sh",
+      "{workspaceRoot}/scripts/nx.sh",
+      "{workspaceRoot}/scripts/require-provisioned.sh",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/tests/pre_push_provisioning/**/*"
+    ]
+  },
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/pre_push_provisioning --no-cov",
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "prePushProvisioningWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ]
+    }
+  }
+}

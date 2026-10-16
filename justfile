@@ -21,6 +21,11 @@ set tempdir := ".logs/just"
 # Tolerated when it fails so a plain recipe still runs in a tree that cannot be
 # written; a shebang recipe there fails with `just`'s own message naming the path.
 _create_recipe_tempdir := `mkdir -p .logs/just 2>/dev/null || true`
+# No recipe's `uv run` syncs the environment on its way into a command: session setup is
+# the one place a checkout is provisioned (AGENTS.md, "The checks"), and every recipe
+# that runs `uv run` depends on `_provisioned`, which refuses a checkout it has not
+# provisioned rather than letting uv run another checkout's tools.
+export UV_NO_SYNC := "1"
 
 # The coverage floor is not restated here: `[tool.coverage.report] fail_under` in
 # pyproject.toml is its one source, enforced by the Nx `coverage` target this recipe
@@ -36,11 +41,12 @@ default:
 # skips a revision already installed), and activate the committed git hooks (the pre-push
 # llmlint gate).
 #
-# `--force` is what distinguishes this from the self-heal every `scripts/nx.sh`
-# already performs: that one reconciles the installed tree against the lockfile,
-# which a refreshed lockfile is enough to trigger, while bootstrap discards the
-# tree and installs from nothing — a clone can carry a `node_modules` no lockfile
-# describes, and reconciling against a lockfile keeps whatever it does not name.
+# `--force` is what distinguishes this from the install session setup performs just
+# before it: that one reconciles the installed tree against the lockfile, while
+# bootstrap discards the tree and installs from nothing — a clone can carry a
+# `node_modules` no lockfile describes, and reconciling against a lockfile keeps
+# whatever it does not name. Nothing past these two installs: `scripts/nx.sh` runs the
+# `bootstrap` targets and heals nothing.
 # llmlint: ignore[changed_behavior_has_e2e] This provisioning journey is run on every clean-clone bootstrap; recursively bootstrapping from its own e2e would replace the active test environment.
 bootstrap:
     ./scripts/session-setup.sh
@@ -52,31 +58,29 @@ bootstrap:
     git config receive.denyCurrentBranch updateInstead
 
 # Full quality gate: format check, lint, type check, persona validation, tests
-# (unit + e2e, coverage enforced), and the Nx cache contract. Must pass before any
-# commit.
+# (unit + e2e, coverage enforced), and budgets. Must pass before any commit.
 #
 # Every captured stage writes through `scripts/preserved-log.sh` to `.logs/<label>.log`
 # (owner-only, credential values redacted, truncated per run). That log survives the
 # process, so a failure is still readable afterwards and a *running* recipe can be
 # followed with `tail -f .logs/check.log` instead of through /proc.
 #
-# Three phases because two questions and a third check: what the diff reaches, what
-# no diff can speak for, and the cross-worktree cache contract. `test-checkouts` reads
-# other repositories and `coverage` reads what the tier beside it just measured, so
-# both stay out of the selection — as `workspace:check-nx-cache` always has. A project's
-# own `budgets.yaml` is measured by its `budgets` target, so in the selection: its budgets
-# run only when a change touches it. Its `host` budgets, which no memo can answer, are
-# `budgets-host`'s, outside it. Every `budgets.yaml` in the tree is validated by
-# `workspace:validate-budgets` outside it, because a malformed one anywhere must never
-# reach a push, whichever project the change touched. Nx takes
-# one selection per invocation, so these are three invocations, and every one of them
-# runs whatever an earlier one returned: one run reports every failing target, and
-# the recipe fails if any phase did, naming each that failed. AGENTS.md carries why
+# Two phases because two questions: what the diff reaches, and what no diff can speak
+# for. `test-checkouts` reads other repositories and `coverage` reads what the tier
+# beside it just measured, so both stay out of the selection. A project's
+# own `budgets.yaml` is measured by its `budgets` target, so in the selection: its
+# budgets run only when a change touches it. Its `host` budgets, which no memo can
+# answer, are `budgets-host`'s, outside it. Every `budgets.yaml` in the tree is
+# validated by `workspace:validate-budgets` outside it, because a malformed one
+# anywhere must never reach a push, whichever project the change touched. Nx takes one
+# selection per invocation, so these are two invocations, and the second runs whatever
+# the first returned: one run reports every failing target, and the recipe fails if
+# either phase did, naming each that failed. AGENTS.md carries why
 # skipping the rest checks nothing less, and `tests/nx_inputs.py` declares which tier
 # is in which half.
 # llmlint: ignore[changed_behavior_has_e2e] The public recipe is the real deterministic gate invoked by this task and pre-push; its sequencing failures use subprocess doubles to avoid recursively invoking the same full suite.
 check:
-    @source ./scripts/preserved-log.sh; preserved_log_open "{{repo_root}}" check; log=$PRESERVED_LOG; selection=$(./scripts/nx-selection.sh) || { echo "check: could not decide which projects to run over; repair the failure scripts/nx-selection.sh reported and retry" >&2; exit 1; }; read -ra selected <<<"$selection"; failed=(); ./scripts/nx.sh "${selected[@]}" -t format-check,lint,typecheck,test,test-docs,test-recipes,budgets 2>&1 | redact_secrets >>"$log" || failed+=("the diff selection"); ./scripts/nx.sh run-many -t test-checkouts,coverage,validate-budgets,budgets-host 2>&1 | redact_secrets >>"$log" || failed+=("test-checkouts,coverage,validate-budgets,budgets-host"); ./scripts/nx.sh run workspace:check-nx-cache 2>&1 | redact_secrets >>"$log" || failed+=("workspace:check-nx-cache"); if (( ${#failed[@]} )); then cat "$log" >&2; phases=$(printf '%s; ' "${failed[@]}"); echo "check: deterministic checks failed in ${#failed[@]} of 3 phases (${phases%; }); fix every reported finding and retry (full output: $log)" >&2; exit 1; fi; total=$(./scripts/coverage-total.sh "{{repo_root}}"); echo "check: all deterministic checks passed${total:+ (line coverage ${total}%)}; project selection: $selection"
+    @source ./scripts/preserved-log.sh; preserved_log_open "{{repo_root}}" check; log=$PRESERVED_LOG; selection=$(./scripts/nx-selection.sh) || { echo "check: could not decide which projects to run over; repair the failure scripts/nx-selection.sh reported and retry" >&2; exit 1; }; read -ra selected <<<"$selection"; failed=(); ./scripts/nx.sh "${selected[@]}" -t format-check,lint,typecheck,test,test-docs,test-recipes,budgets 2>&1 | redact_secrets >>"$log" || failed+=("the diff selection"); ./scripts/nx.sh run-many -t test-checkouts,coverage,validate-budgets,budgets-host 2>&1 | redact_secrets >>"$log" || failed+=("test-checkouts,coverage,validate-budgets,budgets-host"); if (( ${#failed[@]} )); then cat "$log" >&2; phases=$(printf '%s; ' "${failed[@]}"); echo "check: deterministic checks failed in ${#failed[@]} of 2 phases (${phases%; }); fix every reported finding and retry (full output: $log)" >&2; exit 1; fi; total=$(./scripts/coverage-total.sh "{{repo_root}}"); echo "check: all deterministic checks passed${total:+ (line coverage ${total}%)}; project selection: $selection"
 
 # Complete pre-push gate: llmlint's model-free `validate` against the comparison base,
 # then llmlint's judged diff on this branch, then the deterministic checks. Cheapest
@@ -132,7 +136,7 @@ test *nx_args:
 # Same worker count and distribution as the `test` tier, for the same reason: the
 # journeys wait on subprocesses rather than compute, so the wall clock is latency
 # and the workers are nearly free.
-test-e2e:
+test-e2e: _provisioned
     # llmlint: ignore[tool_output_is_signal] Watching one suite run as it goes is the only thing this recipe is for; `just test` is the one that reduces a green run to a line.
     @uv run pytest tests/e2e tests/plan_tooling tests/ask_seam -n 4 --dist loadgroup
 
@@ -320,7 +324,7 @@ finish-plan *args:
 # `scripts/plan-store.sh` establishes this checkout's own board credential first; its
 # header is the one account of why.
 [doc('Refuse a plan whose node would be judged against a demand its task does not state.')]
-check-plan *args:
+check-plan *args: _provisioned
     @./scripts/plan-store.sh uv run orchestrator-check-plan "$@"
 
 # Spend the judged turn that clears a plan's authored content: `just review-plan
@@ -382,7 +386,7 @@ approve-spikes *args:
 
 [group("planning")]
 [doc("Record the user's approval of one plan project's design document.")]
-approve-design *args:
+approve-design *args: _provisioned
     @./scripts/plan-store.sh uv run orchestrator-approve-design "$@"
 
 # Render one Mermaid source to the PNG a design document references: `just render-diagram
@@ -437,7 +441,7 @@ render-diagram *args:
 # `scripts/plan-store.sh` establishes this checkout's own board credential first; its
 # header is the one account of why.
 [doc('Copy a reviewed plan project, and its tasks, onto the plan board this repository launches from.')]
-copy-plan *args:
+copy-plan *args: _provisioned
     @./scripts/plan-store.sh uv run orchestrator-copy-plan "$@"
 # llmlint: ignore-end[tool_output_is_signal]
 
@@ -522,7 +526,7 @@ _verdict verdict run *text:
 # so a sweep another caller holds is named and nothing is swept beside it; session setup
 # starts this recipe detached through that script, at most once an hour.
 # llmlint: ignore[tool_output_is_signal] the two verbs' own reports are what this command is run to read.
-sweep *args:
+sweep *args: _provisioned
     #!/usr/bin/env bash
     set -euo pipefail
     . "{{repo_root}}/scripts/host-sweep.sh"
@@ -618,7 +622,7 @@ replan *args:
 # `scripts/onepipeline.sh` exports the bound `scripts/lock-timeout.sh` derives from how
 # long this identity's gate last took; a caller who exported one of their own keeps it.
 # llmlint: ignore[tool_output_is_signal] the requested readable per-branch train summary is this verb's product.
-integrate *args:
+integrate *args: _provisioned
     @"{{repo_root}}/scripts/onepipeline.sh" integrate "$@"
 
 # List recorded tracked-graph runs, who launched them, and their latest status,
@@ -716,7 +720,7 @@ follow-ups-answer-comments *args:
 # Register a repository checkout alias. Publication policy and approvals come from
 # the rules file the identity matches rather than from flags here; `onevcs` detects
 # the gate the checkout itself carries, which is a different thing and not the routing.
-register-repo *args:
+register-repo *args: _provisioned
     @uv run onevcs register "$@"
 
 # List repository identities and checkout aliases.
@@ -735,7 +739,7 @@ repos *args:
 # `onevcs register` guessed from the checkout, while what a publication actually does
 # comes from the rules file — see `docs/host-setup.md`.
 # llmlint: ignore[tool_output_is_signal] the matched rule and the policy that followed are this viewing command's product.
-repo-policy *args:
+repo-policy *args: _provisioned
     @uv run onevcs rules check "$@"
 
 # Bring this host's registry up to the tracked repository configuration: register
@@ -760,12 +764,12 @@ repos-bootstrap *args:
 # `just history [RUN]` lists one run's records; the argument is a run id rather
 # than the record count it used to be.
 # llmlint: ignore[tool_output_is_signal] human-readable history is this viewing command's product.
-history *args:
+history *args: _provisioned
     @uv run oneagentgraph history "$@"
 
 # Show one recorded dispatch: `just history-show <record-id>`.
 # llmlint: ignore[tool_output_is_signal] the requested multi-line digest is this viewing command's product.
-history-show *args:
+history-show *args: _provisioned
     @uv run oneagentgraph history show "$@"
 
 # Watch one tracked-graph run as one concise event stream: `just monitor <run-id>`.
@@ -889,7 +893,7 @@ unfinished *args:
 # settlement observed it and nothing re-reads it, so a change that merged an hour
 # later still reads as not landed there. Ask this instead of inferring from a run.
 # llmlint: ignore[tool_output_is_signal] the requested report on one piece of work is this viewing command's product.
-work-status *args:
+work-status *args: _provisioned
     @uv run onevcs status "$@"
 
 # Make a branch reachable from an identity's registered checkouts:
@@ -899,7 +903,7 @@ work-status *args:
 # wherever a session happens to be working, so work that only exists in a session
 # worktree or a run clone is invisible to them until it is imported. Omitting
 # `--from` searches everywhere this identity keeps work.
-import-branch *args:
+import-branch *args: _provisioned
     @uv run onevcs import "$@"
 
 # Reclaim a superseded branch: `just reclaim-branch <branch> --repo <checkout>
@@ -911,11 +915,11 @@ import-branch *args:
 # `--discard` is for a branch kept on purpose that never landed — a `preserved` node's,
 # once nothing needs it — and discards its work; every other reason to keep a branch
 # still refuses it.
-reclaim-branch *args:
+reclaim-branch *args: _provisioned
     @uv run onevcs reclaim "$@"
 
 # Fast-forward a publication checkout to its origin: `just sync [BRANCH]`.
-sync *args:
+sync *args: _provisioned
     @uv run onevcs sync "$@"
 
 # Scaffold a new persona: `just new-persona <name>`. The published verb writes into
@@ -925,7 +929,7 @@ new-persona *args:
     @./scripts/new-persona.sh "$@"
 
 # Validate every persona against the delta contract (also part of `just check`).
-validate-personas *args:
+validate-personas *args: _provisioned
     @uv run oneagentgraph persona validate "${@:-personas}"
 
 # Spend real harness turns proving prompt delivery, complete history telemetry, and
@@ -948,7 +952,7 @@ smoke *args:
 # `tests/manager_allowlist/test_manager_allowlist_sync.py` runs the same verb with
 # `--check`. `project` renders into another directory instead — `just probe-allowlist`'s
 # scratch project.
-sync-allowlist project=".":
+sync-allowlist project=".": _provisioned
     @uv run oneharness sync --exact --config config/manager-allowlist.toml --harness claude-code,codex --cwd "$1"
 
 # Spend real Claude Code and Codex turns driving every row of the manager's invocation
@@ -960,6 +964,11 @@ sync-allowlist project=".":
 # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] Not in an affected tier: neither `just check` nor the pre-push gate runs it; an operator runs it by hand after changing the allowlist, the one change it can say anything about, as `smoke` is run for the harness routing.
 probe-allowlist *args:
     @./scripts/allowlist-probe.sh "$@"
+
+# Refuse a checkout session setup has not provisioned, naming `just session-setup`;
+# `scripts/require-provisioned.sh` says why. Every recipe running `uv run` depends on it.
+_provisioned:
+    @"{{repo_root}}/scripts/require-provisioned.sh"
 
 # Provision the session toolchain (installs onejudge, oneharness, bun, llmlint, and
 # the four published CLIs this repository is a configuration layer over).
@@ -999,7 +1008,7 @@ setup-llmlint:
 # oneharness.toml / oneharness.judge.toml). It is layered over — not substituted
 # for — the graph labels inherited when a dispatched agent runs its own gate, so a
 # finding stays attributable to the run and node that provoked it.
-lint-llm *paths:
+lint-llm *paths: _provisioned
     @command -v llmlint >/dev/null 2>&1 || { echo "llmlint not installed — run 'just setup-llmlint'"; exit 1; }
     @PATH="{{repo_root}}/.venv/bin:$PATH" LLMLINT_ONEHARNESS_BIN="{{repo_root}}/scripts/llmlint-oneharness.sh" ONEHARNESS_HISTORY_LABELS="$(uv run orchestrator-history-labels role=llmlint)" llmlint "$@"
 
@@ -1044,17 +1053,17 @@ lint-llm-validate *args:
 # real re-judge, and it is deliberately per-invocation. An ambient global Nx cache
 # skip (`NX_SKIP_NX_CACHE` / `NX_DISABLE_NX_CACHE`, exported to re-judge this tier
 # and inherited by everything else) is reported and ignored here: it would re-roll
-# a non-deterministic judge from every unrelated command, and it silently breaks
-# the checks whose contract is cache replay — the llmlint verdict-replay journeys
-# and `scripts/check-nx-cache.sh`. Every other Nx target still honours it.
+# a non-deterministic judge from every unrelated command. Every other Nx target
+# still honours it.
 #
 # Provenance comes from Nx's own cache reporting: the task line it annotates, or the
 # summary line it prints, only when it replayed a task instead of running it. Both
 # are matched because only the first is safe at any size — Nx replays a hit as one
 # burst and exits, so a replay larger than a pipe buffer arrives here truncated and
-# its summary never does. `tests/e2e/workspace_copies/test_llmlint_cache_e2e.py` asserts both the
-# judged and the replayed wording, so an Nx upgrade that renames them fails the suite
-# rather than quietly reporting every run as freshly judged. Nx's full output is
+# its summary never does. `tests/e2e/workspace_copies/test_workspace_contract_e2e.py`
+# holds every phrase matched here to what the installed Nx prints, so an Nx upgrade
+# that renames one fails the suite rather than quietly reporting every run as freshly
+# judged. Nx's full output is
 # shown because it *is* the report now — except a refusal Nx dropped before relaying
 # it, which the tier also hands back through LLMLINT_DIFF_REFUSALS and this prints
 # (scripts/llmlint-judge.sh says why).

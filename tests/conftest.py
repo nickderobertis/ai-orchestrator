@@ -57,6 +57,8 @@ from nx_inputs import (
     PLAN_STORE_ASSETS_ROOT,
     PLAN_STORE_ASSETS_WORKSPACE,
     PLAN_TOOLING_PROJECTS,
+    PRE_PUSH_PROVISIONING_ROOT,
+    PRE_PUSH_PROVISIONING_WORKSPACE,
     PROJECT_STORE_RACE_ROOT,
     PROJECT_STORE_RACE_WORKSPACE,
     RECIPE_SCOPED,
@@ -64,6 +66,8 @@ from nx_inputs import (
     RENDER_DIAGRAM_WORKSPACE,
     RUN_END_HOOKS_ROOT,
     RUN_END_HOOKS_WORKSPACE,
+    SCHEMA_CACHE_ROOT,
+    SCHEMA_CACHE_WORKSPACE,
     SESSION_OPEN_CONFLICT_ROOT,
     SESSION_OPEN_CONFLICT_WORKSPACE,
     SESSION_SETUP_PYPI_ROOT,
@@ -220,6 +224,11 @@ OWNED_PROJECTS = {
     HOST_VIEWS_ROOT: OwnedProject(key=HOST_VIEWS_WORKSPACE, docs_tier=False),
     SESSION_SETUP_ROOT: OwnedProject(key=SESSION_SETUP_WORKSPACE, docs_tier=False),
     # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The read guard needs
+    # every directory-owned project's key before it collects any of them, so this
+    # project's row is here beside its siblings' rather than in its own directory.
+    PRE_PUSH_PROVISIONING_ROOT: OwnedProject(key=PRE_PUSH_PROVISIONING_WORKSPACE, docs_tier=False),
+    # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+    # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The read guard needs
     # every directory-owned project's key before it collects any of them, so each project's
     # row is here beside its siblings' rather than in its own directory.
     HOST_SWEEP_ROOT: OwnedProject(key=HOST_SWEEP_WORKSPACE, docs_tier=False),
@@ -228,6 +237,13 @@ OWNED_PROJECTS = {
         key=SESSION_SETUP_PYPI_WORKSPACE, docs_tier=False, target=SESSION_SETUP_PYPI_SCOPED
     ),
     PROJECT_STORE_RACE_ROOT: OwnedProject(key=PROJECT_STORE_RACE_WORKSPACE, docs_tier=False),
+    # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
+    # catalog of test projects, where every project has its entry, and
+    # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers
+    # it describes; the schema-cache entry sits beside the others' because the catalog is the
+    # domain.
+    SCHEMA_CACHE_ROOT: OwnedProject(key=SCHEMA_CACHE_WORKSPACE, docs_tier=False),
+    # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
     # catalog of test projects, where every project has its entry, and
     # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside

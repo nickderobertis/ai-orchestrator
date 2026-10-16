@@ -18,9 +18,9 @@ it. `nx.json` keeps only what is shared: the whole-workspace keys and the empty
 `testSupport` a project that is not a unit contributes.
 
 The tier names live here for the same reason. A tier is named by
-`orchestrator/project.json`, by the recipes that run it, by the guards that hold
-it to its key, and by the journeys that prove that key against real Nx; a rename
-that missed one of those would leave a guard checking a target nobody runs.
+`orchestrator/project.json`, by the recipes that run it, and by the guards that
+hold it to its key; a rename that missed one of those would leave a guard checking a
+target nobody runs.
 """
 
 from __future__ import annotations
@@ -69,11 +69,18 @@ RECIPE_WORKSPACE = "recipeWorkspace"
 #: reach every tier's, so an edit to any other module there starts no real provisioning.
 SESSION_SETUP_WORKSPACE = "sessionSetupWorkspace"
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This module is the domain
+# that owns tier keys, one row per test project, as the rows beside this one are.
+#: The named input `pre-push-provisioning`'s one test target is keyed on: the hook, the
+#: session setup chain its `--provision-only` runs, and the scripts and budgets file the
+#: hook runs before and after it, named file by file for the reason the key above is.
+PRE_PUSH_PROVISIONING_WORKSPACE = "prePushProvisioningWorkspace"
+# llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+# llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This module is the domain
 # that owns tier names, one row per test project, as the block over the ask-seam
-# journeys below says: `tests/conftest.py`'s read guard, `tests/tree_scans/test_nx_cache_scope.py`
-# and the real-Nx selection journeys resolve every project's key, name and directory
-# from here, so the host-sweep project's row lands where each sibling's does rather than
-# in `tests/host_sweep/`, which the guard reads before collecting it.
+# journeys below says: `tests/conftest.py`'s read guard and
+# `tests/tree_scans/test_nx_cache_scope.py` resolve every project's key, name and
+# directory from here, so the host-sweep project's row lands where each sibling's does
+# rather than in `tests/host_sweep/`, which the guard reads before collecting it.
 #: The key `host-sweep:test` is memoized on: the files its journeys copy into a fixture
 #: repository and run there — session setup, the host sweep script it starts detached,
 #: the `justfile` whose `sweep` recipe that job runs, the real `setup-llmlint.sh` and
@@ -88,6 +95,16 @@ HOST_SWEEP_WORKSPACE = "hostSweepWorkspace"
 #: project's own files, and the suite modules `tests/conftest.py` imports — nothing
 #: else, because the race reads a temporary root and nothing of this checkout.
 PROJECT_STORE_RACE_WORKSPACE = "projectStoreRaceWorkspace"
+# llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one catalog
+# of test projects, where every project has its entry, and
+# `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside the
+# tiers it describes; the schema-cache entry sits beside the others' because the catalog is
+# the domain.
+#: The key `schema-cache:test` is memoized on: the project's own files and the suite
+#: modules `tests/conftest.py` imports, the schema cache's rule among them — nothing else,
+#: because its sessions write only a temporary directory of their own.
+SCHEMA_CACHE_WORKSPACE = "schemaCacheWorkspace"
+# llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one catalog
 # of test projects, where every project has its entry, and
 # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside the
@@ -179,10 +196,10 @@ TOOLCHAIN_ISOLATION_WORKSPACE = "toolchainIsolationWorkspace"
 GRACEFUL_CANCEL_WORKSPACE = "gracefulCancelWorkspace"
 # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This module holds one row per test
-# project, as the block over the ask-seam journeys says: `tests/conftest.py`'s read guard,
-# `tests/tree_scans/test_nx_cache_scope.py` and the real-Nx selection journeys resolve every
-# project's key, name and directory from here before collecting any of them, so this
-# project's row cannot live in its own directory.
+# project, as the block over the ask-seam journeys says: `tests/conftest.py`'s read guard
+# and `tests/tree_scans/test_nx_cache_scope.py` resolve every project's key, name and
+# directory from here before collecting any of them, so this project's row cannot live
+# in its own directory.
 #: The key `session-open-conflict:test` is memoized on. Files rather than trees, for the
 #: reason `unwatchedWorkspace` names, and measured the same way: the tier traced under
 #: `strace -f -e trace=openat,execve`, each opened path normalized and intersected with
@@ -262,8 +279,6 @@ HOST_VIEWS_WORKSPACE = "hostViewsWorkspace"
 #: `codeWorkspace` excludes the workspace's: nothing here reads this project's
 #: `AGENTS.md`, so an instruction-only edit must not start them.
 DAG_UI_WORKSPACE = "dagUiWorkspace"
-#: The key `workspace:check-nx-cache` is memoized on: what that script reads.
-NX_CACHE_CHECK = "nxCacheCheck"
 #: The tier that runs the bulk of the Python suite across xdist workers.
 CODE_SCOPED = "test"
 #: The tier that runs the tests asserting on this repository's own prose.
@@ -323,8 +338,8 @@ class SubjectProject(NamedTuple):
 
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This module is the domain
 # that owns tier names, one row per test project, as the block over the ask-seam journeys
-# says: the read guard, `tests/tree_scans/test_nx_cache_scope.py` and the real-Nx selection journeys
-# resolve each project's name, directory and key from here before collecting any of them.
+# says: the read guard and `tests/tree_scans/test_nx_cache_scope.py` resolve each project's
+# name, directory and key from here before collecting any of them.
 #: One project per subject of the plan surface, in what each is keyed on. Each key was
 #: measured rather than kept by habit: the spike's traced run of the tiers these journeys
 #: came from — `plan-tooling:test` and `plan-tooling:test-docs` under `strace -f -e
@@ -432,9 +447,9 @@ class AskSeamJourney(NamedTuple):
 
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This module is the domain
 # that owns tier names: the Nx project a journey is, its directory and its key are read by
-# `tests/conftest.py`'s read guard, `tests/tree_scans/test_nx_cache_scope.py` and the real-Nx
-# selection journeys, and resolving them from one row each is what keeps a renamed journey
-# from leaving a guard checking a project nobody runs, as the module docstring says.
+# `tests/conftest.py`'s read guard and `tests/tree_scans/test_nx_cache_scope.py`, and
+# resolving them from one row each is what keeps a renamed journey from leaving a guard
+# checking a project nobody runs, as the module docstring says.
 #: One memoization unit per journey, in what each is keyed on. Every key names files
 #: rather than trees — `tests/tree_scans/test_nx_cache_scope.py` refuses a `config/**/*` or a
 #: `scripts/**/*` in one — because a journey here spends a real launch, and a path in its
@@ -558,6 +573,20 @@ SESSION_SETUP_SCOPED = "test"
 #: The directory it owns, which every other project's tiers ignore.
 SESSION_SETUP_ROOT = "tests/session_setup"
 
+# llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This module is the domain
+# that owns tier names, one row per test project, as the rows beside this one are.
+#: The project whose test target owns the journey over the tracked `pre-push` hook's
+#: provisioning: the real hook in a copy nothing provisioned, as a publication's
+#: worktree is, running session setup's `--provision-only` before its gate. Not a
+#: module of `session-setup`, so an edit to the hook's scripts rebuilds only this
+#: project's toolchain and none of that project's.
+PRE_PUSH_PROVISIONING_PROJECT = "pre-push-provisioning"
+#: That project's one test target: nothing here reads this repository's prose.
+PRE_PUSH_PROVISIONING_SCOPED = "test"
+#: The directory it owns, which every other project's tiers ignore.
+PRE_PUSH_PROVISIONING_ROOT = "tests/pre_push_provisioning"
+# llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The reason above
 # `HOST_SWEEP_WORKSPACE`: this module holds one row per test project.
 #: The project whose test target owns the journeys over the host sweep session setup
@@ -621,6 +650,23 @@ PROJECT_STORE_RACE_PROJECT = "project-store-race"
 PROJECT_STORE_RACE_SCOPED = "test"
 #: The directory it owns, which every other project's tiers ignore.
 PROJECT_STORE_RACE_ROOT = "tests/project_store_race"
+
+# llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one catalog
+# of test projects, where every project has its entry, and
+# `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside the
+# tiers it describes; the schema-cache entry sits beside the others' because the catalog is
+# the domain.
+#: The project whose test target owns the journeys over the one schema cache a session
+#: warms: real multi-worker sessions, each test starting a pytest of its own, read through
+#: their temporary directory during and after the session. A project of its own because
+#: every journey pays for whole sessions, which `nx affected` can only keep off an
+#: unrelated edit where it is a separate project.
+SCHEMA_CACHE_PROJECT = "schema-cache"
+#: That project's one test target: nothing here reads this repository's prose.
+SCHEMA_CACHE_SCOPED = "test"
+#: The directory it owns, which every other project's tiers ignore.
+SCHEMA_CACHE_ROOT = "tests/schema_cache"
+# llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one catalog
 # of test projects, where every project has its entry, and
@@ -757,10 +803,10 @@ MANAGER_ALLOWLIST_ROOT = "tests/manager_allowlist"
 # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This module holds one row per
-# test project, as the block over the ask-seam journeys says: the read guard,
-# `tests/tree_scans/test_nx_cache_scope.py` and the real-Nx selection journeys resolve every
-# project's name, directory and key from here, so the journey projects' rows sit beside
-# their siblings' rather than in `tests/e2e/`.
+# test project, as the block over the ask-seam journeys says: the read guard and
+# `tests/tree_scans/test_nx_cache_scope.py` resolve every project's name, directory and
+# key from here, so the journey projects' rows sit beside their siblings' rather than in
+# `tests/e2e/`.
 #: The directory the journeys over this repository's launches, landings, recipes, budgets
 #: and workspace live under. The shared helpers there are test-support units' and stay where
 #: pytest's `pythonpath` imports them from; every journey module is a directory-owned
@@ -860,9 +906,7 @@ BUDGET_HOST_SCOPED = "budgets-host"
 BUDGETS_VALIDATION_SCOPED = "validate-budgets"
 
 #: The deterministic tier's targets `just check` lets the diff select, in the order the
-#: recipe names them. Every one is memoized, which is what makes skipping an unselected
-#: project equivalent to replaying it; `tests/tree_scans/test_nx_cache_scope.py` refuses one that
-#: is not.
+#: recipe names them.
 SELECTED_TARGETS = (
     "format-check",
     "lint",
@@ -872,14 +916,10 @@ SELECTED_TARGETS = (
     RECIPE_SCOPED,
     BUDGET_SCOPED,
 )
-#: The targets a project declares only by opting in, so the tree may hold no owner of one
-#: yet; its memo is then read from `targetDefaults` alone.
-OPT_IN_TARGETS = (BUDGET_SCOPED, BUDGET_HOST_SCOPED)
 #: The deterministic tier's targets no diff can select, so `just check` runs them over
 #: every project every time: their subjects are what lives outside this workspace, what
 #: the tiers beside them just measured, every budgets file in the tree, and the host a
-#: `host` budget reads. All four are uncached for those same reasons, so the two lists
-#: partition along the line the memo argument draws.
+#: `host` budget reads.
 UNCONDITIONAL_TARGETS = (
     CHECKOUT_SCOPED,
     COVERAGE_SCOPED,
@@ -987,7 +1027,9 @@ def catalogued_roots() -> dict[str, str]:
         PROJECT_STORE_RACE_PROJECT: PROJECT_STORE_RACE_ROOT,
         RENDER_DIAGRAM_PROJECT: RENDER_DIAGRAM_ROOT,
         RUN_END_HOOKS_PROJECT: RUN_END_HOOKS_ROOT,
+        SCHEMA_CACHE_PROJECT: SCHEMA_CACHE_ROOT,
         SESSION_OPEN_CONFLICT_PROJECT: SESSION_OPEN_CONFLICT_ROOT,
+        PRE_PUSH_PROVISIONING_PROJECT: PRE_PUSH_PROVISIONING_ROOT,
         SESSION_SETUP_PROJECT: SESSION_SETUP_ROOT,
         SESSION_SETUP_PYPI_PROJECT: SESSION_SETUP_PYPI_ROOT,
         TOOLCHAIN_ISOLATION_PROJECT: TOOLCHAIN_ISOLATION_ROOT,

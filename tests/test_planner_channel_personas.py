@@ -91,10 +91,10 @@ NESTING = 2
 MEMBERS_KEY = "members:"
 
 #: The two producers whose declarations `UNSET_BY` restates, as this workspace installs
-#: them. `scripts/python-install.sh` puts both here, and these are read rather than
-#: whatever is on PATH: a fallen-through PATH would reconcile this repository's gate
-#: against some other checkout's releases, which is the failure `AGENTS.md` records for
-#: every reader of `<root>/.venv/bin`.
+#: them. Session setup puts both here, and these are read rather than whatever is on
+#: PATH: a fallen-through PATH would reconcile this repository's gate against some other
+#: checkout's releases, which is the failure `AGENTS.md` records for every reader of
+#: `<root>/.venv/bin`.
 ONEJUDGE = REPO_ROOT / ".venv" / "bin" / "onejudge"
 ONEAGENTGRAPH = REPO_ROOT / ".venv" / "bin" / "oneagentgraph"
 

@@ -26,7 +26,6 @@
       "{workspaceRoot}/scripts/follow-up-env.sh",
       "{workspaceRoot}/scripts/plan-root-env.sh",
       "{workspaceRoot}/scripts/registered-checkouts.sh",
-      "{workspaceRoot}/tests/fixtures/nx-cache/.gitignore",
       "{workspaceRoot}/tests/fixtures/pre-adoption-repos.json",
       "{workspaceRoot}/uv.lock",
       "!{workspaceRoot}/orchestrator/**/*.md",

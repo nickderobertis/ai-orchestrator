@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Idempotent dev-toolchain setup for a session. Wired into the Claude Code
 # SessionStart hook (.claude/settings.json) and also runnable by hand
-# (`just session-setup` / `just bootstrap`).
+# (`just session-setup` / `just bootstrap`). `.githooks/pre-push` runs it with
+# `--provision-only`, which stops after step 6 (see where it is parsed below).
 #
 # What it ensures:
 #   0. `just` itself, the entry point to every recipe this setup and a session run. A
@@ -24,23 +25,27 @@
 #      one-time manual `codex login`. See docs/onejudge-integration.md.
 #   5. `bun` is installed via npm and verified so oneharness's `sdk-check` gate
 #      can run in dispatched worktrees.
-#   6. Hands off to `setup-llmlint.sh` to install the llmlint LLM-judge tier.
-#   7. The onetaskgraph SDK dependency installs its matching CLI from the lock at the
+#   6. This checkout's `node_modules`, Nx among it, is installed from `bun.lock` by
+#      `scripts/workspace-install.sh`, which installs only what differs from the lock.
+#      Setup is the one place a worktree is provisioned (AGENTS.md, "The checks"):
+#      `scripts/nx.sh` installs nothing, so without this step no Nx target can run.
+#   7. Hands off to `setup-llmlint.sh` to install the llmlint LLM-judge tier.
+#   8. The onetaskgraph SDK dependency installs its matching CLI from the lock at the
 #      version in `config/onetaskgraph.version`, into this checkout's own `.venv/bin`.
-#   8. The schema cache holds every bundle `config/onemessagebus.yaml` links, so the
+#   9. The schema cache holds every bundle `config/onemessagebus.yaml` links, so the
 #      monitor's judge side never waits on the network (`serve` uses a cached bundle
 #      without revalidating). Never fatal: each link is reported by name with the
 #      version it stored, or why it could not be warmed, and a cold link is fetched on
 #      first use instead.
-#   9. `cargo-sweep`, pinned below, is installed through `cargo install` when absent or
+#  10. `cargo-sweep`, pinned below, is installed through `cargo install` when absent or
 #      at another version: it is the `maintain` command `config/onevcs.workspaces.yml`
 #      names for every Rust identity's warm worktree slots, and a command the host lacks
 #      would fail on every idle tick the engine sweeps the pool on. Optional — a host
 #      without `cargo` pools nothing Rust — so it never changes the exit status.
-#  10. `scripts/host-sweep.sh --detach`, which starts `just sweep` as this hook's own
+#  11. `scripts/host-sweep.sh --detach`, which starts `just sweep` as this hook's own
 #      detached job and never waits on it; docs/host-setup.md, "The host sweep", is the
 #      account of when it starts one and what it reports.
-#  11. Last, `just repos-bootstrap --detach`: every registered sibling checkout's own
+#  12. Last, `just repos-bootstrap --detach`: every registered sibling checkout's own
 #      `just bootstrap`, memoized per checkout, started as a job detached from this
 #      hook so the gate a dispatch publishes through gets its tools however long they
 #      take to fetch. Last because it is the one step about other repositories, and a
@@ -49,8 +54,9 @@
 #
 # `set -e` is omitted so optional tool failures do not prevent the remaining
 # setup steps. Missing or unusable onejudge, oneharness, published-tool, or bun
-# binaries are different: the script finishes the other setup work, then exits
-# non-zero because dispatch and the complete local gate require them.
+# binaries, and a workspace install that failed, are different: the script finishes the
+# other setup work, then exits non-zero because dispatch and the complete local gate
+# require them.
 # llmlint: ignore-file[robust_shell, tool_output_is_signal, boundary_inputs_validated] deliberate for a session-startup installer: `set -e` is omitted so optional tool failures don't abort later setup; progress is logged to stderr; the required onejudge, oneharness, and bun dependencies are verified explicitly and control the final exit status. CLAUDE_ENV_FILE is a path Claude Code itself provides for the session (a trusted platform input, not external/untrusted data); persist_session_env reads and appends to it exactly as the harness intends, so there is no untrusted boundary to validate.
 set -uo pipefail
 
@@ -363,6 +369,15 @@ install_bun() {
   return 1
 }
 
+install_workspace_dependencies() {
+  # Step 6 above: plain rather than forced, so a tree already matching `bun.lock` costs
+  # one reconciling Bun call and installs nothing. Its own lines name what failed.
+  if ! "$SCRIPT_DIR/workspace-install.sh"; then
+    log "the locked workspace install failed — no Nx target can run until setup succeeds"
+    return 1
+  fi
+}
+
 verify_bun() {
   local binary actual
   if ! binary="$(command -v bun 2>/dev/null)"; then
@@ -487,11 +502,33 @@ fi
 # own behaviour since onevcs 0.14.1 (nickderobertis/onevcs#82, widened in 0.15.6),
 # proven in onevcs's repository, and `tests/family_scans/test_upstream_workaround_rule.py` keeps
 # the retired lease from returning. A journey here would re-test a published CLI.
+# `--provision-only` is the checkout's own toolchain and nothing else: steps 0, 1-3, 5
+# and 6, verified, with no host sweep, sibling bootstrap, codex, cargo-sweep, llmlint or
+# session environment. It is what `.githooks/pre-push` runs in a publication worktree,
+# which no session start ever provisioned; the follow-up "onevcs provisions a session or
+# publication worktree when it opens one" tracks moving that call into onevcs.
+provision_only=0
+case "${1:-}" in
+  "") ;;
+  --provision-only) provision_only=1 ;;
+  *)
+    log "unknown argument '$1'; the one this script takes is --provision-only"
+    exit 2
+    ;;
+esac
 toolchain_failed=0
 ensure_just
 install_project_dependencies || toolchain_failed=1
+if [ "$provision_only" -eq 1 ]; then
+  if install_bun; then
+    install_workspace_dependencies || toolchain_failed=1
+  else
+    toolchain_failed=1
+  fi
+  exit "$toolchain_failed"
+fi
 create_plan_root || toolchain_failed=1
-# The host sweep, detached (step 10 above): never waited on, and a report from it — the
+# The host sweep, detached (step 11 above): never waited on, and a report from it — the
 # last sweep having failed — never touches `toolchain_failed`.
 if [ -f "$REPO_ROOT/justfile" ] && command -v just >/dev/null 2>&1; then
   bash "$SCRIPT_DIR/host-sweep.sh" --detach \
@@ -499,7 +536,11 @@ if [ -f "$REPO_ROOT/justfile" ] && command -v just >/dev/null 2>&1; then
 else
   log "host sweep unavailable; continuing session setup"
 fi
-install_bun || toolchain_failed=1
+if install_bun; then
+  install_workspace_dependencies || toolchain_failed=1
+else
+  toolchain_failed=1
+fi
 # Optional, and reported rather than counted: the pool's maintenance command for a
 # Rust identity, which a host without cargo has no slots to run in.
 install_cargo_sweep || log "cargo-sweep unavailable; a Rust identity's idle slots are not maintained until it is (continuing)"
@@ -535,7 +576,7 @@ if ! verify_bun; then
   log "bun is required — the oneharness sdk-check gate will fail until setup succeeds"
   toolchain_failed=1
 fi
-# The sibling gates, detached (step 11 above). A non-zero exit is a report to relay,
+# The sibling gates, detached (step 12 above). A non-zero exit is a report to relay,
 # never a reason for this session to be without a toolchain: it never touches
 # `toolchain_failed`.
 if [ -f "$REPO_ROOT/justfile" ] && command -v just >/dev/null 2>&1; then

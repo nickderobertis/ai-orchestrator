@@ -22,10 +22,16 @@ import time
 from collections.abc import Mapping
 from pathlib import Path
 
+from offline_installs import NO_NETWORK as OFFLINE_NO_NETWORK
+
 from orchestrator.root import REPO_ROOT
 
 ONEJUDGE_VERSION = (REPO_ROOT / "config" / "onejudge.version").read_text().strip()
 ONEHARNESS_VERSION = (REPO_ROOT / "config" / "oneharness.version").read_text().strip()
+
+#: The offline environment every provisioning journey installs under, kept in a unit of
+#: its own so a journey that needs only it takes no edge to this module's files.
+NO_NETWORK = OFFLINE_NO_NETWORK
 
 
 @functools.cache
@@ -48,6 +54,18 @@ def _shared_uv_cache() -> str | None:
         return None
     located = subprocess.run([uv, "cache", "dir"], text=True, capture_output=True, check=False)
     return located.stdout.strip() or None if located.returncode == 0 else None
+
+
+#: The scripts a fixture repository needs beside session setup's own for the workspace
+#: install it runs and the provisioning check its recipes depend on.
+PROVISIONING_SCRIPTS = (
+    "workspace-install.sh",
+    "install-lock.sh",
+    "preserved-log.sh",
+    "require-provisioned.sh",
+)
+#: A Bun manifest with no dependencies: the locked install over it needs no registry.
+EMPTY_MANIFEST = '{\n  "name": "fixture",\n  "private": true\n}\n'
 
 
 def setup_repo(
@@ -103,6 +121,12 @@ def setup_repo(
     # bootstrap, and the report it leaves says so.
     for name in ("repos-bootstrap.sh", "registered-checkouts.sh"):
         shutil.copy2(REPO_ROOT / "scripts" / name, scripts / name)
+    # The workspace install setup runs once Bun is ready, with the lock and log helpers it
+    # sources, over a manifest declaring nothing, so the real Bun installs an empty tree
+    # offline; and the provisioning check the sweep recipe depends on.
+    for name in PROVISIONING_SCRIPTS:
+        shutil.copy2(REPO_ROOT / "scripts" / name, scripts / name)
+    (repo / "package.json").write_text(EMPTY_MANIFEST, encoding="utf-8")
     shutil.copy2(REPO_ROOT / "config" / "onevcs.checkouts", config / "onevcs.checkouts")
     # Every adopted release is copied, so a further pinned tool needs no fixture edit;
     # the parameters below then restate only what a journey deliberately moves.

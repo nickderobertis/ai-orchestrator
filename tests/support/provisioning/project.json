@@ -5,7 +5,9 @@
   "tags": [
     "type:test-support"
   ],
-  "implicitDependencies": [],
+  "implicitDependencies": [
+    "support-offline-installs"
+  ],
   "namedInputs": {
     "testSupport": [
       "{workspaceRoot}/tests/e2e/provisioning.py",
@@ -19,6 +21,10 @@
       "{workspaceRoot}/scripts/setup-llmlint.sh",
       "{workspaceRoot}/scripts/repos-bootstrap.sh",
       "{workspaceRoot}/scripts/registered-checkouts.sh",
+      "{workspaceRoot}/scripts/workspace-install.sh",
+      "{workspaceRoot}/scripts/install-lock.sh",
+      "{workspaceRoot}/scripts/preserved-log.sh",
+      "{workspaceRoot}/scripts/require-provisioned.sh",
       "{workspaceRoot}/orchestrator/root.py",
       "{projectRoot}/project.json"
     ]

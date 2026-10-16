@@ -58,6 +58,7 @@ import pytest
 import short_state
 from nx_workspace import OFFLINE_INSTALLS, TOOLCHAIN_WRITER_MARKS, answering_this_checkouts_origin
 from project_fixtures import helper, no_budgets
+from run_snapshot import is_staging_name
 from scratch_identity import PLANNING_FLOW_ORIGIN, seeded
 from waits import timeout as e2e_timeout
 
@@ -109,6 +110,7 @@ COPIED_SCRIPTS = (
     "plan.sh",
     "registered-checkouts.sh",
     "render-diagram.sh",
+    "require-provisioned.sh",
     "review-plan.sh",
     "run-ended.sh",
     "template-env.sh",
@@ -384,6 +386,17 @@ def _until(what: str, ready: Callable[[], bool], *, seconds: float = 300) -> Non
     raise AssertionError(f"waited for {what} and it did not happen")
 
 
+def _written_terms(terms: Path) -> set[Path]:
+    """The watch terms the engine has finished writing.
+
+    The engine stages each terms file beside its final name and renames it into place, so
+    a listing taken mid-write sees a file that is gone by the time it is read.
+    """
+    if not terms.is_dir():
+        return set()
+    return {path for path in terms.iterdir() if not is_staging_name(path.name)}
+
+
 def _recipe(flow: Flow, *arguments: str) -> subprocess.CompletedProcess[str]:
     """One of this checkout's recipes, as the manager's session runs it."""
     return subprocess.run(
@@ -473,7 +486,7 @@ class Watching:
         if cursor is not None:
             arguments += ["--cursor", cursor]
         terms = self.flow.runs / ".flows" / self.flow_id / "watch-terms"
-        before = set(terms.iterdir()) if terms.is_dir() else set()
+        before = _written_terms(terms)
         armed_at = datetime.now(UTC)
         self.spawned = time.monotonic()
         self.process = subprocess.Popen(
@@ -490,7 +503,7 @@ class Watching:
         process = self.process
 
         def recorded() -> bool:
-            return terms.is_dir() and bool(set(terms.iterdir()) - before)
+            return bool(_written_terms(terms) - before)
 
         # A watch re-armed from a cursor something has already passed (a run that joined
         # between two watches) returns at once, before it records any terms; its ending is
@@ -502,7 +515,7 @@ class Watching:
         if not recorded():
             self.configured = 0.0
             return
-        (written,) = set(terms.iterdir()) - before
+        (written,) = _written_terms(terms) - before
         deadline = json.loads(written.read_text(encoding="utf-8"))["deadline"]
         assert deadline is not None, "the watch recipe armed a watch with no deadline"
         stamp = datetime.fromisoformat(str(deadline).replace("Z", "+00:00"))

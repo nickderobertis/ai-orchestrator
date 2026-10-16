@@ -34,6 +34,13 @@ done < <(git rev-parse --local-env-vars)
 
 echo "pre-push: complete gate (comparison remote=$remote${base:+ base=$base})..." >&2
 comparison=$("$hook_root/scripts/comparison-base.sh" "$remote" "$base")
+# A publication runs this hook in a worktree `onevcs` cut for it, which no session start
+# provisioned, and nothing but session setup installs (AGENTS.md, "The checks"). So the
+# gate's toolchain comes from session setup's own provisioning, scoped to this checkout
+# and nothing about the host. Unconditional, since its locked installs change nothing on a
+# tree that already matches. The follow-up "onevcs provisions a session or publication
+# worktree when it opens one" tracks the library seam that retires this call.
+"$hook_root/scripts/session-setup.sh" --provision-only
 if "$hook_root/scripts/pre-push-smoke-needed.sh" "$comparison" <"$updates"; then
   echo "pre-push: launch path changed; running one real-harness smoke..." >&2
   just smoke

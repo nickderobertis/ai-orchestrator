@@ -133,7 +133,6 @@ rules:
         - "uv.lock"
         - "pyproject.toml"
         - "scripts/check-dag-state-contract.py"
-        - "scripts/check-nx-cache.sh"
         - "scripts/check-oneharness-ui-contract.sh"
   # The manager's allowlist is judged where it is stated, `config/manager-allowlist.toml`:
   # every grant in it, under the plugin's own text. Its two renderings,

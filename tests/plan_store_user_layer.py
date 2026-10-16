@@ -23,6 +23,15 @@ it names itself, which overrides this one in the environment it composes; a test
 redirects `HOME` to sandbox a program deriving its configuration from it names
 `XDG_CONFIG_HOME` beside it, because this export would otherwise win over that derivation.
 
+Bun is the one tool that reads a file at the configuration home's root rather than a
+directory in it: its `.npmrc` is `$XDG_CONFIG_HOME/.npmrc` once that variable is set, and
+`~/.npmrc` only while it is not, so moving the variable hid a host's `cache=` line from
+every Bun install a test ran. Bun then fell back to `$XDG_CACHE_HOME/.bun/install/cache`,
+and a provisioning journey installing offline under a cache home of its own found every
+package missing. So before the move `isolate()` states the cache directory Bun resolves
+now as `BUN_INSTALL_CACHE_DIR`, which Bun reads before either file, unless the
+environment already states one — as a pytest process this one started does.
+
 The invoking user's configuration home is recorded in `HOST_CONFIG_HOME_ENV`, so a pytest
 process this one starts — an xdist worker, or a suite a test runs — links the same host
 entries rather than taking this process's sandbox for the host's.
@@ -35,6 +44,7 @@ from __future__ import annotations
 import atexit
 import os
 import shutil
+import subprocess
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
@@ -49,6 +59,10 @@ USER_DOCUMENT = "config.yaml"
 #: Where the invoking user's configuration home is, for a pytest process this one starts.
 #: No tool reads it.
 HOST_CONFIG_HOME_ENV = "ORCHESTRATOR_TEST_HOST_CONFIG_HOME"
+#: The variable Bun reads its install cache from before any configuration file.
+BUN_CACHE_ENV = "BUN_INSTALL_CACHE_DIR"
+#: A directory holding a `package.json`, which `bun pm cache` needs to answer at all.
+CHECKOUT = Path(__file__).resolve().parent.parent
 
 
 def configuration_home(environment: Mapping[str, str]) -> Path | None:
@@ -71,13 +85,36 @@ def host_config_home(environment: Mapping[str, str]) -> Path | None:
     return configuration_home(environment)
 
 
+def bun_cache(environment: Mapping[str, str]) -> str | None:
+    """The install cache Bun resolves under ``environment``, or `None` when it cannot say.
+
+    Bun's own answer, from `bun pm cache`, so its precedence between its variables, its
+    `bunfig.toml` and the `.npmrc` it reads is Bun's rather than restated here.
+    """
+    bun = shutil.which("bun", path=environment.get("PATH"))
+    if bun is None:  # pragma: no cover - the suite cannot run without Bun on PATH
+        return None
+    answered = subprocess.run(
+        [bun, "pm", "cache"],
+        cwd=CHECKOUT,
+        env=dict(environment),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return answered.stdout.strip() or None if answered.returncode == 0 else None
+
+
 def isolate() -> Path:
     """Export a configuration home linking the host's, with an empty plan-store directory.
 
+    Bun's cache is stated first, where Bun finds it now, because the move would change it.
     Lives under `TMPDIR` rather than pytest's basetemp because it is taken at import, before
     any fixture exists, and is removed when the process ends; removing it unlinks the links
     and never follows one.
     """
+    if not os.environ.get(BUN_CACHE_ENV) and (cache := bun_cache(os.environ)) is not None:
+        os.environ[BUN_CACHE_ENV] = cache
     host = host_config_home(os.environ)
     sandbox = Path(tempfile.mkdtemp(prefix="plan-store-config-home-"))
     atexit.register(shutil.rmtree, sandbox, ignore_errors=True)

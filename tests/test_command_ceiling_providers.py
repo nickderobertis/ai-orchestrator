@@ -48,6 +48,27 @@ def _installed(binary: str) -> str:
     return found
 
 
+def _executable(binary: str) -> Path:
+    """The file `binary` runs, seen through an asdf shim, which `exec`s asdf in its place.
+
+    A shim is a shell script, so reading it reads nothing of the tool; the asdf it names
+    answers which installed executable the shim would run.
+    """
+    found = Path(_installed(binary)).resolve()
+    shim = re.search(rb"^exec (\S+) exec ", found.read_bytes()[:4096], re.MULTILINE)
+    if shim is None:
+        return found
+    which = subprocess.run(
+        [shim.group(1).decode(), "which", binary],
+        text=True,
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+    assert which.returncode == 0, f"the asdf shim at {found} names no {binary}: {which.stderr}"
+    return Path(which.stdout.strip()).resolve()
+
+
 def _codex_prompt_input(codex_home: Path, *config: str) -> subprocess.CompletedProcess[str]:
     """Load codex's configuration as a turn would and render a prompt, spending no turn.
 
@@ -102,11 +123,11 @@ def test_claude_code_reads_each_named_timeout_from_its_environment(variable: str
     `claude` resolves to is what is read; a variable it stopped reading is one the
     worker roles' `[harness.claude-code] env` sets for nothing.
     """
-    bundle = Path(_installed("claude")).resolve().read_bytes()
+    executable = _executable("claude")
+    bundle = executable.read_bytes()
 
     assert re.search(rb"\." + variable.encode() + rb"\b", bundle), (
-        f"the Claude Code bundle at {Path(_installed('claude')).resolve()} reads no "
-        f"`{variable}` from its environment"
+        f"the Claude Code bundle at {executable} reads no `{variable}` from its environment"
     )
 
 

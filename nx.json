@@ -16,16 +16,6 @@
       "!{workspaceRoot}/docs/**/*",
       "!{workspaceRoot}/**/*.md"
     ],
-    "nxCacheCheck": [
-      "{workspaceRoot}/package.json",
-      "{workspaceRoot}/scripts/check-nx-cache.sh",
-      "{workspaceRoot}/scripts/nx.sh",
-      "{workspaceRoot}/scripts/preserved-log.sh",
-      "{workspaceRoot}/scripts/install-lock.sh",
-      "{workspaceRoot}/scripts/workspace-install.sh",
-      "{workspaceRoot}/scripts/python-install.sh",
-      "{workspaceRoot}/tests/fixtures/nx-cache/**/*"
-    ],
     "sharedGlobals": [
       "{workspaceRoot}/package.json",
       "{workspaceRoot}/bun.lock",
@@ -76,12 +66,6 @@
       "cache": true,
       "inputs": [
         "recipeWorkspace"
-      ]
-    },
-    "check-nx-cache": {
-      "cache": true,
-      "inputs": [
-        "nxCacheCheck"
       ]
     },
     "typecheck": {

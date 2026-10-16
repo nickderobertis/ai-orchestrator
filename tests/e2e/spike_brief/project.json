@@ -107,6 +107,7 @@
       "{workspaceRoot}/scripts/lock-timeout.sh",
       "{workspaceRoot}/scripts/plan-check.sh",
       "{workspaceRoot}/scripts/plan-checklist.sh",
+      "{workspaceRoot}/scripts/require-provisioned.sh",
       "{workspaceRoot}/scripts/template-env.sh",
       "{workspaceRoot}/graphs/pr-author.yaml",
       "{workspaceRoot}/personas/planner.yaml",

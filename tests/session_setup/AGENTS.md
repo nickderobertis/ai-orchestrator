@@ -1,27 +1,25 @@
 <!-- llmlint: ignore-file[instruction_layer_localized] Ownership of this subtree is routed: `.github/CODEOWNERS` is `* @nickderobertis`, which matches every path here as it does every sibling tier project under `tests/`, none of which carries an entry of its own; a per-directory line would restate that match rather than route anything. -->
 # `tests/session_setup`
 
-The journey over this checkout's own provisioning: the real `scripts/session-setup.sh`,
-verifying the plan-store CLI the project lock installs at the version
-`config/onetaskgraph.version` pins, creating the plan root a fresh checkout lacks, and
-reaching `just repos-bootstrap --detach` over stand-in siblings the journey registers
-through `ORCHESTRATOR_REPOS_BOOTSTRAP_CHECKOUTS` — never over this host's real siblings,
-whose bootstrap no journey may run. The sibling jobs it starts outlive each session
-start by design, so the journey waits on the ending each job writes to its state and
-releases and waits out every one it started before it ends; it signals none.
+<!-- llmlint: ignore-block[no_redundant_instruction_pointers] The task that made session setup the only provisioning requires this file to point at the one statement of that rule rather than restate it; the pointer names which of the root's sections a maintainer of these journeys has to keep true. -->
+The journeys that prove the rule `AGENTS.md` states under "The checks": session setup,
+and `just bootstrap` which runs it, provision a worktree and nothing else installs.
+<!-- llmlint: ignore-end[no_redundant_instruction_pointers] -->
 
-- **One target, `session-setup:test`, keyed on `sessionSetupWorkspace`**, named file by
-  file rather than as `scripts/**/*` or `config/**/*`: the journey re-provisions the
-  project environment from the lock, so every glob wider than the script, the lock and
-  the one pin it reads makes an unrelated edit pay for that.
-  The helpers its module imports reach that key as the test-support units under
-  `tests/support/` this project depends on. The one module of `orchestrator/` in it is
-  `orchestrator/root.py`, which the journey imports `REPO_ROOT` from.
-- **The journeys that run the same script in a fixture repository and install the
-  published tools from PyPI are not here.** They are `tests/session_setup_pypi/`, a
-  project of their own, because an edit only they read would otherwise select this one.
-- **It is a toolchain writer, run in a copy.** The real setup syncs the `.venv` of the
-  checkout it runs in and installs `uv` tools, so the journey declares
-  `rewrites_workspace_toolchain`, runs the setup in an `isolated_python_root` copy whose
-  `.venv` and `node_modules` are its own, and names `UV_TOOL_DIR` and `UV_TOOL_BIN_DIR`
-  under its own directory, asserting `llmlint` landed there. No xdist group schedules it.
+- **Each module builds one toolchain, through the setup or bootstrap under test and no
+  other way**, in a copy of the tracked files that arrives with neither `.venv` nor
+  `node_modules`: a copy that arrived provisioned could not show what setup provisions.
+- **It touches nothing of this host's.** The copy keeps this host's home, so installs
+  come from the host's caches, under `provisioning.NO_NETWORK`, which fails an install
+  that would download rather than reaching an index. Tool directories, sibling list
+  (`ORCHESTRATOR_REPOS_BOOTSTRAP_CHECKOUTS`), state and cache roots are its own, so no
+  journey reaches this host's registered siblings, whose bootstrap none may run.
+- **Detached jobs are waited out.** Sibling bootstraps and the host sweep outlive each
+  setup by design; a journey waits on the ending each records, and signals none.
+- **The key is named file by file**, never `scripts/**/*` or `config/**/*`: provisioning
+  is the cost, so a key wider than the chain setup and bootstrap run makes an unrelated
+  edit pay for it.
+- **The pre-push hook's provisioning is `tests/pre_push_provisioning/`**, a project of
+  its own, so an edit to the hook's scripts does not rebuild these toolchains.
+- **The PyPI journeys are `tests/session_setup_pypi/`**, a project of their own, so an
+  edit only they read does not select this one.

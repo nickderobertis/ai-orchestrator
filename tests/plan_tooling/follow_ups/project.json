@@ -62,7 +62,6 @@
       "{workspaceRoot}/templates/**/*",
       "{workspaceRoot}/orchestrator/**/*",
       "{workspaceRoot}/tests/fixtures/cycle-time/**/*",
-      "{workspaceRoot}/tests/fixtures/nx-cache/**/*",
       "{workspaceRoot}/tests/fixtures/timeline-runs/dag-ui-truth-monitor-slice/**/*",
       "{workspaceRoot}/tests/plan_tooling/follow_ups/**/*"
     ]

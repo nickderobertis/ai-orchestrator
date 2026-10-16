@@ -18,8 +18,8 @@ logins](#4-the-six-harness-logins) applies.
 
 1. `scripts/session-setup.sh` (below),
 2. `scripts/workspace-install.sh --force` — the locked Bun install, applied to a
-   discarded tree rather than reconciled with the one that is there (every
-   `scripts/nx.sh` already reconciles),
+   discarded tree rather than reconciled with the one that is there (session setup
+   already reconciles),
 3. `scripts/nx.sh run-many -t bootstrap` — each project's own setup,
 4. `git config core.hooksPath .githooks` — activates the pre-push `just gate` and the
    `commit-msg` subject policy, since the setting names the whole directory,
@@ -40,6 +40,11 @@ idempotent. It:
   ([The host sweep](#the-host-sweep-detached-one-at-a-time-once-an-hour));
 - installs `bun` via npm, and `codex` via npm when it is absent, exposing a stable
   `~/.local/bin/codex`;
+<!-- llmlint: ignore-block[no_redundant_instruction_pointers] The task that made session setup the only provisioning requires this page to point at the one statement of that rule rather than restate it, and this page is read on a new host before anything has loaded the root guidance. -->
+- installs the worktree's `node_modules` from `bun.lock` through
+  `scripts/workspace-install.sh` — the only install a worktree gets, which `AGENTS.md`
+  states once under "The checks";
+<!-- llmlint: ignore-end[no_redundant_instruction_pointers] -->
 - installs `cargo-sweep` through `cargo install` when it is absent or at another
   release — pinned in one place in the script, `CARGO_SWEEP_VERSION` — because it is
   the `maintain` command `config/onevcs.workspaces.yml` names for every Rust identity's

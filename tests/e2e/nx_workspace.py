@@ -16,15 +16,15 @@ This module is also the one statement of the suite's toolchain contract, which e
 test module takes from here:
 
 - A **writer** is a test that runs anything installing into or rewriting a `.venv`,
-  `.venv/bin` or `node_modules`: `scripts/nx.sh` (its heal runs both installs), a `just`
-  recipe reaching it, `scripts/workspace-install.sh`, `scripts/python-install.sh`,
+  `.venv/bin` or `node_modules`: `scripts/nx.sh` (its `bootstrap` targets sync the
+  environment), a `just` recipe reaching it, `scripts/workspace-install.sh`,
   `scripts/session-setup.sh`, `uv sync` or `bun install` — the last even when the tree is
   in sync, because a no-change Bun install still re-links every package carrying a `bin`.
   A writer declares `rewrites_workspace_toolchain` (or spreads `TOOLCHAIN_WRITER_MARKS`)
   and runs those writes only inside a copy whose toolchain is its own: `copy_checkout`
   for `node_modules`, `isolated_python_root` when it rewrites `.venv` too. It may *read*
   this checkout's `.venv` through `UV_PROJECT_ENVIRONMENT` only beside `UV_NO_SYNC`, which
-  is what keeps the copy's `scripts/python-install.sh` and `uv run` from syncing it.
+  is what keeps the copy's `uv run` from syncing it.
 - A **reader** only runs recipes and tools through a toolchain somebody else provisioned,
   and declares `shares_workspace_install` (or spreads `WORKSPACE_INSTALL_MARKS`).
 
@@ -175,6 +175,33 @@ def copy_checkout(destination: Path) -> None:
     """A copy of this checkout with a private, hardlinked copy of its workspace install."""
     copy_working_tree(destination)
     private_node_modules(destination)
+
+
+def share_this_checkouts_install(copy: Path) -> dict[str, str]:
+    """Let a copy of this checkout run its recipes on this checkout's install, unwritten.
+
+    `copy/node_modules` is a symlink to this checkout's. `copy/.venv` is an overlay:
+    `pyvenv.cfg`, `lib/` (and `lib64/`, `include/` where present) symlink into this
+    checkout's `.venv`, and `bin/` is a real directory of one symlink per entry of this
+    checkout's `.venv/bin`, so a test doubling one binary replaces that link and never
+    writes this checkout's environment. The interpreter reports the copy's `.venv` as
+    `sys.prefix`, so the copy passes `scripts/require-provisioned.sh` on its own.
+
+    The returned variables go into every command run in the copy: `PYTHONPATH=<copy>`
+    precedes the editable install's `.pth`, which names this checkout, so `orchestrator`
+    — and the `REPO_ROOT` it resolves — is the copy's; `UV_NO_SYNC=1` keeps a `uv run`
+    there from syncing the overlay, which would write through its links.
+    """
+    source = REPO_ROOT / ".venv"
+    (copy / "node_modules").symlink_to(NODE_MODULES, target_is_directory=True)
+    overlay = copy / ".venv"
+    (overlay / "bin").mkdir(parents=True)
+    for name in ("pyvenv.cfg", "lib", "lib64", "include"):
+        if (source / name).exists():
+            (overlay / name).symlink_to(source / name)
+    for entry in (source / "bin").iterdir():
+        (overlay / "bin" / entry.name).symlink_to(entry)
+    return {"PYTHONPATH": str(copy), "UV_NO_SYNC": "1"}
 
 
 def isolated_python_root(destination: Path) -> Path:

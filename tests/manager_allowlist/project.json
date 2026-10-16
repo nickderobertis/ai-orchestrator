@@ -28,6 +28,7 @@
       "{workspaceRoot}/scripts/codex-alt-home.sh",
       "{workspaceRoot}/scripts/credentials-env.sh",
       "{workspaceRoot}/scripts/template-env.sh",
+      "{workspaceRoot}/scripts/require-provisioned.sh",
       "{workspaceRoot}/tests/manager_allowlist/project.json",
       "{workspaceRoot}/tests/manager_allowlist/test_manager_allowlist_recipes_e2e.py",
       "{workspaceRoot}/tests/manager_allowlist/test_manager_allowlist_sync.py"

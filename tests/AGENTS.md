@@ -5,10 +5,12 @@ Conventions for this repository's tests.
 - **This suite proves the configuration layer** — the recipes, the wrapper scripts, the
   harness routing, the llmlint tier, the Nx cache keys, and the provisioning that
   installs the published CLIs. The engines those recipes delegate to are proven in their
-  own repositories; nothing here re-proves them.
+  own repositories; nothing here re-proves them. Nx is one: the keys are held by static
+  scans of the configuration, and which change selects, re-runs or replays which target
+  is Nx's behaviour over it, which no test here drives real Nx to assert.
 - **e2e (`tests/e2e/`) drives the real thing**: the real `just` recipes, the real wrapper
-  scripts, the real `oneharness` CLI and its fallback chain, real Nx in real linked
-  worktrees. Exactly two doubles are sanctioned — the paid model, and the published CLI
+  scripts, the real `oneharness` CLI and its fallback chain, real Nx in copies of this
+  checkout. Exactly two doubles are sanctioned — the paid model, and the published CLI
   a recipe delegates to, doubled below the seam under test. Never double a recipe, a
   wrapper script, or the shell they run in.
 - **A delegated recipe's journey is its row in

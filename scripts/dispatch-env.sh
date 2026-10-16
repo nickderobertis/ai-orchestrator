@@ -212,8 +212,8 @@ declare -A DISPATCH_ENVIRONMENT_KEPT_PREFIXES=(
 #: not know where a node will be placed at all, so an absolute answer does not exist at
 #: the moment this is built. A relative entry is the honest one: a dispatch's working
 #: directory *is* its worktree, so this resolves to that worktree's own environment where
-#: the repository has one — which `scripts/nx.sh`'s healing of `.venv` from the locked
-#: installs is what keeps true — and matches nothing where it does not. It is what
+#: the repository has one — which session setup provisions, and which `scripts/nx.sh` and
+#: the recipes refuse to run without — and matches nothing where it does not. It is what
 #: replaces the inherited VIRTUAL_ENV above: a worker's python, and the tools its own
 #: repository pins, come from the checkout it is working in rather than from whichever
 #: one the launching shell had activated.

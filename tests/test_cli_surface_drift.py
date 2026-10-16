@@ -80,8 +80,9 @@ FENCE = re.compile(r"^[ \t]*```.*?^[ \t]*```", re.MULTILINE | re.DOTALL)
 INLINE = re.compile(r"(?P<ticks>`+)(?P<code>(?:(?!\n[ \t]*\n).)+?)(?P=ticks)", re.DOTALL)
 
 #: A `just` recipe header. Parameters may carry defaults (`gate remote="" base="":`),
-#: so the whole parameter list is skipped rather than one optional word.
-RECIPE = re.compile(r"^(?P<name>[a-z][a-z0-9-]*)(?:\s+[^\s:]+)*\s*:\s*$")
+#: so the whole parameter list is skipped rather than one optional word, and the recipes
+#: it depends on may follow the colon (`sync *args: _provisioned`).
+RECIPE = re.compile(r"^(?P<name>[a-z][a-z0-9-]*)(?:\s+[^\s:]+)*\s*:(?:[ \t]+[A-Za-z_][\w-]*)*\s*$")
 
 #: A token shaped like a subcommand. Placeholders (`<run-id>`, `RUN`, `[FILE]`) and
 #: paths (`plan.json`) deliberately do not match, so they end path resolution without

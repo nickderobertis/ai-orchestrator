@@ -4,29 +4,21 @@
 # llmlint: ignore-file[boundary_inputs_validated] This is the trusted local operator command
 # surface: XDG_CACHE_HOME/HOME are platform-owned directory roots, and arguments are intentionally
 # Nx's own validated CLI. No value is interpreted as repository content or passed to eval.
-# llmlint: ignore-file[changed_behavior_has_e2e] scripts/check-nx-cache.sh exercises this wrapper
-# through two real linked worktrees, including a cache hit and a changed-source typecheck failure.
+# llmlint: ignore-file[changed_behavior_has_e2e] tests/e2e/workspace_copies/test_workspace_contract_e2e.py
+# runs this real wrapper with Nx doubled, including a failing run's preserved owner-only log.
 set -euo pipefail
+# No `uv run` in a target or a test this launches syncs the environment on its way in.
+export UV_NO_SYNC=1
 
 script_dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 # shellcheck source=scripts/preserved-log.sh
 . "$script_dir/preserved-log.sh"
 
-# Nx lives in `node_modules/.bin`, which a freshly created worktree does not have.
-# Healing it here rather than in one recipe is what stops the same missing install
-# from failing `just lint` with "Could not find Nx modules" while `just check`
-# quietly repaired it — and what lets a bare `pytest` drive these targets without
-# an operator running Bun by hand first. It exits immediately once the installed
-# tree matches the lockfile, which is Bun's own answer rather than this wrapper's.
-"$script_dir/workspace-install.sh" || exit 1
-
-# The other half of the same self-heal. Every target below runs its tool through
-# `uv run`, and `.venv` is ignored state a fresh worktree or publication clone
-# arrives without — where a reader of `<root>/.venv/bin` does not fail but falls
-# through to another checkout's environment, which is how a gate came to verify a
-# branch against versions the branch had already moved. It exits immediately once
-# the environment matches the lockfile.
-"$script_dir/python-install.sh" || exit 1
+# This wrapper installs nothing: session setup is the one place a checkout is
+# provisioned (AGENTS.md, "The checks"). The helper refuses a checkout whose Python
+# environment holds no interpreter, naming `just session-setup`.
+# shellcheck source=scripts/require-provisioned.sh
+. "$script_dir/require-provisioned.sh" || exit 1
 
 repo_identity="$(git config --get remote.origin.url || git rev-parse --show-toplevel)" || { echo "nx: cannot resolve repository identity; run from a Git checkout and retry" >&2; exit 1; }
 repo_key="$(printf '%s' "$repo_identity" | sha256sum | cut -c1-16)" || { echo "nx: cannot derive the repository cache key; verify sha256sum is available and retry" >&2; exit 1; }
@@ -44,7 +36,7 @@ export NX_CACHE_DIRECTORY="$cache_root"
 export NX_NATIVE_FILE_CACHE_DIRECTORY="${XDG_CACHE_HOME:-${HOME}/.cache}/ai-orchestrator/nx-native/${repo_key}"
 
 # Nx's daemon is off by default here, and any daemon that is turned back on uses
-# the installed Nx for its own housekeeping.
+# the Nx session setup installed for its own housekeeping.
 #
 # A daemon primes an "are AI agents configured?" cache the instant it starts by
 # installing `nx@latest` into a fresh system-temp directory — ~80 MB, logged as
@@ -62,12 +54,12 @@ export NX_DAEMON="${NX_DAEMON-false}"
 export NX_USE_LOCAL=true
 
 # The Bun-written shim rather than a path inside the package: Nx has moved its
-# bin entry between releases, and the shim is the one name that cannot. The
-# locked install above guarantees one of these exists before every invocation.
+# bin entry between releases, and the shim is the one name that cannot. Session setup's
+# locked install provides it; nothing here does.
 NX_BIN="node_modules/.bin/nx"
 [[ -x "$NX_BIN" ]] || NX_BIN="node_modules/.bin/nx.cmd"
 if [[ ! -x "$NX_BIN" ]]; then
-  echo "nx: locked workspace install did not provide an executable node_modules/.bin/nx or node_modules/.bin/nx.cmd; repair the install and retry" >&2
+  echo "nx: this checkout has no executable node_modules/.bin/nx or node_modules/.bin/nx.cmd, so its workspace is not provisioned; run 'just session-setup' and retry" >&2
   exit 1
 fi
 

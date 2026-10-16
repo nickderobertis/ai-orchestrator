@@ -124,8 +124,8 @@ RELEASE_SUBCOMMANDS = (
 #: measures is the copy a manager would actually get.
 ONEVCS = ("uv", "run", "onevcs")
 
-#: The engine binary a dispatch runs, installed by `scripts/python-install.sh` into
-#: this checkout's own environment.
+#: The engine binary a dispatch runs, installed by session setup into this checkout's
+#: own environment.
 ENGINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
 #: How the recipes reach the read API, which is the view half's own artifact: the same
 #: `uv run` `scripts/telemetry-server.sh` ends in, so this measures the copy an

@@ -27,14 +27,24 @@ with no request leaving the host: a loopback CONNECT proxy, named by the `HTTPS_
 the bus's Contract L honours, terminates TLS for the link's own host with a certificate a
 throwaway authority issued, and `SSL_CERT_FILE` — which the same contract says replaces
 the platform's roots — trusts that authority alone for the one `schemas fetch` that warms
-a cache private to this process. The cache then answers every later resolution, for
-`serve` without revalidation and for every other verb inside a freshness window this sets
-past the life of the suite. The bus's own interfaces store the entry, so this writes
-nothing in the cache's private layout.
+the cache. The cache then answers every later resolution, for `serve` without
+revalidation and for every other verb inside a freshness window this sets past the life of
+the suite. The bus's own interfaces store the entry, so this writes nothing in the cache's
+private layout.
+
+One warmed cache serves a whole session and everything it spawns. The first process to
+seed — a session's controller, which imports the conftest before it starts its `xdist`
+workers — warms it, marks it warmed and exports it under `SUITE_CACHE_ENV`; every process
+inheriting that variable over a cache still marked warmed, each worker and every pytest a
+test starts, reuses it rather than warming one of its own. The process that warmed it
+removes it when it exits, passed or failed, so a session leaves no cache behind.
+`tests/schema_cache/` drives both over real sessions, and the two exits a session never
+takes: a warm that fails, and a forked child of the warming process exiting first.
 """
 
 from __future__ import annotations
 
+import atexit
 import http.server
 import json
 import os
@@ -77,6 +87,14 @@ TTL_ENV = "ONEMESSAGEBUS_SCHEMA_TTL"
 
 #: A freshness window longer than any suite runs, so no verb after the seed revalidates.
 SUITE_TTL_SECONDS = str(10 * 365 * 24 * 3600)
+
+#: The warmed cache a process hands everything it spawns, by its directory: the variable a
+#: process reuses a cache through instead of warming its own.
+SUITE_CACHE_ENV = "AIO_SUITE_SCHEMA_CACHE"
+#: How a warmed cache's directory is named under the temporary directory.
+CACHE_PREFIX = "onemessagebus-schemas-"
+#: The file the warming process writes once the fetch succeeded, and nothing before.
+WARMED_MARKER = "warmed"
 
 #: How long the one warming fetch may take before it is called hung.
 FETCH_SECONDS = 60
@@ -302,15 +320,39 @@ def _serve_through_a_tunnel(
     return listener, f"http://127.0.0.1:{listener.getsockname()[1]}"
 
 
-def seed_process_cache() -> Path:
-    """Warm a schema cache private to this process with the committed links, offline.
+def seed_process_cache(config: Path = CONFIG) -> Path:
+    """Reuse the warmed schema cache this process inherited, or warm one, offline.
 
     Exports the cache and its freshness window into this process's environment, so every
-    verb and launch the suite spawns inherits them, and returns the cache directory.
+    verb and launch the suite spawns inherits them, and returns the cache directory. A
+    cache this process warmed is removed when the process exits. `config` is the
+    configuration whose links a warm fetches, this host's unless a journey names another.
     """
-    links = configured_links()
+    inherited = os.environ.get(SUITE_CACHE_ENV)
+    if inherited and (Path(inherited) / WARMED_MARKER).is_file():
+        directory = Path(inherited)
+    else:
+        directory = Path(tempfile.mkdtemp(prefix=CACHE_PREFIX))
+        atexit.register(_remove_if_owner, directory, os.getpid())
+        _warm(directory, config)
+    cache_dir = directory / "cache"
+    os.environ[SUITE_CACHE_ENV] = str(directory)
+    os.environ[CACHE_DIR_ENV] = str(cache_dir)
+    os.environ[TTL_ENV] = SUITE_TTL_SECONDS
+    return cache_dir
+
+
+def _remove_if_owner(directory: Path, owner: int) -> None:
+    """Remove `directory` from the process that warmed it, never from a forked child."""
+    if os.getpid() == owner:
+        shutil.rmtree(directory, ignore_errors=True)
+
+
+def _warm(directory: Path, config: Path) -> None:
+    """Fill `directory`'s cache from the committed links through a loopback proxy, and
+    mark it warmed only once that fetch succeeded."""
+    links = configured_links(config)
     hosts = {urlsplit(link).hostname or "" for link in links if link.startswith("https://")}
-    directory = Path(tempfile.mkdtemp(prefix="onemessagebus-schemas-"))
     cache_dir = directory / "cache"
     authority, context = mint_authority(directory, hosts)
     listener, proxy = _serve_through_a_tunnel(
@@ -329,7 +371,7 @@ def seed_process_cache() -> Path:
     environment[CACHE_DIR_ENV] = str(cache_dir)
     try:
         fetched = subprocess.run(
-            [_bus(), "schemas", "fetch", "--config", str(CONFIG), "--format", "text"],
+            [_bus(), "schemas", "fetch", "--config", str(config), "--format", "text"],
             env=environment,
             capture_output=True,
             text=True,
@@ -339,13 +381,11 @@ def seed_process_cache() -> Path:
     finally:
         listener.close()
     assert fetched.returncode == 0, (
-        f"the suite could not warm its schema cache from {CONFIG.name}'s links, offline, "
+        f"the suite could not warm its schema cache from {config.name}'s links, offline, "
         f"with the bundle derived from the installed onejudge and {ENGINE_LAYOUT.name}:\n"
         f"{fetched.stdout}{fetched.stderr}"
     )
-    os.environ[CACHE_DIR_ENV] = str(cache_dir)
-    os.environ[TTL_ENV] = SUITE_TTL_SECONDS
-    return cache_dir
+    (directory / WARMED_MARKER).write_text("", encoding="utf-8")
 
 
 def _bus() -> str:

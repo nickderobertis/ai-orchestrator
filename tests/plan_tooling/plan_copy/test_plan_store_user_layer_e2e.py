@@ -5,8 +5,10 @@ arms it. The first journey runs a real fixture of this
 tier — the copy `test_plan_copy_destination_ids_e2e.py` makes through `just plans` — as a
 pytest session of its own loading this suite's conftest, under a configuration home holding
 the very declaration that refused it. The second holds the sandbox to linking every other
-entry of that home, and to leaving the home itself as it found it. The last holds the
-helper's reading of where a configuration home is to the store's own.
+entry of that home, and to leaving the home itself as it found it. The next holds the
+helper's reading of where a configuration home is to the store's own, and the last three
+hold real Bun to the cache the user's `.npmrc` names once the home moves, to a cache the
+environment already states, and to stating none when `bun pm cache` cannot answer.
 """
 
 from __future__ import annotations
@@ -195,3 +197,84 @@ def test_the_configuration_home_is_where_the_store_reads_its_user_layer(
         if setting["origin"].get("layer") == "file"
     }
     assert read == ({str(layer)} if layer is not None else set()), shown.stdout
+
+
+def _bun_cache_under(environment: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bun", "pm", "cache"],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+
+
+def _as_bun_user(monkeypatch: pytest.MonkeyPatch, home: Path, config_home: Path | None) -> None:
+    """This process as a user of ``home`` with no Bun cache stated in the environment."""
+    monkeypatch.setenv("HOME", str(home))
+    if config_home is None:
+        monkeypatch.delenv(plan_store_user_layer.CONFIG_HOME_ENV, raising=False)
+    else:
+        monkeypatch.setenv(plan_store_user_layer.CONFIG_HOME_ENV, str(config_home))
+    monkeypatch.delenv(plan_store_user_layer.HOST_CONFIG_HOME_ENV, raising=False)
+    monkeypatch.delenv(plan_store_user_layer.BUN_CACHE_ENV, raising=False)
+
+
+def test_bun_keeps_the_cache_the_users_npmrc_names_once_the_home_moves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `cache=` line in `~/.npmrc` still decides Bun's cache under the sandboxed home."""
+    home = tmp_path / "home"
+    home.mkdir()
+    cache = tmp_path / "npm-cache"
+    (home / ".npmrc").write_text(f"cache={cache}\n", encoding="utf-8")
+    _as_bun_user(monkeypatch, home, None)
+
+    sandbox = plan_store_user_layer.isolate()
+
+    assert os.environ[plan_store_user_layer.CONFIG_HOME_ENV] == str(sandbox)
+    assert os.environ[plan_store_user_layer.BUN_CACHE_ENV] == str(cache)
+    assert _bun_cache_under(dict(os.environ)).stdout.strip() == str(cache)
+    # Without the stated cache Bun reads `.npmrc` from the moved home and loses the line.
+    unstated = {
+        key: value
+        for key, value in os.environ.items()
+        if key != plan_store_user_layer.BUN_CACHE_ENV
+    }
+    assert _bun_cache_under(unstated).stdout.strip() != str(cache)
+
+
+def test_a_bun_cache_the_environment_already_states_is_kept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit `BUN_INSTALL_CACHE_DIR` wins over what the user's `.npmrc` names."""
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".npmrc").write_text(f"cache={tmp_path / 'npm-cache'}\n", encoding="utf-8")
+    _as_bun_user(monkeypatch, home, None)
+    stated = tmp_path / "stated-cache"
+    monkeypatch.setenv(plan_store_user_layer.BUN_CACHE_ENV, str(stated))
+
+    plan_store_user_layer.isolate()
+
+    assert os.environ[plan_store_user_layer.BUN_CACHE_ENV] == str(stated)
+    assert _bun_cache_under(dict(os.environ)).stdout.strip() == str(stated)
+
+
+def test_a_bun_that_cannot_answer_leaves_its_cache_unstated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `bun pm cache` that fails states nothing, rather than a cache Bun never named."""
+    config_home = tmp_path / "config"
+    config_home.mkdir()
+    (config_home / ".bunfig.toml").write_text("this is [not toml\n", encoding="utf-8")
+    _as_bun_user(monkeypatch, tmp_path / "home", config_home)
+    refused = _bun_cache_under(dict(os.environ))
+    assert refused.returncode != 0, f"Bun answered, so this proves nothing: {refused.stdout}"
+
+    sandbox = plan_store_user_layer.isolate()
+
+    assert os.environ[plan_store_user_layer.CONFIG_HOME_ENV] == str(sandbox)
+    assert plan_store_user_layer.BUN_CACHE_ENV not in os.environ

@@ -181,13 +181,26 @@ def test_an_adoption_of_a_parked_run_is_refused(parked: HeldRun) -> None:
 
     And the live driver it refused to displace keeps the run: nothing was adopted.
     """
-    adopting = _just("orchestrate", "--adopt", parked.run, environment=parked.environment)
-    said = adopting.stdout + adopting.stderr
+    # The refusal names the verdict it read, and the run turns `ACTIVE` just after every
+    # liveness beat, so each attempt is its own sample: every one is refused, and one taken in
+    # a `PARKED` stretch is what names it.
+    refusals: list[str] = []
 
-    assert adopting.returncode == REFUSED, f"exit {adopting.returncode}:\n{said}"
-    assert "PARKED" in said, said
+    def _refused_parked() -> bool:
+        adopting = _just("orchestrate", "--adopt", parked.run, environment=parked.environment)
+        said = adopting.stdout + adopting.stderr
+        assert adopting.returncode == REFUSED, f"exit {adopting.returncode}:\n{said}"
+        assert "is still being driven by driver pid" in said, said
+        refusals.append(said)
+        return "(PARKED)" in said
+
+    _until("a refusal of the adoption naming PARKED", _refused_parked)
+    said = refusals[-1]
     assert _recorded(parked.run, parked.environment, "driver-adopted") == 0, said
-    assert "PARKED" in _status(parked.run, parked.environment)
+    _until(
+        "a reading of PARKED after the refusals",
+        lambda: "PARKED" in _status(parked.run, parked.environment),
+    )
 
 
 def test_a_watch_does_not_end_nothing_driving_when_its_run_turns_parked(held: HeldRun) -> None:

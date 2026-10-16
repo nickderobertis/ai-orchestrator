@@ -40,7 +40,6 @@
       "{workspaceRoot}/templates/templates.yaml",
       "{workspaceRoot}/tests/budget_telemetry.py",
       "{workspaceRoot}/tests/fixtures/budgets/**/*",
-      "{workspaceRoot}/tests/fixtures/nx-cache/**/*",
       "{workspaceRoot}/uv.lock",
       "!{workspaceRoot}/orchestrator/**/*.md",
       "{projectRoot}/**/*"

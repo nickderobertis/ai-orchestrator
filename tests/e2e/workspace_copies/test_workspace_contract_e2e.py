@@ -23,17 +23,12 @@ import shutil
 import subprocess
 import sys
 import time
-import tomllib
 from collections.abc import Callable
 from pathlib import Path
-from typing import NamedTuple
 
-import plan_store_cache
 import pytest
 from nx_inputs import SELECTED_TARGETS, UNCONDITIONAL_TARGETS
 from nx_workspace import (
-    copy_checkout,
-    copy_working_tree,
     rewrites_workspace_toolchain,
     shares_workspace_install,
 )
@@ -47,9 +42,8 @@ from waits import until
 # wrong.
 ROOT = Path(__file__).resolve().parents[3]
 #: The two selections `just check` makes, spelled as Nx receives them. Which tiers
-#: belong to each is declared once in `tests/nx_inputs.py`, and
-#: `tests/tree_scans/test_nx_cache_scope.py` holds the recipe to that split; what these
-#: journeys add is that the recipe really hands Nx two invocations rather than one.
+#: belong to each is declared once in `tests/nx_inputs.py`, and these journeys hold the
+#: recipe to that split by tracing the two invocations it really hands Nx.
 CHECK_SELECTED = ",".join(SELECTED_TARGETS)
 CHECK_UNCONDITIONAL = ",".join(UNCONDITIONAL_TARGETS)
 #: The Nx target lists the other root quality recipes route through, restated here
@@ -77,7 +71,6 @@ def _check_trace(selection: str) -> list[str]:
     return [
         f"nx.sh {selection} -t {CHECK_SELECTED}",
         f"nx.sh run-many -t {CHECK_UNCONDITIONAL}",
-        "nx.sh run workspace:check-nx-cache",
     ]
 
 
@@ -199,9 +192,6 @@ fi
     nx = scripts / "nx.sh"
     nx.write_text(command)
     nx.chmod(0o755)
-    check_nx_cache = scripts / "check-nx-cache.sh"
-    check_nx_cache.write_text(command)
-    check_nx_cache.chmod(0o755)
     session_setup = scripts / "session-setup.sh"
     session_setup.write_text(command)
     session_setup.chmod(0o755)
@@ -560,23 +550,22 @@ def test_check_recipe_preserves_captured_nx_failure(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert "nx.sh: captured failure detail" in result.stderr
-    assert "check: deterministic checks failed in 3 of 3 phases" in result.stderr
+    assert "check: deterministic checks failed in 2 of 2 phases" in result.stderr
     assert trace.read_text().splitlines() == _check_trace("run-many")
 
 
 @rewrites_workspace_toolchain
 def test_one_check_run_reports_every_phase_that_failed(tmp_path: Path) -> None:
-    """A failure in the diff selection does not hide one in a later phase.
+    """A failure in the diff selection does not hide one in the phase after it.
 
-    Failures are planted in two different phases — a target of the diff selection and
-    the cross-worktree cache check — and the phase between them passes. One run of the
-    recipe has to run all three, report both failures and name both phases, and exit
-    non-zero; a recipe that stopped at the first failure would leave the second to be
-    discovered by another full gate after the first was fixed.
+    Failures are planted in both phases — a target of the diff selection and a tier no
+    diff selects. One run of the recipe has to run both, report both failures and name
+    both phases, and exit non-zero; a recipe that stopped at the first failure would
+    leave the second to be discovered by another full gate after the first was fixed.
     """
     checkout, trace = _recipe_checkout(tmp_path)
-    selected, unconditional, cache_check = _check_trace("run-many")
-    planted = "\n".join((selected, cache_check))
+    selected, unconditional = _check_trace("run-many")
+    planted = "\n".join((selected, unconditional))
 
     result = _run(
         "just",
@@ -586,24 +575,23 @@ def test_one_check_run_reports_every_phase_that_failed(tmp_path: Path) -> None:
     )
 
     assert result.returncode != 0
-    assert trace.read_text().splitlines() == [selected, unconditional, cache_check]
+    assert trace.read_text().splitlines() == [selected, unconditional]
     assert f"{selected}: planted failure" in result.stderr
-    assert f"{cache_check}: planted failure" in result.stderr
-    assert f"{unconditional}: planted failure" not in result.stderr
+    assert f"{unconditional}: planted failure" in result.stderr
     assert (
-        "check: deterministic checks failed in 2 of 3 phases "
-        "(the diff selection; workspace:check-nx-cache)"
+        "check: deterministic checks failed in 2 of 2 phases "
+        f"(the diff selection; {CHECK_UNCONDITIONAL})"
     ) in result.stderr
     assert "all deterministic checks passed" not in result.stdout
     log = (checkout / ".logs/check.log").read_text()
-    assert f"{selected}: planted failure" in log and f"{cache_check}: planted failure" in log
+    assert f"{selected}: planted failure" in log and f"{unconditional}: planted failure" in log
 
 
 @rewrites_workspace_toolchain
 def test_a_check_run_failing_only_in_an_unconditional_phase_still_fails(tmp_path: Path) -> None:
     """The phase no diff selects decides the verdict too: a green selection is not a pass."""
     checkout, trace = _recipe_checkout(tmp_path)
-    _, unconditional, _ = _check_trace("run-many")
+    _, unconditional = _check_trace("run-many")
 
     result = _run(
         "just",
@@ -615,7 +603,7 @@ def test_a_check_run_failing_only_in_an_unconditional_phase_still_fails(tmp_path
     assert result.returncode != 0
     assert trace.read_text().splitlines() == _check_trace("run-many")
     assert (
-        f"check: deterministic checks failed in 1 of 3 phases ({','.join(UNCONDITIONAL_TARGETS)})"
+        f"check: deterministic checks failed in 1 of 2 phases ({','.join(UNCONDITIONAL_TARGETS)})"
         in result.stderr
     )
 
@@ -670,15 +658,13 @@ def test_check_recipe_log_is_readable_while_the_recipe_is_still_running(
 
 
 def _nx_wrapper_checkout(tmp_path: Path, name: str) -> Path:
-    """A checkout the *real* `scripts/nx.sh` runs in, with Nx doubled.
+    """A checkout the *real* `scripts/nx.sh` and `scripts/workspace-install.sh` run in.
 
-    Only Nx itself is replaced. `nx.sh`, `preserved-log.sh`, `workspace-install.sh`,
-    and `python-install.sh` are the real files, because what
-    they choose to do — which log to write, and whether to provision the workspace
-    first — is what is under test. This checkout declares no adopted release, which is
-    the case the plan-store heal is written to no-op in: `tests/fixtures/nx-cache` is
-    the other one, and a wrapper that fetched here would put a network crossing in
-    front of every Nx target in a tree that has no plan store to read.
+    Only the published tools they reach — Nx and Bun — are replaced. `nx.sh`,
+    `preserved-log.sh`, `require-provisioned.sh`, `workspace-install.sh` and
+    `install-lock.sh` are the real files, because what they choose to do — which log to
+    write, which lock to take, what to refuse — is what is under test. It carries no
+    `uv.lock`, so it has no project environment for the provisioning check to require.
     """
     checkout = tmp_path / name
     (checkout / "scripts").mkdir(parents=True)
@@ -688,7 +674,7 @@ def _nx_wrapper_checkout(tmp_path: Path, name: str) -> Path:
         "preserved-log.sh",
         "install-lock.sh",
         "workspace-install.sh",
-        "python-install.sh",
+        "require-provisioned.sh",
     ):
         shutil.copy2(ROOT / "scripts" / script, checkout / "scripts" / script)
         (checkout / "scripts" / script).chmod(0o755)
@@ -704,14 +690,8 @@ def _nx_wrapper_checkout(tmp_path: Path, name: str) -> Path:
 
 
 def _nx_nesting_checkout(tmp_path: Path) -> Path:
-    """The wrapper checkout with its workspace already provisioned.
-
-    Bun is doubled here even though this checkout is provisioned, because every
-    `scripts/nx.sh` now asks Bun whether the tree still matches the lockfile — and
-    a checkout with no `package.json` is one the real Bun refuses.
-    """
+    """The wrapper checkout with its workspace already provisioned."""
     checkout = _nx_wrapper_checkout(tmp_path, "nesting")
-    _add_bun_double(checkout)
     _mark_nx_installed(checkout)
     return checkout
 
@@ -735,17 +715,58 @@ def _add_nx_wrapper_doubles(checkout: Path) -> None:
     _add_bun_double(checkout)
 
 
-@rewrites_workspace_toolchain
-def test_nx_wrapper_provisions_the_locked_workspace_when_nx_is_absent(tmp_path: Path) -> None:
-    """A bare Nx invocation in a fresh worktree heals itself instead of failing.
+#: The words both refusals of an unprovisioned checkout name as the remedy.
+PROVISIONING_REMEDY = "just session-setup"
 
-    `just check` used to repair this inline, so the same missing install produced
-    two different stories: one recipe named the provisioning and fixed it, and
-    every other one failed with Nx's own "Could not find Nx modules" under advice
-    to fix project findings it had never reached.
+
+def _recording(path: Path, name: str) -> None:
+    """A stand-in for ``name`` that records each call and the `UV_NO_SYNC` it was handed."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "#!/usr/bin/env bash\n"
+        f'printf \'{name} %s UV_NO_SYNC=%s\\n\' "$*" "${{UV_NO_SYNC-unset}}" >>"$TRACE_FILE"\n',
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
+def _python_project_wrapper_checkout(tmp_path: Path, name: str) -> Path:
+    """The wrapper checkout as a Python project, its `uv` and `bun` recording every call.
+
+    It carries a lockfile, so the provisioning check requires its environment, and a
+    `.venv` whose interpreter is this suite's own — an environment session setup could
+    have made — so that check passes and what the wrapper does next is what is read.
     """
-    checkout = _nx_wrapper_checkout(tmp_path, "provisioning")
-    _add_nx_wrapper_doubles(checkout)
+    checkout = _nx_wrapper_checkout(tmp_path, name)
+    shutil.copy2(ROOT / "uv.lock", checkout / "uv.lock")
+    (checkout / ".venv" / "bin").mkdir(parents=True)
+    (checkout / ".venv" / "bin" / "python").symlink_to(sys.executable)
+    for tool in ("uv", "bun"):
+        _recording(checkout / "bin" / tool, tool)
+    return checkout
+
+
+def _unprovided_env(
+    checkout: Path, tmp_path: Path, trace: Path, **overrides: str
+) -> dict[str, str]:
+    """The wrapper environment with every way a caller points uv at an environment removed,
+    so what a journey reads is what the wrapper or the recipe chose."""
+    environment = _nx_wrapper_env(checkout, tmp_path, trace)
+    for provided in ("UV_NO_SYNC", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
+        environment.pop(provided, None)
+    environment.update(overrides)
+    return environment
+
+
+@rewrites_workspace_toolchain
+def test_nx_wrapper_runs_no_installer_and_hands_nx_uv_no_sync(tmp_path: Path) -> None:
+    """The wrapper reaches Nx without asking Bun or uv anything, and keeps `uv run` unsynced.
+
+    Every Nx call used to re-run both installers first, about 2.2 s even when in sync;
+    session setup is now the only provisioning, so neither stand-in may be reached.
+    """
+    checkout = _python_project_wrapper_checkout(tmp_path, "no-installer")
+    _recording(checkout / "node_modules" / ".bin" / "nx", "nx")
     trace = tmp_path / "trace"
 
     result = _run(
@@ -754,50 +775,17 @@ def test_nx_wrapper_provisions_the_locked_workspace_when_nx_is_absent(tmp_path: 
         "-t",
         "test",
         cwd=checkout,
-        env=_nx_wrapper_env(checkout, tmp_path, trace),
+        env=_unprovided_env(checkout, tmp_path, trace),
     )
 
     assert result.returncode == 0, result.stderr
-    assert trace.read_text().splitlines() == [
-        "bun install --frozen-lockfile",
-        "nx run-many -t test",
-    ]
+    assert trace.read_text(encoding="utf-8").splitlines() == ["nx run-many -t test UV_NO_SYNC=1"]
 
 
 @rewrites_workspace_toolchain
-def test_nx_wrapper_installs_nothing_when_the_tree_already_matches_the_lockfile(
-    tmp_path: Path,
-) -> None:
-    """The heal is a no-op on every ordinary invocation, which is most of them.
-
-    A no-op decided by Bun rather than by the installer, though: the ordinary
-    invocation asks, and what it must not do is spend an install on the answer.
-    """
-    checkout = _nx_wrapper_checkout(tmp_path, "provisioned")
-    _add_nx_wrapper_doubles(checkout)
-    _mark_nx_installed(checkout)
-    trace = tmp_path / "trace"
-
-    result = _run(
-        str(checkout / "scripts" / "nx.sh"),
-        "run",
-        "cached",
-        cwd=checkout,
-        env=_nx_wrapper_env(checkout, tmp_path, trace),
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert trace.read_text().splitlines() == [
-        "bun install --frozen-lockfile (no changes)",
-        "nx run cached",
-    ]
-
-
-@rewrites_workspace_toolchain
-def test_nx_wrapper_names_the_provisioning_it_could_not_complete(tmp_path: Path) -> None:
-    """A failed install stops before Nx and leaves its own reason on disk."""
-    checkout = _nx_wrapper_checkout(tmp_path, "unprovisionable")
-    _add_nx_wrapper_doubles(checkout)
+def test_nx_wrapper_refuses_a_checkout_without_nx_naming_session_setup(tmp_path: Path) -> None:
+    """A checkout with no installed Nx is refused, never healed: nothing is installed."""
+    checkout = _python_project_wrapper_checkout(tmp_path, "no-nx")
     trace = tmp_path / "trace"
 
     result = _run(
@@ -805,18 +793,159 @@ def test_nx_wrapper_names_the_provisioning_it_could_not_complete(tmp_path: Path)
         "run",
         "anything",
         cwd=checkout,
-        env=_nx_wrapper_env(checkout, tmp_path, trace, FAIL_COMMAND="bun"),
+        env=_unprovided_env(checkout, tmp_path, trace),
     )
 
     assert result.returncode != 0
-    log = checkout / ".logs" / "workspace-install.log"
-    assert "workspace-install: install locked workspace dependencies and retry" in result.stderr
-    assert f"full output: {log}" in result.stderr
-    assert "bun: captured failure detail" in log.read_text(encoding="utf-8")
-    assert oct(log.stat().st_mode & 0o777) == "0o600"
-    # Nx is never reached: running it without its modules is what produced the
-    # misleading diagnosis this replaces.
-    assert trace.read_text().splitlines() == ["bun install --frozen-lockfile"]
+    assert PROVISIONING_REMEDY in result.stderr, result.stderr
+    assert not trace.exists(), trace.read_text(encoding="utf-8")
+    assert not (checkout / "node_modules").exists()
+
+
+def _unprovisioned_checkout(tmp_path: Path) -> Path:
+    """A Python project with this checkout's lockfile and recipes, and no environment yet.
+
+    `scripts/nx.sh`, the helper it sources and the justfile are the real files; Nx is
+    doubled, and uv is the real one, because what uv would do in a checkout with no
+    `.venv` — create an empty one and run whatever `PATH` offers — is what is refused.
+    """
+    checkout = tmp_path / "unprovisioned"
+    (checkout / "scripts").mkdir(parents=True)
+    for name in ("pyproject.toml", "uv.lock", "justfile"):
+        shutil.copy2(ROOT / name, checkout / name)
+    for script in ("nx.sh", "preserved-log.sh", "require-provisioned.sh"):
+        shutil.copy2(ROOT / "scripts" / script, checkout / "scripts" / script)
+    _recording(checkout / "node_modules" / ".bin" / "nx", "nx")
+    subprocess.run(["git", "init", "-q"], cwd=checkout, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "remote", "add", "origin", "https://example.invalid/unprovisioned.git"],
+        cwd=checkout,
+        check=True,
+        capture_output=True,
+    )
+    return checkout
+
+
+# llmlint: ignore-block[shell_test_tiers_stay_split] These two run the installed uv because
+# uv's own behaviour is the subject: with no `.venv` under `UV_NO_SYNC` it creates an empty
+# one, which the refusal exists to stop, and where a relative `UV_PROJECT_ENVIRONMENT`
+# resolves, which the check restates. A double would assert the restatement against itself.
+# Both run offline in about a second, in this project's narrow target keyed on
+# `scripts/require-provisioned.sh` and `uv.lock`, as the gate journeys below do.
+@rewrites_workspace_toolchain
+def test_an_unprovisioned_checkout_is_refused_by_nx_and_by_a_uv_running_recipe(
+    tmp_path: Path,
+) -> None:
+    """Both entry points refuse a checkout with no environment, and create none.
+
+    Under `UV_NO_SYNC`, uv with no `.venv` makes an empty one and silently runs another
+    checkout's tools; the refusal is what stands between a fresh worktree and that.
+    Pointed at a provisioned environment — this checkout's, read unsynced — both run.
+    """
+    checkout = _unprovisioned_checkout(tmp_path)
+    trace = tmp_path / "trace"
+    entry_points = (
+        (str(checkout / "scripts" / "nx.sh"), "run", "anything"),
+        ("just", "repo-policy", "--help"),
+    )
+    unprovided = _unprovided_env(checkout, tmp_path, trace)
+
+    for command in entry_points:
+        refused = _run(*command, cwd=checkout, env=unprovided)
+
+        assert refused.returncode != 0, (command, refused.stdout)
+        assert PROVISIONING_REMEDY in refused.stderr, (command, refused.stderr)
+        assert not (checkout / ".venv").exists(), command
+    assert not trace.exists(), "Nx ran in a checkout that was refused"
+
+    provided = _unprovided_env(
+        checkout, tmp_path, trace, UV_PROJECT_ENVIRONMENT=str(ROOT / ".venv"), UV_NO_SYNC="1"
+    )
+    for command in entry_points:
+        ran = _run(*command, cwd=checkout, env=provided)
+
+        assert ran.returncode == 0, (command, ran.stdout + ran.stderr)
+    assert not (checkout / ".venv").exists()
+    assert trace.read_text(encoding="utf-8").splitlines() == ["nx run anything UV_NO_SYNC=1"]
+
+
+@rewrites_workspace_toolchain
+def test_the_provisioning_check_reads_a_relative_environment_where_uv_does(
+    tmp_path: Path,
+) -> None:
+    """A relative `UV_PROJECT_ENVIRONMENT` names a directory under the project root.
+
+    The check restates that much of uv's resolution, so the installed uv is asked the
+    same question from a directory below the root: both must land on the one environment,
+    and a relative name with no environment behind it is refused naming that directory.
+    """
+    checkout = _unprovisioned_checkout(tmp_path)
+    created = _run(
+        "uv", "venv", "--offline", "--python", sys.executable, "relative-env", cwd=checkout
+    )
+    assert created.returncode == 0, created.stderr
+    below = checkout / "scripts"
+    check = str(checkout / "scripts" / "require-provisioned.sh")
+    trace = tmp_path / "trace"
+
+    accepted = _run(
+        check,
+        cwd=below,
+        env=_unprovided_env(checkout, tmp_path, trace, UV_PROJECT_ENVIRONMENT="relative-env"),
+    )
+    asked = _run(
+        "uv",
+        "run",
+        "--offline",
+        "--no-sync",
+        "--project",
+        str(checkout),
+        "python",
+        "-c",
+        "import sys; print(sys.prefix)",
+        cwd=below,
+        env=_unprovided_env(checkout, tmp_path, trace, UV_PROJECT_ENVIRONMENT="relative-env"),
+    )
+    refused = _run(
+        check,
+        cwd=below,
+        env=_unprovided_env(checkout, tmp_path, trace, UV_PROJECT_ENVIRONMENT="absent-env"),
+    )
+
+    assert accepted.returncode == 0, accepted.stderr
+    assert asked.returncode == 0, asked.stderr
+    assert Path(asked.stdout.strip()).resolve() == (checkout / "relative-env").resolve()
+    assert refused.returncode != 0
+    assert f"'{checkout / 'absent-env'}' holds no Python environment" in refused.stderr
+    assert PROVISIONING_REMEDY in refused.stderr
+    assert not (checkout / ".venv").exists()
+
+
+# llmlint: ignore-end[shell_test_tiers_stay_split]
+
+
+def test_a_uv_running_recipe_hands_its_uv_run_uv_no_sync(tmp_path: Path) -> None:
+    """The justfile's own export reaches a recipe's `uv run`; the caller exports none."""
+    checkout = tmp_path / "recipe"
+    (checkout / "scripts").mkdir(parents=True)
+    shutil.copy2(ROOT / "justfile", checkout / "justfile")
+    shutil.copy2(ROOT / "uv.lock", checkout / "uv.lock")
+    shutil.copy2(
+        ROOT / "scripts" / "require-provisioned.sh",
+        checkout / "scripts" / "require-provisioned.sh",
+    )
+    (checkout / ".venv" / "bin").mkdir(parents=True)
+    (checkout / ".venv" / "bin" / "python").symlink_to(sys.executable)
+    _recording(checkout / "bin" / "uv", "uv")
+    trace = tmp_path / "trace"
+    environment = _unprovided_env(checkout, tmp_path, trace)
+
+    result = _run("just", "repo-policy", "github.com/example/repo", cwd=checkout, env=environment)
+
+    assert result.returncode == 0, result.stderr
+    assert trace.read_text(encoding="utf-8").splitlines() == [
+        "uv run onevcs rules check github.com/example/repo UV_NO_SYNC=1"
+    ]
 
 
 @rewrites_workspace_toolchain
@@ -1687,638 +1816,6 @@ def test_concurrent_workspace_installs_install_once_and_both_succeed(tmp_path: P
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
-#: One real journey carrying `shares_workspace_install`, run inside the fresh
-#: worktree below. It reaches Nx through the real `just` recipes, so it is exactly
-#: the shape that used to skip there — and a skip is what made a worker's own
-#: `pytest` say something different from the gate's.
-FRESH_WORKTREE_JOURNEY = (
-    "tests/e2e/workspace_copies/test_llmlint_cache_e2e.py::"
-    "test_an_unresolvable_base_is_rejected_before_the_judge_is_paid"
-)
-
-
-@rewrites_workspace_toolchain
-@pytest.mark.reads_docs
-def test_a_freshly_created_worktree_provisions_itself_for_nx_and_for_pytest(
-    tmp_path: Path,
-) -> None:
-    """The situation every dispatched worker starts in, driven end to end.
-
-    `node_modules` is ignored state that no checkout shares, so a new worktree has
-    none. Both entry points into Nx are exercised here in a real linked worktree
-    carrying this working tree's own changes: a bare `./scripts/nx.sh`, and a bare
-    `pytest` on a journey that drives real Nx. Neither may ask an operator to run
-    Bun by hand, which is what a worker had to do.
-    """
-    worktree = tmp_path / "fresh-worktree"
-    # `--no-checkout`, so what lands here is this working tree exactly rather than
-    # HEAD with the change laid over it — a file this change deletes would
-    # otherwise survive into the tree that is supposed to be proving the change.
-    _run("git", "worktree", "add", "--no-checkout", "--detach", str(worktree), "HEAD")
-    try:
-        copy_working_tree(worktree)
-        assert not (worktree / "node_modules").exists()
-
-        wrapper = _run("./scripts/nx.sh", "show", "projects", cwd=worktree)
-
-        assert wrapper.returncode == 0, wrapper.stderr
-        assert (worktree / "node_modules/.bin/nx").is_file()
-
-        # Again from the other entry point, with the install withdrawn: the suite
-        # provisions rather than skipping, so a green run here means what the gate
-        # means. `uv run` builds this worktree's own environment on the way in.
-        shutil.rmtree(worktree / "node_modules")
-        suite = _run(
-            "uv", "run", "pytest", FRESH_WORKTREE_JOURNEY, "-q", "-p", "no:randomly", cwd=worktree
-        )
-
-        assert suite.returncode == 0, suite.stdout + suite.stderr
-        assert "skipped" not in suite.stdout
-        assert (worktree / "node_modules/.bin/nx").is_file()
-    finally:
-        # Removed here rather than left to teardown: a linked worktree surviving a
-        # test is a leak the guard reports, and rightly. `remove` deregisters this
-        # one on its own; `prune` would reach across a registry other live
-        # orchestrator runs share.
-        _run("git", "worktree", "remove", "--force", str(worktree))
-
-
-#: The dependency this journey moves the pin of, chosen because a stale
-#: `node_modules` really did go on serving an older copy of it under a current pin.
-STALENESS_WITNESS = "onepipeline-ui"
-
-
-@rewrites_workspace_toolchain
-@pytest.mark.reads_docs
-def test_a_worktree_provisioned_before_the_pin_moved_reinstalls_from_the_lockfile(
-    tmp_path: Path,
-) -> None:
-    """A moved pin heals itself, the way a missing `node_modules` already did.
-
-    Every checkout that already had a `node_modules` used to be exempt from the
-    lockfile: the installer asked whether Nx was there, which answers for *an*
-    install rather than *the locked* one. So the pin moved, nothing reinstalled,
-    and an operator reading the served view had no way to tell a stale install
-    from a broken feature.
-
-    Driven against real Bun and a lockfile that really moved, because the whole
-    defect was an install nobody could see: both entry points into the wrapper
-    chain are exercised — the script every recipe routes through, and a `just`
-    recipe on top of it.
-    """
-    worktree = tmp_path / "moved-pin-worktree"
-    # `--no-checkout`, so this working tree's own change is what provisions here.
-    _run("git", "worktree", "add", "--no-checkout", "--detach", str(worktree), "HEAD")
-    try:
-        copy_working_tree(worktree)
-        manifest = worktree / "package.json"
-        lockfile = worktree / "bun.lock"
-        committed_manifest = manifest.read_bytes()
-        committed_lock = lockfile.read_bytes()
-        pinned = json.loads(committed_manifest)["dependencies"][STALENESS_WITNESS]
-
-        # Provisioned from the lockfile as it was before the bump, for real: the
-        # tree a checkout carries when the pin moves under it.
-        before_the_bump = json.loads(committed_manifest)
-        del before_the_bump["dependencies"][STALENESS_WITNESS]
-        manifest.write_text(json.dumps(before_the_bump, indent=2) + "\n", encoding="utf-8")
-        provision = _run("bun", "install", cwd=worktree)
-        assert provision.returncode == 0, provision.stderr
-        assert (worktree / "node_modules/.bin/nx").is_file()
-        assert not (worktree / "node_modules" / STALENESS_WITNESS).exists()
-
-        # The bump lands: the committed manifest and lockfile move, and nothing
-        # else does.
-        manifest.write_bytes(committed_manifest)
-        lockfile.write_bytes(committed_lock)
-
-        wrapper = _run("./scripts/nx.sh", "show", "projects", cwd=worktree)
-
-        assert wrapper.returncode == 0, wrapper.stderr
-        bundle = worktree / "node_modules" / STALENESS_WITNESS / "package.json"
-        assert bundle.is_file(), (
-            f"the wrapper left {STALENESS_WITNESS} uninstalled under a {pinned} pin: a tree "
-            f"provisioned before the bump stayed exempt from the lockfile"
-        )
-        installed = json.loads(bundle.read_text(encoding="utf-8"))
-        assert installed["version"] == pinned, (
-            f"the wrapper left {STALENESS_WITNESS} {installed['version']} installed under a "
-            f"{pinned} pin"
-        )
-        assert lockfile.read_bytes() == committed_lock, "the committed lockfile decides"
-
-        # Again from the recipe an operator runs, against a tree that disagrees with
-        # the lockfile the other way: a package the lockfile names, gone.
-        shutil.rmtree(worktree / "node_modules" / STALENESS_WITNESS)
-        recipe = _run("just", "format-check", cwd=worktree)
-
-        assert recipe.returncode == 0, recipe.stdout + recipe.stderr
-        assert (worktree / "node_modules" / STALENESS_WITNESS / "package.json").is_file()
-    finally:
-        _run("git", "worktree", "remove", "--force", str(worktree))
-
-
-def _provisioning_copy(tmp_path: Path, name: str) -> Path:
-    """A throwaway copy of this checkout the real `scripts/nx.sh` runs in.
-
-    `node_modules` comes across as a private hardlinked copy of this checkout's own
-    install, so what a Python-provisioning journey pays for here is the Python half alone.
-    """
-    checkout = tmp_path / name
-    checkout.mkdir()
-    copy_checkout(checkout)
-    # Nx resolves its workspace from git, and `scripts/nx.sh` derives its shared
-    # cache key from the repository identity.
-    subprocess.run(["git", "init", "-q"], cwd=checkout, check=True, capture_output=True)
-    return checkout
-
-
-def _uv_provisioning_env(**overrides: str) -> dict[str, str]:
-    """The environment a Python-provisioning journey states for itself.
-
-    Every one of these names decides where uv installs, and this suite runs from
-    inside a dispatch that has already set some of them for its own checkout — so a
-    journey about a fresh tree would otherwise be answering about the enclosing one.
-    """
-    environment = os.environ.copy()
-    for provided in ("UV_NO_SYNC", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
-        environment.pop(provided, None)
-    environment.update(overrides)
-    return environment
-
-
-@rewrites_workspace_toolchain
-@pytest.mark.reads_docs
-def test_a_freshly_created_worktree_provisions_its_python_environment_from_the_lockfile(
-    tmp_path: Path,
-) -> None:
-    """A worktree cut for a dispatch arrives without `.venv`, and must not stay that way.
-
-    A missing environment does not fail loudly: every reader of `<root>/.venv/bin`
-    falls through to whichever other checkout is on PATH.
-    """
-    worktree = tmp_path / "fresh-python-worktree"
-    _run("git", "worktree", "add", "--no-checkout", "--detach", str(worktree), "HEAD")
-    try:
-        copy_working_tree(worktree)
-        assert not (worktree / ".venv").exists()
-
-        # `show projects` reaches no project target, so the wrapper's own provisioning
-        # is the only thing that could have built an environment here. A target would
-        # have made one through `uv run` on its way in and proved nothing.
-        wrapper = _run(
-            "./scripts/nx.sh", "show", "projects", cwd=worktree, env=_uv_provisioning_env()
-        )
-
-        assert wrapper.returncode == 0, wrapper.stderr
-        # Installed, not merely created: an empty virtualenv satisfies a check for the
-        # directory while every console script in it still resolves somewhere else.
-        assert (worktree / ".venv/bin/oneharness").is_file()
-        assert (worktree / "uv.lock").read_bytes() == (ROOT / "uv.lock").read_bytes()
-    finally:
-        _run("git", "worktree", "remove", "--force", str(worktree))
-
-
-class PythonVersion(NamedTuple):
-    """A `major.minor` interpreter version, ordered as Python orders versions."""
-
-    major: int
-    minor: int
-
-
-def _declared_python_floor(checkout: Path) -> PythonVersion:
-    """The `major.minor` lower bound a checkout's `requires-python` declares."""
-    declared = tomllib.loads((checkout / "pyproject.toml").read_text(encoding="utf-8"))
-    floor = re.fullmatch(r">=(\d+)\.(\d+)", declared["project"]["requires-python"])
-    assert floor, f"requires-python is not a bare lower bound: {declared['project']!r}"
-    return PythonVersion(int(floor.group(1)), int(floor.group(2)))
-
-
-def _venv_python_version(checkout: Path) -> PythonVersion:
-    probe = _run(
-        str(checkout / ".venv/bin/python"),
-        "-c",
-        "import sys; print(*sys.version_info[:2])",
-        cwd=checkout,
-    )
-    assert probe.returncode == 0, probe.stderr
-    major, minor = probe.stdout.split()
-    return PythonVersion(int(major), int(minor))
-
-
-# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The subject is the whole
-# checkout's install: `python-install.sh` syncs `pyproject.toml`, `uv.lock` and the editable
-# `orchestrator` package of a copy of every tracked file, so the whole-workspace key is the
-# edge that covers what it reads, as it is for this module's other real-`uv sync` journeys
-# beside it. It costs about two seconds on a warm uv cache.
-# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_docs` routes a test
-# to this project's own `test-docs` target, the one keyed on the whole workspace, and
-# `tests/tree_scans/test_nx_cache_scope.py` holds the marker to that routing; a separate Nx
-# project would need a key over the same whole tree.
-# llmlint: ignore-block[shell_test_tiers_stay_split] uv is the host tool, and the sibling
-# provisioning journeys above and below drive the same real `uv sync` from this project;
-# moving one of them out would split one install contract across two projects.
-@rewrites_workspace_toolchain
-@shares_workspace_install
-@pytest.mark.reads_docs
-def test_an_environment_below_the_declared_floor_is_replaced_by_the_locked_install(
-    tmp_path: Path,
-) -> None:
-    # llmlint: ignore-end[shell_test_tiers_stay_split]
-    # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
-    # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
-    """A `.venv` made before the floor moved must not survive the install that follows.
-
-    Every reader of `.venv/bin` would otherwise run this package under an interpreter
-    its own `requires-python` excludes. The stale environment is built for real and
-    measured below the floor first, so an environment that already satisfied it cannot
-    pass for provisioning.
-    """
-    checkout = _provisioning_copy(tmp_path, "below-floor-python")
-    floor = _declared_python_floor(checkout)
-    older = f"{floor.major}.{floor.minor - 1}"
-    environment = _uv_provisioning_env()
-
-    created = _run("uv", "venv", "--python", older, ".venv", cwd=checkout, env=environment)
-    assert created.returncode == 0, created.stderr
-    assert _venv_python_version(checkout) < floor
-
-    install = _run(str(checkout / "scripts/python-install.sh"), cwd=checkout, env=environment)
-
-    assert install.returncode == 0, install.stderr
-    assert _venv_python_version(checkout) >= floor
-    imported = _run(
-        str(checkout / ".venv/bin/python"),
-        "-c",
-        "import jsonschema, mypy, orchestrator, pytest, xdist",
-        cwd=checkout,
-    )
-    assert imported.returncode == 0, imported.stderr
-    assert (checkout / "uv.lock").read_bytes() == (ROOT / "uv.lock").read_bytes()
-
-
-@rewrites_workspace_toolchain
-@shares_workspace_install
-@pytest.mark.reads_docs
-def test_the_gate_path_refuses_a_lockfile_that_would_have_to_move(tmp_path: Path) -> None:
-    """A committed lockfile decides, and one that has to move stops the run.
-
-    `uv run` would instead re-resolve and write the new answer back, so a branch
-    whose subject *is* a pin would be verified against a tree it does not contain.
-    """
-    checkout = _provisioning_copy(tmp_path, "stale-lock")
-    lockfile = checkout / "uv.lock"
-    before = lockfile.read_bytes()
-    pyproject = checkout / "pyproject.toml"
-    # Stale by exactly one field the lockfile carries, with no dependency to resolve,
-    # so what this journey drives is the refusal rather than a resolver's reachability.
-    pyproject.write_text(
-        pyproject.read_text(encoding="utf-8").replace('version = "0.1.0"', 'version = "0.1.1"', 1),
-        encoding="utf-8",
-    )
-
-    wrapper = _run(
-        "./scripts/nx.sh",
-        "show",
-        "projects",
-        cwd=checkout,
-        env=_uv_provisioning_env(XDG_CACHE_HOME=str(tmp_path / "cache")),
-    )
-
-    assert wrapper.returncode != 0
-    assert "python-install: provision the locked Python environment" in wrapper.stderr
-    assert "uv lock" in wrapper.stderr
-    assert lockfile.read_bytes() == before
-
-
-@rewrites_workspace_toolchain
-@shares_workspace_install
-@pytest.mark.reads_docs
-def test_a_caller_that_provides_the_python_environment_is_not_synced_over(
-    tmp_path: Path,
-) -> None:
-    """`UV_NO_SYNC` is honored, because the journeys that copy this checkout rely on it.
-
-    The environment named is an empty path rather than this checkout's own: what
-    fires this journey red is an install into whatever the caller provided, and it
-    must not be able to land on the environment the rest of the suite runs in.
-    """
-    checkout = _provisioning_copy(tmp_path, "provided-environment")
-    provided = tmp_path / "provided-venv"
-
-    wrapper = _run(
-        "./scripts/nx.sh",
-        "show",
-        "projects",
-        cwd=checkout,
-        env=_uv_provisioning_env(
-            UV_NO_SYNC="1",
-            UV_PROJECT_ENVIRONMENT=str(provided),
-            XDG_CACHE_HOME=str(tmp_path / "cache"),
-        ),
-    )
-
-    assert wrapper.returncode == 0, wrapper.stderr
-    assert not provided.exists(), "the provided environment was synced over"
-    assert not (checkout / ".venv").exists()
-
-
-@rewrites_workspace_toolchain
-@shares_workspace_install
-@pytest.mark.reads_docs
-def test_a_caller_that_asks_uv_to_sync_gets_the_environment_it_named(tmp_path: Path) -> None:
-    """`UV_NO_SYNC=0` is how uv is asked to sync, so it must not skip provisioning.
-
-    Read as a presence, the escape hatch fires on the spelling that means the
-    opposite of firing — and the environment the caller named is left empty for
-    every later reader of it to fall through.
-    """
-    checkout = _provisioning_copy(tmp_path, "requested-sync")
-    named = tmp_path / "requested-venv"
-
-    wrapper = _run(
-        "./scripts/nx.sh",
-        "show",
-        "projects",
-        cwd=checkout,
-        env=_uv_provisioning_env(UV_NO_SYNC="0", UV_PROJECT_ENVIRONMENT=str(named)),
-    )
-
-    assert wrapper.returncode == 0, wrapper.stderr
-    assert (named / "bin/oneharness").is_file()
-
-
-def _add_uv_double(checkout: Path) -> None:
-    """Trace what the wrapper asks of uv, and fail on request, provisioning nothing.
-
-    uv is the tool this wrapper delegates to; what the wrapper decides — whether to
-    call it at all, and what it leaves readable when the call fails — is under test.
-    """
-    uv = checkout / "bin" / "uv"
-    uv.write_text(
-        """#!/usr/bin/env bash
-set -euo pipefail
-printf 'uv %s\\n' "$*" >>"$TRACE_FILE"
-if [[ -n ${UV_DOUBLE_FAILURE:-} ]]; then
-    echo "$UV_DOUBLE_FAILURE" >&2
-    exit 1
-fi
-""",
-        encoding="utf-8",
-    )
-    uv.chmod(0o755)
-
-
-def _python_install_checkout(tmp_path: Path, name: str) -> Path:
-    """A wrapper checkout with a lockfile to provision and uv doubled."""
-    checkout = _nx_wrapper_checkout(tmp_path, name)
-    (checkout / "uv.lock").write_text("version = 1\n", encoding="utf-8")
-    _add_uv_double(checkout)
-    return checkout
-
-
-PYTHON_INSTALL = ROOT / "scripts" / "python-install.sh"
-
-#: One `UV_NO_SYNC` value per way of being unreadable, for the wrapper and for uv.
-UNREADABLE_NO_SYNC = (("empty", ""), ("blank", " "), ("numeric", "2"), ("word", "banana"))
-
-_NO_SYNC_ARM = re.compile(r"^\s*(?P<spellings>[a-z0-9]+(?: \| [a-z0-9]+)*)\)(?P<body>.*);;\s*$")
-
-
-def _declared_no_sync_grammar() -> dict[str, bool]:
-    """Each `UV_NO_SYNC` spelling the wrapper accepts, mapped to whether it skips.
-
-    Read out of the script rather than restated, so the journeys below and the gate
-    that measures uv both speak about the one list that decides.
-    """
-    grammar = {
-        spelling: "exit 0" in arm["body"]
-        for line in PYTHON_INSTALL.read_text(encoding="utf-8").splitlines()
-        if (arm := _NO_SYNC_ARM.match(line)) is not None
-        for spelling in arm["spellings"].split(" | ")
-    }
-    if not grammar:
-        raise AssertionError("scripts/python-install.sh no longer names its UV_NO_SYNC grammar")
-    return grammar
-
-
-DECLARED_NO_SYNC = _declared_no_sync_grammar()
-
-
-@rewrites_workspace_toolchain
-@pytest.mark.parametrize(("spelling", "skips"), sorted(DECLARED_NO_SYNC.items()))
-def test_uv_no_sync_skips_or_provisions_by_the_spelling_it_carries(
-    tmp_path: Path, spelling: str, skips: bool
-) -> None:
-    """Read as a presence, every one of these skipped — uv's false spellings included.
-
-    Each runs in both cases, because an operator's `UV_NO_SYNC=FALSE` has to mean
-    what uv means by `false`.
-    """
-    checkout = _python_install_checkout(tmp_path, f"no-sync-{spelling}")
-    trace = tmp_path / "trace"
-
-    for value in (spelling, spelling.upper()):
-        result = _run(
-            str(checkout / "scripts" / "python-install.sh"),
-            cwd=checkout,
-            env=_nx_wrapper_env(checkout, tmp_path, trace, UV_NO_SYNC=value),
-        )
-        assert result.returncode == 0, result.stderr
-
-    assert trace.exists() is not skips
-    if not skips:
-        assert trace.read_text(encoding="utf-8").splitlines() == ["uv sync --locked"] * 2
-
-
-def _uv_no_sync_probe(root: Path) -> Path:
-    """A project the installed uv can decide about without reaching an index.
-
-    Its one dependency is on no index at all, and the probe runs offline: a uv that
-    chose to sync fails to, and a uv that skipped runs the command instead.
-    """
-    project = root / "no-sync-probe"
-    project.mkdir()
-    # The probe runs under this suite's interpreter, so it states the floor that
-    # interpreter was provisioned against rather than a copy of it.
-    floor = _declared_python_floor(ROOT)
-    (project / "pyproject.toml").write_text(
-        '[project]\nname = "no-sync-probe"\nversion = "0.1.0"\n'
-        f'requires-python = ">={floor.major}.{floor.minor}"\n'
-        'dependencies = ["a-distribution-no-index-supplies-0000"]\n',
-        encoding="utf-8",
-    )
-    return project
-
-
-def _uv_reads_no_sync(project: Path, environment: Path, value: str) -> bool | None:
-    """Whether the installed uv skips the sync on one value, syncs on it, or refuses it."""
-    probe = _run(
-        "uv",
-        "run",
-        "--offline",
-        "--python",
-        sys.executable,
-        "--",
-        "python",
-        "-c",
-        "pass",
-        cwd=project,
-        env=_uv_provisioning_env(
-            UV_NO_SYNC=value,
-            UV_PYTHON_DOWNLOADS="never",
-            UV_PROJECT_ENVIRONMENT=str(environment),
-        ),
-    )
-    if "expected a boolish value" in probe.stderr:
-        return None
-    return probe.returncode == 0
-
-
-def test_the_no_sync_grammar_the_wrapper_declares_is_the_one_uv_reads(tmp_path: Path) -> None:
-    """uv owns this grammar, so the wrapper's copy is measured against it, not asserted.
-
-    A spelling uv stops accepting, or starts reading the other way round, would leave
-    the wrapper deciding the opposite of what the caller's own `uv run` decides.
-    """
-    project = _uv_no_sync_probe(tmp_path)
-
-    measured = {
-        spelling: _uv_reads_no_sync(project, tmp_path / f"env-{spelling}", spelling)
-        for spelling in DECLARED_NO_SYNC
-    }
-    refused = {
-        name: _uv_reads_no_sync(project, tmp_path / f"env-refused-{name}", value)
-        for name, value in UNREADABLE_NO_SYNC
-    }
-
-    assert measured == DECLARED_NO_SYNC
-    assert refused == dict.fromkeys(refused)
-
-
-@rewrites_workspace_toolchain
-@pytest.mark.parametrize(("name", "value"), UNREADABLE_NO_SYNC)
-def test_uv_no_sync_refuses_a_value_uv_would_refuse(tmp_path: Path, name: str, value: str) -> None:
-    """A value neither side can read is named here, not left to surface as uv's error.
-
-    Guessing either way is the defect: skip and provisioning silently does not
-    happen, sync and the caller's stated intent is silently overridden.
-    """
-    checkout = _python_install_checkout(tmp_path, f"no-sync-invalid-{name}")
-    trace = tmp_path / "trace"
-
-    result = _run(
-        str(checkout / "scripts" / "python-install.sh"),
-        cwd=checkout,
-        env=_nx_wrapper_env(checkout, tmp_path, trace, UV_NO_SYNC=value),
-    )
-
-    assert result.returncode == 2
-    assert f"UV_NO_SYNC='{value}' is not a value uv reads" in result.stderr
-    assert "or leave it unset" in result.stderr
-    assert not trace.exists(), "a refused value must not have reached uv"
-
-
-@rewrites_workspace_toolchain
-def test_python_install_leaves_the_failing_provision_readable(tmp_path: Path) -> None:
-    """A provision that failed on the way into the gate keeps its own reason on disk."""
-    checkout = _python_install_checkout(tmp_path, "unprovisionable-python")
-    trace = tmp_path / "trace"
-
-    result = _run(
-        str(checkout / "scripts" / "python-install.sh"),
-        cwd=checkout,
-        env=_nx_wrapper_env(
-            checkout, tmp_path, trace, UV_DOUBLE_FAILURE="uv: captured failure detail"
-        ),
-    )
-
-    assert result.returncode == 1
-    log = checkout / ".logs" / "python-install.log"
-    assert "python-install: provision the locked Python environment" in result.stderr
-    assert f"full output: {log}" in result.stderr
-    assert "uv: captured failure detail" in log.read_text(encoding="utf-8")
-    assert oct(log.stat().st_mode & 0o777) == "0o600"
-
-
-@rewrites_workspace_toolchain
-def test_python_install_log_records_the_credential_name_not_its_value(tmp_path: Path) -> None:
-    """A preserved log outlives its terminal, so it must never durably hold a token."""
-    checkout = _python_install_checkout(tmp_path, "python-install-credentials")
-    trace = tmp_path / "trace"
-    token = "sk-ant-oat01-not-a-real-credential"
-
-    result = _run(
-        str(checkout / "scripts" / "python-install.sh"),
-        cwd=checkout,
-        env=_nx_wrapper_env(
-            checkout,
-            tmp_path,
-            trace,
-            CLAUDE_CODE_OAUTH_TOKEN=token,
-            UV_DOUBLE_FAILURE=f"uv: refused with CLAUDE_CODE_OAUTH_TOKEN={token}",
-        ),
-    )
-
-    assert result.returncode == 1
-    log = (checkout / ".logs" / "python-install.log").read_text(encoding="utf-8")
-    assert token not in log
-    assert "CLAUDE_CODE_OAUTH_TOKEN=<redacted:CLAUDE_CODE_OAUTH_TOKEN>" in log
-    assert token not in result.stderr
-
-
-@rewrites_workspace_toolchain
-def test_python_install_refuses_an_argument_and_names_the_call_that_works(
-    tmp_path: Path,
-) -> None:
-    """A flag this script has no meaning for is refused rather than dropped.
-
-    Its sibling takes `--force`, so reaching for one here is the natural mistake —
-    and silently ignoring it would leave an operator believing they had forced
-    something. There is nothing to force: the locked sync is already idempotent.
-    """
-    checkout = _nx_wrapper_checkout(tmp_path, "python-install-arguments")
-
-    result = _run(str(checkout / "scripts" / "python-install.sh"), "--force", cwd=checkout)
-
-    assert result.returncode == 2
-    assert "expected no arguments, got '--force'" in result.stderr
-    assert "rerun it with none" in result.stderr
-
-
-@rewrites_workspace_toolchain
-def test_python_install_reports_a_host_that_cannot_provision_at_all(tmp_path: Path) -> None:
-    """Missing uv is named where the repair is, not deep inside a target.
-
-    This runs in front of every Nx invocation, so on a host that never bootstrapped
-    it is the first thing to notice — and what it says is the whole diagnosis. Left
-    to fall through, the same host fails much later with a bare `uv: command not
-    found` from whichever target happened to run first.
-    """
-    checkout = _nx_wrapper_checkout(tmp_path, "python-install-without-uv")
-    # A lockfile, because a workspace without one has no environment to provision
-    # and would exit before reaching the check under test.
-    (checkout / "uv.lock").write_text("version = 1\n", encoding="utf-8")
-    # A PATH holding what this script runs and nothing else, so what is withdrawn
-    # here is uv alone rather than whatever this host keeps beside it.
-    binaries = tmp_path / "path-without-uv"
-    binaries.mkdir()
-    for tool in ("bash", "dirname", "mkdir", "chmod", "cat", "rm", "sort"):
-        located = shutil.which(tool)
-        assert located is not None, f"this host has no {tool} for the journey to keep"
-        (binaries / tool).symlink_to(located)
-
-    result = _run(
-        str(checkout / "scripts" / "python-install.sh"),
-        cwd=checkout,
-        env={**os.environ, "PATH": str(binaries)},
-    )
-
-    assert result.returncode == 1
-    assert "'uv' is not installed" in result.stderr
-    assert "just bootstrap" in result.stderr
-
-
 @rewrites_workspace_toolchain
 def test_a_nested_nx_run_cannot_erase_the_running_one_s_log(tmp_path: Path) -> None:
     """The running check's log survives a nested Nx invocation in the same checkout.
@@ -2718,6 +2215,42 @@ def test_gate_recipe_validates_first_then_judges_then_checks(
 # llmlint: ignore-end[shell_test_tiers_stay_split]
 
 
+#: How `just lint-llm-diff` tells a replayed verdict from a judged one: the pattern it
+#: matches Nx's own report against, lifted from the recipe rather than restated.
+REPLAY_PATTERN = re.compile(
+    r"grep -qE '\^(?P<summary>[^|]+)\|\^> nx run [^(]+\((?P<annotations>[^)]+)\)'"
+)
+
+
+@shares_workspace_install
+def test_the_lint_recipe_matches_the_cache_wording_the_installed_nx_prints() -> None:
+    """The recipe's replay provenance is read off Nx's wording, so that wording is Nx's.
+
+    `just lint-llm-diff` reports a verdict as replayed only when Nx's report carries
+    its summary line or one of its cache annotations, and as freshly judged otherwise.
+    An Nx release that renamed either would make every replay read as a fresh
+    judgement without failing anything, so each phrase the recipe matches has to be one
+    the installed Nx prints. Read statically from Nx's own distribution: which change
+    replays the target is Nx's behaviour, and no Nx runs here.
+    """
+    recipe = (ROOT / "justfile").read_text(encoding="utf-8")
+    matched = REPLAY_PATTERN.search(recipe)
+    assert matched is not None, (
+        "the lint-llm-diff recipe no longer matches Nx's report as `^<summary>|^> nx run "
+        "<target> +[(<annotations>)`; lift its new form here"
+    )
+    dist = ROOT / "node_modules/nx/dist/src"
+    printed = "\n".join(
+        path.read_text(encoding="utf-8", errors="replace") for path in dist.rglob("*.js")
+    )
+    phrases = [matched["summary"], *(f"[{name}" for name in matched["annotations"].split("|"))]
+    missing = [phrase for phrase in phrases if phrase not in printed]
+    assert not missing, (
+        f"the installed Nx under {dist} prints none of {missing}, which the lint-llm-diff "
+        "recipe reads as a replayed verdict; match the wording this Nx release prints"
+    )
+
+
 UPGRADE_MANIFEST = ("package.json", "bun.lock")
 UPGRADE_INSTALL_CONFIG = ".puppeteerrc.json"
 
@@ -2725,9 +2258,8 @@ UPGRADE_INSTALL_CONFIG = ".puppeteerrc.json"
 def _upgrade_manifest_cache() -> Path:
     """Where this host keeps the resolution `bun update --latest` last produced.
 
-    Alongside the shared fixture lockfile `scripts/check-nx-cache.sh` publishes,
-    and for the same reason: what costs real time against this registry is
-    resolving a dependency tree, not installing one.
+    What costs real time against this registry is resolving a dependency tree, not
+    installing one.
     """
     root = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
     seed = b"".join((ROOT / name).read_bytes() for name in UPGRADE_MANIFEST)
@@ -2816,121 +2348,3 @@ def test_upgrade_recipe_preserves_bun_failure_and_stops(tmp_path: Path) -> None:
         "uv lock --upgrade",
         "uv sync",
     ]
-
-
-def test_real_cache_check_drives_both_linked_worktrees() -> None:
-    """Two real worktrees, a real cache hit and miss, and the failing run's own log.
-
-    The miss half of this check makes the real `scripts/nx.sh` fail, which is the
-    only place a genuine `nx.sh` failure happens under the gate — so it is also
-    where the preserved log is asserted. That log used to be a `mktemp` file an
-    EXIT trap removed.
-    """
-    result = _run("bash", "scripts/check-nx-cache.sh")
-
-    assert result.returncode == 0, result.stderr
-    assert result.stdout == (
-        "nx cache check: cross-worktree hit, broken-input miss, "
-        "and preserved failure log verified\n"
-    )
-
-
-def _shared_resolution_entry() -> tuple[str, str]:
-    """The cache entry name this host's check would use, and the manifest behind it.
-
-    Deliberately restated from `scripts/check-nx-cache.sh` rather than imported:
-    the association between a cached resolution and the manifest it came from is
-    the contract under test, so a test that asked the script for the answer could
-    not detect the script agreeing with itself. If the derivation there changes,
-    the accepted case below stops being accepted and says so.
-    """
-    root = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
-    fixture = json.loads(
-        (ROOT / "tests/fixtures/nx-cache/package.json").read_text(encoding="utf-8")
-    )
-    fixture["devDependencies"] = {
-        "nx": root["devDependencies"]["nx"],
-        "typescript": root["devDependencies"]["typescript"],
-    }
-    manifest = json.dumps(fixture, indent=2) + "\n"
-    bun_version = _run("bun", "--version").stdout.strip()
-    key = hashlib.sha256(manifest.encode() + bun_version.encode()).hexdigest()[:16]
-    return key, manifest
-
-
-#: A real, complete Bun lockfile. This repository's own is the honest fixture: it
-#: is a different tree, but the check's question is whether the file parses whole
-#: and carries what Bun needs, not which packages it resolved.
-COMPLETE_LOCKFILE = (ROOT / "bun.lock").read_text(encoding="utf-8")
-#: The same file cut off mid-write, which is what a publish interrupted by a kill
-#: or a full disk leaves behind. It keeps its opening bytes, so it is exactly the
-#: entry a prefix check would wave through.
-TRUNCATED_LOCKFILE = COMPLETE_LOCKFILE[:400]
-RESOLUTION_REFUSED = "resolve the fixture dependency tree"
-
-
-@pytest.mark.parametrize(
-    ("stored_lockfile", "stored_manifest", "resolves_again"),
-    [
-        pytest.param(COMPLETE_LOCKFILE, None, True, id="no-manifest-beside-it"),
-        pytest.param(
-            COMPLETE_LOCKFILE, '{"name": "something-else"}\n', True, id="manifest-of-another-tree"
-        ),
-        pytest.param(TRUNCATED_LOCKFILE, "", True, id="lockfile-cut-off-mid-write"),
-        pytest.param(COMPLETE_LOCKFILE, "", False, id="complete-and-vouched-for"),
-    ],
-)
-def test_cache_check_seeds_only_a_resolution_it_can_vouch_for(
-    tmp_path: Path, stored_lockfile: str, stored_manifest: str | None, resolves_again: bool
-) -> None:
-    """A shared resolution is trusted for its provenance, not for being readable.
-
-    The cache lives outside the repository under a key any process can write to,
-    so an entry in it is an untrusted input however it got there — a truncated
-    publish, a restored backup, an entry left by an older layout. Seeding one
-    unchecked would not fail here; it would surface much later as an unrelated
-    `--frozen-lockfile` error inside a worktree the check builds.
-
-    The registry is pointed somewhere nothing is listening, which makes the
-    decision observable in a second rather than the two minutes a real resolution
-    costs: re-resolving at all is the proof the entry was refused, and getting
-    past resolution is the proof it was accepted. Everything here is real — the
-    script, `bun`, and a connection that genuinely cannot be made.
-    """
-    key, manifest = _shared_resolution_entry()
-    entries = tmp_path / "cache" / "ai-orchestrator" / "nx-cache-fixture"
-    entries.mkdir(parents=True)
-    (entries / f"{key}.lock").write_text(stored_lockfile, encoding="utf-8")
-    if stored_manifest is not None:
-        (entries / f"{key}.manifest").write_text(stored_manifest or manifest, encoding="utf-8")
-
-    env = os.environ.copy()
-    env["XDG_CACHE_HOME"] = str(tmp_path / "cache")
-    env["npm_config_registry"] = "http://127.0.0.1:1/"
-
-    result = _run("bash", "scripts/check-nx-cache.sh", env=env)
-
-    assert result.returncode != 0, "an unreachable registry must not produce a passing check"
-    assert (RESOLUTION_REFUSED in result.stderr) is resolves_again, result.stderr
-
-
-@pytest.mark.parametrize(
-    "cache_home", ["", "relative/cache", "."], ids=["empty", "relative", "current-directory"]
-)
-def test_cache_check_refuses_a_cache_directory_it_cannot_place(cache_home: str) -> None:
-    """Where the shared cache lives is an input too, and a relative one is not usable.
-
-    This is the failure that would not announce itself: a relative or empty value
-    resolves against whatever directory the check happens to run in, so entries
-    land somewhere no later run looks. Nothing errors — every commit just quietly
-    pays a full resolution again while the cache appears to be working.
-    """
-    env = os.environ.copy()
-    env["XDG_CACHE_HOME"] = cache_home
-    env.pop("HOME", None)
-
-    with plan_store_cache.unguarded("the check's refusal of an unplaceable cache is the subject"):
-        result = _run("bash", "scripts/check-nx-cache.sh", env=env)
-
-    assert result.returncode != 0
-    assert "must name an absolute directory" in result.stderr

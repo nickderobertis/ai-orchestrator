@@ -14,8 +14,8 @@ These journeys build a scratch Nx workspace — this checkout's `nx.json`, root
 `project.json`, `scripts/` and locked installs, and two projects of their own, each
 registering a budget whose command records that it ran and reports the value a file of
 that project holds, and a `host` one timed as it runs. The focused cache journeys drive
-real Nx; the unconditional-host journey drives the shipped `just check` recipe, including
-its real cross-worktree cache check, without registering the parent suite as a target.
+real Nx; the unconditional-host journey drives the shipped `just check` recipe without
+registering the parent suite as a target.
 
 llmlint: ignore-file[e2e_not_mocked] Nothing is substituted: the two projects are the
 subject, and every command they register is real; the only thing standing in is what a
@@ -210,7 +210,6 @@ def workspace(tmp_path: Path) -> Workspace:
         shutil.copy2(REPO_ROOT / relative, root / relative)
     (root / ".gitignore").write_text("node_modules\n.nx\n.logs\n", encoding="utf-8")
     private_node_modules(root)
-    shutil.copytree(REPO_ROOT / "tests/fixtures/nx-cache", root / "tests/fixtures/nx-cache")
     marker = tmp_path / "ran"
     (root / DEPENDENCY).mkdir()
     (root / DEPENDENCY / "project.json").write_text(

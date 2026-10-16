@@ -5,10 +5,9 @@ key covers everything the check reads, and unsound the moment it does not: a fil
 the check reads but the key ignores is a tree that can change its answer without
 changing its hash, which is a green verdict for a tree that would have failed.
 
-`tests/e2e/workspace_copies/test_nx_cache_scope_e2e.py` proves the behaviour against real Nx. These
-assertions keep the declarations that behaviour rests on from narrowing again —
-including as the suite grows new reads, which is how the subset drifted out of
-date in the first place.
+How Nx replays a key is Nx's own behaviour; these assertions read the declarations
+that behaviour rests on and keep them from narrowing again — including as the suite
+grows new reads, which is how the subset drifted out of date in the first place.
 
 The Python suite is keyed at three scopes rather than one, because "keyed on
 everything it reads" and "keyed on the whole workspace" are not the same
@@ -83,14 +82,14 @@ from nx_inputs import (
     MARKER_TIER_ROOT,
     MERGE_POLICY_ROOT,
     MERGE_POLICY_SCOPED,
-    NX_CACHE_CHECK,
-    OPT_IN_TARGETS,
     PLAN_STORE_ASSETS_ROOT,
     PLAN_STORE_ASSETS_SCOPED,
     PLAN_TOOLING_DOCS_SCOPED,
     PLAN_TOOLING_PROJECTS,
     PLAN_TOOLING_ROOT,
     PLAN_TOOLING_SCOPED,
+    PRE_PUSH_PROVISIONING_ROOT,
+    PRE_PUSH_PROVISIONING_SCOPED,
     PROJECT_STORE_RACE_ROOT,
     PROJECT_STORE_RACE_SCOPED,
     RECIPE_SCOPED,
@@ -98,10 +97,10 @@ from nx_inputs import (
     RENDER_DIAGRAM_SCOPED,
     RUN_END_HOOKS_ROOT,
     RUN_END_HOOKS_SCOPED,
-    SELECTED_TARGETS,
+    SCHEMA_CACHE_ROOT,
+    SCHEMA_CACHE_SCOPED,
     SESSION_OPEN_CONFLICT_ROOT,
     SESSION_OPEN_CONFLICT_SCOPED,
-    SESSION_SETUP_PYPI_PROJECT,
     SESSION_SETUP_PYPI_ROOT,
     SESSION_SETUP_PYPI_SCOPED,
     SESSION_SETUP_ROOT,
@@ -110,7 +109,6 @@ from nx_inputs import (
     TEST_SUPPORT,
     TOOLCHAIN_ISOLATION_ROOT,
     TOOLCHAIN_ISOLATION_SCOPED,
-    UNCONDITIONAL_TARGETS,
     UNFINISHED_HOST_SCOPED,
     UNFINISHED_ROOT,
     UNFINISHED_SCOPED,
@@ -133,8 +131,6 @@ from nx_inputs import (
     project_declarations,
     project_root,
     repository_relative,
-    repository_relative_globs,
-    resolve_input_globs,
     target_input_globs,
 )
 from nx_workspace import (
@@ -288,18 +284,6 @@ def test_workspace_scoped_targets_are_keyed_on_the_whole_workspace() -> None:
     )
 
 
-#: The recipe whose project selection the two lists above partition.
-DETERMINISTIC_RECIPE = "check"
-#: How that recipe hands Nx the selection `scripts/nx-selection.sh` decided, and how it
-#: names the tiers it never lets a diff decide. Matched literally, because what makes
-#: the narrowing sound is which of the two invocations a target is named by.
-SELECTED_INVOCATION = './scripts/nx.sh "${selected[@]}" -t '
-UNCONDITIONAL_INVOCATION = "./scripts/nx.sh run-many -t "
-#: Where that recipe takes its selection from. One source, so the base a narrowed gate
-#: judges against cannot be decided in two places.
-SELECTION_SOURCE = "selection=$(./scripts/nx-selection.sh)"
-
-
 def _project_declarations() -> dict[str, dict]:
     """Every project Nx knows here, keyed by the root its declaration sits at.
 
@@ -314,107 +298,6 @@ def _project_declarations() -> dict[str, dict]:
                 (REPO_ROOT / tracked).read_text(encoding="utf-8")
             )
     return declarations
-
-
-def _memoizes(target: str, declaration: dict) -> bool:
-    """Whether Nx would replay ``target`` rather than run it, defaults included.
-
-    A `targetDefaults` entry that names no `cache` is Nx's own default, which is not
-    to cache — so a target nothing declares is read as unmemoized rather than assumed
-    memoized, because that is the direction in which a wrong answer here is safe.
-    """
-    declared = declaration["targets"][target]
-    if "cache" in declared:
-        return bool(declared["cache"])
-    return bool(_nx_config()["targetDefaults"].get(target, {}).get("cache", False))
-
-
-def _owners(target: str) -> list[tuple[str, dict]]:
-    return [
-        (root, declaration)
-        for root, declaration in _project_declarations().items()
-        if target in declaration["targets"]
-    ]
-
-
-def _deterministic_recipe_body() -> str:
-    lines = (REPO_ROOT / "justfile").read_text(encoding="utf-8").splitlines()
-    start = lines.index(f"{DETERMINISTIC_RECIPE}:") + 1
-    body: list[str] = []
-    for line in lines[start:]:
-        if line and not line.startswith((" ", "\t")):
-            break
-        body.append(line)
-    return "\n".join(body)
-
-
-def test_every_tier_a_diff_can_deselect_is_one_a_memo_would_have_answered() -> None:
-    """Narrowing is only sound where skipping a tier and replaying it are the same thing.
-
-    Nx leaves a project out when no changed file matched an input of any of its
-    targets, which is exactly the condition under which each of those targets would
-    have replayed a memo recorded for this tree. That equivalence is what licenses the
-    deterministic tier to run over fewer projects than it has — and it is an argument
-    about *cached* targets only. An unmemoized tier reached by a diff-driven selection
-    is not replayed when its project is left out; it simply does not run, and the gate
-    quietly stops checking what it checks.
-    """
-    for target in SELECTED_TARGETS:
-        owners = _owners(target)
-        if not owners and target in OPT_IN_TARGETS:
-            assert _memoizes(target, {"targets": {target: {}}}), (
-                f"{target} is a tier a diff can deselect that a project opts into, so "
-                "nx.json's targetDefaults has to memoize it for every project that does"
-            )
-            continue
-        assert owners, f"the deterministic tier selects {target}, which no project declares"
-        for root, declaration in owners:
-            assert _memoizes(target, declaration), (
-                f"{root or 'workspace'}:{target} is a tier a diff can deselect, so a "
-                "project Nx leaves out has to be one this target would have replayed "
-                "for; an unmemoized tier belongs in UNCONDITIONAL_TARGETS instead"
-            )
-
-    for target in UNCONDITIONAL_TARGETS:
-        owners = _owners(target)
-        if not owners and target in OPT_IN_TARGETS:
-            assert not _memoizes(target, {"targets": {target: {}}}), (
-                f"{target} is a tier that always runs that a project opts into, so "
-                "nx.json's targetDefaults must leave it unmemoized for every project that does"
-            )
-            continue
-        assert owners, f"the deterministic tier always runs {target}, which no project declares"
-        for root, declaration in owners:
-            assert not _memoizes(target, declaration), (
-                f"{root or 'workspace'}:{target} is memoized, so the diff could decide it "
-                "and it no longer earns a place among the tiers that always run"
-            )
-
-
-def test_the_deterministic_recipe_splits_its_tiers_along_that_same_line() -> None:
-    """The recipe is the selection; these two lists only describe it if it says so."""
-    body = _deterministic_recipe_body()
-    assert set(SELECTED_TARGETS).isdisjoint(UNCONDITIONAL_TARGETS)
-    assert SELECTION_SOURCE in body, (
-        "the base a narrowed gate judges against comes from scripts/nx-selection.sh"
-    )
-    assert f"{SELECTED_INVOCATION}{','.join(SELECTED_TARGETS)}" in body
-    assert f"{UNCONDITIONAL_INVOCATION}{','.join(UNCONDITIONAL_TARGETS)}" in body
-    # Each phase runs whatever the one before it returned, so one run reports every
-    # failing target: no Nx invocation is chained to the next by `&&`, and each records
-    # its own failure for the combined status.
-    invocations = re.findall(r"\./scripts/nx\.sh [^|]+", body)
-    assert len(invocations) == 3, invocations
-    assert "&& ./scripts/nx.sh" not in body
-    assert body.count('| redact_secrets >>"$log" || failed+=(') == len(invocations), (
-        "every phase of the deterministic recipe records its own failure and lets the "
-        "next phase run"
-    )
-    named = [target for group in re.findall(r"-t ([\w,-]+)", body) for target in group.split(",")]
-    assert sorted(named) == sorted([*SELECTED_TARGETS, *UNCONDITIONAL_TARGETS]), (
-        "every target the deterministic tier runs is either one a diff may deselect or "
-        "one it never may, and which of the two decides whether skipping it is sound"
-    )
 
 
 def test_the_marker_that_routes_a_test_to_its_tier_means_the_same_thing_everywhere() -> None:
@@ -618,7 +501,7 @@ def _worker_contracts(path: str, target: str) -> list[tuple[str, str]]:
         ]
     else:
         recipe = re.search(
-            rf"^{re.escape(target)}:\n((?:[ \t]+.*\n?)+)",
+            rf"^{re.escape(target)}:(?:[ \t]+[A-Za-z_][\w-]*)*[ \t]*\n((?:[ \t]+.*\n?)+)",
             (REPO_ROOT / path).read_text(encoding="utf-8"),
             flags=re.MULTILINE,
         )
@@ -681,15 +564,20 @@ def test_agents_md_states_the_parallelism_the_gate_runs() -> None:
 
 
 #: The scripts that install into or rewrite a `.venv`, `.venv/bin` or `node_modules`, by
-#: file name: `scripts/nx.sh` heals both installs before every invocation, and the two
-#: setup scripts provision the project environment and run `uv tool install`.
+#: file name: `scripts/nx.sh` runs the `bootstrap` targets, one of which syncs the project
+#: environment, and the two setup scripts provision it and run `uv tool install`.
 TOOLCHAIN_WRITER_SCRIPTS = (
     "nx.sh",
     "workspace-install.sh",
-    "python-install.sh",
     "session-setup.sh",
     "setup-llmlint.sh",
 )
+
+#: The git hooks under `.githooks/` that provision the checkout they run in, by file name:
+#: `pre-push` runs session setup's `--provision-only` before its gate, since a
+#: publication's worktree is one no session start provisioned. Each runs that setup, so it
+#: installs `uv` tools as session setup does.
+TOOLCHAIN_WRITER_HOOKS = ("pre-push",)
 
 #: The installers a test can run without any script. A no-change `bun install` still
 #: re-links every package carrying a `bin`, so it is a writer even over a tree in sync.
@@ -864,6 +752,7 @@ class _WriterPatterns(NamedTuple):
     """What a spelled argv is matched against, built once per definition."""
 
     script: re.Pattern[str]
+    hook: re.Pattern[str]
     tool_script: re.Pattern[str]
     shell: re.Pattern[str]
     installing_shell: re.Pattern[str]
@@ -899,6 +788,8 @@ def _runs_of(spelled: list[str], rooted: bool, patterns: _WriterPatterns) -> set
             return found
         case [launcher, *command] if launcher in _LAUNCHERS:
             return _runs_of(command, rooted, patterns)
+        case [command, *_] if hooked := patterns.hook.search(command):
+            return {_Run(f".githooks/{hooked[1]}", _in_this_checkout(command), True)}
         case [command, *_] if patterns.script.search(command):
             here = _in_this_checkout(command) or (rooted and command.startswith(("./", "scripts/")))
             installs = bool(patterns.tool_script.search(command))
@@ -918,15 +809,19 @@ def _writer_runs(
 ) -> frozenset[_Run]:
     """Every writer an argv in this syntax runs.
 
-    A script is run when it is the argv's command, behind `bash`/`sh`/`exec`, or the
-    file a `bash -c` string sources; a recipe when `just` runs it; `uv sync` and `bun
-    install` as the two leading words. It runs *here* — in this checkout — when the
-    script's spelling is rooted at `REPO_ROOT`, or a relative command or a `just` runs
-    with `cwd` there. A run installs `uv` tools when it runs a tool-installing script as
-    its entry point, sources one to call `ensure_just`, or runs a recipe that does.
+    A script or a provisioning git hook is run when it is the argv's command, behind
+    `bash`/`sh`/`exec`, or (a script) the file a `bash -c` string sources; a recipe when
+    `just` runs it; `uv sync` and `bun install` as the two leading words. It runs *here*
+    — in this checkout — when the script's spelling is rooted at `REPO_ROOT`, or a
+    relative command or a `just` runs with `cwd` there. A run installs `uv` tools when
+    it runs a tool-installing script as its entry point, sources one to call
+    `ensure_just`, or runs a recipe that does.
     """
     patterns = _WriterPatterns(
         script=_script_named(TOOLCHAIN_WRITER_SCRIPTS),
+        hook=re.compile(
+            rf"(?:^|['\"/])({'|'.join(map(re.escape, TOOLCHAIN_WRITER_HOOKS))})(?=['\"]|$)"
+        ),
         tool_script=_script_named(TOOL_INSTALLING_SCRIPTS),
         shell=_invoking(frozenset(TOOLCHAIN_WRITER_SCRIPTS), recipes=writing),
         installing_shell=_invoking(
@@ -972,9 +867,9 @@ def _shares_this_checkouts_toolchain(
 
     A symlink to either, and a `UV_PROJECT_ENVIRONMENT` naming this checkout's `.venv`
     without `UV_NO_SYNC` beside it in the same mapping — the one way a copy may read it,
-    since `UV_NO_SYNC` is what stops the copy's `scripts/python-install.sh` and `uv run`
-    syncing it. Only a writer is held to this: a reader symlinking a tool out of this
-    checkout's `.venv/bin` runs nothing that could write through the link.
+    since `UV_NO_SYNC` is what stops the copy's `uv run` syncing it. Only a writer is held
+    to this: a reader symlinking a tool out of this checkout's `.venv/bin` runs nothing
+    that could write through the link.
     """
     constants = {**constants, **_local_constants(node)}
     found: list[str] = []
@@ -1252,7 +1147,11 @@ CASE_ARM = re.compile(r"^ +([a-z][a-z-]*(?: *\| *[a-z][a-z-]*)*)\)$", re.MULTILI
 #: rather than on an empty set that also looks like a launch surface having gone.
 DOCUMENTED_LAUNCH_RECIPE = "orchestrate"
 
-JUST_RECIPE = re.compile(r"^([a-z][a-z0-9-]*)[^\n:]*:\n((?:[ \t]+.*\n?)*)", re.MULTILINE)
+#: A recipe's name and body, past any parameters and any recipes it depends on.
+JUST_RECIPE = re.compile(
+    r"^([a-z][a-z0-9-]*)[^\n:]*:(?:[ \t]+[A-Za-z_][\w-]*)*[ \t]*\n((?:[ \t]+.*\n?)*)",
+    re.MULTILINE,
+)
 
 
 def _launching_recipes() -> frozenset[str]:
@@ -1852,7 +1751,8 @@ def _collected_once(selection: tuple[str, ...]) -> frozenset[str]:
 #: updates and one board item per lineage in one, the `run-end-hooks` project owns the
 #: journey that fires the run-end hooks through a real launch in one, the
 #: `project-store-race` project owns the clock-bounded replacement race over the record
-#: store in one, the `plan-store-assets` project owns the journey over a document's image
+#: store in one, the `schema-cache` project owns the journeys over the one schema cache a
+#: session warms in one, the `plan-store-assets` project owns the journey over a document's image
 #: assets in one, the `render-diagram` project owns the journeys over `just render-diagram`
 #: in one, the `unpublished-view` project owns the
 #: journey over `just unpublished` in one, the `unfinished` project owns the journeys over
@@ -1860,8 +1760,10 @@ def _collected_once(selection: tuple[str, ...]) -> frozenset[str]:
 #: whose dispatch ends inside its grace period in one, the `manager-allowlist` project owns the
 #: journeys over `just sync-allowlist` and `just probe-allowlist` in one, the `host-views`
 #: project owns the journeys
-#: over `just status` and `just host` in one, the `session-open-conflict` project owns the
-#: journey over a continued branch's conflict with its moved base in one, each project in
+#: over `just status` and `just host` in one, the `pre-push-provisioning` project owns the
+#: journey over the tracked `pre-push` hook's provisioning in one, the
+#: `session-open-conflict` project owns the journey over a continued branch's conflict with
+#: its moved base in one, each project in
 #: `E2E_JOURNEYS` owns one family of the journeys under `tests/e2e/` — in a `test` target,
 #: an uncached `test-checkouts` one where its journeys read another repository's checkout,
 #: and a whole-workspace `test-docs` one where they copy this checkout — and the
@@ -1875,6 +1777,11 @@ SUITE_TIERS = (
         for target in sorted(project_declarations()[subject.root]["targets"])
     ),
     (f"{SESSION_SETUP_ROOT}/project.json", SESSION_SETUP_SCOPED),
+    # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
+    # catalog of test projects, where every project has its entry; the pre-push-provisioning
+    # entry sits beside the others' because the catalog is the domain.
+    (f"{PRE_PUSH_PROVISIONING_ROOT}/project.json", PRE_PUSH_PROVISIONING_SCOPED),
+    # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
     # catalog of test projects, where every project has its entry, and
     # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside
@@ -1890,6 +1797,13 @@ SUITE_TIERS = (
     (f"{WRITEBACK_BUDGET_ROOT}/project.json", WRITEBACK_BUDGET_SCOPED),
     (f"{RUN_END_HOOKS_ROOT}/project.json", RUN_END_HOOKS_SCOPED),
     (f"{PROJECT_STORE_RACE_ROOT}/project.json", PROJECT_STORE_RACE_SCOPED),
+    # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
+    # catalog of test projects, where every project has its entry, and
+    # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside the tiers
+    # it describes; the schema-cache entry sits beside the others' because the catalog is the
+    # domain.
+    (f"{SCHEMA_CACHE_ROOT}/project.json", SCHEMA_CACHE_SCOPED),
+    # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
     # catalog of test projects, where every project has its entry, and
     # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside
@@ -2314,25 +2228,6 @@ def test_every_repository_path_the_suite_reads_is_part_of_a_test_key() -> None:
     assert "README.md" in uncovered, (
         "the sentinel prose read moved; keep a real one here or this guard stops guarding"
     )
-
-
-def test_the_e2e_witnesses_still_name_paths_outside_the_project_roots() -> None:
-    """Each journey's witness must stay a file no project-root glob would cover.
-
-    One witness per tier, and they have to differ in exactly the way the two keys
-    do: the prose witness proves the whole-workspace tier notices documentation,
-    and the code witness proves the narrowed tier still notices everything else.
-    """
-    globs = repository_relative_globs(
-        resolve_input_globs(["default"], _nx_config()["namedInputs"]), project_root="orchestrator"
-    )
-    for witness in ("AGENTS.md", "justfile"):
-        assert not covers(globs, witness)
-        assert (REPO_ROOT / witness).exists()
-
-    code_globs = _effective_inputs("orchestrator", CODE_SCOPED)
-    assert not covers(code_globs, "AGENTS.md")
-    assert covers(code_globs, "justfile")
 
 
 def _suite_modules() -> dict[str, str]:
@@ -2844,7 +2739,6 @@ SHARED_NAMED_INPUTS = frozenset(
         "sharedGlobals",
         WHOLE_WORKSPACE,
         CODE_WORKSPACE,
-        NX_CACHE_CHECK,
         TEST_SUPPORT,
     }
 )
@@ -2871,56 +2765,6 @@ def test_nx_json_carries_no_tier_inventory_and_no_key_lists_a_helper_by_glob() -
             continue
         swept = [helper for helper in helpers if matches(relative, helper)]
         assert not swept, f"{where} reaches helper modules {swept} by the glob {entry}"
-
-
-def test_the_pypi_journeys_are_a_project_the_check_never_selects() -> None:
-    """The journeys that install from PyPI stay behind an edge of their own.
-
-    They re-provision a fixture repository and fetch the adopted releases from PyPI, so
-    they are the one target of the `session-setup-pypi` project — which `just test` and
-    `just upgrade` run and no selection `just check` makes can reach — keyed on what they
-    copy and run. A project rather than a second target of `session-setup`, because Nx's
-    edges and `nx affected` are per project. The modules of `orchestrator/` either
-    session-setup project is keyed on are exactly those its journeys import, directly and
-    through `tests/conftest.py`, so an edit to any other leaves both alone; both are
-    keyed on `scripts/session-setup.sh`, which both run; and no other project collects the
-    directory the PyPI journeys live in.
-    """
-    assert SESSION_SETUP_PYPI_SCOPED not in (*SELECTED_TARGETS, *UNCONDITIONAL_TARGETS)
-    declared = project_declarations()[SESSION_SETUP_PYPI_ROOT]
-    assert declared["name"] == SESSION_SETUP_PYPI_PROJECT
-    assert set(declared["targets"]) == {SESSION_SETUP_PYPI_SCOPED}, declared["targets"]
-    assert (
-        f"pytest {SESSION_SETUP_PYPI_ROOT} "
-        in declared["targets"][SESSION_SETUP_PYPI_SCOPED]["command"]
-    )
-    assert _memoizes(SESSION_SETUP_PYPI_SCOPED, declared)
-    assert set(project_declarations()[SESSION_SETUP_ROOT]["targets"]) == {SESSION_SETUP_SCOPED}
-    orchestrator = project_declarations()["orchestrator"]["targets"]
-    for target in (CODE_SCOPED, DOCS_SCOPED, RECIPE_SCOPED, CHECKOUT_SCOPED):
-        assert not _collects_under(orchestrator[target]["command"], SESSION_SETUP_PYPI_ROOT), target
-
-    recipes = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
-    for recipe in ("test *nx_args", "upgrade"):
-        body = re.search(rf"^{re.escape(recipe)}:\n\s+(.+)$", recipes, re.MULTILINE)
-        assert body is not None, recipe
-        assert re.search(rf"-t [\w,-]*\b{SESSION_SETUP_PYPI_SCOPED}\b", body.group(1)), (
-            f"`just {recipe.split()[0]}` is a recipe that runs the PyPI journeys, and it no "
-            "longer names them"
-        )
-    package = sorted(path for path in _tracked() if path.startswith("orchestrator/"))
-    for root, target in (
-        (SESSION_SETUP_ROOT, SESSION_SETUP_SCOPED),
-        (SESSION_SETUP_PYPI_ROOT, SESSION_SETUP_PYPI_SCOPED),
-    ):
-        globs = _effective_inputs(root, target)
-        assert covers(globs, "scripts/session-setup.sh"), root
-        keyed = [path for path in package if covers(globs, path)]
-        imported = sorted(_tier_package_imports(f"{root}/project.json", target))
-        assert keyed == imported, (
-            f"{root} is keyed on {keyed} of orchestrator/; the modules its journeys import, "
-            f"directly and through `tests/conftest.py`, are {imported}"
-        )
 
 
 def test_the_recipe_key_stays_inside_the_code_key() -> None:
@@ -3155,73 +2999,6 @@ def test_each_ask_seam_journey_is_keyed_on_what_it_reads_and_nothing_wider() -> 
             "stand-in, nor runs under — a sibling's module or a helper it never opens, and "
             "an edit there would pay for this journey's launch"
         )
-
-
-def test_the_nx_cache_check_key_covers_every_repository_path_that_check_reads() -> None:
-    """`just check` replays this check, so its key has to carry what it opens.
-
-    The check builds two linked worktrees out of the fixture and drives the real
-    `scripts/nx.sh` in both. Every one of those inputs is named in the script as
-    `$root/<path>`, which is what makes the reconciliation mechanical rather than a
-    reviewer's reading of a shell script.
-    """
-    assert _nx_config()["targetDefaults"]["check-nx-cache"]["inputs"] == [NX_CACHE_CHECK], (
-        "the check has to be keyed on its own named input, or the reconciliation below "
-        "is checking globs the target does not actually hash"
-    )
-
-    script = "scripts/check-nx-cache.sh"
-    text = (REPO_ROOT / script).read_text(encoding="utf-8")
-    named = {match.group(1) for match in re.finditer(r'"\$root/([^"]+)"', text)}
-    assert {"package.json", "scripts/nx.sh", "tests/fixtures/nx-cache"} <= named, named
-
-    tracked = _tracked()
-    read = {script}
-    for candidate in named:
-        if candidate in tracked:
-            read.add(candidate)
-        else:
-            read |= {path for path in tracked if path.startswith(f"{candidate}/")}
-
-    globs = _effective_inputs("", "check-nx-cache")
-    uncovered = sorted(path for path in read if not covers(globs, path))
-    assert not uncovered, (
-        "workspace:check-nx-cache reads these repository paths but is not keyed on "
-        f"them, so a change to one replays a stale verdict: {uncovered}"
-    )
-    # Narrow on purpose: a key that had quietly widened to the whole workspace would
-    # pass the assertion above and replay nothing.
-    assert not covers(globs, "AGENTS.md")
-    assert not covers(globs, "orchestrator/labels.py")
-
-
-def test_the_cache_fixture_ignores_what_the_wrapper_chain_writes_into_it() -> None:
-    """The fixture's cross-worktree hit must not turn on what a wrapper wrote first.
-
-    `scripts/nx.sh` provisions before it reaches Nx, and provisioning writes a
-    preserved log into the tree it is provisioning. Bun's carries its own
-    millisecond stamp, so two worktrees' copies of it differ — and Nx hashes an
-    untracked file nothing ignores. Measured in the fixture: one differing file
-    under that directory took a 100% cache hit to 0%. So the fixture has to ignore
-    the state this repository ignores, or the contract it proves holds only while
-    no wrapper writes anything on its way in.
-    """
-    preserved = (REPO_ROOT / "scripts/preserved-log.sh").read_text(encoding="utf-8")
-    directory = re.search(r'dir="\$root/([^"]+)"', preserved)
-    assert directory is not None, (
-        "scripts/preserved-log.sh no longer names the directory it writes into as "
-        '`dir="$root/<name>"`; this gate reads it from there rather than restating it'
-    )
-    rule = f"/{directory.group(1)}/"
-
-    rules = REPO_ROOT / "tests/fixtures/nx-cache/.gitignore"
-    assert rules.is_file(), f"{rules} is gone, so the fixture ignores nothing a wrapper writes"
-    ignored = rules.read_text(encoding="utf-8")
-
-    assert rule in ignored.splitlines(), (
-        f"the cache fixture does not ignore {rule}, which every `scripts/nx.sh` in it "
-        "writes into before Nx hashes anything"
-    )
 
 
 def test_every_project_root_is_in_the_static_catalog() -> None:

@@ -10,6 +10,7 @@
   "implicitDependencies": [
     "support-conftest",
     "support-nx-workspace",
+    "support-provisioning",
     "support-published-tools",
     "support-waits"
   ],
@@ -26,6 +27,10 @@
       "{workspaceRoot}/scripts/setup-llmlint.sh",
       "{workspaceRoot}/scripts/repos-bootstrap.sh",
       "{workspaceRoot}/scripts/registered-checkouts.sh",
+      "{workspaceRoot}/scripts/workspace-install.sh",
+      "{workspaceRoot}/scripts/install-lock.sh",
+      "{workspaceRoot}/scripts/preserved-log.sh",
+      "{workspaceRoot}/scripts/require-provisioned.sh",
       "{workspaceRoot}/tests/host_sweep/**/*",
       "{workspaceRoot}/orchestrator/root.py"
     ]

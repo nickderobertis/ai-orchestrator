@@ -39,7 +39,11 @@ import plan_fixture_source
 import plan_root_variable
 import pytest
 import short_state
-from nx_workspace import answering_this_checkouts_origin, copy_working_tree
+from nx_workspace import (
+    answering_this_checkouts_origin,
+    copy_working_tree,
+    share_this_checkouts_install,
+)
 from project_fixtures import (
     budgeted,
     described_record,
@@ -1167,11 +1171,14 @@ def test_moving_the_review_bar_invalidates_every_record_granted_under_it(
     # The copy answers the same origin as this checkout, so what it refuses below is
     # the moved bar and not a host that reads as another repository.
     answering_this_checkouts_origin(moved)
+    # The copy runs its recipe on this checkout's install, through the shared overlay.
+    shared = share_this_checkouts_install(moved)
     move(moved)
 
     refused = subprocess.run(
         ["just", "check-plan", project],
         cwd=moved,
+        env=dict(os.environ) | shared,
         text=True,
         capture_output=True,
         timeout=e2e_timeout(180),
@@ -2696,11 +2703,13 @@ def test_moving_what_the_compact_view_shows_invalidates_the_plan_record_and_no_t
     moved.mkdir()
     copy_working_tree(moved)
     answering_this_checkouts_origin(moved)
+    shared = share_this_checkouts_install(moved)
     _move_the_compact_view(moved)
 
     refused = subprocess.run(
         ["just", "check-plan", project],
         cwd=moved,
+        env=dict(os.environ) | shared,
         text=True,
         capture_output=True,
         timeout=e2e_timeout(180),
@@ -2918,12 +2927,13 @@ def test_moving_the_plan_checklist_invalidates_the_plan_record_and_no_task_recor
     moved.mkdir()
     copy_working_tree(moved)
     answering_this_checkouts_origin(moved)
+    shared = share_this_checkouts_install(moved)
     move(moved, checking)
 
     refused = subprocess.run(
         ["just", "check-plan", project],
         cwd=moved,
-        env=checking,
+        env=checking | shared,
         text=True,
         capture_output=True,
         timeout=e2e_timeout(180),

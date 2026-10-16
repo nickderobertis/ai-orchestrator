@@ -31,6 +31,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 #: Copied into the checkout so a recipe that delegates through a script finds it.
 WRAPPER_SCRIPTS = (
+    # The provisioning check every recipe that runs `uv run` depends on. This checkout
+    # carries no `uv.lock`, so it has no project environment for the check to require.
+    "require-provisioned.sh",
     "planner-surface.sh",
     "new-persona.sh",
     "telemetry-server.sh",

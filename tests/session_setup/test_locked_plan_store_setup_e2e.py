@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -12,15 +13,17 @@ from pathlib import Path
 from typing import Literal, TypeIs, get_args
 
 import pytest
-from nx_workspace import TOOLCHAIN_WRITER_MARKS, WORKSPACE_INSTALL_MARKS, isolated_python_root
+from nx_workspace import TOOLCHAIN_WRITER_MARKS, copy_working_tree
+from offline_installs import NO_NETWORK
 from waits import until
 
 from orchestrator.root import REPO_ROOT
 
-#: Every journey here runs the real session setup, which re-provisions the `.venv` of the
-#: checkout it runs in and installs `uv` tools: a writer, run in a copy of this checkout
-#: whose toolchain is its own, taking that copy's install from this checkout's.
-pytestmark = [*WORKSPACE_INSTALL_MARKS, *TOOLCHAIN_WRITER_MARKS]
+#: Every journey here runs the real session setup, which provisions the `.venv` and the
+#: `node_modules` of the checkout it runs in and installs `uv` tools: a writer, run in a
+#: copy of this checkout that arrives with neither and is provisioned by the first setup
+#: run in it — the module's one private toolchain, built by the setup under test.
+pytestmark = [*TOOLCHAIN_WRITER_MARKS]
 
 #: The variable session setup's last step reads its checkout list from, in place of the
 #: tracked one. Named here so a run of the real setup provisions the stand-ins below and
@@ -220,16 +223,107 @@ def _marks(marks: Path) -> list[str]:
     return sorted(marks.read_text(encoding="utf-8").split()) if marks.exists() else []
 
 
-@pytest.fixture(scope="module")
-def setup_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """A copy of this checkout, with a `.venv` and `node_modules` of its own, to set up.
+@dataclass(frozen=True)
+class FirstSetup:
+    """The copy of this checkout session setup provisioned, and what that first run said."""
 
-    Session setup provisions the checkout it runs in — `uv sync` when a pin is not met,
-    the plan root, the Bun install it verifies — so it runs here rather than in this
-    checkout, whose toolchain every other worker's recipes read. One per worker, because
-    the copy is the cost and the journeys on one worker run one after another.
+    root: Path
+    started: subprocess.CompletedProcess[str]
+
+
+#: Every way a caller points uv at an environment, dropped so the setup syncs the copy's own.
+PROVIDED_ENVIRONMENT = ("UV_NO_SYNC", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV")
+
+
+@pytest.fixture(scope="module")
+def first_setup(tmp_path_factory: pytest.TempPathFactory) -> FirstSetup:
+    """A copy of this checkout's tracked files with no toolchain, provisioned by real setup.
+
+    The copy carries what a fresh worktree carries — what git would commit, and no
+    `.venv` or `node_modules` — and the real `scripts/session-setup.sh` is the only thing
+    that provisions it, as it is the only thing that provisions a worktree. It keeps this
+    host's home, so the Bun and uv caches it installs from are the host's, and names its
+    own state and an empty sibling list, so it neither reaches this host's registered
+    checkouts nor sweeps this host's state, and installs offline, from those caches alone.
+    One per module: the toolchain is the cost.
     """
-    return isolated_python_root(tmp_path_factory.mktemp("setup-root") / "checkout")
+    base = tmp_path_factory.mktemp("setup-root")
+    root = base / "checkout"
+    root.mkdir()
+    copy_working_tree(root)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True, capture_output=True)
+    assert not (root / ".venv").exists() and not (root / "node_modules").exists()
+    listing = base / "checkouts"
+    listing.write_text("", encoding="utf-8")
+    for directory in ("oneagentgraph-state", "tmp"):
+        (base / directory).mkdir()
+    environment = {
+        **{name: value for name, value in os.environ.items() if name not in PROVIDED_ENVIRONMENT},
+        **NO_NETWORK,
+        REGISTERED_CHECKOUTS_OVERRIDE: str(listing),
+        "XDG_CACHE_HOME": str(base / "cache"),
+        "ONEVCS_HOME": str(base / "onevcs-home"),
+        "ONEAGENTGRAPH_STATE_DIR": str(base / "oneagentgraph-state"),
+        "TMPDIR": str(base / "tmp"),
+        **_private_tool_directories(base),
+    }
+    sweeps: list[int] = []
+    try:
+        started = subprocess.run(
+            ["bash", str(root / "scripts" / "session-setup.sh")],
+            cwd=root,
+            text=True,
+            capture_output=True,
+            check=False,
+            env=environment,
+        )
+        sweeps.extend(_host_sweep_jobs(started.stderr))
+    finally:
+        _await_host_sweeps(sweeps)
+    return FirstSetup(root=root, started=started)
+
+
+@pytest.fixture(scope="module")
+def setup_root(first_setup: FirstSetup) -> Path:
+    """The provisioned copy every later journey sets up again, as a later session would."""
+    assert first_setup.started.returncode == 0, first_setup.started.stderr
+    return first_setup.root
+
+
+def pinned_nx(root: Path) -> str:
+    """The Nx release `package.json` pins, read off the checkout's own manifest."""
+    manifest = json.loads((root / "package.json").read_text(encoding="utf-8"))
+    return str(manifest["devDependencies"]["nx"])
+
+
+def installed_nx(root: Path) -> str:
+    """What the Nx binary under the checkout's `node_modules/.bin` reports itself as."""
+    reported = subprocess.run(
+        [str(root / "node_modules" / ".bin" / "nx"), "--version"],
+        cwd=root,
+        env={**os.environ, "NX_DAEMON": "false"},
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return reported.stdout
+
+
+def test_session_setup_provisions_a_checkout_that_arrives_with_no_toolchain(
+    first_setup: FirstSetup,
+) -> None:
+    """Setup is what provisions a worktree: both environments, from nothing, at the pins.
+
+    Nothing else installs: `scripts/nx.sh` no longer heals a missing `node_modules`, so a
+    setup that synced `.venv` alone would leave a fresh worktree unable to run any target.
+    """
+    started = first_setup.started
+    root = first_setup.root
+
+    assert started.returncode == 0, started.stdout + started.stderr
+    assert (root / ".venv" / "bin" / "python").is_file()
+    assert (root / "node_modules").is_dir()
+    assert f"Local: v{pinned_nx(root)}" in installed_nx(root)
 
 
 def _private_tool_directories(root: Path) -> dict[str, str]:

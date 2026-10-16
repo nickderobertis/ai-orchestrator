@@ -241,7 +241,6 @@ def workspace(tmp_path: Path) -> Workspace:
         "node_modules\n.nx\n.logs\n.telemetry\n__pycache__\n", encoding="utf-8"
     )
     private_node_modules(root)
-    shutil.copytree(REPO_ROOT / "tests/fixtures/nx-cache", root / "tests/fixtures/nx-cache")
     (root / PROJECT).mkdir()
     (root / PROJECT / "project.json").write_text(json.dumps(_project(), indent=2), "utf-8")
     (root / PROJECT / "test_alpha.py").write_text(RECORDING_TEST, encoding="utf-8")

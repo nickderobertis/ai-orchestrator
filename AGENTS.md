@@ -1857,10 +1857,18 @@ repository's prose fails in `tests/conftest.py` — a tier whose subject lives o
 the workspace is uncached, and narrowing a key past what a tier reads makes a
 green suite a claim about a tree nobody ran — force one tier with `--skip-nx-cache` on
 that invocation instead. Both Nx caches are origin-keyed under
-`${XDG_CACHE_HOME:-$HOME/.cache}/ai-orchestrator/` through `scripts/nx.sh`, which also
-heals a worktree's `node_modules`, `.venv` and plan-store CLI from the locked installs
-only (off under `UV_NO_SYNC`), because a missing `.venv` does not fail — its readers
-fall through to whatever other checkout is on PATH.
+`${XDG_CACHE_HOME:-$HOME/.cache}/ai-orchestrator/` through `scripts/nx.sh`.
+
+**Session setup — and `just bootstrap`, which runs it — provisions a worktree, and
+nothing else installs.** `scripts/nx.sh` and every recipe that runs `uv run` export
+`UV_NO_SYNC=1` and, through `scripts/require-provisioned.sh`, refuse a checkout whose
+Python environment holds no interpreter, naming `just session-setup`: under `UV_NO_SYNC`
+a missing `.venv` does not fail, uv creates an empty one and runs whatever another
+checkout puts on PATH. A Codex-side dispatch never runs the session-start hook, so in an
+unprovisioned run root or a new pool slot it meets that refusal until `onevcs` provisions
+a session when it opens one. A publication's worktree is cut the same way, so
+`.githooks/pre-push` runs setup's `--provision-only` before the gate: that checkout's
+toolchain and none of a session's host steps.
 
 ## Dogfooding rule
 

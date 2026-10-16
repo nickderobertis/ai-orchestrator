@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import subprocess
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pytest
@@ -383,13 +383,40 @@ def test_full_setup_continues_past_an_absent_cargo_and_reports_cargo_sweep_unava
     assert "bun is required" in result.stderr
 
 
+#: Where the stand-in for `scripts/workspace-install.sh` records each call's arguments.
+WORKSPACE_INSTALL_CALLS = "workspace-install.calls"
+#: Where the stand-in for `scripts/setup-llmlint.sh` records each call.
+SETUP_LLMLINT_CALLS = "setup-llmlint.calls"
+
+
+def _write_workspace_install_double(scripts: Path, tmp_path: Path) -> None:
+    """Stand in for `scripts/workspace-install.sh`: record each call, fail on request."""
+    _write_executable(
+        scripts / "workspace-install.sh",
+        f'#!/bin/sh\nprintf \'[%s]\\n\' "$*" >>"{tmp_path / WORKSPACE_INSTALL_CALLS}"\n'
+        'if [ "${TEST_WORKSPACE_INSTALL_FAIL:-0}" = 1 ]; then\n'
+        '  echo "workspace-install: install locked workspace dependencies and retry" >&2\n'
+        "  exit 1\n"
+        "fi\n",
+    )
+
+
 def _run_full_setup_without_bun(
-    tmp_path: Path, *, declared: Mapping[str, str | None] | None = None, **extra_env: str
+    tmp_path: Path,
+    *,
+    declared: Mapping[str, str | None] | None = None,
+    real_workspace_install: bool = False,
+    args: Sequence[str] = (),
+    **extra_env: str,
 ) -> subprocess.CompletedProcess[str]:
     """Run the whole script against a fixture host that has every tool but bun.
 
     `declared` restates one `config/<tool>.version` after the real ones are copied in:
-    a string replaces its contents, and `None` removes the file outright.
+    a string replaces its contents, and `None` removes the file outright. The locked
+    workspace install is the repository's own script, which reaches the real Bun, so it
+    is doubled like `uv` and `bun`: it records each call and fails on request.
+    `real_workspace_install` copies in the real script and the two it sources instead,
+    so it runs against whichever `bun` the fixture host puts first.
     """
     test_repo = tmp_path / "repo"
     scripts = test_repo / "scripts"
@@ -401,7 +428,19 @@ def _run_full_setup_without_bun(
         (REPO_ROOT / "scripts" / "session-setup.sh").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
-    _write_executable(scripts / "setup-llmlint.sh", "#!/bin/sh\nexit 0\n")
+    _write_executable(
+        scripts / "setup-llmlint.sh",
+        f'#!/bin/sh\necho called >>"{tmp_path / SETUP_LLMLINT_CALLS}"\nexit 0\n',
+    )
+    if real_workspace_install:
+        for script in ("workspace-install.sh", "preserved-log.sh", "install-lock.sh"):
+            copied = scripts / script
+            copied.write_text(
+                (REPO_ROOT / "scripts" / script).read_text(encoding="utf-8"), encoding="utf-8"
+            )
+            copied.chmod(0o755)
+    else:
+        _write_workspace_install_double(scripts, tmp_path)
     _write_adopted_version_files(config)
     for name, adopted in (declared or {}).items():
         if adopted is None:
@@ -413,7 +452,7 @@ def _run_full_setup_without_bun(
     _write_oneharness(test_repo / ".venv" / "bin" / "oneharness", ADOPTED_ONEHARNESS_VERSION)
     _write_published_tool_clis(test_repo / ".venv" / "bin")
     return subprocess.run(
-        ["bash", str(session_setup)],
+        ["bash", str(session_setup), *args],
         text=True,
         capture_output=True,
         env={
@@ -702,6 +741,96 @@ def test_full_setup_reports_missing_bun_and_returns_failure(tmp_path: Path) -> N
     assert proc.returncode == 1
     assert "cannot install required bun: npm is not installed" in proc.stderr
     assert "bun is required — the oneharness sdk-check gate will fail" in proc.stderr
+    # With no Bun there is nothing to install the workspace with, so it is not attempted.
+    assert not (tmp_path / WORKSPACE_INSTALL_CALLS).exists()
+
+
+def test_full_setup_installs_the_locked_workspace_once_bun_is_ready(tmp_path: Path) -> None:
+    """Setup is what provisions `node_modules`: one plain, non-forced locked install."""
+    _write_bun(tmp_path / ".local" / "node" / "bin" / "bun")
+
+    proc = _run_full_setup_without_bun(tmp_path)
+
+    assert proc.returncode == 0, proc.stderr
+    assert (tmp_path / WORKSPACE_INSTALL_CALLS).read_text(encoding="utf-8").splitlines() == ["[]"]
+
+
+def test_full_setup_fails_when_the_locked_workspace_install_fails(tmp_path: Path) -> None:
+    """No Nx target runs without `node_modules`, so a failed install fails the session's setup."""
+    _write_bun(tmp_path / ".local" / "node" / "bin" / "bun")
+
+    proc = _run_full_setup_without_bun(tmp_path, TEST_WORKSPACE_INSTALL_FAIL="1")
+
+    assert proc.returncode == 1
+    assert "workspace-install: install locked workspace dependencies and retry" in proc.stderr
+    assert "the locked workspace install failed — no Nx target can run" in proc.stderr
+    # The steps after it still ran: a failed install is reported, not an abort.
+    assert "ready (onejudge: " in proc.stderr
+
+
+def test_full_setup_reports_the_real_installers_failure_and_carries_on(tmp_path: Path) -> None:
+    """The real `scripts/workspace-install.sh`, over a Bun whose install fails, fails setup
+    with the installer's own diagnostic and Bun's output, and the later steps still run."""
+    _write_executable(
+        tmp_path / ".local" / "node" / "bin" / "bun",
+        "#!/bin/sh\n"
+        'if [ "$1" = install ]; then\n'
+        '  echo "error: lockfile had changes, but lockfile is frozen" >&2\n'
+        "  exit 1\n"
+        "fi\n"
+        "printf '1.2.3\\n'\n",
+    )
+
+    proc = _run_full_setup_without_bun(tmp_path, real_workspace_install=True)
+
+    assert proc.returncode == 1, proc.stderr
+    assert "error: lockfile had changes, but lockfile is frozen" in proc.stderr
+    assert "workspace-install: install locked workspace dependencies and retry" in proc.stderr
+    assert "the locked workspace install failed — no Nx target can run" in proc.stderr
+    assert "ready (onejudge: " in proc.stderr
+    assert not (tmp_path / "repo" / "node_modules").exists()
+
+
+def test_provision_only_installs_the_checkouts_toolchain_and_nothing_about_the_host(
+    tmp_path: Path,
+) -> None:
+    """The mode the pre-push hook runs in a publication worktree: this checkout's `.venv`
+    and `node_modules`, and none of the session's host steps."""
+    _write_bun(tmp_path / ".local" / "node" / "bin" / "bun")
+
+    proc = _run_full_setup_without_bun(tmp_path, args=("--provision-only",))
+
+    assert proc.returncode == 0, proc.stderr
+    assert (tmp_path / WORKSPACE_INSTALL_CALLS).read_text(encoding="utf-8").splitlines() == ["[]"]
+    assert not (tmp_path / SETUP_LLMLINT_CALLS).exists()
+    assert "host sweep" not in proc.stderr
+    assert "cargo-sweep" not in proc.stderr
+    assert "sibling checkout bootstrap" not in proc.stderr
+    assert not (tmp_path / "repo" / ".plans").exists()
+
+
+def test_provision_only_fails_when_the_locked_workspace_install_fails(tmp_path: Path) -> None:
+    """A publication gate with no `node_modules` cannot run, so the hook is told so."""
+    _write_bun(tmp_path / ".local" / "node" / "bin" / "bun")
+
+    proc = _run_full_setup_without_bun(
+        tmp_path, args=("--provision-only",), TEST_WORKSPACE_INSTALL_FAIL="1"
+    )
+
+    assert proc.returncode == 1
+    assert "the locked workspace install failed — no Nx target can run" in proc.stderr
+
+
+def test_setup_refuses_an_argument_it_does_not_take_and_installs_nothing(tmp_path: Path) -> None:
+    _write_bun(tmp_path / ".local" / "node" / "bin" / "bun")
+
+    proc = _run_full_setup_without_bun(tmp_path, args=("--provision",))
+
+    assert proc.returncode == 2
+    assert "unknown argument '--provision'" in proc.stderr
+    assert "--provision-only" in proc.stderr
+    assert not (tmp_path / WORKSPACE_INSTALL_CALLS).exists()
+    assert not (tmp_path / SETUP_LLMLINT_CALLS).exists()
 
 
 def test_ensure_codex_exposes_asdf_install_on_stable_worker_path(tmp_path: Path) -> None:

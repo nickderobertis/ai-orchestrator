@@ -148,6 +148,10 @@ def test_comparison_base_requires_explicit_base_when_ambiguous(tmp_path, bare_or
 # stay on the narrow key in the same project: the one project `tests/nx_inputs.py` names as
 # WORKSPACE_COPIES_PROJECT, as this project's sibling modules state at file scope.
 @pytest.mark.reads_docs
+# The hook provisions the clone it runs in through session setup before its gate, which
+# this journey's refused base ends it ahead of; declared a writer (the marker
+# `tests/e2e/nx_workspace.py` names) for what the hook can run.
+@pytest.mark.toolchain_writer
 def test_pre_push_hook_clears_git_environment_and_forwards_comparison(tmp_path) -> None:
     # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
     clone = tmp_path / "clone"
@@ -159,6 +163,8 @@ def test_pre_push_hook_clears_git_environment_and_forwards_comparison(tmp_path) 
         cwd=clone,
         env={
             **os.environ,
+            "UV_TOOL_DIR": str(tmp_path / "uv-tools"),
+            "UV_TOOL_BIN_DIR": str(tmp_path / "uv-tool-bin"),
             "GIT_DIR": str(ROOT / ".git"),
             "GIT_WORK_TREE": str(ROOT),
             "ORCHESTRATOR_COMPARISON_BASE": "invalid..base",
@@ -262,6 +268,10 @@ def test_an_explicit_operator_remote_still_beats_the_lifecycles(tmp_path, bare_o
 # stay on the narrow key in the same project: the one project `tests/nx_inputs.py` names as
 # WORKSPACE_COPIES_PROJECT, as this project's sibling modules state at file scope.
 @pytest.mark.reads_docs
+# The hook provisions the clone it runs in through session setup before its gate, which
+# this journey's refused base ends it ahead of; declared a writer (the marker
+# `tests/e2e/nx_workspace.py` names) for what the hook can run.
+@pytest.mark.toolchain_writer
 def test_the_pre_push_hook_reads_the_base_the_lifecycle_exported(tmp_path) -> None:
     # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
     """The hook is where the worker's verdict is replayed rather than re-rolled."""
@@ -274,6 +284,8 @@ def test_the_pre_push_hook_reads_the_base_the_lifecycle_exported(tmp_path) -> No
         cwd=clone,
         env={
             **os.environ,
+            "UV_TOOL_DIR": str(tmp_path / "uv-tools"),
+            "UV_TOOL_BIN_DIR": str(tmp_path / "uv-tool-bin"),
             "GIT_DIR": str(ROOT / ".git"),
             "GIT_WORK_TREE": str(ROOT),
             "ORCHESTRATOR_COMPARISON_BASE": "",

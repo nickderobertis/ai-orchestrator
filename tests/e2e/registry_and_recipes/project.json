@@ -91,7 +91,6 @@
       "{workspaceRoot}/scripts/telemetry-server.sh",
       "{workspaceRoot}/scripts/template-env.sh",
       "{workspaceRoot}/templates/**/*",
-      "{workspaceRoot}/tests/fixtures/nx-cache/**/*",
       "{workspaceRoot}/tests/fixtures/pre-adoption-repos.json",
       "{workspaceRoot}/tests/fixtures/transcript-runs/**/*",
       "{workspaceRoot}/uv.lock",

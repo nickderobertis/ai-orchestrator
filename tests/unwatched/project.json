@@ -18,6 +18,7 @@
     "support-plan-fixture-source",
     "support-probe-run-root",
     "support-project-fixtures",
+    "support-run-snapshot",
     "support-scratch-identity",
     "support-short-state",
     "support-waits"
@@ -96,6 +97,7 @@
       "{workspaceRoot}/scripts/plan.sh",
       "{workspaceRoot}/scripts/registered-checkouts.sh",
       "{workspaceRoot}/scripts/render-diagram.sh",
+      "{workspaceRoot}/scripts/require-provisioned.sh",
       "{workspaceRoot}/scripts/review-plan.sh",
       "{workspaceRoot}/personas/planner.yaml",
       "{workspaceRoot}/personas/design-doc.yaml",

@@ -26,6 +26,7 @@ from pathlib import Path
 
 import pytest
 from nx_workspace import TOOLCHAIN_WRITER_MARKS, WORKSPACE_INSTALL_MARKS, isolated_python_root
+from provisioning import EMPTY_MANIFEST, PROVISIONING_SCRIPTS
 from published_tools import PUBLISHED_TOOLS
 from waits import timeout as e2e_timeout
 from waits import until
@@ -207,9 +208,11 @@ class SessionStart:
             "repos-bootstrap.sh",
             "registered-checkouts.sh",
             "setup-llmlint.sh",
+            *PROVISIONING_SCRIPTS,
         ):
             shutil.copy(REPO_ROOT / "scripts" / name, scripts / name)
         shutil.copyfile(REPO_ROOT / "justfile", self.repo / "justfile")
+        (self.repo / "package.json").write_text(EMPTY_MANIFEST, encoding="utf-8")
         config = self.repo / "config"
         config.mkdir()
         for declared in (REPO_ROOT / "config").glob("*.version"):

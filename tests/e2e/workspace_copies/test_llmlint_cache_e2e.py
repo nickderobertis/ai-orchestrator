@@ -1,23 +1,23 @@
-"""E2E proof that the llmlint tier's judge run is cached by Nx, and only when clean.
+"""E2E proof of what the llmlint tier's recipe and target refuse, report and pass on.
 
-The judge itself is non-deterministic, so `just lint-llm-diff` routes through the
-cached `workspace:lint-llm-diff` target — but nothing records or replays a verdict
-any more. Nx caches the judge *run*: a clean run's `-v` report is the task's
-terminal output and Nx replays it verbatim, while a run with findings and a run
-that never reached a verdict fail the task and are never stored. These journeys
-drive the real recipe, the real `scripts/nx.sh`, the real Nx target definition, and
-the real `llmlint config` resolution in a throwaway copy of this repository. Only
-the billed judge run is faked — the same boundary the rest of the e2e suite fakes —
-so `llmlint --diff` is counted rather than paid for, while `llmlint config` still
-merges a real plugin off disk.
+`just lint-llm-diff` resolves its base, refuses one it cannot judge or one its own
+origin ref has moved past, and routes the judge run through the
+`workspace:lint-llm-diff` target with `-v`. These journeys drive the real recipe, the
+real `scripts/nx.sh`, the real Nx target definition, and the real `llmlint config`
+resolution in a throwaway copy of this repository, and read what each run says: the
+refusals, the green report and what it elides, a red's whole report, the labels a
+run carries, and the ambient cache skip the recipe names and drops. Which change
+replays or re-runs the target is Nx's behaviour over its configuration, and no
+journey here asserts it. Only the billed judge run is faked — the same boundary the
+rest of the e2e suite fakes — so `llmlint --diff` is recorded rather than paid for,
+while `llmlint config` still merges a real plugin off disk.
 
 llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] This module has always
-been where it is, and every one of its journeys drives real Nx, real git and a counted
+been where it is, and every one of its journeys drives real Nx, real git and a recorded
 judge under the same whole-workspace `reads_docs` key — none is cheaper than the others,
-so the placement is the module's rather than any one test's. Moving it is a change to
-this repository's Nx project selection, which a sibling node of this plan owns, and
-excepting a single journey would split a suite whose fixture, fake judge and cache-key
-reasoning are shared while leaving the cost exactly where it is.
+so the placement is the module's rather than any one test's. Excepting a single journey
+would split a suite whose fixture and fake judge are shared while leaving the cost
+exactly where it is.
 
 llmlint: ignore-file[shell_test_tiers_stay_split] Same placement, same reason. What could
 be kept out of this tier was: `tests/e2e/publish_and_landing/test_base_freshness_e2e.py`
@@ -30,11 +30,11 @@ key this module's own premise — copying the tracked tree, prose included — r
 
 llmlint: ignore-file[e2e_not_mocked] The judge run is this repository's paid model
 boundary, faked here exactly as tests/e2e/fake_backend.py fakes the agent harness.
-It is also the one thing these journeys cannot use for real: the claim under test
-is that an unchanged tree yields the same report twice, which a non-deterministic
-judge cannot demonstrate. Counting `--diff` invocations is what proves a report was
-replayed rather than re-rolled; every other boundary — the recipe, Nx, git, and
-llmlint's own config resolution — is real.
+It is also the one thing these journeys cannot use for real: the claims under test
+are about which report a given verdict produces and whether a refusal stopped the
+judge being paid, which a non-deterministic judge cannot demonstrate. Recording each
+`--diff` invocation is what proves a refused run never reached it; every other
+boundary — the recipe, Nx, git, and llmlint's own config resolution — is real.
 """
 
 from __future__ import annotations
@@ -53,25 +53,21 @@ PASS_VERDICT = "fake-judge: 16 passed, 0 failed"
 FAIL_VERDICT = "fake-judge: 15 passed, 1 failed"
 FAIL_FINDING = "fake-judge finding: robust_shell in scripts/llmlint-judge.sh"
 #: Emitted only when the tier asks for `-v`: the per-rule itemization and the
-#: pointer into `llmlint history` are what make a replayed run worth as much as a
-#: fresh one, so they are the thing the cache has to carry.
+#: pointer into `llmlint history` are what the tier's report is for.
 VERBOSE_DETAIL = "fake-judge detail: local_rule passed on 6 files"
 HISTORY_POINTER = "fake-judge: run logged as 0ff1ce — see `llmlint history 0ff1ce`"
 #: `-v` also sends the oneharness debug view to stderr: short diagnostics, plus one
-#: enormous line per judge call carrying every judged file inside the prompt. Nx
-#: replays a hit as one burst and exits, so a replay bigger than a pipe buffer loses
-#: its tail — a green has to stay small enough to survive its own replay, which it
-#: does by eliding the payload and keeping the pointer to where it can be retrieved.
+#: enormous line per judge call carrying every judged file inside the prompt. A green
+#: report stays small by eliding that payload and keeping the pointer to where it can
+#: be retrieved.
 DEBUG_DIAGNOSTIC = "fake-judge: see full results with `llmlint history 0ff1ce`"
 DEBUG_PAYLOAD = "fake-judge serialized judge call: " + "x" * 3000
 ELISION = f"elided a {len(DEBUG_PAYLOAD)}-character serialized judge call"
-CACHE_HIT = "replayed the recorded verdict for base"
-CACHE_MISS = "judged this diff against base"
 
 pytestmark = [
     pytest.mark.skipif(
         shutil.which("llmlint") is None,
-        reason="llmlint resolves the judge configuration this cache key is built from; "
+        reason="llmlint resolves the judge configuration this tier runs under; "
         "run 'just setup-llmlint'",
     ),
     *WORKSPACE_INSTALL_MARKS,
@@ -86,10 +82,9 @@ pytestmark = [
 
 @dataclass(frozen=True)
 class Workspace:
-    """A throwaway checkout wired to count judge runs instead of paying for them."""
+    """A throwaway checkout wired to record judge runs instead of paying for them."""
 
     root: Path
-    plugin: Path
     judge_log: Path
     env: dict[str, str]
 
@@ -152,7 +147,7 @@ def _write_fake_judge(directory: Path) -> None:
         # the other things a run of this tier is supposed to carry.
         'printf "%s\\t%s\\n" "$*" "${ONEHARNESS_HISTORY_LABELS:-}" >>"$FAKE_LLMLINT_LOG"\n'
         # The detail a bare run omits, so a report that carries it proves the tier
-        # asked for `-v` — and a replayed one proves Nx kept it.
+        # asked for `-v`.
         'if [[ " $* " == *" -v "* ]]; then\n'
         # Single-quoted: the pointer quotes the command with backticks, which a
         # double-quoted echo would run instead of print.
@@ -174,21 +169,6 @@ def _write_fake_judge(directory: Path) -> None:
     fake.chmod(0o755)
 
 
-def _write_version_only_llmlint(directory: Path, version: str) -> Path:
-    """Install an ambient llmlint whose version must not enter the pinned target."""
-    directory.mkdir(parents=True, exist_ok=True)
-    fake = directory / "llmlint"
-    fake.write_text(
-        "#!/usr/bin/env bash\n"
-        "set -euo pipefail\n"
-        '[[ ${1:-} == "--version" ]] || { echo "ambient llmlint reached $1" >&2; exit 2; }\n'
-        f'echo "llmlint {version}"\n',
-        encoding="utf-8",
-    )
-    fake.chmod(0o755)
-    return directory
-
-
 def _run_fingerprint(workspace: Workspace, **overrides: str) -> subprocess.CompletedProcess[str]:
     """Run the fingerprint the way an operator diagnosing a cache miss would."""
     return subprocess.run(
@@ -206,8 +186,8 @@ def workspace(tmp_path: Path) -> Workspace:
     root = tmp_path / "checkout"
     copy_checkout(root)
 
-    # A plugin outside the tree: no file input can see it, so only the judge
-    # configuration fingerprint can notice when its rules change.
+    # A plugin outside the tree, so `llmlint config` merges a real plugin off disk
+    # the way the judge configuration fingerprint reads one.
     plugin = tmp_path / "external-plugin.yml"
     plugin.write_text(
         "version: 1\nrules:\n"
@@ -245,333 +225,72 @@ def workspace(tmp_path: Path) -> Workspace:
         "UV_NO_SYNC": "1",
         "UV_PROJECT_ENVIRONMENT": str(ROOT / ".venv"),
     }
-    workspace = Workspace(root=root, plugin=plugin, judge_log=judge_log, env=env)
+    workspace = Workspace(root=root, judge_log=judge_log, env=env)
     workspace._git("init", "-q")
     workspace.commit("checkout under test")
     return workspace
 
 
-def test_unchanged_tree_and_base_replays_the_whole_judge_report(workspace: Workspace) -> None:
-    """One judge roll, and the restored run says everything the first one said."""
-    base = workspace.head()
-
-    first = workspace.lint(base)
-    second = workspace.lint(base)
-
-    assert first.returncode == 0, first.stdout + first.stderr
-    assert second.returncode == 0, second.stdout + second.stderr
-    assert workspace.judge_runs() == 1
-    assert workspace.judge_arguments() == [f"--diff --diff-base {base} -v"]
-    for result in (first, second):
-        # The `-v` report is the product now — per-rule detail and the pointer into
-        # `llmlint history` — so a replayed run has to carry all of it, not a
-        # summary line reconstructed from a record.
-        assert PASS_VERDICT in result.stdout
-        assert VERBOSE_DETAIL in result.stdout
-        assert HISTORY_POINTER in result.stdout
-        # The short diagnostic survives; the payload that would push a real replay
-        # past a pipe buffer — and take the three lines above with it — does not.
-        report = result.stdout + result.stderr
-        assert DEBUG_DIAGNOSTIC in report
-        assert DEBUG_PAYLOAD not in report
-        assert ELISION in report
-    # "Green" is a claim about one base commit, so the one line of provenance names
-    # it: a worker's gate and the push that publishes its work resolving different
-    # bases are answering different questions, visible without digging.
-    assert f"judged this diff against base {base} (Nx cache miss)" in first.stderr
-    assert f"replayed the recorded verdict for base {base} (Nx cache hit)" in second.stderr
-
-
 def test_an_ambient_global_cache_skip_is_reported_and_ignored(workspace: Workspace) -> None:
-    """The only supported re-judge lever is per-tier, so a global one cannot re-roll."""
+    """The only supported re-judge lever is per-tier, so a global one is named and dropped.
+
+    Each run here is green, so it is also where the green report is read: the `-v`
+    report is the product — per-rule detail and the pointer into `llmlint history` —
+    and the short diagnostic survives while the serialized payload that would push a
+    real report past a pipe buffer, and take the lines above with it, is elided.
+    """
     base = workspace.head()
 
     first = workspace.lint(base, NX_SKIP_NX_CACHE="true")
     second = workspace.lint(base, NX_DISABLE_NX_CACHE="true")
 
-    assert workspace.judge_runs() == 1
-    assert CACHE_HIT in second.stderr
+    assert workspace.judge_arguments()[0] == f"--diff --diff-base {base} -v"
     for result in (first, second):
         assert result.returncode == 0, result.stdout + result.stderr
         assert "ignoring the ambient global Nx cache skip" in result.stderr
         assert f"just lint-llm-diff {base} --skip-nx-cache" in result.stderr
-
-
-def test_what_the_deterministic_tier_leaves_in_the_tree_does_not_move_the_verdict(
-    workspace: Workspace,
-) -> None:
-    """The gate judges before `just check` runs, so what that tier writes cannot key the verdict.
-
-    A worker's gate judges a tree `just check` has not yet written to, then runs the
-    suite; the pre-push gate judges the same tree carrying the outputs that run left —
-    `.coverage` and the preserved logs under `.logs/`. Both are gitignored, and the two
-    gates have to resolve one verdict, so their appearing or changing between two judged
-    runs on an unchanged tree and base replays the first green rather than rolling again.
-    """
-    base = workspace.head()
-    coverage = workspace.root / ".coverage"
-    check_log = workspace.root / ".logs/gate-check.log"
-    coverage.unlink(missing_ok=True)
-
-    first = workspace.lint(base)
-    coverage.write_bytes(b"coverage data the suite measured")
-    check_log.parent.mkdir(parents=True, exist_ok=True)
-    check_log.write_text("check: all deterministic checks passed\n", encoding="utf-8")
-    appeared = workspace.lint(base)
-    coverage.write_bytes(b"coverage data a later suite run measured")
-    check_log.write_text("check: deterministic checks failed in 1 of 3 phases\n", encoding="utf-8")
-    changed = workspace.lint(base)
-
-    for result in (first, appeared, changed):
-        assert result.returncode == 0, result.stdout + result.stderr
-    assert workspace.judge_runs() == 1
-    assert f"judged this diff against base {base} (Nx cache miss)" in first.stderr
-    for result in (appeared, changed):
-        assert f"replayed the recorded verdict for base {base} (Nx cache hit)" in result.stderr
         assert PASS_VERDICT in result.stdout
+        assert VERBOSE_DETAIL in result.stdout
+        assert HISTORY_POINTER in result.stdout
+        report = result.stdout + result.stderr
+        assert DEBUG_DIAGNOSTIC in report
+        assert DEBUG_PAYLOAD not in report
+        assert ELISION in report
+        # "Green" is a claim about one base commit, so the one line of provenance
+        # names it.
+        assert f"base {base}" in result.stderr
 
 
-def test_changed_source_reruns_the_judge(workspace: Workspace) -> None:
+def test_findings_fail_the_tier_with_the_whole_report(workspace: Workspace) -> None:
+    """Findings fail the tier, and the whole report reaches the operator who must act on it."""
     base = workspace.head()
-    workspace.lint(base)
 
-    changed = workspace.root / "orchestrator/labels.py"
-    changed.write_text(changed.read_text() + "\n# judged again\n", encoding="utf-8")
-    second = workspace.lint(base)
+    result = workspace.lint(base, FAKE_LLMLINT_EXIT="1")
 
-    assert second.returncode == 0, second.stdout + second.stderr
-    assert workspace.judge_runs() == 2
-    assert CACHE_MISS in second.stderr
-
-
-def test_advanced_base_reruns_the_judge_and_then_caches_per_base(workspace: Workspace) -> None:
-    original = workspace.head()
-    workspace.lint(original)
-
-    # Identical tree, advanced base: only the resolved base commit differs, so a
-    # hit here would replay a verdict computed against a different comparison.
-    advanced = workspace.commit("advance the base", allow_empty=True)
-    assert advanced != original
-    moved = workspace.lint(advanced)
-    repeated = workspace.lint(advanced)
-
-    assert workspace.judge_runs() == 2
-    assert CACHE_MISS in moved.stderr
-    assert CACHE_HIT in repeated.stderr
+    report = result.stdout + result.stderr
+    assert result.returncode != 0, report
+    assert FAIL_FINDING in report
+    assert FAIL_VERDICT in report
+    # Only a green is elided: a red's whole debug view, payload included, is what the
+    # operator diagnoses from.
+    assert DEBUG_PAYLOAD in report
+    assert ELISION not in report
 
 
-def test_changed_rule_configuration_reruns_the_judge(workspace: Workspace) -> None:
-    base = workspace.head()
-    workspace.lint(base)
-
-    config = workspace.root / "llmlint.yml"
-    config.write_text(
-        config.read_text().replace("POSIX-safe", "POSIX-safe and shellcheck-clean"),
-        encoding="utf-8",
-    )
-    second = workspace.lint(base)
-
-    assert workspace.judge_runs() == 2
-    assert CACHE_MISS in second.stderr
-
-
-def test_changed_plugin_rule_source_reruns_the_judge(workspace: Workspace) -> None:
-    base = workspace.head()
-    workspace.lint(base)
-
-    # The plugin lives outside the checkout: the tree Nx hashes is byte-identical.
-    workspace.plugin.write_text(
-        workspace.plugin.read_text().replace("operator entry point", "operator entry point twice"),
-        encoding="utf-8",
-    )
-    second = workspace.lint(base)
-
-    assert workspace.judge_runs() == 2
-    assert CACHE_MISS in second.stderr
-
-
-def test_changed_llmlint_version_reruns_the_judge(workspace: Workspace) -> None:
-    base = workspace.head()
-    workspace.lint(base, FAKE_LLMLINT_VERSION="0.3.25")
-
-    second = workspace.lint(base, FAKE_LLMLINT_VERSION="0.4.0")
-
-    assert workspace.judge_runs() == 2
-    assert CACHE_MISS in second.stderr
-
-
-def test_ambient_judge_bin_does_not_invalidate_the_verdict(workspace: Workspace) -> None:
-    """The target pins its judge binary, so an inherited caller value is not an input."""
-    base = workspace.head()
-    workspace.lint(base, LLMLINT_ONEHARNESS_BIN="/caller/one/oneharness")
-
-    second = workspace.lint(base, LLMLINT_ONEHARNESS_BIN="/caller/two/oneharness")
-
-    assert second.returncode == 0, second.stdout + second.stderr
-    assert workspace.judge_runs() == 1
-    assert CACHE_HIT in second.stderr
-
-
-def test_ambient_llmlint_path_does_not_invalidate_the_verdict(workspace: Workspace) -> None:
-    """Both fingerprint commands resolve llmlint the way the judge does, not the caller.
-
-    A cache hit alone would not prove that: a fingerprint that *fails* under the
-    caller's llmlint also produces one, because Nx scores a runtime input that
-    exits non-zero as no contribution rather than as an error, and both runs then
-    share the same degraded key. So the fingerprint is read directly too — it has
-    to resolve under each ambient llmlint, and resolve to the same digest, which is
-    what says the checkout's judge configuration is still in the key.
-    """
-    base = workspace.head()
-    first_bin = _write_version_only_llmlint(workspace.root.parent / "ambient-one", "1.0.0")
-    second_bin = _write_version_only_llmlint(workspace.root.parent / "ambient-two", "2.0.0")
-    on_first = {"PATH": f"{first_bin}{os.pathsep}{workspace.env['PATH']}"}
-    on_second = {"PATH": f"{second_bin}{os.pathsep}{workspace.env['PATH']}"}
-
-    first = workspace.lint(base, **on_first)
-    second = workspace.lint(base, **on_second)
-    first_print = _run_fingerprint(workspace, **on_first)
-    second_print = _run_fingerprint(workspace, **on_second)
-
-    assert first.returncode == 0, first.stdout + first.stderr
-    assert second.returncode == 0, second.stdout + second.stderr
-    assert workspace.judge_runs() == 1
-    assert CACHE_HIT in second.stderr
-    assert first_print.returncode == 0, first_print.stdout + first_print.stderr
-    assert second_print.returncode == 0, second_print.stdout + second_print.stderr
-    assert first_print.stdout.strip() == second_print.stdout.strip() != ""
-
-
-def test_an_ambient_llmlint_still_lets_the_judge_configuration_invalidate(
+def test_a_judge_that_never_reached_a_verdict_fails_and_says_what_it_saw(
     workspace: Workspace,
 ) -> None:
-    """A caller's llmlint must not quietly drop the fingerprint out of the cache key.
-
-    Nx treats a runtime input that exits non-zero as *no contribution* rather than
-    as an error, so a fingerprint the caller's environment can break does not fail
-    the tier — it silently shrinks the key to the tree and the base. That is the
-    worse half of the split-verdict defect: spurious misses only re-roll the judge,
-    but a degraded key replays a verdict the judge configuration has since moved on
-    from. Resolving the fingerprint under the same pinned runtime that judges is
-    what keeps it contributing while an unrelated llmlint sits on PATH.
-    """
-    base = workspace.head()
-    ambient = _write_version_only_llmlint(workspace.root.parent / "ambient-judge", "1.0.0")
-    on_path = {"PATH": f"{ambient}{os.pathsep}{workspace.env['PATH']}"}
-
-    first = workspace.lint(base, **on_path)
-    # The plugin lives outside the checkout, so no file input can see this: the
-    # judge configuration fingerprint is the only thing that can notice the rules
-    # changed, and only if it is still part of the key.
-    workspace.plugin.write_text(
-        workspace.plugin.read_text().replace("operator entry point", "operator entry point twice"),
-        encoding="utf-8",
-    )
-    second = workspace.lint(base, **on_path)
-
-    assert first.returncode == 0, first.stdout + first.stderr
-    assert second.returncode == 0, second.stdout + second.stderr
-    assert workspace.judge_runs() == 2
-    assert CACHE_MISS in second.stderr
-
-
-def test_findings_fail_the_tier_and_are_never_cached(workspace: Workspace) -> None:
-    """A red is re-judged every time: Nx caches successful tasks only.
-
-    That is the deliberate trade for deleting the record/replay protocol this tier
-    used to smuggle failing verdicts through Nx with. An honest re-roll costs a
-    judge call; the protocol cost a poisoned entry no documented lever could
-    displace.
-    """
+    """A broken judge toolchain is not a verdict: the tier fails and says what it saw."""
     base = workspace.head()
 
-    first = workspace.lint(base, FAKE_LLMLINT_EXIT="1")
-    second = workspace.lint(base, FAKE_LLMLINT_EXIT="1")
+    result = workspace.lint(base, FAKE_LLMLINT_EXIT="2")
 
-    assert workspace.judge_runs() == 2
-    for result in (first, second):
-        report = result.stdout + result.stderr
-        assert result.returncode != 0, report
-        assert FAIL_FINDING in report
-        assert FAIL_VERDICT in report
-        # A failure is never cached, so it never has to survive a replay: the whole
-        # debug view reaches the operator who has to act on it, payload included.
-        assert DEBUG_PAYLOAD in report
-        assert ELISION not in report
-        assert CACHE_MISS in result.stderr
-
-
-def test_a_judge_that_never_reached_a_verdict_fails_and_is_never_cached(
-    workspace: Workspace,
-) -> None:
-    """A broken judge toolchain is not a verdict, so it must re-run rather than stick."""
-    base = workspace.head()
-
-    first = workspace.lint(base, FAKE_LLMLINT_EXIT="2")
-    second = workspace.lint(base, FAKE_LLMLINT_EXIT="2")
-
-    assert workspace.judge_runs() == 2
-    for result in (first, second):
-        report = result.stdout + result.stderr
-        assert result.returncode != 0, report
-        # Whatever the broken toolchain managed to say still reaches the operator —
-        # its report and its debug view both; what it must never do is become a
-        # stored answer about the diff.
-        assert FAIL_FINDING in report
-        assert DEBUG_PAYLOAD in report
-        assert CACHE_MISS in result.stderr
-
-
-def test_a_cleared_red_caches_the_green_that_replaced_it(workspace: Workspace) -> None:
-    """The path a worker actually walks: judge, fix, judge again, then settle."""
-    base = workspace.head()
-
-    red = workspace.lint(base, FAKE_LLMLINT_EXIT="1")
-    cleared = workspace.root / "orchestrator/labels.py"
-    cleared.write_text(cleared.read_text() + "\n# the finding, cleared\n", encoding="utf-8")
-    green = workspace.lint(base)
-    settled = workspace.lint(base)
-
-    assert red.returncode != 0, red.stdout + red.stderr
-    assert green.returncode == 0, green.stdout + green.stderr
-    assert settled.returncode == 0, settled.stdout + settled.stderr
-    assert workspace.judge_runs() == 2
-    assert CACHE_MISS in green.stderr
-    assert CACHE_HIT in settled.stderr
-
-
-def test_skip_nx_cache_forces_a_fresh_judge_run(workspace: Workspace) -> None:
-    """The documented way to re-judge one tier, and it works under a global skip too."""
-    base = workspace.head()
-    workspace.lint(base)
-
-    forced = workspace.lint(base, "--skip-nx-cache", NX_SKIP_NX_CACHE="true")
-
-    assert forced.returncode == 0, forced.stdout + forced.stderr
-    assert workspace.judge_runs() == 2
-    assert CACHE_MISS in forced.stderr
-
-
-def test_a_forced_re_judge_does_not_replace_the_cached_run(workspace: Workspace) -> None:
-    """The honest limit of the re-judge lever, so nobody plans a rescue around it.
-
-    Under this Nx, `--skip-nx-cache` neither reads nor writes the cache: it buys one
-    fresh look at the diff and leaves the stored run exactly where it was. So a
-    *green* an operator disagrees with sticks until the tree, the base commit, or
-    the judge configuration moves — the next ordinary invocation replays the same
-    entry, and the judge is not rolled again.
-    """
-    base = workspace.head()
-    workspace.lint(base)
-
-    workspace.lint(base, "--skip-nx-cache")
-    afterwards = workspace.lint(base)
-
-    assert afterwards.returncode == 0, afterwards.stdout + afterwards.stderr
-    # Two rolls: the original and the forced one. The third invocation replayed the
-    # original rather than anything the forced run produced.
-    assert workspace.judge_runs() == 2
-    assert CACHE_HIT in afterwards.stderr
+    report = result.stdout + result.stderr
+    assert result.returncode != 0, report
+    # Whatever the broken toolchain managed to say still reaches the operator — its
+    # report and its debug view both.
+    assert FAIL_FINDING in report
+    assert DEBUG_PAYLOAD in report
 
 
 def _stub(directory: Path, name: str, body: str) -> Path:

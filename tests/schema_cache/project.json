@@ -1,0 +1,38 @@
+{
+  "name": "schema-cache",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/schema_cache",
+  "tags": [
+    "scope:schema-cache",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-onejudge-bundle"
+  ],
+  "namedInputs": {
+    "schemaCacheWorkspace": [
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/tests/schema_cache/**/*"
+    ]
+  },
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/schema_cache --no-cov",
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "schemaCacheWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ]
+    }
+  }
+}

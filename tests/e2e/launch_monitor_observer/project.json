@@ -86,7 +86,6 @@
       "{workspaceRoot}/pyproject.toml",
       "{workspaceRoot}/scripts/**/*",
       "{workspaceRoot}/templates/**/*",
-      "{workspaceRoot}/tests/fixtures/nx-cache/**/*",
       "{workspaceRoot}/tests/fixtures/pre-cutover-history/**/*",
       "{workspaceRoot}/tests/e2e/stand_in_claude.py",
       "{workspaceRoot}/tests/e2e/timeout_harness.py",

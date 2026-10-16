@@ -42,6 +42,8 @@ from fake_backend import (
     JUDGE_CONFIG_NAME,
     PROMPT_LOG_ENV,
     RUN_TASK,
+    TURN_GATE_ENV,
+    TURN_GATE_RELEASED,
     RecordedTurn,
 )
 from harness_configs import copied_with_its_parents, harness_routing
@@ -2747,12 +2749,15 @@ def observed_launch(
     that file is resolved against its own directory, so a copy anywhere else resolves
     none of them.
 
-    The first node is *dispatched* rather than settled in place, so the run has work
-    left while the monitor completes the exchange this measurement reads. Two nodes
-    alone do not buy that and the plan below says why: an undispatched pair settles in
-    about 50ms, well inside the observer's own. A journey that raced settlement would
-    report a missing export as a missing variable, and would ask neither question
-    below.
+    The first node is *dispatched* rather than settled in place, and its worker's turn
+    is held at the stand-in's turn gate until the driver has said its observer graph
+    stopped watching, so the run has work left for as long as the monitor takes to
+    complete the exchange this measurement reads. Two nodes alone do not buy that and the
+    plan below says why: an undispatched pair settles in about 50ms, well inside the
+    observer's own, and an ungated worker answers at process speed, which on a loaded
+    host still let the run settle before the observer died. A journey that raced
+    settlement would report a missing export as a missing variable, and would ask
+    neither question below.
 
     The launch is driven as a process this fixture polls rather than as a call it
     waits on, and that is the whole shape of it. The installed engine hands back, but
@@ -2770,6 +2775,15 @@ def observed_launch(
     environment = _environment(tmp_path, oneharness_bin)
     recorded = tmp_path / "observer-environment.json"
     environment[ENVIRONMENT_PATH_ENV] = str(recorded)
+    # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This holds the
+    # existing launch's worker at the stand-in's turn gate so the run cannot settle before
+    # its observer dies; it adds no launch and moves none, and a launch of `just
+    # orchestrate` reads the scripts, config and orchestrator trees, so no narrower project
+    # boundary exists for this journey.
+    gate = tmp_path / "turn-gate"
+    gate.mkdir()
+    environment[TURN_GATE_ENV] = str(gate)
+    # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
     # The operator's history store, stated rather than inherited: a dispatch this suite
     # runs inside, or the checkout's `.env` every recipe loads, may carry one, and an
     # exported name beats that file, so this launch's store is the journey's own.
@@ -2874,14 +2888,15 @@ def _observe(
     observed = cast(dict[str, str], json.loads(recorded.read_text(encoding="utf-8")))
 
     # The precondition, from the driver's own words on the stream this fixture captured.
-    # A launcher that has already exited is still read for it: on an engine that keeps
-    # advancing, the observer dies and the run settles within moments of each other, so
-    # the sentence and the exit can both be in the past by the time this loop opens.
+    # The dispatched worker is held until it is read, so the run cannot settle first and
+    # leave the observer nothing to die under; only then is the worker let go, and the
+    # run's frontier carries it to the return the question below waits for.
     dying = deadline(300)
     announced = STOPPED_WATCHING.format(run=OBSERVED_RUN)
     while announced not in stream.read_text(encoding="utf-8") and time.monotonic() < dying:
         time.sleep(0.5)
     watched = stream.read_text(encoding="utf-8")
+    (Path(environment[TURN_GATE_ENV]) / TURN_GATE_RELEASED).touch()
 
     # Bounds whether the launcher comes back at all, not how promptly. See
     # `HANDBACK_SECONDS`.
