@@ -267,13 +267,16 @@ def name_pattern(name: str) -> str:
     """A top-level name with its random parts replaced by ``*``."""
     if UV_LOCK.match(name):
         return "uv-<16 hex>.lock"
-    if re.fullmatch(r"tmp[a-z0-9_]{8}", name):
-        return "tmp*  (Python tempfile default prefix)"
+    match = re.fullmatch(r"tmp[a-z0-9_]{8}((?:\.\w+)*)", name)
+    if match:
+        return f"tmp*{match.group(1)}  (Python tempfile default prefix)"
     if re.fullmatch(r"tmp\.[A-Za-z0-9]{10}", name):
         return "tmp.*  (mktemp default template)"
-    pattern = re.sub(r"(?<=[-_.])[A-Za-z0-9]*\d[A-Za-z0-9]*", "*", name)
-    pattern = re.sub(r"^\d+$", "*", pattern)
-    return pattern
+    # tempfile's 8-character suffix [a-z0-9_], mktemp's XXXXXX ([A-Za-z0-9]), a numeric tail.
+    pattern = re.sub(r"(?<=[-.])[a-z0-9_]{8}$", "*", name)
+    pattern = re.sub(r"(?<=[-.])[A-Za-z0-9]{6}$", "*", pattern)
+    pattern = re.sub(r"(?<=-)\d+$", "*", pattern)
+    return re.sub(r"^\d+$", "*", pattern)
 
 
 # ----------------------------------------------------------------- code search
@@ -476,7 +479,27 @@ def escape_search() -> dict[str, object]:
 EXTERNAL_PRODUCERS = {
     "node-compile-cache": "Node's module compile cache: the Nx CLI enables it (node_modules/nx/dist/src/utils/enable-compile-cache.js) and Node defaults it to os.tmpdir()/node-compile-cache unless NODE_COMPILE_CACHE names one; started through scripts/nx.sh",
     "uv-": "uv's per-interpreter lock files in the system temp directory",
+    "puppeteer_dev_chrome_profile-": "a Chromium profile puppeteer makes under os.tmpdir() for mermaid-cli, launched by scripts/render-diagram.sh (main) and orchestrator/budgets/design_doc_dag.py (render through mmdc)",
+    "org.chromium.Chromium.": "Chromium's own temporary files under TMPDIR, from the same mermaid-cli renders (scripts/render-diagram.sh, orchestrator/budgets/design_doc_dag.py)",
+    "cursor-agent-logs-": "the cursor-agent CLI's log directory under TMPDIR, keyed by uid; a harness oneharness can spawn",
+    "codex-bwrap-synthetic-mount-targets-": "the codex CLI's bubblewrap mount-target scratch under TMPDIR (the judged llmlint tier's codex turn)",
 }
+
+#: A tempfile default name's suffix -> the code writing it with delete=False (it outlives its handle).
+def suffix_producers(suffix: str) -> list[str]:
+    out = []
+    pattern = re.compile(r"suffix=[\"']" + re.escape(suffix) + r"[\"']")
+    for path in tracked_code():
+        try:
+            text = path.read_text()
+        except (OSError, UnicodeDecodeError):
+            continue
+        lines = text.splitlines()
+        for lineno, line in enumerate(lines, 1):
+            window = " ".join(lines[max(0, lineno - 3) : lineno + 2])
+            if pattern.search(line) and "delete=False" in window:
+                out.append(f"{path.relative_to(CHECKOUT)}:{lineno} ({enclosing(path, text, lineno)}) NamedTemporaryFile(delete=False)")
+    return out
 
 
 def producers(prefix: str) -> list[str]:
@@ -496,6 +519,16 @@ def producers(prefix: str) -> list[str]:
                 out.append(f"{path.relative_to(CHECKOUT)}:{lineno} ({enclosing(path, text, lineno)})")
                 break
     return out[:8]
+
+
+def pattern_producers(pattern: str) -> list[str]:
+    match = re.match(r"tmp\*((?:\.\w+)+)  \(Python tempfile", pattern)
+    if match:
+        return suffix_producers(match.group(1)) or ["Python tempfile default name; no tracked NamedTemporaryFile(delete=False) with this suffix"]
+    if pattern.startswith("tmp"):
+        return ["a default tempfile/mktemp name: any caller, no prefix to search"]
+    prefix = pattern.split("*")[0].split("  ")[0]
+    return producers(prefix) if prefix else []
 
 
 def inventory(places: list[Path]) -> dict[str, object]:
@@ -536,8 +569,7 @@ def inventory(places: list[Path]) -> dict[str, object]:
                 examples.append(name)
     out = []
     for group in groups.values():
-        prefix = str(group["pattern"]).split("*")[0].split("  ")[0]
-        group["produced_by"] = producers(prefix) if prefix else []
+        group["produced_by"] = pattern_producers(str(group["pattern"]))
         out.append(group)
     out.sort(key=lambda g: -int(g["bytes"]))  # type: ignore[call-overload]
     return {
@@ -863,7 +895,12 @@ def main() -> int:
             "limit": "allocated size (du -s --block-size=1) of <root>/tmp plus every registered path existing at each sample; an allocation made and removed between two 5 s samples is not seen",
             "free_bytes_min": min(int(s["free_bytes"]) for s in samplers.disk),  # type: ignore[call-overload]
         },
-        "leaked_processes": {"count": len(leaked), "processes": leaked, "stopping": stopping},
+        "leaked_processes": {
+            "count": len(leaked),
+            "meaning": "alive when the disk floor stopped the gate mid-run, so the gate's own working processes, not leaks at a natural exit" if stopped_by_floor else "every member of the descendant tree alive the moment the gate's top process exited, zombies excluded",
+            "processes": leaked,
+            "stopping": stopping,
+        },
         "leftovers": leftovers,
         "breakage": {
             "failed_tests": failures,
