@@ -1,0 +1,524 @@
+{
+ "schema": "gate-host-impact-spike/1",
+ "measured_at": "2026-10-16T17:10:01Z",
+ "checkout_head": "a4e6d9eb82e6c699d0c56487985924b08390141a",
+ "command": [
+  "just",
+  "gate",
+  "origin",
+  "main"
+ ],
+ "environment": {
+  "root": "/home/nick/projects/ai-orchestrator/runs/test-host-impact-brief-spikes/scratch/2027129-0/gate-host-impact-0xpgohat",
+  "TMPDIR": "/home/nick/projects/ai-orchestrator/runs/test-host-impact-brief-spikes/scratch/2027129-0/gate-host-impact-0xpgohat/tmp",
+  "ORCHESTRATOR_GATE_SCRATCH": "/home/nick/projects/ai-orchestrator/runs/test-host-impact-brief-spikes/scratch/2027129-0/gate-host-impact-0xpgohat/scratch",
+  "NX_SKIP_NX_CACHE": "true",
+  "unset_for_the_gate": [
+   "ONEPIPELINE_NODE_SCRATCH_DIR"
+  ],
+  "subreaper": true
+ },
+ "complete": true,
+ "stopped_by": null,
+ "gate": {
+  "exit_status": 1,
+  "wall_clock_seconds": 3.0,
+  "processes_started_lower_bound": 12,
+  "processes_counting": "distinct (pid, start time) pairs in the recorder's descendant tree, sampled every 1 s; a process living under 1 s between samples is missed, so this is a lower bound",
+  "max_concurrent_processes": 8,
+  "log": "/home/nick/projects/ai-orchestrator/runs/test-host-impact-brief-spikes/scratch/2027129-0/gate-host-impact-0xpgohat.gate.log",
+  "log_tail": [
+   "lint-llm-diff: ignoring the ambient global Nx cache skip; force a fresh judgement of this tier alone with 'just lint-llm-diff origin/main --skip-nx-cache'",
+   "",
+   " NX   Failed to load 3 default Nx plugin(s):",
+   "",
+   "  - /home/nick/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/node_modules/nx/dist/src/plugins/js: Attempted to open socket that exceeds the maximum socket length.",
+   "",
+   "Set NX_SOCKET_DIR to a shorter path (e.g. /tmp/nx-tmp) to avoid this issue.",
+   "  - /home/nick/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/node_modules/nx/dist/src/plugins/package-json: Attempted to open socket that exceeds the maximum socket length.",
+   "",
+   "Set NX_SOCKET_DIR to a shorter path (e.g. /tmp/nx-tmp) to avoid this issue.",
+   "  - /home/nick/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/node_modules/nx/dist/src/plugins/project-json/build-nodes/project-json: Attempted to open socket that exceeds the maximum socket length.",
+   "",
+   "Set NX_SOCKET_DIR to a shorter path (e.g. /tmp/nx-tmp) to avoid this issue.",
+   "Pass --verbose to see the stacktrace.",
+   "",
+   "nx: targets failed; fix the reported project findings and rerun the same 'just' recipe (full output: /home/nick/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.logs/nx.log)",
+   "lint-llm-diff: judged this diff against base cd5e90c4c59b9e82a605a3429aee50325010cc63 (Nx cache miss)",
+   "error: Recipe `lint-llm-diff` failed on line 1073 with exit code 1",
+   "gate: llmlint failed; clear the reported findings against 'just lint-llm-diff origin/main' alone, then rerun 'just gate origin main' once to confirm (full output: /home/nick/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.logs/gate-llmlint.log)",
+   "error: Recipe `gate` failed on line 117 with exit code 1"
+  ]
+ },
+ "peak_temp_disk": {
+  "bytes": 2412544,
+  "gib": 0.002,
+  "at_t": 3.06,
+  "walk_seconds_at_peak": 0.003,
+  "walk_seconds_max": 0.003,
+  "walk_seconds_mean": 0.003,
+  "cadence_seconds": 5.0,
+  "at_exit_bytes": 2412544,
+  "samples": 2,
+  "limit": "allocated size (du -s --block-size=1) of <root>/tmp plus every registered path existing at each sample; an allocation made and removed between two 5 s samples is not seen",
+  "free_bytes_min": 13225627648
+ },
+ "leaked_processes": {
+  "count": 0,
+  "processes": [],
+  "stopping": {
+   "exited_within_grace": [],
+   "needed_term": [],
+   "needed_kill": [],
+   "alive_after_kill": []
+  }
+ },
+ "leftovers": {
+  "groups": [
+   {
+    "place": "/home/nick/projects/ai-orchestrator/runs/test-host-impact-brief-spikes/scratch/2027129-0/gate-host-impact-0xpgohat/tmp",
+    "pattern": "node-compile-cache",
+    "top_level": 1,
+    "entries": 507,
+    "bytes": 2408448,
+    "examples": [
+     "node-compile-cache"
+    ],
+    "produced_by": [
+     "Node's module compile cache: the Nx CLI enables it (node_modules/nx/dist/src/utils/enable-compile-cache.js) and Node defaults it to os.tmpdir()/node-compile-cache unless NODE_COMPILE_CACHE names one; started through scripts/nx.sh"
+    ]
+   }
+  ],
+  "entries_total": 507,
+  "bytes_total": 2408448,
+  "zero_byte_uv_locks": {
+   "count": 0,
+   "allocated_bytes": 0
+  }
+ },
+ "breakage": {
+  "failed_tests": [],
+  "unix_socket_address_lines": [
+   "- /home/nick/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/node_modules/nx/dist/src/plugins/js: Attempted to open socket that exceeds the maximum socket length.",
+   "- /home/nick/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/node_modules/nx/dist/src/plugins/package-json: Attempted to open socket that exceeds the maximum socket length.",
+   "- /home/nick/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/node_modules/nx/dist/src/plugins/project-json/build-nodes/project-json: Attempted to open socket that exceeds the maximum socket length."
+  ],
+  "note": "failed tests parsed from the gate's output and .logs/gate-check.log; each re-run once on this tree with the inherited TMPDIR and no registration directory; unix_socket_address_lines re-derived after the run from the same gate log with the widened pattern (the run's own pattern missed Nx's wording)",
+  "cause": "Nx plugin workers open Unix sockets under os.tmpdir()/<workspace hash> (node_modules/nx/dist/src/daemon/tmp-dir.js getSocketDir); with TMPDIR at the 118-byte root/tmp the address passed 108 bytes and every Nx run (first: just lint-llm-diff via scripts/nx.sh) failed to load its default plugins"
+ },
+ "escapes": {
+  "findings": [
+   {
+    "kind": "tempfile-explicit-dir",
+    "file": "orchestrator/follow_up_comments.py",
+    "line": 961,
+    "function": "_staged",
+    "status": "contained",
+    "why": "staging directory beside its destination for an atomic rename; lives where the destination does",
+    "text": "staged = Path(tempfile.mkdtemp(prefix=\".staging-\", dir=parent))"
+   },
+   {
+    "kind": "node-scratch-dir",
+    "file": "orchestrator/follow_up_drafts.py",
+    "line": 115,
+    "function": "<module>",
+    "status": "contained-if-unset",
+    "why": "prefers $ONEPIPELINE_NODE_SCRATCH_DIR over TMPDIR; contained only when it is unset (the harness unsets it for the gate)",
+    "text": "NODE_SCRATCH_ENV = \"ONEPIPELINE_NODE_SCRATCH_DIR\""
+   },
+   {
+    "kind": "tempfile-explicit-dir",
+    "file": "orchestrator/follow_up_drafts.py",
+    "line": 752,
+    "function": "_publish",
+    "status": "contained",
+    "why": "atomic-write staging file beside its destination",
+    "text": "handle, temporary = tempfile.mkstemp(dir=directory, prefix=\".\", suffix=\".tmp\")"
+   },
+   {
+    "kind": "tempfile-explicit-dir",
+    "file": "orchestrator/spike_brief.py",
+    "line": 225,
+    "function": "write",
+    "status": "contained",
+    "why": "atomic-write staging file beside its destination",
+    "text": "descriptor, stage = tempfile.mkstemp(prefix=\".spike-brief-\", dir=path.parent)"
+   },
+   {
+    "kind": "node-scratch-dir",
+    "file": "scripts/allowlist-probe.py",
+    "line": 1175,
+    "function": "main",
+    "status": "contained-if-unset",
+    "why": "prefers $ONEPIPELINE_NODE_SCRATCH_DIR over TMPDIR; contained only when it is unset (the harness unsets it for the gate)",
+    "text": "base = os.environ.get(\"ONEPIPELINE_NODE_SCRATCH_DIR\") or tempfile.gettempdir()"
+   },
+   {
+    "kind": "node-scratch-dir",
+    "file": "scripts/allowlist-probe.py",
+    "line": 1185,
+    "function": "main",
+    "status": "contained-if-unset",
+    "why": "prefers $ONEPIPELINE_NODE_SCRATCH_DIR over TMPDIR; contained only when it is unset (the harness unsets it for the gate)",
+    "text": "\"TMPDIR or ONEPIPELINE_NODE_SCRATCH_DIR at one\""
+   },
+   {
+    "kind": "tempfile-explicit-dir",
+    "file": "scripts/allowlist-probe.py",
+    "line": 1188,
+    "function": "main",
+    "status": "contained-if-unset",
+    "why": "base = $ONEPIPELINE_NODE_SCRATCH_DIR or tempfile.gettempdir(): follows TMPDIR only when that variable is unset (the harness unsets it for the gate)",
+    "text": "scratch = Scratch(Path(tempfile.mkdtemp(prefix=\"allowlist-probe-\", dir=base)))"
+   },
+   {
+    "kind": "node-scratch-dir",
+    "file": "scripts/allowlist-probe.py",
+    "line": 1192,
+    "function": "main",
+    "status": "contained-if-unset",
+    "why": "prefers $ONEPIPELINE_NODE_SCRATCH_DIR over TMPDIR; contained only when it is unset (the harness unsets it for the gate)",
+    "text": "\"or point TMPDIR or ONEPIPELINE_NODE_SCRATCH_DIR at one that is, then retry\""
+   },
+   {
+    "kind": "mktemp-explicit-dir",
+    "file": "scripts/budget-design-doc-summary.sh",
+    "line": 30,
+    "function": "<top level>",
+    "status": "contained",
+    "why": "${TMPDIR:-/tmp} follows TMPDIR",
+    "text": "scratch=$(mktemp -d \"${TMPDIR:-/tmp}/budget-design-doc-summary.XXXXXX\") ||"
+   },
+   {
+    "kind": "mktemp-explicit-dir",
+    "file": "scripts/finish-plan.sh",
+    "line": 700,
+    "function": "<top level>",
+    "status": "contained",
+    "why": "${TMPDIR:-/tmp} follows TMPDIR",
+    "text": "graph_dir=$(mktemp -d \"${TMPDIR:-/tmp}/finish-plan-graph.XXXXXX\") ||"
+   },
+   {
+    "kind": "mktemp-explicit-dir",
+    "file": "scripts/finish-plan.sh",
+    "line": 803,
+    "function": "<top level>",
+    "status": "contained",
+    "why": "${TMPDIR:-/tmp} follows TMPDIR",
+    "text": "answers_file=$(mktemp \"${TMPDIR:-/tmp}/finish-plan-answers.XXXXXX\") || {"
+   },
+   {
+    "kind": "home-scratch",
+    "file": "scripts/host-sweep.sh",
+    "line": 59,
+    "function": "host_sweep_dir",
+    "status": "neither",
+    "why": "the sweep's own memo under $XDG_CACHE_HOME/ai-orchestrator/sweep; session setup's, not the gate's",
+    "text": "local dir=\"${XDG_CACHE_HOME:-$HOME/.cache}/ai-orchestrator/sweep\""
+   },
+   {
+    "kind": "node-scratch-dir",
+    "file": "scripts/node-scratch-dir.sh",
+    "line": 37,
+    "function": "ensure_node_scratch_dir",
+    "status": "contained-if-unset",
+    "why": "prefers $ONEPIPELINE_NODE_SCRATCH_DIR over TMPDIR; contained only when it is unset (the harness unsets it for the gate)",
+    "text": "if [ -n \"${ONEPIPELINE_NODE_SCRATCH_DIR-}\" ]; then"
+   },
+   {
+    "kind": "node-scratch-dir",
+    "file": "scripts/node-scratch-dir.sh",
+    "line": 42,
+    "function": "ensure_node_scratch_dir",
+    "status": "contained-if-unset",
+    "why": "prefers $ONEPIPELINE_NODE_SCRATCH_DIR over TMPDIR; contained only when it is unset (the harness unsets it for the gate)",
+    "text": "scratch=$ONEPIPELINE_NODE_SCRATCH_DIR"
+   },
+   {
+    "kind": "node-scratch-dir",
+    "file": "scripts/node-scratch-dir.sh",
+    "line": 54,
+    "function": "ensure_node_scratch_dir",
+    "status": "contained-if-unset",
+    "why": "prefers $ONEPIPELINE_NODE_SCRATCH_DIR over TMPDIR; contained only when it is unset (the harness unsets it for the gate)",
+    "text": "export ONEPIPELINE_NODE_SCRATCH_DIR=\"$scratch\""
+   },
+   {
+    "kind": "mktemp-explicit-dir",
+    "file": "scripts/node-scratch-dir.sh",
+    "line": 71,
+    "function": "ensure_node_scratch_dir",
+    "status": "contained",
+    "why": "${TMPDIR:-/tmp} follows TMPDIR",
+    "text": "if ! scratch=$(mktemp -d \"${TMPDIR:-/tmp}/$ORCHESTRATOR_NODE_SCRATCH_PREFIX-XXXXXXXX\"); then"
+   },
+   {
+    "kind": "node-scratch-dir",
+    "file": "scripts/node-scratch-dir.sh",
+    "line": 81,
+    "function": "ensure_node_scratch_dir",
+    "status": "contained-if-unset",
+    "why": "prefers $ONEPIPELINE_NODE_SCRATCH_DIR over TMPDIR; contained only when it is unset (the harness unsets it for the gate)",
+    "text": "export ONEPIPELINE_NODE_SCRATCH_DIR=\"$scratch\""
+   },
+   {
+    "kind": "home-scratch",
+    "file": "scripts/nx.sh",
+    "line": 26,
+    "function": "<top level>",
+    "status": "neither",
+    "why": "the same persistent Nx caches under $XDG_CACHE_HOME; by design, not scratch",
+    "text": "cache_root=\"${XDG_CACHE_HOME:-${HOME}/.cache}/ai-orchestrator/nx/${repo_key}\""
+   },
+   {
+    "kind": "nx-native-file-cache",
+    "file": "scripts/nx.sh",
+    "line": 27,
+    "function": "<top level>",
+    "status": "neither",
+    "why": "NX_CACHE_DIRECTORY and NX_NATIVE_FILE_CACHE_DIRECTORY under ${XDG_CACHE_HOME:-$HOME/.cache}/ai-orchestrator/: persistent per-repository caches by design, outside TMPDIR and unregistered; not scratch, so not counted",
+    "text": "export NX_CACHE_DIRECTORY=\"$cache_root\""
+   },
+   {
+    "kind": "nx-native-file-cache",
+    "file": "scripts/nx.sh",
+    "line": 36,
+    "function": "<top level>",
+    "status": "neither",
+    "why": "NX_CACHE_DIRECTORY and NX_NATIVE_FILE_CACHE_DIRECTORY under ${XDG_CACHE_HOME:-$HOME/.cache}/ai-orchestrator/: persistent per-repository caches by design, outside TMPDIR and unregistered; not scratch, so not counted",
+    "text": "export NX_NATIVE_FILE_CACHE_DIRECTORY=\"${XDG_CACHE_HOME:-${HOME}/.cache}/ai-orchestrator/nx-native/${repo_key}\""
+   },
+   {
+    "kind": "home-scratch",
+    "file": "scripts/nx.sh",
+    "line": 36,
+    "function": "<top level>",
+    "status": "neither",
+    "why": "the same persistent Nx caches under $XDG_CACHE_HOME; by design, not scratch",
+    "text": "export NX_NATIVE_FILE_CACHE_DIRECTORY=\"${XDG_CACHE_HOME:-${HOME}/.cache}/ai-orchestrator/nx-native/${repo_key}\""
+   },
+   {
+    "kind": "mktemp-explicit-dir",
+    "file": "scripts/render-diagram.sh",
+    "line": 126,
+    "function": "<top level>",
+    "status": "contained",
+    "why": "staging file beside its own destination",
+    "text": "if ! staged=\"$(mktemp \"$destination/.render-diagram.XXXXXX.png\")\" ||"
+   },
+   {
+    "kind": "home-scratch",
+    "file": "scripts/repos-bootstrap.sh",
+    "line": 45,
+    "function": "usage",
+    "status": "neither",
+    "why": "repos-bootstrap memo under $XDG_CACHE_HOME; session setup's, not the gate's",
+    "text": "under `${XDG_CACHE_HOME:-$HOME/.cache}/ai-orchestrator/repos-bootstrap/`."
+   },
+   {
+    "kind": "home-scratch",
+    "file": "scripts/repos-bootstrap.sh",
+    "line": 100,
+    "function": "<top level>",
+    "status": "neither",
+    "why": "repos-bootstrap memo under $XDG_CACHE_HOME; session setup's, not the gate's",
+    "text": "memo_root=\"${XDG_CACHE_HOME:-$HOME/.cache}/ai-orchestrator/repos-bootstrap\""
+   },
+   {
+    "kind": "mktemp-explicit-dir",
+    "file": "scripts/smoke.sh",
+    "line": 47,
+    "function": "<top level>",
+    "status": "contained",
+    "why": "${TMPDIR:-/tmp} follows TMPDIR",
+    "text": "smoke_root=\"$(mktemp -d \"${TMPDIR:-/tmp}/orchestrator-smoke-XXXXXXXX\")\" \\"
+   },
+   {
+    "kind": "tempfile-explicit-dir",
+    "file": "tests/e2e/launch_monitor_observer/test_quota_fallthrough_e2e.py",
+    "line": 298,
+    "function": "_chain_turn",
+    "status": "contained",
+    "why": "dir=tmp_path, under the pytest root inside TMPDIR",
+    "text": "history_dir = Path(tempfile.mkdtemp(prefix=\"history-\", dir=tmp_path))"
+   },
+   {
+    "kind": "nx-not-via-wrapper",
+    "file": "tests/e2e/workspace_copies/test_workspace_contract_e2e.py",
+    "line": 277,
+    "function": "_add_bun_double",
+    "status": "contained",
+    "why": "a test's fake Nx binary inside its own temporary checkout, not a real Nx run",
+    "text": "if [[ -x node_modules/.bin/nx ]]; then"
+   },
+   {
+    "kind": "nx-not-via-wrapper",
+    "file": "tests/e2e/workspace_copies/test_workspace_contract_e2e.py",
+    "line": 299,
+    "function": "_add_bun_double",
+    "status": "contained",
+    "why": "a test's fake Nx binary inside its own temporary checkout, not a real Nx run",
+    "text": "cat >node_modules/.bin/nx <<'NX'"
+   },
+   {
+    "kind": "nx-not-via-wrapper",
+    "file": "tests/e2e/workspace_copies/test_workspace_contract_e2e.py",
+    "line": 303,
+    "function": "_add_bun_double",
+    "status": "contained",
+    "why": "a test's fake Nx binary inside its own temporary checkout, not a real Nx run",
+    "text": "chmod +x node_modules/.bin/nx"
+   },
+   {
+    "kind": "nx-not-via-wrapper",
+    "file": "tests/e2e/workspace_copies/test_workspace_contract_e2e.py",
+    "line": 315,
+    "function": "_mark_nx_installed",
+    "status": "contained",
+    "why": "a test's fake Nx binary inside its own temporary checkout, not a real Nx run",
+    "text": "nx = checkout / \"node_modules/.bin/nx\""
+   },
+   {
+    "kind": "nx-not-via-wrapper",
+    "file": "tests/e2e/workspace_copies/test_workspace_contract_e2e.py",
+    "line": 1401,
+    "function": "test_a_forced_workspace_install_discards_the_installed_tree_first",
+    "status": "contained",
+    "why": "a test's fake Nx binary inside its own temporary checkout, not a real Nx run",
+    "text": "assert (checkout / \"node_modules/.bin/nx\").is_file()"
+   },
+   {
+    "kind": "nx-not-via-wrapper",
+    "file": "tests/e2e/workspace_copies/test_workspace_contract_e2e.py",
+    "line": 1436,
+    "function": "test_an_install_refuses_a_linked_tree_and_a_forced_one_replaces_the_link",
+    "status": "contained",
+    "why": "a test's fake Nx binary inside its own temporary checkout, not a real Nx run",
+    "text": "assert (checkout / \"node_modules/.bin/nx\").is_file()"
+   },
+   {
+    "kind": "nx-not-via-wrapper",
+    "file": "tests/e2e/workspace_copies/test_workspace_contract_e2e.py",
+    "line": 1530,
+    "function": "test_concurrent_workspace_installs_install_once_and_both_succeed",
+    "status": "contained",
+    "why": "a test's fake Nx binary inside its own temporary checkout, not a real Nx run",
+    "text": "assert (checkout / \"node_modules/.bin/nx\").is_file()"
+   },
+   {
+    "kind": "nx-not-via-wrapper",
+    "file": "tests/e2e/workspace_copies/test_workspace_contract_e2e.py",
+    "line": 1553,
+    "function": "test_a_nested_nx_run_cannot_erase_the_running_one_s_log",
+    "status": "contained",
+    "why": "a test's fake Nx binary inside its own temporary checkout, not a real Nx run",
+    "text": "nx = checkout / \"node_modules/.bin/nx\""
+   },
+   {
+    "kind": "tempfile-explicit-dir",
+    "file": "tests/pytest_temp_root.py",
+    "line": 61,
+    "function": "claim",
+    "status": "contained",
+    "why": "dir=$PYTEST_DEBUG_TEMPROOT, which is unset at the top session (falls back to TMPDIR) and inherited as a root inside TMPDIR below it",
+    "text": "root = Path(tempfile.mkdtemp(prefix=ROOT_PREFIX, dir=os.environ.get(TEMPROOT_ENV)))"
+   },
+   {
+    "kind": "literal-tmp",
+    "file": "tests/short_state.py",
+    "line": 45,
+    "function": "<module>",
+    "status": "registered",
+    "why": "PARENT = /tmp: a Unix socket address leaves no room to nest the base under the gate's root, so short_state_base registers each /tmp/aio-* base in $ORCHESTRATOR_GATE_SCRATCH (this branch's throwaway patch)",
+    "text": "PARENT = Path(\"/tmp\")"
+   },
+   {
+    "kind": "tempfile-explicit-dir",
+    "file": "tests/short_state.py",
+    "line": 61,
+    "function": "short_state_base",
+    "status": "registered",
+    "why": "tempfile.mkdtemp(prefix='aio-', dir=PARENT=/tmp); registered as above",
+    "text": "_base = Path(tempfile.mkdtemp(prefix=BASE_PREFIX, dir=PARENT))"
+   }
+  ],
+  "non_writer_mentions": {
+   "scripts/dispatch-env.sh": 1,
+   "scripts/lock-timeout.sh": 1,
+   "scripts/node-scratch-dir.sh": 4,
+   "scripts/nx.sh": 3,
+   "tests/ask_seam/ask_manager/test_ask_manager_e2e.py": 2,
+   "tests/ask_seam/channel_reply/test_channel_reply_e2e.py": 1,
+   "tests/ask_seam/follow_up_drafts_launch/test_follow_up_drafts_launch_e2e.py": 1,
+   "tests/ask_seam/planner_fallback_ask/test_planner_fallback_ask_e2e.py": 3,
+   "tests/e2e/budget_gate/test_budget_target_e2e.py": 1,
+   "tests/e2e/budget_gate/test_budget_telemetry_e2e.py": 1,
+   "tests/e2e/fake_codex_untrusted_directory.py": 1,
+   "tests/e2e/launch_monitor_observer/test_claude_identity_routing_e2e.py": 1,
+   "tests/e2e/launch_monitor_observer/test_dispatch_environment_e2e.py": 1,
+   "tests/e2e/launch_monitor_observer/test_dispatched_operational_notes_e2e.py": 1,
+   "tests/e2e/launch_monitor_observer/test_fake_codex_reads_each_roles_prompt_e2e.py": 2,
+   "tests/e2e/launch_monitor_observer/test_oneharness_bin_override_e2e.py": 1,
+   "tests/e2e/launch_monitor_observer/test_onetaskgraph_host_e2e.py": 2,
+   "tests/e2e/registry_and_recipes/test_delegated_recipes_e2e.py": 9,
+   "tests/e2e/registry_and_recipes/test_plan_checklist_e2e.py": 1,
+   "tests/e2e/workspace_copies/test_workspace_contract_e2e.py": 1,
+   "tests/graceful_cancel/test_graceful_cancel_e2e.py": 1,
+   "tests/manager_allowlist/test_manager_allowlist_recipes_e2e.py": 3,
+   "tests/plan_store_cache.py": 1,
+   "tests/plan_tooling/check_and_review/test_check_plan_recipe_e2e.py": 1,
+   "tests/plan_tooling/follow_ups/test_follow_ups_recipe_e2e.py": 1,
+   "tests/plan_tooling/follow_ups/test_linear_routed_follow_ups_e2e.py": 1,
+   "tests/plan_tooling/plan_flow/test_visual_plan_flow_e2e.py": 1,
+   "tests/run_end_hooks/test_configured_plan_stores_stay_untouched_e2e.py": 1,
+   "tests/run_end_hooks/test_run_end_hooks_e2e.py": 1,
+   "tests/session_setup/test_fresh_checkout_bootstrap_e2e.py": 1,
+   "tests/test_dispatch_appendix.py": 3,
+   "tests/test_follow_up_comments.py": 2,
+   "tests/test_plan_check.py": 1,
+   "tests/test_plan_review.py": 1,
+   "tests/test_planner_seam_contracts.py": 2,
+   "tests/test_project_store.py": 2,
+   "tests/test_publication_guard.py": 1,
+   "tests/test_short_state_budget.py": 1,
+   "tests/test_spike_flow.py": 1
+  },
+  "note": "static search of tracked code (py, sh, justfile, hooks); 'non_writer_mentions' counts lines that matched a search but read or quote a path rather than write one"
+ },
+ "host": {
+  "load1_peak": 14.26,
+  "dispatches_peak": 5,
+  "samples": 1,
+  "dispatch_counter": "scripts/budget-dispatches.sh"
+ },
+ "cleanup": {
+  "root": "/home/nick/projects/ai-orchestrator/runs/test-host-impact-brief-spikes/scratch/2027129-0/gate-host-impact-0xpgohat",
+  "root_removed": "removed",
+  "registered": {}
+ },
+ "disk_samples": [
+  {
+   "t": 0.0,
+   "label": "periodic",
+   "bytes": 4096,
+   "walk_seconds": 0.003,
+   "paths_walked": 1,
+   "free_bytes": 13228101632
+  },
+  {
+   "t": 3.06,
+   "label": "at-exit",
+   "bytes": 2412544,
+   "walk_seconds": 0.003,
+   "paths_walked": 1,
+   "free_bytes": 13225627648
+  }
+ ],
+ "host_samples": [
+  {
+   "t": 0.95,
+   "load1": 14.26,
+   "dispatches": 5
+  }
+ ]
+}

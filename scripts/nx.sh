@@ -53,6 +53,17 @@ export NX_NATIVE_FILE_CACHE_DIRECTORY="${XDG_CACHE_HOME:-${HOME}/.cache}/ai-orch
 export NX_DAEMON="${NX_DAEMON-false}"
 export NX_USE_LOCAL=true
 
+# Spike (throwaway, spike-gate-host-impact): Nx's plugin workers listen on Unix sockets
+# under `os.tmpdir()`, which the gate recorder's deeper TMPDIR pushes past the socket
+# address limit, so under the recorder they get a short `/tmp/aio-nx-*` directory,
+# registered with it and removed on exit — the prototype of `register_scratch`.
+if [[ -n ${ORCHESTRATOR_GATE_SCRATCH:-} && -z ${NX_SOCKET_DIR:-} ]]; then
+  nx_socket_dir=$(mktemp -d /tmp/aio-nx-XXXXXX)
+  printf '%s\n' "$nx_socket_dir" >"$ORCHESTRATOR_GATE_SCRATCH/nx-socket-$$-${nx_socket_dir##*/}"
+  export NX_SOCKET_DIR="$nx_socket_dir"
+  trap 'rm -rf "$nx_socket_dir"' EXIT
+fi
+
 # The Bun-written shim rather than a path inside the package: Nx has moved its
 # bin entry between releases, and the shim is the one name that cannot. Session setup's
 # locked install provides it; nothing here does.

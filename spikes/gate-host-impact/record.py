@@ -472,11 +472,18 @@ def escape_search() -> dict[str, object]:
     }
 
 
+#: Leftover names no tracked code spells, with the tool that writes them.
+EXTERNAL_PRODUCERS = {
+    "node-compile-cache": "Node's module compile cache: the Nx CLI enables it (node_modules/nx/dist/src/utils/enable-compile-cache.js) and Node defaults it to os.tmpdir()/node-compile-cache unless NODE_COMPILE_CACHE names one; started through scripts/nx.sh",
+    "uv-": "uv's per-interpreter lock files in the system temp directory",
+}
+
+
 def producers(prefix: str) -> list[str]:
     """Code sites holding the literal ``prefix`` of a leftover name."""
     if len(prefix) < 3:
         return []
-    out = []
+    out = [why for name, why in EXTERNAL_PRODUCERS.items() if prefix.startswith(name)]
     for path in tracked_code():
         try:
             text = path.read_text()
@@ -648,7 +655,7 @@ def failed_tests(text: str) -> list[dict[str, str]]:
     return list(found.values())
 
 
-SOCKET_TOO_LONG = re.compile(r"AF_UNIX path too long|path too long for a Unix|sun_path|socket path .*too long", re.I)
+SOCKET_TOO_LONG = re.compile(r"exceeds the maximum socket length|AF_UNIX path too long|path too long for a Unix|sun_path|socket path .*too long", re.I)
 
 
 def rerun_without_harness(nodeids: list[str], env: dict[str, str]) -> dict[str, str]:
@@ -712,6 +719,20 @@ def reap_zombies() -> None:
             return
 
 
+def prior_attempt(path: Path) -> dict[str, object]:
+    prior = json.loads(path.read_text())
+    return {
+        "summary_file": str(path.relative_to(CHECKOUT)) if path.is_relative_to(CHECKOUT) else str(path),
+        "measured_at": prior["measured_at"],
+        "gate": {k: prior["gate"][k] for k in ("exit_status", "wall_clock_seconds", "processes_started_lower_bound", "log_tail")},
+        "peak_temp_disk_bytes": prior["peak_temp_disk"]["bytes"],
+        "leaked_processes": prior["leaked_processes"]["count"],
+        "leftovers": prior["leftovers"],
+        "breakage": prior["breakage"],
+        "cleanup": prior["cleanup"],
+    }
+
+
 def safe_remove(path: Path, root: Path) -> str:
     resolved = path.resolve()
     if resolved in (Path("/"), Path("/tmp"), Path.home(), CHECKOUT) or CHECKOUT.is_relative_to(resolved):
@@ -728,6 +749,7 @@ def main() -> int:
     parser.add_argument("--base", default="main")
     parser.add_argument("--out", default=str(CHECKOUT / "spikes/gate-host-impact/summary.json"))
     parser.add_argument("--gate-cmd", help="replace `just gate` (harness self-test only)")
+    parser.add_argument("--prior", action="append", default=[], help="an earlier attempt's summary, carried into this one's prior_attempts")
     args = parser.parse_args()
 
     node_scratch = Path(os.environ["ONEPIPELINE_NODE_SCRATCH_DIR"])
@@ -849,6 +871,7 @@ def main() -> int:
             "note": "failed tests parsed from the gate's output and .logs/gate-check.log; each re-run once on this tree with the inherited TMPDIR and no registration directory",
         },
         "escapes": escapes,
+        "prior_attempts": [prior_attempt(Path(p)) for p in args.prior],
         "host": {
             "load1_peak": max(host_load) if host_load else None,
             "dispatches_peak": max(host_disp) if host_disp else None,
