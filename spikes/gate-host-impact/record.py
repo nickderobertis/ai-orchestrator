@@ -357,6 +357,14 @@ CURATED = {
         "registered",
         "tempfile.mkdtemp(prefix='aio-', dir=PARENT=/tmp); registered as above",
     ),
+    ("scripts/nx.sh", "literal-tmp"): (
+        "registered",
+        "this branch's throwaway patch: Nx's plugin-worker sockets get a short /tmp/aio-nx-* directory (NX_SOCKET_DIR), registered in $ORCHESTRATOR_GATE_SCRATCH and removed on exit, because the root's depth pushed them past the socket address limit (attempt 1)",
+    ),
+    ("scripts/nx.sh", "mktemp-explicit-dir"): (
+        "registered",
+        "mktemp -d /tmp/aio-nx-XXXXXX for NX_SOCKET_DIR; registered as above",
+    ),
     ("tests/pytest_temp_root.py", "tempfile-explicit-dir"): (
         "contained",
         "dir=$PYTEST_DEBUG_TEMPROOT, which is unset at the top session (falls back to TMPDIR) and inherited as a root inside TMPDIR below it",
@@ -482,6 +490,8 @@ EXTERNAL_PRODUCERS = {
     "puppeteer_dev_chrome_profile-": "a Chromium profile puppeteer makes under os.tmpdir() for mermaid-cli, launched by scripts/render-diagram.sh (main) and orchestrator/budgets/design_doc_dag.py (render through mmdc)",
     "org.chromium.Chromium.": "Chromium's own temporary files under TMPDIR, from the same mermaid-cli renders (scripts/render-diagram.sh, orchestrator/budgets/design_doc_dag.py)",
     "cursor-agent-logs-": "the cursor-agent CLI's log directory under TMPDIR, keyed by uid; a harness oneharness can spawn",
+    "claude-": "Claude Code's per-user temporary directory (claude-<uid>) under TMPDIR, made by a claude CLI a test or harness turn spawns",
+    "onepipeline-scratch": "the onepipeline engine's own scratch directory under TMPDIR (no tracked code spells it)",
     "codex-bwrap-synthetic-mount-targets-": "the codex CLI's bubblewrap mount-target scratch under TMPDIR (the judged llmlint tier's codex turn)",
 }
 
@@ -507,6 +517,8 @@ def producers(prefix: str) -> list[str]:
     if len(prefix) < 3:
         return []
     out = [why for name, why in EXTERNAL_PRODUCERS.items() if prefix.startswith(name)]
+    if out:
+        return out
     for path in tracked_code():
         try:
             text = path.read_text()
@@ -862,7 +874,10 @@ def main() -> int:
     check_log = CHECKOUT / ".logs/gate-check.log"
     check_text = redact(check_log.read_text(errors="replace"), _SECRETS) if check_log.exists() and check_log.stat().st_mtime >= started_wall else ""
     failures = failed_tests(gate_text + "\n" + check_text)
-    socket_lines = sorted({line.strip()[:300] for line in (gate_text + check_text).splitlines() if SOCKET_TOO_LONG.search(line)})
+    # A lint report quoting this file's own pattern is not a socket failure.
+    socket_lines = sorted(
+        {line.strip()[:300] for line in (gate_text + check_text).splitlines() if SOCKET_TOO_LONG.search(line) and "AF_UNIX path too long|" not in line}
+    )
     reruns = rerun_without_harness([f["nodeid"] for f in failures], base_env) if failures and not args.gate_cmd else {}
     for failure in failures:
         failure["without_harness"] = reruns.get(failure["nodeid"], "not rerun")
