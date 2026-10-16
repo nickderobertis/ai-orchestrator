@@ -4121,6 +4121,46 @@
  "free_space_evidence": {
   "free_gib_by_t": [
    [
+    690.38,
+    11.76,
+    0.097
+   ],
+   [
+    695.38,
+    11.75,
+    0.101
+   ],
+   [
+    700.39,
+    11.75,
+    0.102
+   ],
+   [
+    705.4,
+    11.75,
+    0.103
+   ],
+   [
+    710.42,
+    11.75,
+    0.103
+   ],
+   [
+    715.41,
+    11.62,
+    0.123
+   ],
+   [
+    720.44,
+    11.15,
+    0.132
+   ],
+   [
+    725.37,
+    10.57,
+    0.134
+   ],
+   [
     730.37,
     9.98,
     0.134
@@ -4187,6 +4227,6 @@
    "~/.cache/uv": 0.0,
    "checkout": 0.02
   },
-  "note": "free space on /home fell from 11.75 GiB to under 5 GiB in the last ~30 s while the gate's root held ~0.11 GiB; files the gate could write outside its root (Nx caches, uv cache, checkout) grew 0.03 GiB in total over the run (find -newer, read after the run), so the space went to another tenant of /home"
+  "note": "free space on /home fell from 11.75 GiB at t = 700 s to 4.92 GiB at t = 781 s (about 6.8 GiB in 80 s) while the gate's root held ~0.11 GiB; files the gate could write outside its root (Nx caches, uv cache, checkout) grew 0.03 GiB in total over the run (find -newer, read after the run), so the space went to another tenant of /home"
  }
 }
