@@ -960,8 +960,10 @@ def main() -> int:
         "host_samples": samplers.host,
     }
     out = Path(args.out)
-    out.write_text(json.dumps(summary, indent=1) + "\n")
-    print(json.dumps({k: summary[k] for k in ("complete", "gate", "peak_temp_disk")} | {"leaked": len(leaked), "leftover_entries": leftovers["entries_total"], "summary": str(out)}, indent=1, default=str))
+    # One rendering, written to --out and printed whole, so stdout is the same document.
+    document = json.dumps(summary, indent=1) + "\n"
+    out.write_text(document)
+    sys.stdout.write(document)
     return 0
 
 
