@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import os
 import shutil
 import tempfile
 from collections.abc import Iterator
@@ -58,6 +59,12 @@ def short_state_base() -> Iterator[Path]:
     """
     global _base
     _base = Path(tempfile.mkdtemp(prefix=BASE_PREFIX, dir=PARENT))
+    # Spike (throwaway, spike-gate-host-impact): register the base with the gate's
+    # recorder, the prototype of `register_scratch`, since a socket address leaves no
+    # room to nest it under the recorder's deeper root.
+    registry = os.environ.get("ORCHESTRATOR_GATE_SCRATCH")
+    if registry:
+        Path(registry, f"short-state-{os.getpid()}-{_base.name}").write_text(f"{_base}\n")
     try:
         yield _base
     finally:
