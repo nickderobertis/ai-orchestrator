@@ -117,14 +117,17 @@
     "examples": [
      "codex-bwrap-synthetic-mount-targets-522201107"
     ],
-    "produced_by": []
+    "produced_by": [
+     "the codex CLI's bubblewrap mount-target scratch under TMPDIR (the judged llmlint tier's codex turn)"
+    ]
    }
   ],
   "entries_total": 537,
   "bytes_total": 2555904,
   "zero_byte_uv_locks": {
    "count": 1,
-   "allocated_bytes": 0
+   "allocated_bytes": 0,
+   "produced_by": "uv run's environment lock (a uv thread creates .tmpXXXXXX and links it to uv-<hash>.lock), from every `uv run` the recipes spell, e.g. the `status` recipe through scripts/onepipeline.sh; traced in attribution.json"
   }
  },
  "breakage": {
@@ -585,7 +588,8 @@
     "bytes_total": 2408448,
     "zero_byte_uv_locks": {
      "count": 0,
-     "allocated_bytes": 0
+     "allocated_bytes": 0,
+     "produced_by": "uv run's environment lock (a uv thread creates .tmpXXXXXX and links it to uv-<hash>.lock), from every `uv run` the recipes spell, e.g. the `status` recipe through scripts/onepipeline.sh; traced in attribution.json"
     }
    },
    "breakage": {

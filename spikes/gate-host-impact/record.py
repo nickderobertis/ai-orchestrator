@@ -486,12 +486,12 @@ def escape_search() -> dict[str, object]:
 #: Leftover names no tracked code spells, with the tool that writes them.
 EXTERNAL_PRODUCERS = {
     "node-compile-cache": "Node's module compile cache: the Nx CLI enables it (node_modules/nx/dist/src/utils/enable-compile-cache.js) and Node defaults it to os.tmpdir()/node-compile-cache unless NODE_COMPILE_CACHE names one; started through scripts/nx.sh",
-    "uv-": "uv's per-interpreter lock files in the system temp directory",
+    "uv-": "uv run's environment lock (a uv thread creates .tmpXXXXXX and links it to uv-<hash>.lock), from every `uv run` the recipes spell, e.g. the `status` recipe through scripts/onepipeline.sh; traced in attribution.json",
     "puppeteer_dev_chrome_profile-": "a Chromium profile puppeteer makes under os.tmpdir() for mermaid-cli, launched by scripts/render-diagram.sh (main) and orchestrator/budgets/design_doc_dag.py (render through mmdc)",
     "org.chromium.Chromium.": "Chromium's own temporary files under TMPDIR, from the same mermaid-cli renders (scripts/render-diagram.sh, orchestrator/budgets/design_doc_dag.py)",
-    "cursor-agent-logs-": "the cursor-agent CLI's log directory under TMPDIR, keyed by uid; a harness oneharness can spawn",
-    "claude-": "Claude Code's per-user temporary directory (claude-<uid>) under TMPDIR, made by a claude CLI a test or harness turn spawns",
-    "onepipeline-scratch": "the onepipeline engine's own scratch directory under TMPDIR (no tracked code spells it)",
+    "cursor-agent-logs-": "`cursor-agent about --format json`, run by `onepipeline status <run>`'s provider report (linked oneagentgraph health), reached through the `status` recipe / scripts/onepipeline.sh status from the launch, watch and host-view journeys; traced in attribution.json",
+    "claude-": "the `onepipeline status <run>` process's provider report (linked oneagentgraph health), which makes Claude Code's per-uid directory; reached through `just status <run>` in tests/host_views/test_status_and_host_views_e2e.py; traced in attribution.json",
+    "onepipeline-scratch": "`onepipeline publish-branch --pr-author-graph graphs/pr-author.yaml` (and repo-recover): the engine's PR-author drafting dispatch scratch under TMPDIR, reached through the `publish-branch`/`repo-recover` recipes in tests/e2e/publish_and_landing/test_publish_branch_e2e.py and test_printed_landing_command_e2e.py; traced in attribution.json",
     "codex-bwrap-synthetic-mount-targets-": "the codex CLI's bubblewrap mount-target scratch under TMPDIR (the judged llmlint tier's codex turn)",
 }
 
@@ -534,9 +534,18 @@ def producers(prefix: str) -> list[str]:
 
 
 def pattern_producers(pattern: str) -> list[str]:
+    if pattern == "*":
+        return ["tests/short_state.py state_home: the numbered per-owner state roots (0, 1, ...) inside a registered /tmp/aio-* base"]
     match = re.match(r"tmp\*((?:\.\w+)+)  \(Python tempfile", pattern)
     if match:
         return suffix_producers(match.group(1)) or ["Python tempfile default name; no tracked NamedTemporaryFile(delete=False) with this suffix"]
+    if pattern.startswith("tmp.*"):
+        return [
+            "scripts/plan.sh top level: line 552 `snapshot=$(mktemp)` (filled by take_snapshot), whose EXIT trap never runs because plan.sh `exec`s scripts/finish-plan.sh (lines 720, 832); from every `just plan` journey",
+            "scripts/follow-ups.sh top level: lines 466-467 `hook_snapshot`/`budget_hook`, which cleanup_launch keeps once handed to a detached run's budget-closeout hook; from `just follow-ups --detach` (follow-up and run-end-hook journeys)",
+        ]
+    if re.fullmatch(r"\.[0-9a-f]{16}-00000000\.hm", pattern):
+        return ["`bun update --latest nx playwright typescript@6` in the justfile `upgrade` recipe (line 166), driven by the upgrade journeys in tests/e2e/workspace_copies/test_workspace_contract_e2e.py; traced in attribution.json"]
     if pattern.startswith("tmp"):
         return ["a default tempfile/mktemp name: any caller, no prefix to search"]
     prefix = pattern.split("*")[0].split("  ")[0]
@@ -581,7 +590,9 @@ def inventory(places: list[Path]) -> dict[str, object]:
                 examples.append(name)
     out = []
     for group in groups.values():
-        group["produced_by"] = pattern_producers(str(group["pattern"]))
+        group["produced_by"] = pattern_producers(str(group["pattern"])) or [
+            "not attributed: no tracked code or known tool writes this name; trace it as attribution.json describes"
+        ]
         out.append(group)
     out.sort(key=lambda g: -int(g["bytes"]))  # type: ignore[call-overload]
     return {

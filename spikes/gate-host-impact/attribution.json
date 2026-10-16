@@ -1,0 +1,515 @@
+{
+ "schema": "gate-host-impact-attribution/1",
+ "method": "Not the gate and not a measurement. (1) The gate's test tiers replayed once through Nx (`scripts/nx.sh run-many -t test,test-docs,test-recipes,test-checkouts --skip-nx-cache`) with spikes/gate-host-impact/attribute_plugin.py loaded via PYTEST_ADDOPTS: every test ran with its own TMPDIR under /home/nick/.gha-attr, and the names it left there were recorded with its node id and Nx task. ONEPIPELINE_RUNS_DIR pointed at a scratch runs root and ONEPIPELINE_LAUNCHER_SESSION, ONEPIPELINE_NODE_SCRATCH_DIR, PYTEST_DEBUG_TEMPROOT and ORCHESTRATOR_GATE_SCRATCH were unset. (2) One representative test per unattributed pattern was then re-run alone under `strace -f -e trace=execve,openat,mkdir,mkdirat,clone,clone3,vfork,fork`, and the creating syscall's process chain read off the trace. (3) `oneagentgraph health` and `just host --json` were run alone under a fresh TMPDIR. A process that outlives its test is attributed to nothing; counts differ from the gate's because cleanup is timing-dependent.",
+ "replay_exit": "Nx exit 1 (test failures, not relevant to attribution); 1171 tests left something",
+ "direct_probes": {
+  "oneagentgraph health": [
+   "claude-522201107",
+   "cursor-agent-logs-522201107"
+  ],
+  "just host --json": [
+   "uv-2b721a498c3d18ce.lock"
+  ]
+ },
+ "traced": {
+  "tmp.*  (mktemp default template)": [
+   {
+    "test": "tests/plan_tooling/plan_flow/test_plan_flow_e2e.py::test_the_plan_is_reviewed_before_the_dispatch_that_writes_its_document_starts",
+    "left": "1 file, 27 B, holding [\"authoring:plan-flow-e2e\"]",
+    "created_by": "/usr/bin/mktemp, a child of scripts/plan.sh (bash), the file then written by `python -m orchestrator.plan_review snapshot <file>`",
+    "code": "scripts/plan.sh top level: line 552 `snapshot=$(mktemp)`, filled by take_snapshot (line 610); its EXIT trap (line 558) never runs because plan.sh `exec`s scripts/finish-plan.sh (lines 720, 832), which replaces the shell"
+   },
+   {
+    "test": "tests/run_end_hooks/test_configured_plan_stores_stay_untouched_e2e.py::test_the_seeded_draft_and_plan_this_checkout_holds_come_back_unchanged",
+    "left": "none when run alone (the replay under -n 4 left 2)",
+    "created_by": "4 bare mktemp files, each by a child of `bash scripts/follow-ups.sh <run> --detach` <- `onepipeline flow run ...` <- `just follow-ups <run> --detach`",
+    "code": "scripts/follow-ups.sh top level: lines 394 `scratch`, 398 `measured`, 466 `hook_snapshot`, 467 `budget_hook`; cleanup_launch (line 403) removes the last two only while hook_handed_off is 0, so once handed to the detached run's budget-closeout hook (--success-hook/--failure-hook) they stay until that hook runs \u2014 a test (or push) that ends first leaves the pair"
+   }
+  ],
+  ".<16 hex>-00000000.hm": [
+   {
+    "test": "tests/e2e/workspace_copies/test_workspace_contract_e2e.py::test_upgrade_recipe_runs_bun_and_reports_one_success_line",
+    "left": "1 zero-byte file",
+    "created_by": "`bun update --latest nx playwright typescript@6` (openat O_CREAT on the .hm name)",
+    "code": "justfile `upgrade` recipe (line 166), which runs that bun update; driven by the upgrade journeys in tests/e2e/workspace_copies/test_workspace_contract_e2e.py (test_upgrade_recipe_runs_bun_and_reports_one_success_line, and likely test_upgrade_recipe_preserves_bun_failure_and_stops for the gate's second file, not traced)"
+   }
+  ],
+  "onepipeline-scratch": [
+   {
+    "test": "tests/e2e/publish_and_landing/test_publish_branch_e2e.py::test_publish_branch_opens_the_change_request_with_the_drafted_body",
+    "left": "1 directory",
+    "created_by": "mkdir by `onepipeline publish-branch --pr-author-graph graphs/pr-author.yaml <branch> --repo <checkout>` <- `uv run onepipeline publish-branch ...`",
+    "code": "the engine's PR-author drafting dispatch scratch (made under TMPDIR because ONEPIPELINE_NODE_SCRATCH_DIR is unset), reached through the `publish-branch` and `repo-recover` recipes; every replay hit is a drafting test in tests/e2e/publish_and_landing/test_publish_branch_e2e.py or test_printed_landing_command_e2e.py"
+   }
+  ],
+  "cursor-agent-logs-*": [
+   {
+    "test": "tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py::test_the_launch_hands_the_engine_this_hosts_maintenance_schedule",
+    "left": "1 directory",
+    "created_by": "mkdir by `cursor-agent about --format json` <- `onepipeline status <run>` <- `uv run onepipeline status <run>`",
+    "code": "the engine status view's provider report (the linked oneagentgraph health) probing the cursor-agent CLI; reached through the `status` recipe / scripts/onepipeline.sh status, from the launch, watch and host-view journeys"
+   }
+  ],
+  "claude-*": [
+   {
+    "test": "tests/host_views/test_status_and_host_views_e2e.py::test_neither_view_changes_the_run_s_own_record_of_itself",
+    "left": "1 directory",
+    "created_by": "mkdir by the `onepipeline status <run>` process itself <- `uv run onepipeline status <run>` <- `just status <run>`",
+    "code": "the same provider report, which makes Claude Code's per-uid temporary directory; in the replay only the host-view journeys (`just status <run>`) left it, while the launch journeys' `onepipeline status` left cursor-agent's but not claude's \u2014 why the claude probe differs there was not traced"
+   }
+  ],
+  "uv-<16 hex>.lock": [
+   {
+    "test": "tests/host_views/test_status_and_host_views_e2e.py::test_neither_view_changes_the_run_s_own_record_of_itself",
+    "left": "1 zero-byte file",
+    "created_by": "a uv thread of `uv run onepipeline status <run>` (.tmpXXXXXX created then linked to the lock name)",
+    "code": "every `uv run` the recipes and scripts spell (here the `status` recipe through scripts/onepipeline.sh); `just host --json` alone leaves one too"
+   }
+  ]
+ },
+ "replay": {
+  "uv-<16 hex>.lock": {
+   "left": 1219,
+   "tests": 1146,
+   "by_test_file": {
+    "tests/plan_tooling/check_and_review/test_check_plan_recipe_e2e.py": 156,
+    "tests/e2e/test_repo_registry_apply_e2e.py": 96,
+    "tests/plan_tooling/check_and_review/test_plan_review_e2e.py": 69,
+    "tests/tree_scans/test_nx_cache_scope.py": 59,
+    "tests/plan_tooling/plan_flow/test_plan_spike_flow_e2e.py": 58,
+    "tests/plan_tooling/plan_flow/test_approve_design_recipe_e2e.py": 51,
+    "tests/plan_tooling/check_and_review/test_check_plan_budgets_e2e.py": 45,
+    "tests/manager_allowlist/test_manager_allowlist_recipes_e2e.py": 45,
+    "tests/e2e/launch_monitor_observer/test_plan_recipe_e2e.py": 36,
+    "tests/plan_tooling/plan_flow/test_finish_plan_graph_e2e.py": 34,
+    "tests/e2e/publish_and_landing/test_publish_branch_e2e.py": 30,
+    "tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py": 22,
+    "orchestrator/budgets/test_spike_brief_budgets.py": 21,
+    "tests/plan_tooling/plan_flow/test_finish_plan_recipe_e2e.py": 21,
+    "tests/e2e/spike_brief/test_plan_journey.py": 21,
+    "tests/e2e/budget_gate/test_dispatch_count_e2e.py": 18,
+    "tests/dag_ui/test_dag_ui_serving_e2e.py": 18,
+    "tests/plan_tooling/check_and_review/test_check_plan_spikes_e2e.py": 17,
+    "tests/e2e/launch_monitor_observer/test_onetaskgraph_host_e2e.py": 16,
+    "tests/e2e/budget_gate/test_gate_time_budget_e2e.py": 15,
+    "tests/test_registry_resolution.py": 14,
+    "tests/e2e/spike_brief/test_spike_brief.py": 14,
+    "tests/ask_seam/channel_reply/test_channel_reply_e2e.py": 13,
+    "tests/plan_tooling/plan_copy/test_copy_plan_recipe_e2e.py": 13,
+    "tests/e2e/publish_and_landing/test_manager_landing_audiences_e2e.py": 12,
+    "tests/plan_tooling/plan_flow/test_finish_plan_budgets_e2e.py": 12,
+    "tests/e2e/launch_monitor_observer/test_watch_recipe_e2e.py": 11,
+    "tests/run_end_hooks/test_run_end_hooks_e2e.py": 8,
+    "tests/e2e/budget_gate/test_budget_target_e2e.py": 8,
+    "tests/host_views/test_status_and_host_views_e2e.py": 8,
+    "tests/ask_seam/ask_manager/test_ask_manager_e2e.py": 8,
+    "tests/e2e/publish_and_landing/test_merge_path_audit_e2e.py": 8,
+    "tests/ask_seam/launch/test_launch_ask_seam_e2e.py": 8,
+    "tests/plan_tooling/plan_flow/test_check_plan_units_e2e.py": 7,
+    "tests/test_plan_budgets_template.py": 7,
+    "tests/plan_tooling/follow_ups/test_follow_ups_recipe_e2e.py": 7,
+    "tests/plan_tooling/check_and_review/test_shipped_examples_check_plan_e2e.py": 6,
+    "tests/e2e/launch_monitor_observer/test_graph_overrides_dispatch_e2e.py": 6,
+    "tests/test_design_doc_template.py": 6,
+    "tests/e2e/publish_and_landing/test_release_adoption_in_force_e2e.py": 6,
+    "tests/plan_tooling/plan_flow/test_linear_routed_plans_e2e.py": 6,
+    "tests/plan_tooling/follow_ups/test_follow_ups_answer_comments_recipe_e2e.py": 6,
+    "tests/unwatched/test_unwatched_and_stop_hook_e2e.py": 5,
+    "tests/unfinished/test_unfinished_e2e.py": 5,
+    "tests/e2e/workspace_copies/test_llmlint_cache_e2e.py": 5,
+    "tests/e2e/publish_and_landing/test_legacy_runs_root_e2e.py": 5,
+    "tests/e2e/publish_and_landing/test_recoverable_resume_commands_e2e.py": 5,
+    "tests/e2e/publish_and_landing/test_session_labels_e2e.py": 5,
+    "tests/e2e/launch_monitor_observer/test_extends_chain_dispatch_e2e.py": 4,
+    "tests/run_end_hooks/test_spike_branch_discard_e2e.py": 4,
+    "tests/merge_policy/test_merge_policy_vocabulary_e2e.py": 4,
+    "tests/ask_seam/follow_up_drafts_launch/test_follow_up_drafts_launch_e2e.py": 4,
+    "tests/e2e/publish_and_landing/test_integrate_local_direct_e2e.py": 4,
+    "tests/test_unfinished.py": 4,
+    "tests/e2e/unpublished_view/test_unpublished_e2e.py": 4,
+    "tests/e2e/registry_and_recipes/test_transcript_recipe_e2e.py": 4,
+    "tests/session_open_conflict/test_session_open_conflict_e2e.py": 4,
+    "tests/e2e/publish_and_landing/test_work_status_and_import_e2e.py": 4,
+    "tests/run_end_hooks/test_configured_plan_stores_stay_untouched_e2e.py": 3,
+    "tests/unwatched/test_unwatched_launch_shapes_e2e.py": 3,
+    "tests/plan_tooling/check_and_review/test_design_document_body_limit_e2e.py": 3,
+    "tests/e2e/launch_monitor_observer/test_adopted_engine_reads_an_adopted_run_e2e.py": 3,
+    "tests/e2e/budget_gate/test_budget_telemetry_e2e.py": 3,
+    "tests/e2e/board_copy_approval/test_board_copy_design_approval_e2e.py": 3,
+    "tests/e2e/unpublished_view/test_superseded_branches_e2e.py": 3,
+    "tests/e2e/workspace_copies/test_workspace_contract_e2e.py": 3,
+    "tests/e2e/launch_monitor_observer/test_monitor_quiet_turn_e2e.py": 3,
+    "tests/e2e/launch_monitor_observer/test_concurrency_interlock_e2e.py": 3,
+    "tests/e2e/launch_monitor_observer/test_parked_run_is_driven_e2e.py": 3,
+    "tests/plan_tooling/check_and_review/test_plan_store_record_shapes_e2e.py": 3,
+    "tests/plan_tooling/plan_flow/test_plan_flow_e2e.py": 3,
+    "tests/plan_tooling/plan_flow/test_finish_plan_visual_e2e.py": 3,
+    "tests/e2e/publish_and_landing/test_worktree_pool_e2e.py": 3,
+    "tests/e2e/launch_monitor_observer/test_driver_death_is_recoverable_e2e.py": 2,
+    "tests/e2e/launch_monitor_observer/test_monitor_survives_the_channel_e2e.py": 2,
+    "tests/e2e/launch_monitor_observer/test_adopted_engine_settles_and_logs_e2e.py": 2,
+    "tests/writeback_budget/test_linked_plan_store_e2e.py": 2,
+    "tests/e2e/launch_monitor_observer/test_adopted_cli_fixes_e2e.py": 2,
+    "tests/e2e/launch_monitor_observer/test_watch_selector_e2e.py": 2,
+    "tests/e2e/publish_and_landing/test_redispatch_names_the_published_tip_e2e.py": 2,
+    "tests/unwatched/test_flow_stop_hook_e2e.py": 2,
+    "tests/e2e/publish_and_landing/test_session_reuse_retry_e2e.py": 2,
+    "tests/e2e/launch_monitor_observer/test_budget_capabilities_adopted_e2e.py": 2,
+    "tests/plan_tooling/plan_flow/test_finish_plan_diagram_e2e.py": 2,
+    "tests/plan_tooling/follow_ups/test_follow_ups_comment_answers_e2e.py": 2,
+    "tests/e2e/launch_monitor_observer/test_live_note_leaves_the_run_journalling_e2e.py": 1,
+    "tests/e2e/launch_monitor_observer/test_claude_identity_routing_e2e.py": 1,
+    "tests/e2e/launch_monitor_observer/test_launch_walks_no_host_identity_e2e.py": 1,
+    "tests/e2e/launch_monitor_observer/test_monitor_cursor_e2e.py": 1,
+    "tests/graceful_cancel/test_graceful_cancel_e2e.py": 1,
+    "tests/plan_tooling/plan_flow/test_visual_plan_flow_e2e.py": 1,
+    "tests/plan_tooling/plan_flow/test_plan_task_template_e2e.py": 1,
+    "tests/e2e/launch_monitor_observer/test_dispatched_operational_notes_e2e.py": 1,
+    "tests/e2e/launch_monitor_observer/test_reparent_waiting_human_adopted_e2e.py": 1,
+    "tests/ask_seam/structural_reply/test_structural_reply_e2e.py": 1,
+    "tests/e2e/board_copy_approval/test_board_copy_spike_evidence_e2e.py": 1,
+    "tests/test_adoption_guard.py": 1,
+    "tests/e2e/publish_and_landing/test_session_close_retirement_e2e.py": 1,
+    "tests/e2e/launch_monitor_observer/test_lost_turn_wire_contract_e2e.py": 1,
+    "tests/test_plan_checklist_budgets.py": 1,
+    "tests/writeback_budget/test_adopted_engine_projects_incrementally_e2e.py": 1,
+    "tests/writeback_budget/test_targeted_writeback_e2e.py": 1,
+    "tests/test_budgets_files.py": 1,
+    "tests/test_onemessagebus_config.py": 1,
+    "tests/host_sweep/test_host_sweep_e2e.py": 1,
+    "tests/ask_seam/settled_correlated_ruling/test_settled_correlated_ruling_e2e.py": 1,
+    "tests/test_labels.py": 1,
+    "tests/e2e/launch_monitor_observer/test_repositories_field_dispatch_e2e.py": 1,
+    "tests/e2e/launch_monitor_observer/test_observer_graph_liveness_e2e.py": 1,
+    "tests/ask_seam/planner_fallback_ask/test_planner_fallback_ask_e2e.py": 1,
+    "tests/plan_tooling/plan_flow/test_unwatched_planning_launches_e2e.py": 1,
+    "tests/e2e/unpublished_view/test_unpublished_held_publication_e2e.py": 1,
+    "tests/e2e/publish_and_landing/test_human_readable_branch_e2e.py": 1,
+    "tests/e2e/publish_and_landing/test_suite_landings_stay_unowned_e2e.py": 1,
+    "tests/e2e/launch_monitor_observer/test_supervisory_prompt_discipline_e2e.py": 1,
+    "tests/e2e/launch_monitor_observer/test_worker_start_directory_e2e.py": 1,
+    "tests/test_publication_guard.py": 1,
+    "tests/test_watch_and_release_reading_guidance.py": 1,
+    "tests/plan_tooling/follow_ups/test_linear_routed_follow_ups_e2e.py": 1,
+    "tests/e2e/registry_and_recipes/test_commit_msg_hook_e2e.py": 1,
+    "tests/e2e/publish_and_landing/test_manager_landing_supervision_e2e.py": 1,
+    "tests/e2e/publish_and_landing/test_printed_landing_command_e2e.py": 1,
+    "tests/writeback_budget/test_lineage_item_reuse_e2e.py": 1
+   },
+   "by_nx_task": {
+    "plan-tooling-check-and-review:test": 283,
+    "launch-monitor-observer:test": 114,
+    "plan-tooling-plan-flow:test-docs": 106,
+    "e2e-root:test": 96,
+    "plan-tooling-plan-flow:test": 94,
+    "publish-and-landing:test": 75,
+    "tree-scans:test-docs": 59,
+    "manager-allowlist:test": 45,
+    "budget-gate:test": 44,
+    "orchestrator:test": 42,
+    "spike-brief:test": 35,
+    "dag-ui:test": 18,
+    "orchestrator:test-checkouts": 17,
+    "plan-tooling-check-and-review:test-docs": 16,
+    "launch-monitor-observer:test-checkouts": 16,
+    "publish-and-landing:test-checkouts": 16,
+    "run-end-hooks:test": 15,
+    "plan-tooling-follow-ups:test": 15,
+    "ask-seam-channel-reply:test": 13,
+    "plan-tooling-plan-copy:test": 13,
+    "unwatched:test": 10,
+    "host-views:test": 8,
+    "ask-seam-ask-manager:test": 8,
+    "unpublished-view:test": 8,
+    "ask-seam-launch:test": 8,
+    "unfinished:test": 5,
+    "workspace-copies:test-docs": 5,
+    "writeback-budget:test": 5,
+    "registry-and-recipes:test": 5,
+    "merge-policy:test": 4,
+    "ask-seam-follow-up-drafts-launch:test": 4,
+    "board-copy-approval:test": 4,
+    "session-open-conflict:test": 4,
+    "workspace-copies:test": 3,
+    "graceful-cancel:test": 1,
+    "ask-seam-structural-reply:test": 1,
+    "host-sweep:test": 1,
+    "ask-seam-settled-correlated-ruling:test": 1,
+    "ask-seam-planner-fallback-ask:test": 1,
+    "plan-tooling-follow-ups:test-docs": 1
+   }
+  },
+  "tmp*.prompt  (Python tempfile default prefix)": {
+   "left": 945,
+   "tests": 170,
+   "by_test_file": {
+    "tests/e2e/spike_brief/test_plan_journey.py": 284,
+    "tests/e2e/launch_monitor_observer/test_monitor_survives_the_channel_e2e.py": 74,
+    "tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py": 48,
+    "tests/e2e/spike_brief/test_spike_brief.py": 39,
+    "tests/e2e/publish_and_landing/test_manager_landing_supervision_e2e.py": 34,
+    "tests/plan_tooling/plan_flow/test_finish_plan_budgets_e2e.py": 33,
+    "tests/e2e/launch_monitor_observer/test_monitor_quiet_turn_e2e.py": 32,
+    "tests/e2e/launch_monitor_observer/test_onetaskgraph_host_e2e.py": 30,
+    "tests/run_end_hooks/test_run_end_hooks_e2e.py": 24,
+    "tests/ask_seam/launch/test_launch_ask_seam_e2e.py": 23,
+    "tests/session_open_conflict/test_session_open_conflict_e2e.py": 22,
+    "tests/e2e/launch_monitor_observer/test_graph_overrides_dispatch_e2e.py": 21,
+    "tests/plan_tooling/plan_flow/test_finish_plan_recipe_e2e.py": 18,
+    "tests/e2e/launch_monitor_observer/test_monitor_cursor_e2e.py": 16,
+    "tests/plan_tooling/plan_flow/test_visual_plan_flow_e2e.py": 15,
+    "tests/e2e/publish_and_landing/test_redispatch_names_the_published_tip_e2e.py": 14,
+    "tests/plan_tooling/plan_flow/test_plan_flow_e2e.py": 12,
+    "tests/run_end_hooks/test_configured_plan_stores_stay_untouched_e2e.py": 9,
+    "tests/run_end_hooks/test_spike_branch_discard_e2e.py": 9,
+    "tests/ask_seam/follow_up_drafts_launch/test_follow_up_drafts_launch_e2e.py": 9,
+    "tests/plan_tooling/plan_flow/test_linear_routed_plans_e2e.py": 9,
+    "tests/plan_tooling/plan_flow/test_finish_plan_visual_e2e.py": 9,
+    "tests/e2e/launch_monitor_observer/test_extends_chain_dispatch_e2e.py": 8,
+    "tests/ask_seam/ask_manager/test_ask_manager_e2e.py": 8,
+    "tests/e2e/launch_monitor_observer/test_budget_capabilities_adopted_e2e.py": 8,
+    "tests/e2e/launch_monitor_observer/test_plan_recipe_e2e.py": 7,
+    "tests/e2e/launch_monitor_observer/test_repositories_field_dispatch_e2e.py": 7,
+    "tests/plan_tooling/plan_flow/test_plan_task_template_e2e.py": 6,
+    "tests/e2e/launch_monitor_observer/test_reparent_waiting_human_adopted_e2e.py": 6,
+    "tests/e2e/launch_monitor_observer/test_persona_review_bar_e2e.py": 6,
+    "tests/e2e/launch_monitor_observer/test_watch_selector_e2e.py": 6,
+    "tests/e2e/launch_monitor_observer/test_design_doc_graph_e2e.py": 6,
+    "tests/e2e/launch_monitor_observer/test_observer_graph_liveness_e2e.py": 6,
+    "tests/plan_tooling/follow_ups/test_linear_routed_follow_ups_e2e.py": 6,
+    "tests/e2e/launch_monitor_observer/test_live_note_leaves_the_run_journalling_e2e.py": 5,
+    "tests/e2e/launch_monitor_observer/test_adopted_engine_reads_an_adopted_run_e2e.py": 5,
+    "tests/e2e/launch_monitor_observer/test_worker_start_directory_e2e.py": 5,
+    "tests/e2e/launch_monitor_observer/test_dispatched_operational_notes_e2e.py": 4,
+    "tests/plan_tooling/check_and_review/test_plan_review_e2e.py": 4,
+    "tests/e2e/publish_and_landing/test_session_close_retirement_e2e.py": 4,
+    "tests/host_views/test_status_and_host_views_e2e.py": 4,
+    "tests/e2e/publish_and_landing/test_session_reuse_retry_e2e.py": 4,
+    "tests/plan_tooling/plan_flow/test_unwatched_planning_launches_e2e.py": 4,
+    "tests/e2e/publish_and_landing/test_human_readable_branch_e2e.py": 4,
+    "tests/e2e/publish_and_landing/test_manager_landing_audiences_e2e.py": 4,
+    "tests/e2e/launch_monitor_observer/test_supervisory_prompt_discipline_e2e.py": 4,
+    "tests/writeback_budget/test_lineage_item_reuse_e2e.py": 4,
+    "tests/e2e/launch_monitor_observer/test_launch_walks_no_host_identity_e2e.py": 3,
+    "tests/graceful_cancel/test_graceful_cancel_e2e.py": 3,
+    "tests/ask_seam/channel_reply/test_channel_reply_e2e.py": 3,
+    "tests/e2e/launch_monitor_observer/test_path_dispatched_personas_e2e.py": 3,
+    "tests/e2e/launch_monitor_observer/test_parked_run_is_driven_e2e.py": 3,
+    "tests/e2e/registry_and_recipes/test_plan_checklist_e2e.py": 3,
+    "tests/unwatched/test_unwatched_launch_shapes_e2e.py": 2,
+    "tests/writeback_budget/test_linked_plan_store_e2e.py": 2,
+    "tests/writeback_budget/test_adopted_engine_projects_incrementally_e2e.py": 1,
+    "tests/writeback_budget/test_targeted_writeback_e2e.py": 1,
+    "tests/e2e/launch_monitor_observer/test_concurrency_interlock_e2e.py": 1,
+    "tests/e2e/publish_and_landing/test_legacy_runs_root_e2e.py": 1
+   },
+   "by_nx_task": {
+    "spike-brief:test": 323,
+    "launch-monitor-observer:test": 305,
+    "plan-tooling-plan-flow:test": 88,
+    "publish-and-landing:test": 51,
+    "run-end-hooks:test": 42,
+    "ask-seam-launch:test": 23,
+    "session-open-conflict:test": 22,
+    "plan-tooling-plan-flow:test-docs": 18,
+    "publish-and-landing:test-checkouts": 14,
+    "ask-seam-follow-up-drafts-launch:test": 9,
+    "launch-monitor-observer:test-checkouts": 9,
+    "writeback-budget:test": 8,
+    "ask-seam-ask-manager:test": 8,
+    "plan-tooling-follow-ups:test-docs": 6,
+    "plan-tooling-check-and-review:test-docs": 4,
+    "host-views:test": 4,
+    "graceful-cancel:test": 3,
+    "ask-seam-channel-reply:test": 3,
+    "registry-and-recipes:test-checkouts": 3,
+    "unwatched:test": 2
+   }
+  },
+  "tmp*.json  (Python tempfile default prefix)": {
+   "left": 139,
+   "tests": 24,
+   "by_test_file": {
+    "tests/plan_tooling/plan_flow/test_plan_spike_flow_e2e.py": 132,
+    "tests/plan_tooling/plan_flow/test_visual_plan_flow_e2e.py": 4,
+    "tests/unwatched/test_flow_stop_hook_e2e.py": 3
+   },
+   "by_nx_task": {
+    "plan-tooling-plan-flow:test-docs": 132,
+    "plan-tooling-plan-flow:test": 4,
+    "unwatched:test": 3
+   }
+  },
+  "finish-plan-graph.*": {
+   "left": 64,
+   "tests": 60,
+   "by_test_file": {
+    "tests/plan_tooling/plan_flow/test_finish_plan_graph_e2e.py": 19,
+    "tests/plan_tooling/plan_flow/test_finish_plan_budgets_e2e.py": 11,
+    "tests/plan_tooling/plan_flow/test_plan_spike_flow_e2e.py": 9,
+    "tests/plan_tooling/plan_flow/test_finish_plan_recipe_e2e.py": 8,
+    "tests/e2e/spike_brief/test_plan_journey.py": 4,
+    "tests/plan_tooling/plan_flow/test_finish_plan_visual_e2e.py": 4,
+    "tests/plan_tooling/plan_flow/test_linear_routed_plans_e2e.py": 3,
+    "tests/plan_tooling/plan_flow/test_plan_flow_e2e.py": 2,
+    "tests/plan_tooling/plan_flow/test_visual_plan_flow_e2e.py": 1,
+    "tests/plan_tooling/plan_flow/test_plan_task_template_e2e.py": 1,
+    "tests/plan_tooling/plan_flow/test_finish_plan_diagram_e2e.py": 1,
+    "tests/plan_tooling/plan_flow/test_unwatched_planning_launches_e2e.py": 1
+   },
+   "by_nx_task": {
+    "plan-tooling-plan-flow:test-docs": 35,
+    "plan-tooling-plan-flow:test": 25,
+    "spike-brief:test": 4
+   }
+  },
+  "tmp.*  (mktemp default template)": {
+   "left": 31,
+   "tests": 24,
+   "by_test_file": {
+    "tests/plan_tooling/plan_flow/test_plan_spike_flow_e2e.py": 9,
+    "tests/run_end_hooks/test_configured_plan_stores_stay_untouched_e2e.py": 6,
+    "tests/e2e/spike_brief/test_plan_journey.py": 4,
+    "tests/plan_tooling/follow_ups/test_follow_ups_recipe_e2e.py": 4,
+    "tests/run_end_hooks/test_spike_branch_discard_e2e.py": 2,
+    "tests/plan_tooling/plan_flow/test_plan_flow_e2e.py": 2,
+    "tests/plan_tooling/plan_flow/test_visual_plan_flow_e2e.py": 1,
+    "tests/plan_tooling/plan_flow/test_plan_task_template_e2e.py": 1,
+    "tests/unwatched/test_flow_stop_hook_e2e.py": 1,
+    "tests/plan_tooling/plan_flow/test_unwatched_planning_launches_e2e.py": 1
+   },
+   "by_nx_task": {
+    "plan-tooling-plan-flow:test-docs": 10,
+    "run-end-hooks:test": 8,
+    "plan-tooling-plan-flow:test": 4,
+    "spike-brief:test": 4,
+    "plan-tooling-follow-ups:test": 4,
+    "unwatched:test": 1
+   }
+  },
+  "tmp*.md  (Python tempfile default prefix)": {
+   "left": 28,
+   "tests": 5,
+   "by_test_file": {
+    "tests/plan_tooling/follow_ups/test_follow_ups_comment_answers_e2e.py": 15,
+    "tests/plan_tooling/follow_ups/test_follow_ups_answer_comments_recipe_e2e.py": 12,
+    "tests/plan_tooling/follow_ups/test_linear_routed_follow_ups_e2e.py": 1
+   },
+   "by_nx_task": {
+    "plan-tooling-follow-ups:test": 27,
+    "plan-tooling-follow-ups:test-docs": 1
+   }
+  },
+  "node-compile-cache": {
+   "left": 25,
+   "tests": 25,
+   "by_test_file": {
+    "tests/e2e/workspace_copies/test_llmlint_cache_e2e.py": 11,
+    "tests/e2e/budget_gate/test_budget_target_e2e.py": 8,
+    "tests/e2e/budget_gate/test_budget_telemetry_e2e.py": 3,
+    "tests/e2e/workspace_copies/test_nx_wrapper_version_e2e.py": 1,
+    "tests/session_setup/test_locked_plan_store_setup_e2e.py": 1,
+    "tests/tree_scans/test_project_boundaries.py": 1
+   },
+   "by_nx_task": {
+    "workspace-copies:test-docs": 11,
+    "budget-gate:test": 11,
+    "workspace-copies:test": 1,
+    "session-setup:test": 1,
+    "tree-scans:test-docs": 1
+   }
+  },
+  "cursor-agent-logs-*": {
+   "left": 23,
+   "tests": 23,
+   "by_test_file": {
+    "tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py": 5,
+    "tests/host_views/test_status_and_host_views_e2e.py": 5,
+    "tests/e2e/launch_monitor_observer/test_parked_run_is_driven_e2e.py": 3,
+    "tests/e2e/launch_monitor_observer/test_driver_death_is_recoverable_e2e.py": 2,
+    "tests/e2e/launch_monitor_observer/test_extends_chain_dispatch_e2e.py": 2,
+    "tests/e2e/launch_monitor_observer/test_watch_selector_e2e.py": 2,
+    "tests/e2e/launch_monitor_observer/test_live_note_leaves_the_run_journalling_e2e.py": 1,
+    "tests/e2e/launch_monitor_observer/test_adopted_engine_settles_and_logs_e2e.py": 1,
+    "tests/e2e/launch_monitor_observer/test_observer_graph_liveness_e2e.py": 1,
+    "tests/e2e/launch_monitor_observer/test_adopted_engine_reads_an_adopted_run_e2e.py": 1
+   },
+   "by_nx_task": {
+    "launch-monitor-observer:test": 16,
+    "host-views:test": 5,
+    "launch-monitor-observer:test-checkouts": 2
+   }
+  },
+  "onepipeline-scratch": {
+   "left": 10,
+   "tests": 10,
+   "by_test_file": {
+    "tests/e2e/publish_and_landing/test_publish_branch_e2e.py": 9,
+    "tests/e2e/publish_and_landing/test_printed_landing_command_e2e.py": 1
+   },
+   "by_nx_task": {
+    "publish-and-landing:test": 10
+   }
+  },
+  "claude-*": {
+   "left": 5,
+   "tests": 5,
+   "by_test_file": {
+    "tests/host_views/test_status_and_host_views_e2e.py": 5
+   },
+   "by_nx_task": {
+    "host-views:test": 5
+   }
+  },
+  "plan-store-config-home-*": {
+   "left": 5,
+   "tests": 4,
+   "by_test_file": {
+    "tests/plan_tooling/plan_copy/test_plan_store_user_layer_e2e.py": 5
+   },
+   "by_nx_task": {
+    "plan-tooling-plan-copy:test": 5
+   }
+  },
+  "onevcs-host-registry-*": {
+   "left": 2,
+   "tests": 1,
+   "by_test_file": {
+    "tests/e2e/publish_and_landing/test_onevcs_state_snapshot_e2e.py": 2
+   },
+   "by_nx_task": {
+    "publish-and-landing:test": 2
+   }
+  },
+  "onevcs-state-snapshot-*": {
+   "left": 2,
+   "tests": 1,
+   "by_test_file": {
+    "tests/e2e/publish_and_landing/test_onevcs_state_snapshot_e2e.py": 2
+   },
+   "by_nx_task": {
+    "publish-and-landing:test": 2
+   }
+  },
+  "pytest-of-nick": {
+   "left": 1,
+   "tests": 1,
+   "by_test_file": {
+    "test_default_root.py": 1
+   },
+   "by_nx_task": {
+    "orchestrator:test": 1
+   }
+  },
+  ".<16 hex>-00000000.hm": {
+   "left": 1,
+   "tests": 1,
+   "by_test_file": {
+    "tests/e2e/workspace_copies/test_workspace_contract_e2e.py": 1
+   },
+   "by_nx_task": {
+    "workspace-copies:test": 1
+   }
+  }
+ }
+}

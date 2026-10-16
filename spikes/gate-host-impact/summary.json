@@ -173,7 +173,7 @@
      "cursor-agent-logs-522201107"
     ],
     "produced_by": [
-     "the cursor-agent CLI's log directory under TMPDIR, keyed by uid; a harness oneharness can spawn"
+     "`cursor-agent about --format json`, run by `onepipeline status <run>`'s provider report (linked oneagentgraph health), reached through the `status` recipe / scripts/onepipeline.sh status from the launch, watch and host-view journeys; traced in attribution.json"
     ]
    },
    {
@@ -205,7 +205,8 @@
      "tmp.1xtB5iHaSn"
     ],
     "produced_by": [
-     "a default tempfile/mktemp name: any caller, no prefix to search"
+     "scripts/plan.sh top level: line 552 `snapshot=$(mktemp)` (filled by take_snapshot), whose EXIT trap never runs because plan.sh `exec`s scripts/finish-plan.sh (lines 720, 832); from every `just plan` journey",
+     "scripts/follow-ups.sh top level: lines 466-467 `hook_snapshot`/`budget_hook`, which cleanup_launch keeps once handed to a detached run's budget-closeout hook; from `just follow-ups --detach` (follow-up and run-end-hook journeys)"
     ]
    },
    {
@@ -218,7 +219,7 @@
      "onepipeline-scratch"
     ],
     "produced_by": [
-     "the onepipeline engine's own scratch directory under TMPDIR (no tracked code spells it)"
+     "`onepipeline publish-branch --pr-author-graph graphs/pr-author.yaml` (and repo-recover): the engine's PR-author drafting dispatch scratch under TMPDIR, reached through the `publish-branch`/`repo-recover` recipes in tests/e2e/publish_and_landing/test_publish_branch_e2e.py and test_printed_landing_command_e2e.py; traced in attribution.json"
     ]
    },
    {
@@ -231,7 +232,7 @@
      "claude-522201107"
     ],
     "produced_by": [
-     "Claude Code's per-user temporary directory (claude-<uid>) under TMPDIR, made by a claude CLI a test or harness turn spawns"
+     "the `onepipeline status <run>` process's provider report (linked oneagentgraph health), which makes Claude Code's per-uid directory; reached through `just status <run>` in tests/host_views/test_status_and_host_views_e2e.py; traced in attribution.json"
     ]
    },
    {
@@ -244,7 +245,7 @@
      ".7bdf3f35e797dabf-00000000.hm"
     ],
     "produced_by": [
-     "not attributed: no tracked code spells the name"
+     "`bun update --latest nx playwright typescript@6` in the justfile `upgrade` recipe (line 166), driven by the upgrade journeys in tests/e2e/workspace_copies/test_workspace_contract_e2e.py; traced in attribution.json"
     ]
    },
    {
@@ -257,7 +258,7 @@
      ".dbff5af5f7fdfcdd-00000000.hm"
     ],
     "produced_by": [
-     "not attributed: no tracked code spells the name"
+     "`bun update --latest nx playwright typescript@6` in the justfile `upgrade` recipe (line 166), driven by the upgrade journeys in tests/e2e/workspace_copies/test_workspace_contract_e2e.py; traced in attribution.json"
     ]
    }
   ],
@@ -265,8 +266,10 @@
   "bytes_total": 50429952,
   "zero_byte_uv_locks": {
    "count": 114,
-   "allocated_bytes": 0
-  }
+   "allocated_bytes": 0,
+   "produced_by": "uv run's environment lock (a uv thread creates .tmpXXXXXX and links it to uv-<hash>.lock), from every `uv run` the recipes spell, e.g. the `status` recipe through scripts/onepipeline.sh; traced in attribution.json"
+  },
+  "attribution": "produced_by re-derived after the run: tmp.*, the two .hm files, onepipeline-scratch, claude-*, cursor-agent-logs-* and the uv locks were traced by a replay of the gate's test tiers under a per-test TMPDIR plugin plus strace of one test per pattern (spikes/gate-host-impact/attribution.json); the gate itself was not re-run"
  },
  "breakage": {
   "failed_tests": [
@@ -740,7 +743,8 @@
     "bytes_total": 2408448,
     "zero_byte_uv_locks": {
      "count": 0,
-     "allocated_bytes": 0
+     "allocated_bytes": 0,
+     "produced_by": "uv run's environment lock (a uv thread creates .tmpXXXXXX and links it to uv-<hash>.lock), from every `uv run` the recipes spell, e.g. the `status` recipe through scripts/onepipeline.sh; traced in attribution.json"
     }
    },
    "breakage": {
@@ -835,14 +839,17 @@
       "examples": [
        "codex-bwrap-synthetic-mount-targets-522201107"
       ],
-      "produced_by": []
+      "produced_by": [
+       "the codex CLI's bubblewrap mount-target scratch under TMPDIR (the judged llmlint tier's codex turn)"
+      ]
      }
     ],
     "entries_total": 537,
     "bytes_total": 2555904,
     "zero_byte_uv_locks": {
      "count": 1,
-     "allocated_bytes": 0
+     "allocated_bytes": 0,
+     "produced_by": "uv run's environment lock (a uv thread creates .tmpXXXXXX and links it to uv-<hash>.lock), from every `uv run` the recipes spell, e.g. the `status` recipe through scripts/onepipeline.sh; traced in attribution.json"
     }
    },
    "breakage": {
@@ -959,7 +966,9 @@
        "0",
        "1"
       ],
-      "produced_by": []
+      "produced_by": [
+       "tests/short_state.py state_home: the numbered per-owner state roots (0, 1, ...) inside a registered /tmp/aio-* base"
+      ]
      },
      {
       "place": "/home/nick/projects/ai-orchestrator/runs/test-host-impact-brief-spikes/scratch/2027129-0/gate-host-impact-kttycssf/tmp",
@@ -985,7 +994,9 @@
       "examples": [
        "0"
       ],
-      "produced_by": []
+      "produced_by": [
+       "tests/short_state.py state_home: the numbered per-owner state roots (0, 1, ...) inside a registered /tmp/aio-* base"
+      ]
      },
      {
       "place": "/home/nick/projects/ai-orchestrator/runs/test-host-impact-brief-spikes/scratch/2027129-0/gate-host-impact-kttycssf/tmp",
@@ -1063,7 +1074,8 @@
        "tmp.Tqol2wI4CK"
       ],
       "produced_by": [
-       "a default tempfile/mktemp name: any caller, no prefix to search"
+       "scripts/plan.sh top level: line 552 `snapshot=$(mktemp)` (filled by take_snapshot), whose EXIT trap never runs because plan.sh `exec`s scripts/finish-plan.sh (lines 720, 832); from every `just plan` journey",
+       "scripts/follow-ups.sh top level: lines 466-467 `hook_snapshot`/`budget_hook`, which cleanup_launch keeps once handed to a detached run's budget-closeout hook; from `just follow-ups --detach` (follow-up and run-end-hook journeys)"
       ]
      },
      {
@@ -1137,7 +1149,7 @@
        "cursor-agent-logs-522201107"
       ],
       "produced_by": [
-       "the cursor-agent CLI's log directory under TMPDIR, keyed by uid; a harness oneharness can spawn"
+       "`cursor-agent about --format json`, run by `onepipeline status <run>`'s provider report (linked oneagentgraph health), reached through the `status` recipe / scripts/onepipeline.sh status from the launch, watch and host-view journeys; traced in attribution.json"
       ]
      }
     ],
@@ -1145,7 +1157,8 @@
     "bytes_total": 123338752,
     "zero_byte_uv_locks": {
      "count": 7,
-     "allocated_bytes": 0
+     "allocated_bytes": 0,
+     "produced_by": "uv run's environment lock (a uv thread creates .tmpXXXXXX and links it to uv-<hash>.lock), from every `uv run` the recipes spell, e.g. the `status` recipe through scripts/onepipeline.sh; traced in attribution.json"
     },
     "registered_paths_still_present": [
      "/tmp/aio-nx-oV9D9d",
@@ -1371,7 +1384,8 @@
        "tmp.9nOV55YkAT"
       ],
       "produced_by": [
-       "a default tempfile/mktemp name: any caller, no prefix to search"
+       "scripts/plan.sh top level: line 552 `snapshot=$(mktemp)` (filled by take_snapshot), whose EXIT trap never runs because plan.sh `exec`s scripts/finish-plan.sh (lines 720, 832); from every `just plan` journey",
+       "scripts/follow-ups.sh top level: lines 466-467 `hook_snapshot`/`budget_hook`, which cleanup_launch keeps once handed to a detached run's budget-closeout hook; from `just follow-ups --detach` (follow-up and run-end-hook journeys)"
       ]
      },
      {
@@ -1431,7 +1445,7 @@
        "cursor-agent-logs-522201107"
       ],
       "produced_by": [
-       "the cursor-agent CLI's log directory under TMPDIR, keyed by uid; a harness oneharness can spawn"
+       "`cursor-agent about --format json`, run by `onepipeline status <run>`'s provider report (linked oneagentgraph health), reached through the `status` recipe / scripts/onepipeline.sh status from the launch, watch and host-view journeys; traced in attribution.json"
       ]
      },
      {
@@ -1452,7 +1466,8 @@
     "bytes_total": 8478720,
     "zero_byte_uv_locks": {
      "count": 10,
-     "allocated_bytes": 0
+     "allocated_bytes": 0,
+     "produced_by": "uv run's environment lock (a uv thread creates .tmpXXXXXX and links it to uv-<hash>.lock), from every `uv run` the recipes spell, e.g. the `status` recipe through scripts/onepipeline.sh; traced in attribution.json"
     }
    },
    "breakage": {
