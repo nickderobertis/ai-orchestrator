@@ -793,7 +793,9 @@ def test_a_listing_that_meets_a_malformed_record_names_it_instead_of_omitting_it
     assert str(broken) in listed.stderr, (
         f"a refused listing has to name the record it could not parse: {listed.stderr}"
     )
-    assert "line 1" in listed.stderr, (
+    # The parser's own position, not a fixed line: onetaskgraph 0.7.0's parser places
+    # this unclosed scalar at line 2, where the release before it said line 1.
+    assert re.search(r"\bline \d+, column \d+\b", listed.stderr), (
         f"a refused listing has to carry the parser's own diagnostic: {listed.stderr}"
     )
     assert TASK not in listed.stdout, (

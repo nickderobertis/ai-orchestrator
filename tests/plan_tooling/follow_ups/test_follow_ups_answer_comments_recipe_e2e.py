@@ -352,6 +352,15 @@ def _rewritten(issue: str, text: str) -> None:
     row.body = f"{text}{separator}{record}"
 
 
+def _touched(issue: str) -> None:
+    """A person's act on GitHub that moves the issue's `updatedAt` and nothing the store reads.
+
+    A label added and taken off again is one: GitHub dates the issue changed, while its text,
+    its comments and its board row read as they did.
+    """
+    _row(issue).changed_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 # llmlint: ignore-end[tests_mirror_real_usage]
 
 
@@ -777,6 +786,12 @@ def life(tmp_path_factory: pytest.TempPathFactory) -> Life:  # noqa: PLR0915 - o
                     for key in ("A", "B", "C")
                 },
             )
+            # GitHub gives no change token for an item changed within the last minute, and the
+            # pass below is about items in that window. Each issue commented on since the
+            # watermark is changed afresh here, after the dry runs, so the gathering reads every
+            # quoted item inside the minute however long the dry runs took on a loaded host.
+            for key in ("a", "a-answered", "a-deferred", "a-elsewhere", "a-todo", "b", "c", "g"):
+                _touched(issues[key])
             real_started = datetime.now(UTC)
             real = _answer(bench, checkout, record)
             real_ended = datetime.now(UTC)
@@ -1188,9 +1203,9 @@ def test_a_pass_over_items_changed_within_the_minute_reads_each_before_its_reply
 ) -> None:
     """The no-version path, counted exactly: the copy, then each reply's own item read.
 
-    Every quoted item here was commented on in the second before the gathering, and GitHub
-    gives no change token for an item changed within the last minute, so the snapshot holds
-    none of them at a version. Each reply is then sent with no `--expect`, which the store
+    Every quoted item here was changed in the second before the gathering, and GitHub gives no
+    change token for an item changed within the last minute, so the snapshot holds none of them
+    at a version. Each reply is then sent with no `--expect`, which the store
     answers by reading the item before its plain write. After the replies, settle's one batched
     read, then its one write — the confirming reply's estimate line, on an item the replies had
     just changed, so read first as well.

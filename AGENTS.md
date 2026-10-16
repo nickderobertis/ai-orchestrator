@@ -656,8 +656,10 @@ unpinned read costs what it did. Pinned: a plan copy's member loads
 (`just copy-plan`, `just finish-plan`), by its own listing; and, once `comment-snapshot`
 lands, the follow-ups comment pass's gathering copy, every later read of which goes to its
 per-snapshot local copy instead. Unpinned: settlement write-backs, and
-`orchestrator/plan_store.py`'s single-item reads, `board-status` among them. Linear is never
-served from it until the store's Linear live lane proves what its token covers. It lives at
+`orchestrator/plan_store.py`'s single-item reads, `board-status` among them. A Linear task,
+project or document read pinned to a `lin1` token is served from it too, that token covering
+the item's `updatedAt` and a digest of its facets as the adopted onetaskgraph's README states
+under *A local cache of a remote source*. It lives at
 `${XDG_CACHE_HOME:-$HOME/.cache}/onetaskgraph/<source identity digest>`, shared per host,
 and `onetaskgraph cache clear` empties it.
 `tests/e2e/launch_monitor_observer/test_onetaskgraph_host_e2e.py` holds the store's rules

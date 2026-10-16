@@ -114,6 +114,10 @@ _PipelineId = NewType("_PipelineId", str)
 #: A project's native id inside one source — the `<native>` half of a qualified
 #: `<source>:<native>`, and what a stored project answers as its own `id`.
 _ProjectId = NewType("_ProjectId", str)
+#: An item's `<source>:<native>` id, as a copy reports where it put the item.
+_QualifiedId = NewType("_QualifiedId", str)
+#: The change token a read reports as an item's `version`, which a later read pins to.
+_ChangeToken = NewType("_ChangeToken", str)
 #: The project `_write_local_project` renders, named once so the journeys that read it
 #: back and the helper that authors its description agree on one identifier.
 LOCAL_PROJECT = _ProjectId("launch")
@@ -2320,6 +2324,36 @@ def _pinned_show(
     return answer, _GitHubFixture.requests[sent_before:]
 
 
+class _KindRead(NamedTuple):
+    """One project or document `show`: what it answered, the version it carried, what it sent."""
+
+    answer: Mapping[str, object]
+    version: _ChangeToken
+    sent: list[_GraphQLRequest]
+
+
+def _kind_show(
+    environment: dict[str, str],
+    kind: Literal["project", "document"],
+    qualified: _QualifiedId,
+    *pin: str,
+) -> _KindRead:
+    """One `show` of the ``kind`` at ``qualified``.
+
+    ``pin`` is `--pin <version>` for a read pinned to a version the caller holds.
+    """
+    sent_before = len(_GitHubFixture.requests)
+    shown = _followups_command(
+        environment, [str(ONETASKGRAPH_BIN), kind, "show", qualified, *pin, "--json"]
+    )
+    assert shown.returncode == 0, shown.stdout + shown.stderr
+    answer = json.loads(shown.stdout)
+    (row,) = answer["items"]
+    version = row["item"].get("version")
+    assert isinstance(version, str) and version, f"the {kind} read gave no change token: {row}"
+    return _KindRead(answer, _ChangeToken(version), _GitHubFixture.requests[sent_before:])
+
+
 def _cached_entries(cache_home: Path) -> dict[str, list[Path]]:
     """The store's entries under ``cache_home``, by the source-identity directory holding each."""
     root = cache_home / "onetaskgraph"
@@ -2338,15 +2372,19 @@ def test_a_pinned_read_of_an_unchanged_ticket_is_served_from_the_hosts_cache_at_
     The checkout's own `onetaskgraph.yaml` turns the cache on for `followups`, and the locked
     install is the store that reads it, so this is the read a follow-up pass makes once it
     pins: the first read at the listed version fills the entry, and the second is answered
-    from it with no request. Then a person moves the ticket on the board: the listing's token
+    from it with no request. A project and a document copied onto the board are each read,
+    then read again pinned to the version that read returned, which sends nothing either.
+    Then a person moves the ticket on the board: the listing's token
     moves with it, and a read pinned to the new token goes to the board and reports the move,
     which is the whole of why the cache cannot hand a reader stale data. The entries land in
     one source-identity directory under `onetaskgraph/` in the cache home this suite hands
     every process — or under `$HOME/.cache` when no cache home is named — and `cache clear`
-    empties them, after which the same pinned read goes to the board again.
+    empties them, after which the same pinned reads — ticket, project and document — go to the
+    board again.
     """
     environment, drafts_root = _followups_environment(tmp_path)
     _written_ticket(drafts_root, _follow_up_ticket(SIBLING_REPOSITORY))
+    _write_local_project(tmp_path)
     with _serving_followups(environment):
         copied = _copied_ticket(environment, "--json")
         assert copied.returncode == 0, copied.stdout + copied.stderr
@@ -2356,6 +2394,32 @@ def test_a_pinned_read_of_an_unchanged_ticket_is_served_from_the_hosts_cache_at_
         first, _ = _pinned_show(environment, qualified, version)
         second, sent = _pinned_show(environment, qualified, version)
         (created,) = BOARD.created
+        (project,) = [
+            _QualifiedId(str(row["destination"]))
+            for row in _copied_onto(
+                environment, "project", "copy", LOCAL_QUALIFIED, "--to", follow_up_tickets.BOARD
+            )
+            if row["source"] == LOCAL_QUALIFIED
+        ]
+        (document,) = [
+            _QualifiedId(str(row["destination"]))
+            for row in _copied_onto(
+                environment,
+                "document",
+                "copy",
+                f"{LOCAL_QUALIFIED}-design",
+                "--to",
+                follow_up_tickets.BOARD,
+            )
+        ]
+        # A project and a document, each read and then read again pinned to the version the
+        # read returned: what the store vouched for is what a holder of that version reads.
+        kinds = {"project": project, "document": document}
+        reads = {kind: _kind_show(environment, kind, item) for kind, item in kinds.items()}
+        rereads = {
+            kind: _kind_show(environment, kind, item, "--pin", reads[kind].version)
+            for kind, item in kinds.items()
+        }
         # llmlint: ignore-block[tests_mirror_real_usage] A person moving the card on the live
         # board is the change under test, and no test may reach that board; the fixture's row
         # is where that move leaves it. Every read before and after is the locked CLI unchanged.
@@ -2370,6 +2434,10 @@ def test_a_pinned_read_of_an_unchanged_ticket_is_served_from_the_hosts_cache_at_
         )
         emptied = _cached_entries(cache_home)
         after_clear, after_clear_sent = _pinned_show(environment, qualified, moved)
+        cleared_sent = {
+            kind: _kind_show(environment, kind, item, "--pin", reads[kind].version).sent
+            for kind, item in kinds.items()
+        }
         home = tmp_path / "home"
         home.mkdir()
         unnamed = {
@@ -2383,6 +2451,13 @@ def test_a_pinned_read_of_an_unchanged_ticket_is_served_from_the_hosts_cache_at_
     assert sent == [], f"a pinned read of an unchanged ticket went to the board: {sent}"
     assert second.get("cache") == {"served": "cache", "bypassed": None}, second
     assert second["items"] == first["items"], "the cache answered other than the board did"
+    for kind, reread_pinned in rereads.items():
+        assert reread_pinned.sent == [], (
+            f"a {kind} read pinned to its own version went to the board"
+        )
+        assert reread_pinned.answer["items"] == reads[kind].answer["items"], (
+            f"the cache answered a {kind} other than the board did"
+        )
 
     assert moved != version, "moving the ticket on the board did not move its change token"
     assert reread_sent, "a read pinned to a token the cache does not hold sent no request"
@@ -2400,6 +2475,10 @@ def test_a_pinned_read_of_an_unchanged_ticket_is_served_from_the_hosts_cache_at_
     assert all(not entries for entries in emptied.values()), f"`cache clear` left {emptied}"
     assert after_clear_sent, "a pinned read after `cache clear` was answered from nothing"
     assert after_clear.get("cache") == {"served": "remote", "bypassed": None}, after_clear
+    for kind, sent_after_clear in cleared_sent.items():
+        assert sent_after_clear, (
+            f"a pinned {kind} read after `cache clear` was answered from nothing"
+        )
     assert fallen_back.keys() == filled.keys() and next(iter(fallen_back.values())), (
         f"with no cache home named, the store did not cache under $HOME/.cache: {fallen_back}"
     )
@@ -2721,12 +2800,14 @@ def test_two_carriers_of_one_ticket_are_resolved_by_the_native_origin_query_alon
 
 #: What the adopted store's README says of its cache, which `AGENTS.md`'s plan-store section
 #: restates per reader on this host: a listing pins the reads after it in one command, a plain
-#: read by id goes to the source, and no Linear read is served from the cache.
+#: read by id goes to the source, a project and a document read take a pin as a task read
+#: does, and a Linear item's pin is a `lin1` token over its `updatedAt` and facets.
 STORE_CACHE_RULES = (
     "the version a listing, a search or a `--commented-since` result carries pins the reads "
     "that follow it in that command",
+    "`project show <ID> --pin VERSION` and `document show <ID> --pin VERSION`",
     "An **unpinned** read by id, a plain `task show <ID>`, reads the source as it always did",
-    "every Linear read today, whose tasks carry no token",
+    "A **Linear** item's token is `lin1`: its `updatedAt` and a digest of its facets",
 )
 
 
@@ -2757,7 +2838,7 @@ def test_the_cache_rules_agents_md_restates_are_the_adopted_stores_and_this_host
         for name, member in inspect.getmembers(plan_store.client(), callable)
         if not name.startswith("_") and "pin" in inspect.signature(member).parameters
     }
-    assert "task_show" in pinned_reads, pinned_reads
+    assert {"task_show", "project_show", "document_show"} <= pinned_reads, pinned_reads
     pinned = []
     for module in sorted((REPO_ROOT / "orchestrator").glob("*.py")):
         for node in ast.walk(ast.parse(module.read_text(encoding="utf-8"))):
