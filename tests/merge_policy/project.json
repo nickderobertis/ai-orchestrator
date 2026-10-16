@@ -13,7 +13,6 @@
     "support-fake-codex",
     "support-harness-indirections",
     "support-no-paid-provider",
-    "support-nx-workspace",
     "support-project-fixtures",
     "support-short-state",
     "support-waits"

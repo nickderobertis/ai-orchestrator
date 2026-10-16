@@ -14,7 +14,6 @@
     "support-follow-up-variables",
     "support-harness-indirections",
     "support-no-paid-provider",
-    "support-nx-workspace",
     "support-plan-root-variable",
     "support-project-fixtures",
     "support-short-state",

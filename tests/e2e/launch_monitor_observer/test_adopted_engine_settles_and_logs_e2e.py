@@ -50,7 +50,6 @@ from typing import Any, NamedTuple, cast
 
 import pytest
 import short_state
-from nx_workspace import WORKSPACE_INSTALL_MARKS
 from project_fixtures import helper, project_from_plan
 from waits import deadline
 from waits import timeout as e2e_timeout
@@ -81,11 +80,6 @@ WORK_NODE = "work"
 
 #: How long a journey waits for the run to record something.
 PATIENCE_SECONDS = 60
-
-#: A reader of the toolchain this checkout provisioned: every step here runs its tool
-#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
-#: `tests/e2e/nx_workspace.py` asks no xdist group of it.
-pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 
 class HeldRun(NamedTuple):

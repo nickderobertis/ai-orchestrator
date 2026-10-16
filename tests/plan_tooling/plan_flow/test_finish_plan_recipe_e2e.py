@@ -49,7 +49,7 @@ from fake_backend import (
 from nx_workspace import (
     answering_this_checkouts_origin,
     copy_working_tree,
-    rewrites_workspace_toolchain,
+    share_this_checkouts_install,
 )
 from project_fixtures import (
     budget_section,
@@ -1722,11 +1722,18 @@ def test_a_detached_plan_launch_hands_this_command_back_on_its_own_receipt(
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
-def _provisioned_copy_listing_no_criterion(tmp_path: Path) -> Path:
+class Copy(NamedTuple):
+    """A copied checkout, and what every command run in it carries to use its install."""
+
+    root: Path
+    environment: dict[str, str]
+
+
+def _copy_listing_no_criterion(tmp_path: Path) -> Copy:
     """A copy of this checkout whose tail composes its writer's task with no criterion.
 
     Everything is this checkout's — its recipes, its scripts, its templates, its installed
-    commands, provisioned from the locked installs as a session would provision it — but
+    commands — but
     for the one list the tail answers the `plan-task` template's criteria with, emptied in
     the copy. That is the whole of what a composition that renders no criterion is, and
     the copy is the only place it can be made without editing the tree every other tier
@@ -1759,31 +1766,15 @@ def _provisioned_copy_listing_no_criterion(tmp_path: Path) -> Path:
     )
     script.write_text(emptied, encoding="utf-8")
     # llmlint: ignore-end[tests_mirror_real_usage, e2e_not_mocked]
-    environment = {
-        key: value
-        for key, value in os.environ.items()
-        if key not in ("UV_NO_SYNC", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV")
-    }
-    synced = subprocess.run(
-        ["uv", "sync", "--locked"],
-        cwd=checkout,
-        env=environment,
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(600),
-        check=False,
-    )
-    assert synced.returncode == 0, f"the copied checkout could not be provisioned:\n{synced.stderr}"
-    return checkout
+    return Copy(checkout, share_this_checkouts_install(checkout))
 
 
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]  # noqa: E501
 # tests/plan_tooling/AGENTS.md states this project's split: `reads_docs` routes a journey that
 # builds a copy of this checkout to `plan-tooling-plan-flow:test-docs`, keyed on the whole
 # workspace because copying the tracked tree reads all of it, and never out of this project.
-# `test_plan_flow_e2e.py`'s default-board flow copies and provisions a checkout behind the
-# same marker for the same reason.
-@rewrites_workspace_toolchain
+# `test_plan_flow_e2e.py`'s default-board flow copies a checkout behind the same marker for
+# the same reason.
 @pytest.mark.reads_docs
 @pytest.mark.xdist_group("finish-plan")
 def test_a_writer_task_that_lists_no_criterion_is_refused_before_anything_is_launched(
@@ -1799,8 +1790,9 @@ def test_a_writer_task_that_lists_no_criterion_is_refused_before_anything_is_lau
     """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
-    checkout = _provisioned_copy_listing_no_criterion(tmp_path)
+    checkout, shared = _copy_listing_no_criterion(tmp_path)
     bench = _bench(tmp_path, oneharness_bin, PASSES)
+    bench.environment.update(shared)
     authoring = tmp_path / "authoring"
     authoring.mkdir()
     bench.environment[plan_root_variable.name()] = str(authoring)

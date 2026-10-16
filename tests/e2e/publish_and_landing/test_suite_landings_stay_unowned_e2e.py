@@ -24,12 +24,9 @@ import os
 import subprocess
 from pathlib import Path
 
-from nx_workspace import WORKSPACE_INSTALL_MARKS
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
-
-pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 #: The journey whose `just integrate` registered a flow on the dispatching host.
 LEAKED = REPO_ROOT / "tests" / "e2e" / "publish_and_landing" / "test_integrate_local_direct_e2e.py"

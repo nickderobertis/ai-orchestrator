@@ -32,7 +32,7 @@ refusal rather than a slower merge.
 # the directory-owned project keyed on the recipes, scripts and configs its landing journeys
 # drive, which these share with their neighbours there. The third is the same question asked
 # of a shell suite, which these are not: they are pytest journeys over the same recipes and
-# scripts, reading the toolchain this checkout provisioned as `WORKSPACE_INSTALL_MARKS` declares.
+# scripts, reading the toolchain this checkout provisioned.
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] see above
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] see above
 # llmlint: ignore-block[shell_test_tiers_stay_split] see above
@@ -53,16 +53,10 @@ import pytest
 import short_state
 from fake_gh import CheckRun, Poll
 from harness_indirections import established_indirections
-from nx_workspace import WORKSPACE_INSTALL_MARKS
 from project_fixtures import helper
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
-
-#: A reader of the toolchain this checkout provisioned: every step here runs its tool
-#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
-#: `tests/e2e/nx_workspace.py` asks no xdist group of it.
-pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 #: The branch under test, in the shape a dispatch leaves behind.
 FINISHED_BRANCH = "claude/finished-work"

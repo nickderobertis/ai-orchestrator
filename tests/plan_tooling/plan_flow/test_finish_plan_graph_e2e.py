@@ -51,7 +51,11 @@ from typing import Any, NamedTuple, TypedDict
 
 import plan_fixture_source
 import pytest
-from nx_workspace import TOOLCHAIN_WRITER_MARKS, answering_this_checkouts_origin, copy_checkout
+from nx_workspace import (
+    answering_this_checkouts_origin,
+    copy_working_tree,
+    share_this_checkouts_install,
+)
 from project_fixtures import budgeted, no_budgets
 from test_finish_plan_recipe_e2e import (
     COPIES_THE_ROWS,
@@ -63,11 +67,11 @@ from test_finish_plan_recipe_e2e import (
     PASSES,
     STATES_ITS_BAR,
     UNRUNNABLE,
+    Copy,
     RunId,
     _bench,
     _task,
 )
-from test_plan_flow_e2e import _provisioned
 from visual_images import TYPICAL, write_noise_png
 from waits import timeout as e2e_timeout
 
@@ -75,9 +79,7 @@ from orchestrator.plan_store import NodeId, QualifiedProjectId
 from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
 
-# A writer: its module fixture provisions the copied checkout with `uv sync --locked`
-# (`test_plan_flow_e2e._provisioned`), into the copy's own `.venv` and never this one's.
-pytestmark = [*TOOLCHAIN_WRITER_MARKS, pytest.mark.reads_docs]
+pytestmark = [pytest.mark.reads_docs]
 
 #: The stand-in `start` the copied checkout's engine hands that one verb to.
 STAND_IN = Path(__file__).resolve().parent / "finish_plan_writer_engine.py"
@@ -108,8 +110,8 @@ KEPT = re.compile(r"the graph of \S+ this flow reads is kept in (\S+)")
 _SEQUENCE = itertools.count()
 
 
-def _checkout(tmp_path: Path) -> Path:
-    """A provisioned copy of this checkout whose engine doubles `start` and whose store is wrapped.
+def _checkout(tmp_path: Path) -> Copy:
+    """A copy of this checkout whose engine doubles `start` and whose store is wrapped.
 
     The engine wrapper is a shell script handing every call to the stand-in on its second
     line, followed by the real binary's bytes, which bash never reads: `just check-plan`
@@ -117,9 +119,10 @@ def _checkout(tmp_path: Path) -> Path:
     """
     checkout = tmp_path / "checkout"
     checkout.mkdir()
-    copy_checkout(checkout)
+    copy_working_tree(checkout)
     answering_this_checkouts_origin(checkout)
-    _provisioned(checkout)
+    shared = share_this_checkouts_install(checkout)
+    # The copy's own links to the two tools, replaced by doubles; this checkout's stay.
     bins = checkout / ".venv" / "bin"
     engine = bins / "onepipeline"
     real = engine.with_name("onepipeline-real")
@@ -134,11 +137,11 @@ def _checkout(tmp_path: Path) -> Path:
     store.rename(store.with_name("onetaskgraph-real"))
     store.write_text(GRAPH_WRAPPER, encoding="utf-8")
     store.chmod(0o755)
-    return checkout
+    return Copy(checkout, shared)
 
 
 @pytest.fixture(scope="module")
-def checkout(tmp_path_factory: pytest.TempPathFactory) -> Path:
+def checkout(tmp_path_factory: pytest.TempPathFactory) -> Copy:
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
     return _checkout(tmp_path_factory.mktemp("finish-plan-graph"))
@@ -263,7 +266,7 @@ class Finished(NamedTuple):
 
 
 def _finish(
-    checkout: Path,
+    checkout: Copy,
     tmp_path: Path,
     oneharness_bin: str,
     tasks: Sequence[Task],
@@ -284,7 +287,7 @@ def _finish(
     run = RunId(f"graph-run-{os.getpid()}-{next(_SEQUENCE)}")
     answers = tmp_path / f"{native}.answers.json"
     answers.write_text(json.dumps(STAGED), encoding="utf-8")
-    bins = checkout / ".venv" / "bin"
+    bins = checkout.root / ".venv" / "bin"
     changed = (
         "import json, sys; path = sys.argv[1]; a = json.load(open(path))"
         f"\n{change}\njson.dump(a, open(path, 'w'))"
@@ -324,8 +327,7 @@ def _finish(
             "FAKE_ENGINE_STORE": str(bins / "onetaskgraph-real"),
             "FAKE_ENGINE_WRITER_TURN": str(turn),
             "FAKE_ENGINE_LOG": str(log),
-            # The copy is provisioned once; a sync now would reinstall the doubled tools.
-            "UV_NO_SYNC": "1",
+            **checkout.environment,
             # Git may reach no remote: a read that would wait on the network refuses instead.
             "GIT_ALLOW_PROTOCOL": "file",
             **(environment or {}),
@@ -340,7 +342,7 @@ def _finish(
     )
     finish = subprocess.run(
         ["just", "finish-plan", str(brief), "--name", run, "--to", DESTINATION],
-        cwd=checkout,
+        cwd=checkout.root,
         env=bench.environment,
         text=True,
         capture_output=True,
@@ -451,7 +453,7 @@ def _subgraphs(mermaid: str) -> dict[str, str]:
 
 @pytest.mark.xdist_group("finish-plan-graph-accepted")
 def test_an_edged_plans_document_opens_with_the_graph_the_flow_read_and_rendered(
-    checkout: Path, tmp_path: Path, oneharness_bin: str
+    checkout: Copy, tmp_path: Path, oneharness_bin: str
 ) -> None:
     """The kept reads are the verb's own; the picture, the table and the units are one graph."""
     finished = _finish(checkout, tmp_path, oneharness_bin, FOUR)
@@ -506,7 +508,7 @@ def test_an_edged_plans_document_opens_with_the_graph_the_flow_read_and_rendered
     assert Path(held["path"]).read_bytes() == assets["plan-dag.png"]
     approved = subprocess.run(
         ["just", "approve-design", f"{DESTINATION}:{native}"],
-        cwd=checkout,
+        cwd=checkout.root,
         env=finished.environment,
         text=True,
         capture_output=True,
@@ -518,7 +520,7 @@ def test_an_edged_plans_document_opens_with_the_graph_the_flow_read_and_rendered
 
 @pytest.mark.xdist_group("finish-plan-graph-accepted")
 def test_two_tasks_sharing_a_title_are_two_rows_and_a_swapped_location_is_refused(
-    checkout: Path, tmp_path: Path, oneharness_bin: str
+    checkout: Copy, tmp_path: Path, oneharness_bin: str
 ) -> None:
     """Identity is the task's id: each row keeps its own prerequisites and its own location."""
     finished = _finish(checkout, tmp_path / "accepted", oneharness_bin, SAME_TITLE)
@@ -556,7 +558,7 @@ def test_two_tasks_sharing_a_title_are_two_rows_and_a_swapped_location_is_refuse
 @pytest.mark.xdist_group("finish-plan-graph-accepted")
 @pytest.mark.parametrize("tasks", [ONE, EDGELESS], ids=["one task", "no edge"])
 def test_a_plan_whose_graph_only_repeats_its_table_shows_none(
-    checkout: Path, tmp_path: Path, oneharness_bin: str, tasks: tuple[Task, ...]
+    checkout: Copy, tmp_path: Path, oneharness_bin: str, tasks: tuple[Task, ...]
 ) -> None:
     finished = _finish(checkout, tmp_path, oneharness_bin, tasks)
     assert finished.finish.returncode == OK, finished.finish.stderr
@@ -572,7 +574,7 @@ def test_a_plan_whose_graph_only_repeats_its_table_shows_none(
     native = finished.project.partition(":")[2]
     approved = subprocess.run(
         ["just", "approve-design", f"{DESTINATION}:{native}"],
-        cwd=checkout,
+        cwd=checkout.root,
         env=finished.environment,
         text=True,
         capture_output=True,
@@ -629,7 +631,7 @@ DISAGREEMENTS = {
 @pytest.mark.xdist_group("finish-plan-graph-refused")
 @pytest.mark.parametrize("case", list(DISAGREEMENTS))
 def test_a_table_or_units_that_part_from_the_graph_are_refused_and_nothing_is_copied(
-    checkout: Path, tmp_path: Path, oneharness_bin: str, case: str
+    checkout: Copy, tmp_path: Path, oneharness_bin: str, case: str
 ) -> None:
     change, said = DISAGREEMENTS[case]
     finished = _finish(checkout, tmp_path, oneharness_bin, FOUR, change=change)
@@ -650,7 +652,7 @@ def _other_png(tmp_path: Path) -> Path:
 
 @pytest.mark.xdist_group("finish-plan-graph-refused")
 def test_a_graph_image_that_is_not_the_rendered_one_or_is_missing_is_refused(
-    checkout: Path, tmp_path: Path, oneharness_bin: str
+    checkout: Copy, tmp_path: Path, oneharness_bin: str
 ) -> None:
     differs = _finish(
         checkout, tmp_path / "differs", oneharness_bin, FOUR, asset=str(_other_png(tmp_path))
@@ -678,7 +680,7 @@ def test_a_graph_image_that_is_not_the_rendered_one_or_is_missing_is_refused(
 
 @pytest.mark.xdist_group("finish-plan-graph-refused")
 def test_a_one_task_plans_document_carrying_a_graph_image_is_refused(
-    checkout: Path, tmp_path: Path, oneharness_bin: str
+    checkout: Copy, tmp_path: Path, oneharness_bin: str
 ) -> None:
     finished = _finish(
         checkout,
@@ -697,7 +699,7 @@ def test_a_one_task_plans_document_carrying_a_graph_image_is_refused(
 
 @pytest.mark.xdist_group("finish-plan-graph-refused")
 def test_with_no_browser_the_flow_stops_before_any_launch_naming_its_provisioning(
-    checkout: Path, tmp_path: Path, oneharness_bin: str
+    checkout: Copy, tmp_path: Path, oneharness_bin: str
 ) -> None:
     empty = tmp_path / "no-browsers"
     empty.mkdir()
@@ -718,7 +720,7 @@ def test_with_no_browser_the_flow_stops_before_any_launch_naming_its_provisionin
 @pytest.mark.xdist_group("finish-plan-graph-refused")
 @pytest.mark.parametrize("form", ["mermaid", "json"])
 def test_a_graph_read_that_fails_stops_the_flow_naming_the_read_and_its_repair(
-    checkout: Path, tmp_path: Path, oneharness_bin: str, form: str
+    checkout: Copy, tmp_path: Path, oneharness_bin: str, form: str
 ) -> None:
     finished = _finish(
         checkout,
@@ -731,7 +733,7 @@ def test_a_graph_read_that_fails_stops_the_flow_naming_the_read_and_its_repair(
     said = finished.finish.stderr
     assert f"the --format {form} read of the graph of {finished.project} failed" in said, said
     assert (
-        f"'uv run onetaskgraph project graph {finished.project} --group-by "
+        f"'uv run --no-sync onetaskgraph project graph {finished.project} --group-by "
         f"orchestrator.unit --format {form}' prints the graph"
     ) in said, said
     _no_launch(finished)

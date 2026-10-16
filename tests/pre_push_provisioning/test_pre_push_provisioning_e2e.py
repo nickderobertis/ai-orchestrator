@@ -17,13 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from nx_workspace import TOOLCHAIN_WRITER_MARKS, copy_working_tree
+from nx_workspace import copy_working_tree
 from offline_installs import NO_NETWORK
-
-#: The hook runs the real session setup, which provisions the `.venv` and `node_modules`
-#: of the checkout it runs in: a writer, run in a copy that arrives with neither, whose one
-#: private toolchain is the one the hook under test builds.
-pytestmark = [*TOOLCHAIN_WRITER_MARKS]
 
 #: Every way a caller points uv at an environment, or the hook at a comparison base,
 #: dropped so the hook provisions the copy's own and compares against the base named here.

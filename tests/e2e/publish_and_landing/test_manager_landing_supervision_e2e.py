@@ -56,13 +56,12 @@ from manager_landings import (
     watch,
     woken_until_ended,
 )
-from nx_workspace import WORKSPACE_INSTALL_MARKS
 from waits import until
 
 from orchestrator.root import REPO_ROOT
 
-#: Readers of this checkout's toolchain, in one worker: the estate is one host's state.
-pytestmark = [*WORKSPACE_INSTALL_MARKS, pytest.mark.xdist_group("manager-landing-supervision")]
+#: In one worker: the estate is one host's state.
+pytestmark = [pytest.mark.xdist_group("manager-landing-supervision")]
 
 
 def lander(verb: Verb, outcome: Outcome) -> Session:

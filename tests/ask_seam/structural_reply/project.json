@@ -12,7 +12,6 @@
     "support-fake-backend",
     "support-fake-codex",
     "support-no-paid-provider",
-    "support-nx-workspace",
     "support-project-fixtures",
     "support-scratch-identity",
     "support-short-state",

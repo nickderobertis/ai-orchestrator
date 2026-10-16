@@ -36,7 +36,6 @@ be keyed on those same inputs and add only a target.
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -49,7 +48,7 @@ from fake_backend import PROMPT_LOG_ENV, RUN_ON_MARKER_ENV
 from nx_workspace import (
     answering_this_checkouts_origin,
     copy_working_tree,
-    rewrites_workspace_toolchain,
+    share_this_checkouts_install,
 )
 from published_tools import ONETASKGRAPH_BIN
 from test_finish_plan_recipe_e2e import (
@@ -63,6 +62,7 @@ from test_finish_plan_recipe_e2e import (
     PASSES,
     PLAN_UNIT,
     Bench,
+    Copy,
     Drafted,
     RunId,
     _answers,
@@ -147,7 +147,8 @@ listed = subprocess.run(
 )
 (task,) = [held["item"]["content"] for held in json.loads(listed.stdout)["items"]]
 answers = json.loads(open(base, encoding="utf-8").read())
-(command,) = set(re.findall(r"`(uv run python -m orchestrator\.plan_budgets [^`]+)`", task))
+named = r"`(uv run --no-sync python -m orchestrator\.plan_budgets [^`]+)`"
+(command,) = set(re.findall(named, task))
 printed = subprocess.run(shlex.split(command), capture_output=True, text=True, check=True)
 budgets = json.loads(printed.stdout)
 match change:
@@ -223,7 +224,9 @@ def _writes_from_its_task(bench: Bench, drafted: Drafted, run: RunId, change: st
 
 def _names_the_budget_command(task: str, drafted: Drafted) -> None:
     """The writer's task names the command its budget answers copy, and quotes none of them."""
-    assert f"`uv run python -m orchestrator.plan_budgets {drafted.qualified}`" in task, task
+    assert f"`uv run --no-sync python -m orchestrator.plan_budgets {drafted.qualified}`" in task, (
+        task
+    )
     assert "`predates_budgets`, `plan_budgets` and `budgets`" in task, task
     assert "listing-latency" not in task, "the task quotes the budgets rather than naming them"
 
@@ -439,8 +442,8 @@ PRE_BUDGETS_TEMPLATE = (
 REASON = "It was approved before plans stated budgets, in the migration journey."
 
 
-def _provisioned_copy(tmp_path: Path) -> Path:
-    """A copy of this checkout, provisioned from the locked installs as a session would be.
+def _shared_copy(tmp_path: Path) -> Copy:
+    """A copy of this checkout on this checkout's install.
 
     The migration list is a tracked file and nothing but a reviewed change adds to it, so a
     journey whose plan the list names writes that entry into a copy; and the template
@@ -450,26 +453,11 @@ def _provisioned_copy(tmp_path: Path) -> Path:
     checkout.mkdir()
     copy_working_tree(checkout)
     answering_this_checkouts_origin(checkout)
-    environment = {
-        key: value
-        for key, value in os.environ.items()
-        if key not in ("UV_NO_SYNC", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV")
-    }
-    synced = subprocess.run(
-        ["uv", "sync", "--locked"],
-        cwd=checkout,
-        env=environment,
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(600),
-        check=False,
-    )
-    assert synced.returncode == 0, f"the copied checkout could not be provisioned:\n{synced.stderr}"
-    return checkout
+    return Copy(checkout, share_this_checkouts_install(checkout))
 
 
 #: What `uv run` would otherwise take for the environment to run in rather than the copy's.
-_FOREIGN_ENVIRONMENT = ("UV_NO_SYNC", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV")
+_FOREIGN_ENVIRONMENT = ("UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV")
 
 
 def _in(checkout: Path, bench: Bench, *argv: str) -> subprocess.CompletedProcess[str]:
@@ -489,7 +477,6 @@ def _in(checkout: Path, bench: Bench, *argv: str) -> subprocess.CompletedProcess
 # tests/plan_tooling/AGENTS.md states this project's split: `reads_docs` routes a journey that
 # builds a copy of this checkout to `plan-tooling-plan-flow:test-docs`, keyed on the whole
 # workspace because copying the tracked tree reads all of it, and never out of this project.
-@rewrites_workspace_toolchain
 @pytest.mark.reads_docs
 @pytest.mark.xdist_group("finish-plan")
 def test_a_listed_plan_predating_budgets_is_documented_as_such_and_re_approved(
@@ -497,8 +484,9 @@ def test_a_listed_plan_predating_budgets_is_documented_as_such_and_re_approved(
 ) -> None:
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
-    checkout = _provisioned_copy(tmp_path)
+    checkout, shared = _shared_copy(tmp_path)
     bench = _bench(tmp_path, oneharness_bin, PASSES)
+    bench.environment.update(shared)
     authoring = tmp_path / "authoring"
     authoring.mkdir()
     bench.environment[plan_root_variable.name()] = str(authoring)

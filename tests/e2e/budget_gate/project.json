@@ -11,7 +11,6 @@
     "support-conftest",
     "support-follow-up-variables",
     "support-nx-inputs",
-    "support-nx-workspace",
     "support-onejudge-bundle",
     "support-onevcs-state-snapshot",
     "support-plan-fixture-source",

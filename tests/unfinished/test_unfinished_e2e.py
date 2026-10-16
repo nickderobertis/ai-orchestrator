@@ -49,16 +49,10 @@ from typing import Any, NamedTuple
 import budget_telemetry
 import probe_run_root
 import pytest
-from nx_workspace import WORKSPACE_INSTALL_MARKS
 from unpublished_registry import BASE, Registry, Session, commit_on, git, seeded
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
-
-#: A reader of the toolchain this checkout provisioned: every step here runs its tool
-#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
-#: `tests/e2e/nx_workspace.py` asks no xdist group of it.
-pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 ONEPIPELINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
 ONEVCS = REPO_ROOT / ".venv" / "bin" / "onevcs"

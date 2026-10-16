@@ -35,16 +35,11 @@ from pathlib import Path
 
 import short_state
 from harness_indirections import established_indirections
-from nx_workspace import WORKSPACE_INSTALL_MARKS
 from project_fixtures import helper
 from unpublished_registry import BASE, UNPOOLED, Registry, git
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
-
-#: A reader of the toolchain this checkout provisioned: every step here runs its tool
-#: through a `just` recipe, the installed engine or `uv run`, and no writer touches it.
-pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 FAKE_GH = helper("fake_gh.py")
 FAKE_CODEX = helper("fake_codex.py")

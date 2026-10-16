@@ -7,6 +7,8 @@
 # recipe's contract is that a new persona lands where `just validate-personas` and
 # every dispatch look for it.
 set -euo pipefail
+# Session setup provisions this checkout, so no `uv run` here syncs it, however it is run.
+export UV_NO_SYNC=1
 
 script_dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 persona_dir="$(dirname -- "$script_dir")/personas"

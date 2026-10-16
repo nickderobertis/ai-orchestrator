@@ -38,11 +38,19 @@ Conventions for this repository's tests.
 - **A host-tool journey belongs to an Nx project of its own, selected by directory**, so
   an unrelated edit stops paying for it; `conftest.py` holds each project to its key, and
   `tests/nx_inputs.py` says what each key names and why.
+- **A test whose subject is a process- or machine-wide resource declares that as a
+  scheduling constraint** — never a loosened assertion, and never a solo re-proof by
+  hand. This checkout's toolchain is not one: a test needing a mutable copy of this
+  checkout runs it on this checkout's install through `share_this_checkouts_install` in
+  `tests/e2e/nx_workspace.py`, by symlinks alone, and only the provisioning journeys
+  build a toolchain of their own, through the setup under test. So an xdist group names
+  one module's shared fixture, never a toolchain. Read a wait that *expires* as something
+  holding a lock and a wait that merely lengthens as load.
 - **A journey that hangs waiting on a `just` recipe or on a channel reply is read
   through its channel queue first, and not as a toolchain lock.** `uv run` holds the
   `<root>/.venv` lock only while it checks or syncs the environment, and no test syncs
-  this checkout's: every writer installs into a copy of its own and every reader runs
-  ungrouped, as `tests/e2e/nx_workspace.py` states. A run's channel is a directory of
+  this checkout's: a copy shares its install through `tests/e2e/nx_workspace.py`'s
+  symlinks and syncs nothing. A run's channel is a directory of
   `onemessagebus` queues the bus owns, so read it through the bus —
   `onemessagebus status --transport-dir runs/<run-id>/channel` — never by opening its
   files: a question waiting or pending there is a waiter nobody answered, and nothing

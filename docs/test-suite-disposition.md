@@ -47,7 +47,8 @@ items were replaced by three recipe-coverage items.
 | `tests/e2e/launch_monitor_observer/test_quota_fallthrough_e2e.py` | Keep all | Required real oneharness fallback-chain journey. |
 | `tests/e2e/test_repo_registry_apply_e2e.py` | Keep all | Drives this checkout's tracked checkout/rules installer; it does not re-prove onevcs lifecycle behavior. |
 | `tests/session_setup_pypi/test_session_setup_e2e.py` | Keep all | Required real PyPI installation journey for adopted releases. |
-| `tests/e2e/workspace_copies/test_workspace_contract_e2e.py` | Convert | Adds the missing non-recursive proof of the `test-e2e` entry point and drops the journeys of the removed cross-worktree Nx check; all other cases still drive this checkout's quality, bootstrap, log, and workspace wrappers. |
+| `tests/e2e/workspace_copies/test_workspace_contract_e2e.py` | Convert | Adds the missing non-recursive proof of the `test-e2e` entry point and drops the journeys of the removed cross-worktree Nx check and of an install lock shared between checkouts; all other cases still drive this checkout's quality, bootstrap, log, and workspace wrappers, and its one-checkout install lock. |
+| `tests/e2e/workspace_copies/test_nx_wrapper_version_e2e.py` | Keep all | Drives this checkout's `scripts/nx.sh` in this checkout and holds the Nx it runs to the `package.json` pin. |
 
 Helper modules (`conftest.py`, `published_tools.py`, `nx_inputs.py`, and the e2e
 helpers) contain no tests and remain because the kept journeys import them.
@@ -57,9 +58,11 @@ The `repo-policy` parameterized case formerly had no assertion at all and now
 drives `just repo-policy /checkout` to `onevcs rules check /checkout`; the new
 `test_lint_llm_validate_reaches_the_validator` drives the real recipe and proves
 it selects validation rather than either judging path.
-In `test_workspace_contract_e2e.py`, every pre-existing test is kept unchanged;
-the new `test_test_e2e_recipe_names_the_real_tier_without_recursing_into_itself`
-asserts the command that cannot safely be invoked from inside its own tier.
+In `test_workspace_contract_e2e.py`, the new
+`test_test_e2e_recipe_names_the_real_tier_without_recursing_into_itself` asserts the
+command that cannot safely be invoked from inside its own tier, and the journeys of an
+install lock held across two checkouts are gone with that lock: a copy of this checkout
+shares its install through symlinks and installs nothing.
 
 ## Tests touched in the converted file
 

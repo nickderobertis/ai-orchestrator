@@ -13,17 +13,11 @@ from pathlib import Path
 from typing import Literal, TypeIs, get_args
 
 import pytest
-from nx_workspace import TOOLCHAIN_WRITER_MARKS, copy_working_tree
+from nx_workspace import copy_working_tree
 from offline_installs import NO_NETWORK
 from waits import until
 
 from orchestrator.root import REPO_ROOT
-
-#: Every journey here runs the real session setup, which provisions the `.venv` and the
-#: `node_modules` of the checkout it runs in and installs `uv` tools: a writer, run in a
-#: copy of this checkout that arrives with neither and is provisioned by the first setup
-#: run in it — the module's one private toolchain, built by the setup under test.
-pytestmark = [*TOOLCHAIN_WRITER_MARKS]
 
 #: The variable session setup's last step reads its checkout list from, in place of the
 #: tracked one. Named here so a run of the real setup provisions the stand-ins below and

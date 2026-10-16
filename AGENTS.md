@@ -141,9 +141,9 @@ close, in `just sweep`, and on the engine's idle maintenance — and a pool slot
 removed, only returned. A superseded branch that still differs from its base is your
 call, printed with its evidence and answered with `just reclaim-branch <branch> --repo
 <checkout>`; `just unpublished --acknowledge` is for work deliberately kept. For a run
-that settled before this host's engine recorded supersessions, `uv run onepipeline
-supersessions <run-id> --record`, run once by hand, records its retries' superseded
-branches. `just work-status
+that settled before this host's engine recorded supersessions, `uv run --no-sync
+onepipeline supersessions <run-id> --record`, run once by hand, records its retries'
+superseded branches. `just work-status
 <change-url|session|branch|commit>` reports everything `onevcs` knows about one piece
 of work. `just import-branch <branch> --repo <checkout>` makes a branch finished in a
 session worktree or a run clone reachable from an identity's registered checkouts,
@@ -1868,7 +1868,10 @@ checkout puts on PATH. A Codex-side dispatch never runs the session-start hook, 
 unprovisioned run root or a new pool slot it meets that refusal until `onevcs` provisions
 a session when it opens one. A publication's worktree is cut the same way, so
 `.githooks/pre-push` runs setup's `--provision-only` before the gate: that checkout's
-toolchain and none of a session's host steps.
+toolchain and none of a session's host steps. No `uv run` this repository spells syncs:
+the `justfile` and each script that runs one export `UV_NO_SYNC=1`, an Nx target runs
+under `scripts/nx.sh`'s, and a command typed by hand spells `uv run --no-sync`, which
+`tests/tree_scans/test_uv_run_never_syncs.py` holds.
 
 ## Dogfooding rule
 
@@ -1942,24 +1945,6 @@ pre-push because there is no CI.
   ceiling on other dispatches' load alone, and the user chose to keep three slots,
   leaving the host's CPU to its other managers, and to speed the gate by cutting the
   work in its slowest test tiers instead.
-  <!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
-  A test whose subject is a process- or machine-wide resource declares
-  that as a scheduling constraint — never a loosened assertion, and never a solo
-  re-proof by hand. This checkout's toolchain is not one: `uv run` holds the
-  `<root>/.venv` lock only while it checks or syncs, and nothing syncs this checkout's,
-  because every test that installs into a `.venv` or `node_modules` declares
-  `rewrites_workspace_toolchain` and installs into a copy of its own. So readers run
-  ungrouped, and an xdist group names one module's shared fixture, never a toolchain —
-  the contract `tests/e2e/nx_workspace.py` states, `tests/tree_scans/test_nx_cache_scope.py` holds
-  and `tests/e2e/toolchain_isolation/` proves. Read a wait that *expires* as something
-  holding a lock and a wait that merely lengthens as load.
-  <!-- llmlint: ignore-block[agents_md_durable_and_terse] The task that ended the shared toolchain group requires this invariant to carry the tier figures it measured and their host conditions: they are the evidence the ungrouped four-worker schedule rests on, as "from measurement" above is for the worker count. -->
-  Measured with the three slowest tiers together (Nx `parallel` 3, cache skipped) on this
-  14-core host beside other dispatches: ending the group took `orchestrator-e2e:test`,
-  then the one project of every journey, from 2392 s to 1122 s and
-  `orchestrator:test-docs` from 844 s to 528 s, while `plan-tooling:test`, since split
-  into the `plan-tooling-*` subject projects, rose from 464 s to 708 s (load1 peaks 38.5
-  and 27.5).
   <!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 - **Tests are realistic, not mocked.** The suite drives the real `just` recipes, the
   real wrapper scripts, the real `oneharness` CLI, and real Nx; only the paid model and

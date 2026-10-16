@@ -67,6 +67,8 @@
 # `scripts/telemetry-server.sh`, which hands the same answer to the read API so a
 # mutation from the browser is performed as the session that started the server.
 set -euo pipefail
+# Session setup provisions this checkout, so no `uv run` here syncs it, however it is run.
+export UV_NO_SYNC=1
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 

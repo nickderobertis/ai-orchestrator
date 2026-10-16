@@ -38,7 +38,6 @@ from typing import NamedTuple, NewType, NotRequired, Protocol, TypedDict, cast
 
 import pytest
 import short_state
-from nx_workspace import WORKSPACE_INSTALL_MARKS
 from planner_channel import (
     MANAGER_PATIENCE_SECONDS,
     Manager,
@@ -171,12 +170,6 @@ def _environment(tmp_path: Path) -> dict[str, str]:
     environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
     environment.update(_sandboxed_home(tmp_path))
     return environment
-
-
-#: A reader of the toolchain this checkout provisioned: every step here runs its tool
-#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
-#: `tests/e2e/nx_workspace.py` asks no xdist group of it.
-pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 
 @pytest.fixture

@@ -18,14 +18,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from nx_workspace import TOOLCHAIN_WRITER_MARKS, copy_working_tree
+from nx_workspace import copy_working_tree
 from offline_installs import NO_NETWORK
 from waits import until
-
-#: The real bootstrap provisions the `.venv` and `node_modules` of the checkout it runs in
-#: and installs `uv` tools: a writer, run in a copy of this checkout that arrives with
-#: neither, whose one private toolchain is the one the recipe under test builds.
-pytestmark = [*TOOLCHAIN_WRITER_MARKS]
 
 #: The variable session setup's last step reads its sibling checkout list from, pointed at
 #: an empty list so the bootstrap never reaches this host's registered checkouts.

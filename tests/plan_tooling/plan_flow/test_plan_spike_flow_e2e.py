@@ -48,7 +48,11 @@ import plan_fixture_source
 import pytest
 import short_state
 import yaml
-from nx_workspace import TOOLCHAIN_WRITER_MARKS, answering_this_checkouts_origin, copy_working_tree
+from nx_workspace import (
+    answering_this_checkouts_origin,
+    copy_working_tree,
+    share_this_checkouts_install,
+)
 from project_fixtures import no_budgets
 from scratch_identity import PLANNING_FLOW_ORIGIN, seeded
 from spike_flow_engine import Node
@@ -58,20 +62,13 @@ from test_plan_flow_e2e import (
     INHERITED_ENVIRONMENT,
     PAID_PROVIDER_GUARD,
     PASSING_VERDICT,
-    _provisioned,
 )
 from waits import timeout as e2e_timeout
 
 from orchestrator import design_approval, spike_plan
 
 #: Copies the tracked tree, so it sits in the whole-workspace tier.
-# A writer: its module fixture provisions the copied checkout with `uv sync --locked`
-# (`test_plan_flow_e2e._provisioned`), into the copy's own `.venv` and never this one's.
-pytestmark = [
-    *TOOLCHAIN_WRITER_MARKS,
-    pytest.mark.reads_docs,
-    pytest.mark.xdist_group("plan-spike-flow"),
-]
+pytestmark = [pytest.mark.reads_docs, pytest.mark.xdist_group("plan-spike-flow")]
 
 #: A run id, a plan's qualified project, and a spike's node id.
 RunId = NewType("RunId", str)
@@ -125,6 +122,8 @@ class Workspace(NamedTuple):
 
     checkout: Path
     migrated: PlanProject
+    #: What every command run in the copy carries to run on this checkout's install.
+    shared: dict[str, str]
 
 
 class Flow(NamedTuple):
@@ -148,7 +147,8 @@ def workspace(tmp_path_factory: pytest.TempPathFactory) -> Workspace:
     checkout.mkdir()
     copy_working_tree(checkout)
     answering_this_checkouts_origin(checkout)
-    _provisioned(checkout)
+    shared = share_this_checkouts_install(checkout)
+    # The copy's own link to the engine, replaced by the double; this checkout's is untouched.
     engine = checkout / ".venv" / "bin" / "onepipeline"
     real = engine.with_name("onepipeline-real")
     engine.rename(real)
@@ -167,7 +167,7 @@ def workspace(tmp_path_factory: pytest.TempPathFactory) -> Workspace:
             f'- project: "{migrated}"\n'
             f'  reason: "`{migrated}` is a journey\'s plan written before budgets existed."\n'
         )
-    return Workspace(checkout, migrated)
+    return Workspace(checkout, migrated, shared)
 
 
 def _flow(
@@ -197,6 +197,7 @@ def _flow(
     destination.mkdir()
     bin_dir = workspace.checkout / ".venv" / "bin"
     environment.update(identity.environment)
+    environment.update(workspace.shared)
     if session:
         environment["CLAUDE_CODE_SESSION_ID"] = LAUNCHING_SESSION
     environment |= {

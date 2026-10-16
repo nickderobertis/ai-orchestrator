@@ -68,7 +68,6 @@ import short_state
 import yaml
 from flow_engine_stand_in import give_flow_engine
 from follow_up_ticket_shape import QUALIFYING_RELATIONS, UNRELATED_CANDIDATES, impact_prose
-from nx_workspace import WORKSPACE_INSTALL_MARKS
 from project_fixtures import helper, project_from_plan
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
@@ -81,13 +80,10 @@ from orchestrator.project_store import frontmatter, write_plan_project
 from orchestrator.root import REPO_ROOT
 from orchestrator.run_reading import RunId
 
-#: A reader of the toolchain this checkout provisioned: every step here runs its tool
-#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
-#: `tests/e2e/nx_workspace.py` asks no xdist group of it. The group is this module's own,
-#: for fixture sharing: `followed` and `endings` are module-scoped and drive the real recipe end to
-#: end, so spread across workers the module builds them once per worker — measured,
-#: about 360 s on each of four workers against 212 s for the whole module on one.
-pytestmark = [*WORKSPACE_INSTALL_MARKS, pytest.mark.xdist_group("follow-ups-recipe")]
+#: The group is this module's own, for fixture sharing: `followed` and `endings` are module-scoped
+#: and drive the real recipe end to end, so spread across workers the module builds them once per
+#: worker — measured, about 360 s on each of four workers against 212 s for the whole module on one.
+pytestmark = [pytest.mark.xdist_group("follow-ups-recipe")]
 
 #: The provider's stand-in, refusing an untrusted directory the way codex does, and the guard
 #: covering the identities `ONEHARNESS_BIN_*` cannot reach, so a routing mistake refuses a

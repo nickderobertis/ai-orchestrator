@@ -24,16 +24,14 @@ INSTALLERS = ("scripts/workspace-install.sh",)
 #: not be duplicated is the handling of this directory and not the use of `mkdir`.
 PREPARES_THE_LOCK_DIRECTORY = re.compile(r"(?:mkdir|chmod)[^\n]*\.logs")
 
-#: Opening any of the descriptors the helper holds for the life of the sourcing shell:
-#: 8 and 9 for the first lock a shell takes, 6 and 7 for a second, because a forced
-#: workspace install over a shared tree holds that tree's lock and its own at once. An
-#: installer that opened its own would either race the helper's or silently drop the
+#: Opening either descriptor the helper holds for the life of the sourcing shell, 8 and 9.
+#: An installer that opened its own would either race the helper's or silently drop the
 #: lock the helper is holding.
-OPENS_A_LOCK_DESCRIPTOR = re.compile(r"exec\s+[6-9][<>]")
+OPENS_A_LOCK_DESCRIPTOR = re.compile(r"exec\s+[89][<>]")
 
 
 #: Arming the sourcing shell's EXIT trap. The helper's flock-less fallback owns that
-#: trap — it is how every mutex directory the shell took is released — and `trap`
+#: trap — it is how the mutex directory the shell took is released — and `trap`
 #: replaces rather than chains, so an installer arming its own would either drop that
 #: release or have its own dropped, depending on which ran second.
 ARMS_THE_EXIT_TRAP = re.compile(r"^[ \t]*trap\b[^\n#]*\bEXIT\b", re.MULTILINE)
@@ -115,7 +113,7 @@ def test_no_installer_prepares_the_lock_directory_itself(installer: str) -> None
     opened = OPENS_A_LOCK_DESCRIPTOR.findall(body)
     assert not opened, (
         f"{installer} opens a lock descriptor itself ({opened}); {HELPER} holds "
-        f"descriptors 6 to 9 for the life of the sourcing shell, so a second open "
+        f"descriptors 8 and 9 for the life of the sourcing shell, so a second open "
         f"would drop the lock it is holding"
     )
 
@@ -135,6 +133,6 @@ def test_no_installer_arms_the_exit_trap_the_helper_owns(installer: str) -> None
     armed = ARMS_THE_EXIT_TRAP.findall(body)
     assert not armed, (
         f"{installer} arms the sourcing shell's EXIT trap ({armed}); {HELPER} owns that "
-        f"trap to release the fallback's mutex directories, and `trap` replaces rather "
+        f"trap to release the fallback's mutex directory, and `trap` replaces rather "
         f"than chains, so one of the two releases would be lost"
     )

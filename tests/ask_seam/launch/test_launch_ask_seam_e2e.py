@@ -63,7 +63,6 @@ from fake_backend import (
     RUN_ON_MARKER_ENV,
 )
 from flow_engine_stand_in import give_flow_engine
-from nx_workspace import WORKSPACE_INSTALL_MARKS
 from planner_channel import PersistentManager, just, ruling
 from project_fixtures import helper, project_from_plan
 from published_tools import ONETASKGRAPH_BIN
@@ -305,7 +304,6 @@ LAUNCH_GROUP = "ask-seam-launch"
 #: there is none, all four workers take the creating branch at once, and five tests error
 #: in setup and refuse the push. `tests/tree_scans/test_nx_cache_scope.py` holds the rule.
 pytestmark = [
-    *WORKSPACE_INSTALL_MARKS,
     pytest.mark.xdist_group(LAUNCH_GROUP),
     # Read this checkout's own plan store here, whatever launch this suite runs inside and
     # whatever root the suite's autouse isolation would otherwise state. This module both

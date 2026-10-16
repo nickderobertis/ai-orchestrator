@@ -11,7 +11,6 @@
     "support-conftest",
     "support-fake-backend",
     "support-fake-codex",
-    "support-nx-workspace",
     "support-planner-channel",
     "support-project-fixtures",
     "support-short-state",

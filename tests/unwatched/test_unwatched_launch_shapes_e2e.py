@@ -45,16 +45,10 @@ import pytest
 import short_state
 from fake_backend import AGENT_DELAY_ENV
 from harness_indirections import established_indirections
-from nx_workspace import WORKSPACE_INSTALL_MARKS
 from project_fixtures import helper, project_from_plan
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
-
-#: A reader of the toolchain this checkout provisioned: every step here runs its tool
-#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
-#: `tests/e2e/nx_workspace.py` asks no xdist group of it.
-pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 #: The engine this checkout installs from its own pin, asked directly. The recipe is what
 #: *launches*; what is read back has to be the engine, because the question is what a

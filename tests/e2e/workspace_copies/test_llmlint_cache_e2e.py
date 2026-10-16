@@ -46,9 +46,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from nx_workspace import TOOLCHAIN_WRITER_MARKS, WORKSPACE_INSTALL_MARKS, copy_checkout
+from nx_workspace import copy_working_tree, share_this_checkouts_install
 
-ROOT = Path(__file__).resolve().parents[3]
 PASS_VERDICT = "fake-judge: 16 passed, 0 failed"
 FAIL_VERDICT = "fake-judge: 15 passed, 1 failed"
 FAIL_FINDING = "fake-judge finding: robust_shell in scripts/llmlint-judge.sh"
@@ -70,10 +69,6 @@ pytestmark = [
         reason="llmlint resolves the judge configuration this tier runs under; "
         "run 'just setup-llmlint'",
     ),
-    *WORKSPACE_INSTALL_MARKS,
-    # `just lint-llm-diff` reaches `scripts/nx.sh`, whose heal installs into the copy it
-    # runs in, which is the copy's own.
-    *TOOLCHAIN_WRITER_MARKS,
     # Copying the whole tree is this journey's premise, and the tree includes
     # its prose: this belongs to the whole-workspace tier by construction.
     pytest.mark.reads_docs,
@@ -184,7 +179,8 @@ def _run_fingerprint(workspace: Workspace, **overrides: str) -> subprocess.Compl
 @pytest.fixture
 def workspace(tmp_path: Path) -> Workspace:
     root = tmp_path / "checkout"
-    copy_checkout(root)
+    copy_working_tree(root)
+    shared = share_this_checkouts_install(root)
 
     # A plugin outside the tree, so `llmlint config` merges a real plugin off disk
     # the way the judge configuration fingerprint reads one.
@@ -206,9 +202,10 @@ def workspace(tmp_path: Path) -> Workspace:
     real_llmlint = shutil.which("llmlint")
     assert real_llmlint is not None
     _write_fake_judge(binaries)
-    pinned = root / ".venv/bin"
-    pinned.mkdir(parents=True)
-    (pinned / "llmlint").symlink_to(binaries / "llmlint")
+    # The copy's own link to the pinned judge, replaced by the recording one.
+    pinned = root / ".venv/bin" / "llmlint"
+    pinned.unlink(missing_ok=True)
+    pinned.symlink_to(binaries / "llmlint")
 
     judge_log = tmp_path / "judge-runs.log"
     judge_log.write_text("", encoding="utf-8")
@@ -220,11 +217,9 @@ def workspace(tmp_path: Path) -> Workspace:
         "XDG_CACHE_HOME": str(tmp_path / "cache"),
         "FAKE_LLMLINT_LOG": str(judge_log),
         "REAL_LLMLINT": real_llmlint,
-        # Reuse this repository's already-synced environment rather than building
-        # the throwaway copy as a distinct project.
-        "UV_NO_SYNC": "1",
-        "UV_PROJECT_ENVIRONMENT": str(ROOT / ".venv"),
+        **shared,
     }
+    env.pop("UV_PROJECT_ENVIRONMENT", None)
     workspace = Workspace(root=root, judge_log=judge_log, env=env)
     workspace._git("init", "-q")
     workspace.commit("checkout under test")

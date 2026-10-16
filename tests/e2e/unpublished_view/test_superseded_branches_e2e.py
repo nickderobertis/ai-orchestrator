@@ -36,7 +36,6 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 import pytest
-from nx_workspace import WORKSPACE_INSTALL_MARKS
 from unpublished_registry import BASE, ORPHAN_BRANCH, Registry, commit, git, seeded
 from waits import timeout as e2e_timeout
 
@@ -48,10 +47,6 @@ COUNTED, NOTHING_COUNTED = 7, 0
 #: `onevcs`'s retirement class for a branch a landed retry replaced that still differs.
 SUPERSEDED_WITH_CHANGES = "superseded-with-changes"
 
-#: A reader of the toolchain this checkout provisioned: every step here runs its tool
-#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
-#: `tests/e2e/nx_workspace.py` asks no xdist group of it.
-pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 #: The manager session the listing is read as; nothing here acknowledges anything.
 MANAGER = "manager-session-superseded"

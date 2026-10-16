@@ -59,14 +59,11 @@ from manager_landings import (
     watch,
     woken_until_ended,
 )
-from nx_workspace import WORKSPACE_INSTALL_MARKS
 from scratch_identity import GIT_IDENTITY
 from waits import timeout as e2e_timeout
 from waits import until
 
 from orchestrator.root import REPO_ROOT
-
-pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 
 @pytest.fixture

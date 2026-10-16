@@ -55,7 +55,6 @@ import github_board as remote
 import pytest
 from flow_engine_stand_in import UNDOUBLED, give_flow_engine
 from github_board import _GitHubFixture, _Operation
-from nx_workspace import WORKSPACE_INSTALL_MARKS
 from published_tools import ONETASKGRAPH_BIN
 from test_follow_ups_recipe_e2e import (
     HELD_PRIORITY,
@@ -84,13 +83,9 @@ from orchestrator import plan_store
 from orchestrator.plan_store import QualifiedTaskId
 from orchestrator.root import REPO_ROOT
 
-#: A reader of the toolchain this checkout provisioned: every step here runs its tool
-#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
-#: `tests/e2e/nx_workspace.py` asks no xdist group of it. The group is this module's own,
-#: for fixture sharing: `life` is module-scoped and drives the real recipe end to end, so
-#: spread across workers the module would build it once per worker.
+#: The group is this module's own, for fixture sharing: `life` is module-scoped and drives the real
+#: recipe end to end, so spread across workers the module would build it once per worker.
 pytestmark = [
-    *WORKSPACE_INSTALL_MARKS,
     pytest.mark.xdist_group("follow-ups-answer-comments-recipe"),
 ]
 

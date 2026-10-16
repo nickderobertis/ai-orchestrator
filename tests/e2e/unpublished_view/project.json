@@ -9,7 +9,6 @@
   ],
   "implicitDependencies": [
     "support-conftest",
-    "support-nx-workspace",
     "support-onejudge-bundle",
     "support-unpublished-registry",
     "support-waits"

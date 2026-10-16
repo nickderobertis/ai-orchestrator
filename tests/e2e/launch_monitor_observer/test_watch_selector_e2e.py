@@ -66,7 +66,6 @@ from typing import NamedTuple
 
 import pytest
 from fake_backend import AGENT_DELAY_ENV, ASK_QUESTION_ENV, ASK_RECORD_ENV, ASK_TIMEOUT_ENV
-from nx_workspace import WORKSPACE_INSTALL_MARKS
 from project_fixtures import project_from_plan
 
 # The launch environment and the shape of a candidate plan both have one source, and it
@@ -96,13 +95,8 @@ from watch_rule import rule
 
 ROOT = Path(__file__).resolve().parents[3]
 
-#: `reads_checkouts` for the reason the docstring gives, and a reader of this checkout's
-#: provisioned toolchain because the live journeys below launch a run and then poll `just`
-#: recipes while it holds; `tests/e2e/nx_workspace.py` says why that needs no xdist group.
-pytestmark = [
-    pytest.mark.reads_checkouts,
-    *WORKSPACE_INSTALL_MARKS,
-]
+#: `reads_checkouts` for the reason the docstring gives.
+pytestmark = [pytest.mark.reads_checkouts]
 
 #: What the dispatched worker asks its manager, through the real
 #: `scripts/ask-manager.sh`. The text is arbitrary; that a *blocking* surface exists and

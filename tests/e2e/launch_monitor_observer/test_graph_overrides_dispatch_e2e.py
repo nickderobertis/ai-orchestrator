@@ -42,19 +42,12 @@ from typing import Any, NamedTuple, cast
 
 import pytest
 from fake_backend import TURN_GATE_ENV, TURN_GATE_REACHED, TURN_GATE_RELEASED, WORKER_REPLY
-from nx_workspace import WORKSPACE_INSTALL_MARKS
 from project_fixtures import project_from_plan
 from test_orchestrate_launch_e2e import _environment as _launched_environment
 from waits import timeout as e2e_timeout
 from waits import until
 
 from orchestrator.root import REPO_ROOT
-
-#: Every launch here reads this checkout's provisioned toolchain through `just` recipes,
-#: which `tests/e2e/nx_workspace.py` declares as a reader and schedules nowhere. And
-#: the child config and edit envelope are read out of `docs/onejudge-integration.md`, which
-#: the project's key names.
-pytestmark = [*WORKSPACE_INSTALL_MARKS]
 
 DOC = REPO_ROOT / "docs" / "onejudge-integration.md"
 

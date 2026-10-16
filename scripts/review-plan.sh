@@ -24,6 +24,8 @@
 # reaches it untouched — runs end to end in tests/e2e/test_plan_review_e2e.py. What
 # remains are host-failure guards on the checkout layout.
 set -euo pipefail
+# Session setup provisions this checkout, so no `uv run` here syncs it, however it is run.
+export UV_NO_SYNC=1
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd) || {
     echo "review-plan: could not resolve the checkout this recipe was run from; run it from a checkout and retry" >&2

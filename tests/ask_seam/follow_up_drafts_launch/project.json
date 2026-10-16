@@ -12,7 +12,6 @@
     "support-fake-backend",
     "support-fake-codex",
     "support-follow-up-variables",
-    "support-nx-workspace",
     "support-plan-store-user-layer",
     "support-planner-channel",
     "support-project-fixtures",

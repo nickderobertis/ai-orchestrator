@@ -6,14 +6,13 @@
 # opened and read back, because checking a path and then operating on it again is two
 # lookups, and what answers the first is not what receives the second.
 #
-# Each lock holds two descriptors for the life of the sourcing shell: the directory,
-# re-bound to its own name once the lock is taken, and the lock file `flock` locks.
-# The first lock a shell takes holds 8 and 9 and a second holds 6 and 7, since closing
-# a descriptor releases the `flock` on it; a forced workspace install over a link into
-# another checkout's tree holds that tree's lock and its own at once. A third is
-# refused. A caller that needs its own descriptors stays off those four, and arms no
-# EXIT trap of its own: the fallback below releases its mutex directories from the
-# sourcing shell's one EXIT trap, and `trap` replaces rather than chains.
+# The lock holds two descriptors for the life of the sourcing shell: 8, the directory,
+# re-bound to its own name once the lock is taken, and 9, the lock file `flock` locks.
+# A shell takes one lock and a second is refused, since taking it on the same
+# descriptors would close them, and closing a descriptor releases the `flock` on it. A
+# caller that needs its own descriptors stays off those two, and arms no EXIT trap of
+# its own: the fallback below releases its mutex directory from the sourcing shell's one
+# EXIT trap, and `trap` replaces rather than chains.
 # `tests/test_install_lock_source.py` holds the installer to that.
 #
 # Strict mode is established here rather than inherited from the sourcing caller,
@@ -35,16 +34,12 @@ INSTALL_LOCK_POLLS=600
 #: every time, so it reaches this bound in well under a second and still refuses.
 INSTALL_LOCK_ABSENCES=3
 
-#: The caller and every fallback mutex taken, held outside the function so the EXIT trap
-#: that releases the mutexes can still name them once that function has returned.
+#: The caller and the fallback mutex taken, held outside the function so the EXIT trap
+#: that releases the mutex can still name it once that function has returned.
 INSTALL_LOCK_CALLER=
-INSTALL_LOCK_MUTEXES=()
-#: How many locks this shell holds, which is what picks the descriptor pair below.
-INSTALL_LOCK_HELD=0
-#: The most locks one shell can hold: the descriptor pairs are spelled out, because a
-#: redirection's descriptor is a literal in the bash 3.2 this file has to parse on —
-#: `exec {fd}<` is 4.1 — and two is what the forced install over a shared tree needs.
-INSTALL_LOCK_LIMIT=2
+INSTALL_LOCK_MUTEX=
+#: Whether this shell already holds the lock, which a second take is refused on.
+INSTALL_LOCK_HELD=false
 
 # What one `stat` reports, from whichever this platform has: `-c` is GNU and `-f` is
 # BSD/macOS. `-L` so a descriptor under /dev/fd is read as what it holds open.
@@ -58,13 +53,12 @@ install_lock_stat() {
 
 # Open `$2` for reading on descriptor `$1`, in the sourcing shell: `exec` with only a
 # redirection binds the caller's own descriptor table, and a function runs in it. Spelled
-# per descriptor because the number in a redirection is a literal, and the four here are
-# the whole of what `install_lock_take` hands out. Returns what the redirection did, so a
-# path that cannot be opened is a status the caller names rather than a silent death.
+# per descriptor because the number in a redirection is a literal in the bash 3.2 this
+# file has to parse on — `exec {fd}<` is 4.1 — and the two here are the whole of what
+# `install_lock_take` uses. Returns what the redirection did, so a path that cannot be
+# opened is a status the caller names rather than a silent death.
 install_lock_open() {
     case $1 in
-        6) exec 6<"$2" ;;
-        7) exec 7<"$2" ;;
         8) exec 8<"$2" ;;
         9) exec 9<"$2" ;;
         *)
@@ -74,14 +68,9 @@ install_lock_open() {
     esac
 }
 
-# Release every fallback mutex this shell took, in the EXIT trap the fallback arms.
-install_lock_release_mutexes() {
-    local mutex
-    # Never empty here: the trap that calls this is armed only after the first mutex
-    # is recorded, so the expansion is quoted whole and needs no empty-array guard.
-    for mutex in "${INSTALL_LOCK_MUTEXES[@]}"; do
-        rmdir "$mutex" 2>/dev/null || echo "$INSTALL_LOCK_CALLER: could not release the install lock ${mutex}; remove that directory, or the next install waits ${INSTALL_LOCK_WAIT_SECONDS}s for one nothing holds" >&2
-    done
+# Release the fallback mutex this shell took, in the EXIT trap the fallback arms.
+install_lock_release_mutex() {
+    rmdir "$INSTALL_LOCK_MUTEX" 2>/dev/null || echo "$INSTALL_LOCK_CALLER: could not release the install lock ${INSTALL_LOCK_MUTEX}; remove that directory, or the next install waits ${INSTALL_LOCK_WAIT_SECONDS}s for one nothing holds" >&2
 }
 
 # Take the install lock named `$3` under `$2`'s `.logs`, for the caller named `$1`.
@@ -97,22 +86,17 @@ install_lock_take() {
     local caller=${1:?install_lock_take: the name of the calling installer is required, so its diagnostics stay attributable; pass it as the first argument, the way scripts/workspace-install.sh passes workspace-install, then retry}
     local repo_root=${2:?install_lock_take: the checkout the lock lives in is required; pass its root as the second argument, then retry}
     local name=${3:?install_lock_take: the name of the lock file is required, so two installers of one checkout do not serialize on each other; pass it as the third argument, then retry}
-    local lock_dir="$repo_root/.logs" lock_file mutex dir_fd file_fd held held_mode opened opened_links polls absences
+    local lock_dir="$repo_root/.logs" lock_file mutex dir_fd=8 file_fd=9 held held_mode opened opened_links polls absences
     lock_file="$lock_dir/$name"
     mutex="$lock_file.d"
     INSTALL_LOCK_CALLER=$caller
 
-    # Which pair this lock is held on, decided by how many this shell already holds:
-    # taking a second lock on the first one's descriptors would close them, and closing
+    # Taking a second lock on the first one's descriptors would close them, and closing
     # the descriptor `flock` locked is what releases that lock.
-    case $INSTALL_LOCK_HELD in
-        0) dir_fd=8 file_fd=9 ;;
-        1) dir_fd=6 file_fd=7 ;;
-        *)
-            echo "$caller: this shell already holds $INSTALL_LOCK_HELD install locks and scripts/install-lock.sh holds at most $INSTALL_LOCK_LIMIT; a third is a defect in the caller rather than in the checkout, so report it" >&2
-            return 1
-            ;;
-    esac
+    if [[ $INSTALL_LOCK_HELD == true ]]; then
+        echo "$caller: this shell already holds the install lock and scripts/install-lock.sh holds one per shell; a second is a defect in the caller rather than in the checkout, so report it" >&2
+        return 1
+    fi
 
     if ! mkdir -m 700 "$lock_dir" 2>/dev/null; then
         # `mkdir` refuses an existing path outright, a symbolic link included rather than
@@ -306,11 +290,10 @@ install_lock_take() {
             polls=$((polls + 1))
         done
         # Held by the sourcing shell, so it is released when that shell ends however it ends.
-        # Recorded before the trap is armed, and the trap reads the record rather than
-        # this call's own path: a second lock taken in this shell is a second mutex the
-        # one trap has to release, and re-arming it would drop the first.
-        INSTALL_LOCK_MUTEXES[${#INSTALL_LOCK_MUTEXES[@]}]=$mutex
-        trap install_lock_release_mutexes EXIT
+        # Recorded before the trap is armed, since the trap reads the record once this
+        # function has returned.
+        INSTALL_LOCK_MUTEX=$mutex
+        trap install_lock_release_mutex EXIT
     fi
 
     # Both the lock file and the fallback mutex are created through `$lock_dir` again, and no
@@ -325,5 +308,5 @@ install_lock_take() {
         echo "$caller: '$lock_dir' was replaced while this wrapper was taking the install lock, so what it holds is not the lock a second install would wait on and provisioning now would race one; retry" >&2
         return 1
     fi
-    INSTALL_LOCK_HELD=$((INSTALL_LOCK_HELD + 1))
+    INSTALL_LOCK_HELD=true
 }

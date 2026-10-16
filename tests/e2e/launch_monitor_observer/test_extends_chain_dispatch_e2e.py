@@ -60,7 +60,6 @@ from typing import NamedTuple
 
 import pytest
 from fake_backend import AGENT_DELAY_ENV
-from nx_workspace import WORKSPACE_INSTALL_MARKS
 from project_fixtures import project_from_plan
 from served_recipe import serve, stop
 from test_orchestrate_launch_e2e import CandidatePlan, _node
@@ -69,11 +68,6 @@ from waits import timeout as e2e_timeout
 from waits import until
 
 from orchestrator.root import REPO_ROOT
-
-#: A reader of the toolchain this checkout provisioned: every step here runs its tool
-#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
-#: `tests/e2e/nx_workspace.py` asks no xdist group of it.
-pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 WORK_NODE = "work"
 

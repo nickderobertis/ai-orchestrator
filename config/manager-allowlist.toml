@@ -117,16 +117,16 @@ allowed_tools = [
     "Bash(onevcs session close:*)",
 
     # The `uv run` forms AGENTS.md tells a manager to run, and no interpreter-wide one.
-    "Bash(uv run python -m orchestrator.follow_up_tickets statuses)",
-    # llmlint: ignore-block[least_privilege_grants] `just follow-up`, `just follow-ups`, `just follow-ups-answer-comments`, `uv run onepipeline supersessions` and the `board-items`, `check-dispositions`, `check-responses` and `check-gathering` subcommands of `orchestrator.follow_up_tickets`: each suffix is only the run, board, file or filter the one verb names, and the verb bounds it — `follow-up` records one unverified draft against its run, `follow-ups` and `follow-ups-answer-comments` launch their verification through the engine's ledger, `supersessions` reads the named run's journal and with `--record` records only its superseded branches, and the four subcommands read or validate.
+    "Bash(uv run --no-sync python -m orchestrator.follow_up_tickets statuses)",
+    # llmlint: ignore-block[least_privilege_grants] `just follow-up`, `just follow-ups`, `just follow-ups-answer-comments`, `uv run --no-sync onepipeline supersessions` and the `board-items`, `check-dispositions`, `check-responses` and `check-gathering` subcommands of `orchestrator.follow_up_tickets`: each suffix is only the run, board, file or filter the one verb names, and the verb bounds it — `follow-up` records one unverified draft against its run, `follow-ups` and `follow-ups-answer-comments` launch their verification through the engine's ledger, `supersessions` reads the named run's journal and with `--record` records only its superseded branches, and the four subcommands read or validate.
     "Bash(just follow-up:*)",
     "Bash(just follow-ups:*)",
     "Bash(just follow-ups-answer-comments:*)",
-    "Bash(uv run onepipeline supersessions:*)",
-    "Bash(uv run python -m orchestrator.follow_up_tickets board-items:*)",
-    "Bash(uv run python -m orchestrator.follow_up_tickets check-dispositions:*)",
-    "Bash(uv run python -m orchestrator.follow_up_tickets check-responses:*)",
-    "Bash(uv run python -m orchestrator.follow_up_tickets check-gathering:*)",
+    "Bash(uv run --no-sync onepipeline supersessions:*)",
+    "Bash(uv run --no-sync python -m orchestrator.follow_up_tickets board-items:*)",
+    "Bash(uv run --no-sync python -m orchestrator.follow_up_tickets check-dispositions:*)",
+    "Bash(uv run --no-sync python -m orchestrator.follow_up_tickets check-responses:*)",
+    "Bash(uv run --no-sync python -m orchestrator.follow_up_tickets check-gathering:*)",
     # llmlint: ignore-end[least_privilege_grants]
 
     "Bash(git status)",

@@ -23,6 +23,8 @@
 # viewing command's whole product, and the resume command is the line an operator runs
 # it to obtain.
 set -euo pipefail
+# Session setup provisions this checkout, so no `uv run` here syncs it, however it is run.
+export UV_NO_SYNC=1
 
 # llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own directory stops being enterable between its launch and its first line; no journey can produce that without racing the filesystem the test itself runs on.
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || {

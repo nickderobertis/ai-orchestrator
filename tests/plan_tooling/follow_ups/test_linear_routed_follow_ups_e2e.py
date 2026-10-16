@@ -64,8 +64,12 @@ from github_board import (
     _Repository,
     _serving_board,
 )
-from linear_stand_in import provisioned, stand_in
-from nx_workspace import TOOLCHAIN_WRITER_MARKS, answering_this_checkouts_origin, copy_working_tree
+from linear_stand_in import stand_in
+from nx_workspace import (
+    answering_this_checkouts_origin,
+    copy_working_tree,
+    share_this_checkouts_install,
+)
 from project_fixtures import designed, graph_image, helper
 from waits import timeout as e2e_timeout
 
@@ -76,13 +80,8 @@ from orchestrator.plan_store import WRITABLE_PLUGIN
 from orchestrator.project_store import write_plan_project
 
 #: Building a copy of this checkout reads everything git tracks, which routes this module to
-#: the tier that reads this repository's prose; its one fixture runs on one worker; and it
-#: provisions that copy with `uv sync`, a toolchain writer confined to the copy.
-pytestmark = [
-    pytest.mark.reads_docs,
-    *TOOLCHAIN_WRITER_MARKS,
-    pytest.mark.xdist_group("linear-follow-ups"),
-]
+#: the tier that reads this repository's prose; and its one fixture runs on one worker.
+pytestmark = [pytest.mark.reads_docs, pytest.mark.xdist_group("linear-follow-ups")]
 
 #: The provider's stand-ins and the guard over every identity they cannot reach: the follow-up
 #: member's own, which refuses an untrusted directory the way codex does, and the pair a
@@ -138,6 +137,7 @@ INHERITED = (
     "CODEX_SESSION_ID",
     "FAKE_CODEX_HOLD_SECONDS",
     "VIRTUAL_ENV",
+    "UV_PROJECT_ENVIRONMENT",
     *follow_up_variables.all_names(),
     plan_root_variable.name(),
 )
@@ -598,8 +598,18 @@ class Life(NamedTuple):
     delivered_after: dict[str, object]
 
 
+class Routed(NamedTuple):
+    """The scratch root, the copy of this checkout, its Linear stand-in, and what every
+    command run in the copy carries to run on this checkout's install."""
+
+    tmp: Path
+    checkout: Path
+    linear: Path
+    shared: dict[str, str]
+
+
 @pytest.fixture(scope="module")
-def routed(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Path, Path, Path]]:
+def routed(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Routed]:
     """One copy of this checkout, its Linear stand-in, and its recording plan store."""
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
@@ -612,9 +622,9 @@ def routed(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Path, Pat
     linear.mkdir()
     # llmlint: ignore[e2e_not_mocked] This node's amended criteria require a `local-md` source to stand in for `hellopatient-followups`, because no check may reach the production Linear workspace; `tests/test_plan_source_roots.py` holds the tracked source to the Linear plugin's schema.  # noqa: E501 - a directive is one line, and its reason is longer than the limit
     stand_in(checkout, LINEAR, linear, copied=[tickets.Status.PROPOSED.value])
-    provisioned(checkout)
+    shared = share_this_checkouts_install(checkout)
     _recording(checkout)
-    yield tmp, checkout, linear
+    yield Routed(tmp, checkout, linear, shared)
 
 
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]  # noqa: E501 - a directive is one line, and the three rules it names run past the limit
@@ -629,13 +639,13 @@ def routed(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Path, Pat
 # `hellopatient-followups` as, because no check may reach the production workspace. The recipes,
 # engine, store, routing, follow-up tooling and every record read back are real.
 @pytest.fixture(scope="module")
-def life(routed: tuple[Path, Path, Path], oneharness_bin: str) -> Iterator[Life]:  # noqa: PLR0915 - one life, phase by phase
-    tmp, checkout, linear = routed
+def life(routed: Routed, oneharness_bin: str) -> Iterator[Life]:  # noqa: PLR0915 - one life, phase by phase
+    tmp, checkout, linear, shared = routed
     with (
         _serving_board(options=FOLLOWUPS_OPTIONS, number=FOLLOWUPS_PROJECT_NUMBER) as remote,
         pytest.MonkeyPatch.context() as patched,
     ):
-        environment = _environment(tmp, remote)
+        environment = {**_environment(tmp, remote), **shared}
         # This process reads each run's tickets back through the store, from the drafts root
         # the launches name.
         for name in follow_up_variables.all_names()[:2]:

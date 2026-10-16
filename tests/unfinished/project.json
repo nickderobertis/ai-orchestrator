@@ -10,7 +10,6 @@
   "implicitDependencies": [
     "support-budget-telemetry",
     "support-conftest",
-    "support-nx-workspace",
     "support-probe-run-root",
     "support-unpublished-registry",
     "support-waits"

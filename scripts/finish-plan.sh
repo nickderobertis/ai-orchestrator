@@ -85,6 +85,8 @@
 # only then breaking the filesystem or the toolchain under it, which is a journey about
 # `mkdir` and `uv` rather than about this flow.
 set -euo pipefail
+# Session setup provisions this checkout, so no `uv run` here syncs it, however it is run.
+export UV_NO_SYNC=1
 
 #: What the project this launch writes says about itself: it is the plan a *planning*
 #: run is producing, rather than a plan to be executed. That is the one exemption from
@@ -211,7 +213,7 @@ if not brief_what or not brief_why:
     sys.exit(f"{brief} states no ## What or no ## Why for the task to be composed from")
 variables = f"{resolve} | onetaskgraph template variables --template-loader -"
 budget_answers = "`predates_budgets`, `plan_budgets` and `budgets`"
-budget_command = f"uv run python -m orchestrator.plan_budgets {plan}"
+budget_command = f"uv run --no-sync python -m orchestrator.plan_budgets {plan}"
 budget_task = (
     f"The document\u2019s budget answers, {budget_answers}, are exactly the three values of "
     f"the JSON object `{budget_command}` prints, run in the checkout this dispatch works in: "
@@ -702,7 +704,7 @@ graph_mermaid="$graph_dir/plan-graph.mmd"
 graph_json="$graph_dir/plan-graph.json"
 # llmlint: ignore[tool_output_is_signal] The one line naming where the graph this flow read is kept: every refusal after it — a render, the rows, the hold on the written document — is a difference from those files, and they are what an operator opens to repair one.
 echo "finish-plan: the graph of $plan_project this flow reads is kept in $graph_dir" >&2
-graph_read="uv run onetaskgraph project graph $plan_project --group-by $unit_key"
+graph_read="uv run --no-sync onetaskgraph project graph $plan_project --group-by $unit_key"
 read_graph() {
     uv run onetaskgraph project graph "$plan_project" --format "$1" --group-by "$unit_key" >"$2" ||
         fail "the --format $1 read of the graph of $plan_project failed, for the reason above, so no design document was launched" \

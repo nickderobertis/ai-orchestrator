@@ -529,7 +529,8 @@ def design(scenario: Scenario, project: str) -> list[Node]:
     content = str(own["item"]["content"])
     answers = dict(scenario["design"])
     # The task names the command whose output the budget answers copy; run it, as a writer does.
-    (command,) = set(re.findall(r"`(uv run python -m orchestrator\.plan_budgets [^`]+)`", content))
+    named = r"`(uv run --no-sync python -m orchestrator\.plan_budgets [^`]+)`"
+    (command,) = set(re.findall(named, content))
     printed = subprocess.run(shlex.split(command), capture_output=True, text=True, check=True)
     answers.update(json.loads(printed.stdout))
     # And the rows, units and graph image the task quotes, copied as a writer copies them.

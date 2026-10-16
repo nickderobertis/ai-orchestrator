@@ -71,7 +71,7 @@ from fake_backend import (
 from nx_workspace import (
     answering_this_checkouts_origin,
     copy_working_tree,
-    rewrites_workspace_toolchain,
+    share_this_checkouts_install,
 )
 from project_fixtures import helper, no_budgets
 from published_tools import ONETASKGRAPH_BIN
@@ -1118,28 +1118,6 @@ def _the_board_is_a_directory(checkout: Path, board: Path) -> None:
     configuration.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _provisioned(checkout: Path) -> None:
-    """Give a copied checkout the toolchain a `SessionStart` hook would have given it.
-
-    The published CLIs and plan-store SDK are project dependencies, so `uv sync --locked`
-    resolves exactly the releases this checkout pins, including the plan-store console
-    script installed by the SDK's exact CLI dependency.
-    """
-    environment = dict(os.environ)
-    for named in ("UV_NO_SYNC", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
-        environment.pop(named, None)
-    synced = subprocess.run(
-        ["uv", "sync", "--locked"],
-        cwd=checkout,
-        env=environment,
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(600),
-        check=False,
-    )
-    assert synced.returncode == 0, f"the copied checkout could not be provisioned:\n{synced.stderr}"
-
-
 @pytest.fixture(scope="module")
 def default_board(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Defaulted:
     """Drive one whole `just plan` flow that names no destination at all.
@@ -1170,7 +1148,7 @@ def default_board(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str)
     # is: a `local-md` source canonicalizes its root when it is built.
     board.mkdir()
     _the_board_is_a_directory(checkout, board)
-    _provisioned(checkout)
+    shared = share_this_checkouts_install(checkout)
 
     unique = f"test-{os.getpid()}-plan-flow-default"
     stored = Stored(
@@ -1187,6 +1165,7 @@ def default_board(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str)
     environment = _environment(
         tmp_path, stored, destination=DEFAULT_BOARD, declared_at=None, checkout=checkout
     )
+    environment.update(shared)
     environment["REAL_ONEHARNESS_BIN"] = oneharness_bin
     environment[PROMPT_LOG_ENV] = str(tmp_path / "turns.jsonl")
     environment["ONEPIPELINE_RUNS_DIR"] = str(tmp_path / "runs")
@@ -1225,7 +1204,6 @@ def default_board(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str)
             _just("stop", ended, environment=environment, seconds=60, checkout=checkout)
 
 
-@rewrites_workspace_toolchain
 @COPIES_THE_TRACKED_TREE
 @pytest.mark.xdist_group("plan-flow")
 def test_a_flow_that_names_no_destination_copies_into_the_board_this_repository_plans_against(
@@ -1249,7 +1227,6 @@ def test_a_flow_that_names_no_destination_copies_into_the_board_this_repository_
     ], f"the flow left {landed} on the board it copies into when it is told none"
 
 
-@rewrites_workspace_toolchain
 @COPIES_THE_TRACKED_TREE
 @pytest.mark.xdist_group("plan-flow")
 def test_a_flow_that_names_no_destination_reports_where_that_board_holds_both(

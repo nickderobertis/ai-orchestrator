@@ -68,7 +68,6 @@ from driven_run import (
     store,
     waited_for,
 )
-from nx_workspace import WORKSPACE_INSTALL_MARKS
 from waits import deadline
 
 #: The session these launches run under, stated rather than inherited: this suite runs
@@ -107,11 +106,6 @@ CLOSED_BY_A_PERSON = "cancelled"
 #: scripts one. The verdict is scripted, not the review: the reviewer, its schema and the
 #: bus's refusal of an unjudged envelope all run for real.
 PASSING_REVIEW = json.dumps([json.dumps({"passes": True, "findings": []})])
-
-#: A reader of the toolchain this checkout provisioned: every step here runs its tool
-#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
-#: `tests/e2e/nx_workspace.py` asks no xdist group of it.
-pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 
 @pytest.fixture

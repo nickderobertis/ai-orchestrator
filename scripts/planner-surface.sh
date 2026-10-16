@@ -8,6 +8,8 @@
 # no text at all, reads the message from this recipe's own stdin, which is how an
 # agent pipes a long update in.
 set -euo pipefail
+# Session setup provisions this checkout, so no `uv run` here syncs it, however it is run.
+export UV_NO_SYNC=1
 
 run="${1:-}"
 [ -n "$run" ] || {

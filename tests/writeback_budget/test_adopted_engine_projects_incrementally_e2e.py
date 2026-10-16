@@ -32,7 +32,6 @@ from driven_run import (
     task,
     waited_for,
 )
-from nx_workspace import WORKSPACE_INSTALL_MARKS
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
@@ -72,11 +71,6 @@ EDITED_TITLE = "title: retitled by a person on the board"
 #: it, and that turn goes to the stand-in codex the bench already puts at the `oneharness`
 #: seam, which answers no verdict unless a journey scripts one.
 PASSING_REVIEW = json.dumps([json.dumps({"passes": True, "findings": []})])
-
-#: A reader of the toolchain this checkout provisioned: every step here runs its tool
-#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
-#: `tests/e2e/nx_workspace.py` asks no xdist group of it.
-pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 
 class DestinationTask(NamedTuple):

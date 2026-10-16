@@ -39,14 +39,11 @@ from pathlib import Path
 from typing import NamedTuple, NewType
 
 import pytest
-from nx_workspace import WORKSPACE_INSTALL_MARKS
 from published_tools import PUBLISHED_TOOLS
 from served_recipe import serve, stop
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
-
-pytestmark = [*WORKSPACE_INSTALL_MARKS]
 
 #: The one source for the address the read API answers on, which the recipe reads
 #: too — restating it here would let this journey pass while `just dag-ui` and

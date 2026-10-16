@@ -29,7 +29,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from nx_workspace import WORKSPACE_INSTALL_MARKS
 from unpublished_registry import Registry, Session, seeded
 from waits import timeout as e2e_timeout
 
@@ -38,10 +37,6 @@ from orchestrator.root import REPO_ROOT
 #: `just unpublished`'s exit statuses — the engine's own — for a counted row and for none.
 COUNTED, NOTHING_COUNTED = 7, 0
 
-#: A reader of the toolchain this checkout provisioned: every step here runs its tool
-#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
-#: `tests/e2e/nx_workspace.py` asks no xdist group of it.
-pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 #: The manager session whose run left the branch, and the one the stop verdict is asked for.
 MANAGER = "manager-session-held-publication"

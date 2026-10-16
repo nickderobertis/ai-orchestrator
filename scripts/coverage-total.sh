@@ -12,6 +12,8 @@
 # makes `coverage report` exit 2) must never turn a green gate red. The floor
 # itself is enforced by the `test` target, not here.
 set -euo pipefail
+# Session setup provisions this checkout, so no `uv run` here syncs it, however it is run.
+export UV_NO_SYNC=1
 
 root=${1:-}
 if [[ -z $root ]]; then

@@ -43,7 +43,11 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 import pytest
-from nx_workspace import TOOLCHAIN_WRITER_MARKS, answering_this_checkouts_origin, copy_checkout
+from nx_workspace import (
+    answering_this_checkouts_origin,
+    copy_working_tree,
+    share_this_checkouts_install,
+)
 from test_finish_plan_recipe_e2e import (
     COPIES_THE_ROWS,
     DESIGN_RUN_SUFFIX,
@@ -53,6 +57,7 @@ from test_finish_plan_recipe_e2e import (
     OK,
     PASSES,
     Bench,
+    Copy,
     Drafted,
     RunId,
     StoredTask,
@@ -61,18 +66,11 @@ from test_finish_plan_recipe_e2e import (
     _draft,
     _staged_answers,
 )
-from test_plan_flow_e2e import _provisioned
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
 
-# A writer: its module fixture provisions the copied checkout with `uv sync --locked`
-# (`test_plan_flow_e2e._provisioned`), into the copy's own `.venv` and never this one's.
-pytestmark = [
-    *TOOLCHAIN_WRITER_MARKS,
-    pytest.mark.reads_docs,
-    pytest.mark.xdist_group("finish-plan-diagram"),
-]
+pytestmark = [pytest.mark.reads_docs, pytest.mark.xdist_group("finish-plan-diagram")]
 
 #: The stand-in `start` the copied checkout's engine hands that one verb to.
 STAND_IN = Path(__file__).resolve().parent / "finish_plan_writer_engine.py"
@@ -104,8 +102,9 @@ def _declared_page_width() -> int:
 PAGE_WIDTH = _declared_page_width()
 
 
-def _checkout(tmp_path: Path) -> Path:
-    """A provisioned copy of this checkout whose engine doubles `start` and nothing else.
+def _checkout(tmp_path: Path) -> Copy:
+    """A copy of this checkout whose engine doubles `start` and nothing else.
+
 
     The wrapper is a shell script handing every call to the stand-in on its second line,
     followed by the real binary's bytes, which bash never reads: `just check-plan` reads the
@@ -113,9 +112,10 @@ def _checkout(tmp_path: Path) -> Path:
     """
     checkout = tmp_path / "checkout"
     checkout.mkdir()
-    copy_checkout(checkout)
+    copy_working_tree(checkout)
     answering_this_checkouts_origin(checkout)
-    _provisioned(checkout)
+    shared = share_this_checkouts_install(checkout)
+    # The copy's own link to the engine, replaced by the double; this checkout's stays.
     engine = checkout / ".venv" / "bin" / "onepipeline"
     real = engine.with_name("onepipeline-real")
     engine.rename(real)
@@ -125,7 +125,7 @@ def _checkout(tmp_path: Path) -> Path:
         + real.read_bytes()
     )
     engine.chmod(0o755)
-    return checkout
+    return Copy(checkout, shared)
 
 
 def _writes_a_document_showing_a_diagram(bench: Bench, drafted: Drafted, checkout: Path) -> Path:
@@ -191,8 +191,6 @@ def _writes_a_document_showing_a_diagram(bench: Bench, drafted: Drafted, checkou
             "FAKE_ENGINE_STORE": str(bin_dir / "onetaskgraph"),
             "FAKE_ENGINE_WRITER_TURN": str(keyed),
             "FAKE_ENGINE_LOG": str(bench.tmp_path / "starts.jsonl"),
-            # The copy is provisioned once; a sync now would reinstall the doubled engine.
-            "UV_NO_SYNC": "1",
             # Git may reach no remote: a read that would wait on the network refuses instead.
             "GIT_ALLOW_PROTOCOL": "file",
         }
@@ -241,8 +239,9 @@ def diagrammed(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) ->
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
     tmp_path = tmp_path_factory.mktemp("finish-plan-diagram")
-    checkout = _checkout(tmp_path)
+    checkout, shared = _checkout(tmp_path)
     bench = _bench(tmp_path, oneharness_bin, PASSES)
+    bench.environment.update(shared)
     drafted = _draft("finish-plan-diagram")
     png = _writes_a_document_showing_a_diagram(bench, drafted, checkout)
     brief = _brief(tmp_path, drafted, "diagram-listing")

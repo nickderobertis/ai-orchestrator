@@ -150,7 +150,7 @@ _ACKNOWLEDGE = (
 _RELEASE_STATUS = "the adopted `onevcs` has the first `release status` that decides such a landing"
 _POOL = "`onevcs pool status <repo>` reads them"
 _SESSION_CLOSE = "`onevcs session close <session>` closes a session you opened"
-_SUPERSESSIONS = "`uv run onepipeline supersessions <run-id> --record`, run once by hand"
+_SUPERSESSIONS = "`uv run --no-sync onepipeline supersessions <run-id> --record`, run once by hand"
 _TICKETS = (
     "`python -m orchestrator.follow_up_tickets statuses` prints the vocabulary every agent reads"
 )
@@ -343,32 +343,34 @@ INVOCATIONS: tuple[Invocation, ...] = (
         "just follow-ups-answer-comments --from /home/me/follow-ups/feedback/.snapshots/x",
         _COMMENTS,
     ),
-    _allow("supersessions", "uv run onepipeline supersessions {run} --record", _SUPERSESSIONS),
+    _allow(
+        "supersessions", "uv run --no-sync onepipeline supersessions {run} --record", _SUPERSESSIONS
+    ),
     _allow(
         "tickets-statuses",
-        "uv run python -m orchestrator.follow_up_tickets statuses",
+        "uv run --no-sync python -m orchestrator.follow_up_tickets statuses",
         _TICKETS,
         codex=CODEX_EXACT,
     ),
     _allow(
         "tickets-board-items",
-        "uv run python -m orchestrator.follow_up_tickets board-items --board followups "
+        "uv run --no-sync python -m orchestrator.follow_up_tickets board-items --board followups "
         "--search cursor",
         _BOARD_ITEMS,
     ),
     _allow(
         "tickets-dispositions",
-        "uv run python -m orchestrator.follow_up_tickets check-dispositions {run}",
+        "uv run --no-sync python -m orchestrator.follow_up_tickets check-dispositions {run}",
         _CHECK_DISPOSITIONS,
     ),
     _allow(
         "tickets-responses",
-        "uv run python -m orchestrator.follow_up_tickets check-responses {run}",
+        "uv run --no-sync python -m orchestrator.follow_up_tickets check-responses {run}",
         _CHECK_RESPONSES,
     ),
     _allow(
         "tickets-gathering",
-        "uv run python -m orchestrator.follow_up_tickets check-gathering {run}",
+        "uv run --no-sync python -m orchestrator.follow_up_tickets check-gathering {run}",
         _GATHERING,
     ),
     _allow("log-cat", "cat {runs}/{run}/driver.log", _LOG_READ, codex=CODEX_READ),

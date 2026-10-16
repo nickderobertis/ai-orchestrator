@@ -56,7 +56,7 @@ import budget_telemetry
 import plan_fixture_source
 import pytest
 import short_state
-from nx_workspace import OFFLINE_INSTALLS, TOOLCHAIN_WRITER_MARKS, answering_this_checkouts_origin
+from nx_workspace import answering_this_checkouts_origin, share_this_checkouts_install
 from project_fixtures import helper, no_budgets
 from run_snapshot import is_staging_name
 from scratch_identity import PLANNING_FLOW_ORIGIN, seeded
@@ -64,9 +64,8 @@ from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
 
-#: A writer: the copy's `.venv` is synced into the copy, never this checkout's. One worker,
-#: because the flow, its watches and the guard's verdicts are one sequence.
-pytestmark = [*TOOLCHAIN_WRITER_MARKS, pytest.mark.xdist_group("flow-stop-hook")]
+#: One worker, because the flow, its watches and the guard's verdicts are one sequence.
+pytestmark = [pytest.mark.xdist_group("flow-stop-hook")]
 
 #: The double, installed over the copy's engine, and the real engine this checkout pins.
 STAND_IN = REPO_ROOT / "tests" / "plan_tooling" / "plan_flow" / "spike_flow_engine.py"
@@ -205,6 +204,8 @@ class Copy(NamedTuple):
     """The copied checkout the flow runs in, its engine doubled."""
 
     checkout: Path
+    #: What every command run in the copy carries to run on this checkout's install.
+    shared: dict[str, str]
 
 
 #: A run's id, and a flow's: two namespaces the engine keeps apart.
@@ -259,20 +260,8 @@ def copy(tmp_path_factory: pytest.TempPathFactory) -> Copy:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target, follow_symlinks=False)
     answering_this_checkouts_origin(checkout)
-    provided = ("UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV", "UV_NO_SYNC")
-    synced = subprocess.run(
-        ["uv", "sync", "--locked"],
-        cwd=checkout,
-        env={
-            **{name: value for name, value in os.environ.items() if name not in provided},
-            **OFFLINE_INSTALLS,
-        },
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(600),
-        check=False,
-    )
-    assert synced.returncode == 0, f"the copy could not be provisioned:\n{synced.stderr}"
+    shared = share_this_checkouts_install(checkout)
+    # The copy's own link to the engine, replaced by the double; this checkout's stays.
     engine = checkout / ".venv" / "bin" / "onepipeline"
     real = engine.with_name("onepipeline-real")
     engine.rename(real)
@@ -283,7 +272,7 @@ def copy(tmp_path_factory: pytest.TempPathFactory) -> Copy:
         f'#!/usr/bin/env bash\nexec {sys.executable} {STAND_IN} "$@"\n'.encode() + real.read_bytes()
     )
     engine.chmod(0o755)
-    return Copy(checkout)
+    return Copy(checkout, shared)
 
 
 def _flow(copy: Copy, tmp_path: Path) -> Flow:
@@ -311,7 +300,7 @@ def _flow(copy: Copy, tmp_path: Path) -> Flow:
         "ONEPIPELINE_RUNS_DIR": str(tmp_path / "runs"),
         "ONEPIPELINE_WAKE_BUDGET": str(WAKE_BUDGET),
         "XDG_STATE_HOME": str(short_state.state_home(tmp_path)),
-        "UV_NO_SYNC": "1",
+        **copy.shared,
         # llmlint: ignore[e2e_not_mocked] Only the paid reviewer's provider is substituted.
         "ONEHARNESS_BIN_CODEX": str(FAKE_CODEX),
         # llmlint: ignore[e2e_not_mocked] Only the paid reviewer's provider is substituted.

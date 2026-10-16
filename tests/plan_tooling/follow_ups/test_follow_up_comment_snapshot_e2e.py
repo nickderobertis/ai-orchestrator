@@ -51,17 +51,12 @@ from typing import Literal
 import github_board as remote
 import pytest
 from github_board import _GitHubFixture, _Operation
-from nx_workspace import WORKSPACE_INSTALL_MARKS
 from published_tools import ONETASKGRAPH_BIN
 
 from orchestrator import follow_up_comments as comments
 from orchestrator import follow_up_tickets as tickets
 from orchestrator import plan_store
 from orchestrator.root import REPO_ROOT
-
-#: A reader of the toolchain this checkout provisioned — the locked plan store every pass runs —
-#: which no test here writes; each test serves a loopback board of its own.
-pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 HOST = socket.gethostname()
 RUN = remote.PROPOSED_RUN

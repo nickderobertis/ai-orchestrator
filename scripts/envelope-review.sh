@@ -16,6 +16,8 @@
 # below exit 2 for that reason: a checkout this validator cannot read itself out of is
 # no verdict on the envelope.
 set -euo pipefail
+# Session setup provisions this checkout, so no `uv run` here syncs it, however it is run.
+export UV_NO_SYNC=1
 
 # llmlint: ignore[changed_behavior_has_e2e] Reachable only when this script's own directory stops being enterable between its launch and its first line; no journey can produce that without racing the filesystem the test itself runs on.
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd) || {

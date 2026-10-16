@@ -10,6 +10,8 @@
 # went stale whenever a sibling renamed a check and failed every branch here at the end
 # of its gate, and `onevcs` reporting the checks itself is what retired it.
 set -euo pipefail
+# Session setup provisions this checkout, so no `uv run` here syncs it, however it is run.
+export UV_NO_SYNC=1
 
 published=()
 for argument in "$@"; do

@@ -19,7 +19,6 @@ from collections.abc import Collection
 from pathlib import Path
 
 from published_tools import ONETASKGRAPH_BIN
-from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
 
@@ -91,20 +90,3 @@ def stand_in(checkout: Path, source: str, root: Path, copied: Collection[str] = 
     ]
     # llmlint: ignore-end[e2e_not_mocked]
     configuration.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def provisioned(checkout: Path) -> None:
-    """Give the copied checkout the locked toolchain a session start would give it."""
-    environment = dict(os.environ)
-    for named in ("UV_NO_SYNC", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
-        environment.pop(named, None)
-    synced = subprocess.run(
-        ["uv", "sync", "--locked"],  # noqa: S607 - `uv` from the search path, as session setup runs it
-        cwd=checkout,
-        env=environment,
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(600),
-        check=False,
-    )
-    assert synced.returncode == 0, f"the copied checkout could not be provisioned:\n{synced.stderr}"

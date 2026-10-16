@@ -12,7 +12,6 @@
     "support-fake-backend",
     "support-fake-codex",
     "support-flow-engine-stand-in",
-    "support-nx-workspace",
     "support-plan-root-variable",
     "support-planner-channel",
     "support-project-fixtures",

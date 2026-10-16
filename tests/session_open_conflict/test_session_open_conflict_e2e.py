@@ -41,16 +41,10 @@ import pytest
 import short_state
 from fake_backend import JUDGE_CONFIG_NAME, MEMBER_OF_CONFIG, PROMPT_LOG_ENV, RUN_ON_MARKER_ENV
 from harness_indirections import established_indirections
-from nx_workspace import WORKSPACE_INSTALL_MARKS
 from project_fixtures import helper, project_from_plan
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
-
-#: A reader of the toolchain this checkout provisioned: every step here runs its tool
-#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
-#: `tests/e2e/nx_workspace.py` asks no xdist group of it.
-pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 #: The paid model's stand-ins, and the guard covering the identities neither reaches.
 FAKE_BACKEND = helper("fake_backend.py")

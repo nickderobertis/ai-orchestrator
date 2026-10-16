@@ -51,6 +51,8 @@
 # tests/e2e/workspace_copies/test_llmlint_cache_e2e.py. What remains are host-failure guards on the
 # checkout layout; simulating a broken filesystem is the guard's job, not a journey's.
 set -euo pipefail
+# Session setup provisions this checkout, so no `uv run` here syncs it, however it is run.
+export UV_NO_SYNC=1
 
 # Every refusal below ends this task within milliseconds of printing it, and Nx
 # 23.1.0's run-commands, when it has no terminal to run the task in (the gate, a

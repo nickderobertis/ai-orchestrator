@@ -25,18 +25,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from nx_workspace import TOOLCHAIN_WRITER_MARKS, WORKSPACE_INSTALL_MARKS, isolated_python_root
+from nx_workspace import OFFLINE_INSTALLS, isolated_python_root
 from provisioning import EMPTY_MANIFEST, PROVISIONING_SCRIPTS
 from published_tools import PUBLISHED_TOOLS
 from waits import timeout as e2e_timeout
 from waits import until
 
 from orchestrator.root import REPO_ROOT
-
-#: Every session start here runs the real session setup, which provisions the `.venv` of
-#: the fixture repository it runs in and installs `uv` tools into the journey's own tool
-#: directories: a writer, whose fixture repository's toolchain is its own.
-pytestmark = [*WORKSPACE_INSTALL_MARKS, *TOOLCHAIN_WRITER_MARKS]
 
 ADOPTED_ONEJUDGE_VERSION = (
     (REPO_ROOT / "config" / "onejudge.version").read_text(encoding="utf-8").strip()
@@ -654,9 +649,24 @@ def private_environment(tmp_path_factory: pytest.TempPathFactory) -> Path:
     The journey that runs the real verbs links its fixture repository's `.venv` here
     rather than at this checkout's, because the session setup it runs syncs that
     environment whenever a pin is not met, and this checkout's is the one every other
-    worker's recipes read.
+    worker's recipes read. One offline `uv sync --locked` builds it, from the caches this
+    checkout's own install filled; any environment the caller pointed uv at is dropped,
+    or the copy would be synced over it instead.
     """
     root = isolated_python_root(tmp_path_factory.mktemp("host-sweep-environment") / "checkout")
+    provided = ("UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV", "UV_NO_SYNC")
+    synced = subprocess.run(
+        ["uv", "sync", "--locked", "--project", str(root)],
+        cwd=root,
+        env={
+            **{name: value for name, value in os.environ.items() if name not in provided},
+            **OFFLINE_INSTALLS,
+        },
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    assert synced.returncode == 0, synced.stdout + synced.stderr
     return root / ".venv"
 
 

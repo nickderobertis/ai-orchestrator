@@ -35,7 +35,7 @@ from waits import timeout as e2e_timeout
 from orchestrator import run_reading, spike_brief
 from orchestrator.root import REPO_ROOT
 
-pytestmark = [pytest.mark.toolchain_writer, pytest.mark.xdist_group("spike-brief-planning")]
+pytestmark = [pytest.mark.xdist_group("spike-brief-planning")]
 
 
 def wait(path: Path, process: subprocess.Popen[str], log: Path) -> None:

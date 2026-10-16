@@ -12,7 +12,6 @@
     "support-fake-backend",
     "support-fake-codex",
     "support-no-paid-provider",
-    "support-nx-workspace",
     "support-planner-channel",
     "support-project-fixtures",
     "support-short-state",

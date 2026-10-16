@@ -39,7 +39,6 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
-from nx_workspace import WORKSPACE_INSTALL_MARKS
 from project_fixtures import project_from_plan
 from test_adopted_engine_reads_an_adopted_run_e2e import _just, _until
 from test_orchestrate_launch_e2e import (
@@ -55,11 +54,6 @@ from waits import timeout as e2e_timeout
 from orchestrator.plan_review import Verdict
 from orchestrator.root import REPO_ROOT
 from orchestrator.run_reading import Decided, Decision, RunId, decide
-
-#: A reader of the toolchain this checkout provisioned: every step here runs its tool
-#: through a `just` recipe or `uv run`, and no writer touches that toolchain, so
-#: `tests/e2e/nx_workspace.py` asks no xdist group of it.
-pytestmark = list(WORKSPACE_INSTALL_MARKS)
 
 #: A launching session this journey states rather than inherits, so the run is this
 #: session's own to adopt and `just stop`.

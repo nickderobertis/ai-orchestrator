@@ -24,6 +24,8 @@
 # outside one. Extra arguments reach `oneagentgraph smoke` (`--dir` chooses where to
 # spend its turn). Everything this script creates is removed on the way out.
 set -euo pipefail
+# Session setup provisions this checkout, so no `uv run` here syncs it, however it is run.
+export UV_NO_SYNC=1
 
 script_dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 repo_root="$(dirname -- "$script_dir")"

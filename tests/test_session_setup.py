@@ -9,14 +9,9 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pytest
-from nx_workspace import TOOLCHAIN_WRITER_MARKS
 from published_tools import PUBLISHED_TOOLS
 
 from orchestrator.root import REPO_ROOT
-
-#: Every test here but the two pin readers sources or runs `scripts/session-setup.sh`, in
-#: a fixture checkout of its own: a toolchain writer.
-pytestmark = list(TOOLCHAIN_WRITER_MARKS)
 
 ADOPTED_ONEJUDGE_VERSION = (
     (REPO_ROOT / "config" / "onejudge.version").read_text(encoding="utf-8").strip()

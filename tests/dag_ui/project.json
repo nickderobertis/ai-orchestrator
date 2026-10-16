@@ -9,7 +9,6 @@
   ],
   "implicitDependencies": [
     "support-conftest",
-    "support-nx-workspace",
     "support-published-tools",
     "support-served-recipe",
     "support-waits"
