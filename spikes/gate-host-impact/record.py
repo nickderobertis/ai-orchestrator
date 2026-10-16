@@ -772,6 +772,20 @@ def safe_remove(path: Path, root: Path) -> str:
     if not resolved.exists():
         return "absent"
     shutil.rmtree(resolved, ignore_errors=True)
+    if resolved.exists():
+        # A test may leave a directory it made unreadable (mode 000): open it up, then retry.
+        for dirpath, dirnames, _files in os.walk(resolved):
+            for name in dirnames:
+                try:
+                    os.chmod(os.path.join(dirpath, name), 0o700)
+                except OSError:
+                    pass
+        os.chmod(resolved, 0o700)
+        for _ in range(3):
+            subprocess.run(["chmod", "-R", "u+rwx", str(resolved)], stderr=subprocess.DEVNULL, check=False)
+            shutil.rmtree(resolved, ignore_errors=True)
+            if not resolved.exists():
+                return "removed after opening unreadable directories"
     return "removed" if not resolved.exists() else "remained"
 
 
@@ -781,11 +795,15 @@ def main() -> int:
     parser.add_argument("--base", default="main")
     parser.add_argument("--out", default=str(CHECKOUT / "spikes/gate-host-impact/summary.json"))
     parser.add_argument("--gate-cmd", help="replace `just gate` (harness self-test only)")
+    parser.add_argument("--root-parent", help="where the gate's root is made (default $ONEPIPELINE_NODE_SCRATCH_DIR); created and, when empty, removed afterwards")
     parser.add_argument("--prior", action="append", default=[], help="an earlier attempt's summary, carried into this one's prior_attempts")
     args = parser.parse_args()
 
     node_scratch = Path(os.environ["ONEPIPELINE_NODE_SCRATCH_DIR"])
-    root = Path(tempfile.mkdtemp(prefix="gate-host-impact-", dir=node_scratch))
+    root_parent = Path(args.root_parent) if args.root_parent else node_scratch
+    made_parent = not root_parent.exists()
+    root_parent.mkdir(parents=True, exist_ok=True)
+    root = Path(tempfile.mkdtemp(prefix="gate-host-impact-", dir=root_parent))
     tmp, scratch = root / "tmp", root / "scratch"
     tmp.mkdir()
     scratch.mkdir()
@@ -857,6 +875,12 @@ def main() -> int:
     host_disp = [int(h["dispatches"]) for h in samplers.host if h["dispatches"] is not None]  # type: ignore[call-overload]
 
     cleanup = {"root": str(root), "root_removed": safe_remove(root, root), "registered": {str(p): safe_remove(p, root) for p in registered}}
+    if made_parent:
+        try:
+            root_parent.rmdir()
+            cleanup["root_parent"] = f"{root_parent} removed"
+        except OSError as exc:
+            cleanup["root_parent"] = f"{root_parent} remained: {exc}"
 
     summary = {
         "schema": "gate-host-impact-spike/1",
@@ -865,6 +889,7 @@ def main() -> int:
         "command": command,
         "environment": {
             "root": str(root),
+            "root_parent": str(root_parent),
             "TMPDIR": str(tmp),
             "ORCHESTRATOR_GATE_SCRATCH": str(scratch),
             "NX_SKIP_NX_CACHE": "true",
