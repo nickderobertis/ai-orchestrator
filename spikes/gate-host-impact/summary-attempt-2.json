@@ -1,0 +1,867 @@
+{
+ "schema": "gate-host-impact-spike/1",
+ "measured_at": "2026-10-16T17:11:45Z",
+ "checkout_head": "583c28042c99437301cbc5c739f5da9dfd13cb0f",
+ "command": [
+  "just",
+  "gate",
+  "origin",
+  "main"
+ ],
+ "environment": {
+  "root": "/home/nick/projects/ai-orchestrator/runs/test-host-impact-brief-spikes/scratch/2027129-0/gate-host-impact-6dtlrzug",
+  "TMPDIR": "/home/nick/projects/ai-orchestrator/runs/test-host-impact-brief-spikes/scratch/2027129-0/gate-host-impact-6dtlrzug/tmp",
+  "ORCHESTRATOR_GATE_SCRATCH": "/home/nick/projects/ai-orchestrator/runs/test-host-impact-brief-spikes/scratch/2027129-0/gate-host-impact-6dtlrzug/scratch",
+  "NX_SKIP_NX_CACHE": "true",
+  "unset_for_the_gate": [
+   "ONEPIPELINE_NODE_SCRATCH_DIR"
+  ],
+  "subreaper": true
+ },
+ "complete": true,
+ "stopped_by": null,
+ "gate": {
+  "exit_status": 1,
+  "wall_clock_seconds": 86.1,
+  "processes_started_lower_bound": 23,
+  "processes_counting": "distinct (pid, start time) pairs in the recorder's descendant tree, sampled every 1 s; a process living under 1 s between samples is missed, so this is a lower bound",
+  "max_concurrent_processes": 21,
+  "log": "/home/nick/projects/ai-orchestrator/runs/test-host-impact-brief-spikes/scratch/2027129-0/gate-host-impact-6dtlrzug.gate.log",
+  "log_tail": [
+   "     spikes/gate-host-impact/record.py:802: Type ignore lacks a necessity reason.",
+   "     spikes/gate-host-impact/record.py:822: Type ignore lacks a necessity reason.",
+   "     spikes/gate-host-impact/record.py:823: Type ignore lacks a necessity reason.",
+   "     spikes/gate-host-impact/record.py:824: Type ignore lacks a necessity reason.",
+   "     spikes/gate-host-impact/record.py:825: Type ignore lacks a necessity reason.",
+   "     spikes/gate-host-impact/record.py:855: Type ignore lacks a necessity reason.",
+   "     spikes/gate-host-impact/record.py:864: Type ignore lacks a necessity reason.",
+   "SKIP test_tiers_split_by_project_not_by_marker (no files matched)",
+   "N/A tests_assert_real_behavior (not relevant)",
+   "     rationale: tests/short_state.py defines a fixture and allocation helper, not tests.",
+   "N/A tests_hold_no_nonfunctional_thresholds (not relevant)",
+   "     rationale: The short_state.py addition records a scratch path, not timing, size, count, or timeout data.",
+   "SKIP tests_mirror_real_usage (no files matched)",
+   "FAIL tool_output_is_signal",
+   "     rationale: measure.sh:21 reports an unset scratch root without telling the caller to set it; nx.sh:61-64 lets filesystem failures print diagnostics without remediation.",
+   "     spikes/gate-host-impact/measure.sh:21: Tell the caller to set ONEPIPELINE_NODE_SCRATCH_DIR to an existing writable scratch directory and retry.",
+   "     scripts/nx.sh:61-64: Scratch creation, registration, and cleanup failures lack a concrete recovery action.",
+   "N/A work_goes_through_command_surface (not relevant)",
+   "     rationale: The nx.sh addition only registers socket scratch storage; it adds no build, test, lint, format, or setup invocation.",
+   "",
+   "56 rules: 5 passed, 9 failed, 28 skipped, 1 ignored, 13 not relevant",
+   "",
+   "# oneharness: agent default judge 1 [changed_behavior_has_e2e, least_privilege_grants, new_projects_keep_the_graph_uniform, comments_earn_their_place, names_match_behavior, suppressions_justified, no_hardcoded_secrets, new_code_lands_in_a_project, contracts_have_one_source_or_a_drift_gate, code_lands_in_the_domain_that_owns_it, structural_pattern_matching, modern_domain_modeling, protocol_based_seams, no_injection_from_untrusted_input]",
+   "$ /home/nick/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/scripts/llmlint-oneharness.sh run --system-file /home/nick/projects/ai-orchestrator/runs/test-host-impact-brief-spikes/scratch/2027129-0/gate-host-impact-6dtlrzug/tmp/llmlint-system-r7vaYm.txt --prompt 'Evaluate each rule against the target files and respond with the structured verdict object.' --schema /home/nick/projects/ai-orchestrator/runs/test-host-impact-brief-spikes/scratch/2027129-0/gate-host-impact-6dtlrzug/tmp/llmlint-schema-S5NXqX.json --cwd /home/nick/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree --timeout 600 --mode read-only --require-available --format json --compact",
+   "exit: 0",
+   "result:",
+   "{\"schema_version\":\"0.11\",\"oneharness_version\":\"0.22.0\",\"prompt\":\"Evaluate each rule against the target files and respond with the structured verdict object.\",\"model\":null,\"models\":null,\"resume\":null,\"fork\":false,\"session\":null,\"permission_mode\":\"read-only\",\"bypass_permissions\":false,\"dry_run\":false,\"schema\":{\"additionalProperties\":false,\"properties\":{\"changed_behavior_has_e2e\":{\"additionalProperties\":false,\"if\":{\"properties\":{\"relevant\":{\"const\":true}},\"required\":[\"relevant\"]},\"properties\":{\"holds\":{\"type\":\"boolean\"},\"name\":{\"const\":\"changed_behavior_has_e2e\",\"type\":\"string\"},\"rationale\":{\"description\":\"Terse, evidence-citing justification, written before `relevant`/`holds`: why the rule is (or isn't) relevant, and \u2014 when relevant \u2014 the verdict.\",\"minLength\":1,\"type\":\"string\"},\"relevant\":{\"description\":\"Whether this rule applies to the change. Decide before the verdict; when false, omit `holds`/`violations`.\",\"type\":\"boolean\"},\"violations\":{\"items\":{\"additionalProperties\":false,\"properties\":{\"end_line\":{\"minimum\":1,\"type\":\"integer\"},\"file\":{\"type\":\"string\"},\"line\":{\"minimum\":1,\"type\":\"integer\"},\"message\":{\"type\":\"string\"}},\"required\":[\"file\",\"line\"],\"type\":\"object\"},\"type\":\"array\"}},\"required\":[\"name\",\"rationale\",\"relevant\"],\"then\":{\"required\":[\"holds\"]},\"type\":\"object\"},\"code_lands_in_the_domain_that_owns_it\":{\"additionalProperties\":false,\"if\":{\"properties\":{\"relevant\":{\"const\":true}},\"required\":[\"relevant\"]},\"properties\":{\"holds\":{\"type\":\"boolean\"},\"name\":{\"const\":\"code_lands_in_the_domain_that_owns_it\",\"type\":\"string\"},\"rationale\":{\"description\":\"Terse, evidence-citing justification, written before `relevant`/`holds`: why the rule is (or isn't) relevant, and \u2014 when relevant \u2014 the verdict.\",\"minLength\":1,\"type\":\"string\"},\"relevant\":{\"description\":\"Whether this rule applies to the change. Decide before the verdict; when false, omit `holds`/`violations`.\",\"type\":\"boolean\"},\"violations\":{\"items\":{\"additionalProperties\":false,\"properties\":{\"end_line\":{\"minimum\":1,\"type\":\"integer\"},\"file\":{\"type\":\"string\"},\"line\":{\"minimum\":1,\"type\":\"integer\"},\"message\":{\"type\":\"string\"}},\"required\":[\"file\",\"line\"],\"type\":\"object\"},\"type\":\"array\"}},\"required\":[\"name\",\"rationale\",\"relevant\"],\"then\":{\"required\":[\"holds\"]},\"type\":\"object\"},\"comments_earn_their_place\":{\"additionalProperties\":false,\"if\":{\"properties\":{\"relevant\":{\"const\":true}},\"required\":[\"relevant\"]},\"properties\":{\"holds\":{\"type\":\"boolean\"},\"name\":{\"const\":\"comments_earn_their_place\",\"type\":\"string\"},\"rationale\":{\"description\":\"Terse, evidence-citing justification, written before `relevant`/`holds`: why the rule is (or isn't) relevant, and \u2014 when relevant \u2014 the verdict.\",\"minLength\":1,\"type\":\"string\"},\"relevant\":{\"description\":\"Whether this rule applies to the change. Decide before the verdict; when false, omit `holds`/`violations`.\",\"type\":\"boolean\"},\"violations\":{\"items\":{\"additionalProperties\":false,\"properties\":{\"end_line\":{\"minimum\":1,\"type\":\"integer\"},\"file\":{\"type\":\"string\"},\"line\":{\"minimum\":1,\"type\":\"integer\"},\"message\":{\"type\":\"string\"}},\"required\":[\"file\",\"line\"],\"type\":\"object\"},\"type\":\"array\"}},\"required\":[\"name\",\"rationale\",\"relevant\"],\"then\":{\"required\":[\"holds\"]},\"type\":\"object\"},\"contracts_have_one_source_or_a_drift_gate\":{\"additionalProperties\":false,\"if\":{\"properties\":{\"relevant\":{\"const\":true}},\"required\":[\"relevant\"]},\"properties\":{\"holds\":{\"type\":\"boolean\"},\"name\":{\"const\":\"contracts_have_one_source_or_a_drift_gate\",\"type\":\"string\"},\"rationale\":{\"description\":\"Terse, evidence-citing justification, written before `relevant`/`holds`: why the rule is (or isn't) relevant, and \u2014 when relevant \u2014 the verdict.\",\"minLength\":1,\"type\":\"string\"},\"relevant\":{\"description\":\"Whether this rule applies to the change. Decide before the verdict; when false, omit `holds`/`violations`.\",\"type\":\"boolean\"},\"violations\":{\"items\":{\"additionalProperties\":false,\"properties\":{\"end_line\":{\"minimum\":1,\"type\":\"integer\"},\"file\":{\"type\":\"string\"},\"line\":{\"minimum\":1,\"type\":\"integer\"},\"message\":{\"type\":\"string\"}},\"type\":\"object\"},\"type\":\"array\"}},\"required\":[\"name\",\"rationale\",\"relevant\"],\"then\":{\"required\":[\"holds\"]},\"type\":\"object\"},\"least_privilege_grants\":{\"additionalProperties\":false,\"if\":{\"properties\":{\"relevant\":{\"const\":true}},\"required\":[\"relevant\"]},\"properties\":{\"holds\":{\"type\":\"boolean\"},\"name\":{\"const\":\"least_privilege_grants\",\"type\":\"string\"},\"rationale\":{\"description\":\"Terse, evidence-citing justification, written before `relevant`/`holds`: why the rule is (or isn't) relevant, and \u2014 when relevant \u2014 the verdict.\",\"minLength\":1,\"type\":\"string\"},\"relevant\":{\"description\":\"Whether this rule applies to the change. Decide before the verdict; when false, omit `holds`/`violations`.\",\"type\":\"boolean\"},\"violations\":{\"items\":{\"additionalProperties\":false,\"properties\":{\"end_line\":{\"minimum\":1,\"type\":\"integer\"},\"file\":{\"type\":\"string\"},\"line\":{\"minimum\":1,\"type\":\"integer\"},\"message\":{\"type\":\"string\"}},\"required\":[\"file\",\"line\"],\"type\":\"object\"},\"type\":\"array\"}},\"required\":[\"name\",\"rationale\",\"relevant\"],\"then\":{\"required\":[\"holds\"]},\"type\":\"object\"},\"modern_domain_modeling\":{\"additionalProperties\":false,\"if\":{\"properties\":{\"relevant\":{\"const\":true}},\"required\":[\"relevant\"]},\"properties\":{\"holds\":{\"type\":\"boolean\"},\"name\":{\"const\":\"modern_domain_modeling\",\"type\":\"string\"},\"rationale\":{\"description\":\"Terse, evidence-citing justification, written before `relevant`/`holds`: why the rule is (or isn't) relevant, and \u2014 when relevant \u2014 the verdict.\",\"minLength\":1,\"type\":\"string\"},\"relevant\":{\"description\":\"Whether this rule applies to the change. Decide before the verdict; when false, omit `holds`/`violations`.\",\"type\":\"boolean\"},\"violations\":{\"items\":{\"additionalProperties\":false,\"properties\":{\"end_line\":{\"minimum\":1,\"type\":\"integer\"},\"file\":{\"type\":\"string\"},\"line\":{\"minimum\":1,\"type\":\"integer\"},\"message\":{\"type\":\"string\"}},\"required\":[\"file\",\"line\"],\"type\":\"object\"},\"type\":\"array\"}},\"required\":[\"name\",\"rationale\",\"relevant\"],\"then\":{\"required\":[\"holds\"]},\"type\":\"object\"},\"names_match_behavior\":{\"additionalProperties\":false,\"if\":{\"properties\":{\"relevant\":{\"const\":true}},\"required\":[\"relevant\"]},\"properties\":{\"holds\":{\"type\":\"boolean\"},\"name\":{\"const\":\"names_match_behavior\",\"type\":\"string\"},\"rationale\":{\"description\":\"Terse, evidence-citing justification, written before `relevant`/`holds`: why the rule is (or isn't) relevant, and \u2014 when relevant \u2014 the verdict.\",\"minLength\":1,\"type\":\"string\"},\"relevant\":{\"description\":\"Whether this rule applies to the change. Decide before the verdict; when false, omit `holds`/`violations`.\",\"type\":\"boolean\"},\"violations\":{\"items\":{\"additionalProperties\":false,\"properties\":{\"end_line\":{\"minimum\":1,\"type\":\"integer\"},\"file\":{\"type\":\"string\"},\"line\":{\"minimum\":1,\"type\":\"integer\"},\"message\":{\"type\":\"string\"}},\"required\":[\"file\",\"line\"],\"type\":\"object\"},\"type\":\"array\"}},\"required\":[\"name\",\"rationale\",\"relevant\"],\"then\":{\"required\":[\"holds\"]},\"type\":\"object\"},\"new_code_lands_in_a_project\":{\"additionalProperties\":false,\"if\":{\"properties\":{\"relevant\":{\"const\":true}},\"required\":[\"relevant\"]},\"properties\":{\"holds\":{\"type\":\"boolean\"},\"name\":{\"const\":\"new_code_lands_in_a_project\",\"type\":\"string\"},\"rationale\":{\"description\":\"Terse, evidence-citing justification, written before `relevant`/`holds`: why the rule is (or isn't) relevant, and \u2014 when relevant \u2014 the verdict.\",\"minLength\":1,\"type\":\"string\"},\"relevant\":{\"description\":\"Whether this rule applies to the change. Decide before the verdict; when false, omit `holds`/`violations`.\",\"type\":\"boolean\"},\"violations\":{\"items\":{\"additionalProperties\":false,\"properties\":{\"end_line\":{\"minimum\":1,\"type\":\"integer\"},\"file\":{\"type\":\"string\"},\"line\":{\"minimum\":1,\"type\":\"integer\"},\"message\":{\"type\":\"string\"}},\"type\":\"object\"},\"type\":\"array\"}},\"required\":[\"name\",\"rationale\",\"relevant\"],\"then\":{\"required\":[\"holds\"]},\"type\":\"object\"},\"new_projects_keep_the_graph_uniform\":{\"additionalProperties\":false,\"if\":{\"properties\":{\"relevant\":{\"const\":true}},\"required\":[\"relevant\"]},\"properties\":{\"holds\":{\"type\":\"boolean\"},\"name\":{\"const\":\"new_projects_keep_the_graph_uniform\",\"type\":\"string\"},\"rationale\":{\"description\":\"Terse, evidence-citing justification, written before `relevant`/`holds`: why the rule is (or isn't) relevant, and \u2014 when relevant \u2014 the verdict.\",\"minLength\":1,\"type\":\"string\"},\"relevant\":{\"description\":\"Whether this rule applies to the change. Decide before the verdict; when false, omit `holds`/`violations`.\",\"type\":\"boolean\"},\"violations\":{\"items\":{\"additionalProperties\":false,\"properties\":{\"end_line\":{\"minimum\":1,\"type\":\"integer\"},\"file\":{\"type\":\"string\"},\"line\":{\"minimum\":1,\"type\":\"integer\"},\"message\":{\"type\":\"string\"}},\"type\":\"object\"},\"type\":\"array\"}},\"required\":[\"name\",\"rationale\",\"relevant\"],\"then\":{\"required\":[\"holds\"]},\"type\":\"object\"},\"no_hardcoded_secrets\":{\"additionalProperties\":false,\"if\":{\"properties\":{\"relevant\":{\"const\":true}},\"required\":[\"relevant\"]},\"properties\":{\"holds\":{\"type\":\"boolean\"},\"name\":{\"const\":\"no_hardcoded_secrets\",\"type\":\"string\"},\"rationale\":{\"description\":\"Terse, evidence-citing justification, written before `relevant`/`holds`: why the rule is (or isn't) relevant, and \u2014 when relevant \u2014 the verdict.\",\"minLength\":1,\"type\":\"string\"},\"relevant\":{\"description\":\"Whether this rule applies to the change. Decide before the verdict; when false, omit `holds`/`violations`.\",\"type\":\"boolean\"},\"violations\":{\"items\":{\"additionalProperties\":false,\"properties\":{\"end_line\":{\"minimum\":1,\"type\":\"integer\"},\"file\":{\"type\":\"string\"},\"line\":{\"minimum\":1,\"type\":\"integer\"},\"message\":{\"type\":\"string\"}},\"required\":[\"file\",\"line\"],\"type\":\"object\"},\"type\":\"array\"}},\"required\":[\"name\",\"rationale\",\"relevant\"],\"then\":{\"required\":[\"holds\"]},\"type\":\"object\"},\"no_injection_from_untrusted_input\":{\"additionalProperties\":false,\"if\":{\"properties\":{\"relevant\":{\"const\":true}},\"required\":[\"relevant\"]},\"properties\":{\"holds\":{\"type\":\"boolean\"},\"name\":{\"const\":\"no_injection_from_untrusted_input\",\"type\":\"string\"},\"rationale\":{\"description\":\"Terse, evidence-citing justification, written before `relevant`/`holds`: why the rule is (or isn't) relevant, and \u2014 when relevant \u2014 the verdict.\",\"minLength\":1,\"type\":\"string\"},\"relevant\":{\"description\":\"Whether this rule applies to the change. Decide before the verdict; when false, omit `holds`/`violations`.\",\"type\":\"boolean\"},\"violations\":{\"items\":{\"additionalProperties\":false,\"properties\":{\"end_line\":{\"minimum\":1,\"type\":\"integer\"},\"file\":{\"type\":\"string\"},\"line\":{\"minimum\":1,\"type\":\"integer\"},\"message\":{\"type\":\"string\"}},\"required\":[\"file\",\"line\"],\"type\":\"object\"},\"type\":\"array\"}},\"required\":[\"name\",\"rationale\",\"relevant\"],\"then\":{\"required\":[\"holds\"]},\"type\":\"object\"},\"protocol_based_seams\":{\"additionalProperties\":false,\"if\":{\"properties\":{\"relevant\":{\"const\":true}},\"required\":[\"relevant\"]},\"properties\":{\"holds\":{\"type\":\"boolean\"},\"name\":{\"const\":\"protocol_based_seams\",\"type\":\"string\"},\"rationale\":{\"description\":\"Terse, evidence-citing justification, written before `relevant`/`holds`: why the rule is (or isn't) relevant, and \u2014 when relevant \u2014 the verdict.\",\"minLength\":1,\"type\":\"string\"},\"relevant\":{\"description\":\"Whether this rule applies to the change. Decide before the verdict; when false, omit `holds`/`violations`.\",\"type\":\"boolean\"},\"violations\":{\"items\":{\"additionalProperties\":false,\"properties\":{\"end_line\":{\"minimum\":1,\"type\":\"integer\"},\"file\":{\"type\":\"string\"},\"line\":{\"minimum\":1,\"type\":\"integer\"},\"message\":{\"type\":\"string\"}},\"required\":[\"file\",\"line\"],\"type\":\"object\"},\"type\":\"array\"}},\"required\":[\"name\",\"rationale\",\"relevant\"],\"then\":{\"required\":[\"holds\"]},\"type\":\"object\"},\"structural_pattern_matching\":{\"additionalProperties\":false,\"if\":{\"properties\":{\"relevant\":{\"const\":true}},\"required\":[\"relevant\"]},\"properties\":{\"holds\":{\"type\":\"boolean\"},\"name\":{\"const\":\"structural_pattern_matching\",\"type\":\"string\"},\"rationale\":{\"description\":\"Terse, evidence-citing justification, written before `relevant`/`holds`: why the rule is (or isn't) relevant, and \u2014 when relevant \u2014 the verdict.\",\"minLength\":1,\"type\":\"string\"},\"relevant\":{\"description\":\"Whether this rule applies to the change. Decide before the verdict; when false, omit `holds`/`violations`.\",\"type\":\"boolean\"},\"violations\":{\"items\":{\"additionalProperties\":false,\"properties\":{\"end_line\":{\"minimum\":1,\"type\":\"integer\"},\"file\":{\"type\":\"string\"},\"line\":{\"minimum\":1,\"type\":\"integer\"},\"message\":{\"type\":\"string\"}},\"required\":[\"file\",\"line\"],\"type\":\"object\"},\"type\":\"array\"}},\"required\":[\"name\",\"rationale\",\"relevant\"],\"then\":{\"required\":[\"holds\"]},\"type\":\"object\"},\"suppressions_justified\":{\"additionalProperties\":false,\"if\":{\"properties\":{\"relevant\":{\"const\":true}},\"required\":[\"relevant\"]},\"properties\":{\"holds\":{\"type\":\"boolean\"},\"name\":{\"const\":\"suppressions_justified\",\"type\":\"string\"},\"rationale\":{\"description\":\"Terse, evidence-citing justification, written before `relevant`/`holds`: why the rule is (or isn't) relevant, and \u2014 when relevant \u2014 the verdict.\",\"minLength\":1,\"type\":\"string\"},\"relevant\":{\"description\":\"Whether this rule applies to the change. Decide before the verdict; when false, omit `holds`/`violations`.\",\"type\":\"boolean\"},\"violations\":{\"items\":{\"additionalProperties\":false,\"properties\":{\"end_line\":{\"minimum\":1,\"type\":\"integer\"},\"file\":{\"type\":\"string\"},\"line\":{\"minimum\":1,\"type\":\"integer\"},\"message\":{\"type\":\"string\"}},\"required\":[\"file\",\"line\"],\"type\":\"object\"},\"type\":\"array\"}},\"required\":[\"name\",\"rationale\",\"relevant\"],\"then\":{\"required\":[\"holds\"]},\"type\":\"object\"}},\"required\":[\"changed_behavior_has_e2e\",\"least_privilege_grants\",\"new_projects_keep_the_graph_uniform\",\"comments_earn_their_place\",\"names_match_behavior\",\"suppressions_justified\",\"no_hardcoded_secrets\",\"new_code_lands_in_a_project\",\"contracts_have_one_source_or_a_drift_gate\",\"code_lands_in_the_domain_that_owns_it\",\"structural_pattern_matching\",\"modern_domain_modeling\",\"protocol_based_seams\",\"no_injection_from_untrusted_input\"],\"type\":\"object\"},\"schema_max_retries\":2,\"batch\":null,\"fallback\":{\"ran\":\"codex:primary\",\"fell_through\":[],\"stopped_without_work\":false},\"mock_rules\":null,\"spy_file\":null,\"history_file\":\"/home/nick/.local/state/oneharness/history/home-nick-.onevcs-workspaces-github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4-pool-1-worktree/evaluate-each-rule-against-the-target-20261016T171151Z-3362329.jsonl\",\"config_files\":[\"/home/nick/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/oneharness.identities.toml\",\"/home/nick/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/oneharness.llmlint.toml\",\"environment\"],\"control\":null,\"results\":[{\"harness\":\"codex\",\"variant\":\"primary\",\"harness_id\":\"codex:primary\",\"bin\":\"codex\",\"available\":true,\"status\":\"ok\",\"prompt\":null,\"model\":\"gpt-6.1-sol\",\"observed_model\":null,\"exit_code\":0,\"duration_ms\":78723,\"telemetry\":{\"source\":\"provider_measured\",\"started_at\":\"2026-10-16T17:11:51.647Z\",\"finished_at\":\"2026-10-16T17:13:10.371Z\",\"model_ms\":76760,\"tool_ms\":33,\"time_to_first_token_ms\":5147},\"command\":[\"codex\",\"exec\",\"--sandbox\",\"read-only\",\"--model\",\"gpt-6.1-sol\",\"--json\",\"-\",\"-c\",\"sandbox_permissions=[\\\"disk-full-read-access\\\",\\\"network-full-access\\\"]\",\"-c\",\"features.apps=false\"],\"output_format\":\"json\",\"text\":\"{\\n  \\\"changed_behavior_has_e2e\\\": {\\n    \\\"name\\\": \\\"changed_behavior_has_e2e\\\",\\n    \\\"rationale\\\": \\\"No tests reference the recorder or scratch-registration protocol. The captured failed gate run supplies evidence, but no assertions cover attribution, measurement, cleanup, recovery, or registration.\\\",\\n    \\\"relevant\\\": true,\\n    \\\"holds\\\": false,\\n    \\\"violations\\\": [\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":94,\\\"end_line\\\":192,\\\"message\\\":\\\"Process discovery, sampler exclusion, orphan attribution, and credential-redacted process reporting lack integration assertions.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":198,\\\"end_line\\\":275,\\\"message\\\":\\\"Scratch registration reads, allocated-disk measurement, and leftover accounting lack integration assertions.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":404,\\\"end_line\\\":548,\\\"message\\\":\\\"Writer classification, escape reporting, producer attribution, and grouped inventory output lack assertions proving their results.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":554,\\\"end_line\\\":646,\\\"message\\\":\\\"Sampling cadence, disk-floor detection, host readings, process counts, and orphan reaping lack integration coverage.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":649,\\\"end_line\\\":679,\\\"message\\\":\\\"Failure extraction, socket-error detection, and comparison reruns lack integration coverage, including timeout and failed-rerun paths.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":682,\\\"end_line\\\":743,\\\"message\\\":\\\"Graceful exit, TERM/KILL escalation, zombie reaping, and filesystem cleanup safeguards lack integration coverage.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":746,\\\"end_line\\\":888,\\\"message\\\":\\\"Gate environment isolation, disk-floor interruption, prior-summary ingestion, and persisted report contents lack integration assertions.\\\"},\\n      {\\\"file\\\":\\\"tests/short_state.py\\\",\\\"line\\\":65,\\\"end_line\\\":67,\\\"message\\\":\\\"No integration assertion verifies scratch registration when enabled or its interaction with fixture cleanup.\\\"}\\n    ]\\n  },\\n  \\\"least_privilege_grants\\\": {\\n    \\\"name\\\":\\\"least_privilege_grants\\\",\\n    \\\"rationale\\\":\\\"The changes declare no permission grants, token scopes, roles, or command allowlists.\\\",\\n    \\\"relevant\\\":false\\n  },\\n  \\\"new_projects_keep_the_graph_uniform\\\": {\\n    \\\"name\\\":\\\"new_projects_keep_the_graph_uniform\\\",\\n    \\\"rationale\\\":\\\"No target file declares a new Nx project.\\\",\\n    \\\"relevant\\\":false\\n  },\\n  \\\"comments_earn_their_place\\\": {\\n    \\\"name\\\":\\\"comments_earn_their_place\\\",\\n    \\\"rationale\\\":\\\"record.py:67,195,279,551 contain decorative section dividers; measure.sh:8 records future implementation history rather than a constraint.\\\",\\n    \\\"relevant\\\":true,\\n    \\\"holds\\\":false,\\n    \\\"violations\\\":[\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":67,\\\"message\\\":\\\"Decorative process-tree section divider.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":195,\\\"message\\\":\\\"Decorative disk section divider.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":279,\\\"message\\\":\\\"Decorative code-search section divider.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":551,\\\"message\\\":\\\"Decorative run section divider.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/measure.sh\\\",\\\"line\\\":8,\\\"message\\\":\\\"The future task that grows the prototype is session/planning history, not useful code guidance.\\\"}\\n    ]\\n  },\\n  \\\"names_match_behavior\\\": {\\n    \\\"name\\\":\\\"names_match_behavior\\\",\\n    \\\"rationale\\\":\\\"record.py:736 names deletion safe_remove and accepts root, but ignores root and permits arbitrary unrelated directories outside a short denylist.\\\",\\n    \\\"relevant\\\":true,\\n    \\\"holds\\\":false,\\n    \\\"violations\\\":[\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":736,\\\"end_line\\\":743,\\\"message\\\":\\\"safe_remove overclaims safety: root is unused and registered paths need not be owned scratch directories before recursive deletion.\\\"}\\n    ]\\n  },\\n  \\\"suppressions_justified\\\": {\\n    \\\"name\\\":\\\"suppressions_justified\\\",\\n    \\\"rationale\\\":\\\"record.py has unexplained suppressions at 38,530\u2013532,542,545\u2013546,802,822\u2013825,855,864.\\\",\\n    \\\"relevant\\\":true,\\n    \\\"holds\\\":false,\\n    \\\"violations\\\":[\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":38,\\\"message\\\":\\\"E402 suppression lacks a brief necessity reason.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":530,\\\"message\\\":\\\"Type ignore lacks a necessity reason.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":531,\\\"message\\\":\\\"Type ignore lacks a necessity reason.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":532,\\\"message\\\":\\\"Type ignore lacks a necessity reason.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":542,\\\"message\\\":\\\"Type ignore lacks a necessity reason.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":545,\\\"message\\\":\\\"Type ignore lacks a necessity reason.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":546,\\\"message\\\":\\\"Type ignore lacks a necessity reason.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":802,\\\"message\\\":\\\"Type ignore lacks a necessity reason.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":822,\\\"message\\\":\\\"Type ignore lacks a necessity reason.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":823,\\\"message\\\":\\\"Type ignore lacks a necessity reason.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":824,\\\"message\\\":\\\"Type ignore lacks a necessity reason.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":825,\\\"message\\\":\\\"Type ignore lacks a necessity reason.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":855,\\\"message\\\":\\\"Type ignore lacks a necessity reason.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":864,\\\"message\\\":\\\"Type ignore lacks a necessity reason.\\\"}\\n    ]\\n  },\\n  \\\"no_hardcoded_secrets\\\": {\\n    \\\"name\\\":\\\"no_hardcoded_secrets\\\",\\n    \\\"rationale\\\":\\\"record.py obtains credential values through secret_values() from inherited and descendant environments; no credential literals are embedded.\\\",\\n    \\\"relevant\\\":true,\\n    \\\"holds\\\":true,\\n    \\\"violations\\\":[]\\n  },\\n  \\\"new_code_lands_in_a_project\\\": {\\n    \\\"name\\\":\\\"new_code_lands_in_a_project\\\",\\n    \\\"rationale\\\":\\\"The root project.json declares workspace, whose project root covers the new spikes/gate-host-impact scripts.\\\",\\n    \\\"relevant\\\":true,\\n    \\\"holds\\\":true,\\n    \\\"violations\\\":[]\\n  },\\n  \\\"contracts_have_one_source_or_a_drift_gate\\\": {\\n    \\\"name\\\":\\\"contracts_have_one_source_or_a_drift_gate\\\",\\n    \\\"rationale\\\":\\\"scripts/nx.sh:60\u201362, tests/short_state.py:65\u201367, and record.py:198\u2013213 independently spell the scratch-registration protocol without reconciliation; record.py:348\u2013400 independently freezes other modules' containment policies without a drift check.\\\",\\n    \\\"relevant\\\":true,\\n    \\\"holds\\\":false,\\n    \\\"violations\\\":[\\n      {\\\"file\\\":\\\"scripts/nx.sh\\\",\\\"line\\\":60,\\\"end_line\\\":62,\\\"message\\\":\\\"The registry environment name and absolute-path file format are independently restated without a shared implementation or drift gate.\\\"},\\n      {\\\"file\\\":\\\"tests/short_state.py\\\",\\\"line\\\":65,\\\"end_line\\\":67,\\\"message\\\":\\\"The registry environment name and absolute-path file format are independently restated without a shared implementation or drift gate.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":198,\\\"end_line\\\":213,\\\"message\\\":\\\"The registry reader assumes the independently implemented writers' on-disk format without reconciliation.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":348,\\\"end_line\\\":400,\\\"message\\\":\\\"CURATED hardcodes other modules' directory-selection and containment policies; no check detects changes that invalidate these classifications.\\\"}\\n    ]\\n  },\\n  \\\"code_lands_in_the_domain_that_owns_it\\\": {\\n    \\\"name\\\":\\\"code_lands_in_the_domain_that_owns_it\\\",\\n    \\\"rationale\\\":\\\"The new recorder helpers serve the gate-host-impact experiment and reside together under spikes/gate-host-impact; no central cross-domain registry or shared model package is introduced.\\\",\\n    \\\"relevant\\\":true,\\n    \\\"holds\\\":true,\\n    \\\"violations\\\":[]\\n  },\\n  \\\"structural_pattern_matching\\\": {\\n    \\\"name\\\":\\\"structural_pattern_matching\\\",\\n    \\\"rationale\\\":\\\"record.py:409\u2013432 repeatedly dispatches on kind using equality checks; match cases would group the kind-specific guards and results directly.\\\",\\n    \\\"relevant\\\":true,\\n    \\\"holds\\\":false,\\n    \\\"violations\\\":[\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":409,\\\"end_line\\\":432,\\\"message\\\":\\\"Replace repeated kind comparisons with match/case, retaining the per-kind guards inside their cases.\\\"}\\n    ]\\n  },\\n  \\\"modern_domain_modeling\\\": {\\n    \\\"name\\\":\\\"modern_domain_modeling\\\",\\n    \\\"rationale\\\":\\\"record.py represents process stats (94), process descriptions (153), disk results (216,245), search rules/classifications (337,348,404), findings (458), inventory groups (527), samples (584,623), failures (654), stopping results (684), prior summaries (723), and final reports (828\u2013830) as positional tuples, heterogeneous dictionaries, or string statuses.\\\",\\n    \\\"relevant\\\":true,\\n    \\\"holds\\\":false,\\n    \\\"violations\\\":[\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":94,\\\"message\\\":\\\"Use a named process-stat model instead of a four-position tuple accessed by numeric indices.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":153,\\\"end_line\\\":176,\\\"message\\\":\\\"Process descriptions have a stable heterogeneous schema suited to a typed model.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":216,\\\"message\\\":\\\"Disk measurements combine total, per-path usage, and duration in an unnamed positional tuple.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":245,\\\"message\\\":\\\"Allocated-entry counts and bytes should use named result fields.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":337,\\\"end_line\\\":345,\\\"message\\\":\\\"Search rules use positional kind/regex pairs and string kinds instead of a typed rule model.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":348,\\\"end_line\\\":401,\\\"message\\\":\\\"Curated classifications use positional status/reason tuples and string statuses instead of typed classifications.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":404,\\\"end_line\\\":433,\\\"message\\\":\\\"Classification results return stringly typed status/reason tuples.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":458,\\\"end_line\\\":466,\\\"message\\\":\\\"Search findings have a stable schema but are constructed as heterogeneous dictionaries.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":525,\\\"end_line\\\":547,\\\"message\\\":\\\"Inventory groups and totals use mutable object-valued dictionaries requiring casts and suppressions instead of typed models.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":584,\\\"end_line\\\":592,\\\"message\\\":\\\"Disk samples use heterogeneous dictionaries instead of a typed sample model.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":623,\\\"message\\\":\\\"Host samples use heterogeneous dictionaries instead of a typed sample model.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":649,\\\"end_line\\\":655,\\\"message\\\":\\\"Failed-test records encode node ID, reason, and subsequently added rerun result as bare dictionaries.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":684,\\\"message\\\":\\\"Process-stopping outcomes use an object-valued dictionary with differently shaped lists instead of named typed fields.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":723,\\\"end_line\\\":733,\\\"message\\\":\\\"Prior-attempt records are reconstructed as untyped dictionaries rather than parsed into a summary model.\\\"},\\n      {\\\"file\\\":\\\"spikes/gate-host-impact/record.py\\\",\\\"line\\\":828,\\\"end_line\\\":882,\\\"message\\\":\\\"Cleanup and the nested report schema are assembled as bare dictionaries and consumed through string keys; define typed report models before serialization.\\\"}\\n    ]\\n  },\\n  \\\"protocol_based_seams\\\": {\\n    \\\"name\\\":\\\"protocol_based_seams\\\",\\n    \\\"rationale\\\":\\\"The recorder defines concrete internal helpers, not an injectable or pluggable Python dependency interface; --gate-cmd selects an external process.\\\",\\n    \\\"relevant\\\":false\\n  },\\n  \\\"no_injection_from_untrusted_input\\\": {\\n    \\\"name\\\":\\\"no_injection_from_untrusted_input\\\",\\n    \\\"rationale\\\":\\\"record.py uses argument-list subprocess APIs and json.loads, with no shell evaluation, dynamic execution, or unsafe deserialization.\\\",\\n    \\\"relevant\\\":true,\\n    \\\"holds\\\":true,\\n    \\\"violations\\\":[]\\n  }\\n}\",\"text_source\":\"json:codex-agent-message\",\"usage\":{\"input_tokens\":254541,\"output_tokens\":3359,\"cache_read_tokens\":188928,\"cache_write_tokens\":null,\"cost_usd\":null},\"usage_source\":\"json\",\"session_id\":\"01a145b2-de3c-7d93-86e7-5845862ef495\",\"events\":[{\"kind\":\"message\",\"name\":null,\"input\":null,\"output\":\"I\u2019ll read the target files, project definitions, and related tests before judging each rule.\",\"index\":0,\"tool_call_id\":null,\"started_at\":null,\"finished_at\":null,\"duration_ms\":null,\"status\":null},{\"kind\":\"tool_call\",\"name\":\"command_execution\",\"input\":{\"command\":\"/usr/bin/bash -lc 'cat scripts/nx.sh tests/short_state.py spikes/gate-host-impact/measure.sh; cat spikes/gate-host-impact/record.py'\",\"exit_code\":0},\"output\":\"#!/usr/bin/env bash\\n# Give every checkout of one repository the same local Nx cache without putting\\n# generated state in a worktree. Nx's content hash still guards every replay.\\n# llmlint: ignore-file[boundary_inputs_validated] This is the trusted local operator command\\n# surface: XDG_CACHE_HOME/HOME are platform-owned directory roots, and arguments are intentionally\\n# Nx's own validated CLI. No value is interpreted as repository content or passed to eval.\\n# llmlint: ignore-file[changed_behavior_has_e2e] tests/e2e/workspace_copies/test_workspace_contract_e2e.py\\n# runs this real wrapper with Nx doubled, including a failing run's preserved owner-only log.\\nset -euo pipefail\\n# No `uv run` in a target or a test this launches syncs the environment on its way in.\\nexport UV_NO_SYNC=1\\n\\nscript_dir=\\\"$(CDPATH='' cd -- \\\"$(dirname -- \\\"$0\\\")\\\" && pwd)\\\"\\n# shellcheck source=scripts/preserved-log.sh\\n. \\\"$script_dir/preserved-log.sh\\\"\\n\\n# This wrapper installs nothing: session setup is the one place a checkout is\\n# provisioned (AGENTS.md, \\\"The checks\\\"). The helper refuses a checkout whose Python\\n# environment holds no interpreter, naming `just session-setup`.\\n# shellcheck source=scripts/require-provisioned.sh\\n. \\\"$script_dir/require-provisioned.sh\\\" || exit 1\\n\\nrepo_identity=\\\"$(git config --get remote.origin.url || git rev-parse --show-toplevel)\\\" || { echo \\\"nx: cannot resolve repository identity; run from a Git checkout and retry\\\" >&2; exit 1; }\\nrepo_key=\\\"$(printf '%s' \\\"$repo_identity\\\" | sha256sum | cut -c1-16)\\\" || { echo \\\"nx: cannot derive the repository cache key; verify sha256sum is available and retry\\\" >&2; exit 1; }\\n[[ \\\"$repo_key\\\" =~ ^[0-9a-f]{16}$ ]] || { echo \\\"nx: derived an invalid repository cache key; verify sha256sum output and retry\\\" >&2; exit 1; }\\ncache_root=\\\"${XDG_CACHE_HOME:-${HOME}/.cache}/ai-orchestrator/nx/${repo_key}\\\"\\nexport NX_CACHE_DIRECTORY=\\\"$cache_root\\\"\\n\\n# The *other* Nx cache, keyed the same way so it grows per repository rather than per\\n# worktree: Nx copies its 22 MB native module into a directory named from the workspace\\n# root, and every dispatch here works in a new one. A sibling of the computation cache\\n# rather than that directory itself, because Nx creates `NX_CACHE_DIRECTORY` only when\\n# it stores a task result \u2014 which is what lets a metadata-only invocation leave nothing\\n# behind \u2014 while the native loader creates its own on every invocation. See AGENTS.md,\\n# \\\"The computation cache those targets use\\\".\\nexport NX_NATIVE_FILE_CACHE_DIRECTORY=\\\"${XDG_CACHE_HOME:-${HOME}/.cache}/ai-orchestrator/nx-native/${repo_key}\\\"\\n\\n# Nx's daemon is off by default here, and any daemon that is turned back on uses\\n# the Nx session setup installed for its own housekeeping.\\n#\\n# A daemon primes an \\\"are AI agents configured?\\\" cache the instant it starts by\\n# installing `nx@latest` into a fresh system-temp directory \u2014 ~80 MB, logged as\\n# `[LATEST-NX]: Pulling latest Nx...` \u2014 and removes it only on a *graceful*\\n# shutdown. There is one daemon per workspace root and the e2e suite copies this\\n# checkout per journey, so one worktree accumulated dozens of resident daemons\\n# (8.9 GB RSS) and the host accumulated ~110 GB of abandoned installs in a day.\\n# The daemon buys about 0.1s per invocation on this workspace, which does not pay\\n# for that; `NX_DAEMON=true` still turns it back on for anyone who wants it.\\n# `NX_USE_LOCAL` is the independent guard that keeps such a daemon from pulling a\\n# private copy at all. It also makes `nx migrate` plan from the installed Nx\\n# rather than the latest release, which is the right trade for a wrapper whose job\\n# is running this workspace's own targets.\\nexport NX_DAEMON=\\\"${NX_DAEMON-false}\\\"\\nexport NX_USE_LOCAL=true\\n\\n# Spike (throwaway, spike-gate-host-impact): Nx's plugin workers listen on Unix sockets\\n# under `os.tmpdir()`, which the gate recorder's deeper TMPDIR pushes past the socket\\n# address limit, so under the recorder they get a short `/tmp/aio-nx-*` directory,\\n# registered with it and removed on exit \u2014 the prototype of `register_scratch`.\\nif [[ -n ${ORCHESTRATOR_GATE_SCRATCH:-} && -z ${NX_SOCKET_DIR:-} ]]; then\\n  nx_socket_dir=$(mktemp -d /tmp/aio-nx-XXXXXX)\\n  printf '%s\\\\n' \\\"$nx_socket_dir\\\" >\\\"$ORCHESTRATOR_GATE_SCRATCH/nx-socket-$$-${nx_socket_dir##*/}\\\"\\n  export NX_SOCKET_DIR=\\\"$nx_socket_dir\\\"\\n  trap 'rm -rf \\\"$nx_socket_dir\\\"' EXIT\\nfi\\n\\n# The Bun-written shim rather than a path inside the package: Nx has moved its\\n# bin entry between releases, and the shim is the one name that cannot. Session setup's\\n# locked install provides it; nothing here does.\\nNX_BIN=\\\"node_modules/.bin/nx\\\"\\n[[ -x \\\"$NX_BIN\\\" ]] || NX_BIN=\\\"node_modules/.bin/nx.cmd\\\"\\nif [[ ! -x \\\"$NX_BIN\\\" ]]; then\\n  echo \\\"nx: this checkout has no executable node_modules/.bin/nx or node_modules/.bin/nx.cmd, so its workspace is not provisioned; run 'just session-setup' and retry\\\" >&2\\n  exit 1\\nfi\\n\\n# The log outlives this process on purpose: a failing run needs its full output\\n# after the fact, and a *running* one has to be inspectable (`tail -f`) without\\n# reading this process's file descriptors through /proc.\\npreserved_log_open \\\"$(dirname -- \\\"$script_dir\\\")\\\" nx || exit 1\\nlog=$PRESERVED_LOG\\nif \\\"$NX_BIN\\\" \\\"$@\\\" 2>&1 | redact_secrets >\\\"$log\\\"; then\\n  # llmlint: ignore[tool_output_is_signal] Explicit debug output lets the cache-contract check inspect Nx's success evidence, and lets `just lint-llm-diff` show the judge report Nx replayed; default successful invocations still emit one line.\\n  if [[ \\\"${AI_ORCHESTRATOR_NX_SHOW_OUTPUT:-}\\\" == \\\"1\\\" ]]; then cat \\\"$log\\\"; fi\\n  printf 'nx: requested targets succeeded\\\\n'\\n  exit 0\\nfi\\ncat \\\"$log\\\" >&2\\nprintf \\\"nx: targets failed; fix the reported project findings and rerun the same 'just' recipe (full output: %s)\\\\n\\\" \\\"$log\\\" >&2\\nexit 1\\n\\\"\\\"\\\"Allocate per-journey state homes within one short-lived base per test process.\\\"\\\"\\\"\\n\\nfrom __future__ import annotations\\n\\nimport itertools\\nimport os\\nimport shutil\\nimport tempfile\\nfrom collections.abc import Iterator\\nfrom pathlib import Path\\n\\nimport pytest\\n\\n#: The platform's cap on a Unix socket address (`sun_path`, its terminating NUL included).\\n#: The kernel's rather than oneharness's, so it is held to the kernel:\\n#: `tests/test_short_state_budget.py` binds a real socket either side of it.\\nUNIX_SOCKET_ADDRESS_BYTES = 108\\n\\n#: What oneharness puts between a state root and that socket at its own defaults \u2014\\n#: `--session-dir` under `<XDG_STATE_HOME>/oneharness/sessions`, the socket in its\\n#: `control/` directory. Its one source is the installed CLI, which\\n#: `tests/test_short_state_budget.py` reads both halves back out of.\\nSOCKET_LAYOUT = \\\"/oneharness/sessions/control/\\\"\\n\\n#: What this host reserves under that layout for a session name and its `.sock` suffix.\\n#: A decision rather than a copy of anybody's value \u2014 nothing published states a maximum\\n#: session name \u2014 and `tests/test_short_state_budget.py` is what keeps it a sufficient\\n#: one, against the longest name the graphs and members this repository ships compose.\\nRESERVED_FOR_A_SESSION = 54\\n\\n#: What is left for a state root, which is what `state_home` refuses to spend past. The\\n#: byte taken off the top is the terminating NUL the limit above counts, so an address of\\n#: exactly `UNIX_SOCKET_ADDRESS_BYTES` characters is one byte too long rather than the\\n#: longest that fits.\\nBUDGET = UNIX_SOCKET_ADDRESS_BYTES - 1 - len(SOCKET_LAYOUT) - RESERVED_FOR_A_SESSION\\n\\n#: How the base is named. Short on purpose \u2014 every byte here is a byte a session name\\n#: cannot have \u2014 and recognisable enough that a leftover directory says whose it was.\\nBASE_PREFIX = \\\"aio-\\\"\\n\\n#: Where the base is minted. Stated rather than left to `tempfile`'s own choice, because\\n#: that one follows `TMPDIR`, which a caller of this suite may have pointed at a directory\\n#: inside a checkout \u2014 and a root the budget below then refuses would fail every launched\\n#: journey rather than shortening anything.\\nPARENT = Path(\\\"/tmp\\\")\\n\\n_base: Path | None = None\\n_homes: dict[Path, Path] = {}\\n_minted = itertools.count()\\n\\n\\n@pytest.fixture(scope=\\\"session\\\", autouse=True)\\ndef short_state_base() -> Iterator[Path]:\\n    \\\"\\\"\\\"Create this test process's short state base, and remove it when the process ends.\\n\\n    Autouse and session-scoped because the callers are of every scope: a module-scoped\\n    fixture that spends a launch needs it as much as a function-scoped test does, and a\\n    fixture narrower than the widest caller could not be requested by that caller at all.\\n    \\\"\\\"\\\"\\n    global _base\\n    _base = Path(tempfile.mkdtemp(prefix=BASE_PREFIX, dir=PARENT))\\n    # Spike (throwaway, spike-gate-host-impact): register the base with the gate's\\n    # recorder, the prototype of `register_scratch`, since a socket address leaves no\\n    # room to nest it under the recorder's deeper root.\\n    registry = os.environ.get(\\\"ORCHESTRATOR_GATE_SCRATCH\\\")\\n    if registry:\\n        Path(registry, f\\\"short-state-{os.getpid()}-{_base.name}\\\").write_text(f\\\"{_base}\\\\n\\\")\\n    try:\\n        yield _base\\n    finally:\\n        base, _base = _base, None\\n        _homes.clear()\\n        shutil.rmtree(base, ignore_errors=True)\\n\\n\\ndef state_home(owner: Path) -> Path:\\n    \\\"\\\"\\\"The short state root belonging to ``owner``, created on first ask.\\n\\n    ``owner`` is whatever directory the caller would otherwise have put a `state`\\n    directory under \u2014 its `tmp_path`, its world's root, its scratch \u2014 and one owner is\\n    answered with one directory however often it asks, because a journey that builds its\\n    environment twice is continuing one run and a second store would lose its sessions.\\n    \\\"\\\"\\\"\\n    if _base is None:\\n        raise AssertionError(\\n            \\\"short_state.state_home was called with no session base; `short_state_base` \\\"\\n            \\\"in tests/short_state.py is autouse for every test process and creates it\\\"\\n        )\\n    resolved = Path(owner).resolve()\\n    known = _homes.get(resolved)\\n    if known is None:\\n        known = _base / str(next(_minted))\\n        known.mkdir()\\n        _homes[resolved] = known\\n    if len(str(known)) > BUDGET:\\n        raise AssertionError(\\n            f\\\"{known} is {len(str(known))} bytes where a state root may spend {BUDGET}: \\\"\\n            f\\\"oneharness adds {SOCKET_LAYOUT!r} and this host reserves \\\"\\n            f\\\"{RESERVED_FOR_A_SESSION} bytes for the session name under it, so anything \\\"\\n            f\\\"over turns a controlled turn into one refused for its address and re-taken \\\"\\n            f\\\"without control\\\"\\n        )\\n    return known\\n#!/usr/bin/env bash\\n# Spike harness (throwaway): measure what one cold pre-push gate of this checkout does to\\n# the host \u2014 peak temporary disk, leftovers, leaked processes \u2014 attributing only the\\n# gate's own root and the scratch registered to it. Run from the checkout root:\\n#\\n#     spikes/gate-host-impact/measure.sh [--remote origin] [--base main] [--out FILE]\\n#\\n# `record.py` holds every rule; `record-gate-host-impact` grows it into the recorder.\\nset -euo pipefail\\n\\nroot=$(CDPATH='' cd -- \\\"$(dirname -- \\\"$0\\\")/../..\\\" && pwd)\\nif [[ $PWD != \\\"$root\\\" ]]; then\\n    echo \\\"measure: run from the checkout root ($root), not $PWD\\\" >&2\\n    exit 2\\nfi\\nif [[ ! -x $root/.venv/bin/python ]]; then\\n    echo \\\"measure: $root/.venv/bin/python is missing; run 'just session-setup' first\\\" >&2\\n    exit 2\\nfi\\nif [[ -z ${ONEPIPELINE_NODE_SCRATCH_DIR:-} ]]; then\\n    echo \\\"measure: ONEPIPELINE_NODE_SCRATCH_DIR is unset; the gate's root is made under it, never under /tmp\\\" >&2\\n    exit 2\\nfi\\nexec \\\"$root/.venv/bin/python\\\" \\\"$root/spikes/gate-host-impact/record.py\\\" \\\"$@\\\"\\n\\\"\\\"\\\"Spike prototype: one measurement of what a cold pre-push gate does to the host.\\n\\nThrowaway. It attributes to the gate exactly two places \u2014 the root it makes for the gate\\nunder ``$ONEPIPELINE_NODE_SCRATCH_DIR`` and every path a writer registered into\\n``$ORCHESTRATOR_GATE_SCRATCH`` \u2014 and never reads, counts or removes anything else in the\\nhost's ``/tmp``. It signals only processes in its own descendant tree.\\n\\nOrder, which is the measurement's rulings:\\n  1. root with ``tmp/`` and ``scratch/``; TMPDIR/TMP/TEMP -> ``tmp/``.\\n  2. become a child subreaper, so every orphan the gate leaves is re-parented here.\\n  3. run ``just gate <remote> <base>`` with NX_SKIP_NX_CACHE=true, ORCHESTRATOR_GATE_PUSH unset.\\n  4. every 5 s (and once at exit) ``du -s --block-size=1`` over ``tmp/`` + registered paths.\\n  5. at gate exit: list every live descendant at any depth (leaked), then count leftovers,\\n     then wait 10 s, TERM the tree, 5 s, re-walk, KILL what remains.\\n  6. remove the root and every registered path, and nothing else.\\n\\\"\\\"\\\"\\n\\nfrom __future__ import annotations\\n\\nimport argparse\\nimport ast\\nimport ctypes\\nimport json\\nimport os\\nimport re\\nimport shutil\\nimport signal\\nimport subprocess\\nimport sys\\nimport tempfile\\nimport threading\\nimport time\\nfrom collections import defaultdict\\nfrom pathlib import Path\\n\\nCHECKOUT = Path(__file__).resolve().parents[2]\\nsys.path.insert(0, str(CHECKOUT))\\nfrom orchestrator.redaction import redact, secret_values  # noqa: E402\\n\\nPR_SET_CHILD_SUBREAPER = 36\\nSAMPLE_SECONDS = 5.0\\nPROC_SAMPLE_SECONDS = 1.0\\nDISK_FLOOR_BYTES = 5 * 1024**3\\nLEAK_GRACE_SECONDS = 10.0\\nTERM_GRACE_SECONDS = 5.0\\nUV_LOCK = re.compile(r\\\"^uv-[0-9a-f]{16}\\\\.lock$\\\")\\nCLK_TCK = os.sysconf(\\\"SC_CLK_TCK\\\")\\nSELF = os.getpid()\\n\\n_SECRETS = secret_values()\\n\\n\\ndef now() -> float:\\n    return time.monotonic()\\n\\n\\ndef boot_time() -> float:\\n    for line in Path(\\\"/proc/stat\\\").read_text().splitlines():\\n        if line.startswith(\\\"btime \\\"):\\n            return float(line.split()[1])\\n    return 0.0\\n\\n\\nBTIME = boot_time()\\n\\n\\n# ---------------------------------------------------------------------- process tree\\n\\n\\nclass Excluded:\\n    \\\"\\\"\\\"Pids of the recorder's own sampler commands, whose subtrees are never the gate's.\\\"\\\"\\\"\\n\\n    def __init__(self) -> None:\\n        self._lock = threading.Lock()\\n        self._pids: set[int] = set()\\n\\n    def add(self, pid: int) -> None:\\n        with self._lock:\\n            self._pids.add(pid)\\n\\n    def discard(self, pid: int) -> None:\\n        with self._lock:\\n            self._pids.discard(pid)\\n\\n    def snapshot(self) -> set[int]:\\n        with self._lock:\\n            return set(self._pids)\\n\\n\\nEXCLUDED = Excluded()\\n\\n\\ndef read_stat(pid: int) -> tuple[int, str, int, str] | None:\\n    \\\"\\\"\\\"(ppid, state, starttime ticks, comm) or None when the process is gone.\\\"\\\"\\\"\\n    try:\\n        raw = Path(f\\\"/proc/{pid}/stat\\\").read_text()\\n    except OSError:\\n        return None\\n    lparen, rparen = raw.find(\\\"(\\\"), raw.rfind(\\\")\\\")\\n    comm = raw[lparen + 1 : rparen]\\n    fields = raw[rparen + 2 :].split()\\n    return int(fields[1]), fields[0], int(fields[19]), comm\\n\\n\\ndef descendants(root: int = SELF, *, with_zombies: bool = False) -> dict[int, tuple[int, str, int, str]]:\\n    \\\"\\\"\\\"Every process under ``root`` at any depth, found by walking parent links in /proc.\\n\\n    Excludes ``root`` itself and the subtree of every sampler command the recorder runs.\\n    \\\"\\\"\\\"\\n    table: dict[int, tuple[int, str, int, str]] = {}\\n    for entry in os.listdir(\\\"/proc\\\"):\\n        if entry.isdigit():\\n            stat = read_stat(int(entry))\\n            if stat is not None:\\n                table[int(entry)] = stat\\n    children: dict[int, list[int]] = defaultdict(list)\\n    for pid, (ppid, *_rest) in table.items():\\n        children[ppid].append(pid)\\n    excluded = EXCLUDED.snapshot()\\n    found: dict[int, tuple[int, str, int, str]] = {}\\n    stack = list(children.get(root, []))\\n    while stack:\\n        pid = stack.pop()\\n        if pid in excluded or pid in found:\\n            continue\\n        stat = table[pid]\\n        stack.extend(children.get(pid, []))\\n        if stat[1] == \\\"Z\\\" and not with_zombies:\\n            continue\\n        found[pid] = stat\\n    return found\\n\\n\\ndef read_environ(pid: int) -> dict[str, str]:\\n    try:\\n        raw = Path(f\\\"/proc/{pid}/environ\\\").read_bytes()\\n    except OSError:\\n        return {}\\n    env = {}\\n    for item in raw.split(b\\\"\\\\0\\\"):\\n        if b\\\"=\\\" in item:\\n            key, _, value = item.partition(b\\\"=\\\")\\n            env[key.decode(errors=\\\"replace\\\")] = value.decode(errors=\\\"replace\\\")\\n    return env\\n\\n\\ndef cmdline(pid: int) -> str:\\n    try:\\n        raw = Path(f\\\"/proc/{pid}/cmdline\\\").read_bytes()\\n    except OSError:\\n        return \\\"\\\"\\n    return \\\" \\\".join(part.decode(errors=\\\"replace\\\") for part in raw.split(b\\\"\\\\0\\\") if part)\\n\\n\\ndef describe(pid: int, stat: tuple[int, str, int, str]) -> dict[str, object]:\\n    ppid, state, start, comm = stat\\n    env = read_environ(pid)\\n    secrets = sorted(set(_SECRETS) | set(secret_values(env)), key=lambda kv: (-len(kv[1]), kv[0]))\\n    try:\\n        cwd = os.readlink(f\\\"/proc/{pid}/cwd\\\")\\n    except OSError:\\n        cwd = None\\n    started_by = {\\n        key: env[key]\\n        for key in (\\\"PYTEST_CURRENT_TEST\\\", \\\"NX_TASK_TARGET_PROJECT\\\", \\\"NX_TASK_TARGET_TARGET\\\")\\n        if key in env\\n    }\\n    line = redact(cmdline(pid), secrets)\\n    return {\\n        \\\"pid\\\": pid,\\n        \\\"ppid\\\": ppid,\\n        \\\"state\\\": state,\\n        \\\"comm\\\": comm,\\n        \\\"cmdline\\\": line[:2000],\\n        \\\"cwd\\\": cwd,\\n        \\\"started_at_epoch\\\": round(BTIME + start / CLK_TCK, 2),\\n        \\\"started_by\\\": started_by or attribute_from(line, cwd),\\n    }\\n\\n\\ndef attribute_from(line: str, cwd: str | None) -> dict[str, str]:\\n    \\\"\\\"\\\"Best-effort attribution when the environment names no test or Nx task.\\\"\\\"\\\"\\n    out: dict[str, str] = {}\\n    match = re.search(r\\\"nx(?:\\\\.js)? run ([\\\\w./-]+:[\\\\w-]+)\\\", line)\\n    if match:\\n        out[\\\"nx_task\\\"] = match.group(1)\\n    match = re.search(r\\\"(tests/\\\\S+\\\\.py(?:::\\\\S+)?)\\\", line)\\n    if match:\\n        out[\\\"test_path\\\"] = match.group(1)\\n    if cwd and \\\"/popen-gw\\\" in cwd:\\n        out[\\\"pytest_tmp_dir\\\"] = cwd\\n    return out\\n\\n\\n# --------------------------------------------------------------------------- disk\\n\\n\\ndef registered_paths(scratch: Path) -> list[Path]:\\n    paths: list[Path] = []\\n    try:\\n        entries = sorted(scratch.iterdir())\\n    except OSError:\\n        return paths\\n    for entry in entries:\\n        try:\\n            value = entry.read_text().strip()\\n        except OSError:\\n            continue\\n        if value.startswith(\\\"/\\\") and Path(value) not in paths:\\n            paths.append(Path(value))\\n    return paths\\n\\n\\ndef du_bytes(paths: list[Path]) -> tuple[int, dict[str, int], float]:\\n    \\\"\\\"\\\"Allocated bytes over ``paths`` by one ``du`` walk, and how long it took.\\\"\\\"\\\"\\n    started = now()\\n    existing = [str(p) for p in paths if p.exists()]\\n    if not existing:\\n        return 0, {}, now() - started\\n    proc = subprocess.Popen(\\n        [\\\"du\\\", \\\"-s\\\", \\\"--block-size=1\\\", \\\"--\\\", *existing],\\n        stdout=subprocess.PIPE,\\n        stderr=subprocess.DEVNULL,\\n        text=True,\\n    )\\n    EXCLUDED.add(proc.pid)\\n    try:\\n        out, _ = proc.communicate()\\n    finally:\\n        EXCLUDED.discard(proc.pid)\\n    per: dict[str, int] = {}\\n    for line in out.splitlines():\\n        size, _, path = line.partition(\\\"\\\\t\\\")\\n        if size.isdigit():\\n            per[path] = int(size)\\n    return sum(per.values()), per, now() - started\\n\\n\\ndef free_bytes(path: Path) -> int:\\n    st = os.statvfs(path)\\n    return st.f_bavail * st.f_frsize\\n\\n\\ndef allocated(path: Path) -> tuple[int, int]:\\n    \\\"\\\"\\\"(entries, allocated bytes) under ``path``, itself included, without following links.\\\"\\\"\\\"\\n    entries = 0\\n    size = 0\\n    try:\\n        st = path.lstat()\\n    except OSError:\\n        return 0, 0\\n    entries += 1\\n    size += st.st_blocks * 512\\n    if path.is_dir() and not path.is_symlink():\\n        for dirpath, dirnames, filenames in os.walk(path, onerror=lambda _e: None):\\n            for name in dirnames + filenames:\\n                try:\\n                    sub = os.lstat(os.path.join(dirpath, name))\\n                except OSError:\\n                    continue\\n                entries += 1\\n                size += sub.st_blocks * 512\\n    return entries, size\\n\\n\\ndef name_pattern(name: str) -> str:\\n    \\\"\\\"\\\"A top-level name with its random parts replaced by ``*``.\\\"\\\"\\\"\\n    if UV_LOCK.match(name):\\n        return \\\"uv-<16 hex>.lock\\\"\\n    if re.fullmatch(r\\\"tmp[a-z0-9_]{8}\\\", name):\\n        return \\\"tmp*  (Python tempfile default prefix)\\\"\\n    if re.fullmatch(r\\\"tmp\\\\.[A-Za-z0-9]{10}\\\", name):\\n        return \\\"tmp.*  (mktemp default template)\\\"\\n    pattern = re.sub(r\\\"(?<=[-_.])[A-Za-z0-9]*\\\\d[A-Za-z0-9]*\\\", \\\"*\\\", name)\\n    pattern = re.sub(r\\\"^\\\\d+$\\\", \\\"*\\\", pattern)\\n    return pattern\\n\\n\\n# ----------------------------------------------------------------- code search\\n\\n\\nCODE_SUFFIXES = (\\\".py\\\", \\\".sh\\\", \\\".bash\\\")\\n\\n\\ndef tracked_code() -> list[Path]:\\n    out = subprocess.run(\\n        [\\\"git\\\", \\\"ls-files\\\"], cwd=CHECKOUT, capture_output=True, text=True, check=True\\n    ).stdout.splitlines()\\n    files = []\\n    for rel in out:\\n        if rel.startswith((\\\"scratch/\\\", \\\"spikes/\\\")):\\n            continue\\n        if rel.endswith(CODE_SUFFIXES) or rel == \\\"justfile\\\" or rel.startswith(\\\".githooks/\\\"):\\n            files.append(CHECKOUT / rel)\\n    return files\\n\\n\\ndef enclosing(path: Path, text: str, lineno: int) -> str:\\n    \\\"\\\"\\\"The function (Python, shell) or recipe (justfile) holding ``lineno``.\\\"\\\"\\\"\\n    if path.suffix == \\\".py\\\":\\n        try:\\n            tree = ast.parse(text)\\n        except SyntaxError:\\n            return \\\"<unparsed>\\\"\\n        best = \\\"<module>\\\"\\n        best_start = 0\\n        for node in ast.walk(tree):\\n            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):\\n                end = getattr(node, \\\"end_lineno\\\", node.lineno)\\n                if node.lineno <= lineno <= end and node.lineno >= best_start:\\n                    best, best_start = node.name, node.lineno\\n        return best\\n    lines = text.splitlines()\\n    for index in range(lineno - 1, -1, -1):\\n        line = lines[index]\\n        if path.name == \\\"justfile\\\":\\n            match = re.match(r\\\"^([A-Za-z_][\\\\w-]*)\\\\b[^:=]*:(?!=)\\\", line)\\n        else:\\n            match = re.match(r\\\"^\\\\s*(?:function\\\\s+)?([A-Za-z_][\\\\w-]*)\\\\s*\\\\(\\\\)\\\\s*\\\\{?\\\", line)\\n        if match:\\n            closed = path.name != \\\"justfile\\\" and any(\\n                re.match(r\\\"^\\\\}\\\", between) for between in lines[index + 1 : lineno - 1]\\n            )\\n            return \\\"<top level>\\\" if closed else match.group(1)\\n    return \\\"<top level>\\\"\\n\\n\\nWRITE_HINT = re.compile(\\n    r\\\"mkdtemp|mkstemp|mkdir|mktemp|TemporaryDirectory|NamedTemporaryFile|\\\\bopen\\\\(|write_|\\\"\\n    r\\\"(?<![-=>&])>\\\\s*[\\\\\\\"$/\\\\w]|PARENT|\\\\bdir=|cp |touch \\\"\\n)\\n\\n#: A line that only reports (a message, a usage text, a docstring quoting a path).\\nMESSAGE = re.compile(r\\\"\\\"\\\"^\\\\s*(echo|printf|fail|raise|print\\\\()|`\\\"\\\"\\\")\\n\\n#: Search patterns: (kind, regex). Each line matching one is a candidate writer.\\nSEARCHES = [\\n    (\\\"literal-tmp\\\", re.compile(r\\\"\\\"\\\"(?<![\\\\w:-])[\\\"'(=\\\\s]?/tmp(?=[/\\\"'\\\\s)]|$)\\\"\\\"\\\")),\\n    (\\\"tempfile-explicit-dir\\\", re.compile(r\\\"tempfile\\\\.\\\\w+\\\\([^)]*\\\\bdir=\\\")),\\n    (\\\"mktemp-explicit-dir\\\", re.compile(r\\\"mktemp\\\\b[^|;&]*?(?:-p\\\\s|--tmpdir=|\\\\S*/\\\\S*X{3,})\\\")),\\n    (\\\"nx-native-file-cache\\\", re.compile(r\\\"nx-native-file-cache|NX_NATIVE_FILE_CACHE_DIRECTORY|NX_CACHE_DIRECTORY\\\")),\\n    (\\\"home-scratch\\\", re.compile(r\\\"(\\\\$HOME|\\\\$\\\\{HOME\\\\}|Path\\\\.home\\\\(\\\\)|XDG_CACHE_HOME)[^\\\\n]*(\\\\.cache|scratch|/tmp)\\\")),\\n    (\\\"nx-not-via-wrapper\\\", re.compile(r\\\"\\\\b(bunx|npx)\\\\s+nx\\\\b|node_modules/\\\\.bin/nx\\\\b\\\")),\\n    (\\\"node-scratch-dir\\\", re.compile(r\\\"ONEPIPELINE_NODE_SCRATCH_DIR\\\")),\\n]\\n\\n#: Sites read by hand: file -> (status, why). Anything else is classified heuristically.\\nCURATED = {\\n    (\\\"tests/short_state.py\\\", \\\"literal-tmp\\\"): (\\n        \\\"registered\\\",\\n        \\\"PARENT = /tmp: a Unix socket address leaves no room to nest the base under the gate's root, so short_state_base registers each /tmp/aio-* base in $ORCHESTRATOR_GATE_SCRATCH (this branch's throwaway patch)\\\",\\n    ),\\n    (\\\"tests/short_state.py\\\", \\\"tempfile-explicit-dir\\\"): (\\n        \\\"registered\\\",\\n        \\\"tempfile.mkdtemp(prefix='aio-', dir=PARENT=/tmp); registered as above\\\",\\n    ),\\n    (\\\"tests/pytest_temp_root.py\\\", \\\"tempfile-explicit-dir\\\"): (\\n        \\\"contained\\\",\\n        \\\"dir=$PYTEST_DEBUG_TEMPROOT, which is unset at the top session (falls back to TMPDIR) and inherited as a root inside TMPDIR below it\\\",\\n    ),\\n    (\\\"scripts/nx.sh\\\", \\\"nx-native-file-cache\\\"): (\\n        \\\"neither\\\",\\n        \\\"NX_CACHE_DIRECTORY and NX_NATIVE_FILE_CACHE_DIRECTORY under ${XDG_CACHE_HOME:-$HOME/.cache}/ai-orchestrator/: persistent per-repository caches by design, outside TMPDIR and unregistered; not scratch, so not counted\\\",\\n    ),\\n    (\\\"scripts/nx.sh\\\", \\\"home-scratch\\\"): (\\n        \\\"neither\\\",\\n        \\\"the same persistent Nx caches under $XDG_CACHE_HOME; by design, not scratch\\\",\\n    ),\\n    (\\\"scripts/host-sweep.sh\\\", \\\"home-scratch\\\"): (\\n        \\\"neither\\\",\\n        \\\"the sweep's own memo under $XDG_CACHE_HOME/ai-orchestrator/sweep; session setup's, not the gate's\\\",\\n    ),\\n    (\\\"scripts/repos-bootstrap.sh\\\", \\\"home-scratch\\\"): (\\n        \\\"neither\\\",\\n        \\\"repos-bootstrap memo under $XDG_CACHE_HOME; session setup's, not the gate's\\\",\\n    ),\\n    (\\\"orchestrator/follow_up_comments.py\\\", \\\"tempfile-explicit-dir\\\"): (\\n        \\\"contained\\\",\\n        \\\"staging directory beside its destination for an atomic rename; lives where the destination does\\\",\\n    ),\\n    (\\\"orchestrator/follow_up_drafts.py\\\", \\\"tempfile-explicit-dir\\\"): (\\n        \\\"contained\\\",\\n        \\\"atomic-write staging file beside its destination\\\",\\n    ),\\n    (\\\"orchestrator/spike_brief.py\\\", \\\"tempfile-explicit-dir\\\"): (\\n        \\\"contained\\\",\\n        \\\"atomic-write staging file beside its destination\\\",\\n    ),\\n    (\\\"scripts/allowlist-probe.py\\\", \\\"tempfile-explicit-dir\\\"): (\\n        \\\"contained-if-unset\\\",\\n        \\\"base = $ONEPIPELINE_NODE_SCRATCH_DIR or tempfile.gettempdir(): follows TMPDIR only when that variable is unset (the harness unsets it for the gate)\\\",\\n    ),\\n    (\\\"scripts/render-diagram.sh\\\", \\\"mktemp-explicit-dir\\\"): (\\n        \\\"contained\\\",\\n        \\\"staging file beside its own destination\\\",\\n    ),\\n    (\\\"tests/e2e/launch_monitor_observer/test_quota_fallthrough_e2e.py\\\", \\\"tempfile-explicit-dir\\\"): (\\n        \\\"contained\\\",\\n        \\\"dir=tmp_path, under the pytest root inside TMPDIR\\\",\\n    ),\\n}\\n\\n\\ndef classify(rel: str, kind: str, line: str) -> tuple[str, str] | None:\\n    if (rel, kind) in CURATED:\\n        return CURATED[(rel, kind)]\\n    if MESSAGE.search(line) and not re.search(r\\\"\\\\$\\\\(mktemp|mkdtemp\\\", line):\\n        return None\\n    if kind == \\\"nx-not-via-wrapper\\\" and rel == \\\"scripts/nx.sh\\\":\\n        return None  # the wrapper resolving the pinned binary is the one sanctioned run\\n    if kind in (\\\"literal-tmp\\\", \\\"mktemp-explicit-dir\\\") and re.search(r\\\"\\\\$\\\\{TMPDIR:-/tmp\\\\}\\\", line):\\n        return (\\\"contained\\\", \\\"${TMPDIR:-/tmp} follows TMPDIR\\\")\\n    if kind == \\\"node-scratch-dir\\\":\\n        if rel.startswith(\\\"tests/\\\"):\\n            return None  # tests set it for the process under test; reads only\\n        return (\\\"contained-if-unset\\\", \\\"prefers $ONEPIPELINE_NODE_SCRATCH_DIR over TMPDIR; contained only when it is unset (the harness unsets it for the gate)\\\")\\n    if kind == \\\"nx-not-via-wrapper\\\":\\n        if rel.startswith(\\\"tests/\\\"):\\n            return (\\\"contained\\\", \\\"a test's fake Nx binary inside its own temporary checkout, not a real Nx run\\\")\\n        return (\\\"neither\\\", \\\"an Nx run that bypasses scripts/nx.sh and its cache keys\\\")\\n    if kind == \\\"home-scratch\\\":\\n        if not WRITE_HINT.search(line):\\n            return None\\n        return (\\\"neither\\\", \\\"writes under $HOME/$XDG_CACHE_HOME, outside TMPDIR and unregistered\\\")\\n    if kind == \\\"literal-tmp\\\":\\n        if not WRITE_HINT.search(line):\\n            return None  # a /tmp string used as data (a fake path, a message), not a writer\\n        return (\\\"neither\\\", \\\"writes under a literal /tmp, outside TMPDIR and unregistered\\\")\\n    if kind == \\\"tempfile-explicit-dir\\\":\\n        return (\\\"depends-on-dir\\\", \\\"explicit dir= argument; contained when that directory is\\\")\\n    if kind == \\\"mktemp-explicit-dir\\\":\\n        return (\\\"depends-on-dir\\\", \\\"explicit template directory; contained when that directory is\\\")\\n    return (\\\"neither\\\", kind)\\n\\n\\ndef escape_search() -> dict[str, object]:\\n    findings = []\\n    data_only: dict[str, int] = defaultdict(int)\\n    for path in tracked_code():\\n        rel = str(path.relative_to(CHECKOUT))\\n        try:\\n            text = path.read_text()\\n        except (OSError, UnicodeDecodeError):\\n            continue\\n        for lineno, line in enumerate(text.splitlines(), 1):\\n            stripped = line.strip()\\n            if stripped.startswith(\\\"#\\\") or stripped.startswith('\\\"\\\"\\\"'):\\n                continue\\n            for kind, regex in SEARCHES:\\n                if not regex.search(line):\\n                    continue\\n                verdict = classify(rel, kind, line)\\n                if verdict is None:\\n                    data_only[rel] += 1\\n                    continue\\n                status, why = verdict\\n                findings.append(\\n                    {\\n                        \\\"kind\\\": kind,\\n                        \\\"file\\\": rel,\\n                        \\\"line\\\": lineno,\\n                        \\\"function\\\": enclosing(path, text, lineno),\\n                        \\\"status\\\": status,\\n                        \\\"why\\\": why,\\n                        \\\"text\\\": stripped[:240],\\n                    }\\n                )\\n    return {\\n        \\\"findings\\\": findings,\\n        \\\"non_writer_mentions\\\": dict(sorted(data_only.items())),\\n        \\\"note\\\": \\\"static search of tracked code (py, sh, justfile, hooks); 'non_writer_mentions' counts lines that matched a search but read or quote a path rather than write one\\\",\\n    }\\n\\n\\n#: Leftover names no tracked code spells, with the tool that writes them.\\nEXTERNAL_PRODUCERS = {\\n    \\\"node-compile-cache\\\": \\\"Node's module compile cache: the Nx CLI enables it (node_modules/nx/dist/src/utils/enable-compile-cache.js) and Node defaults it to os.tmpdir()/node-compile-cache unless NODE_COMPILE_CACHE names one; started through scripts/nx.sh\\\",\\n    \\\"uv-\\\": \\\"uv's per-interpreter lock files in the system temp directory\\\",\\n}\\n\\n\\ndef producers(prefix: str) -> list[str]:\\n    \\\"\\\"\\\"Code sites holding the literal ``prefix`` of a leftover name.\\\"\\\"\\\"\\n    if len(prefix) < 3:\\n        return []\\n    out = [why for name, why in EXTERNAL_PRODUCERS.items() if prefix.startswith(name)]\\n    for path in tracked_code():\\n        try:\\n            text = path.read_text()\\n        except (OSError, UnicodeDecodeError):\\n            continue\\n        if prefix not in text:\\n            continue\\n        for lineno, line in enumerate(text.splitlines(), 1):\\n            if prefix in line and not line.strip().startswith(\\\"#\\\"):\\n                out.append(f\\\"{path.relative_to(CHECKOUT)}:{lineno} ({enclosing(path, text, lineno)})\\\")\\n                break\\n    return out[:8]\\n\\n\\ndef inventory(places: list[Path]) -> dict[str, object]:\\n    groups: dict[tuple[str, str], dict[str, object]] = {}\\n    uv_locks = 0\\n    uv_lock_bytes = 0\\n    for place in places:\\n        if not place.exists():\\n            continue\\n        try:\\n            names = sorted(os.listdir(place))\\n        except OSError:\\n            continue\\n        for name in names:\\n            full = place / name\\n            if UV_LOCK.match(name):\\n                try:\\n                    st = full.lstat()\\n                except OSError:\\n                    continue\\n                if st.st_size == 0:\\n                    uv_locks += 1\\n                    uv_lock_bytes += st.st_blocks * 512\\n                    continue\\n            pattern = name_pattern(name)\\n            key = (str(place), pattern)\\n            group = groups.setdefault(\\n                key,\\n                {\\\"place\\\": str(place), \\\"pattern\\\": pattern, \\\"top_level\\\": 0, \\\"entries\\\": 0, \\\"bytes\\\": 0, \\\"examples\\\": []},\\n            )\\n            entries, size = allocated(full)\\n            group[\\\"top_level\\\"] = int(group[\\\"top_level\\\"]) + 1  # type: ignore[call-overload]\\n            group[\\\"entries\\\"] = int(group[\\\"entries\\\"]) + entries  # type: ignore[call-overload]\\n            group[\\\"bytes\\\"] = int(group[\\\"bytes\\\"]) + size  # type: ignore[call-overload]\\n            examples = group[\\\"examples\\\"]\\n            assert isinstance(examples, list)\\n            if len(examples) < 3:\\n                examples.append(name)\\n    out = []\\n    for group in groups.values():\\n        prefix = str(group[\\\"pattern\\\"]).split(\\\"*\\\")[0].split(\\\"  \\\")[0]\\n        group[\\\"produced_by\\\"] = producers(prefix) if prefix else []\\n        out.append(group)\\n    out.sort(key=lambda g: -int(g[\\\"bytes\\\"]))  # type: ignore[call-overload]\\n    return {\\n        \\\"groups\\\": out,\\n        \\\"entries_total\\\": sum(int(g[\\\"entries\\\"]) for g in out),  # type: ignore[call-overload]\\n        \\\"bytes_total\\\": sum(int(g[\\\"bytes\\\"]) for g in out),  # type: ignore[call-overload]\\n        \\\"zero_byte_uv_locks\\\": {\\\"count\\\": uv_locks, \\\"allocated_bytes\\\": uv_lock_bytes},\\n    }\\n\\n\\n# -------------------------------------------------------------------------- run\\n\\n\\nclass Samplers:\\n    def __init__(self, root: Path, tmp: Path, scratch: Path) -> None:\\n        self.root, self.tmp, self.scratch = root, tmp, scratch\\n        self.stop = threading.Event()\\n        self.floor_hit = threading.Event()\\n        self.disk: list[dict[str, object]] = []\\n        self.host: list[dict[str, object]] = []\\n        self.seen: set[tuple[int, int]] = set()\\n        self.max_live = 0\\n        self.protected: set[int] = set()\\n        self.t0 = now()\\n        self.threads = [\\n            threading.Thread(target=self._disk, daemon=True),\\n            threading.Thread(target=self._host, daemon=True),\\n            threading.Thread(target=self._procs, daemon=True),\\n        ]\\n\\n    def start(self) -> None:\\n        for thread in self.threads:\\n            thread.start()\\n\\n    def join(self) -> None:\\n        self.stop.set()\\n        for thread in self.threads:\\n            thread.join()\\n\\n    def sample_disk(self, label: str = \\\"periodic\\\") -> dict[str, object]:\\n        paths = [self.tmp, *registered_paths(self.scratch)]\\n        total, per, walk = du_bytes(paths)\\n        free = free_bytes(self.root)\\n        sample = {\\n            \\\"t\\\": round(now() - self.t0, 2),\\n            \\\"label\\\": label,\\n            \\\"bytes\\\": total,\\n            \\\"walk_seconds\\\": round(walk, 3),\\n            \\\"paths_walked\\\": len(per),\\n            \\\"per_path\\\": per,\\n            \\\"free_bytes\\\": free,\\n        }\\n        self.disk.append(sample)\\n        if free < DISK_FLOOR_BYTES:\\n            self.floor_hit.set()\\n        return sample\\n\\n    def _disk(self) -> None:\\n        while not self.stop.is_set():\\n            started = now()\\n            self.sample_disk()\\n            self.stop.wait(max(0.0, SAMPLE_SECONDS - (now() - started)))\\n\\n    def _host(self) -> None:\\n        while not self.stop.is_set():\\n            started = now()\\n            load1 = float(Path(\\\"/proc/loadavg\\\").read_text().split()[0])\\n            dispatches: int | None = None\\n            proc = subprocess.Popen(\\n                [str(CHECKOUT / \\\"scripts/budget-dispatches.sh\\\")],\\n                stdout=subprocess.PIPE,\\n                stderr=subprocess.DEVNULL,\\n                text=True,\\n                env={k: v for k, v in os.environ.items() if k not in (\\\"TMPDIR\\\", \\\"TMP\\\", \\\"TEMP\\\")},\\n            )\\n            EXCLUDED.add(proc.pid)\\n            try:\\n                out, _ = proc.communicate()\\n            finally:\\n                EXCLUDED.discard(proc.pid)\\n            if out.strip().isdigit():\\n                dispatches = int(out.strip())\\n            self.host.append({\\\"t\\\": round(now() - self.t0, 2), \\\"load1\\\": load1, \\\"dispatches\\\": dispatches})\\n            self.stop.wait(max(0.0, SAMPLE_SECONDS - (now() - started)))\\n\\n    def _procs(self) -> None:\\n        while not self.stop.is_set():\\n            live = descendants()\\n            self.max_live = max(self.max_live, len(live))\\n            for pid, stat in live.items():\\n                self.seen.add((pid, stat[2]))\\n            self._reap()\\n            self.stop.wait(PROC_SAMPLE_SECONDS)\\n\\n    def _reap(self) -> None:\\n        \\\"\\\"\\\"Reap adopted orphans that died, so an hour of them does not pile up as zombies.\\n\\n        Only zombies whose parent is the recorder and which no `Popen` here owns.\\n        \\\"\\\"\\\"\\n        protected = self.protected | EXCLUDED.snapshot()\\n        for pid, stat in descendants(with_zombies=True).items():\\n            if stat[0] == SELF and stat[1] == \\\"Z\\\" and pid not in protected:\\n                try:\\n                    os.waitpid(pid, os.WNOHANG)\\n                except ChildProcessError:\\n                    pass\\n\\n\\ndef failed_tests(text: str) -> list[dict[str, str]]:\\n    found: dict[str, dict[str, str]] = {}\\n    for match in re.finditer(r\\\"^(?:FAILED|ERROR) (\\\\S+?)(?: - (.*))?$\\\", text, re.M):\\n        nodeid = match.group(1)\\n        if \\\"::\\\" in nodeid or nodeid.endswith(\\\".py\\\"):\\n            found.setdefault(nodeid, {\\\"nodeid\\\": nodeid, \\\"reason\\\": (match.group(2) or \\\"\\\")[:400]})\\n    return list(found.values())\\n\\n\\nSOCKET_TOO_LONG = re.compile(r\\\"exceeds the maximum socket length|AF_UNIX path too long|path too long for a Unix|sun_path|socket path .*too long\\\", re.I)\\n\\n\\ndef rerun_without_harness(nodeids: list[str], env: dict[str, str]) -> dict[str, str]:\\n    \\\"\\\"\\\"Re-run each failed test once on this tree without the harness's root (TMPDIR as inherited).\\\"\\\"\\\"\\n    results = {}\\n    for nodeid in nodeids[:20]:\\n        path = nodeid.split(\\\"::\\\")[0]\\n        if not (CHECKOUT / path).exists():\\n            results[nodeid] = \\\"not rerun: path not relative to the checkout root\\\"\\n            continue\\n        proc = subprocess.run(\\n            [str(CHECKOUT / \\\".venv/bin/python\\\"), \\\"-m\\\", \\\"pytest\\\", \\\"-q\\\", \\\"-p\\\", \\\"no:cacheprovider\\\", nodeid],\\n            cwd=CHECKOUT,\\n            env=env,\\n            capture_output=True,\\n            text=True,\\n            timeout=1800,\\n        )\\n        results[nodeid] = \\\"passes without the harness\\\" if proc.returncode == 0 else f\\\"also fails without the harness (exit {proc.returncode})\\\"\\n    return results\\n\\n\\ndef stop_tree(leaked_pids: set[int]) -> dict[str, object]:\\n    \\\"\\\"\\\"Wait for the leaked processes, then TERM the whole tree, then KILL what survives.\\\"\\\"\\\"\\n    record: dict[str, object] = {\\\"exited_within_grace\\\": [], \\\"needed_term\\\": [], \\\"needed_kill\\\": [], \\\"alive_after_kill\\\": []}\\n    deadline = now() + LEAK_GRACE_SECONDS\\n    while now() < deadline and descendants():\\n        time.sleep(0.25)\\n    still = descendants()\\n    record[\\\"exited_within_grace\\\"] = sorted(leaked_pids - set(still))\\n    if not still:\\n        return record\\n    for pid in still:\\n        try:\\n            os.kill(pid, signal.SIGTERM)\\n        except ProcessLookupError:\\n            pass\\n    record[\\\"needed_term\\\"] = sorted(still)\\n    deadline = now() + TERM_GRACE_SECONDS\\n    while now() < deadline and descendants():\\n        time.sleep(0.25)\\n    survivors = descendants()  # re-walked: children started meanwhile included\\n    for pid in survivors:\\n        try:\\n            os.kill(pid, signal.SIGKILL)\\n        except ProcessLookupError:\\n            pass\\n    record[\\\"needed_kill\\\"] = [describe(pid, stat) for pid, stat in survivors.items()]\\n    time.sleep(1.0)\\n    record[\\\"alive_after_kill\\\"] = sorted(descendants())\\n    return record\\n\\n\\ndef reap_zombies() -> None:\\n    while True:\\n        try:\\n            pid, _ = os.waitpid(-1, os.WNOHANG)\\n        except ChildProcessError:\\n            return\\n        if pid == 0:\\n            return\\n\\n\\ndef prior_attempt(path: Path) -> dict[str, object]:\\n    prior = json.loads(path.read_text())\\n    return {\\n        \\\"summary_file\\\": str(path.relative_to(CHECKOUT)) if path.is_relative_to(CHECKOUT) else str(path),\\n        \\\"measured_at\\\": prior[\\\"measured_at\\\"],\\n        \\\"gate\\\": {k: prior[\\\"gate\\\"][k] for k in (\\\"exit_status\\\", \\\"wall_clock_seconds\\\", \\\"processes_started_lower_bound\\\", \\\"log_tail\\\")},\\n        \\\"peak_temp_disk_bytes\\\": prior[\\\"peak_temp_disk\\\"][\\\"bytes\\\"],\\n        \\\"leaked_processes\\\": prior[\\\"leaked_processes\\\"][\\\"count\\\"],\\n        \\\"leftovers\\\": prior[\\\"leftovers\\\"],\\n        \\\"breakage\\\": prior[\\\"breakage\\\"],\\n        \\\"cleanup\\\": prior[\\\"cleanup\\\"],\\n    }\\n\\n\\ndef safe_remove(path: Path, root: Path) -> str:\\n    resolved = path.resolve()\\n    if resolved in (Path(\\\"/\\\"), Path(\\\"/tmp\\\"), Path.home(), CHECKOUT) or CHECKOUT.is_relative_to(resolved):\\n        return \\\"refused: not a scratch path\\\"\\n    if not resolved.exists():\\n        return \\\"absent\\\"\\n    shutil.rmtree(resolved, ignore_errors=True)\\n    return \\\"removed\\\" if not resolved.exists() else \\\"remained\\\"\\n\\n\\ndef main() -> int:\\n    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])\\n    parser.add_argument(\\\"--remote\\\", default=\\\"origin\\\")\\n    parser.add_argument(\\\"--base\\\", default=\\\"main\\\")\\n    parser.add_argument(\\\"--out\\\", default=str(CHECKOUT / \\\"spikes/gate-host-impact/summary.json\\\"))\\n    parser.add_argument(\\\"--gate-cmd\\\", help=\\\"replace `just gate` (harness self-test only)\\\")\\n    parser.add_argument(\\\"--prior\\\", action=\\\"append\\\", default=[], help=\\\"an earlier attempt's summary, carried into this one's prior_attempts\\\")\\n    args = parser.parse_args()\\n\\n    node_scratch = Path(os.environ[\\\"ONEPIPELINE_NODE_SCRATCH_DIR\\\"])\\n    root = Path(tempfile.mkdtemp(prefix=\\\"gate-host-impact-\\\", dir=node_scratch))\\n    tmp, scratch = root / \\\"tmp\\\", root / \\\"scratch\\\"\\n    tmp.mkdir()\\n    scratch.mkdir()\\n    gate_log = node_scratch / f\\\"{root.name}.gate.log\\\"\\n\\n    libc = ctypes.CDLL(None, use_errno=True)\\n    if libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:\\n        print(f\\\"record: prctl(PR_SET_CHILD_SUBREAPER) failed: errno {ctypes.get_errno()}\\\", file=sys.stderr)\\n        return 2\\n\\n    base_env = dict(os.environ)\\n    env = dict(base_env)\\n    env.update({\\\"TMPDIR\\\": str(tmp), \\\"TMP\\\": str(tmp), \\\"TEMP\\\": str(tmp), \\\"ORCHESTRATOR_GATE_SCRATCH\\\": str(scratch), \\\"NX_SKIP_NX_CACHE\\\": \\\"true\\\"})\\n    removed_env = [k for k in (\\\"ORCHESTRATOR_GATE_PUSH\\\", \\\"ONEPIPELINE_NODE_SCRATCH_DIR\\\", \\\"PYTEST_DEBUG_TEMPROOT\\\") if env.pop(k, None) is not None]\\n\\n    command = args.gate_cmd.split() if args.gate_cmd else [\\\"just\\\", \\\"gate\\\", args.remote, args.base]\\n    samplers = Samplers(root, tmp, scratch)\\n    samplers.start()\\n    started_wall = time.time()\\n    t_start = now()\\n    with gate_log.open(\\\"w\\\") as log:\\n        gate = subprocess.Popen(command, cwd=CHECKOUT, env=env, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)\\n        samplers.protected.add(gate.pid)\\n        stopped_by_floor = False\\n        while True:\\n            status = gate.poll()\\n            if status is not None:\\n                break\\n            if samplers.floor_hit.is_set():\\n                stopped_by_floor = True\\n                break\\n            time.sleep(0.5)\\n    t_exit = now()\\n\\n    # The moment the gate's top process exits (or the floor stopped it): every live member.\\n    leaked_tree = descendants()\\n    leaked = [describe(pid, stat) for pid, stat in sorted(leaked_tree.items())]\\n    samplers.join()\\n    final = samplers.sample_disk(\\\"at-exit\\\")\\n    registered = registered_paths(scratch)\\n    # Before any signal: what is left.\\n    leftovers = inventory([tmp, *registered])\\n    for path in registered:\\n        if path.exists():\\n            # The registered base itself is a leftover: short_state_base removes it on a clean exit.\\n            leftovers.setdefault(\\\"registered_paths_still_present\\\", []).append(str(path))  # type: ignore[union-attr]\\n    stopping = stop_tree(set(leaked_tree))\\n    if stopped_by_floor:\\n        gate.wait(timeout=30)\\n    reap_zombies()\\n    gate_status = gate.returncode\\n\\n    raw = gate_log.read_text(errors=\\\"replace\\\")\\n    gate_text = redact(raw, _SECRETS)\\n    gate_log.write_text(gate_text)\\n    check_log = CHECKOUT / \\\".logs/gate-check.log\\\"\\n    check_text = redact(check_log.read_text(errors=\\\"replace\\\"), _SECRETS) if check_log.exists() and check_log.stat().st_mtime >= started_wall else \\\"\\\"\\n    failures = failed_tests(gate_text + \\\"\\\\n\\\" + check_text)\\n    socket_lines = sorted({line.strip()[:300] for line in (gate_text + check_text).splitlines() if SOCKET_TOO_LONG.search(line)})\\n    reruns = rerun_without_harness([f[\\\"nodeid\\\"] for f in failures], base_env) if failures and not args.gate_cmd else {}\\n    for failure in failures:\\n        failure[\\\"without_harness\\\"] = reruns.get(failure[\\\"nodeid\\\"], \\\"not rerun\\\")\\n\\n    escapes = escape_search()\\n\\n    peak = max(samplers.disk, key=lambda s: int(s[\\\"bytes\\\"]))  # type: ignore[call-overload]\\n    walks = [float(s[\\\"walk_seconds\\\"]) for s in samplers.disk]  # type: ignore[arg-type]\\n    host_load = [float(h[\\\"load1\\\"]) for h in samplers.host]  # type: ignore[arg-type]\\n    host_disp = [int(h[\\\"dispatches\\\"]) for h in samplers.host if h[\\\"dispatches\\\"] is not None]  # type: ignore[call-overload]\\n\\n    cleanup = {\\\"root\\\": str(root), \\\"root_removed\\\": safe_remove(root, root), \\\"registered\\\": {str(p): safe_remove(p, root) for p in registered}}\\n\\n    summary = {\\n        \\\"schema\\\": \\\"gate-host-impact-spike/1\\\",\\n        \\\"measured_at\\\": time.strftime(\\\"%Y-%m-%dT%H:%M:%SZ\\\", time.gmtime(started_wall)),\\n        \\\"checkout_head\\\": subprocess.run([\\\"git\\\", \\\"rev-parse\\\", \\\"HEAD\\\"], cwd=CHECKOUT, capture_output=True, text=True).stdout.strip(),\\n        \\\"command\\\": command,\\n        \\\"environment\\\": {\\n            \\\"root\\\": str(root),\\n            \\\"TMPDIR\\\": str(tmp),\\n            \\\"ORCHESTRATOR_GATE_SCRATCH\\\": str(scratch),\\n            \\\"NX_SKIP_NX_CACHE\\\": \\\"true\\\",\\n            \\\"unset_for_the_gate\\\": removed_env,\\n            \\\"subreaper\\\": True,\\n        },\\n        \\\"complete\\\": not stopped_by_floor,\\n        \\\"stopped_by\\\": \\\"disk floor (free space under 5 GiB on the root's filesystem)\\\" if stopped_by_floor else None,\\n        \\\"gate\\\": {\\n            \\\"exit_status\\\": gate_status,\\n            \\\"wall_clock_seconds\\\": round(t_exit - t_start, 1),\\n            \\\"processes_started_lower_bound\\\": len(samplers.seen),\\n            \\\"processes_counting\\\": f\\\"distinct (pid, start time) pairs in the recorder's descendant tree, sampled every {PROC_SAMPLE_SECONDS:g} s; a process living under {PROC_SAMPLE_SECONDS:g} s between samples is missed, so this is a lower bound\\\",\\n            \\\"max_concurrent_processes\\\": samplers.max_live,\\n            \\\"log\\\": str(gate_log),\\n            \\\"log_tail\\\": gate_text.splitlines()[-40:],\\n        },\\n        \\\"peak_temp_disk\\\": {\\n            \\\"bytes\\\": peak[\\\"bytes\\\"],\\n            \\\"gib\\\": round(int(peak[\\\"bytes\\\"]) / 1024**3, 3),  # type: ignore[call-overload]\\n            \\\"at_t\\\": peak[\\\"t\\\"],\\n            \\\"walk_seconds_at_peak\\\": peak[\\\"walk_seconds\\\"],\\n            \\\"walk_seconds_max\\\": max(walks),\\n            \\\"walk_seconds_mean\\\": round(sum(walks) / len(walks), 3),\\n            \\\"cadence_seconds\\\": SAMPLE_SECONDS,\\n            \\\"at_exit_bytes\\\": final[\\\"bytes\\\"],\\n            \\\"samples\\\": len(samplers.disk),\\n            \\\"limit\\\": \\\"allocated size (du -s --block-size=1) of <root>/tmp plus every registered path existing at each sample; an allocation made and removed between two 5 s samples is not seen\\\",\\n            \\\"free_bytes_min\\\": min(int(s[\\\"free_bytes\\\"]) for s in samplers.disk),  # type: ignore[call-overload]\\n        },\\n        \\\"leaked_processes\\\": {\\\"count\\\": len(leaked), \\\"processes\\\": leaked, \\\"stopping\\\": stopping},\\n        \\\"leftovers\\\": leftovers,\\n        \\\"breakage\\\": {\\n            \\\"failed_tests\\\": failures,\\n            \\\"unix_socket_address_lines\\\": socket_lines,\\n            \\\"note\\\": \\\"failed tests parsed from the gate's output and .logs/gate-check.log; each re-run once on this tree with the inherited TMPDIR and no registration directory\\\",\\n        },\\n        \\\"escapes\\\": escapes,\\n        \\\"prior_attempts\\\": [prior_attempt(Path(p)) for p in args.prior],\\n        \\\"host\\\": {\\n            \\\"load1_peak\\\": max(host_load) if host_load else None,\\n            \\\"dispatches_peak\\\": max(host_disp) if host_disp else None,\\n            \\\"samples\\\": len(samplers.host),\\n            \\\"dispatch_counter\\\": \\\"scripts/budget-dispatches.sh\\\",\\n        },\\n        \\\"cleanup\\\": cleanup,\\n        \\\"disk_samples\\\": [{k: v for k, v in s.items() if k != \\\"per_path\\\"} for s in samplers.disk],\\n        \\\"host_samples\\\": samplers.host,\\n    }\\n    out = Path(args.out)\\n    out.write_text(json.dumps(summary, indent=1) + \\\"\\\\n\\\")\\n    print(json.dumps({k: summary[k] for k in (\\\"complete\\\", \\\"gate\\\", \\\"peak_temp_disk\\\")} | {\\\"leaked\\\": len(leaked), \\\"leftover_entries\\\": leftovers[\\\"entries_total\\\"], \\\"summary\\\": str(out)}, indent=1, default=str))\\n    return 0\\n\\n\\nif __name__ == \\\"__main__\\\":\\n    sys.exit(main())\\n\",\"index\":1,\"tool_call_id\":\"item_3\",\"started_at\":\"2026-10-16T17:12:00.162Z\",\"finished_at\":\"2026-10-16T17:12:00.166Z\",\"duration_ms\":4,\"status\":\"completed\"},{\"kind\":\"tool_call\",\"name\":\"command_execution\",\"input\":{\"command\":\"/usr/bin/bash -lc \\\"rg --files -g '*project.json' -g '*nx*' -g '*gate*impact*'; rg -n 'gate-host-impact|register_scratch|ORCHESTRATOR_GATE_SCRATCH' tests spikes nx.json package.json; cat nx.json; rg --files -g 'project.json' -g 'AGENTS.md'\\\"\",\"exit_code\":0},\"output\":\"orchestrator/project.json\\nnx.json\\nproject.json\\nscripts/nx-selection.sh\\nscripts/nx.sh\\ntests/plan_store_assets/project.json\\ntests/pre_push_provisioning/project.json\\ntests/tree_scans/test_nx_cache_scope.py\\ntests/tree_scans/project.json\\ntests/plan_tooling/follow_ups/project.json\\ntests/dispatch_bar/project.json\\ntests/session_setup/project.json\\ntests/plan_tooling/plan_copy/project.json\\ntests/ask_seam/settled_correlated_ruling/project.json\\ntests/plan_tooling/check_and_review/project.json\\ntests/plan_tooling/plan_flow/project.json\\ntests/dag_ui/project.json\\ntests/host_sweep/project.json\\ntests/host_views/project.json\\ntests/e2e/project.json\\ntests/e2e/nx_workspace.py\\ntests/unfinished/project.json\\ntests/release_pins/project.json\\ntests/session_open_conflict/project.json\\ntests/e2e/budget_gate/project.json\\ntests/e2e/spike_brief/project.json\\ntests/e2e/suite_helpers/project.json\\ntests/project_store_race/project.json\\ntests/e2e/registry_and_recipes/project.json\\ntests/plan_guidance/project.json\\ntests/e2e/workspace_copies/project.json\\ntests/session_setup_pypi/project.json\\ntests/e2e/workspace_copies/test_nx_wrapper_version_e2e.py\\ntests/run_end_hooks/project.json\\ntests/schema_cache/project.json\\ntests/family_scans/project.json\\ntests/graceful_cancel/project.json\\ntests/nx_inputs.py\\n.nx/workspace-da",
+   "",
+   "  Run duration:      1m 23s",
+   "  Critical path:     1m 23s (1 task)",
+   "  Recoverable time:  <1ms",
+   "",
+   "  Recommendations:",
+   "    - Speed up or split the longest tasks on the critical path:",
+   "        workspace:lint-llm-diff    1m 23s",
+   "nx: targets failed; fix the reported project findings and rerun the same 'just' recipe (full output: /home/nick/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.logs/nx.log)",
+   "lint-llm-diff: judged this diff against base cd5e90c4c59b9e82a605a3429aee50325010cc63 (Nx cache miss)",
+   "error: Recipe `lint-llm-diff` failed on line 1073 with exit code 1",
+   "gate: llmlint failed; clear the reported findings against 'just lint-llm-diff origin/main' alone, then rerun 'just gate origin main' once to confirm (full output: /home/nick/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.logs/gate-llmlint.log)",
+   "error: Recipe `gate` failed on line 117 with exit code 1"
+  ]
+ },
+ "peak_temp_disk": {
+  "bytes": 2560000,
+  "gib": 0.002,
+  "at_t": 86.09,
+  "walk_seconds_at_peak": 0.002,
+  "walk_seconds_max": 0.007,
+  "walk_seconds_mean": 0.003,
+  "cadence_seconds": 5.0,
+  "at_exit_bytes": 2560000,
+  "samples": 19,
+  "limit": "allocated size (du -s --block-size=1) of <root>/tmp plus every registered path existing at each sample; an allocation made and removed between two 5 s samples is not seen",
+  "free_bytes_min": 13217583104
+ },
+ "leaked_processes": {
+  "count": 0,
+  "processes": [],
+  "stopping": {
+   "exited_within_grace": [],
+   "needed_term": [],
+   "needed_kill": [],
+   "alive_after_kill": []
+  }
+ },
+ "leftovers": {
+  "groups": [
+   {
+    "place": "/home/nick/projects/ai-orchestrator/runs/test-host-impact-brief-spikes/scratch/2027129-0/gate-host-impact-6dtlrzug/tmp",
+    "pattern": "node-compile-cache",
+    "top_level": 1,
+    "entries": 535,
+    "bytes": 2551808,
+    "examples": [
+     "node-compile-cache"
+    ],
+    "produced_by": [
+     "Node's module compile cache: the Nx CLI enables it (node_modules/nx/dist/src/utils/enable-compile-cache.js) and Node defaults it to os.tmpdir()/node-compile-cache unless NODE_COMPILE_CACHE names one; started through scripts/nx.sh"
+    ]
+   },
+   {
+    "place": "/home/nick/projects/ai-orchestrator/runs/test-host-impact-brief-spikes/scratch/2027129-0/gate-host-impact-6dtlrzug/tmp",
+    "pattern": "codex-bwrap-synthetic-mount-targets-*",
+    "top_level": 1,
+    "entries": 2,
+    "bytes": 4096,
+    "examples": [
+     "codex-bwrap-synthetic-mount-targets-522201107"
+    ],
+    "produced_by": []
+   }
+  ],
+  "entries_total": 537,
+  "bytes_total": 2555904,
+  "zero_byte_uv_locks": {
+   "count": 1,
+   "allocated_bytes": 0
+  }
+ },
+ "breakage": {
+  "failed_tests": [],
+  "unix_socket_address_lines": [
+   "{\"schema_version\":\"0.11\",\"oneharness_version\":\"0.22.0\",\"prompt\":\"Evaluate each rule against the target files and respond with the structured verdict object.\",\"model\":null,\"models\":null,\"resume\":null,\"fork\":false,\"session\":null,\"permission_mode\":\"read-only\",\"bypass_permissions\":false,\"dry_run\":false,"
+  ],
+  "note": "failed tests parsed from the gate's output and .logs/gate-check.log; each re-run once on this tree with the inherited TMPDIR and no registration directory",
+  "stage_failure": "the judged tier (just lint-llm-diff origin/main) refused the spike's own diff: FAIL changed_behavior_has_e2e, comments_earn_their_place, contracts_have_one_source_or_a_drift_gate, modern_domain_modeling (.logs/nx.log of that run); the gate stopped there and never reached just check. Harness-caused: the plan assumed an empty judged diff, which the committed harness made untrue"
+ },
+ "escapes": {
+  "findings": [
+   {
+    "kind": "tempfile-explicit-dir",
+    "file": "orchestrator/follow_up_comments.py",
+    "line": 961,
+    "function": "_staged",
+    "status": "contained",
+    "why": "staging directory beside its destination for an atomic rename; lives where the destination does",
+    "text": "staged = Path(tempfile.mkdtemp(prefix=\".staging-\", dir=parent))"
+   },
+   {
+    "kind": "node-scratch-dir",
+    "file": "orchestrator/follow_up_drafts.py",
+    "line": 115,
+    "function": "<module>",
+    "status": "contained-if-unset",
+    "why": "prefers $ONEPIPELINE_NODE_SCRATCH_DIR over TMPDIR; contained only when it is unset (the harness unsets it for the gate)",
+    "text": "NODE_SCRATCH_ENV = \"ONEPIPELINE_NODE_SCRATCH_DIR\""
+   },
+   {
+    "kind": "tempfile-explicit-dir",
+    "file": "orchestrator/follow_up_drafts.py",
+    "line": 752,
+    "function": "_publish",
+    "status": "contained",
+    "why": "atomic-write staging file beside its destination",
+    "text": "handle, temporary = tempfile.mkstemp(dir=directory, prefix=\".\", suffix=\".tmp\")"
+   },
+   {
+    "kind": "tempfile-explicit-dir",
+    "file": "orchestrator/spike_brief.py",
+    "line": 225,
+    "function": "write",
+    "status": "contained",
+    "why": "atomic-write staging file beside its destination",
+    "text": "descriptor, stage = tempfile.mkstemp(prefix=\".spike-brief-\", dir=path.parent)"
+   },
+   {
+    "kind": "node-scratch-dir",
+    "file": "scripts/allowlist-probe.py",
+    "line": 1175,
+    "function": "main",
+    "status": "contained-if-unset",
+    "why": "prefers $ONEPIPELINE_NODE_SCRATCH_DIR over TMPDIR; contained only when it is unset (the harness unsets it for the gate)",
+    "text": "base = os.environ.get(\"ONEPIPELINE_NODE_SCRATCH_DIR\") or tempfile.gettempdir()"
+   },
+   {
+    "kind": "node-scratch-dir",
+    "file": "scripts/allowlist-probe.py",
+    "line": 1185,
+    "function": "main",
+    "status": "contained-if-unset",
+    "why": "prefers $ONEPIPELINE_NODE_SCRATCH_DIR over TMPDIR; contained only when it is unset (the harness unsets it for the gate)",
+    "text": "\"TMPDIR or ONEPIPELINE_NODE_SCRATCH_DIR at one\""
+   },
+   {
+    "kind": "tempfile-explicit-dir",
+    "file": "scripts/allowlist-probe.py",
+    "line": 1188,
+    "function": "main",
+    "status": "contained-if-unset",
+    "why": "base = $ONEPIPELINE_NODE_SCRATCH_DIR or tempfile.gettempdir(): follows TMPDIR only when that variable is unset (the harness unsets it for the gate)",
+    "text": "scratch = Scratch(Path(tempfile.mkdtemp(prefix=\"allowlist-probe-\", dir=base)))"
+   },
+   {
+    "kind": "node-scratch-dir",
+    "file": "scripts/allowlist-probe.py",
+    "line": 1192,
+    "function": "main",
+    "status": "contained-if-unset",
+    "why": "prefers $ONEPIPELINE_NODE_SCRATCH_DIR over TMPDIR; contained only when it is unset (the harness unsets it for the gate)",
+    "text": "\"or point TMPDIR or ONEPIPELINE_NODE_SCRATCH_DIR at one that is, then retry\""
+   },
+   {
+    "kind": "mktemp-explicit-dir",
+    "file": "scripts/budget-design-doc-summary.sh",
+    "line": 30,
+    "function": "<top level>",
+    "status": "contained",
+    "why": "${TMPDIR:-/tmp} follows TMPDIR",
+    "text": "scratch=$(mktemp -d \"${TMPDIR:-/tmp}/budget-design-doc-summary.XXXXXX\") ||"
+   },
+   {
+    "kind": "mktemp-explicit-dir",
+    "file": "scripts/finish-plan.sh",
+    "line": 700,
+    "function": "<top level>",
+    "status": "contained",
+    "why": "${TMPDIR:-/tmp} follows TMPDIR",
+    "text": "graph_dir=$(mktemp -d \"${TMPDIR:-/tmp}/finish-plan-graph.XXXXXX\") ||"
+   },
+   {
+    "kind": "mktemp-explicit-dir",
+    "file": "scripts/finish-plan.sh",
+    "line": 803,
+    "function": "<top level>",
+    "status": "contained",
+    "why": "${TMPDIR:-/tmp} follows TMPDIR",
+    "text": "answers_file=$(mktemp \"${TMPDIR:-/tmp}/finish-plan-answers.XXXXXX\") || {"
+   },
+   {
+    "kind": "home-scratch",
+    "file": "scripts/host-sweep.sh",
+    "line": 59,
+    "function": "host_sweep_dir",
+    "status": "neither",
+    "why": "the sweep's own memo under $XDG_CACHE_HOME/ai-orchestrator/sweep; session setup's, not the gate's",
+    "text": "local dir=\"${XDG_CACHE_HOME:-$HOME/.cache}/ai-orchestrator/sweep\""
+   },
+   {
+    "kind": "node-scratch-dir",
+    "file": "scripts/node-scratch-dir.sh",
+    "line": 37,
+    "function": "ensure_node_scratch_dir",
+    "status": "contained-if-unset",
+    "why": "prefers $ONEPIPELINE_NODE_SCRATCH_DIR over TMPDIR; contained only when it is unset (the harness unsets it for the gate)",
+    "text": "if [ -n \"${ONEPIPELINE_NODE_SCRATCH_DIR-}\" ]; then"
+   },
+   {
+    "kind": "node-scratch-dir",
+    "file": "scripts/node-scratch-dir.sh",
+    "line": 42,
+    "function": "ensure_node_scratch_dir",
+    "status": "contained-if-unset",
+    "why": "prefers $ONEPIPELINE_NODE_SCRATCH_DIR over TMPDIR; contained only when it is unset (the harness unsets it for the gate)",
+    "text": "scratch=$ONEPIPELINE_NODE_SCRATCH_DIR"
+   },
+   {
+    "kind": "node-scratch-dir",
+    "file": "scripts/node-scratch-dir.sh",
+    "line": 54,
+    "function": "ensure_node_scratch_dir",
+    "status": "contained-if-unset",
+    "why": "prefers $ONEPIPELINE_NODE_SCRATCH_DIR over TMPDIR; contained only when it is unset (the harness unsets it for the gate)",
+    "text": "export ONEPIPELINE_NODE_SCRATCH_DIR=\"$scratch\""
+   },
+   {
+    "kind": "mktemp-explicit-dir",
+    "file": "scripts/node-scratch-dir.sh",
+    "line": 71,
+    "function": "ensure_node_scratch_dir",
+    "status": "contained",
+    "why": "${TMPDIR:-/tmp} follows TMPDIR",
+    "text": "if ! scratch=$(mktemp -d \"${TMPDIR:-/tmp}/$ORCHESTRATOR_NODE_SCRATCH_PREFIX-XXXXXXXX\"); then"
+   },
+   {
+    "kind": "node-scratch-dir",
+    "file": "scripts/node-scratch-dir.sh",
+    "line": 81,
+    "function": "ensure_node_scratch_dir",
+    "status": "contained-if-unset",
+    "why": "prefers $ONEPIPELINE_NODE_SCRATCH_DIR over TMPDIR; contained only when it is unset (the harness unsets it for the gate)",
+    "text": "export ONEPIPELINE_NODE_SCRATCH_DIR=\"$scratch\""
+   },
+   {
+    "kind": "home-scratch",
+    "file": "scripts/nx.sh",
+    "line": 26,
+    "function": "<top level>",
+    "status": "neither",
+    "why": "the same persistent Nx caches under $XDG_CACHE_HOME; by design, not scratch",
+    "text": "cache_root=\"${XDG_CACHE_HOME:-${HOME}/.cache}/ai-orchestrator/nx/${repo_key}\""
+   },
+   {
+    "kind": "nx-native-file-cache",
+    "file": "scripts/nx.sh",
+    "line": 27,
+    "function": "<top level>",
+    "status": "neither",
+    "why": "NX_CACHE_DIRECTORY and NX_NATIVE_FILE_CACHE_DIRECTORY under ${XDG_CACHE_HOME:-$HOME/.cache}/ai-orchestrator/: persistent per-repository caches by design, outside TMPDIR and unregistered; not scratch, so not counted",
+    "text": "export NX_CACHE_DIRECTORY=\"$cache_root\""
+   },
+   {
+    "kind": "nx-native-file-cache",
+    "file": "scripts/nx.sh",
+    "line": 36,
+    "function": "<top level>",
+    "status": "neither",
+    "why": "NX_CACHE_DIRECTORY and NX_NATIVE_FILE_CACHE_DIRECTORY under ${XDG_CACHE_HOME:-$HOME/.cache}/ai-orchestrator/: persistent per-repository caches by design, outside TMPDIR and unregistered; not scratch, so not counted",
+    "text": "export NX_NATIVE_FILE_CACHE_DIRECTORY=\"${XDG_CACHE_HOME:-${HOME}/.cache}/ai-orchestrator/nx-native/${repo_key}\""
+   },
+   {
+    "kind": "home-scratch",
+    "file": "scripts/nx.sh",
+    "line": 36,
+    "function": "<top level>",
+    "status": "neither",
+    "why": "the same persistent Nx caches under $XDG_CACHE_HOME; by design, not scratch",
+    "text": "export NX_NATIVE_FILE_CACHE_DIRECTORY=\"${XDG_CACHE_HOME:-${HOME}/.cache}/ai-orchestrator/nx-native/${repo_key}\""
+   },
+   {
+    "kind": "literal-tmp",
+    "file": "scripts/nx.sh",
+    "line": 61,
+    "function": "<top level>",
+    "status": "neither",
+    "why": "writes under a literal /tmp, outside TMPDIR and unregistered",
+    "text": "nx_socket_dir=$(mktemp -d /tmp/aio-nx-XXXXXX)"
+   },
+   {
+    "kind": "mktemp-explicit-dir",
+    "file": "scripts/nx.sh",
+    "line": 61,
+    "function": "<top level>",
+    "status": "depends-on-dir",
+    "why": "explicit template directory; contained when that directory is",
+    "text": "nx_socket_dir=$(mktemp -d /tmp/aio-nx-XXXXXX)"
+   },
+   {
+    "kind": "mktemp-explicit-dir",
+    "file": "scripts/render-diagram.sh",
+    "line": 126,
+    "function": "<top level>",
+    "status": "contained",
+    "why": "staging file beside its own destination",
+    "text": "if ! staged=\"$(mktemp \"$destination/.render-diagram.XXXXXX.png\")\" ||"
+   },
+   {
+    "kind": "home-scratch",
+    "file": "scripts/repos-bootstrap.sh",
+    "line": 45,
+    "function": "usage",
+    "status": "neither",
+    "why": "repos-bootstrap memo under $XDG_CACHE_HOME; session setup's, not the gate's",
+    "text": "under `${XDG_CACHE_HOME:-$HOME/.cache}/ai-orchestrator/repos-bootstrap/`."
+   },
+   {
+    "kind": "home-scratch",
+    "file": "scripts/repos-bootstrap.sh",
+    "line": 100,
+    "function": "<top level>",
+    "status": "neither",
+    "why": "repos-bootstrap memo under $XDG_CACHE_HOME; session setup's, not the gate's",
+    "text": "memo_root=\"${XDG_CACHE_HOME:-$HOME/.cache}/ai-orchestrator/repos-bootstrap\""
+   },
+   {
+    "kind": "mktemp-explicit-dir",
+    "file": "scripts/smoke.sh",
+    "line": 47,
+    "function": "<top level>",
+    "status": "contained",
+    "why": "${TMPDIR:-/tmp} follows TMPDIR",
+    "text": "smoke_root=\"$(mktemp -d \"${TMPDIR:-/tmp}/orchestrator-smoke-XXXXXXXX\")\" \\"
+   },
+   {
+    "kind": "tempfile-explicit-dir",
+    "file": "tests/e2e/launch_monitor_observer/test_quota_fallthrough_e2e.py",
+    "line": 298,
+    "function": "_chain_turn",
+    "status": "contained",
+    "why": "dir=tmp_path, under the pytest root inside TMPDIR",
+    "text": "history_dir = Path(tempfile.mkdtemp(prefix=\"history-\", dir=tmp_path))"
+   },
+   {
+    "kind": "nx-not-via-wrapper",
+    "file": "tests/e2e/workspace_copies/test_workspace_contract_e2e.py",
+    "line": 277,
+    "function": "_add_bun_double",
+    "status": "contained",
+    "why": "a test's fake Nx binary inside its own temporary checkout, not a real Nx run",
+    "text": "if [[ -x node_modules/.bin/nx ]]; then"
+   },
+   {
+    "kind": "nx-not-via-wrapper",
+    "file": "tests/e2e/workspace_copies/test_workspace_contract_e2e.py",
+    "line": 299,
+    "function": "_add_bun_double",
+    "status": "contained",
+    "why": "a test's fake Nx binary inside its own temporary checkout, not a real Nx run",
+    "text": "cat >node_modules/.bin/nx <<'NX'"
+   },
+   {
+    "kind": "nx-not-via-wrapper",
+    "file": "tests/e2e/workspace_copies/test_workspace_contract_e2e.py",
+    "line": 303,
+    "function": "_add_bun_double",
+    "status": "contained",
+    "why": "a test's fake Nx binary inside its own temporary checkout, not a real Nx run",
+    "text": "chmod +x node_modules/.bin/nx"
+   },
+   {
+    "kind": "nx-not-via-wrapper",
+    "file": "tests/e2e/workspace_copies/test_workspace_contract_e2e.py",
+    "line": 315,
+    "function": "_mark_nx_installed",
+    "status": "contained",
+    "why": "a test's fake Nx binary inside its own temporary checkout, not a real Nx run",
+    "text": "nx = checkout / \"node_modules/.bin/nx\""
+   },
+   {
+    "kind": "nx-not-via-wrapper",
+    "file": "tests/e2e/workspace_copies/test_workspace_contract_e2e.py",
+    "line": 1401,
+    "function": "test_a_forced_workspace_install_discards_the_installed_tree_first",
+    "status": "contained",
+    "why": "a test's fake Nx binary inside its own temporary checkout, not a real Nx run",
+    "text": "assert (checkout / \"node_modules/.bin/nx\").is_file()"
+   },
+   {
+    "kind": "nx-not-via-wrapper",
+    "file": "tests/e2e/workspace_copies/test_workspace_contract_e2e.py",
+    "line": 1436,
+    "function": "test_an_install_refuses_a_linked_tree_and_a_forced_one_replaces_the_link",
+    "status": "contained",
+    "why": "a test's fake Nx binary inside its own temporary checkout, not a real Nx run",
+    "text": "assert (checkout / \"node_modules/.bin/nx\").is_file()"
+   },
+   {
+    "kind": "nx-not-via-wrapper",
+    "file": "tests/e2e/workspace_copies/test_workspace_contract_e2e.py",
+    "line": 1530,
+    "function": "test_concurrent_workspace_installs_install_once_and_both_succeed",
+    "status": "contained",
+    "why": "a test's fake Nx binary inside its own temporary checkout, not a real Nx run",
+    "text": "assert (checkout / \"node_modules/.bin/nx\").is_file()"
+   },
+   {
+    "kind": "nx-not-via-wrapper",
+    "file": "tests/e2e/workspace_copies/test_workspace_contract_e2e.py",
+    "line": 1553,
+    "function": "test_a_nested_nx_run_cannot_erase_the_running_one_s_log",
+    "status": "contained",
+    "why": "a test's fake Nx binary inside its own temporary checkout, not a real Nx run",
+    "text": "nx = checkout / \"node_modules/.bin/nx\""
+   },
+   {
+    "kind": "tempfile-explicit-dir",
+    "file": "tests/pytest_temp_root.py",
+    "line": 61,
+    "function": "claim",
+    "status": "contained",
+    "why": "dir=$PYTEST_DEBUG_TEMPROOT, which is unset at the top session (falls back to TMPDIR) and inherited as a root inside TMPDIR below it",
+    "text": "root = Path(tempfile.mkdtemp(prefix=ROOT_PREFIX, dir=os.environ.get(TEMPROOT_ENV)))"
+   },
+   {
+    "kind": "literal-tmp",
+    "file": "tests/short_state.py",
+    "line": 45,
+    "function": "<module>",
+    "status": "registered",
+    "why": "PARENT = /tmp: a Unix socket address leaves no room to nest the base under the gate's root, so short_state_base registers each /tmp/aio-* base in $ORCHESTRATOR_GATE_SCRATCH (this branch's throwaway patch)",
+    "text": "PARENT = Path(\"/tmp\")"
+   },
+   {
+    "kind": "tempfile-explicit-dir",
+    "file": "tests/short_state.py",
+    "line": 61,
+    "function": "short_state_base",
+    "status": "registered",
+    "why": "tempfile.mkdtemp(prefix='aio-', dir=PARENT=/tmp); registered as above",
+    "text": "_base = Path(tempfile.mkdtemp(prefix=BASE_PREFIX, dir=PARENT))"
+   }
+  ],
+  "non_writer_mentions": {
+   "scripts/dispatch-env.sh": 1,
+   "scripts/lock-timeout.sh": 1,
+   "scripts/node-scratch-dir.sh": 4,
+   "scripts/nx.sh": 3,
+   "tests/ask_seam/ask_manager/test_ask_manager_e2e.py": 2,
+   "tests/ask_seam/channel_reply/test_channel_reply_e2e.py": 1,
+   "tests/ask_seam/follow_up_drafts_launch/test_follow_up_drafts_launch_e2e.py": 1,
+   "tests/ask_seam/planner_fallback_ask/test_planner_fallback_ask_e2e.py": 3,
+   "tests/e2e/budget_gate/test_budget_target_e2e.py": 1,
+   "tests/e2e/budget_gate/test_budget_telemetry_e2e.py": 1,
+   "tests/e2e/fake_codex_untrusted_directory.py": 1,
+   "tests/e2e/launch_monitor_observer/test_claude_identity_routing_e2e.py": 1,
+   "tests/e2e/launch_monitor_observer/test_dispatch_environment_e2e.py": 1,
+   "tests/e2e/launch_monitor_observer/test_dispatched_operational_notes_e2e.py": 1,
+   "tests/e2e/launch_monitor_observer/test_fake_codex_reads_each_roles_prompt_e2e.py": 2,
+   "tests/e2e/launch_monitor_observer/test_oneharness_bin_override_e2e.py": 1,
+   "tests/e2e/launch_monitor_observer/test_onetaskgraph_host_e2e.py": 2,
+   "tests/e2e/registry_and_recipes/test_delegated_recipes_e2e.py": 9,
+   "tests/e2e/registry_and_recipes/test_plan_checklist_e2e.py": 1,
+   "tests/e2e/workspace_copies/test_workspace_contract_e2e.py": 1,
+   "tests/graceful_cancel/test_graceful_cancel_e2e.py": 1,
+   "tests/manager_allowlist/test_manager_allowlist_recipes_e2e.py": 3,
+   "tests/plan_store_cache.py": 1,
+   "tests/plan_tooling/check_and_review/test_check_plan_recipe_e2e.py": 1,
+   "tests/plan_tooling/follow_ups/test_follow_ups_recipe_e2e.py": 1,
+   "tests/plan_tooling/follow_ups/test_linear_routed_follow_ups_e2e.py": 1,
+   "tests/plan_tooling/plan_flow/test_visual_plan_flow_e2e.py": 1,
+   "tests/run_end_hooks/test_configured_plan_stores_stay_untouched_e2e.py": 1,
+   "tests/run_end_hooks/test_run_end_hooks_e2e.py": 1,
+   "tests/session_setup/test_fresh_checkout_bootstrap_e2e.py": 1,
+   "tests/test_dispatch_appendix.py": 3,
+   "tests/test_follow_up_comments.py": 2,
+   "tests/test_plan_check.py": 1,
+   "tests/test_plan_review.py": 1,
+   "tests/test_planner_seam_contracts.py": 2,
+   "tests/test_project_store.py": 2,
+   "tests/test_publication_guard.py": 1,
+   "tests/test_short_state_budget.py": 1,
+   "tests/test_spike_flow.py": 1
+  },
+  "note": "static search of tracked code (py, sh, justfile, hooks); 'non_writer_mentions' counts lines that matched a search but read or quote a path rather than write one"
+ },
+ "prior_attempts": [
+  {
+   "summary_file": "spikes/gate-host-impact/summary-attempt-1.json",
+   "measured_at": "2026-10-16T17:10:01Z",
+   "gate": {
+    "exit_status": 1,
+    "wall_clock_seconds": 3.0,
+    "processes_started_lower_bound": 12,
+    "log_tail": [
+     "lint-llm-diff: ignoring the ambient global Nx cache skip; force a fresh judgement of this tier alone with 'just lint-llm-diff origin/main --skip-nx-cache'",
+     "",
+     " NX   Failed to load 3 default Nx plugin(s):",
+     "",
+     "  - /home/nick/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/node_modules/nx/dist/src/plugins/js: Attempted to open socket that exceeds the maximum socket length.",
+     "",
+     "Set NX_SOCKET_DIR to a shorter path (e.g. /tmp/nx-tmp) to avoid this issue.",
+     "  - /home/nick/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/node_modules/nx/dist/src/plugins/package-json: Attempted to open socket that exceeds the maximum socket length.",
+     "",
+     "Set NX_SOCKET_DIR to a shorter path (e.g. /tmp/nx-tmp) to avoid this issue.",
+     "  - /home/nick/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/node_modules/nx/dist/src/plugins/project-json/build-nodes/project-json: Attempted to open socket that exceeds the maximum socket length.",
+     "",
+     "Set NX_SOCKET_DIR to a shorter path (e.g. /tmp/nx-tmp) to avoid this issue.",
+     "Pass --verbose to see the stacktrace.",
+     "",
+     "nx: targets failed; fix the reported project findings and rerun the same 'just' recipe (full output: /home/nick/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.logs/nx.log)",
+     "lint-llm-diff: judged this diff against base cd5e90c4c59b9e82a605a3429aee50325010cc63 (Nx cache miss)",
+     "error: Recipe `lint-llm-diff` failed on line 1073 with exit code 1",
+     "gate: llmlint failed; clear the reported findings against 'just lint-llm-diff origin/main' alone, then rerun 'just gate origin main' once to confirm (full output: /home/nick/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/.logs/gate-llmlint.log)",
+     "error: Recipe `gate` failed on line 117 with exit code 1"
+    ]
+   },
+   "peak_temp_disk_bytes": 2412544,
+   "leaked_processes": 0,
+   "leftovers": {
+    "groups": [
+     {
+      "place": "/home/nick/projects/ai-orchestrator/runs/test-host-impact-brief-spikes/scratch/2027129-0/gate-host-impact-0xpgohat/tmp",
+      "pattern": "node-compile-cache",
+      "top_level": 1,
+      "entries": 507,
+      "bytes": 2408448,
+      "examples": [
+       "node-compile-cache"
+      ],
+      "produced_by": [
+       "Node's module compile cache: the Nx CLI enables it (node_modules/nx/dist/src/utils/enable-compile-cache.js) and Node defaults it to os.tmpdir()/node-compile-cache unless NODE_COMPILE_CACHE names one; started through scripts/nx.sh"
+      ]
+     }
+    ],
+    "entries_total": 507,
+    "bytes_total": 2408448,
+    "zero_byte_uv_locks": {
+     "count": 0,
+     "allocated_bytes": 0
+    }
+   },
+   "breakage": {
+    "failed_tests": [],
+    "unix_socket_address_lines": [
+     "- /home/nick/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/node_modules/nx/dist/src/plugins/js: Attempted to open socket that exceeds the maximum socket length.",
+     "- /home/nick/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/node_modules/nx/dist/src/plugins/package-json: Attempted to open socket that exceeds the maximum socket length.",
+     "- /home/nick/.onevcs/workspaces/github.com-nickderobertis-ai-orchestrator-c2fddf4e28b4/pool/1/worktree/node_modules/nx/dist/src/plugins/project-json/build-nodes/project-json: Attempted to open socket that exceeds the maximum socket length."
+    ],
+    "note": "failed tests parsed from the gate's output and .logs/gate-check.log; each re-run once on this tree with the inherited TMPDIR and no registration directory; unix_socket_address_lines re-derived after the run from the same gate log with the widened pattern (the run's own pattern missed Nx's wording)",
+    "cause": "Nx plugin workers open Unix sockets under os.tmpdir()/<workspace hash> (node_modules/nx/dist/src/daemon/tmp-dir.js getSocketDir); with TMPDIR at the 118-byte root/tmp the address passed 108 bytes and every Nx run (first: just lint-llm-diff via scripts/nx.sh) failed to load its default plugins"
+   },
+   "cleanup": {
+    "root": "/home/nick/projects/ai-orchestrator/runs/test-host-impact-brief-spikes/scratch/2027129-0/gate-host-impact-0xpgohat",
+    "root_removed": "removed",
+    "registered": {}
+   }
+  }
+ ],
+ "host": {
+  "load1_peak": 16.14,
+  "dispatches_peak": 5,
+  "samples": 18,
+  "dispatch_counter": "scripts/budget-dispatches.sh"
+ },
+ "cleanup": {
+  "root": "/home/nick/projects/ai-orchestrator/runs/test-host-impact-brief-spikes/scratch/2027129-0/gate-host-impact-6dtlrzug",
+  "root_removed": "removed",
+  "registered": {
+   "/tmp/aio-nx-PlXpy5": "absent"
+  }
+ },
+ "disk_samples": [
+  {
+   "t": 0.0,
+   "label": "periodic",
+   "bytes": 4096,
+   "walk_seconds": 0.002,
+   "paths_walked": 1,
+   "free_bytes": 13227356160
+  },
+  {
+   "t": 5.0,
+   "label": "periodic",
+   "bytes": 1773568,
+   "walk_seconds": 0.002,
+   "paths_walked": 2,
+   "free_bytes": 13225402368
+  },
+  {
+   "t": 10.0,
+   "label": "periodic",
+   "bytes": 2252800,
+   "walk_seconds": 0.002,
+   "paths_walked": 2,
+   "free_bytes": 13224210432
+  },
+  {
+   "t": 15.01,
+   "label": "periodic",
+   "bytes": 2256896,
+   "walk_seconds": 0.004,
+   "paths_walked": 2,
+   "free_bytes": 13224046592
+  },
+  {
+   "t": 20.01,
+   "label": "periodic",
+   "bytes": 2256896,
+   "walk_seconds": 0.005,
+   "paths_walked": 2,
+   "free_bytes": 13222916096
+  },
+  {
+   "t": 25.01,
+   "label": "periodic",
+   "bytes": 2256896,
+   "walk_seconds": 0.007,
+   "paths_walked": 2,
+   "free_bytes": 13222883328
+  },
+  {
+   "t": 30.01,
+   "label": "periodic",
+   "bytes": 2256896,
+   "walk_seconds": 0.002,
+   "paths_walked": 2,
+   "free_bytes": 13222748160
+  },
+  {
+   "t": 35.0,
+   "label": "periodic",
+   "bytes": 2256896,
+   "walk_seconds": 0.002,
+   "paths_walked": 2,
+   "free_bytes": 13222703104
+  },
+  {
+   "t": 40.01,
+   "label": "periodic",
+   "bytes": 2256896,
+   "walk_seconds": 0.003,
+   "paths_walked": 2,
+   "free_bytes": 13222694912
+  },
+  {
+   "t": 45.01,
+   "label": "periodic",
+   "bytes": 2224128,
+   "walk_seconds": 0.003,
+   "paths_walked": 2,
+   "free_bytes": 13222625280
+  },
+  {
+   "t": 50.01,
+   "label": "periodic",
+   "bytes": 2224128,
+   "walk_seconds": 0.002,
+   "paths_walked": 2,
+   "free_bytes": 13222625280
+  },
+  {
+   "t": 55.01,
+   "label": "periodic",
+   "bytes": 2224128,
+   "walk_seconds": 0.006,
+   "paths_walked": 2,
+   "free_bytes": 13222481920
+  },
+  {
+   "t": 60.01,
+   "label": "periodic",
+   "bytes": 2224128,
+   "walk_seconds": 0.004,
+   "paths_walked": 2,
+   "free_bytes": 13222412288
+  },
+  {
+   "t": 65.01,
+   "label": "periodic",
+   "bytes": 2224128,
+   "walk_seconds": 0.002,
+   "paths_walked": 2,
+   "free_bytes": 13222367232
+  },
+  {
+   "t": 70.01,
+   "label": "periodic",
+   "bytes": 2224128,
+   "walk_seconds": 0.002,
+   "paths_walked": 2,
+   "free_bytes": 13222330368
+  },
+  {
+   "t": 75.02,
+   "label": "periodic",
+   "bytes": 2224128,
+   "walk_seconds": 0.006,
+   "paths_walked": 2,
+   "free_bytes": 13221847040
+  },
+  {
+   "t": 80.01,
+   "label": "periodic",
+   "bytes": 2224128,
+   "walk_seconds": 0.002,
+   "paths_walked": 2,
+   "free_bytes": 13221838848
+  },
+  {
+   "t": 85.02,
+   "label": "periodic",
+   "bytes": 2224128,
+   "walk_seconds": 0.005,
+   "paths_walked": 2,
+   "free_bytes": 13217583104
+  },
+  {
+   "t": 86.09,
+   "label": "at-exit",
+   "bytes": 2560000,
+   "walk_seconds": 0.002,
+   "paths_walked": 1,
+   "free_bytes": 13222453248
+  }
+ ],
+ "host_samples": [
+  {
+   "t": 0.64,
+   "load1": 12.47,
+   "dispatches": 5
+  },
+  {
+   "t": 5.65,
+   "load1": 12.67,
+   "dispatches": 5
+  },
+  {
+   "t": 10.68,
+   "load1": 13.98,
+   "dispatches": 5
+  },
+  {
+   "t": 15.6,
+   "load1": 13.34,
+   "dispatches": 5
+  },
+  {
+   "t": 20.54,
+   "load1": 13.07,
+   "dispatches": 5
+  },
+  {
+   "t": 25.64,
+   "load1": 12.59,
+   "dispatches": 5
+  },
+  {
+   "t": 30.48,
+   "load1": 13.02,
+   "dispatches": 5
+  },
+  {
+   "t": 35.42,
+   "load1": 13.66,
+   "dispatches": 5
+  },
+  {
+   "t": 40.72,
+   "load1": 14.01,
+   "dispatches": 5
+  },
+  {
+   "t": 45.69,
+   "load1": 14.01,
+   "dispatches": 5
+  },
+  {
+   "t": 50.6,
+   "load1": 13.68,
+   "dispatches": 5
+  },
+  {
+   "t": 55.68,
+   "load1": 14.91,
+   "dispatches": 5
+  },
+  {
+   "t": 60.81,
+   "load1": 15.8,
+   "dispatches": 5
+  },
+  {
+   "t": 65.82,
+   "load1": 16.14,
+   "dispatches": 5
+  },
+  {
+   "t": 70.61,
+   "load1": 15.24,
+   "dispatches": 5
+  },
+  {
+   "t": 75.72,
+   "load1": 14.34,
+   "dispatches": 5
+  },
+  {
+   "t": 80.47,
+   "load1": 14.0,
+   "dispatches": 5
+  },
+  {
+   "t": 85.84,
+   "load1": 13.75,
+   "dispatches": 4
+  }
+ ]
+}
