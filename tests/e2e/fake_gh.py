@@ -8,21 +8,22 @@ git into a real bare origin — judged by a real `pre-push` hook where the journ
 for one — and the change request this records is opened by the real `onevcs` from the
 real recipe.
 
-What it answers is the calls opening a change request makes: who is authenticated,
-which changes already exist for a head and base, the `pr create` itself, the head
-commit of what was just created, whether it is a draft, which checks its base
-requires, and the `pr ready` that lifts one. The base is unprotected unless
-`FAKE_GH_STATE/checks.json` scripts a watch.
+What it answers is the calls opening a change request makes: who is authenticated, which
+changes already exist for a head and base, the `pr create` itself, the head commit of
+what was just created, whether it is a draft, which checks its base requires, the `pr
+ready` that lifts one, and each repository's visibility — public, so no repository's
+name is a term another one's publication must keep out of what it writes. The base is
+unprotected unless `FAKE_GH_STATE/checks.json` scripts a watch.
 That file contains one `statusCheckRollup` list per poll, with the last repeated;
 classic protection then requires `aggregate`. The draft journeys model a workflow
 whose aggregate waits on other jobs and which has no `ready_for_review` trigger:
 lifting changes only the draft flag and never starts another run. Workflow-runs
 and check-suites reads return GitHub's empty-list shapes for that idle head.
-Every call is appended to
-`FAKE_GH_CALLS` as JSON argv, and the body of each opened change request is written
-to `FAKE_GH_STATE/pr-<n>.body` — byte for byte, because "the change request carries
-exactly the drafted body" is a claim about characters and an assertion against
-anything but the recorded file would be a claim about this program instead.
+Every call is appended to `FAKE_GH_CALLS` as JSON argv, and the body of each
+opened change request is written to `FAKE_GH_STATE/pr-<n>.body` — byte for byte, because
+"the change request carries exactly the drafted body" is a claim about characters and an
+assertion against anything but the recorded file would be a claim about this program
+instead.
 
 **A journey may give the base required checks, and decide when the host merges.** Named
 by `FAKE_GH_CHECKS`, a file of one check a line — `<name> <status> <conclusion>
@@ -35,6 +36,18 @@ tree onto the base in the bare origin, as GitHub does, so the merge commit it re
 one real git put there — at the first call that finds `FAKE_GH_STATE/merge` written.
 Unset, the host is the unprotected one above, or the `checks.json` one when that is
 scripted instead; the two scripts are never combined in one journey.
+
+It is one host holding several repositories, as GitHub is. Every call is answered for
+the repository it names — `--repo`, or the `repos/<owner>/<name>/` an `api` path is
+under — and `REPOSITORY` where it names none, so each repository numbers its change
+requests from 1 as GitHub does, and two repositories' change requests collide on
+number while staying two change requests. `REPOSITORY`'s records stay at the top of
+`FAKE_GH_STATE`, where the journeys written against one repository read them; every
+other repository's are under `repositories/<owner>/<name>/` there. `FAKE_GH_ORIGINS`
+maps a repository to its bare origin, beside the one `FAKE_GH_ORIGIN` names for
+`REPOSITORY`. What the host does on its own — a person merging or closing a change request,
+or one opened by a build that is no longer installed — is `hold`, `merge` and `close`
+below, which write exactly the record a call reads back.
 """
 
 from __future__ import annotations
@@ -54,8 +67,15 @@ STATE_ENV = "FAKE_GH_STATE"
 #: The bare origin a created change request reads its head commit from, so the sha it
 #: reports is the one real git actually put there.
 ORIGIN_ENV = "FAKE_GH_ORIGIN"
-#: The repository every URL this host mints is under.
-REPOSITORY = "acme-corp/hosted"
+#: Each other repository's bare origin, as a JSON object keyed by `owner/name`.
+ORIGINS_ENV = "FAKE_GH_ORIGINS"
+#: A repository as `gh` names one, `owner/name`: what keeps each one's change requests apart.
+type Repository = str
+#: A commit's full sha, as the origin reports it.
+type Commit = str
+
+#: The repository a call naming none is answered for.
+REPOSITORY: Repository = "acme-corp/hosted"
 #: The check script the paragraph above describes; unset, nothing is required.
 CHECKS_ENV = "FAKE_GH_CHECKS"
 #: The file under the state directory a journey writes to let the host merge what it armed.
@@ -99,6 +119,24 @@ def _state() -> Path:
     return state
 
 
+def records(state: Path, repository: Repository) -> Path:
+    """Where this host keeps one repository's change requests, under `state`."""
+    held = state if repository == REPOSITORY else state / "repositories" / repository
+    held.mkdir(parents=True, exist_ok=True)
+    return held
+
+
+def _repository(argv: list[str]) -> Repository:
+    """The repository a call is about: the one it names, or `REPOSITORY`."""
+    for flag in ("--repo", "-R"):
+        if flag in argv[:-1]:
+            return argv[argv.index(flag) + 1]
+    if argv[:1] == ["api"] and len(argv) > 1 and argv[1].startswith("repos/"):
+        owner, name = argv[1].split("/")[1:3]
+        return f"{owner}/{name}"
+    return REPOSITORY
+
+
 def _record(argv: list[str]) -> None:
     with Path(os.environ[CALLS_ENV]).open("a", encoding="utf-8") as calls:
         calls.write(json.dumps(argv) + "\n")
@@ -123,6 +161,10 @@ class Call(NamedTuple):
     body: str = ""
     #: `--json`, split into the field names the caller asked `pr view` for.
     fields: tuple[str, ...] = ()
+    #: `--repo`, or the repository an `api` path is under: `REPOSITORY` where neither.
+    repository: Repository = REPOSITORY
+    #: `--state`, which change requests `pr list` answers with: gh's own default, `open`.
+    state: str = "open"
 
 
 class Change(TypedDict):
@@ -143,10 +185,13 @@ class Change(TypedDict):
     head: str
     base: str
     title: str
+    #: `gh`'s own shape for the commit a merge reached the base as: `{"oid": sha}` once
+    #: merged, and `None` while it is not. What the installed `onevcs` reads it as is held by
+    #: the sweep journey's merged branch, which retires only on this field read as onevcs
+    #: reads it, so a shape drifting from the reader fails there by name.
+    mergeCommit: MergeCommit | None
     #: Whether `pr merge --auto` armed it, for the host to merge once it may.
     armed: bool
-    #: The commit the host's squash put on the base, once it merged.
-    mergeCommit: MergeCommit | None
     mergedAt: str | None
 
 
@@ -225,23 +270,34 @@ def _call(argv: list[str]) -> Call:
         title=read.get("title", ""),
         body=read.get("body", ""),
         fields=tuple(field for field in read.get("json", "").split(",") if field),
+        repository=_repository(argv),
+        state=read.get("state", "open"),
     )
 
 
-def _remembered() -> list[Change]:
-    """Every change request this host has opened, in the order it opened them."""
-    # `cast` rather than a check: every one of these files was written by `_create`
-    # below, so the shape is this program's own and a JSON round trip is the only reason
-    # it is not statically known. A validator here would be asserting against itself.
+def _remembered(repository: Repository) -> list[Change]:
+    """Every change request this host holds for one repository, in number order."""
+    # `cast` rather than a check: every one of these files was written by `_create` or
+    # `hold` below, so the shape is this program's own and a JSON round trip is the only
+    # reason it is not statically known. A validator here would be asserting against
+    # itself.
     return [
         cast(Change, json.loads(record.read_text(encoding="utf-8")))
-        for record in sorted(_state().glob("pr-*.json"))
+        for record in sorted(records(_state(), repository).glob("pr-*.json"))
     ]
 
 
-def _head_sha(head: str) -> str:
+def _origin(repository: Repository) -> str:
+    """The bare origin one repository's branches are really pushed to, if it has one."""
+    if repository == REPOSITORY:
+        return os.environ.get(ORIGIN_ENV, "")
+    origins: dict[str, str] = json.loads(os.environ.get(ORIGINS_ENV) or "{}")
+    return origins.get(repository, "")
+
+
+def _head_sha(repository: Repository, head: str) -> Commit:
     """What the origin really has on that branch, read from the origin itself."""
-    origin = os.environ.get(ORIGIN_ENV, "")
+    origin = _origin(repository)
     if not origin:
         return "unknown"
     done = subprocess.run(
@@ -255,40 +311,98 @@ def _head_sha(head: str) -> str:
 
 # llmlint: ignore-block[e2e_not_mocked] This file is the `gh` boundary AGENTS.md permits doubling — the published CLI `onevcs` delegates to, through the `ONEVCS_GH` seam it publishes for this — and what it adds answers the calls the pinned `onevcs` now makes there, so `onevcs`, the recipes and git stay real.  # noqa: E501 - a directive is one line
 def _create(call: Call, *, draft: bool) -> int:
-    state = _state()
+    held = records(_state(), call.repository)
     number = 1
-    while (state / f"pr-{number}.json").exists():
+    while (held / f"pr-{number}.json").exists():
         number += 1
-    (state / f"pr-{number}.body").write_text(call.body, encoding="utf-8")
+    (held / f"pr-{number}.body").write_text(call.body, encoding="utf-8")
+    opened = hold(
+        _state(),
+        call.repository,
+        number=number,
+        head=call.head,
+        head_sha=_head_sha(call.repository, call.head),
+        base=call.base,
+        title=call.title,
+        draft=draft,
+    )
+    sys.stdout.write(f"{opened['url']}\n")
+    return 0
+
+
+def hold(
+    state: Path,
+    repository: Repository,
+    *,
+    number: int,
+    head: str,
+    head_sha: Commit,
+    base: str = "main",
+    title: str = "",
+    draft: bool = False,
+) -> Change:
+    """The host holding change request `number` of `repository` open from `head`.
+
+    What `pr create` records, and what a change request opened by a build that is no
+    longer installed left on the host — the second being what a journey seeds.
+    """
     opened: Change = {
         "number": number,
-        "url": f"https://github.com/{REPOSITORY}/pull/{number}",
+        "url": f"https://github.com/{repository}/pull/{number}",
         "state": "OPEN",
-        "headRefOid": _head_sha(call.head),
+        "headRefOid": head_sha,
         "isDraft": draft,
-        "head": call.head,
-        "base": call.base,
-        "title": call.title,
+        "head": head,
+        "base": base,
+        "title": title,
         "armed": False,
         "mergeCommit": None,
         "mergedAt": None,
     }
-    (state / f"pr-{number}.json").write_text(json.dumps(opened), encoding="utf-8")
-    sys.stdout.write(f"https://github.com/{REPOSITORY}/pull/{number}\n")
-    return 0
+    path = records(state, repository) / f"pr-{number}.json"
+    path.write_text(json.dumps(opened), encoding="utf-8")
+    return opened
 
 
-# llmlint: ignore-end[e2e_not_mocked]
+def merge(state: Path, repository: Repository, *, number: int, commit: Commit) -> Change:
+    """A person merging change request `number` of `repository` on the host.
+
+    The host reports it `MERGED`, at `commit` on the base, from the head it held — which
+    is what a later `pr view` answers, and nothing else about it moves.
+    """
+    path = records(state, repository) / f"pr-{number}.json"
+    # `cast` for the same reason as in `_remembered`: `hold` wrote this file.
+    record = cast(Change, json.loads(path.read_text(encoding="utf-8")))
+    record["state"] = "MERGED"
+    record["isDraft"] = False
+    record["mergeCommit"] = {"oid": commit}
+    path.write_text(json.dumps(record), encoding="utf-8")
+    return record
 
 
-# llmlint: ignore-block[e2e_not_mocked] This file is the `gh` boundary AGENTS.md permits doubling — the published CLI `onevcs` delegates to, through the `ONEVCS_GH` seam it publishes for this — and the checks, mergeability and merge it reports are the host's own answers there, so `onevcs`, the recipes and git stay real.  # noqa: E501 - a directive is one line
+def close(state: Path, repository: Repository, *, number: int) -> Change:
+    """A person closing change request `number` of `repository` without merging it."""
+    path = records(state, repository) / f"pr-{number}.json"
+    # `cast` for the same reason as in `_remembered`: `hold` wrote this file.
+    record = cast(Change, json.loads(path.read_text(encoding="utf-8")))
+    record["state"] = "CLOSED"
+    path.write_text(json.dumps(record), encoding="utf-8")
+    return record
+
+
 def _view(number: str, call: Call) -> int:
-    """Exactly the fields the call asked for, as `gh` answers."""
-    path = _state() / f"pr-{number}.json"
-    # `cast` for the same reason as in `_remembered`: `_create` wrote this file.
+    """Exactly the fields the call asked for, of the repository it named, as `gh` answers."""
+    path = records(_state(), call.repository) / f"pr-{number}.json"
+    if not path.exists():
+        sys.stderr.write(
+            f"GraphQL: Could not resolve to a PullRequest with the number of {number}. "
+            "(repository.pullRequest)\n"
+        )
+        return 1
+    # `cast` for the same reason as in `_remembered`: `hold` wrote this file.
     record = cast(Change, json.loads(path.read_text(encoding="utf-8")))
     if record["armed"] and record["state"] == "OPEN" and (_state() / MERGE_PERMIT).exists():
-        record = _merge_now(path, record)
+        record = _merge_now(path, record, call.repository)
     # Projected off a plain mapping of the record, because which fields `--json` names is
     # the caller's to choose and a fixed field cannot stand in for a chosen one.
     remembered: dict[str, object] = {
@@ -316,13 +430,9 @@ def _view(number: str, call: Call) -> int:
     return 0
 
 
-# llmlint: ignore-end[e2e_not_mocked]
-
-
-# llmlint: ignore-block[e2e_not_mocked] This file is the `gh` boundary AGENTS.md permits doubling — the published CLI `onevcs` delegates to, through the `ONEVCS_GH` seam it publishes for this — and what it adds answers the calls the pinned `onevcs` now makes there, so `onevcs`, the recipes and git stay real.  # noqa: E501 - a directive is one line
-def _ready(number: str) -> int:
+def _ready(number: str, call: Call) -> int:
     """Lift a draft, as `gh pr ready` does: the record says so from then on."""
-    path = _state() / f"pr-{number}.json"
+    path = records(_state(), call.repository) / f"pr-{number}.json"
     # `cast` for the same reason as in `_remembered`: `_create` wrote this file.
     record = cast(Change, json.loads(path.read_text(encoding="utf-8")))
     record["isDraft"] = False
@@ -334,13 +444,9 @@ def _ready(number: str) -> int:
     return 0
 
 
-# llmlint: ignore-end[e2e_not_mocked]
-
-
-# llmlint: ignore-block[e2e_not_mocked] This file is the `gh` boundary AGENTS.md permits doubling — the published CLI `onevcs` delegates to, through the `ONEVCS_GH` seam it publishes for this — and the merge it performs is the host's own, done with real git in the bare origin, so `onevcs`, the recipes and git stay real.  # noqa: E501 - a directive is one line
-def _merge(number: str, *, auto: bool) -> int:
+def _merge(number: str, call: Call, *, auto: bool) -> int:
     """`pr merge --squash [--auto]`: merge now when the host may, otherwise arm it."""
-    path = _state() / f"pr-{number}.json"
+    path = records(_state(), call.repository) / f"pr-{number}.json"
     # `cast` for the same reason as in `_remembered`: `_create` wrote this file.
     record = cast(Change, json.loads(path.read_text(encoding="utf-8")))
     if record["state"] != "OPEN":
@@ -349,13 +455,13 @@ def _merge(number: str, *, auto: bool) -> int:
         record["armed"] = True
         path.write_text(json.dumps(record), encoding="utf-8")
         return 0
-    _merge_now(path, record)
+    _merge_now(path, record, call.repository)
     return 0
 
 
-def _merge_now(path: Path, record: Change) -> Change:
+def _merge_now(path: Path, record: Change, repository: Repository) -> Change:
     """Squash the head's tree onto the base in the bare origin, and record the merge."""
-    origin = os.environ[ORIGIN_ENV]
+    origin = _origin(repository)
 
     def plumbing(*args: str) -> str:
         return subprocess.run(
@@ -385,7 +491,7 @@ def _merge_now(path: Path, record: Change) -> Change:
     return record
 
 
-def _pr_checks(argv: list[str]) -> int:
+def _pr_checks(argv: list[str], call: Call) -> int:
     """`pr checks N [--required] --json …`: which checks block the merge, or where each ran.
 
     A base requiring nothing is answered as `gh` answers it — exit 1, nothing on stdout,
@@ -400,7 +506,10 @@ def _pr_checks(argv: list[str]) -> int:
         sys.stdout.write(json.dumps(required) + "\n")
         return 0
     links = [
-        {"name": check.name, "link": f"https://github.com/{REPOSITORY}/actions/runs/1/job/{index}"}
+        {
+            "name": check.name,
+            "link": f"https://github.com/{call.repository}/actions/runs/1/job/{index}",
+        }
         for index, check in enumerate(checks, start=1)
     ]
     sys.stdout.write(json.dumps(links) + "\n")
@@ -424,11 +533,33 @@ def _rules() -> int:
     return 0
 
 
-# llmlint: ignore-end[e2e_not_mocked]
+def _merge_scripted(number: str, call: Call) -> int:
+    """`pr merge` under a `checks.json` watch: refused on a draft, else fast-forwarded."""
+    record_path = records(_state(), call.repository) / f"pr-{number}.json"
+    # `_create` wrote this Change; deserialization alone loses its type.
+    record = cast(Change, json.loads(record_path.read_text(encoding="utf-8")))
+    if record["isDraft"]:
+        sys.stderr.write("cannot merge a draft\n")
+        return 1
+    subprocess.run(
+        [
+            "git",
+            "--git-dir",
+            _origin(call.repository),
+            "update-ref",
+            f"refs/heads/{record['base']}",
+            record["headRefOid"],
+        ],
+        check=True,
+    )
+    record["state"] = "MERGED"
+    record["mergeCommit"] = {"oid": record["headRefOid"]}
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    return 0
 
 
 def _list(call: Call) -> int:
-    """Every open change request for that head and base — none, until one is created."""
+    """Every change request in the asked state for that head and base, as `gh` filters them."""
     matched = [
         {
             "number": change["number"],
@@ -436,14 +567,15 @@ def _list(call: Call) -> int:
             "state": change["state"],
             "headRefOid": change["headRefOid"],
         }
-        for change in _remembered()
-        if change["head"] == call.head and change["base"] == call.base
+        for change in _remembered(call.repository)
+        if change["head"] == call.head
+        and change["base"] == call.base
+        and call.state in ("all", change["state"].lower())
     ]
     sys.stdout.write(json.dumps(matched) + "\n")
     return 0
 
 
-# llmlint: ignore-block[e2e_not_mocked] This file is the `gh` boundary AGENTS.md permits doubling — the published CLI `onevcs` delegates to, through the `ONEVCS_GH` seam it publishes for this — and what it adds answers the calls the pinned `onevcs` now makes there, so `onevcs`, the recipes and git stay real.  # noqa: E501 - a directive is one line
 def main(argv: list[str]) -> int:
     _record(argv)
     call = _call(argv)
@@ -451,11 +583,16 @@ def main(argv: list[str]) -> int:
         case ["api", "user", *_]:
             sys.stdout.write("tester\n")
             return 0
-        case ["api", path, *_] if path.startswith(f"repos/{REPOSITORY}/rules/branches/"):
+        case ["api", path, *_] if path == f"repos/{call.repository}":
+            # Every repository here is public, so no repository's name is a term another
+            # one's publication must keep out of what it writes.
+            sys.stdout.write(json.dumps({"visibility": "public", "private": False}) + "\n")
+            return 0
+        case ["api", path, *_] if path.startswith(f"repos/{call.repository}/rules/branches/"):
             # Unscripted, no ruleset applies to the base, so none of its rules requires a check.
             return _rules()
         case ["api", path, *_] if path.startswith(
-            f"repos/{REPOSITORY}/branches/"
+            f"repos/{call.repository}/branches/"
         ) and path.endswith("/protection/required_status_checks"):
             if (_state() / "checks.json").exists():
                 sys.stdout.write(json.dumps({"contexts": ["aggregate"], "checks": []}) + "\n")
@@ -473,27 +610,7 @@ def main(argv: list[str]) -> int:
             sys.stdout.write('[ {"name": "aggregate"} ]\n')
             return 0
         case ["pr", "merge", number, *_] if (_state() / "checks.json").exists():
-            record_path = _state() / f"pr-{number}.json"
-            # `_create` wrote this Change; deserialization alone loses its type.
-            record = cast(Change, json.loads(record_path.read_text(encoding="utf-8")))
-            if record["isDraft"]:
-                sys.stderr.write("cannot merge a draft\n")
-                return 1
-            subprocess.run(
-                [
-                    "git",
-                    "--git-dir",
-                    os.environ[ORIGIN_ENV],
-                    "update-ref",
-                    f"refs/heads/{record['base']}",
-                    record["headRefOid"],
-                ],
-                check=True,
-            )
-            record["state"] = "MERGED"
-            record["mergeCommit"] = {"oid": record["headRefOid"]}
-            record_path.write_text(json.dumps(record), encoding="utf-8")
-            return 0
+            return _merge_scripted(number, call)
         case ["pr", "create", *_]:
             return _create(call, draft="--draft" in argv)
         case ["pr", "list", *_]:
@@ -501,16 +618,16 @@ def main(argv: list[str]) -> int:
         case ["pr", "view", number, *_]:
             return _view(number, call)
         case ["pr", "ready", number, *_]:
-            return _ready(number)
+            return _ready(number, call)
         case ["run", "view", *_] if "--log" in argv:
             # The log `onevcs` keeps beside a check it records; its content is not this
             # host's to decide, only that the host produced one.
             sys.stdout.write(f"log of {argv[argv.index('--job') + 1]}\n")
             return 0
         case ["pr", "checks", _number, *_]:
-            return _pr_checks(argv)
+            return _pr_checks(argv, call)
         case ["pr", "merge", number, *_] if "--squash" in argv:
-            return _merge(number, auto="--auto" in argv)
+            return _merge(number, call, auto="--auto" in argv)
     sys.stderr.write(f"fake gh: nothing here answers {argv}\n")
     return 1
 

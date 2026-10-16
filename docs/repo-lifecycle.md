@@ -1975,8 +1975,23 @@ adopted `onevcs` rather than restated from memory.
 | carrying unattested incomplete provenance | [`just repo-recover <branch> --repo <checkout>`](#what-the-base-branch-carries-for-a-recovered-incomplete-step) | Attests the incomplete-step marker, verifies, and publishes |
 | complete, and the identity's **resolved publication policy** is `local-direct` — `onevcs rules check` answers it, whatever the origin's host | [`just integrate <branch>… --push`](#integrating-completed-workstreams) | Merge train: merges the named branches into the base locally, in order, then pushes; refused by name for the three change-request policies |
 | any unlanded state, and you want it **kept** rather than landed | `onevcs preserve --repo <checkout> <branch>` — what `just shutdown` runs for every branch its runs name | Pushes the branch to its identity's origin under its own name and lands nothing: no change request, no merge path, no base touched, no force-push. The branch stays on whichever row above it was on, now also on its origin |
-| provably holding no work beyond its base — its change request merged, its landing recorded, or every path it changed identical on the base | `onevcs retire <branch> --repo <checkout>`, which nobody need run: `onevcs session close`, `just sweep` and the engine's idle maintenance retire such a branch themselves | Deletes it from every registered checkout, run clone and pool slot clone that holds it, and its origin copy with `--no-verify`, because a deletion lands nothing; returns a slot rather than removing it; refuses anything else with exit `4` |
+| provably holding no work beyond its base — its **own repository's** change request merged, its landing recorded, or every path it changed identical on the base | `onevcs retire <branch> --repo <checkout>`, which nobody need run: `onevcs session close`, `just sweep` and the engine's idle maintenance retire such a branch themselves | Deletes it from every registered checkout, run clone and pool slot clone that holds it, and its origin copy with `--no-verify`, because a deletion lands nothing; returns a slot rather than removing it; refuses anything else with exit `4`. A change request opened from it that is still open keeps it as `open-change-request`, and one closed without merging as `closed-change-request` |
 | superseded — a retry replaced it and landed — and still differing from its base | `just reclaim-branch <branch> --repo <checkout>`, the manager's call | The same deletion as `retire`, discarding what it still differs in; refuses a branch `onevcs` classes `keep` and anything a live session holds, with exit `4` |
+
+**The `retire` row's merged proof is the branch's own repository's**, the rule onevcs
+0.49.0 states once in its `docs/contract.md` (*A branch is merged only on its own
+repository's change request*), which is where its detail lives: a legacy
+`publish-branch-<branch>` stream that every repository publishing one branch name shares
+lends none of them another one's change request or landing. Before it, one pass here
+retired 18 branches whose own change requests were still open, on another repository's
+merge. Three journeys hold it on the adopted releases: `just sweep` over two identities
+sharing a branch name keeps each one's open change request and a closed-unmerged one, and
+retires a branch whose own change request merged at its head
+(`tests/e2e/publish_and_landing/test_sweep_e2e.py`); and a dispatched node's session close
+keeps the branch of its open change request over the other identity's landing
+(`tests/e2e/publish_and_landing/test_session_close_retirement_e2e.py`), as two
+publications of one name through `just publish-branch` do
+(`tests/e2e/publish_and_landing/test_publish_branch_e2e.py`).
 
 The `integrate` row's condition is stated as the policy because the verb now gates on
 nothing else. Through onevcs 0.19.3 it gated on two stored identity fields that

@@ -9,7 +9,8 @@ field set, and every `not_examined[]` entry carrying a non-empty `owner` — ove
 root holding a pool slot and a preserved unpublished branch, the two families a wrapper
 here once had to name itself.
 
-Nothing is doubled. The recipe and both published verbs are the real ones; what makes
+Nothing but the remote host is doubled, and only where a journey has one. The recipe and
+both published verbs are the real ones; what makes
 that safe is isolation rather than substitution — `ONEAGENTGRAPH_STATE_DIR`, `TMPDIR` and
 `ONEVCS_HOME` put every family this run judges inside `tmp_path`. The pool slot is one a
 real `onevcs session open` placed and `session close` returned, and the preserved branch
@@ -21,6 +22,12 @@ read, and a later pass over unchanged inputs reuses it instead of re-deriving it
 onevcs 0.35.0 contract, `derivation: derived | reused` on every `finished-branches` entry.
 One journey drives the real recipe twice over a registered checkout holding a branch the
 pass keeps and a session branch it can prove retirable, and reads that field.
+
+Two hosted identities publishing one branch name must each keep their own open change
+request through a sweep — the retirement fix onevcs 0.49.0 carries — while a branch whose
+own change request merged at its head is retired. One journey holds that on the installed
+verb through the real recipe, with only the remote host's decisioning substituted, by
+`tests/e2e/fake_gh.py` through `ONEVCS_GH`.
 
 What the command covers and why is docs/orchestration.md, "The recorded run".
 
@@ -40,7 +47,13 @@ produces them: a `temp`-family directory whose owner died or is alive — the jo
 holds one alive does so with a real process taking the real lock — and a `workspaces` that
 is a file, which is what a half-provisioned onevcs state root looks like and the one way to
 make the real verb refuse. The pool slot and the preserved branch are produced through
-`onevcs register`, `session open` and `session close` and real git.
+`onevcs register`, `session open` and `session close` and real git. A third has no
+interface any more: the legacy branch-keyed `publish-branch-<branch>` stream whose events
+carry no `labels.identity`, one stream for every repository publishing that branch name,
+which every onevcs since 0.49.0 writes labelled. The journey over two hosted identities
+writes those records directly, in the shape this host's streams hold, because they are
+the input the retirement fix it proves is about; the branches, sessions, origins and
+change requests beside them are made by `onevcs`, real git and the host double.
 """
 
 from __future__ import annotations
@@ -52,6 +65,7 @@ import textwrap
 from pathlib import Path
 from typing import Literal, NamedTuple, TypedDict, cast
 
+import fake_gh
 import pytest
 from waits import timeout as e2e_timeout
 
@@ -522,3 +536,389 @@ def test_a_directory_a_live_process_holds_survives_a_real_sweep(host: Host) -> N
     finally:
         holder.terminate()
         holder.wait(timeout=e2e_timeout(30))
+
+
+#: The branch name both hosted repositories below publish, as the fleet whose shared
+#: stream retired eighteen open branches in a day did.
+SHARED_BRANCH = "nick/dev-shared-name"
+#: A branch of the first repository whose own change request the host merged at its head.
+LANDED_BRANCH = "nick/dev-landed"
+#: A branch of the second repository whose own change request was closed without merging.
+CLOSED_BRANCH = "nick/dev-closed"
+
+
+#: A session's token, as `onevcs session` names one.
+type SessionToken = str
+
+
+def _stream_token(branch: str) -> SessionToken:
+    """The legacy branch-keyed stream a `publish-branch` of `branch` recorded into."""
+    return "publish-branch-" + branch.replace("/", "-")
+
+
+class HostedRepository(NamedTuple):
+    """One repository of the substituted host, registered under its own GitHub origin."""
+
+    slug: fake_gh.Repository
+    origin: Path
+    checkout: Path
+
+    @property
+    def identity(self) -> str:
+        return f"github.com/{self.slug}"
+
+    @property
+    def name(self) -> str:
+        return self.slug.split("/")[1]
+
+    def url(self, number: int) -> str:
+        return f"https://github.com/{self.slug}/pull/{number}"
+
+
+class Worked(NamedTuple):
+    """A branch worked in a closed session and pushed: the session, and where it stands."""
+
+    token: SessionToken
+    tip: fake_gh.Commit
+
+
+class LegacyEvent(NamedTuple):
+    """One event of a legacy branch-keyed stream, before it is enveloped and numbered."""
+
+    kind: str
+    phase: str
+    payload: dict[str, object]
+
+
+class HostedFleet:
+    """Two hosted identities on one scratch state root, and the host that answers both.
+
+    The origins are real bare repositories and the checkouts real clones, registered by
+    `onevcs register` under the GitHub origin each is resolved from; the branches are
+    worked in real `onevcs session open` sessions that `session close` closed. What is
+    substituted is the remote host's decisioning alone — `tests/e2e/fake_gh.py` through
+    `ONEVCS_GH`, the seam `onevcs` publishes for it — answering each repository's change
+    requests separately, under numbers that collide across the two.
+    """
+
+    def __init__(self, host: Host) -> None:
+        self.host = host
+        self.gh_state = host.root / "gh-state"
+        self.gh_calls = host.root / "gh-calls.jsonl"
+        self.repositories = {name: self._repository(name) for name in ("alpha", "beta")}
+        # A hosted identity's change requests are opened for review, so the host is
+        # what decides whether one is open: the policy every repository here resolves.
+        (host.onevcs_home / "rules.yml").write_text(
+            "version: 3\n"
+            "trailer_prefix: Orchestrator-\n"
+            "rules: []\n"
+            "default:\n"
+            "  publication: change-open\n"
+            "  approvals: required\n",
+            encoding="utf-8",
+        )
+        for repository in self.repositories.values():
+            registered = host.onevcs(
+                "register",
+                str(repository.checkout),
+                "--origin",
+                f"https://github.com/{repository.slug}.git",
+            )
+            assert registered.returncode == 0, registered.stderr
+
+    @property
+    def environment(self) -> dict[str, str]:
+        return {
+            **self.host.environment,
+            # llmlint: ignore[e2e_not_mocked] Only the remote host's decisioning, at onevcs's seam.
+            "ONEVCS_GH": str(fake_gh.__file__),
+            "FAKE_GH_STATE": str(self.gh_state),
+            "FAKE_GH_CALLS": str(self.gh_calls),
+            "FAKE_GH_ORIGINS": json.dumps(
+                {
+                    repository.slug: str(repository.origin)
+                    for repository in self.repositories.values()
+                }
+            ),
+        }
+
+    def _repository(self, name: str) -> HostedRepository:
+        origin = self.host.root / f"{name}.git"
+        _git("init", "--quiet", "--bare", "--initial-branch=main", str(origin))
+        checkout = self.host.root / name
+        _git("clone", "--quiet", str(origin), str(checkout))
+        _git("commit", "--quiet", "--allow-empty", "-m", "seed", cwd=checkout)
+        _git("push", "--quiet", "origin", "HEAD:main", cwd=checkout)
+        return HostedRepository(f"acme-corp/{name}", origin, checkout)
+
+    def onevcs(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [str(ONEVCS), *arguments],
+            cwd=self.host.root,
+            env=self.environment,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=e2e_timeout(120),
+        )
+
+    def worked(self, repository: HostedRepository, branch: str, file: str) -> Worked:
+        """Work `branch` in a closed session and push it, as a publication left it."""
+        opened = self.onevcs(
+            "session", "open", str(repository.checkout), "--branch", branch, "--pool", "0"
+        )
+        assert opened.returncode == 0, opened.stderr
+        session = json.loads(opened.stdout)
+        worktree = Path(session["worktree"])
+        (worktree / file).write_text(f"{repository.slug} wrote this\n", encoding="utf-8")
+        _git("add", file, cwd=worktree)
+        _git("commit", "--quiet", "-m", f"feat: {repository.slug}'s {file}", cwd=worktree)
+        closed = self.onevcs("session", "close", session["token"])
+        assert closed.returncode == 0, closed.stderr
+        _git("push", "--quiet", "origin", branch, cwd=repository.checkout)
+        tip = _git("rev-parse", branch, cwd=repository.checkout).strip()
+        return Worked(session["token"], tip)
+
+    def merged_long_ago(self, repository: HostedRepository, number: int) -> str:
+        """Change request `number` of `repository`, merged at a squash its base carries."""
+        work = self.host.root / f"{repository.slug.replace('/', '-')}-old-{number}"
+        _git("clone", "--quiet", str(repository.origin), str(work))
+        (work / f"old-{number}.txt").write_text("old work\n", encoding="utf-8")
+        _git("add", "-A", cwd=work)
+        _git("commit", "--quiet", "-m", f"feat: old work (#{number})", cwd=work)
+        _git("push", "--quiet", "origin", "HEAD:main", cwd=work)
+        merged = _git("rev-parse", "HEAD", cwd=work).strip()
+        fake_gh.hold(
+            self.gh_state, repository.slug, number=number, head=f"old/{number}", head_sha=merged
+        )
+        fake_gh.merge(self.gh_state, repository.slug, number=number, commit=merged)
+        _git("pull", "--quiet", "--ff-only", "origin", "main", cwd=repository.checkout)
+        return merged
+
+    def squash_merged(self, repository: HostedRepository, number: int, branch: str) -> str:
+        """A person squash-merging `repository`'s change request `number` from `branch`."""
+        work = self.host.root / f"{repository.slug.replace('/', '-')}-merge-{number}"
+        _git("clone", "--quiet", str(repository.origin), str(work))
+        _git("fetch", "--quiet", "origin", branch, cwd=work)
+        _git("merge", "--quiet", "--squash", "FETCH_HEAD", cwd=work)
+        _git("commit", "--quiet", "-m", f"feat: {branch} (#{number})", cwd=work)
+        _git("push", "--quiet", "origin", "HEAD:main", cwd=work)
+        merged = _git("rev-parse", "HEAD", cwd=work).strip()
+        fake_gh.merge(self.gh_state, repository.slug, number=number, commit=merged)
+        _git("pull", "--quiet", "--ff-only", "origin", "main", cwd=repository.checkout)
+        return merged
+
+    def legacy_stream(self, branch: str, events: list[LegacyEvent]) -> None:
+        """The `publish-branch-<branch>` stream as a build before the identity label wrote it.
+
+        One stream per branch *name*, every repository's events in it, and none carrying
+        `labels.identity` — the shape this host's streams hold. No installed verb writes
+        this any more, which is why it is written here.
+        """
+        token = _stream_token(branch)
+        streams = self.host.onevcs_home / "streams"
+        streams.mkdir(parents=True, exist_ok=True)
+        lines = [
+            json.dumps(
+                {
+                    "v": 1,
+                    "ts": f"2026-10-12T11:{seq:02d}:00.000Z",
+                    "stream": token,
+                    "seq": seq,
+                    "source": "vcs",
+                    "kind": event.kind,
+                    "phase": event.phase,
+                    "labels": {"session": token},
+                    "payload": event.payload,
+                    "artifacts": [],
+                }
+            )
+            for seq, event in enumerate(events, start=1)
+        ]
+        (streams / f"{token}.ndjson").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def calls(self) -> list[list[str]]:
+        """Every call the host was asked to make, as the argv `onevcs` passed."""
+        if not self.gh_calls.exists():
+            return []
+        return [
+            json.loads(line)
+            for line in self.gh_calls.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+
+    def viewed(self) -> set[tuple[str, str]]:
+        """Every `(repository, number)` the host was asked `pr view` about."""
+        return {
+            (call[call.index("--repo") + 1], call[2])
+            for call in self.calls()
+            if call[:2] == ["pr", "view"] and "--repo" in call
+        }
+
+
+def _pushed(branch: str, head: str) -> LegacyEvent:
+    """A `push` of the branch's own name as the legacy stream records one, with its head."""
+    return LegacyEvent(
+        "push",
+        "development",
+        {"branch": branch, "remote": "origin", "accepted": True, "head": head},
+    )
+
+
+def _opened(url: str, number: int) -> LegacyEvent:
+    """A `change-opened` event as the legacy stream records one."""
+    return LegacyEvent(
+        "change-opened",
+        "review",
+        {"url": url, "host": "github", "id": str(number), "base": "main", "author": "tester"},
+    )
+
+
+def _landed(url: str, commit: str) -> LegacyEvent:
+    """A `change-merged` landing as the legacy stream records one, with no reported head."""
+    return LegacyEvent(
+        "change-merged",
+        "review",
+        {
+            "url": url,
+            "sha": commit,
+            "landed_at": "2026-06-20T23:12:25.000Z",
+            "landing": commit,
+        },
+    )
+
+
+def _tip(place: Path, branch: str) -> str | None:
+    """The commit `branch` stands at in a checkout or a bare origin, or `None`."""
+    done = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],
+        cwd=place,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=e2e_timeout(60),
+    )
+    return done.stdout.strip() or None
+
+
+def test_a_branch_name_two_repositories_share_is_kept_on_each_ones_own_open_change_request(
+    host: Host,
+) -> None:
+    """The retirement fix this host adopted, through the real recipe and the installed onevcs.
+
+    Two hosted repositories each publish one branch name with its own content, and the one
+    legacy `publish-branch-<branch>` stream holds both publications — alpha's push and #1,
+    then beta's push and #2 — and, newest of all, a landing naming beta's #1, which merged
+    long ago. Alpha's #2 merged long ago too. A pass that took the shared stream's newest
+    records reads beta's #2 as both branches' change request and retires both: measured
+    on onevcs 0.48.1, this fixture deletes both open branches on `merged-change-request`
+    naming beta's #2, without asking the host — the incident. So each branch must be kept
+    as `open-change-request` on the change request its own repository opened, asked of its
+    own repository; a branch whose own change request was closed without merging must be
+    kept as `closed-change-request`; and a branch whose own change request the host merged
+    at that branch's head must be retired on that proof, which a release keeping every
+    branch fails.
+    """
+    fleet = HostedFleet(host)
+    alpha, beta = fleet.repositories["alpha"], fleet.repositories["beta"]
+    beta_landing = fleet.merged_long_ago(beta, 1)
+    fleet.merged_long_ago(alpha, 2)
+    tokens: dict[str, str] = {}
+    tips: dict[str, str] = {}
+    for repository, number in ((alpha, 1), (beta, 2)):
+        worked = fleet.worked(repository, SHARED_BRANCH, f"{repository.name}.txt")
+        tokens[repository.slug], tips[repository.slug] = worked
+        fake_gh.hold(
+            fleet.gh_state, repository.slug, number=number, head=SHARED_BRANCH, head_sha=worked.tip
+        )
+    fleet.legacy_stream(
+        SHARED_BRANCH,
+        [
+            _pushed(SHARED_BRANCH, tips[alpha.slug]),
+            _opened(alpha.url(1), 1),
+            _pushed(SHARED_BRANCH, tips[beta.slug]),
+            _opened(beta.url(2), 2),
+            _landed(beta.url(1), beta_landing),
+        ],
+    )
+    landed_tip = fleet.worked(alpha, LANDED_BRANCH, "landed.txt").tip
+    fake_gh.hold(fleet.gh_state, alpha.slug, number=3, head=LANDED_BRANCH, head_sha=landed_tip)
+    fleet.legacy_stream(
+        LANDED_BRANCH, [_pushed(LANDED_BRANCH, landed_tip), _opened(alpha.url(3), 3)]
+    )
+    fleet.squash_merged(alpha, 3, LANDED_BRANCH)
+    closed_tip = fleet.worked(beta, CLOSED_BRANCH, "closed.txt").tip
+    fake_gh.hold(fleet.gh_state, beta.slug, number=3, head=CLOSED_BRANCH, head_sha=closed_tip)
+    fleet.legacy_stream(
+        CLOSED_BRANCH, [_pushed(CLOSED_BRANCH, closed_tip), _opened(beta.url(3), 3)]
+    )
+    fake_gh.close(fleet.gh_state, beta.slug, number=3)
+    for repository in (alpha, beta):
+        for place in (repository.checkout, repository.origin):
+            assert _tip(place, SHARED_BRANCH) == tips[repository.slug], (
+                f"the premise: {place} holds {repository.slug}'s own {SHARED_BRANCH}"
+            )
+    assert tips[alpha.slug] != tips[beta.slug], "the premise: each carries its own content"
+
+    result = sweep(host, "--min-age-hours", "0", "--format", "json", environment=fleet.environment)
+
+    assert result.returncode == 0, result.stderr
+    report, _ = json.JSONDecoder().raw_decode(result.stdout.lstrip())
+    assert report["verb"] == "onevcs sweep", f"the first report is not onevcs's: {report}"
+    examined = {
+        (entry["identity"], entry["branch"]): entry
+        for entry in report["finished_branches"]["examined"]
+    }
+    for repository in (alpha, beta):
+        kept = examined[(repository.identity, SHARED_BRANCH)]
+        assert (kept["class"], kept["reason"], kept["outcome"]) == (
+            "keep",
+            "open-change-request",
+            "kept",
+        ), kept
+        for place in (repository.checkout, repository.origin):
+            assert _tip(place, SHARED_BRANCH) == tips[repository.slug], (
+                f"{repository.slug}'s {SHARED_BRANCH} moved or went from {place}: {kept}"
+            )
+    # Each kept branch stood on its own repository's change request: the host was asked
+    # about alpha's #1 and beta's #2, each of its own repository, and never about the
+    # number the other repository's change request took there.
+    viewed = fleet.viewed()
+    assert {(alpha.slug, "1"), (beta.slug, "2")} <= viewed, viewed
+    assert not {(alpha.slug, "2"), (beta.slug, "1")} & viewed, (
+        f"a repository was asked about the other one's change request number: {viewed}"
+    )
+    # …and that is the change request each one's own session reads out of the shared
+    # stream, never the newest one across both.
+    for repository, own in ((alpha, alpha.url(1)), (beta, beta.url(2))):
+        status = fleet.onevcs("status", tokens[repository.slug], "--json")
+        assert status.returncode == 0, status.stderr
+        publication = json.loads(status.stdout)["publication"]
+        assert publication["change_url"] == own, (repository.slug, publication)
+        assert publication["landed"]["state"] != "yes", (repository.slug, publication)
+
+    # A change request closed without merging keeps its branch too, under its own word.
+    shut = examined[(beta.identity, CLOSED_BRANCH)]
+    assert (shut["class"], shut["reason"], shut["outcome"]) == (
+        "keep",
+        "closed-change-request",
+        "kept",
+    ), shut
+    for place in (beta.checkout, beta.origin):
+        assert _tip(place, CLOSED_BRANCH) == closed_tip, f"{CLOSED_BRANCH} went from {place}"
+
+    retired = examined[(alpha.identity, LANDED_BRANCH)]
+    assert retired["class"] == "retirable", retired
+    assert retired["proof"] == {
+        "kind": "merged-change-request",
+        "change_url": alpha.url(3),
+        "head": landed_tip,
+    }, retired
+    assert retired["outcome"] == "retired", retired
+    assert _tip(alpha.checkout, LANDED_BRANCH) is None, "the merged branch stayed on its checkout"
+    assert _tip(alpha.origin, LANDED_BRANCH) is None, "the merged branch stayed on its origin"
+
+    asked = fleet.calls()
+    assert not [call for call in asked if call[:2] in (["pr", "close"], ["pr", "merge"])], (
+        f"the pass closed or merged a change request: {asked}"
+    )

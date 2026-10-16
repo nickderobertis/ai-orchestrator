@@ -44,9 +44,11 @@ import os
 import stat
 import subprocess
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple, TypedDict, cast
 
+import fake_gh
 import pytest
 import short_state
 from fake_gh import CheckRun, Poll
@@ -1102,56 +1104,14 @@ def _hosted(tmp_path: Path, *, answers: list[str], pre_push: str | None = None) 
     """
     home = tmp_path / "onevcs-home"
     home.mkdir()
-    seed = tmp_path / "seed"
-    _git("init", "-q", "-b", BASE, str(seed), cwd=tmp_path)
-    (seed / "README.md").write_text("seed\n", encoding="utf-8")
-    if pre_push is not None:
-        _write_pre_push(seed, pre_push)
-    _git("add", "-A", cwd=seed)
-    _git("commit", "-q", "-m", "init", cwd=seed)
-    origin = tmp_path / "origin.git"
-    _git("clone", "-q", "--bare", str(seed), str(origin), cwd=tmp_path)
-    checkout = tmp_path / "checkout"
-    _git("clone", "-q", str(origin), str(checkout), cwd=tmp_path)
-    if pre_push is not None:
-        _git("config", "core.hooksPath", ".githooks", cwd=checkout)
-    # A reviewed path: `change-open` opens the change request and stops, which is the
-    # state whose description is under test. The rules name no verifier — onevcs 0.11.0
-    # removed the concept — so what can refuse this branch before the change request
-    # exists is the publishing push, and a journey about what a *refused* branch costs
-    # states its own hook.
-    (home / "rules.yml").write_text(
-        "version: 3\n"
-        "trailer_prefix: Orchestrator-\n"
-        "rules: []\n"
-        "default:\n"
-        "  publication: change-open\n"
-        "  approvals: required\n",
-        encoding="utf-8",
-    )
-
+    checkout, origin = _hosted_repository(tmp_path, "", pre_push=pre_push)
+    _write_hosted_rules(home)
     state = tmp_path / "gh-state"
     state.mkdir()
     calls = tmp_path / "gh-calls.jsonl"
-    environment = dict(os.environ)
-    environment["ONEVCS_HOME"] = str(home)
-    # llmlint: ignore[e2e_not_mocked] Only the remote host's decisioning, at onevcs's seam.
-    environment["ONEVCS_GH"] = str(FAKE_GH)
-    environment["FAKE_GH_STATE"] = str(state)
-    environment["FAKE_GH_CALLS"] = str(calls)
+    environment = _hosted_environment(tmp_path, home, state, calls, answers)
     environment["FAKE_GH_ORIGIN"] = str(origin)
-    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
-    environment["ONEHARNESS_BIN_CODEX"] = str(FAKE_CODEX)
-    # And the identities that seam cannot reach; see `no_paid_provider`.
-    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
-    environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
-    environment["FAKE_CODEX_ANSWERS"] = json.dumps(answers)
     prompts = tmp_path / "prompts.jsonl"
-    environment["FAKE_CODEX_PROMPT_LOG"] = str(prompts)
-    environment["FAKE_CODEX_ATTEMPT_LOG"] = str(tmp_path / "launches")
-    # Keeps this journey's harness history out of the host's.
-    environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
-    environment.update(established_indirections(INDIRECTION_CALLER))
 
     # The origin the identity is resolved from is the one the rules and the host are
     # written for; the remote git actually pushes to is still the bare origin above.
@@ -1164,6 +1124,80 @@ def _hosted(tmp_path: Path, *, answers: list[str], pre_push: str | None = None) 
     )
     assert registered.returncode == 0, registered.stderr + registered.stdout
     return Hosted(checkout, origin, environment, state, calls, prompts)
+
+
+class HostedRepository(NamedTuple):
+    """One throwaway repository of the substituted host, before it is registered."""
+
+    #: The checkout a publication is given as `--repo`.
+    checkout: Path
+    #: The bare origin it really pushes to.
+    origin: Path
+
+
+def _hosted_repository(
+    tmp_path: Path, name: str, *, pre_push: str | None = None
+) -> HostedRepository:
+    """A checkout of a throwaway bare origin, `name`-prefixed."""
+    prefix = f"{name}-" if name else ""
+    seed = tmp_path / f"{prefix}seed"
+    _git("init", "-q", "-b", BASE, str(seed), cwd=tmp_path)
+    (seed / "README.md").write_text("seed\n", encoding="utf-8")
+    if pre_push is not None:
+        _write_pre_push(seed, pre_push)
+    _git("add", "-A", cwd=seed)
+    _git("commit", "-q", "-m", "init", cwd=seed)
+    origin = tmp_path / f"{prefix}origin.git"
+    _git("clone", "-q", "--bare", str(seed), str(origin), cwd=tmp_path)
+    checkout = tmp_path / f"{prefix}checkout"
+    _git("clone", "-q", str(origin), str(checkout), cwd=tmp_path)
+    if pre_push is not None:
+        _git("config", "core.hooksPath", ".githooks", cwd=checkout)
+    return HostedRepository(checkout, origin)
+
+
+def _write_hosted_rules(home: Path) -> None:
+    """A reviewed path for every identity of `home`: `change-open`, approvals required.
+
+    `change-open` opens the change request and stops, which is the state whose
+    description is under test. The rules name no verifier — onevcs 0.11.0 removed the
+    concept — so what can refuse a branch before the change request exists is the
+    publishing push, and a journey about what a *refused* branch costs states its own
+    hook.
+    """
+    (home / "rules.yml").write_text(
+        "version: 3\n"
+        "trailer_prefix: Orchestrator-\n"
+        "rules: []\n"
+        "default:\n"
+        "  publication: change-open\n"
+        "  approvals: required\n",
+        encoding="utf-8",
+    )
+
+
+def _hosted_environment(
+    tmp_path: Path, home: Path, state: Path, calls: Path, answers: list[str]
+) -> dict[str, str]:
+    """The scratch registry, the substituted host, and the scripted provider."""
+    environment = dict(os.environ)
+    environment["ONEVCS_HOME"] = str(home)
+    # llmlint: ignore[e2e_not_mocked] Only the remote host's decisioning, at onevcs's seam.
+    environment["ONEVCS_GH"] = str(FAKE_GH)
+    environment["FAKE_GH_STATE"] = str(state)
+    environment["FAKE_GH_CALLS"] = str(calls)
+    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
+    environment["ONEHARNESS_BIN_CODEX"] = str(FAKE_CODEX)
+    # And the identities that seam cannot reach; see `no_paid_provider`.
+    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
+    environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
+    environment["FAKE_CODEX_ANSWERS"] = json.dumps(answers)
+    environment["FAKE_CODEX_PROMPT_LOG"] = str(tmp_path / "prompts.jsonl")
+    environment["FAKE_CODEX_ATTEMPT_LOG"] = str(tmp_path / "launches")
+    # Keeps this journey's harness history out of the host's.
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
+    environment.update(established_indirections(INDIRECTION_CALLER))
+    return environment
 
 
 # llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The task that adopted the draft hold requires this journey to drive `just publish-branch` through the real engine, its linked onevcs and tests/e2e/fake_gh.py, which is exactly what this project's key names; it reuses this module's `_hosted` identity and adds no project or edge, and a project of its own would re-key the whole publication path for one parametrized journey.  # noqa: E501
@@ -1670,6 +1704,148 @@ def test_publish_branch_lands_the_branch_when_the_drafting_dispatch_fails(
         "the operator was never told which ending left the change request bodyless:\n"
         f"{published.stderr}"
     )
+
+
+def _foreign_landing(home: Path, branch: str, url: str, commit: fake_gh.Commit) -> None:
+    """Append a landing of another repository's change request to the branch's stream.
+
+    `publish-branch` records into one stream per branch *name*, so every repository on a
+    host publishing that name shares it — and before onevcs 0.49.0 no event in it carried
+    the identity it was written for. No installed verb writes that unlabelled shape any
+    more, so the one record the journey needs — a landing naming the other repository's
+    change request, recorded now — is appended as that build wrote it.
+    """
+    token = "publish-branch-" + branch.replace("/", "-")
+    stream = home / "streams" / f"{token}.ndjson"
+    written = stream.read_text(encoding="utf-8").splitlines() if stream.exists() else []
+    now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    event = {
+        "v": 1,
+        "ts": now,
+        "stream": token,
+        "seq": len(written) + 1,
+        "source": "vcs",
+        "kind": "change-merged",
+        "phase": "review",
+        "labels": {"session": token},
+        "payload": {"url": url, "sha": commit, "landed_at": now, "landing": commit},
+        "artifacts": [],
+    }
+    stream.parent.mkdir(parents=True, exist_ok=True)
+    # llmlint: ignore[tests_mirror_real_usage] No installed verb writes an unlabelled shared stream any more; the docstring above says why it is written here.  # noqa: E501 - a directive is one line
+    stream.write_text(
+        "".join(f"{line}\n" for line in [*written, json.dumps(event)]), encoding="utf-8"
+    )
+
+
+def test_publishing_one_branch_name_on_two_repositories_retires_neither_on_a_foreign_landing(
+    tmp_path: Path,
+) -> None:
+    """The retirement fix the adopted engine links, through the real landing recipe.
+
+    Every publication's session close runs the retirement pass over the branch it
+    published, in the `onevcs` the engine links. Two `change-open` identities publish one
+    branch name, each with its own content, into the one shared stream — which already
+    carries a landing of the *other* repository's change request, beta's #1, merged long
+    ago, so beta's own new one takes #2 while alpha's takes #1. A release that read that
+    landing as this branch's would retire the branch it had just published, deleting it
+    from its origin and so closing its open change request unmerged: the incident this
+    host adopted the fix for. So after both publications and the retirement each close ran,
+    both branches stand on their checkouts and origins, each change request is open on its
+    host, and the host was asked to close nothing and delete nothing.
+    """
+    home = tmp_path / "onevcs-home"
+    home.mkdir()
+    _write_hosted_rules(home)
+    state = tmp_path / "gh-state"
+    state.mkdir()
+    calls = tmp_path / "gh-calls.jsonl"
+    environment = _hosted_environment(tmp_path, home, state, calls, answers=[])
+    repositories = {name: _hosted_repository(tmp_path, name) for name in ("alpha", "beta")}
+    environment["FAKE_GH_ORIGINS"] = json.dumps(
+        {f"acme-corp/{name}": str(made.origin) for name, made in repositories.items()}
+    )
+    for name, made in repositories.items():
+        registered = _just(
+            "register-repo",
+            str(made.checkout),
+            "--origin",
+            f"https://github.com/acme-corp/{name}.git",
+            environment=environment,
+        )
+        assert registered.returncode == 0, registered.stderr + registered.stdout
+
+    # Beta's #1, merged long ago at a commit beta's base carries.
+    beta_checkout = repositories["beta"].checkout
+    (beta_checkout / "old.txt").write_text("old work\n", encoding="utf-8")
+    _git("add", "-A", cwd=beta_checkout)
+    _git("commit", "-q", "-m", "feat: old work (#1)", cwd=beta_checkout)
+    _git("push", "-q", "origin", BASE, cwd=beta_checkout)
+    merged = _git("rev-parse", "HEAD", cwd=beta_checkout).strip()
+    fake_gh.hold(state, "acme-corp/beta", number=1, head="old/work", head_sha=merged)
+    fake_gh.merge(state, "acme-corp/beta", number=1, commit=merged)
+
+    heads = {}
+    for name, made in repositories.items():
+        checkout = made.checkout
+        _git("checkout", "-q", "-b", FINISHED_BRANCH, cwd=checkout)
+        (checkout / f"{name}.txt").write_text(f"{name}'s work\n", encoding="utf-8")
+        _git("add", "-A", cwd=checkout)
+        _git("commit", "-q", "-m", f"feat: {name}'s work", cwd=checkout)
+        heads[name] = _git("rev-parse", "HEAD", cwd=checkout).strip()
+        _git("checkout", "-q", BASE, cwd=checkout)
+    assert heads["alpha"] != heads["beta"], "the premise: each branch carries its own content"
+
+    for name in ("beta", "alpha"):
+        if name == "alpha":
+            # Recorded between the two publications, as a later pass recorded the other
+            # repository's merge into the stream both publish into.
+            _foreign_landing(
+                home, FINISHED_BRANCH, "https://github.com/acme-corp/beta/pull/1", merged
+            )
+        checkout = repositories[name].checkout
+        published = _just(
+            "publish-branch",
+            FINISHED_BRANCH,
+            "--repo",
+            str(checkout),
+            "--no-draft",
+            environment=environment,
+            timeout=600,
+        )
+        assert published.returncode == 0, f"{name}: {published.stderr}{published.stdout}"
+
+    for name, made in repositories.items():
+        for place in made:
+            standing = _git(
+                "for-each-ref", "--format=%(objectname)", f"refs/heads/{FINISHED_BRANCH}", cwd=place
+            ).strip()
+            assert standing == heads[name], (
+                f"{name}'s {FINISHED_BRANCH} is no longer where it was published in {place}: "
+                f"{standing!r}"
+            )
+    held = {
+        name: json.loads(
+            (fake_gh.records(state, f"acme-corp/{name}") / f"pr-{number}.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        for name, number in (("alpha", 1), ("beta", 2))
+    }
+    for name, change in held.items():
+        assert (change["state"], change["head"], change["headRefOid"]) == (
+            "OPEN",
+            FINISHED_BRANCH,
+            heads[name],
+        ), f"{name}'s own change request is not the open one its publication opened: {change}"
+    asked = [json.loads(line) for line in calls.read_text(encoding="utf-8").splitlines() if line]
+    closing = [
+        call
+        for call in asked
+        if call[:2] in (["pr", "close"], ["pr", "merge"])
+        or (call[:1] == ["api"] and any(word in ("DELETE", "--method=DELETE") for word in call))
+    ]
+    assert not closing, f"the host was asked to close, merge or delete: {closing}"
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
