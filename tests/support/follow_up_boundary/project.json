@@ -1,0 +1,26 @@
+{
+  "name": "support-follow-up-boundary",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "tags": [
+    "type:test-support"
+  ],
+  "implicitDependencies": [
+    "support-boundary-home",
+    "support-onevcs-state-snapshot"
+  ],
+  "namedInputs": {
+    "testSupport": [
+      "{workspaceRoot}/tests/follow_up_boundary.py",
+      "{projectRoot}/project.json"
+    ]
+  },
+  "targets": {
+    "test-support": {
+      "executor": "nx:noop",
+      "inputs": [
+        "testSupport"
+      ]
+    }
+  }
+}

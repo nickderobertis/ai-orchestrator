@@ -28,6 +28,7 @@ import re
 from collections.abc import Callable
 from pathlib import Path
 
+import follow_up_boundary
 import follow_up_variables
 import onetaskgraph_sdk
 import pytest
@@ -186,6 +187,7 @@ def board(drafts_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     root.mkdir()
     monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{BOARD.upper()}__PLUGIN", WRITABLE_PLUGIN)
     monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{BOARD.upper()}__CONFIG__ROOT", str(root))
+    follow_up_boundary.enable(monkeypatch, public=(BOARD,))
     return root
 
 

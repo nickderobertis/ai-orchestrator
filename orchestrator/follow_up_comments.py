@@ -34,9 +34,11 @@ paths, the source name and the lines it writes.
 2. **`items/`** (:data:`SNAPSHOT_ITEMS`) is a `local-md` root: **the snapshot source**, named
    :data:`SNAPSHOT_SOURCE` for every process that reads it — this module through
    :func:`snapshot_settings`, every other process through :func:`snapshot_environment`'s two
-   variables. Only the gathering's own copy writes it: one `task copy --to snapshot --comments
-   --no-link` per board, by the narrowed query unscoped, or by the ids an `--issue` or `--run`
-   pass reads. Each item carries `onetaskgraph.origin` naming its board item and
+   variables; this module's own commands declare it `visibility: private`
+   (:data:`SNAPSHOT_VISIBILITY`). Only the
+   gathering's own copy writes it: one `task copy --to snapshot --comments --no-link` per
+   board, by the narrowed query unscoped, or by the ids an `--issue` or `--run` pass reads.
+   Each item carries `onetaskgraph.origin` naming its board item and
    `onetaskgraph.copied_version` naming the board version it holds, and each comment carries
    the board comment's id as `origin.id`. Nothing writes it afterwards, so the cache
    refreshing, this pass's own writes and `cache clear` cannot change it. Its status names are
@@ -310,6 +312,15 @@ SNAPSHOT_LAUNCHABLE_FOR = timedelta(hours=24)
 #: The one name every process reads a snapshot's `items/` under, and the plugin serving it.
 SNAPSHOT_SOURCE = "snapshot"
 SNAPSHOT_PLUGIN = plan_store.WRITABLE_PLUGIN
+#: The snapshot's declared visibility. It holds a copy of every item of the board's family,
+#: an item a route sent to a source declared private among them, and the store's public
+#: boundary writes a private item only to a source declared private; nothing is copied out of
+#: the snapshot, so no copy from it loses the origin a copy into a source not declared private
+#: would drop. Declared only on this module's own snapshot commands, never in
+#: :func:`snapshot_environment`: any declared visibility turns the store's boundary on, and a
+#: process another one starts, which writes its replies to the boards, must not have it on
+#: where no screening command is configured.
+SNAPSHOT_VISIBILITY = "private"
 #: The two variables, at the store's environment layer, that point a process at a snapshot.
 SNAPSHOT_PLUGIN_ENV = f"ONETASKGRAPH_SOURCES__{SNAPSHOT_SOURCE.upper()}__PLUGIN"
 SNAPSHOT_ROOT_ENV = f"ONETASKGRAPH_SOURCES__{SNAPSHOT_SOURCE.upper()}__CONFIG__ROOT"
@@ -613,13 +624,15 @@ def snapshot_status_names(board: str) -> dict[str, str]:
 def snapshot_settings(directory: Path, board: str) -> list[str]:
     """The `--set` settings every read or copy this module makes of the snapshot passes.
 
-    The plugin and the root :func:`snapshot_environment` exports, and the status names of
-    :func:`snapshot_status_names`, which no environment variable can spell.
+    The plugin and the root :func:`snapshot_environment` exports, the snapshot's declared
+    :data:`SNAPSHOT_VISIBILITY`, and the status names of :func:`snapshot_status_names`, which
+    no environment variable can spell.
     """
     root = directory.absolute() / SNAPSHOT_ITEMS
     settings = [
         f"sources.{SNAPSHOT_SOURCE}.plugin={SNAPSHOT_PLUGIN}",
         f"sources.{SNAPSHOT_SOURCE}.config.root={root}",
+        f"sources.{SNAPSHOT_SOURCE}.visibility={SNAPSHOT_VISIBILITY}",
     ]
     settings.extend(
         f"sources.{SNAPSHOT_SOURCE}.config.status_mapping.{name}={category}"

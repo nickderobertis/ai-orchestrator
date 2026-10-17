@@ -8,6 +8,7 @@
     "type:tests"
   ],
   "implicitDependencies": [
+    "support-boundary-home",
     "support-budget-telemetry",
     "support-conftest",
     "support-delegation-checkout",
@@ -15,6 +16,7 @@
     "support-fake-codex",
     "support-fake-codex-untrusted-directory",
     "support-flow-engine-stand-in",
+    "support-follow-up-boundary",
     "support-follow-up-ticket-shape",
     "support-follow-up-variables",
     "support-github-board",
@@ -80,6 +82,7 @@
         {
           "input": "testSupport",
           "projects": [
+            "support-boundary-home",
             "support-budget-telemetry",
             "support-conftest",
             "support-delegation-checkout",
@@ -87,6 +90,7 @@
             "support-fake-codex",
             "support-fake-codex-untrusted-directory",
             "support-flow-engine-stand-in",
+            "support-follow-up-boundary",
             "support-follow-up-ticket-shape",
             "support-follow-up-variables",
             "support-github-board",

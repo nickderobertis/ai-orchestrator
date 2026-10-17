@@ -24,15 +24,16 @@ import sys
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import NamedTuple, get_type_hints
+from typing import Any, NamedTuple, get_type_hints
 
+import follow_up_boundary
 import follow_up_variables
 import pytest
 
 from orchestrator import follow_up_comments as comments
 from orchestrator import follow_up_tickets as tickets
 from orchestrator import plan_store
-from orchestrator.plan_store import WRITABLE_PLUGIN
+from orchestrator.plan_store import WRITABLE_PLUGIN, QualifiedTaskId
 
 #: The local store standing in for the board, spelled lowercase because it is spelled into
 #: the store's environment layer as well as onto `--to`.
@@ -71,7 +72,7 @@ def test_comment_time_and_url_fallbacks_refuse_missing_answers() -> None:
         datetime.now(UTC),
     )
     issue = comments.Issue(
-        comments.QualifiedTaskId(f"{BOARD}:x"),
+        QualifiedTaskId(f"{BOARD}:x"),
         "title",
         tickets.RunId(RUN),
         "/tmp/issue.md",
@@ -107,6 +108,7 @@ def board(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root.mkdir()
     monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{BOARD.upper()}__PLUGIN", WRITABLE_PLUGIN)
     monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{BOARD.upper()}__CONFIG__ROOT", str(root))
+    follow_up_boundary.enable(monkeypatch, public=(BOARD,))
     return root
 
 
@@ -145,7 +147,8 @@ def _filed(
     copied = plan_store.sdk(
         plan_store.client().task_copy([tickets.qualified_id(run, cause)], to=BOARD)
     )
-    destination = copied.items[0].root.destination
+    # A failed outcome carries no destination, so reading it as absent fails the copy here.
+    destination = getattr(copied.items[0].root, "destination", None)
     assert destination is not None, copied
     if record:
         # Bound to the item the copy reached, as `board-status` binds a ticket it copies.
@@ -154,7 +157,7 @@ def _filed(
         opening = f"    created_by_run: {run}\n"
         binding = f"    {tickets.BINDING_FIELD}: {native}\n"
         path.write_text(text.replace(opening, opening + binding, 1), encoding="utf-8")
-    return destination.model_dump()
+    return str(destination.model_dump())
 
 
 def _commented(issue: str, body: str, author: str | None = PERSON) -> str:
@@ -165,7 +168,7 @@ def _commented(issue: str, body: str, author: str | None = PERSON) -> str:
         plan_store.client().task_comment_add(issue, body_file=str(path), author=author)
     )
     path.unlink()
-    return added.id.model_dump()
+    return str(added.id.model_dump())
 
 
 def _edited(issue: str, identifier: str, body: str) -> None:
@@ -757,7 +760,9 @@ def test_the_feedback_file_asks_for_an_action_a_reply_and_a_report_per_comment(
     ):
         assert said in flat, said
     # The anchor sits with the comment it names, so the account's order is the file's.
-    assert tickets.quoted_comments(written) == [tickets.Quoted(own, identifier)], written
+    assert tickets.quoted_comments(written) == [
+        tickets.Quoted(QualifiedTaskId(own), tickets.CommentId(identifier))
+    ], written
     assert written.index("2. **Act on it**") < written.index("3. **Post its one reply**")
     # A run with no response has no boundary, and an unnamed author is said to be one.
     assert "changed after" not in written
@@ -908,7 +913,11 @@ def test_a_watermark_is_read_back_as_written_and_any_other_shape_is_refused(
 
 
 def _answered_run(
-    root: Path, capsys: pytest.CaptureFixture[str], *arguments: str, reply: bool
+    root: Path,
+    capsys: pytest.CaptureFixture[str],
+    *arguments: str,
+    reply: bool,
+    fallback: str | None = None,
 ) -> tuple[Gathered, Path, str]:
     """A gathering of one comment on the run's issue, and its account, answered or not."""
     own = _filed(root, RUN, CAUSE)
@@ -932,7 +941,7 @@ def _answered_run(
                         "reply": posted,
                         # A folder of Markdown answers a comment with no address of its own.
                         "reply_url": None,
-                        "reply_fallback": None,
+                        "reply_fallback": fallback,
                         "verdict": tickets.Verdict.DOES_NOT_CONFIRM.value,
                     }
                 ],
@@ -961,6 +970,24 @@ def test_a_settled_run_answered_soundly_reports_its_replies_and_advances_the_wat
     assert lines[-1].startswith(
         f"plan store: {plan.snapshot.store}; the narrowed query returned 1 "
     )
+
+
+def test_a_reply_that_took_a_fallback_read_is_named_and_counted(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    reason = "the store read the item once to find the comment's thread"
+    plan, _, posted = _answered_run(drafts_root, capsys, reply=True, fallback=reason)
+    lines: list[str] = []
+
+    status = comments.settle(drafts_root, plan.plan, {RUN: "follow-up-1"}, say=lines.append)
+
+    assert status == comments.DONE, lines
+    assert lines[1] == f"run {RUN} (follow-up run follow-up-1): check-responses passed"
+    assert any(
+        line.startswith("  fallback read: ") and line.endswith(f": reply {posted}: {reason}")
+        for line in lines
+    ), lines
+    assert "board writes: 0; fallback reads: 1" in lines
 
 
 def test_a_run_not_answered_soundly_is_named_and_leaves_the_watermark_where_it_was(
@@ -1265,6 +1292,7 @@ def routed(board: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path
         f"ONETASKGRAPH_SOURCES__{BOARD.upper()}__ROUTES__0__REPOSITORIES", "github.com/petsinc/*"
     )
     monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{BOARD.upper()}__ROUTES__0__TO", ROUTED)
+    follow_up_boundary.enable(monkeypatch, public=(BOARD,), private=(ROUTED,))
     return root
 
 
@@ -1387,7 +1415,7 @@ def test_on_linear_a_comment_naming_no_user_is_an_integrations_and_a_named_one_a
     assert not comments.is_bot(None, "github-projects")
     assert not comments.is_bot(None)
     issue = comments.Issue(
-        comments.QualifiedTaskId(f"{ROUTED}:ENG-1"),
+        QualifiedTaskId(f"{ROUTED}:ENG-1"),
         "hp-api: the intake form drops a field",
         tickets.RunId(RUN),
         None,
@@ -1835,7 +1863,7 @@ def test_the_snapshot_is_written_as_its_contract_states_and_read_back_as_itself(
     assert item["id"] == own and item["snapshot_id"].startswith(f"{comments.SNAPSHOT_SOURCE}:")
     held = comments.read_snapshot(snapshot)
     assert comments._snapshot_document(held) == record, "the record reads back as itself"
-    (chosen,) = held.selection[RUN]
+    (chosen,) = held.selection[tickets.RunId(RUN)]
     assert (chosen.issue, chosen.comment) == (own, asked)
     assert chosen.body_sha256 == comments.body_sha256("Please add page 9.\n")
     copied = list((snapshot / comments.SNAPSHOT_ITEMS).rglob("*.md"))
@@ -1858,6 +1886,7 @@ def test_the_snapshot_is_written_as_its_contract_states_and_read_back_as_itself(
     assert item["version"] is not None
     assert f"- Issue: {comments.issue_line(own, item['snapshot_id'], None)}\n" in written
     (selected,) = record["selection"][RUN]
+    broken: object
     for broken in (
         [],
         {"schema": 2},
@@ -2103,7 +2132,9 @@ def test_a_reply_answers_the_version_its_gathering_quoted_and_one_with_no_accoun
         ),
         encoding="utf-8",
     )
-    quoted = comments.moment(plan.snapshot.selection[RUN][0].last_changed, "the quoted version")
+    quoted = comments.moment(
+        plan.snapshot.selection[tickets.RunId(RUN)][0].last_changed, "the quoted version"
+    )
     assert comments.quoted_versions(drafts_root) == {(own, reply): quoted}
 
     report, _ = _gathered(drafts_root, capsys, "--dry-run")
@@ -2132,7 +2163,9 @@ def test_answers_no_real_store_gives_are_refused_by_name(
     assert comments.store_command(["task", "show", "x"]).document is None
     with pytest.raises(OSError, match="names no default status mapping"):
         comments._local_md_defaults()
-    mapping = {"plugin_config": {comments.SNAPSHOT_PLUGIN: {"properties": {"status_mapping": {}}}}}
+    mapping: dict[str, Any] = {
+        "plugin_config": {comments.SNAPSHOT_PLUGIN: {"properties": {"status_mapping": {}}}}
+    }
     for default in (["backlog"], {"Proposal": 3}):
         mapping["plugin_config"][comments.SNAPSHOT_PLUGIN]["properties"]["status_mapping"] = {
             "default": default
@@ -2304,7 +2337,7 @@ def test_the_fresh_dry_run_a_refusal_names_is_the_gathering_the_snapshot_was() -
         boards=(BOARD,),
         named_board=False,
         scope=tickets.RunId(RUN),
-        issue=f"{BOARD}:x",
+        issue=QualifiedTaskId(f"{BOARD}:x"),
         starts={},
         store="onetaskgraph test",
         dry_run=True,
@@ -2382,7 +2415,7 @@ def test_a_launched_snapshot_whose_record_is_unreadable_is_passed_over_by_the_ov
 def test_pending_writes_of_any_other_shape_are_refused_rather_than_lost(drafts_root: Path) -> None:
     path = comments.pending_path(drafts_root)
     path.parent.mkdir(parents=True)
-    entry = {
+    entry: dict[str, object] = {
         "snapshot": "/x",
         "run": RUN,
         "item": f"{BOARD}:x",
@@ -2462,6 +2495,7 @@ def test_a_write_response_that_does_not_say_what_it_wrote_is_unknown() -> None:
     assert bare.state == "unknown" and "a part was not described" in str(bare.error)
     nested = {"items": [{"destination": written, "action": "updated", "result": ["landed"]}]}
     assert comments.outcome(comments.StoreAnswer(0, nested, ""), written).state == "unknown"
+    result: object
     for result in ({"parts": "landed"}, ["landed"], {"parts": []}):
         malformed = comments.outcome(
             comments.StoreAnswer(0, {"id": written, "result": result}, ""), written

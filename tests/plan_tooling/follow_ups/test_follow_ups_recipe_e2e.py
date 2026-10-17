@@ -60,6 +60,7 @@ from typing import NamedTuple
 
 import budget_telemetry
 import delegation_checkout
+import follow_up_boundary
 import follow_up_variables
 import github_board as host_board
 import plan_root_variable
@@ -323,9 +324,17 @@ def _bench(tmp: Path) -> Bench:
     environment["ONEPIPELINE_RUNS_DIR"] = str(runs)
     environment[root_name] = str(drafts_root)
     environment[plugin_name] = WRITABLE_PLUGIN
-    environment[plan_root_variable.name()] = str(plans)
+    environment[plan_root_variable.name()] = str(tmp / "authoring")
+    plans = drafts_root / "runs"
+    # Made now, as the recipe makes it: the store builds every source declared private on
+    # each dependency walk, and a folder root that does not exist fails that walk.
+    plans.mkdir(parents=True, exist_ok=True)
+    environment["ONETASKGRAPH_SOURCES__FOLLOW_UP_RUNS__CONFIG__ROOT"] = str(plans)
     environment[f"ONETASKGRAPH_SOURCES__{BOARD.upper()}__PLUGIN"] = WRITABLE_PLUGIN
     environment[f"ONETASKGRAPH_SOURCES__{BOARD.upper()}__CONFIG__ROOT"] = str(board)
+    # The stand-in board is the public `followups` board's, so it is declared public, and the
+    # state root registers every repository a ticket here names, which the boundary classifies.
+    environment = follow_up_boundary.environment(environment, public=(BOARD,))
     environment["ONETASKGRAPH_PAGE_SIZE"] = str(PAGE_SIZE)
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["ONEHARNESS_BIN_CODEX"] = str(FAKE_CODEX)
@@ -1008,11 +1017,11 @@ def _template_environment(bench: Bench) -> dict[str, str]:
 
 def _stored(bench: Bench, project: str) -> Stored:
     """The node's task read back out of the store, and checked and re-rendered by the pins."""
-    listed = _store(bench, "task", "list", "--source", "authoring", "--project", project)
+    listed = _store(bench, "task", "list", "--source", "follow-up-runs", "--project", project)
     items = listed["items"]
     assert isinstance(items, list), listed
     tasks = [str(held["id"]) for held in items]
-    assert tasks, f"the store holds no task for authoring:{project}"
+    assert tasks, f"the store holds no task for follow-up-runs:{project}"
     item = _item(bench, tasks[0])
     metadata = item["metadata"]
     assert isinstance(metadata, dict), item
@@ -1913,7 +1922,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
 
         # The exemption, read by the gate itself: the recipe's own project, and a copy of it
         # that gained a second node under the same stamp.
-        project = f"authoring:{main}{SUFFIX}"
+        project = f"follow-up-runs:{main}{SUFFIX}"
         exempt_gate = _run(
             [str(REPO_ROOT / ".venv" / "bin" / "orchestrator-launch-gate"), project], bench
         )
@@ -1945,7 +1954,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
         tampered_gate = _run(
             [
                 str(REPO_ROOT / ".venv" / "bin" / "orchestrator-launch-gate"),
-                f"authoring:{main}-tampered",
+                f"follow-up-runs:{main}-tampered",
             ],
             bench,
         )
@@ -2274,6 +2283,31 @@ def test_a_draft_filename_outside_the_id_grammar_refuses_the_recipe_before_launc
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
+def test_a_drafts_root_whose_run_root_cannot_be_made_refuses_the_recipe_before_launch(
+    followed: Followed, tmp_path: Path
+) -> None:
+    """A run root the recipe cannot create is named, with its drafts root, and nothing runs."""
+    bench = followed.bench
+    drafts_root = tmp_path / "follow-ups"
+    drafts_root.mkdir()
+    # A file where the run root goes: `mkdir -p` cannot make a directory over it.
+    (drafts_root / "runs").write_text("not a directory\n", encoding="utf-8")
+    root_name, _, _ = follow_up_variables.all_names()
+    environment = {**bench.environment, root_name: str(drafts_root)}
+
+    refused = _run(
+        ["just", "follow-ups", followed.empty_run, "--to", BOARD], bench, environment=environment
+    )
+
+    assert refused.returncode == REFUSED, refused.stdout + refused.stderr
+    assert (
+        f"follow-ups: the follow-up run root {drafts_root / 'runs'} could not be created; "
+        f"check that the drafts root {drafts_root} is writable, then retry"
+    ) in refused.stderr, refused.stderr
+    assert "nothing to verify" not in refused.stdout, refused.stdout
+    assert not (bench.runs / f"{followed.empty_run}{SUFFIX}").exists()
+
+
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This recipe journey
 # runs in the `plan-tooling-follow-ups` Nx project, the dedicated tier for journeys that drive the
 # installed engine; its planToolingFollowUpsWorkspace input covers the recipe, the task module and
@@ -2349,8 +2383,8 @@ def test_the_recipe_launches_one_direct_node_under_the_graph_that_settles_on_the
     results = _run(["just", "results", first.run], followed.bench)
     assert re.search(rf"^\s+{NODE}\s+done$", results.stdout, re.MULTILINE), results.stdout
     assert (
-        f"launch-gate: authoring:{followed.main}{SUFFIX} is the project a follow-ups launch writes"
-        in first.result.stderr
+        f"launch-gate: follow-up-runs:{followed.main}{SUFFIX} "
+        "is the project a follow-ups launch writes" in first.result.stderr
     ), first.result.stderr
 
 
@@ -4298,7 +4332,7 @@ def _launchable(tmp_path: Path) -> tuple[Path, Path, Path]:
 def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_free_run_id(
     tmp_path: Path,
 ) -> None:
-    """`just follow-ups run-1` writes `authoring:run-1-follow-ups` and launches it, gated.
+    """`just follow-ups run-1` writes `follow-up-runs:run-1-follow-ups` and launches it, gated.
 
     One direct node naming `graphs/follow-up.yaml`, launched on `--dag-graph off` with
     native budget closeout hooks. A second launch while a run root holds the first id launches
@@ -4308,14 +4342,14 @@ def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_fre
     checkout, trace, store = _launchable(tmp_path)
     launched = (
         _flow_line(checkout, "run-1-follow-ups", "run-1"),
-        *_template_lines(checkout, "authoring:run-1-follow-ups"),
+        *_template_lines(checkout, "follow-up-runs:run-1-follow-ups"),
         *(
             delegation_checkout.at(checkout, line)
             for line in (
-                "uv run orchestrator-launch-gate authoring:run-1-follow-ups --dag-graph off",
+                "uv run orchestrator-launch-gate follow-up-runs:run-1-follow-ups --dag-graph off",
                 delegation_checkout.ENGINE_VERSION,
                 f"{delegation_checkout.ENGINE} start {delegation_checkout.DEFAULTS} "
-                "authoring:run-1-follow-ups --dag-graph off",
+                "follow-up-runs:run-1-follow-ups --dag-graph off",
             )
         ),
     )
@@ -4326,7 +4360,9 @@ def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_fre
     assert [line.split(" --success-hook", 1)[0] for line in trace.read_text().splitlines()] == list(
         launched
     )
-    project = (checkout / ".plans/projects/run-1-follow-ups.md").read_text(encoding="utf-8")
+    project = (checkout / ".follow-ups/runs/projects/run-1-follow-ups.md").read_text(
+        encoding="utf-8"
+    )
     assert 'title: "run-1-follow-ups"' in project
     assert '"orchestrator.plan-kind": {"kind": "follow-ups", "nodes": ["follow-ups"]}' in project
     node = _one_task_record(checkout)
@@ -4368,7 +4404,9 @@ def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_fre
         _flow_line(checkout, "run-1-follow-ups-2", "run-1"),
         *launched[1:],
     ]
-    project = (checkout / ".plans/projects/run-1-follow-ups.md").read_text(encoding="utf-8")
+    project = (checkout / ".follow-ups/runs/projects/run-1-follow-ups.md").read_text(
+        encoding="utf-8"
+    )
     assert 'title: "run-1-follow-ups-2"' in project
     # The second launch retired the first one's task before creating its own.
     assert f"template: {REFERENCE}" in _one_task_record(checkout)
@@ -4435,9 +4473,10 @@ def test_a_failed_detached_launch_keeps_its_closeout_hook_only_once_the_engine_r
         assert left == [], f"a launch the engine never recorded left scratch behind: {left}"
 
 
-def _one_task_record(checkout: Path) -> str:
-    """The one task record the recipe left under the checkout's plan-authoring root."""
-    records = sorted((checkout / ".plans" / "tasks").rglob("*.md"))
+def _one_task_record(checkout: Path, *, root: Path | None = None) -> str:
+    """The task the recipe left in its local follow-up run source."""
+    source = checkout / ".follow-ups" / "runs" if root is None else root
+    records = sorted((source / "tasks").rglob("*.md"))
     assert len(records) == 1, records
     return records[0].read_text(encoding="utf-8")
 
@@ -4445,7 +4484,7 @@ def _one_task_record(checkout: Path) -> str:
 def test_a_run_id_carrying_capitals_launches_the_project_the_store_wrote(
     tmp_path: Path,
 ) -> None:
-    """`just follow-ups Run-1` launches `authoring:run-1-follow-ups`, the id the store holds.
+    """`just follow-ups Run-1` launches `follow-up-runs:run-1-follow-ups`, the id the store holds.
 
     The store slugs a project id lower-case while a board plan's run id keeps its title's
     capitals, so a launch naming the id it asked for named a project nothing held and the
@@ -4489,18 +4528,20 @@ def test_a_run_id_carrying_capitals_launches_the_project_the_store_wrote(
     traced = trace.read_text().splitlines()
     assert [line.split(" --success-hook", 1)[0] for line in traced] == [
         _flow_line(checkout, f"{run}-follow-ups", run),
-        *_template_lines(checkout, "authoring:run-1-follow-ups"),
+        *_template_lines(checkout, "follow-up-runs:run-1-follow-ups"),
         *(
             delegation_checkout.at(checkout, line)
             for line in (
-                "uv run orchestrator-launch-gate authoring:run-1-follow-ups --dag-graph off",
+                "uv run orchestrator-launch-gate follow-up-runs:run-1-follow-ups --dag-graph off",
                 delegation_checkout.ENGINE_VERSION,
                 f"{delegation_checkout.ENGINE} start {delegation_checkout.DEFAULTS} "
-                "authoring:run-1-follow-ups --dag-graph off",
+                "follow-up-runs:run-1-follow-ups --dag-graph off",
             )
         ),
     ]
-    project = (checkout / ".plans/projects/run-1-follow-ups.md").read_text(encoding="utf-8")
+    project = (checkout / ".follow-ups/runs/projects/run-1-follow-ups.md").read_text(
+        encoding="utf-8"
+    )
     assert 'title: "Run-1-follow-ups"' in project
     # The launch above is traced, so the id it named is handed to the real launch gate over
     # the real store, which is the read that refused the capitalised id before; the store's
@@ -4512,7 +4553,13 @@ def test_a_run_id_carrying_capitals_launches_the_project_the_store_wrote(
             *shlex.split(traced[3].split("orchestrator-launch-gate", 1)[1]),
         ],
         cwd=checkout,
-        env=os.environ | {plan_root_variable.name(): str(checkout / ".plans")},
+        env=os.environ
+        | {
+            plan_root_variable.name(): str(checkout / ".plans"),
+            "ONETASKGRAPH_SOURCES__FOLLOW_UP_RUNS__CONFIG__ROOT": str(
+                checkout / ".follow-ups/runs"
+            ),
+        },
         capture_output=True,
         text=True,
         check=False,
@@ -4576,12 +4623,12 @@ def test_a_task_the_store_cannot_create_launches_nothing_and_the_next_launch_rec
     assert unregistered.returncode == REFUSED, unregistered.stdout + unregistered.stderr
     assert f"template {TEMPLATE_NAME} is not registered" in unregistered.stderr, unregistered.stderr
     assert (
-        f"could not be created in authoring:run-1-follow-ups from the {TEMPLATE_NAME} template"
+        f"could not be created in follow-up-runs:run-1-follow-ups from the {TEMPLATE_NAME} template"
     ) in unregistered.stderr, unregistered.stderr
     assert len([line for line in trace.read_text().splitlines() if line.startswith(start)]) == 1, (
         "the re-dispatch whose template could not be stated launched"
     )
-    assert sorted((checkout / ".plans" / "tasks").rglob("*.md")) == [], (
+    assert sorted((checkout / ".follow-ups" / "runs" / "tasks").rglob("*.md")) == [], (
         "the re-dispatch whose template could not be stated left a task for the project"
     )
     registration.write_text(registered, encoding="utf-8")
@@ -4603,12 +4650,12 @@ def test_a_task_the_store_cannot_create_launches_nothing_and_the_next_launch_rec
     assert f"template {TEMPLATE_NAME}.md.j2 line" in refused.stderr, refused.stderr
     assert "a value there is undefined" in refused.stderr, refused.stderr
     assert (
-        f"could not be created in authoring:run-1-follow-ups from the {TEMPLATE_NAME} template"
+        f"could not be created in follow-up-runs:run-1-follow-ups from the {TEMPLATE_NAME} template"
     ) in refused.stderr, refused.stderr
     assert len([line for line in trace.read_text().splitlines() if line.startswith(start)]) == 1, (
         "the refused re-dispatch launched"
     )
-    assert sorted((checkout / ".plans" / "tasks").rglob("*.md")) == [], (
+    assert sorted((checkout / ".follow-ups" / "runs" / "tasks").rglob("*.md")) == [], (
         "the refused re-dispatch left a task for the project to launch"
     )
 
@@ -4652,7 +4699,7 @@ def _launch_follow_up_validation(
     dispatch_check = tmp_path / "dispatch-check.py"
     dispatch_check.write_text(
         "import pathlib, re, shlex, subprocess\n"
-        f"records = sorted(pathlib.Path({str(checkout / '.plans/tasks')!r}).rglob('*.md'))\n"
+        f"records = sorted(pathlib.Path({str(root / 'runs/tasks')!r}).rglob('*.md'))\n"
         "assert len(records) == 1, records\n"
         "body = records[0].read_text().split('---\\n', 2)[2]\n"
         "commands = re.findall(r'`([^`\\n]*orchestrator\\.follow_up_tickets "
@@ -4696,7 +4743,7 @@ def _launch_follow_up_validation(
     assert result.returncode == (tickets.UNSOUND if corrupt else 0), result.stderr
     if corrupt:
         assert "holds the priority `high`" in result.stderr, result.stderr
-    task = _one_task_record(checkout)
+    task = _one_task_record(checkout, root=root / "runs")
     validators = re.findall(
         r"`([^`\n]*orchestrator\.follow_up_tickets check-dispositions[^`\n]*)`",
         task.split("---\n", 2)[2],
@@ -4737,6 +4784,7 @@ def test_follow_up_launch_validation_checks_the_board_once_and_refuses_a_late_ch
 ) -> None:
     """Last dispatch check and attached closeout check the board once, including refusal."""
     environment, root = host_board._followups_environment(tmp_path)
+    environment = follow_up_boundary.environment(environment)
     trace = host_board._audit_follow_up_calls(tmp_path, environment)
     ticket = host_board._follow_up_ticket(host_board.SIBLING_REPOSITORY)
     path = host_board._written_ticket(root, ticket)
@@ -4973,7 +5021,11 @@ def test_real_follow_ups_disposes_of_open_cancelled_and_changed_budget_causes(
     detached: bool,
 ) -> None:
     bench = _bench(tmp_path)
-    bench.environment["ONEVCS_HOME"] = str(tmp_path / "delivery-vcs")
+    # A root of its own, whose one registration is the publication checkout below; its rules
+    # declare the visibility the boundary classifies that repository by.
+    bench.environment["ONEVCS_HOME"] = str(
+        follow_up_boundary.declared_home(tmp_path / "delivery-vcs")
+    )
     main, earlier = "delivery-main", "delivery-earlier"
     publication = tmp_path / "service"
     publication.mkdir()
@@ -5225,7 +5277,11 @@ def test_failed_detached_follow_up_closes_its_budget_account_without_launching_a
     tmp_path: Path,
 ) -> None:
     bench = _bench(tmp_path)
-    bench.environment["ONEVCS_HOME"] = str(tmp_path / "delivery-vcs")
+    # A root of its own, whose one registration is the publication checkout below; its rules
+    # declare the visibility the boundary classifies that repository by.
+    bench.environment["ONEVCS_HOME"] = str(
+        follow_up_boundary.declared_home(tmp_path / "delivery-vcs")
+    )
     bench.environment["FAKE_CODEX_FAIL_AFTER_TURN"] = "1"
     bench.environment["FAKE_CODEX_RUN_ON_MARKER"] = str(tmp_path / "commands.json")
     bench.environment["FAKE_CODEX_RUN_ON_MARKER_LOG"] = str(tmp_path / "commands-ran.jsonl")

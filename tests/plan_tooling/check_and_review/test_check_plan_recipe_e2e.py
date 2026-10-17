@@ -34,6 +34,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import NamedTuple
 
+import boundary_home
 import pytest
 from conftest import git
 from criteria_examples import (
@@ -59,6 +60,12 @@ from orchestrator.criteria_guard import (
     OutOfDispatch,
 )
 from orchestrator.root import REPO_ROOT
+
+
+@pytest.fixture(autouse=True)
+def _boundary_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    boundary_home.answering(monkeypatch)
+
 
 #: This suite is its own Nx project, `plan-tooling-check-and-review`, rather than a marker
 #: tier of the orchestrator project: every journey here spawns the installed `onepipeline`,

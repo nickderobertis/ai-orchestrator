@@ -34,6 +34,7 @@ import tempfile
 from pathlib import Path
 from typing import NamedTuple
 
+import boundary_home
 import plan_fixture_source
 import pytest
 from project_fixtures import budgeted, no_budgets, reviewed
@@ -44,6 +45,12 @@ from orchestrator import design_approval, plan_store
 from orchestrator.criteria_guard import APPENDIX
 from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
+
+
+@pytest.fixture(autouse=True)
+def _boundary_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    boundary_home.answering(monkeypatch)
+
 
 _SEQUENCE = itertools.count()
 

@@ -45,10 +45,10 @@ WATCH_SECTION = "### Never let dispatched work run unwatched"
 ENGINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
 RECORDED_RUNS = REPO_ROOT / "tests" / "fixtures" / "timeline-runs"
 SETTLED_RUN = "gate-parity-2"
-#: The watcher records a live `onepipeline watch` writes and removes inside a run it
-#: watches. Other journeys watch the checked-in recordings in place, so a copy taken
+#: The watcher and watch-terms records a live `onepipeline watch` writes and removes inside
+#: a run it watches. Other journeys watch the checked-in recordings in place, so a copy taken
 #: while one runs can meet a record that vanishes mid-copy; none is ever checked in.
-LIVE_WATCHERS = shutil.ignore_patterns("watchers")
+LIVE_WATCHERS = shutil.ignore_patterns("watchers", "watch-terms")
 #: The launcher whose observer default is why a planning run has nothing watching it.
 PLAN_LAUNCHER = "scripts/plan.sh"
 #: What that launcher names when the caller names no graph. Quoted as the assignment so

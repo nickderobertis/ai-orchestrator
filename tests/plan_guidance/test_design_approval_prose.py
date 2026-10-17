@@ -15,6 +15,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import boundary_home
 import pytest
 from test_design_approval import EXAMPLES, _stand_ins
 
@@ -79,6 +80,10 @@ def test_regenerating_a_shipped_example_keeps_its_body_and_approves_nothing(
     _stand_ins(tmp_path, monkeypatch, [project])
     repository = design_chain.plan_repository(project)
     assert repository is not None, "the example this regenerates names its one repository"
+    # The store's public boundary screens the write to `examples`, which declares no
+    # visibility, so the example's repository is registered public, with a stand-in checkout
+    # carrying no layer of its own, in a state root the render reads.
+    boundary_home.answering(monkeypatch, public=(repository,))
     before = design_approval.design_document(project)
     recorded = design_approval.recorded(before)
     assert recorded is not None, "the example carries no approval a person recorded"

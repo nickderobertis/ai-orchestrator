@@ -1,3 +1,6 @@
+# The plan store's public write boundary is deliberately left switched off: no `write_policy`
+# and no `visibility` is declared here. `docs/orchestration.md` (The public write boundary)
+# says why and what switching it on takes.
 default_sources: [authoring, examples, plans, hellopatient, test-fixtures]
 sources:
   examples:
@@ -12,6 +15,13 @@ sources:
     plugin: local-md
     config:
       root: .follow-ups
+  # Follow-up launch tasks quote drafts and board comments that may name private work.
+  # They stay on this machine and are never copied to a board, so this source is declared
+  # private once the boundary is switched on.
+  follow-up-runs:
+    plugin: local-md
+    config:
+      root: .follow-ups/runs
   test-fixtures:
     plugin: local-md
     config:

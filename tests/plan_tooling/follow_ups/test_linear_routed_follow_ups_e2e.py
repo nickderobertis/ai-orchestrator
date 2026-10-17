@@ -44,6 +44,7 @@ from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import NamedTuple
 
+import follow_up_boundary
 import follow_up_variables
 import github_board
 import plan_root_variable
@@ -283,6 +284,8 @@ def _environment(tmp: Path, remote: Mapping[str, str]) -> dict[str, str]:
     environment[root_name] = str(tmp / "follow-ups")
     environment[plugin_name] = WRITABLE_PLUGIN
     environment[plan_root_variable.name()] = str(tmp / "authoring")
+    # The delivery plan names private work and stays in this fixture's local source.
+    environment["ONETASKGRAPH_SOURCES__AUTHORING__VISIBILITY"] = "private"
     environment["CLAUDE_CODE_SESSION_ID"] = LAUNCHING_SESSION
     environment["ONEPIPELINE_RUNS_DIR"] = str(tmp / "runs")
     environment["ONETASKGRAPH_SECRETS_FILE"] = str(tmp / "no-secrets.env")
@@ -299,7 +302,7 @@ def _environment(tmp: Path, remote: Mapping[str, str]) -> dict[str, str]:
     # A follow-up task is rendered from its template, so its launch runs under the
     # `require_rendered` default every launch outside the suite does.
     environment.pop(plan_check.REQUIRE_RENDERED_ENV, None)
-    return environment
+    return follow_up_boundary.environment(environment)
 
 
 def _run(bench: Bench, *command: str, seconds: float = 900) -> subprocess.CompletedProcess[str]:
@@ -621,7 +624,7 @@ def routed(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Routed]:
     linear = tmp / LINEAR
     linear.mkdir()
     # llmlint: ignore[e2e_not_mocked] This node's amended criteria require a `local-md` source to stand in for `hellopatient-followups`, because no check may reach the production Linear workspace; `tests/test_plan_source_roots.py` holds the tracked source to the Linear plugin's schema.  # noqa: E501 - a directive is one line, and its reason is longer than the limit
-    stand_in(checkout, LINEAR, linear, copied=[tickets.Status.PROPOSED.value])
+    stand_in(checkout, LINEAR, linear, copied=[tickets.Status.PROPOSED.value], visibility="private")
     shared = share_this_checkouts_install(checkout)
     _recording(checkout)
     yield Routed(tmp, checkout, linear, shared)
@@ -1122,11 +1125,14 @@ def test_a_re_dispatch_binds_both_tickets_and_files_no_duplicate(life: Life) -> 
     assert life.linear_files_after_redispatch == life.linear_files_after_filing
     assert life.board_issues_after_redispatch == life.board_issues_after_filing == 1
     linear, board = life.bindings[FILED_LINEAR], life.bindings[FILED_BOARD]
+    # The private item's copy link cannot be written into undeclared drafts. The
+    # existing binding mechanism steers subsequent copies by its explicit origin instead.
     assert (linear.board_item, linear.link(LINEAR), linear.link(BOARD)) == (
         linear_native,
-        linear_native,
+        None,
         None,
     )
+    assert linear.origin == life.filed_linear_item
     assert (board.board_item, board.link(BOARD), board.link(LINEAR)) == (
         board_native,
         board_native,

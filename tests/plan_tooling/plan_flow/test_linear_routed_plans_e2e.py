@@ -56,7 +56,8 @@ from nx_workspace import (
 )
 from project_fixtures import budgeted, helper, no_budgets
 from published_tools import ONETASKGRAPH_BIN
-from scratch_identity import seeded
+from scratch_identity import Identity
+from scratch_identity import seeded as seeded_identity
 from waits import timeout as e2e_timeout
 
 from orchestrator import plan_store
@@ -150,6 +151,12 @@ def routed(tmp_path_factory: pytest.TempPathFactory) -> Routed:
     stand_in(checkout, LINEAR, linear)
     shared = share_this_checkouts_install(checkout)
     return Routed(checkout=checkout, linear=linear, environment=shared)
+
+
+def seeded(root: Path, *, execution: str, origin: str) -> Identity:
+    """The stand-in's scratch identity, declared public: this journey routes public
+    repository content into the team source."""
+    return seeded_identity(root, execution=execution, origin=origin, visibility="public")
 
 
 class Bench(NamedTuple):

@@ -17,6 +17,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import ClassVar, Literal, NamedTuple, NewType, TypedDict
 
+import boundary_home
 import budget_telemetry
 import jsonschema
 import plan_root_variable
@@ -107,6 +108,21 @@ from waits import timeout as e2e_timeout
 from orchestrator import follow_up_comments, follow_up_tickets, plan_check, plan_store, task_body
 from orchestrator.project_store import PlanDocument, PlanNode, frontmatter, write_plan_project
 from orchestrator.root import REPO_ROOT
+
+
+@pytest.fixture(autouse=True)
+def _boundary_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Register public fixtures; routed organization identities stay unregistered and private."""
+    boundary_home.answering(
+        monkeypatch,
+        public=(
+            *boundary_home.FIXTURE_REPOSITORIES,
+            _hosted(FOREIGN_REPOSITORY),
+            _hosted(UNREACHABLE_REPOSITORY),
+            f"gitlab.com/{FOREIGN_REPOSITORY}",
+        ),
+    )
+
 
 ADOPTED = (REPO_ROOT / "config" / "onetaskgraph.version").read_text().strip()
 _NodeId = NewType("_NodeId", str)
@@ -715,7 +731,7 @@ def test_project_copy_files_each_task_issue_in_the_repository_its_own_record_nam
 
 @pytest.mark.parametrize("refusal", PLACEMENT_REFUSALS.values(), ids=PLACEMENT_REFUSALS)
 def test_project_copy_is_refused_for_a_task_whose_repository_cannot_hold_its_issue(
-    tmp_path: Path, refusal: _PlacementRefusal
+    tmp_path: Path, refusal: _PlacementRefusal, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A task naming a repository its issue cannot be created in is refused by name.
 
@@ -728,6 +744,10 @@ def test_project_copy_is_refused_for_a_task_whose_repository_cannot_hold_its_iss
     spelling. The project's own issue, created before its task was refused, is taken back
     with `deleteIssue`, so the board is left as the copy found it.
     """
+    # Visibility is public here; the backend's ownership and token checks are the subject.
+    boundary_home.answering(
+        monkeypatch, public=(*boundary_home.FIXTURE_REPOSITORIES, refusal.origin)
+    )
     title = "feat: change a repository this copy cannot file in"
     _write_placed_project(tmp_path, {refusal.origin: title})
     copied = _copy_placed_project(tmp_path)
@@ -1910,6 +1930,7 @@ def _routing_petsinc_to_a_folder(environment: dict[str, str], root: Path) -> dic
     return environment | {
         "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__PLUGIN": plan_store.WRITABLE_PLUGIN,
         "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__CONFIG__ROOT": str(root),
+        "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__VISIBILITY": "private",
         "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__REPOSITORIES": "github.com/petsinc/*",
         "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__TO": ROUTED_FOLLOWUPS,
     }
@@ -1921,16 +1942,18 @@ def _routing_petsinc_to_a_folder(environment: dict[str, str], root: Path) -> dic
     ids=["owner-first", "routed-first"],
 )
 def test_a_ticket_whose_fix_changes_several_repositories_is_filed_in_the_boards_own_repository(
-    tmp_path: Path, listed: tuple[str, ...]
+    tmp_path: Path, listed: tuple[str, ...], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Decided, validated and copied as the agent does: on `followups`, its issue in the default.
 
-    The fix changes a repository of the board's owner and a `petsinc` one, which no route
-    matches together, so the store keeps it on `followups` and creates its issue in the
+    The public fixture repositories match no route together, so the store keeps the
+    ticket on `followups` and creates its issue in the
     repository that source configures, whichever is listed first. A re-copy updates that
     issue, its copy carries both repositories, and no issue was created in either of them; a
     re-estimate reads the item, verified in the two it lists rather than where it was filed.
     """
+    # This journey covers placement of a public multi-repository ticket, not privacy refusal.
+    boundary_home.answering(monkeypatch, public=(*boundary_home.FIXTURE_REPOSITORIES, *listed))
     environment, drafts_root = _followups_environment(tmp_path)
     filed_in = _hosted(CONFIGURED_REPOSITORY)
     ticket = _written_ticket(drafts_root, _spanning_ticket(filed_in, *listed))
@@ -3177,6 +3200,7 @@ def test_one_tickets_filing_re_copy_withdrawal_and_comment_answer_read_only_thei
         routed = environment | {
             "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__PLUGIN": plan_store.WRITABLE_PLUGIN,
             "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__CONFIG__ROOT": str(routed_root),
+            "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__VISIBILITY": "private",
             "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__REPOSITORIES": "github.com/petsinc/*",
             "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__TO": "routedfollowups",
         }
@@ -3635,6 +3659,7 @@ def test_a_realistic_comment_pass_reads_the_board_once_before_its_replies_and_on
     environment |= {
         "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__PLUGIN": plan_store.WRITABLE_PLUGIN,
         "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__CONFIG__ROOT": str(routed_root),
+        "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__VISIBILITY": "private",
         "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__REPOSITORIES": "github.com/petsinc/*",
         "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__TO": "routedfollowups",
     }

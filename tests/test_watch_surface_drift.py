@@ -123,10 +123,10 @@ NODE_ID_PLACEHOLDER = "<ID>"
 #: A recorded run that settled, for the wait with no bound: it returns on the first pass
 #: whatever the wait says, which is what makes an unbounded spelling drivable at all.
 SETTLED_RUN = "gate-parity-2"
-#: The watcher records a live `onepipeline watch` writes and removes inside a run it
-#: watches. Other journeys watch the checked-in recordings in place, so a copy taken
+#: The watcher and watch-terms records a live `onepipeline watch` writes and removes inside
+#: a run it watches. Other journeys watch the checked-in recordings in place, so a copy taken
 #: while one runs can meet a record that vanishes mid-copy; none is ever checked in.
-LIVE_WATCHERS = shutil.ignore_patterns("watchers")
+LIVE_WATCHERS = shutil.ignore_patterns("watchers", "watch-terms")
 
 
 #: What tells an accepted value from a refused one, without reading either's words. A

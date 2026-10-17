@@ -5,9 +5,11 @@ written under where the plan was drafted. The board mints every copied record an
 own, so on the board copy no document carries those ids — but the plan store stamps each copy
 with `onetaskgraph.origin`, the record it was copied from, and that is how a report is found
 there: the `spike-report` document of the plan's project whose origin names the id the task
-links. So `just check-plan` passes the board copy, each task's report resolves inside the
-board copy's own project, and the report and branch rules stand as they did where the plan
-was drafted — the branch of a spike its engine retried among them.
+links — or, drafted where `authoring` is declared private, whose id the drafting source's own
+`onetaskgraph.copies` link names, since such a copy carries no origin. So `just check-plan`
+passes the board copy, each task's report resolves inside the board copy's own project, and
+the report and branch rules stand as they did where the plan was drafted — the branch of a
+spike its engine retried among them.
 
 Everything is real but GitHub's Projects API, which the loopback board `tests/github_board.py`
 serves, and the paid model `reviewed` scripts: `just copy-plan` and `just check-plan`, the
@@ -24,6 +26,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import NamedTuple
 
+import boundary_home
 import pytest
 from github_board import AUTHORING_ROOT_ENV, AUTHORING_SOURCE, _plan_environment, _serving_board
 from project_fixtures import budgeted, no_budgets, reviewed
@@ -37,6 +40,9 @@ from orchestrator.root import REPO_ROOT
 PROJECT = "spiked-board"
 QUALIFIED = f"{AUTHORING_SOURCE}:{PROJECT}"
 REPOSITORY = "github.com/nickderobertis/ai-orchestrator"
+
+#: The store's environment-layer name for the drafting source's declared visibility.
+PRIVATE_AUTHORING_ENV = f"ONETASKGRAPH_SOURCES__{AUTHORING_SOURCE.upper()}__VISIBILITY"
 
 CLOSING = (
     "Every claim the dispatch makes about the finished work is true of the tree as it "
@@ -161,12 +167,29 @@ def _finalized(root: Path, environment: Mapping[str, str]) -> None:
 
 # llmlint: ignore-block[e2e_not_mocked] GitHub's Projects API is the one boundary doubled, for the reason `tests/github_board.py` gives — driving it writes to the live board this repository plans on — and the paid model `reviewed` scripts is the other; the recipes, the pinned engine and plan store, and the records they write are all real.  # noqa: E501
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] `board-copy-approval` is this directory's own leaf project, keyed on `boardCopyApprovalWorkspace`, which names the recipes, scripts and package this journey drives.  # noqa: E501
+@pytest.mark.parametrize(
+    "private", [False, True], ids=["authoring-undeclared", "authoring-private"]
+)
 def test_a_finalized_plan_copied_onto_the_board_resolves_and_checks_each_tasks_report(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, private: bool
 ) -> None:
+    """Each report resolves on the board copy, by its origin or by the drafting source's link.
+
+    Drafted where `authoring` is declared private, the copy carries no `onetaskgraph.origin`:
+    the store records the correspondence on the private side, as `onetaskgraph.copies`, and
+    the report resolves through that link (`spike_plan.drafted_ids`) instead.
+    """
     root = tmp_path / "authoring"
     root.mkdir()
     monkeypatch.setenv(AUTHORING_ROOT_ENV, str(root))
+    if private:
+        # Declared private with the store's public boundary switched on, in a configuration
+        # home of this test's own: the tracked configuration lands it switched off.
+        boundary_home.screening(monkeypatch, tmp_path)
+        monkeypatch.setenv(PRIVATE_AUTHORING_ENV, "private")
+    # The store's public boundary reads the plan's repository as public through a state root
+    # registering it, so the plan may reach the public board.
+    boundary_home.answering(monkeypatch, public=(REPOSITORY,))
     environment = _environment(root)
     _finalized(root, environment)
     drafted = _recipe(environment, "check-plan", QUALIFIED)
@@ -181,6 +204,7 @@ def test_a_finalized_plan_copied_onto_the_board_resolves_and_checks_each_tasks_r
         _on_the_board(monkeypatch, remote)
         tasks = plan_store.read_tasks(board)
         documents = plan_store.read_documents(board)
+        drafted = spike_plan.drafted_ids(board)
 
     assert checked.returncode == 0, (
         f"`just check-plan` has to pass the board copy {board}, whose reports the board gave "
@@ -196,18 +220,123 @@ def test_a_finalized_plan_copied_onto_the_board_resolves_and_checks_each_tasks_r
         assert all(
             str(held.qualified_id).partition(":")[2] != linked.report for held in documents
         ), [held.qualified_id for held in documents]
-        report = spike_plan.report_for(linked, documents)
+        report = spike_plan.report_for(linked, documents, drafted)
         assert report is not None, (
             f"{task.node_id}'s report {linked.report} resolves to no document of {board}: "
             f"{[(one.qualified_id, one.metadata.get(plan_store.ORIGIN_KEY)) for one in documents]}"
         )
         assert str(report.project) == board.partition(":")[2], report
         assert design_approval.is_spike_report(report), report.metadata
-        assert report.metadata.get(plan_store.ORIGIN_KEY) == f"{AUTHORING_SOURCE}:{linked.report}"
+        # The store links each drafted document to its copy whatever the source's visibility;
+        # only a copy out of a source declared private goes without an origin.
+        assert drafted[str(report.qualified_id)] == f"{AUTHORING_SOURCE}:{linked.report}"
+        assert report.metadata.get(plan_store.ORIGIN_KEY) == (
+            None if private else f"{AUTHORING_SOURCE}:{linked.report}"
+        ), report.metadata
         assert f"# Spike `{expected.spike}`" in report.content, report.content
         assert f"`{expected.branch}`" in report.content, report.content
         # The task tells its worker how to find it there.
         assert "the one whose `onetaskgraph.origin`" in (task.content or "")
+
+
+def _visual_report(environment: Mapping[str, str]) -> None:
+    """The plan's visual spike report, rendered where it is drafted, as that spike writes it."""
+    _rendered(
+        environment,
+        "spike-report",
+        "document",
+        "create",
+        AUTHORING_SOURCE,
+        "--project",
+        PROJECT,
+        "--title",
+        f"Spike report: {spike_plan.VISUAL_SPIKE}",
+        "--id",
+        spike_plan.VISUAL_REPORT,
+        answers={
+            "spike": spike_plan.VISUAL_SPIKE,
+            "branch": f"nick/{PROJECT}/{spike_plan.VISUAL_SPIKE}",
+            "harness": "`capture.sh` at the branch's root; run `sh capture.sh`.",
+            "method": "Screenshots of the listing before and after, at one viewport.",
+            "candidates": [],
+            "findings": [],
+        },
+    )
+
+
+def test_a_visual_report_copied_out_of_a_private_source_resolves_and_an_unreadable_one_does_not(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The board copy's visual report resolves through the drafting source's copy link.
+
+    Found canonically, by the drafted id the report was written under, and when the board
+    copy's project selects it by that id; and where the drafting source holds no project
+    linking the copy, or its documents or the source itself cannot be read, nothing resolves
+    through a link at all, so a copy carrying no origin is left unresolved rather than misread.
+    """
+    root = tmp_path / "authoring"
+    root.mkdir()
+    monkeypatch.setenv(AUTHORING_ROOT_ENV, str(root))
+    boundary_home.screening(monkeypatch, tmp_path)
+    monkeypatch.setenv(PRIVATE_AUTHORING_ENV, "private")
+    boundary_home.answering(monkeypatch, public=(REPOSITORY,))
+    environment = _environment(root)
+    _finalized(root, environment)
+    _visual_report(environment)
+    drafted_visual = f"{AUTHORING_SOURCE}:{spike_plan.VISUAL_REPORT}"
+
+    with _serving_board() as remote:
+        on_the_board = {**environment, **remote}
+        copied = _recipe(on_the_board, "copy-plan", QUALIFIED, "--to", "plans")
+        assert copied.returncode == 0, copied.stdout + copied.stderr
+        board = QualifiedProjectId(_copied(copied.stdout)[QUALIFIED])
+        _on_the_board(monkeypatch, remote)
+        documents = plan_store.read_documents(board)
+        canonical = spike_plan.current_visual_report(board, documents)
+        selected = subprocess.run(
+            [str(plan_store.locked_binary()), "project", "metadata", "set", board]
+            + [spike_plan.VISUAL_REPORT_KEY, json.dumps(drafted_visual)],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert selected.returncode == 0, selected.stderr
+        chosen = spike_plan.current_visual_report(board, documents)
+
+        # The drafting source readable but holding no project whose copy link names the board
+        # copy: a fresh root drafted nothing there.
+        unlinked_root = tmp_path / "unlinked-authoring"
+        unlinked_root.mkdir()
+        monkeypatch.setenv(AUTHORING_ROOT_ENV, str(unlinked_root))
+        unlinked_source = spike_plan.drafted_ids(board)
+        monkeypatch.setenv(AUTHORING_ROOT_ENV, str(root))
+        # The drafting source's documents unreadable: a record the store cannot parse.
+        (root / "documents" / "broken.md").write_text("---\n: [\n---\n", encoding="utf-8")
+        unreadable_documents = spike_plan.drafted_ids(board)
+        # The drafting source itself unreadable: its root is gone.
+        monkeypatch.setenv(AUTHORING_ROOT_ENV, str(tmp_path / "gone"))
+        unreadable_source = spike_plan.drafted_ids(board)
+
+    assert canonical is not None, [one.qualified_id for one in documents]
+    assert plan_store.ORIGIN_KEY not in canonical.metadata, canonical.metadata
+    assert design_approval.is_spike_report(canonical), canonical.metadata
+    assert f"# Spike `{spike_plan.VISUAL_SPIKE}`" in canonical.content, canonical.content
+    assert chosen == canonical
+    assert unlinked_source == {}
+    assert unreadable_documents == {}
+    assert unreadable_source == {}
+    evidence = spike_plan.Evidence(
+        spike_plan.VISUAL_SPIKE,
+        spike_plan.VISUAL_REPORT,
+        spike_plan.Branch(f"nick/{PROJECT}/{spike_plan.VISUAL_SPIKE}"),
+    )
+    for links, why in (
+        (unlinked_source, "no drafted project linking it"),
+        (unreadable_source, "its drafting source unreadable"),
+    ):
+        held = [one for one in documents if spike_plan.report_for(evidence, [one], links)]
+        assert held == [], f"a copy carrying no origin resolved with {why}"
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

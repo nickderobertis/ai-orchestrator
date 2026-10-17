@@ -32,6 +32,13 @@ package missing. So before the move `isolate()` states the cache directory Bun r
 now as `BUN_INSTALL_CACHE_DIR`, which Bun reads before either file, unless the
 environment already states one — as a pytest process this one started does.
 
+A host also states plan-store settings in the environment — a source's root, a field of a
+source the tracked document defines — which the store reads above every document, so the same
+host's choices would reach a test that way. `isolate()` unsets each inherited
+`ONETASKGRAPH_SOURCES__…` setting before the suite states the roots it isolates
+(`tests/conftest.py`), so a test reads only the sources the tracked document and the test
+itself state.
+
 The invoking user's configuration home is recorded in `HOST_CONFIG_HOME_ENV`, so a pytest
 process this one starts — an xdist worker, or a suite a test runs — links the same host
 entries rather than taking this process's sandbox for the host's.
@@ -59,6 +66,8 @@ USER_DOCUMENT = "config.yaml"
 #: Where the invoking user's configuration home is, for a pytest process this one starts.
 #: No tool reads it.
 HOST_CONFIG_HOME_ENV = "ORCHESTRATOR_TEST_HOST_CONFIG_HOME"
+#: The prefix of every setting the store reads for one source from the environment.
+SOURCE_SETTING_PREFIX = "ONETASKGRAPH_SOURCES__"
 #: The variable Bun reads its install cache from before any configuration file.
 BUN_CACHE_ENV = "BUN_INSTALL_CACHE_DIR"
 #: A directory holding a `package.json`, which `bun pm cache` needs to answer at all.
@@ -108,7 +117,9 @@ def bun_cache(environment: Mapping[str, str]) -> str | None:
 def isolate() -> Path:
     """Export a configuration home linking the host's, with an empty plan-store directory.
 
-    Bun's cache is stated first, where Bun finds it now, because the move would change it.
+    Bun's cache is stated first, where Bun finds it now, because the move would change it,
+    and every plan-store source setting the environment carries is unset, because it is the
+    host's.
     Lives under `TMPDIR` rather than pytest's basetemp because it is taken at import, before
     any fixture exists, and is removed when the process ends; removing it unlinks the links
     and never follows one.
@@ -126,6 +137,8 @@ def isolate() -> Path:
     if host is not None:
         os.environ[HOST_CONFIG_HOME_ENV] = str(host)
     os.environ[CONFIG_HOME_ENV] = str(sandbox)
+    for name in [name for name in os.environ if name.startswith(SOURCE_SETTING_PREFIX)]:
+        del os.environ[name]
     return sandbox
 
 

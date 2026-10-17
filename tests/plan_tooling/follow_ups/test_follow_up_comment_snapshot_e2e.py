@@ -48,6 +48,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
+import follow_up_boundary
 import github_board as remote
 import pytest
 from github_board import _GitHubFixture, _Operation
@@ -118,9 +119,12 @@ def loopback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Loopba
     environment |= {
         "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__PLUGIN": plan_store.WRITABLE_PLUGIN,
         "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__CONFIG__ROOT": str(routed),
+        "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__VISIBILITY": "private",
         "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__REPOSITORIES": "github.com/petsinc/*",
         "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__TO": "routedfollowups",
     }
+    # The state root the store's public boundary classifies every ticket's repositories by.
+    environment = follow_up_boundary.environment(environment)
     with remote._serving_followups(environment, fields=True):
         for name in [one for one in os.environ if one.startswith(remote.FOLLOWUPS_ENV_PREFIX)]:
             monkeypatch.delenv(name)
@@ -769,16 +773,16 @@ def test_a_refused_priority_write_is_failed_and_retried_alone_and_a_persons_chan
     )
 
     assert status == comments.UNANSWERED, said
-    # A refused write takes the store's cached copy of the item out of service, so the write
-    # after it reads the item once first, and the report names that read.
+    # A refusal invalidates the cached item. The next write's boundary admission reads
+    # it for classification, supplying the binding before the write's own fallback accounting.
     assert sent == [
         BATCHED_READ,
         _Operation.UPDATE_FIELD_WHOLE,
         _Operation.ISSUE,
         _Operation.UPDATE_ISSUE_WHOLE,
     ], sent
-    assert any(line.startswith(f"  fallback read: {issue}: ") for line in said), said
-    assert "fallback reads: 1" in " ".join(said)
+    assert not any(line.startswith("  fallback read: ") for line in said), said
+    assert "fallback reads: 0" in " ".join(said)
     (entry,) = comments.read_pending(loopback.root)
     assert (entry.write, entry.state, dict(entry.intended)) == (
         "priority",
@@ -1002,8 +1006,8 @@ def test_what_moves_the_cache_after_a_snapshot_moves_nothing_a_reader_of_the_sna
     cache is cleared. `check-gathering`, the agent's reads and `check-responses` read the
     snapshot source either way, at exactly the versions `snapshot.json` records, and send no
     request. The only board reads the log holds are the gathering's, settle's one batched read,
-    and — after a clear — the one fallback read each reply's write makes, which the account
-    records and settle names and counts.
+    and — after a clear — each reply's boundary classification read. That read primes
+    the write's binding, so the write reports no fallback read of its own.
     """
     issues = [_filed(loopback), _filed(loopback, "a-second-cause")]
     asked = [_said(loopback, issue, ASKED) for issue in issues]
@@ -1085,7 +1089,8 @@ def test_what_moves_the_cache_after_a_snapshot_moves_nothing_a_reader_of_the_sna
     assert status == comments.DONE, said
     assert settling == [BATCHED_READ], settling
     fallbacks = [line for line in said if line.startswith("  fallback read: ")]
-    assert len(fallbacks) == (len(issues) if moved == "cleared" else 0), said
+    # The exact issue reads above are boundary admissions, outside write fallback accounting.
+    assert fallbacks == [], said
     assert f"fallback reads: {len(fallbacks)}" in " ".join(said)
     # The gathering's one search page and one batched copy of both items, exactly; the answering
     # and settling requests were each held to their exact sequence above.

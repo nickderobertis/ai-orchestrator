@@ -1652,7 +1652,12 @@ def _shown_locally(root: Path, monkeypatch: pytest.MonkeyPatch, image: bytes) ->
     """
     monkeypatch.setenv("ONETASKGRAPH_SOURCES__SHOWN__PLUGIN", "local-md")
     monkeypatch.setenv("ONETASKGRAPH_SOURCES__SHOWN__CONFIG__ROOT", str(root / "store"))
-    (root / "store").mkdir(parents=True)
+    # The plan the document is filed under, as the store holds it: with the public boundary
+    # on, a document under a project its source does not hold is refused.
+    (root / "store" / "projects").mkdir(parents=True)
+    (root / "store" / "projects" / "demo.md").write_text(
+        '---\ntitle: "demo"\nstatus: "todo"\n---\n\nThe plan.\n', encoding="utf-8"
+    )
     (root / "architecture.png").write_bytes(image)
     (root / "body.md").write_text(SHOWN, encoding="utf-8")
     created = subprocess.run(
@@ -1886,7 +1891,12 @@ def _graphed_locally(root: Path, monkeypatch: pytest.MonkeyPatch, content: str) 
     """Store ``content``, which shows the graph image, with that image as its asset."""
     monkeypatch.setenv("ONETASKGRAPH_SOURCES__GRAPHED__PLUGIN", "local-md")
     monkeypatch.setenv("ONETASKGRAPH_SOURCES__GRAPHED__CONFIG__ROOT", str(root / "store"))
-    (root / "store").mkdir(parents=True)
+    # The plan the document is filed under, as the store holds it: with the public boundary
+    # on, a document under a project its source does not hold is refused.
+    (root / "store" / "projects").mkdir(parents=True)
+    (root / "store" / "projects" / "demo.md").write_text(
+        '---\ntitle: "demo"\nstatus: "todo"\n---\n\nThe plan.\n', encoding="utf-8"
+    )
     (root / "plan-dag.png").write_bytes(_png(3))
     (root / "body.md").write_text(content, encoding="utf-8")
     created = subprocess.run(

@@ -22,6 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import ClassVar, Literal, NamedTuple, NewType
 
+import follow_up_boundary
 import follow_up_variables
 from follow_up_ticket_shape import FIX, current_section, impact_prose
 from published_tools import ONETASKGRAPH_BIN
@@ -2015,6 +2016,10 @@ def _followups_environment(tmp_path: Path) -> tuple[dict[str, str], Path]:
     environment[follow_up_variables.root_name()] = str(drafts_root)
     environment[follow_up_variables.plugin_name()] = plan_store.WRITABLE_PLUGIN
     environment["PATH"] = f"{ONETASKGRAPH_BIN.parent}{os.pathsep}{environment['PATH']}"
+    # The follow-up journeys cover the store's public boundary, which the tracked
+    # configuration lands switched off, so it is switched on in a configuration home of
+    # this process's own.
+    environment[follow_up_boundary.CONFIG_HOME_ENV] = str(follow_up_boundary.config_home())
     return environment, drafts_root
 
 

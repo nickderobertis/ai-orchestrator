@@ -386,6 +386,7 @@ def _isolated_plan_store_roots(tmp_path_factory: pytest.TempPathFactory) -> Iter
     base = tmp_path_factory.mktemp("plan-store-roots")
     isolated = {
         **_plan_store_root_variables(),
+        "follow-up-runs": "ONETASKGRAPH_SOURCES__FOLLOW_UP_RUNS__CONFIG__ROOT",
         # No launch helper composes this one, because nothing outside `tests/` and
         # `onetaskgraph.yaml` names the source at all; it is composed once in
         # `tests/plan_fixture_source.py` and read back from there by every writer.

@@ -9,10 +9,8 @@
 # `just setup-llmlint`; safe to run by hand. Always exits 0 so a flaky install
 # never aborts session startup.
 #
-# Harness selection: the committed `oneharness.toml` is in fallback mode (codex +
-# gpt-5.5 primary, claude-code + opus-4.8 secondary), so llmlint runs the primary
-# where Codex is authenticated and falls through to claude-code in a Claude Code
-# session where codex is absent — no ONEHARNESS_* override needed.
+# Harness selection: `scripts/llmlint-oneharness.sh` forces `oneharness.llmlint.toml`, which
+# owns the judged tier's routing and models — no ONEHARNESS_* override needed.
 #
 # Ceiling: the highest `llmlint-cli` at or above the floor whose declared
 # `oneharness-cli` requirement admits the release `config/oneharness.version` names.

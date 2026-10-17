@@ -50,6 +50,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple, NewType
 
+import follow_up_boundary
 import follow_up_variables
 import github_board as remote
 import pytest
@@ -307,12 +308,15 @@ def _serving(bench: Bench) -> Iterator[None]:
         {
             "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__PLUGIN": plan_store.WRITABLE_PLUGIN,
             "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__CONFIG__ROOT": str(routed),
+            "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__VISIBILITY": "private",
             "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__REPOSITORIES": "github.com/petsinc/*",
             "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__TO": "routedfollowups",
             "ONETASKGRAPH_PAGE_SIZE": str(PAGE_SIZE),
             "ONETASKGRAPH_SECRETS_FILE": str(bench.tmp / "no-secrets.env"),
         }
     )
+    # The state root the store's public boundary classifies every ticket's repositories by.
+    bench.environment.update(follow_up_boundary.environment(bench.environment))
     with remote._serving_followups(bench.environment, fields=True):
         remote.BOARD.real_time = True
         yield

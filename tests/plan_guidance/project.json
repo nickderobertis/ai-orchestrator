@@ -8,8 +8,10 @@
     "type:tests"
   ],
   "implicitDependencies": [
+    "support-boundary-home",
     "support-conftest",
     "support-fake-codex",
+    "support-follow-up-boundary",
     "support-follow-up-ticket-shape",
     "support-follow-up-variables",
     "support-github-board",

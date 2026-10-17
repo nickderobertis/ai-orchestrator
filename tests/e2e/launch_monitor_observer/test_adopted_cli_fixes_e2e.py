@@ -115,10 +115,10 @@ INSTALLED = Path(sys.executable).parent
 
 #: A run this repository recorded, copied per journey so a new event can be written to it.
 RECORDED_RUN = REPO_ROOT / "tests" / "fixtures" / "timeline-runs" / "gate-parity-2"
-#: The watcher records a live `onepipeline watch` writes and removes inside a run it
-#: watches. Other journeys watch the checked-in recordings in place, so a copy taken
+#: The watcher and watch-terms records a live `onepipeline watch` writes and removes inside
+#: a run it watches. Other journeys watch the checked-in recordings in place, so a copy taken
 #: while one runs can meet a record that vanishes mid-copy; none is ever checked in.
-LIVE_WATCHERS = shutil.ignore_patterns("watchers")
+LIVE_WATCHERS = shutil.ignore_patterns("watchers", "watch-terms")
 #: The resume line `onepipeline monitor` ends a pass with, and one rendered event line.
 CURSOR_LINE = "-- cursor "
 EVENT_LINE = re.compile(r"^\d{4}-\d{2}-\d{2}T\S+Z\s")

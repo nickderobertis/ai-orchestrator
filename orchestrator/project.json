@@ -8,12 +8,14 @@
     "lang:python"
   ],
   "implicitDependencies": [
+    "support-boundary-home",
     "support-budget-telemetry",
     "support-command-ceiling",
     "support-conftest",
     "support-credential-dialect",
     "support-criteria-examples",
     "support-fake-codex",
+    "support-follow-up-boundary",
     "support-follow-up-ticket-shape",
     "support-follow-up-variables",
     "support-github-board",

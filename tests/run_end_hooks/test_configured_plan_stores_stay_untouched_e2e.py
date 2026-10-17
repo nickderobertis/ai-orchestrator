@@ -14,7 +14,8 @@ configured roots** carrying the launched run's own id — exactly the records an
 unisolated hook would read and overwrite — and a second draft is seeded under the
 isolated drafts root so the hook has something to find and carries on into the write. It
 then has to be true that the follow-up run's composed task names the isolated drafts
-root, that the project it wrote landed under the isolated authoring root, and that both
+root, that the project it wrote landed under the isolated drafts root's `runs` folder, the
+`follow-up-runs` source's, and that both
 seeded records come back out of the store byte for byte.
 
 Everything between the recipe and the model is real: `just orchestrate`,
@@ -454,14 +455,18 @@ def test_the_hook_reads_the_isolated_drafts_root_and_not_the_one_this_checkout_c
     assert CONFIGURED_TITLE not in launched.task, launched.task
 
 
-def test_the_follow_up_project_lands_under_the_isolated_authoring_root(
+def test_the_follow_up_project_lands_under_the_isolated_drafts_root(
     launched: Launched,
 ) -> None:
-    """The write half: the project the recipe wrote is in the suite's root, not the checkout's."""
-    native = f"{launched.run}{FOLLOW_UPS_SUFFIX}"
+    """The write half: the project the recipe wrote is in the suite's root, not the checkout's.
 
-    assert (launched.isolated.authoring / "projects" / f"{native}.md").is_file(), (
-        f"no {native} project under {launched.isolated.authoring}; the launch wrote its "
+    `just follow-ups` writes it into `follow-up-runs`, rooted under the drafts root it resolved.
+    """
+    native = f"{launched.run}{FOLLOW_UPS_SUFFIX}"
+    runs = launched.isolated.drafts / "runs"
+
+    assert (runs / "projects" / f"{native}.md").is_file(), (
+        f"no {native} project under {runs}; the launch wrote its "
         "follow-up project somewhere this journey did not state"
     )
 

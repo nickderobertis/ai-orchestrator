@@ -23,8 +23,10 @@ plan's main run succeeds:
   project, rendered from the ``spike-report`` template; on a copy of the plan, whose
   destination mints the document an id of its own, the report is the ``spike-report``
   document whose ``onetaskgraph.origin`` — the plan store's own record of what a copy was
-  copied from — names that id. The store has no document lookup by origin, so the check
-  reads the plan project's own documents, one project-scoped read;
+  copied from — names that id, or, for a copy out of ``authoring`` declared private, on
+  which the store records no origin, the document that source's ``onetaskgraph.copies`` link
+  names. The store has no document lookup by origin, so the check reads the plan project's
+  own documents, one project-scoped read, and for such a copy the drafted project's too;
 * a spike may depend on other spikes — a shared harness spike the area spikes build on —
   and the engine starts it from the branch its base dependency kept, so same-repository
   spike dependencies lie on one stacking chain; the engine's ``plan check`` refuses a fan-in
@@ -254,6 +256,7 @@ def _evidence_refusals(
     task: Mapping[str, object],
     documents: Sequence[plan_store.StoreDocument],
     spikes: frozenset[NodeId],
+    drafted: Drafted,
 ) -> Iterator[Refused]:
     node = NodeId(str(task["id"]))
     body = task.get("task")
@@ -267,7 +270,8 @@ def _evidence_refusals(
         )
     for linked in evidence(body if isinstance(body, str) else ""):
         named = report_id(linked.spike)
-        if report_for(linked, documents) is None or linked.report.rpartition(":")[2] != named:
+        resolved = report_for(linked, documents, drafted)
+        if resolved is None or linked.report.rpartition(":")[2] != named:
             yield Refused(
                 node,
                 "task",
@@ -282,7 +286,9 @@ def _evidence_refusals(
 
 
 def _spikes_of(
-    tasks: Sequence[Mapping[str, object]], documents: Sequence[plan_store.StoreDocument]
+    tasks: Sequence[Mapping[str, object]],
+    documents: Sequence[plan_store.StoreDocument],
+    drafted: Drafted,
 ) -> frozenset[NodeId]:
     """Every spike the plan knows: each one a task links, and each one whose report it holds."""
     bodies = [task.get("task") for task in tasks]
@@ -291,54 +297,116 @@ def _spikes_of(
         NodeId(name.removesuffix(REPORT_SUFFIX))
         for held in documents
         if design_approval.is_spike_report(held)
-        for name in names(held)
+        for name in names(held, drafted)
         if name.endswith(REPORT_SUFFIX) and ":" not in name
     }
     return frozenset(linked | reported)
 
 
-def names(report: plan_store.StoreDocument) -> frozenset[str]:
+#: The source a plan is drafted in. Once a host declares it private, its copies onto a board
+#: carry no `onetaskgraph.origin`: the store keeps that correspondence on this side instead.
+AUTHORING = "authoring"
+
+#: A copy's document, by its qualified id, mapped to the qualified id it was copied from.
+type Drafted = Mapping[str, str]
+
+
+def drafted_ids(project: str) -> dict[str, str]:
+    """Each document of ``project``, a copy of a plan drafted in :data:`AUTHORING`, by its source.
+
+    A copy out of a source declared private records no `onetaskgraph.origin` on the items it
+    creates, and keeps the correspondence on the private side as the store's own
+    `onetaskgraph.copies` link instead. So the drafted project whose link names ``project`` is
+    found, and each of its documents' links names the copy it reached: the answer maps that
+    copy's id to the drafted document's. Empty for a project of :data:`AUTHORING` itself, for
+    one no drafted project links, and where that source cannot be read — a reader without it
+    then finds a report by the origin a copy carries alone, as before.
+    """
+    if plan_store.qualified(project)[0] == AUTHORING:
+        return {}
+    try:
+        drafted_projects = plan_store.read_projects(AUTHORING)
+    except OSError:
+        return {}
+    for drafted in drafted_projects:
+        copies = drafted.metadata.get(plan_store.COPIES_KEY)
+        if not isinstance(copies, Mapping) or project not in copies.values():
+            continue
+        try:
+            documents = plan_store.read_documents(str(drafted.qualified_id))
+        except OSError:
+            return {}
+        return {
+            link: str(document.qualified_id) for document in documents for link in _links(document)
+        }
+    return {}
+
+
+def _links(document: plan_store.StoreDocument) -> list[str]:
+    copies = document.metadata.get(plan_store.COPIES_KEY)
+    if not isinstance(copies, Mapping):
+        return []
+    return [link for link in copies.values() if isinstance(link, str)]
+
+
+def _drafted_for(project: str, documents: Sequence[plan_store.StoreDocument]) -> Drafted:
+    """:func:`drafted_ids` for ``project``, read only when it holds a report carrying no origin."""
+    if any(
+        design_approval.is_spike_report(held) and plan_store.ORIGIN_KEY not in held.metadata
+        for held in documents
+    ):
+        return drafted_ids(project)
+    return {}
+
+
+def names(report: plan_store.StoreDocument, drafted: Drafted | None = None) -> frozenset[str]:
     """Every name a task's `spikes` answer may link ``report`` by, on any copy of the plan.
 
     Its own id, qualified and native, and — on a copy, where the destination mints an id of
-    its own — the id of the document it was copied from, which the plan store records on the
-    copy as `onetaskgraph.origin`. That record is the store's, and travels with every copy,
-    so a task written where the plan was drafted names its report wherever the plan is read.
+    its own — the id of the document it was copied from: the one the plan store records on the
+    copy as `onetaskgraph.origin`, or, for a copy out of a private source, the one ``drafted``
+    (:func:`drafted_ids`) reads off that source's own link. Either record is the store's, so a
+    task written where the plan was drafted names its report wherever the plan is read.
     """
     held = [str(report.qualified_id)]
     origin = report.metadata.get(plan_store.ORIGIN_KEY)
     if isinstance(origin, str) and origin:
         held.append(origin)
+    source = (drafted or {}).get(str(report.qualified_id))
+    if source:
+        held.append(source)
     return frozenset(name for one in held for name in (one, one.partition(":")[2]))
 
 
 def report_for(
-    linked: Evidence, documents: Sequence[plan_store.StoreDocument]
+    linked: Evidence,
+    documents: Sequence[plan_store.StoreDocument],
+    drafted: Drafted | None = None,
 ) -> plan_store.StoreDocument | None:
     """The spike-report document of ``documents`` a task's ``linked`` evidence names, if any."""
     return next(
         (
             held
             for held in documents
-            if design_approval.is_spike_report(held) and linked.report in names(held)
+            if design_approval.is_spike_report(held) and linked.report in names(held, drafted)
         ),
         None,
     )
 
 
 def visual_report(
-    documents: Sequence[plan_store.StoreDocument],
+    documents: Sequence[plan_store.StoreDocument], drafted: Drafted | None = None
 ) -> plan_store.StoreDocument | None:
     """The plan's :data:`VISUAL_REPORT` among ``documents``, or ``None`` for a plan with none.
 
     Found as a task's evidence finds a report: a spike-report document named by that id, its
-    own or — on a copy — the one the store's `onetaskgraph.origin` records it was copied from.
+    own or — on a copy — the one it was copied from (:func:`names`).
     """
     return next(
         (
             held
             for held in documents
-            if design_approval.is_spike_report(held) and VISUAL_REPORT in names(held)
+            if design_approval.is_spike_report(held) and VISUAL_REPORT in names(held, drafted)
         ),
         None,
     )
@@ -357,9 +425,10 @@ def current_visual_report(
     Null, non-string, blank, malformed, missing, wrong-kind, wrong-project and ambiguous
     selections fail closed; only an absent key delegates to :func:`visual_report`.
     """
+    drafted = _drafted_for(project, documents)
     metadata = plan_store.project_record(project).get("metadata")
     if not isinstance(metadata, Mapping) or VISUAL_REPORT_KEY not in metadata:
-        return visual_report(documents)
+        return visual_report(documents, drafted)
     selected = metadata[VISUAL_REPORT_KEY]
     reason: str | None
     match selected:
@@ -378,7 +447,12 @@ def current_visual_report(
     matches = [
         held
         for held in documents
-        if selected in (str(held.qualified_id), held.metadata.get(plan_store.ORIGIN_KEY))
+        if selected
+        in (
+            str(held.qualified_id),
+            held.metadata.get(plan_store.ORIGIN_KEY),
+            drafted.get(str(held.qualified_id)),
+        )
     ]
     match matches:
         case []:
@@ -434,10 +508,11 @@ def refusals(project: str, document: object) -> list[Refused]:
     is_spikes = stamped is not None and stamped.kind == design_approval.SPIKES
     found: list[Refused] = []
     tasks = list(_tasks(document))
-    spikes = _spikes_of(tasks, documents)
+    drafted = _drafted_for(project, documents)
+    spikes = _spikes_of(tasks, documents, drafted)
     for task in tasks:
         found.extend(_spike_node_refusals(task, is_spikes))
-        found.extend(_evidence_refusals(task, documents, spikes))
+        found.extend(_evidence_refusals(task, documents, spikes, drafted))
     return found
 
 

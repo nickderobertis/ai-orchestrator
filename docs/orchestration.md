@@ -58,6 +58,35 @@ it, which is why a board can still be listed by a checkout that names none.
 a copy of a local project files its issues in the configured repository, and a
 repository the credential cannot reach refuses the copy before anything is created.
 
+### The public write boundary
+
+**The plan store's public write boundary is landed switched off, so no write is screened.**
+Switched on, a write to any source not declared private is screened and one naming a private
+repository is refused: a `write_policy` names two commands of the pinned `onevcs`, `boundary
+inspect`, which answers each repository an item names as public or private, a rule's
+declaration first and the host otherwise, and `boundary check`, which refuses a write carrying a
+private repository's terms, with the store's own refusal naming the source and nothing written.
+The store turns it on as soon as its configuration names a `write_policy` or any source declares
+a `visibility`, so the tracked `onetaskgraph.yaml` does neither.
+
+It stays off because the pinned store walks every source declared private on each dependency
+read of a task in any other source, and fails the read when one cannot be authenticated. The
+two Linear plan sources would have to be declared private for an organization's plan to be
+routed to them while the boundary is on, and a dispatch that does not hold the Linear
+credential could then walk no dependency at all; with them left undeclared, the boundary would
+refuse every private repository's task routed there. Turning it on waits for the store to answer
+such a read with what the reader can see. Meanwhile a follow-up launch writes its project into
+`follow-up-runs`, a folder under the drafts root that is declared private once the boundary is
+on, rather than into `authoring`, because its task quotes drafts and board comments that may
+name private work, and `just follow-ups` creates that folder before any store command.
+
+The boundary's tests switch it on in a configuration home of their own
+(`tests/boundary_home.py`'s `screening`), whose plan-store user layer names the policy, and read
+none of this host's sources: `tests/plan_tooling/plan_copy/test_private_authoring_boundary_e2e.py`
+drives a private source receiving an organization's plan and the public board refusing it, and
+`tests/e2e/board_copy_approval/test_board_copy_spike_evidence_e2e.py` a plan copied out of a
+private `authoring` whose spike reports resolve through the copy link the store records there.
+
 ### Where a plan's tasks land: the board, or Hello Patient's Linear
 
 **A task's destination follows its repository, through the store's routes, and nobody

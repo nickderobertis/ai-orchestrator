@@ -10,6 +10,7 @@ its reader's seam, since what is under test is what this module decides from the
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Mapping
 
 import pytest
@@ -222,6 +223,110 @@ def test_a_report_on_a_copy_resolves_through_the_origin_the_store_records(
     (refused,) = spike_plan.refusals("plans:I_created_0", {"tasks": [task, unknown]})
     assert (refused.node, refused.field) == ("other", "task")
     assert "links the report `spike-b-report` of `spike-b`" in refused.reason
+
+
+def _drafted_project(native: str, copies: object) -> plan_store.StoreProject:
+    """A project of the authoring source, declared private, carrying the copy link ``copies``."""
+    return plan_store.StoreProject(
+        qualified_id=plan_store.QualifiedProjectId(f"authoring:{native}"),
+        title=native,
+        metadata={} if copies is None else {plan_store.COPIES_KEY: copies},
+        location=None,
+    )
+
+
+def _drafted_report(native: str, copies: object) -> StoreDocument:
+    """A report as the authoring source, declared private, holds it, linking a board's copy."""
+    metadata: dict[str, object] = dict(REPORT_PROVENANCE)
+    if copies is not None:
+        metadata[plan_store.COPIES_KEY] = copies
+    return dataclasses.replace(
+        _copied_report(f"authoring:{native}", None, True), metadata=metadata, project="cursor-plan"
+    )
+
+
+def test_a_report_copied_out_of_private_authoring_resolves_through_the_drafted_link(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A copy out of a private source carries no origin; authoring's own link names it instead."""
+    board = "plans:I_created_0"
+    copied = _copied_report("plans:I_created_2", None, True)
+    unlinked = _copied_report("plans:I_created_3", None, True)
+    projects = [
+        _drafted_project("elsewhere", {"plans": "plans:I_other"}),
+        _drafted_project("unlinked", None),
+        _drafted_project("cursor-plan", {"plans": board}),
+    ]
+    drafted = [
+        _drafted_report("spike-a-report", {"plans": "plans:I_created_2", "odd": 7}),
+        _drafted_report("notes", "not a link"),
+        _drafted_report("spike-b-report", None),
+    ]
+    read: list[str] = []
+
+    def documents(project: str) -> list[StoreDocument]:
+        read.append(project)
+        return drafted if project == "authoring:cursor-plan" else [unlinked, copied]
+
+    monkeypatch.setattr(plan_store, "read_projects", lambda _source: projects)
+    monkeypatch.setattr(plan_store, "read_documents", documents)
+    monkeypatch.setattr(plan_store, "project_record", lambda _project: {"metadata": {}})
+    linked = spike_plan.Evidence(
+        NodeId("spike-a"), spike_plan.ReportId("spike-a-report"), spike_plan.Branch("n/p/spike-a")
+    )
+
+    links = spike_plan.drafted_ids(board)
+    assert links == {"plans:I_created_2": "authoring:spike-a-report"}
+    assert spike_plan.report_for(linked, [unlinked, copied]) is None
+    assert spike_plan.report_for(linked, [unlinked, copied], links) == copied
+    task = {
+        "id": "listing",
+        "task": _body(_evidence_line("spike-a", "spike-a-report", "n/p/spike-a")),
+    }
+    assert spike_plan.refusals(board, {"tasks": [task]}) == []
+    assert read == ["authoring:cursor-plan", board, "authoring:cursor-plan"]
+    # The drafted project's own documents name themselves, and no copy link is read for them.
+    assert spike_plan.drafted_ids("authoring:cursor-plan") == {}
+
+
+def test_a_copy_no_drafted_project_links_or_authoring_cannot_answer_for_resolves_nothing_more(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every way the authoring side has no link to give answers no drafted id, never a refusal."""
+    board = "plans:I_created_0"
+    monkeypatch.setattr(plan_store, "read_projects", lambda _source: [])
+    assert spike_plan.drafted_ids(board) == {}
+
+    def unreadable(_where: str) -> list[object]:
+        raise OSError("the authoring root cannot be read")
+
+    monkeypatch.setattr(plan_store, "read_projects", unreadable)
+    assert spike_plan.drafted_ids(board) == {}
+
+    monkeypatch.setattr(
+        plan_store, "read_projects", lambda _source: [_drafted_project("p", {"plans": board})]
+    )
+    monkeypatch.setattr(plan_store, "read_documents", unreadable)
+    assert spike_plan.drafted_ids(board) == {}
+
+
+def test_the_visual_report_of_a_copy_out_of_private_authoring_is_found_through_its_link(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With no selection and with one naming the drafted report, the board copy is the one."""
+    board = "plans:I_created_0"
+    copied = _copied_report("plans:I_created_4", None, True)
+    drafted = _drafted_report(spike_plan.VISUAL_REPORT, {"plans": "plans:I_created_4"})
+    monkeypatch.setattr(
+        plan_store, "read_projects", lambda _source: [_drafted_project("p", {"plans": board})]
+    )
+    monkeypatch.setattr(plan_store, "read_documents", lambda _project: [drafted])
+    metadata: dict[str, object] = {}
+    monkeypatch.setattr(plan_store, "project_record", lambda _project: {"metadata": metadata})
+
+    assert spike_plan.current_visual_report(board, [copied]) == copied
+    metadata[spike_plan.VISUAL_REPORT_KEY] = f"authoring:{spike_plan.VISUAL_REPORT}"
+    assert spike_plan.current_visual_report(board, [copied]) == copied
 
 
 @pytest.mark.parametrize(

@@ -38,10 +38,10 @@ from orchestrator.root import REPO_ROOT
 #: The recorded run, and the node that dispatched inside it. Both are the real ids, so
 #: an operator meeting this journey can go and read the whole run it was cut from.
 RECORDED_RUNS = REPO_ROOT / "tests" / "fixtures" / "transcript-runs"
-#: The watcher records a live `onepipeline watch` writes and removes inside a run it
-#: watches. Other journeys watch the checked-in recordings in place, so a copy taken
+#: The watcher and watch-terms records a live `onepipeline watch` writes and removes inside
+#: a run it watches. Other journeys watch the checked-in recordings in place, so a copy taken
 #: while one runs can meet a record that vanishes mid-copy; none is ever checked in.
-LIVE_WATCHERS = shutil.ignore_patterns("watchers")
+LIVE_WATCHERS = shutil.ignore_patterns("watchers", "watch-terms")
 RECORDED_RUN = "adopt-and-retire-gate"
 RECORDED_NODE = "adopt-and-retire-gate"
 

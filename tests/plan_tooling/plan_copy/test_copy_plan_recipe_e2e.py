@@ -31,6 +31,7 @@ from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any, NewType
 
+import boundary_home
 import plan_fixture_source
 import pytest
 from project_fixtures import (
@@ -48,6 +49,12 @@ from waits import timeout as e2e_timeout
 from orchestrator import design_approval, plan_budgets, plan_review, plan_store
 from orchestrator.criteria_guard import APPENDIX
 from orchestrator.root import REPO_ROOT
+
+
+@pytest.fixture(autouse=True)
+def _boundary_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    boundary_home.answering(monkeypatch)
+
 
 #: This suite is its own Nx project, `plan-tooling-plan-copy`; see
 #: `tests/plan_tooling/plan_copy/project.json` and the guard in `tests/conftest.py`.

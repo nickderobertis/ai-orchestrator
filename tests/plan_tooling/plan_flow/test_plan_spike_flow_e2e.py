@@ -187,7 +187,7 @@ def _flow(
     qualified = plan or PlanProject(f"{FIXTURE_SOURCE}:test-{os.getpid()}-{key}-plan")
     named = tuple(SpikeId(f"spike-{key}-{topic}") for topic in topics if spikes)
     repository = str(scenario.get("repository", PLANNING_FLOW_ORIGIN))
-    identity = seeded(tmp_path / "identity", origin=repository)
+    identity = seeded(tmp_path / "identity", origin=repository, visibility="public")
     environment = dict(os.environ)
     for name in INHERITED_ENVIRONMENT:
         environment.pop(name, None)

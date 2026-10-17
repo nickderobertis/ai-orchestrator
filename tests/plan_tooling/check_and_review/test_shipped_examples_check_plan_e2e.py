@@ -30,6 +30,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import boundary_home
 import plan_fixture_source
 import pytest
 from project_fixtures import older_engine, register_stand_in
@@ -38,6 +39,12 @@ from waits import timeout as e2e_timeout
 from orchestrator import plan_budgets, plan_check, plan_store
 from orchestrator.project_store import hosted_origin
 from orchestrator.root import REPO_ROOT
+
+
+@pytest.fixture(autouse=True)
+def _boundary_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    boundary_home.answering(monkeypatch)
+
 
 #: The source the examples ship in, which the exemption is stated for.
 EXAMPLES = plan_check.REVIEW_EXEMPT_SOURCE
@@ -73,7 +80,9 @@ def _snapshot(root: Path) -> dict[Path, bytes]:
 
 def _registry(tmp_path: Path, projects: list[str]) -> dict[str, str]:
     """An environment whose `onevcs` registry holds a stand-in for each origin ``projects`` name."""
-    home = tmp_path / "onevcs"
+    # Its rules declare each fixture repository's visibility, which the store's public
+    # boundary classifies a registered stand-in by.
+    home = boundary_home.declared_home(tmp_path / "onevcs")
     environment = {**os.environ, "ONEVCS_HOME": str(home)}
     # The suite loads its hand-written plans without `require_rendered`; these journeys are
     # about the examples being renderings, so they check them as a reader's launch would.

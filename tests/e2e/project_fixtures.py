@@ -22,6 +22,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, TypedDict
 
+import boundary_home
 import plan_fixture_source
 from published_tools import ONETASKGRAPH_BIN
 
@@ -111,7 +112,9 @@ def local_project(content: str, name: str) -> str:
             task.setdefault("unit", FIXTURE_UNIT)
     write_plan_project(plan_fixture_source.root(), plan, native_id=native)
     project = f"test-fixtures:{native}"
-    budgeted(plan_fixture_source.SOURCE, native, no_budgets(plan_repositories(plan)))
+    budgeted(
+        plan_fixture_source.SOURCE, native, no_budgets(plan_repositories(plan)), resolving(project)
+    )
     _designed(native)
     approved(project)
     return project
@@ -207,6 +210,8 @@ def budgeted(
     With ``analysis=False``, render overview alone without recording project analysis.
     The project keeps its title. Answers the project's qualified id.
     """
+    if environment is None:
+        environment = resolving(f"{source}:{native}")
     shown = subprocess.run(
         [str(ONETASKGRAPH_BIN), "project", "show", f"{source}:{native}", "--json"],
         cwd=REPO_ROOT,
@@ -418,7 +423,10 @@ def resolving(project: str, base: Mapping[str, str] | None = None) -> dict[str, 
     environment = dict(os.environ if base is None else base)
     repository = design_chain.plan_repository(project)
     if repository is None:
-        return environment
+        home = boundary_home.registered_home(
+            Path(_STAND_IN_DIR.name), public=boundary_home.FIXTURE_REPOSITORIES
+        )
+        return boundary_home.environment(environment, home)
     resolved = subprocess.run(
         ["onevcs", "resolve", repository],
         env=environment,
@@ -428,12 +436,12 @@ def resolving(project: str, base: Mapping[str, str] | None = None) -> dict[str, 
     )
     if resolved.returncode == 0:
         return environment
-    home = Path(_STAND_IN_DIR.name) / "onevcs"
-    checkout = Path(_STAND_IN_DIR.name) / re.sub(r"[^a-z0-9-]+", "-", repository.lower())
-    if not checkout.exists():
-        register_stand_in(home, repository, checkout)
-    environment[ONEVCS_HOME] = str(home)
-    return environment
+    # These are public fixture repositories. Register their visibility as well as a
+    # layerless checkout so the store can screen the document regenerated below.
+    home = boundary_home.registered_home(
+        Path(_STAND_IN_DIR.name), public=(*boundary_home.FIXTURE_REPOSITORIES, repository)
+    )
+    return boundary_home.environment(environment, home)
 
 
 def approved(project: str) -> str:
@@ -549,6 +557,8 @@ def designed(
     budget answers, as `python -m orchestrator.plan_budgets` prints them, when given;
     ``answers`` replace any of the others, and each of ``assets`` is given with `--asset`.
     """
+    if environment is None:
+        environment = resolving(f"{source}:{native}")
     composed = {
         "what": f"The fixture plan {native}.",
         "why": "A journey needs a project it can launch.",

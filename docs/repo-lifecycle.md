@@ -29,7 +29,8 @@ onevcs 0.51.2 and onetaskgraph 0.7.0: the engine 0.74.1 removes a successful run
 dispatch scratch, reports what any other ending keeps, and adds `onepipeline scratch
 discard <run-id>`; its idle maintenance runs the command each repository declares in its
 own `onevcs.toml` and reports what that freed. It links onevcs 0.52.0 and the
-onetaskgraph 0.7.1 store crates, so the CLI pins follow both, and the read API 0.38.0
+onetaskgraph 0.7.1 store crates, which file a private source's documents under the home
+its copy link names, so the CLI pins follow both, and the read API 0.38.0
 links that engine. No landing behaviour moved.
 From onepipeline 0.72.0, onepipeline-ui 0.36.0
 and onetaskgraph 0.6.0: the engine 0.73.0 and the read API 0.37.0 link the onetaskgraph

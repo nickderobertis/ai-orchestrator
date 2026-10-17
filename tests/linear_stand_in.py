@@ -47,7 +47,13 @@ def tracked_states(source: str) -> dict[str, str]:
     return states
 
 
-def stand_in(checkout: Path, source: str, root: Path, copied: Collection[str] = ()) -> None:
+def stand_in(
+    checkout: Path,
+    source: str,
+    root: Path,
+    copied: Collection[str] = (),
+    visibility: str | None = None,
+) -> None:
     """Declare the copy's ``source`` as a folder at ``root`` reading the tracked state names.
 
     The block is located by the shape the tracked file has, so a configuration that moved
@@ -60,6 +66,9 @@ def stand_in(checkout: Path, source: str, root: Path, copied: Collection[str] = 
     category — `backlog`, the proposal a follow-up ticket is filed as, against Linear's own
     `Backlog`, the state a person defers to — that state is left out and the word maps to its
     own category, which is the reading Linear gives the copy.
+
+    ``visibility``, when given, is the stand-in's declared visibility in place of the tracked
+    source's own.
     """
     configuration = checkout / "onetaskgraph.yaml"
     lines = configuration.read_text(encoding="utf-8").splitlines()
@@ -69,6 +78,13 @@ def stand_in(checkout: Path, source: str, root: Path, copied: Collection[str] = 
     end = start + 1
     while end < len(lines) and (lines[end].startswith("    ") or not lines[end].strip()):
         end += 1
+    # Replacing the backend keeps the tracked source's boundary declaration, unless the journey
+    # states the one its real backend has: a Linear workspace is readable by its members alone.
+    declared = (
+        [f"    visibility: {visibility}"]
+        if visibility is not None
+        else [line for line in lines[start:end] if line.startswith("    visibility:")]
+    )
     words = {word.casefold() for word in copied}
     mapping = [
         f"        {json.dumps(state)}: {category}"
@@ -83,6 +99,7 @@ def stand_in(checkout: Path, source: str, root: Path, copied: Collection[str] = 
     lines[start:end] = [
         opens,
         "    plugin: local-md",
+        *declared,
         "    config:",
         f"      root: {root}",
         "      status_mapping:",

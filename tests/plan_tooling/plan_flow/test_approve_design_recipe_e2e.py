@@ -31,10 +31,11 @@ from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import boundary_home
 import pytest
 import yaml
 from github_board import _serving_board
-from project_fixtures import ONEVCS_HOME, helper, register_stand_in, reviewed
+from project_fixtures import helper, reviewed
 from published_tools import ONETASKGRAPH_BIN
 from visual_images import LARGE, TYPICAL, sized_like_screenshots, write_noise_png
 from waits import timeout as e2e_timeout
@@ -411,6 +412,15 @@ class Store:
         drafted = f"{native}-design"
         documents = self.drafts / "documents"
         documents.mkdir(parents=True, exist_ok=True)
+        # The plan stood up where the document is drafted too: with the store's public
+        # boundary on, an item filed under a project its own source does not hold is
+        # unclassified, and the copy refuses it before writing anything.
+        projects = self.drafts / "projects"
+        projects.mkdir(parents=True, exist_ok=True)
+        (projects / f"{native}.md").write_text(
+            frontmatter({"title": native, "status": "todo", "metadata": {}}, native),
+            encoding="utf-8",
+        )
         (documents / f"{drafted}.md").write_text(
             frontmatter({"title": f"Design: {native} (design)", "project": native}, content),
             encoding="utf-8",
@@ -1592,19 +1602,38 @@ def test_an_approval_travels_with_the_document_onto_the_store_the_plan_is_launch
 # other journey of this module already runs behind it. That key names the recipes, scripts,
 # templates and package these journeys drive, so narrowing it would memoize a verdict over a
 # tree never run.
+def _boundary_registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A registry of this journey's own declaring :data:`SERVICE` and :data:`CLIENT` public.
+
+    With the store's public boundary switched on — a host's own choice, since the tracked
+    configuration lands it off — a plan naming a repository the registry cannot answer public
+    for is private, and its document is refused at :data:`SOURCE`, which declares no
+    visibility; registering both keeps these journeys about approval either way. Every recipe
+    below inherits this registry. Answers its root.
+    """
+    home = boundary_home.registered_home(tmp_path / "boundary", public=[SERVICE, CLIENT])
+    for name, value in boundary_home.environment(os.environ, home).items():
+        if os.environ.get(name) != value:
+            monkeypatch.setenv(name, value)
+    return home
+
+
 def _registered(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, origin: str, layer: str | None = None
 ) -> Path:
-    """Register a stand-in checkout for ``origin``, carrying ``layer`` as its repository layer.
+    """The checkout registered for ``origin``, carrying ``layer`` as its repository layer.
 
-    In a registry of this journey's own, which every recipe below inherits, so the engine
-    resolves ``origin`` to this checkout exactly as it resolves a registered repository's
-    origin on a host. ``layer`` is the text of its `.onepipeline/templates/design-doc.md.j2`,
-    or ``None`` for a checkout carrying no layer of its own. Answers the checkout.
+    The one :func:`_boundary_registry`'s registry holds for it, which every recipe below
+    inherits, so the engine resolves ``origin`` to this checkout exactly as it resolves a
+    registered repository's origin on a host. ``layer`` is the text of its
+    `.onepipeline/templates/design-doc.md.j2`, or ``None`` for a checkout carrying no layer
+    of its own. Answers the checkout.
     """
-    home = tmp_path / "onevcs"
-    monkeypatch.setenv(ONEVCS_HOME, str(home))
-    checkout = register_stand_in(home, origin, tmp_path / origin.replace("/", "-"))
+    _boundary_registry(tmp_path, monkeypatch)
+    resolved = subprocess.run(
+        ["onevcs", "resolve", origin], text=True, capture_output=True, check=True
+    )
+    checkout = Path(json.loads(resolved.stdout)["publication_checkout"])
     if layer is not None:
         _layered(checkout, layer)
     return checkout
@@ -1646,6 +1675,7 @@ def test_every_repair_names_the_resolve_command_the_rule_gives_for_the_plan(
             project = store.plan(native, beyond=["second"], repositories=[SERVICE, SERVICE])
             repository: str | None = SERVICE
         case "several repositories":
+            _boundary_registry(tmp_path, monkeypatch)
             project = store.plan(native, beyond=["second"], repositories=[SERVICE, CLIENT])
             repository = None
         case _:
@@ -2139,6 +2169,9 @@ def test_a_visual_plans_document_is_approved_only_once_it_shows_the_reported_cha
     current = _just("approve-design", project, runs=runs)
     assert current.returncode == 0, current.stdout + current.stderr
     generated[revised[0]["after"]] = current_bytes
+    # Another plan the store holds, since the boundary refuses a document filed under a
+    # project its source does not hold.
+    store.standing_project("another-plan", titled="Another plan")
     store._piped(
         "document",
         "create",
@@ -2221,6 +2254,7 @@ def test_a_visual_plans_document_is_approved_only_once_it_shows_the_reported_cha
 
     collision = tmp_path / "collision.md"
     collision.write_text("A different project's notes.\n")
+    board.standing_project("other", titled="Other")
     board._stored(
         "document",
         "create",

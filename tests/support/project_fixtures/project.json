@@ -6,6 +6,7 @@
     "type:test-support"
   ],
   "implicitDependencies": [
+    "support-boundary-home",
     "support-fake-codex",
     "support-no-paid-provider",
     "support-plan-fixture-source",

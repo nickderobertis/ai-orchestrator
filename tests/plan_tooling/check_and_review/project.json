@@ -8,6 +8,7 @@
     "type:tests"
   ],
   "implicitDependencies": [
+    "support-boundary-home",
     "support-conftest",
     "support-criteria-examples",
     "support-fake-backend",

@@ -46,6 +46,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import boundary_home
 import pytest
 import short_state
 from project_fixtures import ONEVCS_HOME, budgeted, helper, no_budgets, register_stand_in
@@ -56,6 +57,12 @@ from orchestrator import design_approval, plan_review, plan_store
 from orchestrator.criteria_guard import APPENDIX
 from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
+
+
+@pytest.fixture(autouse=True)
+def _boundary_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    boundary_home.answering(monkeypatch)
+
 
 #: This suite is its own Nx project, `plan-tooling-check-and-review`; see
 #: `tests/plan_tooling/check_and_review/project.json` and the guard in `tests/conftest.py`.
@@ -445,7 +452,8 @@ def test_a_design_document_carrying_labels_is_approved_and_keeps_them(
     # The plan's one task names one repository, so its document resolves through that
     # repository's registered checkout: a layerless stand-in, in a registry of this test's own.
     environment = _environment(tmp_path)
-    environment[ONEVCS_HOME] = str(tmp_path / "onevcs")
+    # Its rules declare the stand-in's visibility, which the store's public boundary reads.
+    environment[ONEVCS_HOME] = str(boundary_home.declared_home(tmp_path / "onevcs"))
     register_stand_in(Path(environment[ONEVCS_HOME]), SERVICE_ORIGIN, tmp_path / "service")
     approved = _just("approve-design", project, environment=environment)
     assert approved.returncode == 0, approved.stdout + approved.stderr

@@ -365,7 +365,7 @@ def test_a_run_whose_nodes_all_end_done_launches_its_follow_up_run_detached(
     assert matched["run"] == run
     assert matched["follow_up"] == matched["watched"] == f"{run}{FOLLOW_UPS_SUFFIX}"
     launched = _launch_record(ended.bench, succeeded.follow_up)
-    assert launched["project"] == f"authoring:{run}{FOLLOW_UPS_SUFFIX}", launched
+    assert launched["project"] == f"follow-up-runs:{run}{FOLLOW_UPS_SUFFIX}", launched
     # Detached, so the hook returned at the launch record rather than awaiting the run.
     assert launched.get("mode", "detached") != "attached", launched
 
@@ -635,7 +635,7 @@ def test_a_failed_run_whose_failed_node_is_settled_done_fires_its_success_hook_o
         assert matched is not None, success_log
         follow_up = matched["follow_up"]
         assert follow_up == f"{run}{FOLLOW_UPS_SUFFIX}"
-        assert _launch_record(bench, follow_up)["project"] == f"authoring:{follow_up}"
+        assert _launch_record(bench, follow_up)["project"] == f"follow-up-runs:{follow_up}"
 
         # Once: a second adoption of the ended run finds the success hook already fired
         # for this ending and fires nothing, so `results` still carries one record of it.

@@ -32,6 +32,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+import follow_up_boundary
 import follow_up_variables
 import pytest
 from follow_up_ticket_shape import DUPLICATE_SEARCH as SHARED_DUPLICATE_SEARCH
@@ -2139,6 +2140,7 @@ def board(drafts_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     root.mkdir()
     monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{BOARD.upper()}__PLUGIN", WRITABLE_PLUGIN)
     monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{BOARD.upper()}__CONFIG__ROOT", str(root))
+    follow_up_boundary.enable(monkeypatch, public=(BOARD,))
     return root
 
 
@@ -4289,12 +4291,12 @@ def test_check_budgets_on_the_board_refuses_this_runs_budget_question_re_renderi
         drafts=(),
         budget=tickets._standing(entry),
     )
+    publication = tmp_path / "registered"
+    _register_budget_repo(publication)
     item = _on_board(_write(drafts_root, old))
     _moved(item, tickets.Status.WITHDRAWN)
     entry["disposition"] = [_budget_disposed(item, "budget-question")]
     _budget_account(drafts_root, entry)
-    publication = tmp_path / "registered"
-    _register_budget_repo(publication)
     _standing_budget(publication, entry)
     question = "budget cycle-time: actual 9 seconds. Cause: a long gate. Should the budget change?"
     for run, evidence in (("a-third-run", RE_RENDERED), (RUN, question)):
@@ -6826,6 +6828,7 @@ def routed(board: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path
         f"ONETASKGRAPH_SOURCES__{BOARD.upper()}__ROUTES__0__REPOSITORIES", "github.com/petsinc/*"
     )
     monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{BOARD.upper()}__ROUTES__0__TO", ROUTED)
+    follow_up_boundary.enable(monkeypatch, public=(BOARD,), private=(ROUTED,))
     return root
 
 
@@ -6851,7 +6854,14 @@ def test_the_family_is_the_board_and_every_source_its_routes_name(routed: Path) 
 def test_a_routed_ticket_is_filed_bound_decided_and_searched_on_the_board_its_route_names(
     routed: Path, board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Every per-ticket command takes the root board and acts at the ticket's routed board."""
+    """Every per-ticket command takes the root board and acts at the ticket's routed board.
+
+    The routed board is declared private, and the store records no link from a ticket of the
+    `drafts` source, which is not, to the private item its copy created; the item still records
+    the ticket's origin, which the origin query reads, and the copy binds the ticket and points
+    its own `onetaskgraph.origin` at the item, which every later copy follows by its origin
+    rule, so a re-copy updates that item and no other.
+    """
     ticket = _write(drafts_root, _routed_ticket())
     destination = f"{ROUTED}:{RUN}/tickets/{ROUTED_CAUSE}"
 
@@ -6863,11 +6873,15 @@ def test_a_routed_ticket_is_filed_bound_decided_and_searched_on_the_board_its_ro
     assert not any(board.rglob("*.md")), "the routed ticket was filed on the root board"
     assert len(list(routed.rglob("*.md"))) == 1
     bound = tickets.read_ticket(ticket)
-    assert (bound.board_item, bound.link(ROUTED), bound.link(BOARD)) == (
-        tickets.BoardItemId(f"{RUN}/tickets/{ROUTED_CAUSE}"),
+    assert (bound.board_item, bound.link(ROUTED), bound.link(BOARD), bound.origin) == (
         tickets.BoardItemId(f"{RUN}/tickets/{ROUTED_CAUSE}"),
         None,
+        None,
+        destination,
     )
+    held = _board_item(destination)["metadata"]
+    assert isinstance(held, dict)
+    assert held[tickets.ORIGIN_KEY] == tickets.qualified_id(RUN, ROUTED_CAUSE)
 
     _moved(destination, tickets.Status.ACCEPTED.value)
     assert _decided(ticket, capsys) == (tickets.SOUND, "todo\n", "")
@@ -6915,10 +6929,9 @@ def test_a_ticket_listing_several_repositories_takes_a_route_only_when_every_one
     ("listed", "filed_in", "lands_on"),
     [
         ((ROUTED_REPOSITORY, ROUTED_SIBLING), ROUTED_REPOSITORY, ROUTED),
-        ((ROUTED_REPOSITORY, REPOSITORY), ROUTED_REPOSITORY, BOARD),
-        ((REPOSITORY, ROUTED_REPOSITORY), REPOSITORY, BOARD),
+        ((REPOSITORY, OTHER_REPOSITORY), REPOSITORY, BOARD),
     ],
-    ids=["every-one-routed", "routed-record-beside-another", "record-beside-a-routed-one"],
+    ids=["every-one-routed", "none-routed"],
 )
 def test_a_ticket_listing_several_repositories_is_filed_where_its_route_sends_them_all(
     routed: Path,
@@ -6948,6 +6961,41 @@ def test_a_ticket_listing_several_repositories_is_filed_where_its_route_sends_th
     query = ("--metadata", tickets.root_cause_query(CAUSE))
     searched = [one for repository in listed for one in ("--repository", repository)]
     assert _listed(capsys, *query, *searched) == (tickets.SOUND, [destination], "")
+
+
+@pytest.mark.parametrize(
+    ("listed", "filed_in"),
+    [
+        ((ROUTED_REPOSITORY, REPOSITORY), ROUTED_REPOSITORY),
+        ((REPOSITORY, ROUTED_REPOSITORY), REPOSITORY),
+    ],
+    ids=["routed-record-beside-another", "record-beside-a-routed-one"],
+)
+def test_a_ticket_listing_a_private_repository_beside_a_public_one_reaches_no_board(
+    routed: Path,
+    board: Path,
+    drafts_root: Path,
+    capsys: pytest.CaptureFixture[str],
+    listed: tuple[str, ...],
+    filed_in: str,
+) -> None:
+    """The route takes it only when every listed repository matches, so it stays on the root.
+
+    The root board is declared public and the routed repository is private, so the store's
+    public boundary refuses the copy, naming the ticket as private and the board as not
+    declared private, and nothing reaches either board.
+    """
+    ticket = _write(drafts_root, _spanning(*listed, filed_in=filed_in))
+    assert tickets.ticket_board(BOARD, list(listed)) == BOARD
+
+    status, printed, reported = _copied(ticket, capsys)
+
+    assert (status, printed) == (tickets.UNRUNNABLE, "")
+    assert f"{tickets.qualified_id(RUN, CAUSE)} is private, and source {BOARD} is not declared" in (
+        reported
+    )
+    assert not any(board.rglob("*.md")), "a private ticket reached the public root board"
+    assert not any(routed.rglob("*.md")), "a ticket no route takes reached the routed board"
 
 
 def test_a_ticket_listing_several_repositories_whose_record_names_none_of_them_is_not_copied(
@@ -7035,8 +7083,8 @@ def test_the_dispositions_check_and_a_re_estimate_read_a_routed_ticket_where_it_
 
 @pytest.mark.parametrize(
     ("listed", "lands_on"),
-    [((ROUTED_REPOSITORY, ROUTED_SIBLING), ROUTED), ((ROUTED_REPOSITORY, REPOSITORY), BOARD)],
-    ids=["every-one-routed", "one-routed"],
+    [((ROUTED_REPOSITORY, ROUTED_SIBLING), ROUTED), ((REPOSITORY, OTHER_REPOSITORY), BOARD)],
+    ids=["every-one-routed", "none-routed"],
 )
 def test_the_dispositions_check_and_a_re_estimate_read_a_spanning_ticket_where_it_was_filed(
     routed: Path,
@@ -7052,7 +7100,7 @@ def test_the_dispositions_check_and_a_re_estimate_read_a_spanning_ticket_where_i
     """
     _drafted(drafts_root, RUN, "a-cursor-draft")
     spanning = dataclasses.replace(
-        _spanning(*listed, filed_in=ROUTED_REPOSITORY), drafts=(tickets.QualifiedDraftId(DRAFT),)
+        _spanning(*listed, filed_in=listed[0]), drafts=(tickets.QualifiedDraftId(DRAFT),)
     )
     ticket = _write(drafts_root, spanning)
     tickets.open_dispositions(drafts_root, RUN).write_text(
@@ -7514,6 +7562,8 @@ def test_budget_question_reads_the_closed_item_and_the_budget_that_stands(
     entry = _cycle_entry()
     budget = tickets._standing(entry)
     old = _ticket(created_by_run=OTHER_RUN, owning_runs=(tickets.RunId(OTHER_RUN),), budget=budget)
+    checkout = tmp_path / "registered"
+    _register_budget_repo(checkout)
     destination = _on_board(_write(drafts_root, old))
     entry["disposition"] = [_budget_disposed(destination, "budget-question")]
     _budget_account(drafts_root, entry)
@@ -7521,8 +7571,6 @@ def test_budget_question_reads_the_closed_item_and_the_budget_that_stands(
     assert done.returncode == tickets.UNSOUND
     assert "not closed as not planned" in done.stderr
     _moved(destination, tickets.Status.WITHDRAWN)
-    checkout = tmp_path / "registered"
-    _register_budget_repo(checkout)
     _standing_budget(checkout, entry)
     assert _budget_cli(drafts_root).returncode == tickets.SOUND
     done = _budget_cli(drafts_root, RUN, "--board", BOARD)
@@ -8179,6 +8227,7 @@ def test_budget_question_refuses_missing_changed_or_unreadable_closed_records(
     board: Path,
     drafts_root: Path,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     entry = _cycle_entry()
     budget = tickets._standing(entry)
@@ -8188,13 +8237,17 @@ def test_budget_question_refuses_missing_changed_or_unreadable_closed_records(
         drafts=(),
         budget=budget,
     )
+    publication = tmp_path / "registered"
+    _register_budget_repo(publication)
     item = _on_board(_write(drafts_root, old))
     _moved(item, tickets.Status.WITHDRAWN)
     entry["disposition"] = [_budget_disposed(item, "budget-question")]
     _budget_account(drafts_root, entry)
-    assert "standing budget could not be read" in _budget_cli(drafts_root).stderr
-    publication = tmp_path / "registered"
-    _register_budget_repo(publication)
+    # Read where nothing registers the budget's repository: the check reads the board alone,
+    # which the boundary does not classify, so a root registering nothing answers it.
+    with monkeypatch.context() as unregistered:
+        unregistered.setenv("ONEVCS_HOME", str(tmp_path / "unregistered"))
+        assert "standing budget could not be read" in _budget_cli(drafts_root).stderr
     assert "standing budget could not be read" in _budget_cli(drafts_root).stderr
     _standing_budget(publication, entry)
     assert _budget_cli(drafts_root).returncode == tickets.SOUND
@@ -8235,8 +8288,15 @@ def test_budget_account_validates_budget_values_before_using_them(
 
 
 @pytest.fixture
-def budget_registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    registry = tmp_path / "budget-registry"
+def budget_registry(board: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A state root of the test's own, answering which checkout publishes a budget's repository.
+
+    Taken after `board`, so it is the root every process reads. Its rules declare the follow-up
+    identities' visibility and it registers none: a test registers its own checkout of the
+    budget's repository, which the board's boundary then classifies, before copying a ticket
+    naming it.
+    """
+    registry = follow_up_boundary.declared_home(tmp_path / "budget-registry")
     monkeypatch.setenv("ONEVCS_HOME", str(registry))
     return registry
 
@@ -8518,12 +8578,12 @@ def test_budget_question_refuses_malformed_registered_budget_values(
         owning_runs=(tickets.RunId(OTHER_RUN),),
         budget=tickets._standing(entry),
     )
+    checkout = tmp_path / "registered"
+    _register_budget_repo(checkout)
     destination = _on_board(_write(drafts_root, old))
     _moved(destination, tickets.Status.WITHDRAWN)
     entry["disposition"] = [_budget_disposed(destination, "budget-question")]
     _budget_account(drafts_root, entry)
-    checkout = tmp_path / "registered"
-    _register_budget_repo(checkout)
     _standing_budget(checkout, entry)
     bin = tmp_path / "tools"
     bin.mkdir()

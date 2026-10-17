@@ -313,6 +313,8 @@ def launched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
     # the fake `ssh` the hosted origin is served through, which every fetch a session
     # makes goes over.
     environment["ONEVCS_HOME"] = str(identity.home)
+    # This launch deliberately uses a private identity; its local plan stays private too.
+    environment["ONETASKGRAPH_SOURCES__TEST_FIXTURES__VISIBILITY"] = "private"
     environment.update(identity.environment)
     environment["ONEPIPELINE_RUNS_DIR"] = str(root / "runs")
     environment["XDG_STATE_HOME"] = str(short_state.state_home(root))

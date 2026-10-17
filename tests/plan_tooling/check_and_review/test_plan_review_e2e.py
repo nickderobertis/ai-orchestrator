@@ -34,6 +34,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+import boundary_home
 import jsonschema
 import plan_fixture_source
 import plan_root_variable
@@ -59,6 +60,12 @@ from orchestrator import plan_budgets, plan_checklist_budgets, plan_review, plan
 from orchestrator.criteria_guard import APPENDIX
 from orchestrator.project_store import render_plan_project, write_plan_project
 from orchestrator.root import REPO_ROOT
+
+
+@pytest.fixture(autouse=True)
+def _boundary_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    boundary_home.answering(monkeypatch)
+
 
 #: This suite is its own Nx project, `plan-tooling-check-and-review`, rather than a marker
 #: tier of the orchestrator project: every journey here spawns the installed `onepipeline`,

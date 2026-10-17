@@ -33,6 +33,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import boundary_home
 import plan_fixture_source
 import pytest
 import yaml
@@ -42,6 +43,12 @@ from published_tools import ONETASKGRAPH_BIN
 from orchestrator import design_approval, plan_budgets, plan_store, task_body
 from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
+
+
+@pytest.fixture(autouse=True)
+def _boundary_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    boundary_home.answering(monkeypatch)
+
 
 _SEQUENCE = itertools.count()
 

@@ -33,6 +33,20 @@ FIXTURE = Path(__file__).with_name("test_plan_copy_destination_ids_e2e.py")
 ONETASKGRAPH = REPO_ROOT / ".venv" / "bin" / "onetaskgraph"
 
 
+@pytest.fixture(autouse=True)
+def _source_settings_restored(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Undo, after each test, the source settings `isolate()` unsets in this process.
+
+    Those settings are the roots `tests/conftest.py` stated for the whole session, which every
+    later test in this worker reads; each is unset through ``monkeypatch`` so its teardown
+    states it again.
+    """
+    for name in [
+        name for name in os.environ if name.startswith(plan_store_user_layer.SOURCE_SETTING_PREFIX)
+    ]:
+        monkeypatch.delenv(name)
+
+
 def _invoking_user(config_home: Path) -> dict[str, str]:
     """This process's environment as a user whose configuration home is ``config_home``.
 
@@ -157,6 +171,43 @@ def test_the_sandbox_links_every_other_entry_and_leaves_the_users_home_unchanged
     assert {path: path.read_bytes() for path in config_home.rglob("*") if path.is_file()} == (
         before
     )
+
+
+def test_a_source_setting_the_host_states_in_the_environment_reaches_no_test(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A host's own environment settings of a source are unset, a tracked source's among them.
+
+    Read back through the installed store, so what is held is what a test's store reads: the
+    tracked source answers from the tracked document, and a source only the host's environment
+    defined is gone.
+    """
+    stated = tmp_path / "hosts-own-examples"
+    stated.mkdir()
+    monkeypatch.setenv("ONETASKGRAPH_SOURCES__EXAMPLES__CONFIG__ROOT", str(stated))
+    monkeypatch.setenv("ONETASKGRAPH_SOURCES__HOSTONLY__PLUGIN", "local-md")
+    monkeypatch.setenv("ONETASKGRAPH_SOURCES__HOSTONLY__CONFIG__ROOT", str(tmp_path))
+    monkeypatch.delenv(plan_store_user_layer.HOST_CONFIG_HOME_ENV, raising=False)
+
+    plan_store_user_layer.isolate()
+
+    assert not [
+        name for name in os.environ if name.startswith(plan_store_user_layer.SOURCE_SETTING_PREFIX)
+    ]
+    shown = subprocess.run(
+        [str(ONETASKGRAPH), "config", "show", "--json"],
+        cwd=REPO_ROOT,
+        env=dict(os.environ),
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=True,
+    )
+    settings = {setting["key"]: setting for setting in json.loads(shown.stdout)["settings"]}
+    assert not any(key.startswith("sources.hostonly.") for key in settings), sorted(settings)
+    root = settings["sources.examples.config.root"]
+    assert str(stated) not in str(root["value"]), root
+    assert root["origin"]["layer"] == "file", root
 
 
 @pytest.mark.parametrize(

@@ -27,11 +27,18 @@ import subprocess
 from pathlib import Path
 from typing import cast
 
+import boundary_home
 import pytest
 from waits import timeout as e2e_timeout
 
 from orchestrator.project_store import PlanDocument, PlanNode, write_plan_project
 from orchestrator.root import REPO_ROOT
+
+
+@pytest.fixture(autouse=True)
+def _boundary_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    boundary_home.answering(monkeypatch)
+
 
 #: The source a plan is drafted in, standing in for the gitignored `authoring` root, and a
 #: second one standing in for another local folder a plan is moved into.

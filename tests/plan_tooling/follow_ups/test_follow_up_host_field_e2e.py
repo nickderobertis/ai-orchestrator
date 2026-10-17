@@ -1,11 +1,13 @@
 """A copied follow-up ticket's host lands on the `followups` board's `Host` field.
 
 The installed plan store and `python -m orchestrator.follow_up_tickets copy` run for real,
-under this repository's committed `onetaskgraph.yaml`, against the loopback board in
-`tests/github_board.py`: the projection is the store's, configured here, so what is proven
-is that this host's configuration makes a real copy write the record's `host` onto the
-board, and that a board without the field refuses the copy by name until the operator's
-`just plans sources fields followups --apply` creates it.
+under this repository's committed `onetaskgraph.yaml`, with its public boundary switched on in
+a configuration home of the suite's own and classifying the ticket's repository against a state
+root that registers it public (`tests/follow_up_boundary.py`), against the loopback board in
+`tests/github_board.py`: the projection is the store's, configured here, so what is proven is
+that this host's configuration makes a real copy write the record's `host` onto the board, and
+that a board without the field refuses the copy by name until the operator's `just plans
+sources fields followups --apply` creates it.
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import follow_up_boundary
 import github_board as host_board
 
 from orchestrator import follow_up_tickets as tickets
@@ -41,6 +44,7 @@ def test_a_copied_ticket_s_host_is_projected_onto_the_board_s_host_field(
     tmp_path: Path,
 ) -> None:
     environment, root = host_board._followups_environment(tmp_path)
+    environment = follow_up_boundary.environment(environment)
     ticket = host_board._follow_up_ticket(host_board.SIBLING_REPOSITORY, verified_on=VERIFIED_ON)
     path = host_board._written_ticket(root, ticket)
     with host_board._serving_followups(environment, fields=True):
@@ -60,6 +64,7 @@ def test_a_board_without_the_host_field_refuses_the_copy_until_the_field_setup_c
     tmp_path: Path,
 ) -> None:
     environment, root = host_board._followups_environment(tmp_path)
+    environment = follow_up_boundary.environment(environment)
     ticket = host_board._follow_up_ticket(host_board.SIBLING_REPOSITORY, verified_on=VERIFIED_ON)
     path = host_board._written_ticket(root, ticket)
     with host_board._serving_followups(environment, fields=True):

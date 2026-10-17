@@ -35,6 +35,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, NamedTuple, NewType, TypedDict, cast
 
+import boundary_home
 import plan_fixture_source
 import plan_root_variable
 import pytest
@@ -68,6 +69,13 @@ from orchestrator import design_approval, design_chain, plan_review, plan_store
 from orchestrator.criteria_guard import APPENDIX
 from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
+
+
+@pytest.fixture(autouse=True)
+def _boundary_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Register the public fixture repositories this flow renders before its launches."""
+    boundary_home.answering(monkeypatch)
+
 
 #: This journey is its own Nx project's, `plan-tooling-plan-flow`; see
 #: `tests/plan_tooling/plan_flow/project.json` and the guard in `tests/conftest.py`.
@@ -405,6 +413,7 @@ def _bench(tmp_path: Path, oneharness_bin: str, *answers: object) -> Bench:
         publication=PUBLICATION_ALIAS,
         execution=EXECUTION_ALIAS,
         origin=PLANNING_FLOW_ORIGIN,
+        visibility="public",
     )
     destination = tmp_path / "board"
     # Created rather than left to the first write: a `local-md` source canonicalizes its

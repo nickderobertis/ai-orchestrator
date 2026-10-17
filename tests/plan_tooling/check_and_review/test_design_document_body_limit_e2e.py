@@ -27,6 +27,7 @@ import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 
+import boundary_home
 import plan_fixture_source
 import pytest
 from project_fixtures import GraphImage, graph_image, reviewed
@@ -37,6 +38,12 @@ from orchestrator import plan_store, task_body
 from orchestrator.criteria_guard import APPENDIX
 from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
+
+
+@pytest.fixture(autouse=True)
+def _boundary_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    boundary_home.answering(monkeypatch)
+
 
 #: The source a plan is drafted in here: this process's own `test-fixtures` store.
 DRAFTED_IN = plan_fixture_source.SOURCE
@@ -291,6 +298,18 @@ def test_a_design_document_its_picture_carries_past_the_limit_is_refused_as_serv
     """
     probe = f"test-{os.getpid()}-pictured-probe"
     probe_padding = task_body.BODY_LIMIT - 2_000
+    # The probe's project is created first: while the store's public boundary is on, a
+    # document filed under a project its source does not hold is never written.
+    filed = subprocess.run(
+        [str(ONETASKGRAPH_BIN), "project", "create", DRAFTED_IN, "--id", probe]
+        + ["--title", probe, "--no-interactive"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+    assert filed.returncode == 0, filed.stderr
     _designed(probe, probe_padding, tmp_path, pictured=True)
     (probed,) = plan_store.read_documents(f"{DRAFTED_IN}:{probe}")
     probed_stored = task_body.measure(probed.content, probed.metadata)

@@ -18,7 +18,7 @@
 # `scripts/plan.sh` is the precedent for everything about the launch, and each departure
 # from it is named:
 #
-#   * **One direct node, `follow-ups`, in project `authoring:<run-id>-follow-ups`**, whose
+#   * **One direct node, `follow-ups`, in project `follow-up-runs:<run-id>-follow-ups`**, whose
 #     task the template renders ending in `PLAN_DIRECT_PLACEMENT_NOTE`: a direct node works
 #     in the launching checkout and commits nothing, which is exactly what this agent's
 #     deliverable is — records under the gitignored draft root and items on a board, never
@@ -127,7 +127,16 @@ GRAPH="graphs/follow-up.yaml"
 TEMPLATE_NAME="follow-up-task"
 
 #: The source the project is written into, and what its native id and run id append.
-PLAN_SOURCE="authoring"
+#: `follow-up-runs` rather than `authoring`: a follow-up run's task quotes the drafts and the
+#: board comments it answers, which may name a private repository, and the store's public
+#: boundary, once switched on, refuses such a write anywhere not declared private. This source
+#: is a folder of this machine under the drafts root that nothing copies to a board, so it is
+#: the one to declare private when the boundary is on (`onetaskgraph.yaml` says why it is not
+#: yet), at no cost in origin bindings.
+PLAN_SOURCE="follow-up-runs"
+#: The store's environment-layer name for that source's root, rooted here under the drafts
+#: root this launch resolved, so the project this writes and the run that reads it agree.
+PLAN_SOURCE_ROOT_ENV="ONETASKGRAPH_SOURCES__FOLLOW_UP_RUNS__CONFIG__ROOT"
 SUFFIX="-follow-ups"
 
 #: What one count the inventory answers with is: a non-negative whole number.
@@ -299,6 +308,13 @@ fi
 load follow-up-env.sh
 export_follow_up_drafts follow-ups || exit "$?"
 drafts_root=${!FOLLOW_UP_DRAFTS_ROOT_ENV}
+# The source the launch writes its project into, rooted under that drafts root and exported
+# before any store command, and made now: once it is declared private the store builds it on
+# every dependency walk, and a `local-md` root that does not exist fails that walk.
+export "$PLAN_SOURCE_ROOT_ENV=$drafts_root/runs"
+mkdir -p -- "${!PLAN_SOURCE_ROOT_ENV}" ||
+    fail "the follow-up run root ${!PLAN_SOURCE_ROOT_ENV} could not be created" \
+        "check that the drafts root $drafts_root is writable, then retry"
 
 if [ "$comments" -ne 1 ]; then
     counts=$("$python" -m orchestrator.follow_up_tickets inventory --root "$drafts_root" "$run") ||
@@ -385,7 +401,10 @@ export "$PLAN_RUN_ID_ENV=$follow_up_run"
 # shellcheck source=scripts/plan-root-env.sh
 load plan-root-env.sh
 export_plan_authoring_root follow-ups || exit "$?"
-plan_root=${!PLAN_AUTHORING_ROOT_ENV}
+plan_root=${!PLAN_SOURCE_ROOT_ENV}
+# The engine reads a launched project's nodes from its default sources. Include this
+# launch's private source; every board operation in its task names its source explicitly.
+export ONETASKGRAPH_DEFAULT_SOURCES="${ONETASKGRAPH_DEFAULT_SOURCES:+$ONETASKGRAPH_DEFAULT_SOURCES,}$PLAN_SOURCE"
 
 # The repository layer `onepipeline template resolve` reads is the working directory this
 # was run from, which `just` makes this checkout: taken before anything below changes one.
