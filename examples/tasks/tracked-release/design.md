@@ -6,7 +6,7 @@ metadata:
   "onepipeline.id": "design"
   "orchestrator.unit": "Design"
   "onepipeline.persona": "planner"
-  "onetaskgraph.template": {"answers_digest":"sha256:f24832a6173a19bee2fb73daa3d4177cff9707c1d3fd0aa305d527a65bd332ac","body_digest":"sha256:33b120cd2c2569fd302776b6f0e029000909364da8b596594fd758c74f5e4572","digest":"sha256:094afa20a55d0b9740923d270cdb02667b834b6b43c1b2c59f9e38b68c8e7325","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:7930c93b056450ffc6386f1b7e7fee53a5f48476813e6489a0e080d53cbc700e","body_digest":"sha256:33b120cd2c2569fd302776b6f0e029000909364da8b596594fd758c74f5e4572","digest":"sha256:5839c2551180e40b54ce7bf8c98b2406452ee3f43ccf9e99a7b9e76ce0899d1d","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What
@@ -399,6 +399,7 @@ acceptance_criteria:
 - The API and rollout contract is complete.
 - The design is verified against the current project.
 additional_info: ''
+boundary: {}
 budgets: []
 spikes: []
 what: Design the release and record its API and rollout contract in docs/design.md.

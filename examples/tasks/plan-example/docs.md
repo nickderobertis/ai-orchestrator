@@ -7,7 +7,7 @@ metadata:
   "onepipeline.id": "docs"
   "orchestrator.unit": "Documentation"
   "onepipeline.persona": "docs-writer"
-  "onetaskgraph.template": {"answers_digest":"sha256:21405607a873160ba8d99961ae995852a843ce0e4884a92af089f7207da052d8","body_digest":"sha256:46b4e9ea289fc4dc56d44f41a55e5ef21e567a9ea0e9bfaf944086de9e0f1be2","digest":"sha256:094afa20a55d0b9740923d270cdb02667b834b6b43c1b2c59f9e38b68c8e7325","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:93bf1835f693573a6782e94802fe6abde2dfedf62bfa79c7656595aa058972ad","body_digest":"sha256:46b4e9ea289fc4dc56d44f41a55e5ef21e567a9ea0e9bfaf944086de9e0f1be2","digest":"sha256:5839c2551180e40b54ce7bf8c98b2406452ee3f43ccf9e99a7b9e76ce0899d1d","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What
@@ -402,6 +402,7 @@ acceptance_criteria:
 - Every command in it was run against this checkout and behaves as written.
 - Every documented request and response matches the implemented endpoints.
 additional_info: ''
+boundary: {}
 budgets: []
 spikes: []
 what: 'Write the README for the URL shortener: what it is, how to run it, and the API surface.'

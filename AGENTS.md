@@ -707,7 +707,14 @@ them reach you; `manager` names the session role and is never a command.
    qualified project id the plan must create on its own `Plan project:
    <source>:<project>` line, and brief every planner to write into the `authoring`
    source; a plan of another repository stays local and launches from there (`--to`,
-   or `--no-design-doc` for a planner alone). Do not hand it contracts, acceptance
+   or `--no-design-doc` for a planner alone). A plan spanning public and private
+   repositories names them as normalized origins on one `Repositories:` line: only a
+   line `onevcs` reads as both visibilities hands the planner the engine's own
+   `onepipeline boundary guidance`, so any other brief dispatches byte for byte what it
+   did without the line (`tests/plan_tooling/plan_flow/test_boundary_guidance_e2e.py`).
+   Whatever reaches a public destination — the brief's words a plan carries, its
+   description, a public node's text — names nothing private, not even an inventory of
+   the repositories you checked. Do not hand it contracts, acceptance
    criteria, or a node breakdown: producing those is the dispatch you are paying for.
    Treat an unfamiliar project-sounding name as a lookup before a question — local
    project directories, the registered repositories, the GitHub account — and ask only

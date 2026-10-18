@@ -9,7 +9,7 @@ metadata:
   "onepipeline.repo_type": "team"
   "onepipeline.merge_policy": "change-auto"
   "onepipeline.persona": "docs-writer"
-  "onetaskgraph.template": {"answers_digest":"sha256:4d04cf0e4b433696848ef7aa80b5cb12c2883c182aeb87bdcefd66789d43fed3","body_digest":"sha256:4a9b6cad47f4a2a8fd01c2bdea7f675a6e1b24df93db1fa4fd3dd17bc621d23a","digest":"sha256:094afa20a55d0b9740923d270cdb02667b834b6b43c1b2c59f9e38b68c8e7325","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:2345769b818c32529181b132c44587c173602dd388d8703ffe0ee9796f1a8b9f","body_digest":"sha256:4a9b6cad47f4a2a8fd01c2bdea7f675a6e1b24df93db1fa4fd3dd17bc621d23a","digest":"sha256:5839c2551180e40b54ce7bf8c98b2406452ee3f43ccf9e99a7b9e76ce0899d1d","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What
@@ -404,6 +404,7 @@ acceptance_criteria:
 - Every example was run against the API and behaves as written.
 - The documented contract matches the endpoint as implemented, not as proposed.
 additional_info: ''
+boundary: {}
 budgets: []
 spikes: []
 what: 'Document the new `/health` endpoint: its request, its response, and worked examples.'

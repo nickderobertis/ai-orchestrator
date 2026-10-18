@@ -7,7 +7,7 @@ metadata:
   "onepipeline.id": "ui"
   "orchestrator.unit": "Web UI"
   "onepipeline.persona": "engineer"
-  "onetaskgraph.template": {"answers_digest":"sha256:e747ed086a9e709ba4d61484b2a893e47cced2168502690e06d159079334e4a8","body_digest":"sha256:7dee0536df97055f418ded986415d6ce97bb63ff08e96d99a2c65bc7f3a5158f","digest":"sha256:094afa20a55d0b9740923d270cdb02667b834b6b43c1b2c59f9e38b68c8e7325","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:ab5535b1388b19101257ac1bb6864af2e07421ca139747ece3044ad085982225","body_digest":"sha256:7dee0536df97055f418ded986415d6ce97bb63ff08e96d99a2c65bc7f3a5158f","digest":"sha256:5839c2551180e40b54ce7bf8c98b2406452ee3f43ccf9e99a7b9e76ce0899d1d","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What
@@ -402,6 +402,7 @@ acceptance_criteria:
 - The form and result view carry the labels, roles, and keyboard paths the existing components use.
 - The components follow the existing design-system patterns rather than introducing new ones.
 additional_info: ''
+boundary: {}
 budgets: []
 spikes: []
 what: 'Build the URL-shortener web UI per `docs/design.md`: a form to create a short link and a view of the result. Match the existing component patterns and keep it accessible.'

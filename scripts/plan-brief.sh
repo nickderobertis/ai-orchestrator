@@ -41,6 +41,17 @@ PLAN_PROJECT_LINE="Plan project: <source>:<project>"
 PLAN_PROJECT_DECLARATION='^Plan project:[[:space:]]*(.*[^[:space:]]|)[[:space:]]*$'
 PLAN_PROJECT_QUALIFIED='^[A-Za-z0-9_.-]+:[^[:space:]]+$'
 
+#: The optional line a brief carries to name the repositories its plan will work in, as
+#: normalized origins — `host/owner/name`, the spelling a task record's `repositories`
+#: names — separated by commas. What it decides is whether the planner is handed the
+#: engine's repository-boundary guidance: only a plan spanning public and private
+#: repositories is, so a brief without the line, or with one naming a single visibility,
+#: dispatches exactly the planner it did before the line existed. Declared and validated in
+#: two steps for the reason the plan-project line is.
+PLAN_REPOSITORIES_LINE="Repositories: <host>/<owner>/<name>, ..."
+PLAN_REPOSITORIES_DECLARATION='^Repositories:[[:space:]]*(.*[^[:space:]]|)[[:space:]]*$'
+PLAN_REPOSITORY_ORIGIN='^[A-Za-z0-9.-]+/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+
 #: What a planning flow will use as a run name. Narrower than what the engine's
 #: `onepipeline ask` accepts as a run id, and deliberately so: `onepipeline`
 #: mints the run id from the plan's `name` and NORMALIZES it on the way — measured,
@@ -254,6 +265,48 @@ plan_brief_project() {
         return 2
     fi
     printf '%s' "$project"
+}
+
+# Echo each repository the brief ``$2`` declares on its optional `Repositories:` line, one
+# normalized origin per line, or nothing when it declares none; refuse a line declared
+# twice, one naming nothing, and an entry that is not a normalized origin.
+plan_brief_repositories() {
+    local caller=${1:?plan_brief_repositories: the name of the calling launcher is required, so its diagnostics stay attributable; pass it as the first argument, then retry}
+    local brief=${2-} line declared=0 listed="" content entry rest
+    content=$(plan_brief_content "$caller" "$brief") || return $?
+    while IFS= read -r line; do
+        line=${line%$'\r'}
+        # llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so nothing would ever match.
+        if [[ "$line" =~ $PLAN_REPOSITORIES_DECLARATION ]]; then
+            declared=$((declared + 1))
+            listed="${BASH_REMATCH[1]}"
+        fi
+    done <<<"$content"
+    [ "$declared" -ne 0 ] || return 0
+    if [ "$declared" -ne 1 ]; then
+        echo "$caller: the brief '$brief' declares $declared 'Repositories:' lines, so this flow cannot tell which names the plan's repositories; leave exactly one '$PLAN_REPOSITORIES_LINE' line in it" >&2
+        return 2
+    fi
+    if [ -z "$listed" ]; then
+        echo "$caller: the brief '$brief' has a 'Repositories:' line naming nothing; name the plan's repositories as '$PLAN_REPOSITORIES_LINE', or remove the line" >&2
+        return 2
+    fi
+    # Split at every comma by hand rather than with `read -a`, which drops a trailing empty
+    # field: an entry left empty by a stray comma is refused like any other entry that is
+    # not an origin, rather than passing unseen.
+    rest="$listed,"
+    while [ -n "$rest" ]; do
+        entry=${rest%%,*}
+        rest=${rest#*,}
+        entry=${entry#"${entry%%[![:space:]]*}"}
+        entry=${entry%"${entry##*[![:space:]]}"}
+        # llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so nothing would ever match.
+        if ! [[ "$entry" =~ $PLAN_REPOSITORY_ORIGIN ]]; then
+            echo "$caller: the brief '$brief' names repository '$entry' on its 'Repositories:' line, which is not a normalized origin; write each as host/owner/name, separated by commas, as '$PLAN_REPOSITORIES_LINE'" >&2
+            return 2
+        fi
+        printf '%s\n' "$entry"
+    done
 }
 
 # Echo the run name a flow over ``$3`` runs under, given the caller's ``$2`` or nothing.

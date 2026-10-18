@@ -8,7 +8,7 @@ metadata:
   "orchestrator.unit": "Health endpoint"
   "onepipeline.repo_type": "team"
   "onepipeline.persona": "engineer"
-  "onetaskgraph.template": {"answers_digest":"sha256:193d52d4e100fcbe40f89f6785ded2c37e5c6a15d650520becdbcc7b2a3cbc31","body_digest":"sha256:20719e708ea8e830557cde74f13010c825961e68a1284515d831098802a94a7a","digest":"sha256:094afa20a55d0b9740923d270cdb02667b834b6b43c1b2c59f9e38b68c8e7325","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:74480dfe65907ea1fc572f7471831543188d0a6022ff14dad75bad7bd5a08e0f","body_digest":"sha256:20719e708ea8e830557cde74f13010c825961e68a1284515d831098802a94a7a","digest":"sha256:5839c2551180e40b54ce7bf8c98b2406452ee3f43ccf9e99a7b9e76ce0899d1d","template":"onepipeline:plan-task"}
   "orchestrator.budgets": [{"basis":"estimate","check_runtime_seconds":3,"command":"python scripts/budgets/health_latency.py .budgets/health-requests.jsonl","direction":"max","evidence":"Estimate: the handler returns build metadata fixed at startup and reads no store, so its time is routing and serialization, a few milliseconds; 50 ms leaves headroom for a loaded test host.","file":"budgets.yaml","file_change":"add","id":"health-endpoint-p95-latency","inner_measure_reason":"","measure":"The 95th-percentile time a poller waits for `GET /health`, from the request sent to the response read through the service's real HTTP stack, over the requests the endpoint's request tests record; its analysis reports the median and the slowest request as its breakdown.","name":"Health endpoint p95 latency","repository":"github.com/nickderobertis/some-service","schema_version":2,"source":"telemetry","threshold":50,"unit":"ms","workload":"200 sequential `GET /health` requests against one service instance, the requests three monitoring probes polling every 10 s and a load balancer checking every 5 s make over about five minutes."}]
 ---
 ## What
@@ -421,6 +421,7 @@ acceptance_criteria:
 - Each new test's subject is the behaviour this change adds, so removing that behaviour fails it.
 - The change opens no coverage gap.
 additional_info: ''
+boundary: {}
 budgets:
 - basis: estimate
   check_runtime_seconds: 3

@@ -7,7 +7,7 @@ metadata:
   "onepipeline.id": "announce"
   "orchestrator.unit": "Announcement"
   "onepipeline.persona": "docs-writer"
-  "onetaskgraph.template": {"answers_digest":"sha256:ac7a459cc2f6352b3040846715d12ea86b0da0330c735a12017338b3e66504bc","body_digest":"sha256:4aa5fa1648b8dd7d63363781b37c2c44cd691af9ca1fb500a4be717f5914369c","digest":"sha256:094afa20a55d0b9740923d270cdb02667b834b6b43c1b2c59f9e38b68c8e7325","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:e31cf1118280a5107673f781794a4a841bcef279142d8d7d0216c42c549eaa07","body_digest":"sha256:4aa5fa1648b8dd7d63363781b37c2c44cd691af9ca1fb500a4be717f5914369c","digest":"sha256:5839c2551180e40b54ce7bf8c98b2406452ee3f43ccf9e99a7b9e76ce0899d1d","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What
@@ -400,6 +400,7 @@ acceptance_criteria:
 - The announcement matches the verified behavior and documentation.
 - It clearly states the user impact.
 additional_info: ''
+boundary: {}
 budgets: []
 spikes: []
 what: Prepare the final release announcement from the verified implementation and documentation.

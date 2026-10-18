@@ -9,7 +9,7 @@ metadata:
   "orchestrator.unit": "Documentation"
   "onepipeline.repo_type": "team"
   "onepipeline.persona": "docs-writer"
-  "onetaskgraph.template": {"answers_digest":"sha256:1d37b87858cd2308dc42903cbd761ca2b9dfbbe723b6ff6600912e6727029db9","body_digest":"sha256:83cc297f704027202b9e4ee7f6f00845b67c12d5bf2d354a31af439bd8563262","digest":"sha256:094afa20a55d0b9740923d270cdb02667b834b6b43c1b2c59f9e38b68c8e7325","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:d18287fdb8ec4b52d996832e962f34708f4a5d550caa344ff08b466dcb8ba646","body_digest":"sha256:83cc297f704027202b9e4ee7f6f00845b67c12d5bf2d354a31af439bd8563262","digest":"sha256:5839c2551180e40b54ce7bf8c98b2406452ee3f43ccf9e99a7b9e76ce0899d1d","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What
@@ -402,6 +402,7 @@ acceptance_criteria:
 - The approved API and rollout are documented.
 - Every command is verified against the implementation.
 additional_info: ''
+boundary: {}
 budgets: []
 spikes: []
 what: Document the approved API and rollout.

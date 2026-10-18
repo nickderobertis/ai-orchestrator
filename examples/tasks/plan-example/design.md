@@ -6,7 +6,7 @@ metadata:
   "onepipeline.id": "design"
   "orchestrator.unit": "Design notes"
   "onepipeline.persona": "planner"
-  "onetaskgraph.template": {"answers_digest":"sha256:151dcd7c499cb12d9448994161dd31b51da762d51d7a45b18004f87f8efe9c6c","body_digest":"sha256:851eca7b21ef0b56f1c5924e6bfe01c7f2fdbfdfc1b80137e887c46f10e4ac0a","digest":"sha256:094afa20a55d0b9740923d270cdb02667b834b6b43c1b2c59f9e38b68c8e7325","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:24ea404f271ee6ee32cd4c3ffcf01358cfeeccb87e2b2514f7a8b6ca5522422e","body_digest":"sha256:851eca7b21ef0b56f1c5924e6bfe01c7f2fdbfdfc1b80137e887c46f10e4ac0a","digest":"sha256:5839c2551180e40b54ce7bf8c98b2406452ee3f43ccf9e99a7b9e76ce0899d1d","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What
@@ -403,6 +403,7 @@ acceptance_criteria:
 - Every boundary it names is one a caller can code against without reading the implementation.
 - The api and ui subtasks can proceed in parallel from this document alone.
 additional_info: ''
+boundary: {}
 budgets: []
 spikes: []
 what: 'Design a URL-shortener service and write the design to `docs/design.md`: the HTTP API (create + resolve), the storage schema, and the module boundaries the api and ui subtasks build against.'

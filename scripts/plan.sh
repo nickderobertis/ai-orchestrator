@@ -326,7 +326,9 @@ FINALIZE_NODE_ID="finalize"
 PLAN_PROGRAM='
 import json, pathlib, sys
 
-(name, brief, persona, node_id, turns, direct_note, note, goal, graph, checklist) = sys.argv[1:11]
+(name, brief, persona, node_id, turns, direct_note, note, goal, graph, checklist, boundary) = (
+    sys.argv[1:12]
+)
 task = pathlib.Path(brief).read_text(encoding="utf-8")
 
 # A direct node works in the launch directory, and the shared completion bar demands
@@ -336,8 +338,12 @@ task = pathlib.Path(brief).read_text(encoding="utf-8")
 # checklist, so the words of the manager still precede everything else.
 node = {"id": node_id, "persona": persona, "agent_graph": graph}
 staged = "\n\n" + note.strip() if note.strip() else ""
+# The repository-boundary guidance, for a brief whose repositories span visibilities, goes
+# after the placement note; for every other brief it is empty and adds no byte.
+bounded = "\n\n" + boundary.strip() if boundary.strip() else ""
 node["task"] = (
-    task.rstrip() + staged + "\n\n" + checklist.strip() + "\n\n" + direct_note.strip() + "\n"
+    task.rstrip() + staged + "\n\n" + checklist.strip() + "\n\n" + direct_note.strip()
+    + bounded + "\n"
 )
 if turns:
     node["max_turns"] = int(turns)
@@ -473,6 +479,10 @@ fi
 # not refused as taken; a fresh flow refuses it like every other id above.
 [ -n "$PLAN_OPT_RESUME" ] || plan_run_is_free plan "$name" || exit 2
 
+# The repositories the brief's optional `Repositories:` line names, refused here with the
+# other refusals when the line is malformed; what they decide is read below.
+declared_repositories=$(plan_brief_repositories plan "$brief") || exit 2
+
 # Every refusal above is made before anything is written, so this is where the flow starts:
 # the launcher re-executes itself inside a flow named for the run name, which holds the
 # session from here to the tail's last step, the handover to `scripts/finish-plan.sh`
@@ -516,6 +526,88 @@ mkdir -p "$plan_directory" || fail "the plan directory $plan_directory could not
 # Where this flow's runs are recorded, and so where a stage's run is found to exist: the
 # same default and override `plan_run_is_free` reads.
 runs_root=${!PLAN_RUNS_ROOT_ENV:-$PLAN_DEFAULT_RUNS_ROOT}
+
+#: What a planner of a mixed plan is told around the engine's guidance: the two decisions
+#: the engine's text leaves to this host — how a task here carries the engine's mixed
+#: context, and that the plan's own text goes where anyone can read it. The guidance itself
+#: is the engine's, printed by `onepipeline boundary guidance` and quoted whole, never
+#: restated here; `@GUIDANCE@` is where it goes.
+BOUNDARY_NOTE_TEMPLATE=$(
+    cat <<'NOTE'
+## Repository boundary
+
+The repositories this brief names span public and private visibility, so the plan you
+write is mixed, and the engine refuses a mixed plan that lets private work reach a public
+node any other way than the one below. This is the engine's own guidance, as
+`onepipeline boundary guidance` prints it:
+
+@GUIDANCE@
+
+How a plan of this host carries it:
+
+- Render every task of a node that names a repository with the engine's mixed context as
+  its `boundary` answer: `--var 'boundary={"mixed": true, "clearance": "public"}'` for a
+  public node, `"private"` for a private one. A node is public only when every repository
+  it names answers `public` to `onevcs boundary inspect`. That context is what gives a
+  public node's task its no-private-reference criterion and its appendix the boundary
+  note.
+- Name the export directory, every public node's id, title and task, and the plan's own
+  description and documents in neutral, generic words. They are copied to destinations
+  anyone can read, so they name no private repository, project, path, identifier or
+  content — and no inventory of the repositories you inspected.
+NOTE
+)
+
+# The repository-boundary note this flow's planners are handed: empty unless the brief's
+# `Repositories:` line spans visibilities, which is the one case it is written for, so a
+# brief without the line or naming one visibility dispatches exactly what it did before.
+# Visibility is `onevcs`'s answer; a repository it cannot answer for — unregistered, or a
+# read that failed — counts as private, as the engine counts it, so a doubt adds the
+# guidance rather than withholding it.
+#: Reads `onevcs boundary inspect --json`'s answer on stdin and prints its top-level
+#: `visibility`, or fails when the answer is not an object carrying one of the three
+#: values `onevcs boundary schema` declares.
+VISIBILITY_PROGRAM='
+import json, sys
+answer = json.load(sys.stdin)
+visibility = answer.get("visibility") if isinstance(answer, dict) else None
+if visibility not in ("public", "private", "unknown"):
+    sys.exit(1)
+print(visibility)
+'
+
+boundary_note=""
+if [ -n "$declared_repositories" ]; then
+    public=0
+    private=0
+    while IFS= read -r repository; do
+        visibility=""
+        if answer=$(printf '{"repository": "%s"}' "$repository" |
+            onevcs boundary inspect --input - --json 2>&1); then
+            # The answer's own top-level `visibility`, read as JSON and held to the three
+            # values `onevcs boundary schema` declares; anything else is no answer.
+            visibility=$(printf '%s' "$answer" | "$python" -c "$VISIBILITY_PROGRAM" 2>/dev/null) ||
+                visibility=""
+        fi
+        case "$visibility" in
+            public) public=$((public + 1)) ;;
+            private | unknown) private=$((private + 1)) ;;
+            *)
+                echo "plan: onevcs could not say whether '$repository' is public (${answer//[[:cntrl:]]/ }), so it is counted private, as the engine counts it; register it with 'just repos-apply' if it should be read as public, then relaunch" >&2
+                private=$((private + 1))
+                ;;
+        esac
+    done <<<"$declared_repositories"
+    if [ "$public" -gt 0 ] && [ "$private" -gt 0 ]; then
+        # llmlint: ignore[changed_behavior_has_e2e] Reachable only when the pinned engine itself cannot print its own guidance; driving it would mean breaking the locked `.venv` engine every concurrent test shares, and `uv run` resolves no other.
+        guidance=$("$script_dir/onepipeline.sh" boundary guidance) || fail \
+            "the brief's repositories span public and private visibility, and the engine's boundary guidance its planner must be handed could not be read" \
+            "run 'onepipeline boundary guidance' to see why, repair it, then retry"
+        # Split around the placeholder rather than substituted with `${…/…/…}`, whose
+        # replacement bash 5.2 reads `&` in as the matched text.
+        boundary_note="${BOUNDARY_NOTE_TEMPLATE%%@GUIDANCE@*}$guidance${BOUNDARY_NOTE_TEMPLATE#*@GUIDANCE@}"
+    fi
+fi
 
 # The command that carries this flow on from stage ``$1``: the brief, the flow's own name
 # and every option this launch was given, so the resumed stage launches exactly as this
@@ -584,7 +676,7 @@ write_planner() {
     # where errexit is off, so a failed resolution would otherwise write an empty checklist.
     checklist=$(checklist_rules) || return
     "$python" -c "$PLAN_PROGRAM" "$run_name" "$brief" "$PLANNER_PERSONA" "$node_id" "$PLAN_OPT_MAX_TURNS" \
-        "$PLAN_DIRECT_PLACEMENT_NOTE" "$note" "$goal" "$PLANNER_GRAPH" "$checklist" \
+        "$PLAN_DIRECT_PLACEMENT_NOTE" "$note" "$goal" "$PLANNER_GRAPH" "$checklist" "$boundary_note" \
         | "$python" -m orchestrator.project_store "$plan_root" "$metadata" >/dev/null || {
         # Reported rather than swallowed, and reported without ending the launch here: what
         # the operator has to act on is the write that failed, which the diagnostic below

@@ -368,3 +368,24 @@ on it and judges it by meaning: criteria that state a demand in their own words 
 and no criterion is refused for failing to use a particular phrase. Nothing reads it
 deterministically any more, because the phrase matching that did refused wordings the same
 review had just asked for.
+{% if boundary is defined and boundary.mixed is defined and boundary.mixed %}
+
+### This plan spans public and private repositories
+
+The engine ends this task with a `## Repository boundary` section stating this node's
+clearance and the guidance for its side of the boundary. Where it and anything above
+differ about what this node may write, and where, that section wins.
+{% if boundary.clearance is defined and boundary.clearance == "public" %}
+
+This node is public, so everything it produces is public: its files, paths, names and
+identifiers, its commit messages and branch, its follow-up drafts and questions to the
+manager, and its reports, which its change request's description is drafted from. Name
+nothing private in any of them. Private work reaches this node only as the generic
+examples the engine exported into its branch.
+{% else %}
+
+This node is private. Its work reaches a public repository only through the export the
+engine makes along its export edge, never through a copy, a push or a change request of
+your own.
+{% endif %}
+{% endif %}

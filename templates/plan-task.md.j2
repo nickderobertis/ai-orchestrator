@@ -36,6 +36,16 @@ variables:
     type: list
     items: object
     default: []
+  boundary:
+    description: >-
+      The engine's mixed-plan context for this node, exactly as the engine states it in a
+      mixed plan's `## Repository boundary` section: an object whose `mixed` is true and
+      whose `clearance` is `public` or `private`. Answer it only for a node of a plan that
+      spans public and private repositories; a public node's task then carries the
+      no-private-reference criterion and its appendix the boundary note. Leave it unanswered
+      for every other plan, which renders exactly as it would without it.
+    type: object
+    default: {}
 ---
 {% extends "onepipeline/plan-task.md.j2" %}
 {% block before_criteria %}
@@ -48,6 +58,11 @@ variables:
 {{ why }}
 
 {% include "plan-task-budgets.md.j2" %}
+{% endblock %}
+{% block more_criteria %}
+{% if boundary.mixed is defined and boundary.mixed and boundary.clearance is defined and boundary.clearance == "public" %}
+- Nothing this task produces names anything private: no private repository, project, plan, task, path, identifier or content appears in its files, paths, names or identifiers, its commit messages or branch, or the text of its change request, follow-up drafts and reports.
+{% endif %}
 {% endblock %}
 {% block after_criteria %}
 {% if spikes %}

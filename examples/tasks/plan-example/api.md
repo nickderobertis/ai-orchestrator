@@ -7,7 +7,7 @@ metadata:
   "onepipeline.id": "api"
   "orchestrator.unit": "Shortener API"
   "onepipeline.persona": "engineer"
-  "onetaskgraph.template": {"answers_digest":"sha256:d820b56e02f9bb834defc82e9a0366e61acba92305fe81cecb4aa4da733d0fed","body_digest":"sha256:92439b3624ae5efa93ac997302f5bd7349e01db693958ec0942a77a736fcedf3","digest":"sha256:094afa20a55d0b9740923d270cdb02667b834b6b43c1b2c59f9e38b68c8e7325","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:fb23bc8ecf0b928b4b9db11ee2643bddec12bc81cbf40bf07ef5cda6f5d5d876","body_digest":"sha256:92439b3624ae5efa93ac997302f5bd7349e01db693958ec0942a77a736fcedf3","digest":"sha256:5839c2551180e40b54ce7bf8c98b2406452ee3f43ccf9e99a7b9e76ce0899d1d","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What
@@ -402,6 +402,7 @@ acceptance_criteria:
 - Invalid input is rejected rather than persisted, and a test proves it.
 - Persistence is covered by a test that reads back what a create wrote.
 additional_info: ''
+boundary: {}
 budgets: []
 spikes: []
 what: 'Implement the URL-shortener HTTP API per `docs/design.md`: the create and resolve endpoints, validation, and persistence. Cover the endpoints with tests that drive real requests.'

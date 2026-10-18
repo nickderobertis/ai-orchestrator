@@ -9,7 +9,7 @@ metadata:
   "orchestrator.unit": "Client library"
   "onepipeline.repo_type": "team"
   "onepipeline.persona": "engineer"
-  "onetaskgraph.template": {"answers_digest":"sha256:a91c77cba36a397a8cc5f71c9590aa435e0832e6f3237d27d6674f94c813115b","body_digest":"sha256:bd6cfd3406a0c8f84f5a475d9de203dea09fd304091e62261006e84b03d38450","digest":"sha256:094afa20a55d0b9740923d270cdb02667b834b6b43c1b2c59f9e38b68c8e7325","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:1e739d17982754e9d35650f46ea451bb07b3413693570480c0cde73bb4a9b193","body_digest":"sha256:bd6cfd3406a0c8f84f5a475d9de203dea09fd304091e62261006e84b03d38450","digest":"sha256:5839c2551180e40b54ce7bf8c98b2406452ee3f43ccf9e99a7b9e76ce0899d1d","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What
@@ -404,6 +404,7 @@ acceptance_criteria:
 - A test drives it against a real local server rather than a mocked transport.
 - One failure response is covered alongside the happy path.
 additional_info: ''
+boundary: {}
 budgets: []
 spikes: []
 what: Add a typed `health()` method to the client that calls `GET /health`, with a test against a real local server.

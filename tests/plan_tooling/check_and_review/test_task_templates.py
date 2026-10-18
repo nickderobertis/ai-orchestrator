@@ -130,6 +130,22 @@ def _render(environment: dict[str, str], answers: dict[str, object], tmp_path: P
     return rendered.body
 
 
+def _appendix(environment: dict[str, str]) -> str:
+    """The appendix as the pinned store renders it with no context answered.
+
+    Rendered rather than read, because the file carries a block only a mixed plan's
+    `boundary` context opens, and rendered alone that context is absent, which is every
+    plan that does not span public and private repositories.
+    """
+    rendered = _run(
+        [str(PLAN_STORE), "template", "render", str(APPENDIX), "--search-path", str(ROOT)]
+        + ["--no-interactive"],
+        environment,
+    )
+    assert rendered.returncode == 0, rendered.stderr
+    return rendered.stdout
+
+
 def test_the_host_root_holds_the_registration_the_template_and_the_one_appendix() -> None:
     """`templates/` is the root, and the appendix it includes exists nowhere else."""
     assert REGISTRATION.is_file() and PLAN_TASK.is_file() and APPENDIX.is_file()
@@ -231,7 +247,7 @@ def test_the_template_extends_the_engines_base_and_opens_no_criteria_heading_its
     assert '{% include "dispatch-appendix.md" %}' in source
 
 
-def test_the_variables_are_the_five_this_host_declares_and_the_inherited_criteria(
+def test_the_variables_are_the_six_this_host_declares_and_the_inherited_criteria(
     launch_environment: dict[str, str],
 ) -> None:
     listed = _run(
@@ -248,6 +264,7 @@ def test_the_variables_are_the_five_this_host_declares_and_the_inherited_criteri
         "additional_info",
         "spikes",
         "budgets",
+        "boundary",
         "acceptance_criteria",
     }
     for name in ("what", "why"):
@@ -258,6 +275,8 @@ def test_the_variables_are_the_five_this_host_declares_and_the_inherited_criteri
     assert variables["spikes"]["default"] == []
     assert (variables["budgets"]["type"], variables["budgets"]["required"]) == ("list", False)
     assert variables["budgets"]["default"] == []
+    assert (variables["boundary"]["type"], variables["boundary"]["required"]) == ("object", False)
+    assert variables["boundary"]["default"] == {}
     assert variables["acceptance_criteria"]["type"] == "list"
     assert variables["acceptance_criteria"]["required"] is True
     assert variables["acceptance_criteria"]["declared_in"] == BASE
@@ -394,7 +413,7 @@ def test_a_rendering_is_the_layout_every_plan_task_here_carries(
     body = _render(launch_environment, ANSWERS, tmp_path)
 
     headings = re.findall(r"^## .+$", body, re.MULTILINE)
-    appendix = APPENDIX.read_text(encoding="utf-8")
+    appendix = _appendix(launch_environment)
     appendix_headings = re.findall(r"^## .+$", appendix, re.MULTILINE)
     assert headings == [
         "## What",
@@ -416,7 +435,7 @@ def test_a_task_with_no_notes_of_its_own_renders_no_section_for_them(
 
     body = _render(launch_environment, answers, tmp_path)
 
-    appendix = APPENDIX.read_text(encoding="utf-8")
+    appendix = _appendix(launch_environment)
     assert body.count("## Additional info") == appendix.count("## Additional info")
     assert criteria_guard.own_additional_info(body) == ""
     assert body.endswith(appendix)

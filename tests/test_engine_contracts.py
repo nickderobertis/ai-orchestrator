@@ -4298,3 +4298,46 @@ def test_dispatch_count_fields_are_in_the_pinned_host_schema() -> None:
 
 
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+
+
+#: The engine's mixed-plan template context, as the pinned engine's contract states it:
+#: the shape `templates/plan-task.md.j2`'s `boundary` answer takes and both host templates'
+#: conditionals read.
+BOUNDARY_CONTEXT = (
+    '{"boundary": {"mixed": true, "clearance": "public" | "private", '
+    '"export_directory"?: string, "target_directory"?: string}}'
+)
+
+#: What the host templates read of that context: each `boundary.<key>` they name, and each
+#: clearance they compare it with.
+BOUNDARY_KEY_READ = re.compile(r"\bboundary\.(\w+)")
+CLEARANCE_COMPARED = re.compile(r'boundary\.clearance\s*==\s*"(\w+)"')
+
+
+def test_the_boundary_context_the_templates_read_is_the_engines_own() -> None:
+    """The host templates read only keys and clearances the engine's context carries.
+
+    The `boundary` answer a planner gives a task is the engine's mixed context, stated in
+    the engine's contract and serialized from its `Context`; a key or a clearance the
+    templates read that the engine stopped writing would leave a mixed plan's public task
+    without its no-private-reference criterion, silently.
+    """
+    contract = _plain(_source(ONEPIPELINE_DOCS, "contract.md"))
+    assert _plain(BOUNDARY_CONTEXT) in contract, (
+        f"onepipeline {ONEPIPELINE.ref} no longer states the boundary context as "
+        f"{BOUNDARY_CONTEXT}; re-read its contract and bring the host templates to it"
+    )
+    source = _source(ONEPIPELINE, "boundary.rs")
+    context = source.split("struct Context {", 1)[1].split("\n}\n", 1)[0]
+    written = set(re.findall(r"^\s+(\w+):", context, re.MULTILINE))
+    clearance = source.split("enum Clearance {", 1)[1].split("\n}\n", 1)[0]
+    clearances = {name.lower() for name in re.findall(r"^\s+(\w+),", clearance, re.MULTILINE)}
+    assert (
+        'rename_all = "kebab-case"' in source.split("enum Clearance {", 1)[0].rsplit("\n\n", 1)[1]
+    )
+    for template in ("plan-task.md.j2", "dispatch-appendix.md"):
+        text = (REPO_ROOT / "templates" / template).read_text(encoding="utf-8")
+        read = set(BOUNDARY_KEY_READ.findall(text))
+        assert read and read <= written, f"templates/{template} reads {read - written}"
+        compared = set(CLEARANCE_COMPARED.findall(text))
+        assert compared <= clearances, f"templates/{template} compares {compared - clearances}"

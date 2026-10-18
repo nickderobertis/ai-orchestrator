@@ -7,7 +7,7 @@ metadata:
   "onepipeline.id": "review"
   "orchestrator.unit": "Review"
   "onepipeline.persona": "reviewer"
-  "onetaskgraph.template": {"answers_digest":"sha256:193ecbc5505194a5ccc2317cad08d5fd393a164dbbbb4db2d7bf1cef3af6b4eb","body_digest":"sha256:b791144ec6373a051d42af7b91628e22d90e0b785d4ced2e18dad5247a704d8a","digest":"sha256:094afa20a55d0b9740923d270cdb02667b834b6b43c1b2c59f9e38b68c8e7325","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:127e264008687ada1935875ac80e6a05910eb7d6e31194d4f69cb93835b02a59","body_digest":"sha256:b791144ec6373a051d42af7b91628e22d90e0b785d4ced2e18dad5247a704d8a","digest":"sha256:5839c2551180e40b54ce7bf8c98b2406452ee3f43ccf9e99a7b9e76ce0899d1d","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What
@@ -402,6 +402,7 @@ acceptance_criteria:
 - Each finding was verified against the code rather than inferred from a diff alone.
 - Findings are ranked most severe first, and the report says plainly when a dimension turned up nothing.
 additional_info: ''
+boundary: {}
 budgets: []
 spikes: []
 what: Review the URL shortener end to end (api + ui + docs) for correctness, missing edge cases, and security, and report verified, severity-ranked findings.

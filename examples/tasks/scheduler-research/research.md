@@ -6,7 +6,7 @@ metadata:
   "onepipeline.id": "research"
   "orchestrator.unit": "Scheduler research"
   "onepipeline.persona": "engineer"
-  "onetaskgraph.template": {"answers_digest":"sha256:634e56d899a1fb173e401f6900c75cf9e5fef3763b10b252419e7bf1db89028b","body_digest":"sha256:e41850b019324271c4fb65ffd9e6a1c272ccaabaff513cf36c54421212dd36ed","digest":"sha256:094afa20a55d0b9740923d270cdb02667b834b6b43c1b2c59f9e38b68c8e7325","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:bc44dacccf31d2aef0f608f0558c99a3f574bfbe1c331b60200835939ae09f44","body_digest":"sha256:e41850b019324271c4fb65ffd9e6a1c272ccaabaff513cf36c54421212dd36ed","digest":"sha256:5839c2551180e40b54ce7bf8c98b2406452ee3f43ccf9e99a7b9e76ce0899d1d","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What
@@ -399,6 +399,7 @@ acceptance_criteria:
 - The note names the selection rule and the code that implements it.
 - Every claim is traced to a file and symbol in this checkout.
 additional_info: ''
+boundary: {}
 budgets: []
 spikes: []
 what: Read the scheduler and report how it selects the next runnable node, in `docs/scheduler-notes.md`.
