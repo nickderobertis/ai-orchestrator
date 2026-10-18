@@ -79,7 +79,10 @@ from orchestrator.plan_store import NodeId, QualifiedProjectId
 from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
 
-pytestmark = [pytest.mark.reads_docs]
+# What the recipes these journeys run leave in the temporary directory, by design or
+# from a published tool they run, is this module's own and goes with it
+# (`tests/short_state.py`).
+pytestmark = [pytest.mark.reads_docs, pytest.mark.usefixtures("module_tmpdir")]
 
 #: The stand-in `start` the copied checkout's engine hands that one verb to.
 STAND_IN = Path(__file__).resolve().parent / "finish_plan_writer_engine.py"

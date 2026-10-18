@@ -2008,7 +2008,11 @@ there alone. It is labelled `host-variable`, so over it on a passing gate warns 
 not refuse: still a defect to optimize, but gate wall clock on a shared, variably loaded
 host is not a consistent measurement, and a strict absolute threshold belongs on a
 consistent system such as a CI runner. A failed gate, an errored measurement, or over any
-other root budget still refuses the push, and a project's own budgets live in a `budgets.yaml` beside its `project.json`. The one
+other root budget still refuses the push — among them `gate-leftovers`,
+`gate-peak-temp-disk` and `gate-leaked-processes`, which the same gate run records about
+the host through `orchestrator/gate_impact.py`: what it left in its own temporary root,
+its peak temporary disk, and the processes that outlived it, the measurement and its
+limits stated in that module's docstring. A project's own budgets live in a `budgets.yaml` beside its `project.json`. The one
 exception is `onevcs preserve`, the only verb that may push without the hook: it puts an
 unproven **branch ref, never a base**, on the origin, opens no change request, and nothing can merge that ref without a publication
 that does run the merge path — the words `just shutdown`'s report prints about every

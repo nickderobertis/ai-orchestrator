@@ -49,6 +49,11 @@ from waits import timeout as e2e_timeout
 from orchestrator.plan_store import WRITABLE_PLUGIN
 from orchestrator.root import REPO_ROOT
 
+# What the recipes these journeys run leave in the temporary directory, by design or
+# from a published tool they run, is this module's own and goes with it
+# (`tests/short_state.py`).
+pytestmark = [pytest.mark.usefixtures("module_tmpdir")]
+
 #: The paid model's stand-ins, and the guard covering the identities neither seam reaches.
 FAKE_BACKEND = helper("fake_backend.py")
 FAKE_CODEX = helper("fake_codex.py")

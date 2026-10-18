@@ -20,9 +20,9 @@
 # other budget is strict, and over one refuses the push. A failed gate, and a check that
 # errored in either selection — a `gate-time` that could not be measured included — still
 # refuse. Neither selection is timed in `gate-time`, since both run after the gate. An
-# empty selection exits 0, prints nothing and samples no host conditions, which is the
-# strict one today; a strict root budget added later makes every push sample the
-# conditions a second time, so add one deliberately.
+# empty selection exits 0, prints nothing and samples no host conditions; the strict one
+# holds `gate-leftovers`, `gate-peak-temp-disk` and `gate-leaked-processes` among others,
+# so every push samples the conditions a second time for it.
 #
 # Strict mode is established here rather than inherited, as the helper it sources does.
 set -euo pipefail

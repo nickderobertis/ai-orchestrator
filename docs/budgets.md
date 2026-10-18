@@ -34,7 +34,10 @@ for the file's shape. This page restates none of it beyond the keys a plan's bud
   over it warns rather than refuses: on a shared, variably loaded host that measurement is
   not consistent, so a strict absolute threshold on it can only be a gate on a consistent
   system such as a CI runner. A failed gate, an errored measurement, and over any other
-  root budget still refuse the push. The label is read only by the hook's check of the
+  root budget still refuse the push — `gate-leftovers`, `gate-peak-temp-disk` and
+  `gate-leaked-processes` among them, the three figures that same gate run records about
+  its effect on the host, whose measurement `orchestrator/gate_impact.py`'s docstring
+  states. The label is read only by the hook's check of the
   root file; a project's own `budgets` Nx target (`nx.json`) checks every budget strictly.
 - **Host conditions are recorded for the manager's judgement.** Each result carries the
   conditions it was taken under, such as load, memory and other work running, so the

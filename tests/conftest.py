@@ -91,7 +91,11 @@ from nx_inputs import (
     target_input_globs,
 )
 from registered_checkouts import listed_checkout_paths
-from short_state import short_state_base  # noqa: F401 - registered by being named here
+from short_state import (  # noqa: F401 - registered by being named here
+    module_node_scratch,
+    module_tmpdir,
+    short_state_base,
+)
 from waits import install_default_bounds
 
 from orchestrator import plan_check
@@ -578,6 +582,21 @@ def _isolate_dispatch_selection(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     for key in DISPATCH_SELECTION_ENV:
         monkeypatch.delenv(key, raising=False)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_launcher_ownership_for_the_session() -> Iterator[None]:
+    """The same isolation for the whole session, so it reaches every fixture too.
+
+    A module- or session-scoped fixture is set up before any test's own fixtures, so a
+    landing one runs — `tests/unfinished/test_unfinished_e2e.py`'s `world` is one — went to
+    the enclosing manager's runs root under that manager's session, whatever the
+    test-scoped fixture below then removed.
+    """
+    with pytest.MonkeyPatch.context() as patch:
+        for key in OWNERSHIP_ENV:
+            patch.delenv(key, raising=False)
+        yield
 
 
 @pytest.fixture(autouse=True)

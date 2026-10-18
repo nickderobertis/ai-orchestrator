@@ -65,7 +65,10 @@ from waits import timeout as e2e_timeout
 from orchestrator.root import REPO_ROOT
 
 #: One worker, because the flow, its watches and the guard's verdicts are one sequence.
-pytestmark = [pytest.mark.xdist_group("flow-stop-hook")]
+# What the recipes these journeys run leave in the temporary directory, by design or
+# from a published tool they run, is this module's own and goes with it
+# (`tests/short_state.py`).
+pytestmark = [pytest.mark.xdist_group("flow-stop-hook"), pytest.mark.usefixtures("module_tmpdir")]
 
 #: The double, installed over the copy's engine, and the real engine this checkout pins.
 STAND_IN = REPO_ROOT / "tests" / "plan_tooling" / "plan_flow" / "spike_flow_engine.py"

@@ -5,7 +5,7 @@
   "tags": ["scope:workspace"],
   "targets": {
     "lint-llm-diff": {
-      "command": "llmlint --diff --diff-base \"$LLMLINT_DIFF_BASE_SHA\"",
+      "command": "judge_tmp=$(mktemp -d -t lj.XXXXXX) || { echo \"lint-llm-diff: no temporary directory could be made for the judge; make TMPDIR (or /tmp) a writable directory with free space, then retry\" >&2; exit 1; }; trap 'chmod -R u+rwx -- \"$judge_tmp\" || echo \"lint-llm-diff: not everything under $judge_tmp could be made removable\" >&2; rm -rf -- \"$judge_tmp\" || echo \"lint-llm-diff: the temporary directory $judge_tmp handed to the judge could not be removed; remove it by hand with rm -rf\" >&2' EXIT; TMPDIR=\"$judge_tmp\" TMP=\"$judge_tmp\" TEMP=\"$judge_tmp\" llmlint --diff --diff-base \"$LLMLINT_DIFF_BASE_SHA\"",
       "options": { "cwd": "." }
     },
     "validate-budgets": {

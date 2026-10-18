@@ -58,6 +58,11 @@ from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
 
+# What the recipes these journeys run leave in the temporary directory, by design or
+# from a published tool they run, is this module's own and goes with it
+# (`tests/short_state.py`).
+pytestmark = [pytest.mark.usefixtures("module_node_scratch")]
+
 #: The branch under test, in the shape a dispatch leaves behind.
 FINISHED_BRANCH = "claude/finished-work"
 

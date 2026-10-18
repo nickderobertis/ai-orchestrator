@@ -19,6 +19,40 @@ budgets:
     direction: max
     threshold: 1800
   # llmlint: ignore-end[budgets_track_product_owner_outcomes]
+  # The three figures one complete gate's own run records about its effect on the host,
+  # which `python -m orchestrator.gate_impact report` reads back for this push; that
+  # module's docstring states how each is measured and what each cannot see. Unlabelled,
+  # so over any of them refuses the push.
+  - id: gate-leftovers
+    description: >-
+      Entries one complete pre-push gate leaves in its own temporary root and registered
+      scratch once it has exited. It protects the disk every agent on this host shares
+      from a suite that stops cleaning up after itself.
+    measure: reported
+    command: [".venv/bin/python", "-m", "orchestrator.gate_impact", "report", "leftovers"]
+    unit: entries
+    direction: max
+    threshold: 0
+  - id: gate-peak-temp-disk
+    description: >-
+      The largest temporary disk, sampled while it runs, that one complete pre-push gate
+      holds in its own root and registered scratch. It protects the shared disk
+      from a gate that fills it mid-run and fails every concurrent dispatch with it.
+    measure: reported
+    command: [".venv/bin/python", "-m", "orchestrator.gate_impact", "report", "peak-temp-disk"]
+    unit: gib
+    direction: max
+    threshold: 2
+  - id: gate-leaked-processes
+    description: >-
+      Processes descended from one complete pre-push gate still alive the moment it
+      exits. It protects the host from test processes that outlive their tests and hold
+      its resources, or a caller's output, open.
+    measure: reported
+    command: [".venv/bin/python", "-m", "orchestrator.gate_impact", "report", "leaked-processes"]
+    unit: processes
+    direction: max
+    threshold: 0
   - id: cycle-time
     description: >-
       A landed change's time from its first dispatch to its landing on the base. It

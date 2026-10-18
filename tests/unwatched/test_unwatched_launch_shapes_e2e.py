@@ -32,9 +32,11 @@ and the verb are all real, and the record read is the engine's own.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
+import signal
 import subprocess
 import time
 from collections.abc import Iterator
@@ -313,6 +315,37 @@ def _launched(tmp_path: Path, oneharness_bin: str, run: RunId) -> Iterator[Launc
         yield launch
     finally:
         _just("stop", run, environment=environment, seconds=120)
+        _end_what_the_stop_left(Path(environment["ONEPIPELINE_RUNS_DIR"]))
+
+
+def _end_what_the_stop_left(runs: Path) -> None:
+    """End every process this launch started that its run's stop left running.
+
+    Under a loaded suite the engine's `stop` does not always reach a dispatch's turn in
+    flight, so a stand-in worker in its `WORKING_SECONDS` turn outlived the journey and the
+    session, which the pre-push gate's recorder counts as a leaked process; that is the
+    engine's to fix, and this contains it to the journey. They are found by the runs root
+    every dispatch of this launch is handed, a directory under this journey's own
+    temporary path, so nothing but this launch's own processes can carry it.
+    """
+    marker = f"ONEPIPELINE_RUNS_DIR={runs}".encode()
+    left: list[int] = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit() or int(entry.name) == os.getpid():
+            continue
+        try:
+            environ = (entry / "environ").read_bytes()
+        except OSError:
+            continue
+        if marker in environ.split(b"\0"):
+            left.append(int(entry.name))
+    for number in (signal.SIGTERM, signal.SIGKILL):
+        for pid in left:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, number)
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and any(Path(f"/proc/{pid}").exists() for pid in left):
+            time.sleep(0.1)
 
 
 @pytest.fixture(name="attached")

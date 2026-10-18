@@ -1015,3 +1015,73 @@ def test_the_wrapper_refuses_a_checkout_missing_the_module(world: World, tmp_pat
     assert done.returncode == UNANSWERED, done.stderr
     assert f"the view's module is not a readable regular file: {module}" in done.stderr
     assert done.stdout == ""
+
+
+#: A module of this suite's own shape, planted where the session below collects it: a
+#: module-scoped fixture lands a branch through the helper `world` above lands its own
+#: with, before any test's own fixtures have run.
+PLANTED_LANDING = """
+import pytest
+from unpublished_registry import seeded
+
+
+@pytest.fixture(scope="module")
+def landed(tmp_path_factory):
+    registry = seeded(tmp_path_factory.mktemp("scrubbed") / "registry")
+    session = registry.open_session(labels={"run": "run-scrubbed", "node": "node-1"})
+    registry.close_session(session)
+    return registry.run(
+        "just", "publish-branch", session.branch, "--repo", str(registry.checkout), "--no-draft"
+    )
+
+
+def test_landed(landed):
+    assert landed.returncode == 0, landed.stderr + landed.stdout
+"""
+
+
+def test_a_landing_registers_nothing_in_a_runs_root_the_suite_inherits(tmp_path: Path) -> None:
+    """A suite run from inside a dispatch inherits that dispatch's runs root and its
+    manager's session, and a landing a module-scoped fixture runs through the real
+    `publish-branch` recipe registered a flow there under that manager — which its Stop
+    hook then owed. The suite's ownership scrub reaches those fixtures' processes too."""
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    planted = tmp_path / "planted" / "test_planted_landing.py"
+    planted.parent.mkdir()
+    planted.write_text(PLANTED_LANDING, encoding="utf-8")
+    environment = {
+        **os.environ,
+        "ONEPIPELINE_RUNS_DIR": str(runs),
+        "ONEPIPELINE_LAUNCHER_SESSION": "the-inherited-manager",
+        # Where this suite's own modules resolve from, so the session loads its conftest
+        # for a module planted outside the tree.
+        "PYTHONPATH": os.pathsep.join(str(REPO_ROOT / part) for part in ("tests", "tests/e2e")),
+    }
+
+    session = subprocess.run(
+        [
+            str(REPO_ROOT / ".venv" / "bin" / "python"),
+            "-m",
+            "pytest",
+            "-p",
+            "conftest",
+            "-p",
+            "no:cacheprovider",
+            "-p",
+            "no:xdist",
+            "--no-cov",
+            "-q",
+            f"--rootdir={REPO_ROOT}",
+            str(planted),
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(600),
+        check=False,
+    )
+
+    assert session.returncode == 0, session.stdout + session.stderr
+    assert sorted(path.relative_to(runs) for path in runs.rglob("*")) == []

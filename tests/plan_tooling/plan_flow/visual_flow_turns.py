@@ -21,6 +21,7 @@ runs it.
 
 from __future__ import annotations
 
+import atexit
 import io
 import json
 import os
@@ -103,6 +104,9 @@ def _run(command: list[str], *, cwd: Path | None = None, stdin: str | None = Non
 def _answers(answers: Mapping[str, object]) -> str:
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as written:
         json.dump(answers, written)
+    # Read by the store's own process after this returns, so it outlives the handle, and
+    # is removed as this process ends rather than left in the temporary directory.
+    atexit.register(os.unlink, written.name)
     return written.name
 
 

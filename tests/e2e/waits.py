@@ -11,12 +11,18 @@ wait of that shape must name what it was waiting for and what state that reached
 the hundred: a `subprocess.run`, a `Popen.wait`, a `Popen.communicate` that states no
 timeout of its own. Stating one at every call site would be the policy written out two
 hundred times, and the two hundred and first would be the one somebody forgot.
+
+`end_carrying` is what a bound that elapsed leaves behind: a timed-out `subprocess.run`
+kills only its own child, never the processes beneath it, so a test whose processes all
+carry a directory of its own ends them by that directory once it is over.
 """
 
 from __future__ import annotations
 
+import contextlib
 import math
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -246,3 +252,48 @@ def install_default_bounds(seconds: float = BLOCKING_SECONDS) -> Callable[[], No
         subprocess.Popen.communicate = original_communicate  # type: ignore[method-assign]
 
     return unwind
+
+
+def carrying(root: Path) -> list[int]:
+    """The processes, other than this one, whose environment names a path under ``root``.
+
+    ``root`` is a directory of one test's own, so nothing but processes that test started,
+    and their descendants, can name it; another user's processes cannot be read at all.
+    """
+    prefix, under = str(root).encode(), (str(root) + "/").encode()
+    found: list[int] = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit() or int(entry.name) == os.getpid():
+            continue
+        try:
+            environ = (entry / "environ").read_bytes()
+        except OSError:
+            continue
+        values = (item.partition(b"=")[2] for item in environ.split(b"\0"))
+        if any(value == prefix or value.startswith(under) for value in values):
+            found.append(int(entry.name))
+    return found
+
+
+def end_carrying(root: Path, *, grace: float = 10) -> list[int]:
+    """End every process :func:`carrying` names: TERM, ``grace`` seconds, then KILL.
+
+    Answers the pids it found, so a caller can say a test left them.
+    """
+    found = carrying(root)
+    for number in (signal.SIGTERM, signal.SIGKILL):
+        for pid in found:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, number)
+        limit = time.monotonic() + grace
+        while time.monotonic() < limit and any(_running(pid) for pid in found):
+            time.sleep(0.1)
+    return found
+
+
+def _running(pid: int) -> bool:
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+    except (OSError, IndexError):
+        return False
+    return state not in ("Z", "X")

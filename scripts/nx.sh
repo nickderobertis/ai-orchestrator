@@ -35,6 +35,22 @@ export NX_CACHE_DIRECTORY="$cache_root"
 # "The computation cache those targets use".
 export NX_NATIVE_FILE_CACHE_DIRECTORY="${XDG_CACHE_HOME:-${HOME}/.cache}/ai-orchestrator/nx-native/${repo_key}"
 
+# Node's module compile cache, which the Nx CLI turns on and Node otherwise keeps under
+# the temporary directory — where every Nx run left one beside the gate's test files. A
+# persistent per-repository cache beside the two above instead, keyed the same way.
+export NODE_COMPILE_CACHE="${XDG_CACHE_HOME:-${HOME}/.cache}/ai-orchestrator/node-compile/${repo_key}"
+
+# Under the pre-push gate's recorder (`orchestrator/gate_impact.py`), whose temporary
+# root is deeper than Nx's plugin-worker sockets leave room for in a Unix socket address,
+# those sockets get a short directory of their own, registered with the recorder so it is
+# counted with the gate's scratch, and removed when this run ends.
+if [[ -n ${ORCHESTRATOR_GATE_SCRATCH:-} && -z ${NX_SOCKET_DIR:-} ]]; then
+  nx_socket_dir=$(mktemp -d /tmp/aio-nx-XXXXXX) || { echo "nx: no socket directory could be made under /tmp; check that it is writable and has free space, then retry" >&2; exit 1; }
+  trap 'rm -rf -- "$nx_socket_dir" || echo "nx: the socket directory $nx_socket_dir could not be removed; remove it by hand with rm -rf once no Nx run is using it" >&2' EXIT
+  "$script_dir/../.venv/bin/python" -m orchestrator.gate_impact register "$nx_socket_dir" || { echo "nx: the socket directory $nx_socket_dir could not be registered with the gate's recorder; its line above says why" >&2; exit 1; }
+  export NX_SOCKET_DIR="$nx_socket_dir"
+fi
+
 # Nx's daemon is off by default here, and any daemon that is turned back on uses
 # the Nx session setup installed for its own housekeeping.
 #

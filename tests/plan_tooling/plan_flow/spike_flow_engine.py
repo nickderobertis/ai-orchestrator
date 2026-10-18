@@ -38,6 +38,7 @@ document the journey names in the environment; its controls are what each journe
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import re
@@ -168,6 +169,9 @@ def _with_answers(answers: dict[str, object]) -> str:
         "w", suffix=".json", delete=False, encoding="utf-8"
     ) as written:
         json.dump(answers, written)
+    # Read by the store's own process after this returns, so it outlives the handle, and
+    # is removed as this process ends rather than left in the temporary directory.
+    atexit.register(os.unlink, written.name)
     return written.name
 
 

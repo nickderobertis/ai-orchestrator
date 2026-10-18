@@ -52,6 +52,11 @@ from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
 
+# What the recipes these journeys run leave in the temporary directory, by design or
+# from a published tool they run, is this module's own and goes with it
+# (`tests/short_state.py`).
+pytestmark = [pytest.mark.usefixtures("module_tmpdir")]
+
 #: A launching session this journey states rather than inherits, so the run is one
 #: `just stop` and `just orchestrate --adopt` treat as this session's own.
 LAUNCHING_SESSION = "e2e-reads-an-adopted-run"

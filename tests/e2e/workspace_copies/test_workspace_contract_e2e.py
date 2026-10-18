@@ -29,6 +29,11 @@ from nx_inputs import SELECTED_TARGETS, UNCONDITIONAL_TARGETS
 from waits import timeout as e2e_timeout
 from waits import until
 
+# What the recipes these journeys run leave in the temporary directory, by design or
+# from a published tool they run, is this module's own and goes with it
+# (`tests/short_state.py`).
+pytestmark = [pytest.mark.usefixtures("module_tmpdir")]
+
 # Deliberately no module-level tier mark. Most of this file drives `just` recipes
 # and shell scripts that never open this repository's prose, and a blanket
 # declaration would charge every documentation edit for all of them. Each test

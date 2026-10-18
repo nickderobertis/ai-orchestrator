@@ -84,7 +84,13 @@ from orchestrator.run_reading import RunId
 #: The group is this module's own, for fixture sharing: `followed` and `endings` are module-scoped
 #: and drive the real recipe end to end, so spread across workers the module builds them once per
 #: worker — measured, about 360 s on each of four workers against 212 s for the whole module on one.
-pytestmark = [pytest.mark.xdist_group("follow-ups-recipe")]
+# What the recipes these journeys run leave in the temporary directory, by design or
+# from a published tool they run, is this module's own and goes with it
+# (`tests/short_state.py`).
+pytestmark = [
+    pytest.mark.xdist_group("follow-ups-recipe"),
+    pytest.mark.usefixtures("module_tmpdir"),
+]
 
 #: The provider's stand-in, refusing an untrusted directory the way codex does, and the guard
 #: covering the identities `ONEHARNESS_BIN_*` cannot reach, so a routing mistake refuses a

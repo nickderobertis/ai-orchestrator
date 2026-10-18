@@ -141,7 +141,7 @@ CONFIRMING = (ON_A,)
 #: Run in the turn with the prompt log every turn appends to, so it reads the last prompt
 #: whose feedback is its own run's: several runs answer at once here.
 REPLY_TO_FEEDBACK = """\
-import json, os, re, subprocess, sys, tempfile
+import atexit, json, os, re, subprocess, sys, tempfile
 from orchestrator import follow_up_comments as comments
 from orchestrator import follow_up_tickets as tickets
 
@@ -177,6 +177,8 @@ for one, fields, text in zip(
     )
     with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as body:
         body.write(reply)
+    # Read by the store's own process, so it outlives the handle; removed as this ends.
+    atexit.register(os.unlink, body.name)
     # After a reply on the same issue, the version that reply's answer carried.
     version = latest.get(line["issue"], line["version"])
     expect = [] if version == comments.NO_VERSION else ["--expect", version]

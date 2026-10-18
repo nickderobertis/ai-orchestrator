@@ -183,7 +183,7 @@ path.write_text(json.dumps(held, indent=2), encoding="utf-8")
 #: `--expect` the version that line gives, where it gives one — and account for each reply with
 #: the id, URL and any fallback that command's own answer reports.
 REPLY_PROGRAM = """\
-import json, re, subprocess, sys, tempfile
+import atexit, json, os, re, subprocess, sys, tempfile
 from orchestrator import follow_up_comments as comments
 from orchestrator import follow_up_tickets as tickets
 
@@ -208,6 +208,8 @@ for one, fields in zip(gathering.quoted, gathering.metadata, strict=True):
     )
     with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as body:
         body.write(reply)
+    # Read by the store's own process, so it outlives the handle; removed as this ends.
+    atexit.register(os.unlink, body.name)
     # After a reply on the same issue, the version that reply's answer carried.
     version = latest.get(line["issue"], line["version"])
     expect = [] if version == comments.NO_VERSION else ["--expect", version]

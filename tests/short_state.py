@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from orchestrator.gate_impact import register_scratch
+
 #: The platform's cap on a Unix socket address (`sun_path`, its terminating NUL included).
 #: The kernel's rather than oneharness's, so it is held to the kernel:
 #: `tests/test_short_state_budget.py` binds a real socket either side of it.
@@ -58,6 +60,10 @@ def short_state_base() -> Iterator[Path]:
     """
     global _base
     _base = Path(tempfile.mkdtemp(prefix=BASE_PREFIX, dir=PARENT))
+    # Outside the temporary root a gate's recorder hands this process, since a socket
+    # address leaves no room to nest it there, so it is registered with that recorder:
+    # counted as the gate's scratch, and removed by it once counted.
+    register_scratch(_base)
     try:
         yield _base
     finally:
@@ -94,3 +100,49 @@ def state_home(owner: Path) -> Path:
             f"without control"
         )
     return known
+
+
+#: The variables a process reads for its temporary directory.
+TEMP_VARIABLES = ("TMPDIR", "TMP", "TEMP")
+
+
+@pytest.fixture(scope="module")
+def module_tmpdir() -> Iterator[Path]:
+    """A temporary directory of this test module's own for every process its tests start,
+    removed when the module ends.
+
+    For a module whose recipes leave files in the temporary directory by design — a
+    `finish-plan` graph kept for its operator, a detached run's closeout hook its run has
+    not reached yet — or because a published tool they run leaves its own there: what
+    they leave is the module's, and goes with it. Short, under this process's base, so a
+    socket a recipe opens under it still fits its address. Only the environment changes:
+    this process's own `tempfile` keeps the directory it already resolved, which is read
+    first so that it is never this one.
+    """
+    if _base is None:
+        raise AssertionError(
+            "module_tmpdir was requested with no session base; `short_state_base` in "
+            "tests/short_state.py is autouse for every test process and creates it"
+        )
+    tempfile.gettempdir()
+    own = _base / f"tmp{next(_minted)}"
+    own.mkdir()
+    with pytest.MonkeyPatch.context() as patch:
+        for name in TEMP_VARIABLES:
+            patch.setenv(name, str(own))
+        try:
+            yield own
+        finally:
+            shutil.rmtree(own, ignore_errors=True)
+
+
+@pytest.fixture(scope="module")
+def module_node_scratch(module_tmpdir: Path) -> Iterator[Path]:
+    """`ONEPIPELINE_NODE_SCRATCH_DIR` inside `module_tmpdir`, for the processes this
+    module's tests start: where the engine's own dispatches put their scratch, which they
+    otherwise put in the temporary directory or in the dispatch running this suite."""
+    own = module_tmpdir / "node-scratch"
+    own.mkdir()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("ONEPIPELINE_NODE_SCRATCH_DIR", str(own))
+        yield own

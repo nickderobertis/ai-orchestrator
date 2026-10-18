@@ -96,7 +96,10 @@ from watch_rule import rule
 ROOT = Path(__file__).resolve().parents[3]
 
 #: `reads_checkouts` for the reason the docstring gives.
-pytestmark = [pytest.mark.reads_checkouts]
+# What the recipes these journeys run leave in the temporary directory, by design or
+# from a published tool they run, is this module's own and goes with it
+# (`tests/short_state.py`).
+pytestmark = [pytest.mark.reads_checkouts, pytest.mark.usefixtures("module_tmpdir")]
 
 #: What the dispatched worker asks its manager, through the real
 #: `scripts/ask-manager.sh`. The text is arbitrary; that a *blocking* surface exists and

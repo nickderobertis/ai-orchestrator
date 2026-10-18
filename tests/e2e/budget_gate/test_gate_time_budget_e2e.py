@@ -607,7 +607,9 @@ def test_samples_that_cannot_be_written_or_read_are_said_so_and_left_out(host: H
         "\n".join(
             (
                 "sleep 1.5",
-                'samples=$(echo "$TMPDIR"/tmp.*)',
+                # Named rather than read from TMPDIR, which the gate itself is handed as
+                # the recorder's own root.
+                f"samples=$(echo {shlex.quote(str(temporary))}/tmp.*)",
                 'chmod 000 "$samples/dispatches"',
                 'chmod 400 "$samples/load1"',
                 'chmod 500 "$samples"',

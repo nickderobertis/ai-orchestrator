@@ -33,6 +33,7 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
 import short_state
 from harness_indirections import established_indirections
 from project_fixtures import helper
@@ -40,6 +41,11 @@ from unpublished_registry import BASE, UNPOOLED, Registry, git
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
+
+# What the recipes these journeys run leave in the temporary directory, by design or
+# from a published tool they run, is this module's own and goes with it
+# (`tests/short_state.py`).
+pytestmark = [pytest.mark.usefixtures("module_node_scratch")]
 
 FAKE_GH = helper("fake_gh.py")
 FAKE_CODEX = helper("fake_codex.py")

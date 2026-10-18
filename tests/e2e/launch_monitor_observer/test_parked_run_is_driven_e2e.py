@@ -47,6 +47,11 @@ from test_watch_recipe_e2e import heartbeats, returned, watch
 
 from orchestrator.run_reading import RunId
 
+# What the recipes these journeys run leave in the temporary directory, by design or
+# from a published tool they run, is this module's own and goes with it
+# (`tests/short_state.py`).
+pytestmark = [pytest.mark.usefixtures("module_tmpdir")]
+
 #: A launching session this journey states rather than inherits, so the run is this
 #: session's own to `just stop` when the journey is done with it.
 LAUNCHING_SESSION = "e2e-parked-run-is-driven"

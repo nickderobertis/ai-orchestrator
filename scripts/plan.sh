@@ -647,7 +647,20 @@ snapshot=$(mktemp) || fail "the review snapshot could not be opened" \
 # that fails costs one stale file in the temporary directory rather than anything a
 # caller has to act on now — but it is said rather than swallowed, because the next
 # reader of a full temporary filesystem should know what put a file there.
-trap 'rm -f "$snapshot" || echo "plan: the review snapshot at $snapshot could not be removed; delete it by hand once this launch has finished" >&2' EXIT
+remove_snapshot() {
+    rm -f "$snapshot" || echo "plan: the review snapshot at $snapshot could not be removed; delete it by hand once this launch has finished" >&2
+}
+trap remove_snapshot EXIT
+
+# Hand the flow on to its tail, `scripts/finish-plan.sh`, which replaces this shell: the
+# EXIT trap above never runs past an `exec`, so the snapshot, which nothing reads after a
+# planner's closeout, is removed here first.
+exec_tail() {
+    trap - EXIT
+    remove_snapshot
+    # llmlint: ignore[tool_output_is_signal] The tail's own lines are its product: it is a further launch, and the run id it prints is the only place that run's channel is named.
+    exec "$script_dir/finish-plan.sh" "$brief" "${tail_arguments[@]}"
+}
 
 # The plan checklist's rules as llmlint resolves `PLAN_CHECKLIST_CONFIG` now, rendered as the
 # section a planner's task carries. The llmlint on PATH is the one the checklist judge runs
@@ -808,8 +821,7 @@ if [ ! -e "$runs_root/$spikes_run" ]; then
     spike_nodes=$("$python" -m orchestrator.spike_flow prepare "$spikes_project" "$spikes_run") ||
         stop "the spikes project $spikes_project could not be read or stamped; the diagnostic above names why" spikes 2
     if [ -z "$spike_nodes" ]; then
-        # llmlint: ignore[tool_output_is_signal] The tail's own lines are its product: it is a further launch, and the run id it prints is the only place that run's channel is named.
-        exec "$script_dir/finish-plan.sh" "$brief" "${tail_arguments[@]}"
+        exec_tail
     fi
     # The plan and its spikes are each reviewed, then checked, before a spike is launched:
     # a plan the check refuses — one missing its plan-level budget answers, say — is one no spike
@@ -920,5 +932,4 @@ fi
 # it is a further launch, and the run id it prints is the only place that run's channel is
 # named — a supervisor holding this output has to be able to reach every one. The two
 # locations it ends with are what a person opens to review the plan.
-# llmlint: ignore[tool_output_is_signal] see the note above this line
-exec "$script_dir/finish-plan.sh" "$brief" "${tail_arguments[@]}"
+exec_tail

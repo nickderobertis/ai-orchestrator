@@ -58,8 +58,11 @@ fi
 # it refuses. Over `gate-time`, labelled `host-variable`, warns rather than refuses: gate
 # wall clock on a shared, variably loaded host is not a consistent measurement, so a
 # strict absolute threshold belongs on a consistent system such as a CI runner. A failed
-# gate, an errored measurement, or over any other root budget still refuses the push.
+# gate, an errored measurement, or over any other root budget still refuses the push —
+# among them `gate-leftovers`, `gate-peak-temp-disk` and `gate-leaked-processes`, which the
+# same gate run records through `orchestrator/gate_impact.py`: what it left on the host,
+# its peak temporary disk, and the processes that outlived it.
 # shellcheck source=scripts/gate-budgets.sh
 . "$hook_root/scripts/gate-budgets.sh"
-# llmlint: ignore[changed_behavior_has_e2e] Driving this line would run the complete gate, which ai-orchestrator#1164 rejects as a second test; tests/e2e/budget_gate/test_gate_time_budget_e2e.py drives gate_within_budgets itself with a stand-in gate of known duration, and every publication of this repository runs this line for real.
+# llmlint: ignore[changed_behavior_has_e2e] Driving this line would run the complete gate, which ai-orchestrator#1164 rejects as a second test; tests/e2e/budget_gate/test_gate_time_budget_e2e.py drives gate_within_budgets itself with a stand-in gate of known duration, tests/e2e/budget_gate/test_gate_host_impact_e2e.py drives it with stand-in gates that leave files, hold disk and leak processes for the gate-leftovers, gate-peak-temp-disk and gate-leaked-processes budgets, and every publication of this repository runs this line for real.
 gate_within_budgets "$hook_root/budgets.yaml" just gate "$remote" "$base"

@@ -345,6 +345,35 @@ def test_a_pass_is_replayed_for_an_unchanged_tree_base_and_judge(copies: Copies)
     assert _replayed(copies.first, copies.base) == first
 
 
+def test_the_judge_s_temporary_directory_is_its_own_and_is_removed(
+    copies: Copies, tmp_path: Path
+) -> None:
+    """What the judge's harness leaves in its temporary directory goes when the tier exits.
+
+    The stand-in leaves a sandbox mount-target directory in whatever temporary directory
+    its turn was handed, as the real codex does on every turn; that directory sat inside
+    the caller's, and the caller's is empty once the recipe returns. The caller's is a
+    short one, as the gate's own root is, because Nx keeps its plugin sockets in it.
+    """
+    caller_tmp = short_state.state_home(tmp_path / "caller-tmp")
+    left_log = tmp_path / "left-behind.txt"
+
+    result = copies.first.lint(
+        copies.base,
+        TMPDIR=str(caller_tmp),
+        FAKE_CODEX_LLMLINT_LEAVE_TEMPORARY=str(left_log),
+    )
+
+    report = result.stdout + result.stderr
+    assert result.returncode == 0, report
+    left = [Path(line) for line in left_log.read_text(encoding="utf-8").splitlines()]
+    assert left, report
+    for path in left:
+        assert path.name.startswith("codex-bwrap-synthetic-mount-targets-"), left
+        assert path.parent.parent == caller_tmp, left
+    assert list(caller_tmp.iterdir()) == [], report
+
+
 def test_a_pass_judged_in_one_copy_replays_in_another_at_a_different_path(
     copies: Copies,
 ) -> None:

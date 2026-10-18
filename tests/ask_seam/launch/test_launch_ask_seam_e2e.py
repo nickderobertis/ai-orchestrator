@@ -305,6 +305,10 @@ LAUNCH_GROUP = "ask-seam-launch"
 #: in setup and refuse the push. `tests/tree_scans/test_nx_cache_scope.py` holds the rule.
 pytestmark = [
     pytest.mark.xdist_group(LAUNCH_GROUP),
+    # What the recipes these journeys run leave in the temporary directory, by design or
+    # from a published tool they run, is this module's own and goes with it
+    # (`tests/short_state.py`).
+    pytest.mark.usefixtures("module_tmpdir"),
     # Read this checkout's own plan store here, whatever launch this suite runs inside and
     # whatever root the suite's autouse isolation would otherwise state. This module both
     # launches planning runs and asks what its own checkout resolves the `authoring` source

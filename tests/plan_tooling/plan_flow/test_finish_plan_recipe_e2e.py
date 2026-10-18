@@ -70,6 +70,11 @@ from orchestrator.criteria_guard import APPENDIX
 from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
 
+# What the recipes these journeys run leave in the temporary directory, by design or
+# from a published tool they run, is this module's own and goes with it
+# (`tests/short_state.py`).
+pytestmark = [pytest.mark.usefixtures("module_tmpdir")]
+
 
 @pytest.fixture(autouse=True)
 def _boundary_answers(monkeypatch: pytest.MonkeyPatch) -> None:

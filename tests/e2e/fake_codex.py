@@ -85,7 +85,11 @@ tell one outcome from another deterministically:
   llmlint judge running beside it. ``FAKE_CODEX_LLMLINT_OMIT`` beside it is a JSON list of
   rule names that batch's answer leaves out altogether, ``["*"]`` leaving out every one:
   the incomplete reply a model can give, which llmlint has to refuse rather than read as a
-  pass.
+  pass. ``FAKE_CODEX_LLMLINT_LEAVE_TEMPORARY`` names a file each such batch appends the
+  path of a ``codex-bwrap-synthetic-mount-targets-<pid>`` directory to, which it makes in
+  its temporary directory and leaves there, as the real codex's sandbox does on every
+  turn; it is how a journey proves the caller hands the judge a temporary directory it
+  removes.
 
 Keep this deterministic and stdlib-only — this file *is* the provider binary.
 """
@@ -96,6 +100,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Literal, NamedTuple, NotRequired, TypedDict
@@ -503,6 +508,13 @@ def main() -> int:
         # reviewer's turns, which journeys read back in order.
         if llmlint_log := os.environ.get("FAKE_CODEX_LLMLINT_PROMPT_LOG"):
             record_prompt(prompt, sys.argv[1:], [], log=llmlint_log)
+        if left_log := os.environ.get("FAKE_CODEX_LLMLINT_LEAVE_TEMPORARY"):
+            left = (
+                Path(tempfile.gettempdir()) / f"codex-bwrap-synthetic-mount-targets-{os.getpid()}"
+            )
+            left.mkdir()
+            with open(left_log, "a", encoding="utf-8") as stream:
+                stream.write(f"{left}\n")
         for event in turn_events(llmlint_verdict(batch), billed=True):
             print(json.dumps(event), flush=True)
         return 0

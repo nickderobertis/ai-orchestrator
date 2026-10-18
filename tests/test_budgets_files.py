@@ -78,7 +78,8 @@ def _schema() -> dict:
 
 def test_the_root_file_holds_gate_time_cycle_time_and_the_dispatches_condition() -> None:
     document = _root()
-    gate_time, cycle_time, _ = document["budgets"]
+    by_id = {budget["id"]: budget for budget in document["budgets"]}
+    gate_time, cycle_time = by_id["gate-time"], by_id["cycle-time"]
     threshold = gate_time.pop("threshold")
     description = gate_time.pop("description")
 
@@ -106,6 +107,31 @@ def test_the_root_file_holds_gate_time_cycle_time_and_the_dispatches_condition()
         "command": ["scripts/budget-cycle-time.sh"],
         "unit": "seconds",
         "direction": "max",
+    }
+
+
+@pytest.mark.parametrize(
+    ("budget", "figure", "unit", "threshold"),
+    [
+        ("gate-leftovers", "leftovers", "entries", 0),
+        ("gate-peak-temp-disk", "peak-temp-disk", "gib", 2),
+        ("gate-leaked-processes", "leaked-processes", "processes", 0),
+    ],
+)
+def test_the_root_file_holds_each_gate_host_impact_figure_strictly(
+    budget: str, figure: str, unit: str, threshold: int
+) -> None:
+    """Unlabelled, so over it refuses the push; read back from the gate's own record."""
+    (entry,) = [one for one in _root()["budgets"] if one["id"] == budget]
+    description = entry.pop("description")
+    assert "It protects" in description and "gate" in description, description
+    assert entry == {
+        "id": budget,
+        "measure": "reported",
+        "command": [".venv/bin/python", "-m", "orchestrator.gate_impact", "report", figure],
+        "unit": unit,
+        "direction": "max",
+        "threshold": threshold,
     }
 
 

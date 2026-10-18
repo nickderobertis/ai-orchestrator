@@ -44,6 +44,11 @@ from test_plan_flow_e2e import (
 from orchestrator import plan_check, plan_store, task_body
 from orchestrator.root import REPO_ROOT
 
+# What the recipes these journeys run leave in the temporary directory, by design or
+# from a published tool they run, is this module's own and goes with it
+# (`tests/short_state.py`).
+pytestmark = [pytest.mark.usefixtures("module_tmpdir")]
+
 #: The source a planning launch authors into, whose root the launch exports to the
 #: dispatch and `tests/conftest.py` isolates for this process, under the name
 #: `scripts/plan-root-env.sh` composes and `tests/plan_root_variable.py` reads.

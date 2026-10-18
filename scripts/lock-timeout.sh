@@ -213,7 +213,11 @@ gate_sample_peak() {
 # host is sampled while the gate runs, and the same duration is recorded again with that
 # push and the samples' peaks at `local_direct_gate_push_file`. `.githooks/pre-push` sets
 # it without exporting it, so no process the gate starts — a test that pushes, say —
-# inherits a push to record for.
+# inherits a push to record for. For such a push the gate also runs through this
+# checkout's recorder, `python -m orchestrator.gate_impact run`, which records against the
+# push what the gate left on the host, how much temporary disk it took at its peak and
+# which of its processes outlived it, for the three budgets `report` reads; it exits with
+# the gate's own status. `orchestrator/gate_impact.py` states how each is measured.
 record_local_direct_gate() {
     local started ended status file push=${ORCHESTRATOR_GATE_PUSH:-} samples=
     if [ -n "$push" ]; then
@@ -228,7 +232,12 @@ record_local_direct_gate() {
     # Bash's own clock rather than a `date` process, so reading the time cannot fail.
     started=$EPOCHSECONDS
     status=0
-    "$@" || status=$?
+    if [ -n "$push" ]; then
+        "${BASH_SOURCE[0]%/*}/../.venv/bin/python" -m orchestrator.gate_impact run \
+            --push "$push" -- "$@" || status=$?
+    else
+        "$@" || status=$?
+    fi
     ended=$EPOCHSECONDS
     if [ -n "$samples" ]; then
         stop_gate_sampling

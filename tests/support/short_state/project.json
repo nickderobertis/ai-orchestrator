@@ -9,6 +9,8 @@
   "namedInputs": {
     "testSupport": [
       "{workspaceRoot}/tests/short_state.py",
+      "{workspaceRoot}/orchestrator/gate_impact.py",
+      "{workspaceRoot}/orchestrator/redaction.py",
       "{projectRoot}/project.json"
     ]
   },

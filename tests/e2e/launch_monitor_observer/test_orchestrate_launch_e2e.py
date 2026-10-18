@@ -72,6 +72,11 @@ from orchestrator.labels import (
 from orchestrator.plan_store import WRITABLE_PLUGIN
 from orchestrator.root import REPO_ROOT
 
+# What the recipes these journeys run leave in the temporary directory, by design or
+# from a published tool they run, is this module's own and goes with it
+# (`tests/short_state.py`).
+pytestmark = [pytest.mark.usefixtures("module_tmpdir")]
+
 #: The stand-in for the paid model, named to `oneagentgraph` as its harness.
 FAKE_BACKEND = helper("fake_backend.py")
 

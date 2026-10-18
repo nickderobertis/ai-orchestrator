@@ -1025,6 +1025,11 @@ lint-llm-validate *args:
 #
 # The judge runs under `oneharness.llmlint.toml`, which `llmlint.yml` names; the
 # identity directories its variants map are exported here from the shared resolvers.
+# The target hands llmlint, and nothing above it, a temporary directory of its own that
+# it removes on exit, because the codex harness leaves its sandbox's mount targets
+# (`codex-bwrap-synthetic-mount-targets-*`) in the temporary directory on every turn and
+# nothing else removes them; Nx stays on the caller's, whose sockets a deeper directory
+# would push past the Unix address limit.
 lint-llm-diff base="origin/main" *nx_args:
     @command -v llmlint >/dev/null 2>&1 || { echo "llmlint not installed — run 'just setup-llmlint'"; exit 1; }
     @# Nx 23.1 resolves a run-commands task on the child's `exit` before its pipes drain, so with no terminal (CI, the gate, the pre-push hook) a fast failure's output is lost; NX_RUN_COMMANDS_DIRECTLY=false lost none in 750 runs (the spike-nx-output-loss report). Remove it once Nx collects run-commands output on `close`.

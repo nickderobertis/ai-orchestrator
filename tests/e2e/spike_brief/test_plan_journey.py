@@ -35,7 +35,13 @@ from waits import timeout as e2e_timeout
 from orchestrator import run_reading, spike_brief
 from orchestrator.root import REPO_ROOT
 
-pytestmark = [pytest.mark.xdist_group("spike-brief-planning")]
+# What the recipes these journeys run leave in the temporary directory, by design or
+# from a published tool they run, is this module's own and goes with it
+# (`tests/short_state.py`).
+pytestmark = [
+    pytest.mark.xdist_group("spike-brief-planning"),
+    pytest.mark.usefixtures("module_tmpdir"),
+]
 
 
 def wait(path: Path, process: subprocess.Popen[str], log: Path) -> None:

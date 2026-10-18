@@ -66,6 +66,11 @@ from orchestrator.plan_store import QualifiedProjectId
 from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
 
+# What the recipes these journeys run leave in the temporary directory, by design or
+# from a published tool they run, is this module's own and goes with it
+# (`tests/short_state.py`).
+pytestmark = [pytest.mark.usefixtures("module_tmpdir")]
+
 #: The step a stand-in writer runs to copy the budget command's output into its answers.
 MERGES_THE_BUDGETS = Path(__file__).resolve().parent / "merge_answers.py"
 

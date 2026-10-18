@@ -69,6 +69,11 @@ from waits import until
 
 from orchestrator.root import REPO_ROOT
 
+# What the recipes these journeys run leave in the temporary directory, by design or
+# from a published tool they run, is this module's own and goes with it
+# (`tests/short_state.py`).
+pytestmark = [pytest.mark.usefixtures("module_tmpdir")]
+
 WORK_NODE = "work"
 
 #: What the parent — and only the parent — makes the provider answer. `oneharness`'s

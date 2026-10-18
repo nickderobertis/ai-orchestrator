@@ -79,6 +79,11 @@ from waits import timeout as e2e_timeout
 from orchestrator import plan_budgets, plan_store
 from orchestrator.root import REPO_ROOT
 
+# What the recipes these journeys run leave in the temporary directory, by design or
+# from a published tool they run, is this module's own and goes with it
+# (`tests/short_state.py`).
+pytestmark = [pytest.mark.usefixtures("module_tmpdir")]
+
 #: The source plans are drafted in here: this process's own fixture store.
 FIXTURE_SOURCE = plan_fixture_source.SOURCE
 
@@ -173,13 +178,15 @@ loader = subprocess.run(
 ).stdout
 with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as written:
     json.dump(answers, written)
-subprocess.run(
-    [store, "document", "create", source, "--project", project, "--title", title,
-     "--id", document, "--template-loader", "-", "--answers", written.name,
-     "--no-interactive", *(("--asset", image) if image else ())],
-    input=loader, text=True, check=True,
-)
-os.unlink(written.name)
+try:
+    subprocess.run(
+        [store, "document", "create", source, "--project", project, "--title", title,
+         "--id", document, "--template-loader", "-", "--answers", written.name,
+         "--no-interactive", *(("--asset", image) if image else ())],
+        input=loader, text=True, check=True,
+    )
+finally:
+    os.unlink(written.name)
 """
 
 

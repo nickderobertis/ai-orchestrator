@@ -53,6 +53,11 @@ from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
 
+# What the recipes these journeys run leave in the temporary directory, by design or
+# from a published tool they run, is this module's own and goes with it
+# (`tests/short_state.py`).
+pytestmark = [pytest.mark.usefixtures("module_tmpdir")]
+
 #: The observer graph every `just orchestrate` attaches, and the two members it names.
 DAG_SCOPE_GRAPH = "graphs/dag-scope.yaml"
 MONITOR_MEMBER = "monitor"

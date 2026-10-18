@@ -69,7 +69,14 @@ from waits import timeout as e2e_timeout
 from orchestrator import design_approval, spike_plan
 
 #: Copies the tracked tree, so it sits in the whole-workspace tier.
-pytestmark = [pytest.mark.reads_docs, pytest.mark.xdist_group("plan-spike-flow")]
+# What the recipes these journeys run leave in the temporary directory, by design or
+# from a published tool they run, is this module's own and goes with it
+# (`tests/short_state.py`).
+pytestmark = [
+    pytest.mark.reads_docs,
+    pytest.mark.xdist_group("plan-spike-flow"),
+    pytest.mark.usefixtures("module_tmpdir"),
+]
 
 #: A run id, a plan's qualified project, and a spike's node id.
 RunId = NewType("RunId", str)

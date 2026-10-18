@@ -107,7 +107,13 @@ DESIGN_RUN = f"{RUN}-design"
 #: each worker then runs a flow of its own under these same run ids in this checkout's
 #: one `.plans`: one flow's teardown unlinked `.plans/projects/{DESIGN_RUN}.md` while the
 #: other's tail was launching it, which the store reports as `no project with that id`.
-pytestmark = pytest.mark.xdist_group("unwatched-planning")
+# What the recipes these journeys run leave in the temporary directory, by design or
+# from a published tool they run, is this module's own and goes with it
+# (`tests/short_state.py`).
+pytestmark = [
+    pytest.mark.xdist_group("unwatched-planning"),
+    pytest.mark.usefixtures("module_tmpdir"),
+]
 
 #: How long each stand-in turn takes. The two runs are unsettled only while their own
 #: dispatch is working, so this is what gives a poll something to see — and it is a

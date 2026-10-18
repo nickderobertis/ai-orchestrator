@@ -72,6 +72,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -499,8 +500,20 @@ def _last_flag(argv: list[str], name: str) -> str | None:
     return values[-1] if values else None
 
 
-def _prompt(argv: list[str]) -> tuple[list[str], str]:
-    """This invocation's prompt, and an argv the real CLI can still be given.
+class Prompt(NamedTuple):
+    """One invocation's prompt, as the delegated run is to be handed it."""
+
+    #: An argv the real CLI can still be given.
+    argv: list[str]
+    #: The prompt's text.
+    text: str
+    #: The file the prompt was spilled to, if it was.
+    spilled: Path | None
+
+
+def _prompt(argv: list[str]) -> Prompt:
+    """This invocation's prompt, an argv the real CLI can still be given, and the file
+    the prompt was spilled to, if it was.
 
     onejudge writes the prompt to `--prompt-file -`, this process's standard
     input, which can only be read once. So a piped prompt is read here and spilled
@@ -509,23 +522,31 @@ def _prompt(argv: list[str]) -> tuple[list[str], str]:
     """
     for index, argument in enumerate(argv):
         if argument == "--prompt" and index + 1 < len(argv):
-            return argv, argv[index + 1]
+            return Prompt(argv, argv[index + 1], None)
         if argument == "--prompt-file" and index + 1 < len(argv):
             named = argv[index + 1]
             if named != "-":
-                return argv, Path(named).read_text(encoding="utf-8")
+                return Prompt(argv, Path(named).read_text(encoding="utf-8"), None)
             text = sys.stdin.read()
             # `delete=False`: the delegated `oneharness` is a child process that
             # opens this path after the block closes it, so the file has to outlive
-            # the handle. It is one prompt in the run's own temporary directory.
+            # the handle. `main` removes it once that run has returned. Spilled into the
+            # dispatch's own scratch where the engine gave this turn one, which goes with
+            # its run, so a turn killed outright by a stop leaves nothing in the
+            # temporary directory either.
+            scratch = os.environ.get("ONEPIPELINE_NODE_SCRATCH_DIR", "")
             with tempfile.NamedTemporaryFile(
-                "w", suffix=".prompt", delete=False, encoding="utf-8"
+                "w",
+                suffix=".prompt",
+                delete=False,
+                encoding="utf-8",
+                dir=scratch if os.path.isdir(scratch) else None,
             ) as spilled:
                 spilled.write(text)
             replaced = list(argv)
             replaced[index + 1] = spilled.name
-            return replaced, text
-    return argv, ""
+            return Prompt(replaced, text, Path(spilled.name))
+    return Prompt(argv, "", None)
 
 
 def _ask_manager(config: str | None) -> None:
@@ -761,6 +782,18 @@ def _passed_through(argv: list[str]) -> int:
     return passed.returncode
 
 
+#: The prompt this turn spilled, for `_stopped` to remove.
+_SPILLED: list[Path] = []
+
+
+def _stopped(number: int, _frame: object) -> None:
+    """Remove the spilled prompt, then end exactly as the signal would have."""
+    for spilled in _SPILLED:
+        spilled.unlink(missing_ok=True)
+    signal.signal(number, signal.SIG_DFL)
+    os.kill(os.getpid(), number)
+
+
 def main(argv: list[str]) -> int:
     """Answer one harness turn."""
     if argv and argv[0] in PASSED_THROUGH_VERBS:
@@ -769,7 +802,24 @@ def main(argv: list[str]) -> int:
         print(f"fake_backend: unsupported invocation {argv}", file=sys.stderr)
         return 2
     original = list(argv)
-    argv, prompt = _prompt(argv)
+    # A turn stopped by its caller — a cancel, a stop, a driver going down — removes the
+    # prompt it spilled too, rather than dying with it left behind.
+    for number in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(number, _stopped)
+    argv, prompt, spilled = _prompt(argv)
+    if spilled is not None:
+        _SPILLED.append(spilled)
+    try:
+        return _turn(original, argv, prompt)
+    finally:
+        # Every delegated run has returned by now, so nothing reads the spilled prompt
+        # again; left behind, one per turn piles up in the temporary directory.
+        if spilled is not None:
+            spilled.unlink(missing_ok=True)
+
+
+def _turn(original: list[str], argv: list[str], prompt: str) -> int:
+    """Answer one harness turn whose prompt has been read."""
     config = _last_flag(argv, CONFIG_FLAG)
     # First, before anything records the turn: that ordering is the gate's whole promise.
     _await_turn_gate(config)

@@ -53,8 +53,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, NamedTuple, NewType, TypedDict, cast
@@ -89,6 +91,11 @@ from orchestrator import (
 from orchestrator.criteria_guard import APPENDIX
 from orchestrator.project_store import render_plan_project
 from orchestrator.root import REPO_ROOT
+
+# What the recipes these journeys run leave in the temporary directory, by design or
+# from a published tool they run, is this module's own and goes with it
+# (`tests/short_state.py`).
+pytestmark = [pytest.mark.usefixtures("module_tmpdir")]
 
 #: The step a stand-in writer runs to copy the budget command's output into its answers.
 MERGES_THE_BUDGETS = Path(__file__).resolve().parent / "merge_answers.py"
@@ -321,6 +328,8 @@ class Planned(NamedTuple):
     #: The environment the flow ran in, so a read afterwards answers about the same
     #: store configuration the copy wrote through.
     environment: dict[str, str]
+    #: What the flow left in the temporary directory it ran with, by name.
+    left_in_tmpdir: list[str]
 
 
 def _plan_records(stored: Stored) -> dict[str, str]:
@@ -589,7 +598,9 @@ DESIGN_RUN = RunId(f"{RUN}{DESIGN_RUN_SUFFIX}")
 
 
 @pytest.fixture(scope="module")
-def planned(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Planned:
+def planned(
+    tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str, module_tmpdir: Path
+) -> Planned:
     """Drive one whole planning flow, attached, and hand every question its record.
 
     One flow for every claim here rather than one each: the ordering, the task the second
@@ -663,6 +674,7 @@ def planned(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Pl
             stored=stored,
             destination=destination,
             environment=environment,
+            left_in_tmpdir=sorted(path.name for path in module_tmpdir.iterdir()),
         )
     finally:
         for ended in (RUN, DESIGN_RUN):
@@ -1287,4 +1299,17 @@ def test_a_flow_that_names_no_destination_reports_where_that_board_holds_both(
     assert f"holds its design document at {held[0]['item']['location']['path']}" in reported, (
         f"the flow never reported where the board it defaults to holds the document a "
         f"person reviews this plan as:\n{reported}"
+    )
+
+
+@pytest.mark.xdist_group("plan-flow")
+def test_the_flow_leaves_no_review_snapshot_and_keeps_its_graph(planned: Planned) -> None:
+    """`scripts/plan.sh` hands over to `scripts/finish-plan.sh` by `exec`, past which its
+    own exit trap never runs, so it removes its review snapshot — a bare `mktemp` file —
+    before it does; the tail's graph directory is still kept for an operator to read."""
+    assert planned.environment["TMPDIR"] != tempfile.gettempdir()
+    snapshots = [name for name in planned.left_in_tmpdir if re.fullmatch(r"tmp\.\w{10}", name)]
+    assert snapshots == [], planned.left_in_tmpdir
+    assert any(name.startswith("finish-plan-graph.") for name in planned.left_in_tmpdir), (
+        planned.left_in_tmpdir
     )
