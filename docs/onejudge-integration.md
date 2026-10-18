@@ -209,6 +209,28 @@ resolves and to the argv a dry run builds per identity, and fails on a mode othe
 `read-only`, a sandbox pinned by hand or missing from Codex's argv, a Claude Code tool
 set other than the read-only one, or a lost `--strict-mcp-config`.
 
+### The access a channel-writing supervisory member runs with
+
+The two observer members that write a run's channel — the `monitor`, raising findings and
+live edits, and the `check-in` pacemaker, raising the regular update — declare
+**`mode = "bypass"`** in their own role files, `oneharness.orchestrator.toml` and
+`oneharness.check-in.toml`. Their access is declared in tracked configuration and is
+independent of identity homes: no shared parent states a mode, so a role that stated none
+would run each identity in `default`, where codex obeys whatever `sandbox_mode` that
+identity's home configures, and only bypass puts a flag on the provider's command line that
+outranks it. That gap is how a check-in turn that fell from a rate-limited `codex:primary`
+to a `codex:alternate` whose home was read-only completed without its surface, and the
+manager read the quiet run as a healthy one. The fix is never an edit to a `~/.codex*` or
+`~/.claude*` home. The file is the one place the pacemaker can state it, because the
+oneagentgraph the engine links admits no `mode` on a single-sided `kind: oneharness`
+member. The monitor's graph member states `mode: bypass` as well, and its file says the same
+so the two cannot disagree. Both files declare the same value, which keeps them one field —
+`timeout` — apart. No other role's mode moved, and the judges stay `read-only`.
+`tests/e2e/launch_monitor_observer/test_supervisory_channel_access_e2e.py` forces that
+fallback: a quota refusal on the primary and a read-only alternate home. It reads the
+check-in update back off a real run's channel, and the bypass flag off each fallback
+identity's command line.
+
 ### The judge side may be a list of judges
 
 The pinned onejudge accepts a judge side that is a **list** of judges rather than one:

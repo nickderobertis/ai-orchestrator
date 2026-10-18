@@ -9,7 +9,15 @@
 # `oneharness.orchestrator.toml`'s routing with one field changed: both extend
 # `oneharness.identities.toml` and name the same chain, and only the `timeout`
 # differs. tests/e2e/launch_monitor_observer/test_oneharness_timeout_e2e.py holds that to exactly one field.
+#
+# Its access is declared here too, in tracked configuration and independent of every
+# identity's home: `mode = "bypass"` below, because this member writes the run's channel,
+# and here because the graph schema admits no `mode` on a single-sided member. See
+# docs/onejudge-integration.md, "The access a channel-writing supervisory member runs with".
 extends = "oneharness.identities.toml"
+
+# llmlint: ignore[least_privilege_grants] The channel this member writes is in the run's directory, outside its working directory, so `auto`, the narrower mode, denies that write.
+mode = "bypass"
 
 # timeout: the per-turn deadline in seconds. Stated rather than inherited, because a
 # deadline nobody wrote down is precisely what killed the orchestrator side. A

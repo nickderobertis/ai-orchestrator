@@ -152,6 +152,10 @@ members:
   # config so that it keeps a finite deadline, and re-sharing one file is what
   # would silently take that away. See
   # docs/onejudge-integration.md#choosing-a-deadline-per-side.
+  #
+  # Its access is that config's `mode = "bypass"`, not a field here: this member writes
+  # the channel, and the schema admits no `mode` on a single-sided member. See
+  # docs/onejudge-integration.md#the-access-a-channel-writing-supervisory-member-runs-with.
   check-in:
     kind: oneharness
     oneharness_config: ../oneharness.check-in.toml

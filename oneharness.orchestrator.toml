@@ -10,7 +10,16 @@
 # It extends `oneharness.identities.toml` rather than `oneharness.dispatch.toml`: the
 # monitor is started beside a run rather than inside a node's dispatch, so there is no
 # node scratch directory for the runtime-directory repoint to point at.
+#
+# Its access is declared here, in tracked configuration and independent of every
+# identity's home: `mode = "bypass"` below, because the monitor writes the run's channel.
+# Its graph member states it too, and this file agrees so a turn run against it by any
+# other road holds the same access. See docs/onejudge-integration.md, "The access a
+# channel-writing supervisory member runs with".
 extends = "oneharness.identities.toml"
+
+# llmlint: ignore[least_privilege_grants] The channel the monitor writes is in the run's directory, outside its working directory, so `auto`, the narrower mode, denies that write.
+mode = "bypass"
 
 # timeout: the per-turn deadline in seconds. Since oneharness 0.7.0 both `0` and an
 # absent key mean none; `0` stays spelled out here because this side's lack of a
