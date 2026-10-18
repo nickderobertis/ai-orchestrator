@@ -37,7 +37,7 @@ skips its dependents, and a retry of it re-points them onto its replacement's br
 
 **A retried spike is two names.** The engine retries `spike-x` as `spike-x-2`, so the branch is
 discovered by its original name or a numeric retry suffix, while the report is the one the
-spike's task named, `spike-x-report`: each standing node is answered with the spike it is a
+spike's task named, `<plan>-spike-x-report`: each standing node is answered with the spike it is a
 retry of, by walking the ledger's `superseded_by` links back to the first.
 
 Each prints what it found on stdout and why it refused on stderr, exiting 1 for a stage the
@@ -409,7 +409,7 @@ def branches(run: RunId) -> dict[NodeId, Branch]:
             retry = spike_plan.RETRY_SUFFIX.search(last)
             if last != one.spike and not (retry is not None and last[: retry.start()] == one.spike):
                 continue
-            linked = spike_plan.Evidence(one.spike, spike_plan.report_id(one.spike), branch)
+            linked = spike_plan.Evidence(one.spike, spike_plan.report_id(plan, one.spike), branch)
             refusal = spike_plan.branch_refusal(one.spike, linked, spikes)
             if refusal is not None:
                 raise ValueError(refusal.reason)
@@ -434,12 +434,16 @@ def note(
     project: QualifiedProjectId,
     kept: Mapping[NodeId, Branch],
     above: Mapping[NodeId, Sequence[NodeId]] | None = None,
+    documents: Sequence[plan_store.StoreDocument] = (),
 ) -> str:
     """The finalize planner's instructions for ``project``, whose spikes kept ``kept``.
 
     ``above`` is each spike's stacking chain, as :func:`stacking_chains` reads it; a task
     building on a spike links every spike above it too, because its harness is there.
+    Each report is named as ``documents``, the plan's own, hold it
+    (:func:`orchestrator.spike_plan.held_report_id`).
     """
+    plan = spike_plan.plan_native(project)
     if plan_budgets.migrated(_qualified(project)) is not None:
         budgets = (
             "The plan predates budgets: the host's budgets migration list names it, so it "
@@ -458,7 +462,8 @@ def note(
             "there and in the criteria of the task that builds on it, never in a budgets file."
         )
     listed = "\n".join(
-        f"- `{spike}`: report `{spike_plan.report_id(spike)}`; branch `{branch}`"
+        f"- `{spike}`: report `{spike_plan.held_report_id(plan, spike, documents)}`; "
+        f"branch `{branch}`"
         for spike, branch in kept.items()
     )
     stacked = "\n".join(
@@ -520,7 +525,7 @@ def main(argv: list[str] | None = None) -> int:
                 plan = _qualified(args.project)
                 kept = branches(run)
                 chains = stacking_chains(QualifiedProjectId(spike_plan.spikes_project(plan)))
-                sys.stdout.write(note(plan, kept, chains))
+                sys.stdout.write(note(plan, kept, chains, plan_store.read_documents(plan)))
     except Stop as exc:
         print(f"plan: {exc}", file=sys.stderr)
         return 1

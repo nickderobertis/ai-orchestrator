@@ -1,6 +1,6 @@
 """`just finish-plan` quotes a visual plan's before-and-after screenshots to its writer.
 
-A plan whose project holds its visual spike's report, `spike-visual-report`, changes what a
+A plan whose project holds its visual spike's report, `<plan>-spike-visual-report`, changes what a
 user sees, and the design document a person approves it as shows each change as a pair of
 images. The writer does not compose that answer: the tail's task quotes the report's
 `visual_changes` and, for each image, where the store holds it, and holds the document to
@@ -56,6 +56,7 @@ from test_finish_plan_recipe_e2e import (
     _design_task,
     _draft,
     _just,
+    _landed,
     _staged_answers,
     _stop,
 )
@@ -124,16 +125,17 @@ def _report(
     images: dict[str, bytes],
     *,
     changes: list[dict[str, str]] = CHANGES,
-    report_id: str = spike_plan.VISUAL_REPORT,
+    report_id: str | None = None,
 ) -> str:
     """Store the visual spike's report in the plan's project, each image an asset of it."""
+    source, _, project = drafted.qualified.partition(":")
+    report_id = report_id or spike_plan.visual_report_id(project)
     directory = bench.tmp_path / f"report-{drafted.project}-{report_id}"
     directory.mkdir()
     for name, image in images.items():
         (directory / name).write_bytes(image)
     answers = directory / "answers.json"
     answers.write_text(json.dumps(_report_answers(drafted.project, changes)), encoding="utf-8")
-    source, _, project = drafted.qualified.partition(":")
     assets = [flag for name in images for flag in ("--asset", str(directory / name))]
     created = _store(
         bench,
@@ -404,7 +406,7 @@ def test_a_copy_whose_destination_reminted_the_report_is_found_and_an_imposter_i
 ) -> None:
     """On a copy, the visual report is the spike report its origin names, whatever id it holds.
 
-    The destination already holds a document under `spike-visual-report` that no spike-report
+    The destination already holds a document under `plan-spike-visual-report` that no spike-report
     template rendered, so the real store mints the copied report a different id there and
     records where it came from as `onetaskgraph.origin`. The imposter is no visual report —
     a plan holding only it is not visual — and the reminted copy is the one the tail names.
@@ -439,7 +441,7 @@ def test_a_copy_whose_destination_reminted_the_report_is_found_and_an_imposter_i
     body.write_text("Notes that happen to sit under the visual report's id.\n", encoding="utf-8")
     store(
         *("document", "create", "board", "--project", "plan", "--title", "Notes"),
-        *("--id", spike_plan.VISUAL_REPORT, "--body-file", str(body)),
+        *("--id", spike_plan.visual_report_id("plan"), "--body-file", str(body)),
     )
     only_the_imposter = _visual_report_of("board:plan", environment)
     assert only_the_imposter.returncode == 0, only_the_imposter.stderr
@@ -453,16 +455,16 @@ def test_a_copy_whose_destination_reminted_the_report_is_found_and_an_imposter_i
     write_noise_png(after, 1, (220, 211))
     store(
         *("document", "create", "drafting", "--project", "plan", "--title", "Visual spike"),
-        *("--id", spike_plan.VISUAL_REPORT, "--answers", str(answers)),
+        *("--id", spike_plan.visual_report_id("plan"), "--answers", str(answers)),
         *("--template-loader", "-", "--no-interactive"),
         *("--asset", str(image), "--asset", str(after)),
         stdin=_loader("spike-report"),
     )
-    (copied,) = store("document", "copy", f"drafting:{spike_plan.VISUAL_REPORT}", "--to", "board")[
-        "items"
-    ]
+    (copied,) = store(
+        "document", "copy", f"drafting:{spike_plan.visual_report_id('plan')}", "--to", "board"
+    )["items"]
     reminted = str(copied["destination"])
-    assert reminted != f"board:{spike_plan.VISUAL_REPORT}", copied
+    assert reminted != f"board:{spike_plan.visual_report_id('plan')}", copied
 
     found = _visual_report_of("board:plan", environment)
     assert found.returncode == 0, found.stderr
@@ -474,7 +476,7 @@ def test_a_copy_whose_destination_reminted_the_report_is_found_and_an_imposter_i
         "set",
         "board:plan",
         spike_plan.VISUAL_REPORT_KEY,
-        json.dumps(f"drafting:{spike_plan.VISUAL_REPORT}"),
+        json.dumps(f"drafting:{spike_plan.visual_report_id('plan')}"),
     )
     explicit = _visual_report_of("board:plan", environment)
     assert explicit.returncode == 0, explicit.stderr
@@ -608,3 +610,75 @@ def test_finish_quotes_selected_revision_and_refuses_invalid_selections(
     finally:
         for name in (run, revision_run):
             _stop(bench, f"{name}{DESIGN_RUN_SUFFIX}")
+
+
+def test_plans_in_one_source_each_quote_their_own_visual_report_and_an_old_id_one_is_read(
+    tmp_path: Path,
+    oneharness_bin: str,
+) -> None:
+    """Two plans' visual spikes share a topic and a source; each tail quotes its plan's report.
+
+    The canonical report is `<plan native id>-spike-visual-report`, so the two plans drafted in
+    the one `test-fixtures` root hold two documents, and each design writer is quoted its own
+    plan's changes — the first plan's even while it also holds a stale report under the old
+    `spike-visual-report`. A plan whose visual spike reported only under that old id, before
+    ids named their plan, is quoted that report and approved against it. The old id is one
+    document for the whole flat source, so the stale one is the old-id plan's only once that
+    plan writes its own over it.
+    """
+    bench = _bench(tmp_path, oneharness_bin, PASSES)
+    images = _images(tmp_path / "images")
+    legacy = spike_plan.legacy_report_id(spike_plan.VISUAL_SPIKE)
+
+    def changes_of(name: str) -> list[dict[str, str]]:
+        return [change | {"description": f"{change['description']} ({name})"} for change in CHANGES]
+
+    def tail(drafted: Drafted, report: str) -> str:
+        run = RunId(f"{drafted.project}-tail")
+        _writes_the_visual_document(bench, drafted, report)
+        brief = _brief(tmp_path, drafted, drafted.project)
+        try:
+            finished = _just(
+                "finish-plan",
+                str(brief),
+                "--name",
+                run,
+                "--to",
+                DESTINATION,
+                environment=bench.environment,
+            )
+            assert finished.returncode == OK, finished.stdout + finished.stderr
+            return _design_task(bench, run)["content"]
+        finally:
+            _stop(bench, f"{run}{DESIGN_RUN_SUFFIX}")
+
+    first, second = _draft("finish-collide-first"), _draft("finish-collide-second")
+    reports = {
+        drafted.project: _report(bench, drafted, images, changes=changes_of(drafted.project))
+        for drafted in (first, second)
+    }
+    stale = _report(bench, first, images, changes=changes_of("stale"), report_id=legacy)
+    for drafted in (first, second):
+        assert reports[drafted.project].partition(":")[2] == spike_plan.visual_report_id(
+            drafted.project
+        )
+    assert reports[first.project] != reports[second.project]
+
+    for drafted, other in ((first, second), (second, first)):
+        content = tail(drafted, reports[drafted.project])
+        quoted = json.dumps(changes_of(drafted.project), ensure_ascii=False, indent=2)
+        assert quoted in content, content
+        assert f"`{reports[drafted.project]}`" in content, content
+        assert f"`{reports[other.project]}`" not in content, content
+        assert f"`{stale}`" not in content and "(stale)" not in content, content
+    approved = _just("approve-design", _landed(bench, first), environment=bench.environment)
+    assert approved.returncode == OK, approved.stdout + approved.stderr
+
+    old = _draft("finish-old-visual-id")
+    old_report = _report(bench, old, images, changes=changes_of(old.project), report_id=legacy)
+    assert old_report.partition(":")[2] == legacy
+    content = tail(old, old_report)
+    assert json.dumps(changes_of(old.project), ensure_ascii=False, indent=2) in content, content
+    assert f"`{old_report}`" in content, content
+    approved = _just("approve-design", _landed(bench, old), environment=bench.environment)
+    assert approved.returncode == OK, approved.stdout + approved.stderr

@@ -3,7 +3,7 @@ onetaskgraph_template: 1
 description: >-
   A spike's report: what one spike measured, how, on which branch its harness is kept, and
   any problem it found with the plan's design. The spike writes it as the document
-  `<spike id>-report` of the plan's own project, so it travels to the board with the plan's
+  `<plan native id>-<spike id>-report` of the plan's own project, so it travels to the board with the plan's
   other documents; the finalize planner reworks the plan from it, and every task that builds
   on the spike links it through the `plan-task` template's `spikes` answer.
 variables:

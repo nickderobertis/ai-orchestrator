@@ -104,7 +104,7 @@ def _finalized(root: Path, environment: Mapping[str, str]) -> None:
         encoding="utf-8",
     )
     for one in LINKED:
-        report = spike_plan.report_id(plan_store.NodeId(one.spike))
+        report = spike_plan.report_id(PROJECT, plan_store.NodeId(one.spike))
         _rendered(
             environment,
             "spike-report",
@@ -204,7 +204,7 @@ def test_a_finalized_plan_copied_onto_the_board_resolves_and_checks_each_tasks_r
         _on_the_board(monkeypatch, remote)
         tasks = plan_store.read_tasks(board)
         documents = plan_store.read_documents(board)
-        drafted = spike_plan.drafted_ids(board)
+        origins = spike_plan.drafted_ids(board)
 
     assert checked.returncode == 0, (
         f"`just check-plan` has to pass the board copy {board}, whose reports the board gave "
@@ -220,7 +220,7 @@ def test_a_finalized_plan_copied_onto_the_board_resolves_and_checks_each_tasks_r
         assert all(
             str(held.qualified_id).partition(":")[2] != linked.report for held in documents
         ), [held.qualified_id for held in documents]
-        report = spike_plan.report_for(linked, documents, drafted)
+        report = spike_plan.report_for(linked, documents, origins)
         assert report is not None, (
             f"{task.node_id}'s report {linked.report} resolves to no document of {board}: "
             f"{[(one.qualified_id, one.metadata.get(plan_store.ORIGIN_KEY)) for one in documents]}"
@@ -229,7 +229,7 @@ def test_a_finalized_plan_copied_onto_the_board_resolves_and_checks_each_tasks_r
         assert design_approval.is_spike_report(report), report.metadata
         # The store links each drafted document to its copy whatever the source's visibility;
         # only a copy out of a source declared private goes without an origin.
-        assert drafted[str(report.qualified_id)] == f"{AUTHORING_SOURCE}:{linked.report}"
+        assert origins[str(report.qualified_id)] == f"{AUTHORING_SOURCE}:{linked.report}"
         assert report.metadata.get(plan_store.ORIGIN_KEY) == (
             None if private else f"{AUTHORING_SOURCE}:{linked.report}"
         ), report.metadata
@@ -239,8 +239,12 @@ def test_a_finalized_plan_copied_onto_the_board_resolves_and_checks_each_tasks_r
         assert "the one whose `onetaskgraph.origin`" in (task.content or "")
 
 
-def _visual_report(environment: Mapping[str, str]) -> None:
-    """The plan's visual spike report, rendered where it is drafted, as that spike writes it."""
+def _visual_report(environment: Mapping[str, str], report: str | None = None) -> None:
+    """The plan's visual spike report, rendered where it is drafted, as that spike writes it.
+
+    Under ``report`` where one is named: the id a report was written under before ids named
+    their plan, say.
+    """
     _rendered(
         environment,
         "spike-report",
@@ -252,7 +256,7 @@ def _visual_report(environment: Mapping[str, str]) -> None:
         "--title",
         f"Spike report: {spike_plan.VISUAL_SPIKE}",
         "--id",
-        spike_plan.VISUAL_REPORT,
+        report or spike_plan.visual_report_id(PROJECT),
         answers={
             "spike": spike_plan.VISUAL_SPIKE,
             "branch": f"nick/{PROJECT}/{spike_plan.VISUAL_SPIKE}",
@@ -283,7 +287,7 @@ def test_a_visual_report_copied_out_of_a_private_source_resolves_and_an_unreadab
     environment = _environment(root)
     _finalized(root, environment)
     _visual_report(environment)
-    drafted_visual = f"{AUTHORING_SOURCE}:{spike_plan.VISUAL_REPORT}"
+    drafted_visual = f"{AUTHORING_SOURCE}:{spike_plan.visual_report_id(PROJECT)}"
 
     with _serving_board() as remote:
         on_the_board = {**environment, **remote}
@@ -328,7 +332,7 @@ def test_a_visual_report_copied_out_of_a_private_source_resolves_and_an_unreadab
     assert unreadable_source == {}
     evidence = spike_plan.Evidence(
         spike_plan.VISUAL_SPIKE,
-        spike_plan.VISUAL_REPORT,
+        spike_plan.visual_report_id(PROJECT),
         spike_plan.Branch(f"nick/{PROJECT}/{spike_plan.VISUAL_SPIKE}"),
     )
     for links, why in (
@@ -337,6 +341,52 @@ def test_a_visual_report_copied_out_of_a_private_source_resolves_and_an_unreadab
     ):
         held = [one for one in documents if spike_plan.report_for(evidence, [one], links)]
         assert held == [], f"a copy carrying no origin resolved with {why}"
+
+
+def test_a_copys_reports_resolve_by_their_origin_with_the_authoring_source_unreadable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The board copy's own id names no plan, so each report's origin names it instead.
+
+    Copied where `authoring` is undeclared, each report carries the `onetaskgraph.origin` it was
+    copied from. With the authoring source then unreadable, nothing links the copy to its drafted
+    plan, so the plan's id is read off those origins: the evidence check passes each task's
+    qualified report, and the visual fallback takes the qualified visual report over a stale one
+    left under the old `spike-visual-report`.
+    """
+    root = tmp_path / "authoring"
+    root.mkdir()
+    monkeypatch.setenv(AUTHORING_ROOT_ENV, str(root))
+    boundary_home.answering(monkeypatch, public=(REPOSITORY,))
+    environment = _environment(root)
+    _finalized(root, environment)
+    _visual_report(environment, spike_plan.legacy_report_id(spike_plan.VISUAL_SPIKE))
+    _visual_report(environment)
+    gone = str(tmp_path / "gone")
+
+    with _serving_board() as remote:
+        on_the_board = {**environment, **remote}
+        copied = _recipe(on_the_board, "copy-plan", QUALIFIED, "--to", "plans")
+        assert copied.returncode == 0, copied.stdout + copied.stderr
+        board = QualifiedProjectId(_copied(copied.stdout)[QUALIFIED])
+        checked = _recipe({**on_the_board, AUTHORING_ROOT_ENV: gone}, "check-plan", board)
+        _on_the_board(monkeypatch, remote)
+        monkeypatch.setenv(AUTHORING_ROOT_ENV, gone)
+        documents = plan_store.read_documents(board)
+        native = spike_plan.plan_native(board)
+        visual = spike_plan.current_visual_report(board, documents)
+
+    assert native == board.partition(":")[2] != PROJECT
+    assert checked.returncode == 0, (
+        f"`just check-plan` has to pass the board copy {board} by its reports' origins with "
+        f"the authoring source unreadable:\n{checked.stdout}{checked.stderr}"
+    )
+    assert visual is not None, [
+        (one.qualified_id, one.metadata.get(plan_store.ORIGIN_KEY)) for one in documents
+    ]
+    assert visual.metadata.get(plan_store.ORIGIN_KEY) == (
+        f"{AUTHORING_SOURCE}:{spike_plan.visual_report_id(PROJECT)}"
+    ), visual.metadata
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

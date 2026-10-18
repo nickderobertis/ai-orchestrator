@@ -6,7 +6,7 @@ metadata:
   "onepipeline.id": "design"
   "orchestrator.unit": "Design"
   "onepipeline.persona": "planner"
-  "onetaskgraph.template": {"answers_digest":"sha256:7930c93b056450ffc6386f1b7e7fee53a5f48476813e6489a0e080d53cbc700e","body_digest":"sha256:36bb74a8d2321833d8eed8c677ec377b623f6f2fe9de16bb31f6164b425ce946","digest":"sha256:3ad3814d294c7e78a9895d70d4007a528b97fe3a7949ff08ec1a5daf1d56b0fd","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:7930c93b056450ffc6386f1b7e7fee53a5f48476813e6489a0e080d53cbc700e","body_digest":"sha256:36bb74a8d2321833d8eed8c677ec377b623f6f2fe9de16bb31f6164b425ce946","digest":"sha256:02c4dffa2f5b549c69f5f1d78d6f19a934c864bcffc64548ba4051bc31086e94","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What

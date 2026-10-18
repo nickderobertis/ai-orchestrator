@@ -80,7 +80,18 @@ def _body(*lines: str) -> str:
 
 def test_the_names_the_convention_composes() -> None:
     assert spike_plan.spikes_project(PROJECT) == "authoring:cursor-plan-spikes"
-    assert spike_plan.report_id("spike-listing") == "spike-listing-report"
+    assert (
+        spike_plan.report_id("cursor-plan", NodeId("spike-listing"))
+        == "cursor-plan-spike-listing-report"
+    )
+    assert spike_plan.legacy_report_id(NodeId("spike-listing")) == "spike-listing-report"
+    assert spike_plan.REPORT_SHAPE == "<plan native id>-<spike id>-report"
+    assert spike_plan.report_spike("cursor-plan", "cursor-plan-spike-listing-report") == (
+        "spike-listing"
+    )
+    assert spike_plan.report_spike("cursor-plan", "spike-listing-report") == "spike-listing"
+    assert spike_plan.report_spike("cursor-plan", "other-plan-spike-listing-report") is None
+    assert spike_plan.report_spike("cursor-plan", "cursor-plan-spike-listing") is None
     assert spike_plan.is_spike("spike-listing")
     assert not spike_plan.is_spike("spike-")
     assert not spike_plan.is_spike("listing-spike-")
@@ -95,8 +106,16 @@ def test_evidence_is_read_from_its_own_section_alone() -> None:
     )
 
     assert spike_plan.evidence(body) == [
-        spike_plan.Evidence("spike-listing", "spike-listing-report", "nick/p/spike-listing"),
-        spike_plan.Evidence("spike-quota", "spike-quota-report", "nick/p/spike-quota"),
+        spike_plan.Evidence(
+            NodeId("spike-listing"),
+            spike_plan.ReportId("spike-listing-report"),
+            spike_plan.Branch("nick/p/spike-listing"),
+        ),
+        spike_plan.Evidence(
+            NodeId("spike-quota"),
+            spike_plan.ReportId("spike-quota-report"),
+            spike_plan.Branch("nick/p/spike-quota"),
+        ),
     ]
     assert spike_plan.evidence("## What\n\nNo spikes here.\n") == []
 
@@ -175,6 +194,79 @@ def test_a_plan_with_no_tasks_list_refuses_nothing(monkeypatch: pytest.MonkeyPat
     assert spike_plan.refusals(PROJECT, []) == []
 
 
+def test_a_report_is_linked_by_its_plan_qualified_id_and_never_by_another_plans(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two plans spiking one topic each hold their own report; the old id answers only alone."""
+    _store(
+        monkeypatch,
+        {},
+        "authoring:cursor-plan-spike-a-report",
+        "authoring:spike-a-report",
+        "authoring:spike-b-report",
+        "authoring:cursor-plan-spike-x-2-report",
+    )
+    task = {
+        "id": "listing",
+        "task": _body(
+            _evidence_line("spike-a", "cursor-plan-spike-a-report", "nick/p/spike-a"),
+            # The old id where the qualified one is held is not this spike's report.
+            _evidence_line("spike-a", "spike-a-report", "nick/p/spike-a"),
+            # The old id where only it is held is, for a plan reported before ids named it.
+            _evidence_line("spike-b", "spike-b-report", "nick/p/spike-b"),
+            # Another plan's id is never this plan's report.
+            _evidence_line("spike-b", "other-plan-spike-b-report", "nick/p/spike-b"),
+            # A qualified report names its spike, so a branch it could be a retry of is ambiguous.
+            _evidence_line("spike-x", "cursor-plan-spike-x-2-report", "nick/p/spike-x-2"),
+        ),
+    }
+
+    refused = spike_plan.refusals(PROJECT, {"tasks": [task]})
+
+    assert [one.reason.split(";")[0] for one in refused] == [
+        "`listing`'s `spikes` answer links the report `spike-a-report` of `spike-a`, which is "
+        "not that spike's report among this plan's documents",
+        "`listing`'s `spikes` answer links the report `other-plan-spike-b-report` of `spike-b`, "
+        "which is not that spike's report among this plan's documents",
+        "`listing`'s `spikes` answer links the report `cursor-plan-spike-x-2-report` of "
+        "`spike-x`, which is not that spike's report among this plan's documents",
+        "`listing`'s `spikes` answer names the branch `nick/p/spike-x-2` for `spike-x`, which "
+        "could be a retry of `spike-x` or the branch of the plan's own spike `spike-x-2`",
+    ]
+    assert "the document `cursor-plan-spike-a-report` it writes there" in refused[0].reason
+
+
+def test_a_copys_plan_is_its_drafted_projects_and_its_reports_resolve_through_their_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A board copy is named by the drafted plan, so its reports keep their authoring ids."""
+    board = "plans:I_created_0"
+    report = _copied_report("plans:I_created_2", "authoring:cursor-plan-spike-a-report", True)
+    projects = [
+        _drafted_project("elsewhere", {"plans": "plans:I_other"}),
+        _drafted_project("unlinked", None),
+        _drafted_project("cursor-plan", {"plans": board}),
+    ]
+    monkeypatch.setattr(plan_store, "read_projects", lambda _source: projects)
+    monkeypatch.setattr(plan_store, "read_documents", lambda _project: [report])
+    monkeypatch.setattr(plan_store, "project_record", lambda _project: {"metadata": {}})
+    task = {
+        "id": "listing",
+        "task": _body(_evidence_line("spike-a", "cursor-plan-spike-a-report", "n/p/spike-a")),
+    }
+
+    assert spike_plan.plan_native(board) == "cursor-plan"
+    assert spike_plan.plan_native("authoring:cursor-plan") == "cursor-plan"
+    assert spike_plan.plan_native("plans:NEVER-COPIED") == "NEVER-COPIED"
+    assert spike_plan.refusals(board, {"tasks": [task]}) == []
+
+    def unreadable(_source: str) -> list[object]:
+        raise OSError("the authoring root cannot be read")
+
+    monkeypatch.setattr(plan_store, "read_projects", unreadable)
+    assert spike_plan.plan_native(board) == "I_created_0"
+
+
 def _copied_report(minted: str, origin: str | None, provenance: object) -> StoreDocument:
     """A document as a board copy holds it: an id the board minted, and the store's origin."""
     metadata: dict[str, object] = dict(REPORT_PROVENANCE) if provenance else {}
@@ -200,6 +292,8 @@ def test_a_report_on_a_copy_resolves_through_the_origin_the_store_records(
     unrelated = _copied_report("plans:I_created_3", "authoring:spike-b-report", False)
     monkeypatch.setattr(plan_store, "project_record", lambda _project: {"metadata": {}})
     monkeypatch.setattr(plan_store, "read_documents", lambda _project: [unrelated, report])
+    # No drafted project links this copy, so it is named by its own native id.
+    monkeypatch.setattr(plan_store, "read_projects", lambda _source: [])
     linked = spike_plan.Evidence(
         NodeId("spike-a"), spike_plan.ReportId("spike-a-report"), spike_plan.Branch("n/p/spike-a")
     )
@@ -223,6 +317,57 @@ def test_a_report_on_a_copy_resolves_through_the_origin_the_store_records(
     (refused,) = spike_plan.refusals("plans:I_created_0", {"tasks": [task, unknown]})
     assert (refused.node, refused.field) == ("other", "task")
     assert "links the report `spike-b-report` of `spike-b`" in refused.reason
+
+
+def test_a_copy_resolves_its_reports_through_their_origin_with_authoring_unreadable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The copy's own id names no plan, so each report's recorded origin names it instead."""
+    board = "plans:I_created_0"
+
+    def unreadable(_source: str) -> list[object]:
+        raise OSError("the authoring root cannot be read")
+
+    visual = _copied_report("plans:I_created_4", "authoring:cursor-plan-spike-visual-report", True)
+    stale = _copied_report("plans:I_created_5", "authoring:spike-visual-report", True)
+    listing = _copied_report("plans:I_created_6", "authoring:cursor-plan-spike-a-report", True)
+    legacy = _copied_report("plans:I_created_7", "authoring:spike-a-report", True)
+    retried = _copied_report("plans:I_created_8", "authoring:cursor-plan-spike-x-2-report", True)
+    documents = [stale, visual, legacy, listing, retried]
+    metadata: dict[str, object] = {}
+    monkeypatch.setattr(plan_store, "read_projects", unreadable)
+    monkeypatch.setattr(plan_store, "read_documents", lambda _project: documents)
+    monkeypatch.setattr(plan_store, "project_record", lambda _project: {"metadata": metadata})
+
+    assert spike_plan.plan_native(board) == "I_created_0"
+    # The qualified report wins over the one under the old id, found through its origin.
+    assert spike_plan.current_visual_report(board, documents) == visual
+    assert spike_plan.current_visual_report(board, [stale]) == stale
+    # An explicit selection stays opaque: it names the old report, and the old report it is.
+    metadata[spike_plan.VISUAL_REPORT_KEY] = "authoring:spike-visual-report"
+    assert spike_plan.current_visual_report(board, documents) == stale
+    del metadata[spike_plan.VISUAL_REPORT_KEY]
+
+    task = {
+        "id": "listing",
+        "task": _body(
+            _evidence_line("spike-a", "cursor-plan-spike-a-report", "n/p/spike-a"),
+            # The old id where the qualified one is held is not this spike's report.
+            _evidence_line("spike-a", "spike-a-report", "n/p/spike-a"),
+            # A report held for `spike-x-2` makes that branch ambiguous, as on the drafted plan.
+            _evidence_line("spike-x", "cursor-plan-spike-x-report", "n/p/spike-x-2"),
+        ),
+    }
+    refused = spike_plan.refusals(board, {"tasks": [task]})
+    assert [one.reason.split(";")[0] for one in refused] == [
+        "`listing`'s `spikes` answer links the report `spike-a-report` of `spike-a`, which is "
+        "not that spike's report among this plan's documents",
+        "`listing`'s `spikes` answer links the report `cursor-plan-spike-x-report` of `spike-x`, "
+        "which is not that spike's report among this plan's documents",
+        "`listing`'s `spikes` answer names the branch `n/p/spike-x-2` for `spike-x`, which could "
+        "be a retry of `spike-x` or the branch of the plan's own spike `spike-x-2`",
+    ]
+    assert "the document `cursor-plan-spike-a-report` it writes there" in refused[0].reason
 
 
 def _drafted_project(native: str, copies: object) -> plan_store.StoreProject:
@@ -316,7 +461,7 @@ def test_the_visual_report_of_a_copy_out_of_private_authoring_is_found_through_i
     """With no selection and with one naming the drafted report, the board copy is the one."""
     board = "plans:I_created_0"
     copied = _copied_report("plans:I_created_4", None, True)
-    drafted = _drafted_report(spike_plan.VISUAL_REPORT, {"plans": "plans:I_created_4"})
+    drafted = _drafted_report(spike_plan.visual_report_id("p"), {"plans": "plans:I_created_4"})
     monkeypatch.setattr(
         plan_store, "read_projects", lambda _source: [_drafted_project("p", {"plans": board})]
     )
@@ -325,7 +470,7 @@ def test_the_visual_report_of_a_copy_out_of_private_authoring_is_found_through_i
     monkeypatch.setattr(plan_store, "project_record", lambda _project: {"metadata": metadata})
 
     assert spike_plan.current_visual_report(board, [copied]) == copied
-    metadata[spike_plan.VISUAL_REPORT_KEY] = f"authoring:{spike_plan.VISUAL_REPORT}"
+    metadata[spike_plan.VISUAL_REPORT_KEY] = f"authoring:{spike_plan.visual_report_id('p')}"
     assert spike_plan.current_visual_report(board, [copied]) == copied
 
 
@@ -414,29 +559,48 @@ def test_the_visual_spike_and_its_report_are_reserved_spike_names() -> None:
     """One visual spike per plan, named as a spike, its report named as every report is."""
     assert spike_plan.VISUAL_SPIKE == "spike-visual"
     assert spike_plan.is_spike(spike_plan.VISUAL_SPIKE)
-    assert spike_plan.VISUAL_REPORT == "spike-visual-report"
-    assert spike_plan.report_id(spike_plan.VISUAL_SPIKE) == spike_plan.VISUAL_REPORT
+    assert spike_plan.visual_report_id("cursor-plan") == "cursor-plan-spike-visual-report"
+    assert spike_plan.report_id("cursor-plan", spike_plan.VISUAL_SPIKE) == (
+        spike_plan.visual_report_id("cursor-plan")
+    )
 
 
 def test_a_plans_visual_report_is_found_by_its_id_or_the_origin_its_copy_records() -> None:
-    """Drafted, the report is `spike-visual-report`; on a board copy, its origin names it."""
-    drafted = _copied_report("authoring:spike-visual-report", None, True)
-    copied = _copied_report("plans:I_created_4", "authoring:spike-visual-report", True)
-    other = _copied_report("authoring:spike-listing-report", None, True)
-    unrendered = _copied_report("authoring:spike-visual-report", None, False)
-    native = _copied_report("destination:spike-visual-report", "elsewhere:x", True)
+    """Drafted, the report is `<plan>-spike-visual-report`; on a board copy, its origin names it."""
+    plan = "cursor-plan"
+    drafted = _copied_report("authoring:cursor-plan-spike-visual-report", None, True)
+    copied = _copied_report("plans:I_created_4", "authoring:cursor-plan-spike-visual-report", True)
+    other = _copied_report("authoring:cursor-plan-spike-listing-report", None, True)
+    unrendered = _copied_report("authoring:cursor-plan-spike-visual-report", None, False)
+    native = _copied_report("destination:cursor-plan-spike-visual-report", "elsewhere:x", True)
+    another_plans = _copied_report("authoring:other-plan-spike-visual-report", None, True)
+    legacy = _copied_report("authoring:spike-visual-report", None, True)
 
-    assert spike_plan.visual_report([other, drafted]) == drafted
-    assert spike_plan.visual_report([other, copied]) == copied
-    assert spike_plan.visual_report([native]) == native
+    assert spike_plan.visual_report(plan, [other, drafted]) == drafted
+    assert spike_plan.visual_report(plan, [other, copied]) == copied
+    assert spike_plan.visual_report(plan, [native]) == native
+    # Another plan's visual report is never this plan's.
+    assert spike_plan.visual_report(plan, [another_plans]) is None
+    # The id reports had before they named their plan answers only where the qualified is absent.
+    assert spike_plan.visual_report(plan, [other, legacy]) == legacy
+    assert spike_plan.visual_report(plan, [legacy, drafted]) == drafted
     # A document of that name not rendered from the spike-report template is no report.
-    assert spike_plan.visual_report([other, unrendered]) is None
-    assert spike_plan.visual_report([]) is None
+    assert spike_plan.visual_report(plan, [other, unrendered]) is None
+    assert spike_plan.visual_report(plan, []) is None
 
 
 def test_the_command_names_a_plans_visual_report_or_prints_nothing(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    _store(
+        monkeypatch,
+        {},
+        "authoring:cursor-plan-spike-visual-report",
+        "authoring:cursor-plan-spike-listing-report",
+    )
+    assert spike_plan.main(["visual-report", PROJECT]) == 0
+    assert capsys.readouterr().out == "authoring:cursor-plan-spike-visual-report\n"
+
     _store(monkeypatch, {}, "authoring:spike-visual-report", "authoring:spike-listing-report")
     assert spike_plan.main(["visual-report", PROJECT]) == 0
     assert capsys.readouterr().out == "authoring:spike-visual-report\n"

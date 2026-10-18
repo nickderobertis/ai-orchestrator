@@ -231,7 +231,7 @@ def _scenario(plan: str, evidence: Path, chromium: str) -> dict[str, object]:
             "acceptance_criteria": [
                 "The mock is committed with `sh shots/capture.sh <out>`, the one command that "
                 "re-captures its screenshots.",
-                "`spike-visual-report` answers `visual_changes` with each pair as its assets.",
+                "The plan's visual report answers `visual_changes` with each pair as its assets.",
             ],
         },
     }
@@ -305,7 +305,7 @@ def _design_writer(plan: str, staged: Path, *, revision: bool = False) -> list[s
         str(staged),
         str(MERGES_THE_BUDGETS),
         str(RESTATES_THE_REPORT),
-        spike_plan.VISUAL_REPORT,
+        spike_plan.visual_report_id(native),
         TARGET,
         str(COPIES_THE_ROWS),
     ]
@@ -370,7 +370,7 @@ def _documents(environment: dict[str, str], project: str) -> dict[str, Any]:
     for one in listed["items"]:
         template = (one["item"]["metadata"].get("onetaskgraph.template") or {}).get("template")
         kind = {"onepipeline:design-doc": "design", "onepipeline:spike-report": "report"}.get(
-            template
+            str(template)
         )
         if kind:
             held[kind] = _store(environment, "document", "show", str(one["id"]))
@@ -647,7 +647,9 @@ def test_a_second_visual_spike_preserves_evidence_and_renders_the_existing_desig
     evidence = flow.evidence
     native = flow.project.partition(":")[2]
     project = f"{AUTHORING}:{native}"
-    original = _store(environment, "document", "show", f"{AUTHORING}:{spike_plan.VISUAL_REPORT}")
+    original = _store(
+        environment, "document", "show", f"{AUTHORING}:{spike_plan.visual_report_id(native)}"
+    )
     design_id = f"{project}-design"
     design_before = _store(environment, "document", "show", design_id)
     scenario_data = _scenario(project, evidence, _chromium())
@@ -706,7 +708,12 @@ def test_a_second_visual_spike_preserves_evidence_and_renders_the_existing_desig
         )
         assert [path.name for path in (evidence / "revision-captured").iterdir()] == ["listing.png"]
         assert (
-            _store(environment, "document", "show", f"{AUTHORING}:{spike_plan.VISUAL_REPORT}")
+            _store(
+                environment,
+                "document",
+                "show",
+                f"{AUTHORING}:{spike_plan.visual_report_id(native)}",
+            )
             == original
         )
         selected = f"{project}-spike-visual-revision-report"

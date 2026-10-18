@@ -42,7 +42,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import NamedTuple, NewType
 
-from orchestrator import design_approval, plan_store, spike_plan
+from orchestrator import design_approval, spike_plan
 from orchestrator.plan_store import QualifiedProjectId
 from orchestrator.root import REPO_ROOT
 from orchestrator.spike_plan import Branch
@@ -55,9 +55,6 @@ PlanId = NewType("PlanId", str)
 #: pattern every branch the hook then *deletes* is matched by, so a character a pattern reads
 #: — `*`, `?`, `[` — or a `..` would widen that selection past this plan's spikes.
 PLAN_ID = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*(/[A-Za-z0-9_][A-Za-z0-9_.-]*)*\Z")
-
-#: The source a plan is drafted in, and so the one whose native ids its spikes are named by.
-AUTHORING = "authoring"
 
 #: The run's launch record and the plan it recorded, under its run root.
 LAUNCH_RECORD = "launch.json"
@@ -99,22 +96,13 @@ def plan_id(native: str) -> PlanId:
 
 
 def plan_native_id(project: QualifiedProjectId) -> PlanId:
-    """The native id ``project``'s spikes were launched under: its ``authoring`` project's."""
-    source, _, native = project.partition(":")
-    if source == AUTHORING:
-        return plan_id(native)
-    # A source that cannot be read answers as one holding no copy of the plan: the launched
-    # project's own id is then the best name there is, and listing under it discards at
-    # worst nothing, where refusing would keep every spike of every such plan.
-    try:
-        drafted_projects = plan_store.read_projects(AUTHORING)
-    except OSError:
-        return plan_id(native)
-    for drafted in drafted_projects:
-        copies = drafted.metadata.get(plan_store.COPIES_KEY)
-        if isinstance(copies, dict) and project in copies.values():
-            return plan_id(str(drafted.qualified_id).partition(":")[2])
-    return plan_id(native)
+    """The native id ``project``'s spikes were launched under: its ``authoring`` project's.
+
+    A source that cannot be read answers as one holding no copy of the plan: the launched
+    project's own id is then the best name there is, and listing under it discards at worst
+    nothing, where refusing would keep every spike of every such plan.
+    """
+    return plan_id(spike_plan.plan_native(project))
 
 
 def repositories(run_root: Path) -> list[str]:

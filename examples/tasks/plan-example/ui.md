@@ -7,7 +7,7 @@ metadata:
   "onepipeline.id": "ui"
   "orchestrator.unit": "Web UI"
   "onepipeline.persona": "engineer"
-  "onetaskgraph.template": {"answers_digest":"sha256:ab5535b1388b19101257ac1bb6864af2e07421ca139747ece3044ad085982225","body_digest":"sha256:e8f785f406779797c16c5a8050718c55e078be64311551932a0cc37a46ae6912","digest":"sha256:3ad3814d294c7e78a9895d70d4007a528b97fe3a7949ff08ec1a5daf1d56b0fd","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:ab5535b1388b19101257ac1bb6864af2e07421ca139747ece3044ad085982225","body_digest":"sha256:e8f785f406779797c16c5a8050718c55e078be64311551932a0cc37a46ae6912","digest":"sha256:02c4dffa2f5b549c69f5f1d78d6f19a934c864bcffc64548ba4051bc31086e94","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What

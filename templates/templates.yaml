@@ -15,7 +15,7 @@ templates:
     description: A plan's own description, carrying its plan-level budget answers.
   spike-report:
     role: document
-    description: A spike's report, stored as the document `<spike id>-report` of the plan's own project.
+    description: A spike's report, stored as the document `<plan native id>-<spike id>-report` of the plan's own project.
   spike-brief:
     role: document
     description: A local draft preview, with one question and use per actual spike agent.

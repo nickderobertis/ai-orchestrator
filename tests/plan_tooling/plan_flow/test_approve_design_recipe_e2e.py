@@ -1891,19 +1891,15 @@ def test_nested_decision_shapes_are_checked_at_approval_despite_rendering_overri
     )
     native = "nested-decision-contract"
     project = store.plan(native)
-    answers = {
-        **DESIGN,
-        "units": [
-            {
-                "name": "Engine",
-                "repository": "onepipeline",
-                "part": "",
-                "summary": "A unit.",
-                "reversible": [],
-                "decisions": [decision],
-            }
-        ],
+    unit: dict[str, object] = {
+        "name": "Engine",
+        "repository": "onepipeline",
+        "part": "",
+        "summary": "A unit.",
+        "reversible": [],
+        "decisions": [decision],
     }
+    answers = {**DESIGN, "units": [unit]}
     expected = "units[1].decisions[1]"
     legacy = {
         "name": "historical",
@@ -1913,9 +1909,9 @@ def test_nested_decision_shapes_are_checked_at_approval_despite_rendering_overri
     }
     match decision:
         case "valid-legacy":
-            answers["units"][0]["decisions"] = [legacy]
+            unit["decisions"] = [legacy]
         case "valid-mixed":
-            answers["units"][0]["decisions"] = [
+            unit["decisions"] = [
                 legacy,
                 {
                     "name": "modern",
@@ -1924,7 +1920,7 @@ def test_nested_decision_shapes_are_checked_at_approval_despite_rendering_overri
                 },
             ]
         case "valid-container-exit":
-            answers["units"][0]["decisions"] = [
+            unit["decisions"] = [
                 {
                     "name": "exit",
                     "justification": "j",
@@ -1944,7 +1940,7 @@ def test_nested_decision_shapes_are_checked_at_approval_despite_rendering_overri
             answers["units"] = ["not an object"]
             expected = "units[1].decisions"
         case "invalid-decisions":
-            answers["units"][0]["decisions"] = "not a list"
+            unit["decisions"] = "not a list"
             expected = "units[1].decisions"
     valid = isinstance(decision, str) and decision.startswith("valid-")
     store.document(native, answers, template_root=REPO_ROOT / "templates" if valid else root)
@@ -2030,10 +2026,10 @@ def test_a_visual_plans_document_is_approved_only_once_it_shows_the_reported_cha
     )
     store._piped(
         *("document", "create", SOURCE, "--project", native, "--title", "Visual spike"),
-        *("--id", spike_plan.VISUAL_REPORT, "--answers", str(report_answers), *assets),
+        *("--id", spike_plan.visual_report_id(native), "--answers", str(report_answers), *assets),
         template="spike-report",
     )
-    report = f"{SOURCE}:{spike_plan.VISUAL_REPORT}"
+    report = f"{SOURCE}:{spike_plan.visual_report_id(native)}"
     store.document(native)
     reviewed(project)
 

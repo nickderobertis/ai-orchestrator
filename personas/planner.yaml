@@ -329,8 +329,9 @@ system_prompt: |
   branch, written as a command that performs one measurement, because the figure has to be
   taken before the work that will record it exists. The node that implements the budget
   turns it into the command `budgets_reuse_gate_telemetry` passes. Second, the report
-  document `<spike id>-report`, written into the **plan's** project — not the spikes
-  project — rendered from the `spike-report` template the same way a task is rendered from
+  document `<plan native id>-<spike id>-report` — the plan project's own native id, never
+  the spikes project's, so two plans spiking one topic write two documents — written into
+  the **plan's** project — not the spikes project — rendered from the `spike-report` template the same way a task is rendered from
   `plan-task`. For each candidate budget it reports what is achievable,
   what the system's limits allow (rate-limit arithmetic, for example) and what the spike
   consumed itself, and it reports any problem with the plan's design beyond budgets: an

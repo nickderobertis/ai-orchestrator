@@ -109,6 +109,11 @@ class Scenario(TypedDict):
     fail_finalize: NotRequired[bool]
     #: A run held started and unsettled until the journey releases it.
     hold: NotRequired[Hold]
+    #: Whether each spike writes its report under the id reports had before they named their
+    #: plan, `<spike id>-report`, as a plan reported before the change does.
+    legacy_reports: NotRequired[bool]
+    #: Whether each spike also leaves a report under that old id, beside its qualified one.
+    stale_legacy_reports: NotRequired[bool]
 
 
 class Hold(TypedDict):
@@ -378,14 +383,31 @@ def _base(deps: list[str], graph: dict[str, list[str]]) -> str | None:
 
 def _report(scenario: Scenario, node: str, kept: Node) -> None:
     """Write ``node``'s report, the one its task names, whichever attempt kept the branch."""
+    # The id `orchestrator/spike_plan.py`'s `report_id` gives, `<plan native id>-<spike id>-report`,
+    # spelled as the planner briefs a spike to; or, for a plan whose spikes reported before ids
+    # named their plan, the spike's id alone.
+    plan = scenario["plan"].partition(":")[2]
+    legacy = f"{node}-report"
+    if scenario.get("legacy_reports"):
+        _report_as(scenario, node, legacy, str(kept.get("branch", "")))
+        return
+    if scenario.get("stale_legacy_reports"):
+        # A report left under the old id beside the one the spike wrote under the qualified id,
+        # naming a branch nothing kept, so a reader that took it would say so.
+        _report_as(scenario, node, legacy, f"stale/{node}")
+    _report_as(scenario, node, f"{plan}-{node}-report", str(kept.get("branch", "")))
+
+
+def _report_as(scenario: Scenario, node: str, report: str, branch: str) -> None:
+    """Write ``node``'s report into the plan's project under the id ``report``."""
     measured = node not in scenario.get("unmeasured", [])
     _document(
         scenario["plan"],
-        f"{node}-report",
+        report,
         "spike-report",
         {
             "spike": node,
-            "branch": kept.get("branch", ""),
+            "branch": branch,
             "harness": f"`{node}.sh` at the branch's root; run `sh {node}.sh`.",
             "method": "Twenty pages of the real listing at 2,000 nodes.",
             "candidates": [

@@ -19,8 +19,14 @@ plan's main run succeeds:
   or more, where the engine retried the spike as the node ``spike-<topic>-<n>`` and that
   retry cut a branch of its own; such a branch is refused as ambiguous where the plan also
   has a spike named ``spike-<topic>-<n>``;
-* each spike writes its report as the document ``<spike id>-report`` of the **plan's**
-  project, rendered from the ``spike-report`` template; on a copy of the plan, whose
+* each spike writes its report as the document ``<plan native id>-<spike id>-report`` of
+  the **plan's** project (:func:`report_id`), rendered from the ``spike-report`` template —
+  the plan's own native id in front because a flat document source such as ``authoring``
+  keeps every project's documents in one directory, where two plans spiking one topic would
+  otherwise write one document. The native id is the ``authoring`` project's, resolved for a
+  copy through the store's own copy link (:func:`plan_native`). A report written before ids
+  named their plan, under the spike's id alone (:func:`legacy_report_id`), is read only
+  where the plan holds no report under the qualified id. On a copy of the plan, whose
   destination mints the document an id of its own, the report is the ``spike-report``
   document whose ``onetaskgraph.origin`` — the plan store's own record of what a copy was
   copied from — names that id, or, for a copy out of ``authoring`` declared private, on
@@ -37,7 +43,7 @@ plan's main run succeeds:
   each spike it builds on and every spike above it in that spike's stacking chain, never a
   dependency edge on a spike.
 * a plan is **visual** — it changes what a user sees — exactly when its spikes project holds
-  the initial node :data:`VISUAL_SPIKE`, whose canonical report :data:`VISUAL_REPORT`
+  the initial node :data:`VISUAL_SPIKE`, whose canonical report :func:`visual_report_id`
   answers ``visual_changes`` with each expected change's before-and-after screenshots as
   assets of the report; the design document restates that answer, `scripts/finish-plan.sh`
   quotes it to the document's writer, and :mod:`orchestrator.design_approval` refuses to
@@ -59,7 +65,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from typing import NamedTuple, NewType
 
 from orchestrator import design_approval, plan_store
@@ -77,13 +83,12 @@ SPIKE_PREFIX = "spike-"
 #: What a plan's spikes project is called: the plan project's own id with this appended.
 SPIKES_SUFFIX = "-spikes"
 
-#: What a spike's report document is called: the spike's node id with this appended.
+#: What a spike's report document ends with, after the plan's native id and the spike's id.
 REPORT_SUFFIX = "-report"
 
-#: The reserved spike a plan that changes what a user sees authors, and its report's id:
-#: the one statement of both, which every reader of a visual plan takes from here.
+#: The reserved spike a plan that changes what a user sees authors; its canonical report is
+#: :func:`visual_report_id`, the one statement every reader of a visual plan takes it from.
 VISUAL_SPIKE = NodeId(f"{SPIKE_PREFIX}visual")
-VISUAL_REPORT = ReportId(f"{VISUAL_SPIKE}{REPORT_SUFFIX}")
 
 #: The one `publish` value a spike node declares, and the metadata key it is stored under.
 PRESERVE = "preserve"
@@ -121,9 +126,104 @@ def spikes_project(plan_project: str) -> str:
     return f"{plan_project}{SPIKES_SUFFIX}"
 
 
-def report_id(spike: NodeId) -> ReportId:
-    """The document id ``spike``'s report is stored under in the plan's project."""
+def report_id(plan: str, spike: NodeId) -> ReportId:
+    """The document id ``spike``'s report is stored under in the project of the plan ``plan``.
+
+    ``plan`` is the plan project's own native id (:func:`plan_native`), never its spikes
+    project's: the one definition of the shape, which every statement of it is held to.
+    """
+    return ReportId(f"{plan}-{spike}{REPORT_SUFFIX}")
+
+
+def legacy_report_id(spike: NodeId) -> ReportId:
+    """The id ``spike``'s report was written under before report ids named their plan."""
     return ReportId(f"{spike}{REPORT_SUFFIX}")
+
+
+#: The shape :func:`report_id` gives, in the placeholders the prose states it in.
+REPORT_SHAPE = report_id("<plan native id>", NodeId("<spike id>"))
+
+
+def visual_report_id(plan: str) -> ReportId:
+    """The canonical report of the plan ``plan``'s :data:`VISUAL_SPIKE`."""
+    return report_id(plan, VISUAL_SPIKE)
+
+
+def plan_native(project: str) -> str:
+    """The native id of the plan ``project`` was drafted as: its ``authoring`` project's.
+
+    A copy's own native id is minted by its destination, so the drafted project whose
+    `onetaskgraph.copies` link names ``project`` answers instead; a project no drafted one
+    links, or a source that cannot be read, answers with its own native id.
+    """
+    source, _, native = project.partition(":")
+    if source == AUTHORING:
+        return native
+    try:
+        drafted_projects = plan_store.read_projects(AUTHORING)
+    except OSError:
+        return native
+    for drafted in drafted_projects:
+        copies = drafted.metadata.get(plan_store.COPIES_KEY)
+        if isinstance(copies, Mapping) and project in copies.values():
+            return str(drafted.qualified_id).partition(":")[2]
+    return native
+
+
+def held_report_id(
+    plan: str,
+    spike: NodeId,
+    documents: Sequence[plan_store.StoreDocument],
+    drafted: Drafted | None = None,
+) -> ReportId:
+    """The id ``spike``'s report goes by among ``documents``: :func:`report_id`'s, or the old one.
+
+    The qualified id is ``plan``'s, or — on a copy whose ``plan`` is no drafted plan's, since
+    the authoring side could not say which — the one a report's provenance names for
+    ``spike`` (:func:`provenance_plans`). The old :func:`legacy_report_id` answers only where
+    no spike report goes by a qualified id and one goes by the old, so a plan whose spikes
+    reported before ids named their plan still reads its own reports.
+    """
+    reports = [document for document in documents if design_approval.is_spike_report(document)]
+    held = {name for document in reports for name in names(document, drafted)}
+    for one in (plan, *sorted(provenance_plans(reports, (spike,), drafted) - {plan})):
+        if report_id(one, spike) in held:
+            return report_id(one, spike)
+    legacy = legacy_report_id(spike)
+    return legacy if legacy in held else report_id(plan, spike)
+
+
+def provenance_plans(
+    documents: Sequence[plan_store.StoreDocument],
+    spikes: Iterable[NodeId],
+    drafted: Drafted | None = None,
+) -> frozenset[str]:
+    """Each plan id a document's provenance names as the plan of one of ``spikes``' reports.
+
+    A copy's report records the id it was copied from — its `onetaskgraph.origin`, or the
+    private source's own link (:func:`names`) — which is
+    ``<plan native id>-<spike id>-report`` for the drafted plan, so the plan is read off it
+    without reading the authoring source. Only that
+    provenance is read, never a document's own id, which on the drafted plan must be
+    :func:`report_id`'s exactly.
+    """
+    suffixes = [f"-{spike}{REPORT_SUFFIX}" for spike in spikes]
+    return frozenset(
+        name.removesuffix(suffix)
+        for document in documents
+        for name in _provenance(document, drafted)
+        for suffix in suffixes
+        if name.endswith(suffix) and len(name) > len(suffix)
+    )
+
+
+def report_spike(plan: str, name: str) -> NodeId | None:
+    """The spike a report named ``name`` in the plan ``plan``'s project is of, if any."""
+    if not name.endswith(REPORT_SUFFIX):
+        return None
+    stem = name.removesuffix(REPORT_SUFFIX)
+    spike = stem.removeprefix(f"{plan}-")
+    return NodeId(spike) if is_spike(spike) else None
 
 
 def is_spike(node: str) -> bool:
@@ -257,6 +357,7 @@ def _evidence_refusals(
     documents: Sequence[plan_store.StoreDocument],
     spikes: frozenset[NodeId],
     drafted: Drafted,
+    plan: str,
 ) -> Iterator[Refused]:
     node = NodeId(str(task["id"]))
     body = task.get("task")
@@ -269,7 +370,7 @@ def _evidence_refusals(
             f"the task from its `spikes` answer",
         )
     for linked in evidence(body if isinstance(body, str) else ""):
-        named = report_id(linked.spike)
+        named = held_report_id(plan, linked.spike, documents, drafted)
         resolved = report_for(linked, documents, drafted)
         if resolved is None or linked.report.rpartition(":")[2] != named:
             yield Refused(
@@ -289,16 +390,24 @@ def _spikes_of(
     tasks: Sequence[Mapping[str, object]],
     documents: Sequence[plan_store.StoreDocument],
     drafted: Drafted,
+    plan: str,
 ) -> frozenset[NodeId]:
-    """Every spike the plan knows: each one a task links, and each one whose report it holds."""
+    """Every spike the plan knows: each one a task links, and each one whose report it holds.
+
+    A report's id is read against ``plan`` and every plan its linked spikes' provenance names
+    (:func:`provenance_plans`), so a copy whose drafted plan could not be read knows them too.
+    """
     bodies = [task.get("task") for task in tasks]
     linked = {one.spike for body in bodies if isinstance(body, str) for one in evidence(body)}
+    reports = [held for held in documents if design_approval.is_spike_report(held)]
+    plans = sorted({plan} | provenance_plans(reports, (*linked, VISUAL_SPIKE), drafted))
     reported = {
-        NodeId(name.removesuffix(REPORT_SUFFIX))
-        for held in documents
-        if design_approval.is_spike_report(held)
+        spike
+        for held in reports
         for name in names(held, drafted)
-        if name.endswith(REPORT_SUFFIX) and ":" not in name
+        if ":" not in name
+        for one in plans
+        if (spike := report_spike(one, name)) is not None
     }
     return frozenset(linked | reported)
 
@@ -368,14 +477,25 @@ def names(report: plan_store.StoreDocument, drafted: Drafted | None = None) -> f
     (:func:`drafted_ids`) reads off that source's own link. Either record is the store's, so a
     task written where the plan was drafted names its report wherever the plan is read.
     """
-    held = [str(report.qualified_id)]
+    held = [str(report.qualified_id), *_recorded(report, drafted)]
+    return frozenset(name for one in held for name in (one, one.partition(":")[2]))
+
+
+def _recorded(report: plan_store.StoreDocument, drafted: Drafted | None) -> list[str]:
+    """The qualified ids the store records ``report`` was copied from, if any."""
+    held: list[str] = []
     origin = report.metadata.get(plan_store.ORIGIN_KEY)
     if isinstance(origin, str) and origin:
         held.append(origin)
     source = (drafted or {}).get(str(report.qualified_id))
     if source:
         held.append(source)
-    return frozenset(name for one in held for name in (one, one.partition(":")[2]))
+    return held
+
+
+def _provenance(report: plan_store.StoreDocument, drafted: Drafted | None) -> list[str]:
+    """The native ids ``report`` was copied from, as :func:`_recorded` names them."""
+    return [one.partition(":")[2] for one in _recorded(report, drafted)]
 
 
 def report_for(
@@ -395,18 +515,20 @@ def report_for(
 
 
 def visual_report(
-    documents: Sequence[plan_store.StoreDocument], drafted: Drafted | None = None
+    plan: str, documents: Sequence[plan_store.StoreDocument], drafted: Drafted | None = None
 ) -> plan_store.StoreDocument | None:
-    """The plan's :data:`VISUAL_REPORT` among ``documents``, or ``None`` for a plan with none.
+    """The plan ``plan``'s visual report among ``documents``, or ``None`` for a plan with none.
 
-    Found as a task's evidence finds a report: a spike-report document named by that id, its
-    own or — on a copy — the one it was copied from (:func:`names`).
+    Found as a task's evidence finds a report: a spike-report document named by
+    :func:`held_report_id` for :data:`VISUAL_SPIKE`, its own name or — on a copy — the one it
+    was copied from (:func:`names`).
     """
+    named = held_report_id(plan, VISUAL_SPIKE, documents, drafted)
     return next(
         (
             held
             for held in documents
-            if design_approval.is_spike_report(held) and VISUAL_REPORT in names(held, drafted)
+            if design_approval.is_spike_report(held) and named in names(held, drafted)
         ),
         None,
     )
@@ -428,7 +550,7 @@ def current_visual_report(
     drafted = _drafted_for(project, documents)
     metadata = plan_store.project_record(project).get("metadata")
     if not isinstance(metadata, Mapping) or VISUAL_REPORT_KEY not in metadata:
-        return visual_report(documents, drafted)
+        return visual_report(plan_native(project), documents, drafted)
     selected = metadata[VISUAL_REPORT_KEY]
     reason: str | None
     match selected:
@@ -509,10 +631,11 @@ def refusals(project: str, document: object) -> list[Refused]:
     found: list[Refused] = []
     tasks = list(_tasks(document))
     drafted = _drafted_for(project, documents)
-    spikes = _spikes_of(tasks, documents, drafted)
+    plan = plan_native(project)
+    spikes = _spikes_of(tasks, documents, drafted, plan)
     for task in tasks:
         found.extend(_spike_node_refusals(task, is_spikes))
-        found.extend(_evidence_refusals(task, documents, spikes, drafted))
+        found.extend(_evidence_refusals(task, documents, spikes, drafted, plan))
     return found
 
 

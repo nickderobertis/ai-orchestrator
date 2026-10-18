@@ -789,8 +789,11 @@ know a budget's number without measuring, or is unsure of an approach, writes sp
 naming exactly its nodes — exempt from design approval for them alone — checks it and the
 plan, and launches it with a branch template naming the plan, so each branch is
 `<host prefix>/<plan native id>/spike-<topic>`. Each spike writes its report as the
-document `<spike id>-report` of the **plan's** project, from `templates/spike-report.md.j2`,
-so it travels to the board with the plan. Once every spike settled `preserved`, each branch
+document `<plan native id>-<spike id>-report` of the **plan's** project, from
+`templates/spike-report.md.j2`, so it travels to the board with the plan; the plan's own
+native id keeps two plans spiking one topic apart in a flat document source, and a report
+written before ids named their plan is read under its old id only where the plan holds none
+under the qualified one. Once every spike settled `preserved`, each branch
 `onevcs` recorded for that run is acknowledged with `just unpublished --acknowledge`, and a
 finalize planner reworks the plan from the reports, linking each dependent task to its
 reports and branches through the `plan-task` template's `spikes` answer. A draft with no

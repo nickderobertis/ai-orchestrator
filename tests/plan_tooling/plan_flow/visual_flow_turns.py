@@ -15,7 +15,7 @@ runs it.
   — the views' seeds and an owner column — runs the target's committed capture command on
   the unchanged base for each "before", since the target holds no baseline screenshots, and
   on its own change for each "after", checks every capture is screenshot-sized before any is
-  given to the store, and writes `spike-visual-report` with each image given as `--asset`.
+  given to the store, and writes `<plan>-spike-visual-report` with each image given as `--asset`.
   It runs no test and no hook.
 """
 
@@ -121,6 +121,8 @@ def plan(store: str, engine: str, scenario: dict[str, object]) -> None:
             node = old["item"]["metadata"].get("onepipeline.id")
             if node != "spike-visual-revision":
                 task = str(old["id"])
+                spike_answers = scenario["spike_task"]
+                assert isinstance(spike_answers, dict)
                 _run(
                     [
                         store,
@@ -141,7 +143,7 @@ def plan(store: str, engine: str, scenario: dict[str, object]) -> None:
                         "--template-loader",
                         "-",
                         "--answers",
-                        _answers(scenario["spike_task"]),
+                        _answers(spike_answers),
                         "--no-interactive",
                     ],
                     stdin=_run([engine, "template", "resolve", "plan-task", "--json"]),
@@ -174,18 +176,18 @@ def plan(store: str, engine: str, scenario: dict[str, object]) -> None:
             ),
         ),
     )
-    for task in tasks:
-        assert isinstance(task.answers, dict)
+    for planned in tasks:
+        assert isinstance(planned.answers, dict)
         metadata = [
-            f"onepipeline.id={task.node}",
+            f"onepipeline.id={planned.node}",
             'onepipeline.persona="engineer"',
             'orchestrator.unit="Views"',
-            *task.placing,
+            *planned.placing,
         ]
         _run(
             [store, "task", "create", source, "--template-loader", "-", "--no-interactive"]
-            + ["--project", task.project, "--title", task.title]
-            + ["--answers", _answers(task.answers)]
+            + ["--project", planned.project, "--title", planned.title]
+            + ["--answers", _answers(planned.answers)]
             + ["--repository", str(scenario["repository"])]
             + [flag for one in metadata for flag in ("--metadata", one)]
             + ["--json"],
@@ -281,7 +283,7 @@ def spike(store: str, engine: str, scenario: dict[str, object]) -> None:
     source, _, native = str(scenario["plan"]).partition(":")
     _run(
         [store, "document", "create", source, "--project", native, "--title", "Visual spike"]
-        + ["--id", spike_plan.VISUAL_REPORT, "--answers", _answers(report)]
+        + ["--id", spike_plan.visual_report_id(native), "--answers", _answers(report)]
         + ["--template-loader", "-", "--no-interactive", "--json"]
         + [flag for name in images for flag in ("--asset", str(named_assets / name))],
         stdin=_run([engine, "template", "resolve", "spike-report", "--json"]),
@@ -291,7 +293,7 @@ def spike(store: str, engine: str, scenario: dict[str, object]) -> None:
 def revision(store: str, engine: str, scenario: dict[str, object]) -> None:
     """Change one view, preserving the baseline report's other answers and asset bytes."""
     source, _, native = str(scenario["plan"]).partition(":")
-    baseline = f"{source}:{spike_plan.VISUAL_REPORT}"
+    baseline = f"{source}:{spike_plan.visual_report_id(native)}"
     report = json.loads(_run([store, "document", "answers", baseline, "--json"]))
     shown = json.loads(_run([store, "document", "show", baseline, "--json"]))
     images = {asset["name"]: Path(asset["path"]) for asset in shown["assets"]}

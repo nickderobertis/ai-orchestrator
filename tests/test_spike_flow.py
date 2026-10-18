@@ -27,9 +27,10 @@ import pytest
 from conftest import git
 
 from orchestrator import design_approval, plan_store, spike_flow
-from orchestrator.plan_store import NodeId
+from orchestrator.plan_store import NodeId, QualifiedProjectId
 from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
+from orchestrator.spike_flow import RunId
 from orchestrator.spike_plan import Branch
 
 _SEQUENCE = itertools.count()
@@ -104,7 +105,7 @@ def test_a_draft_with_spikes_has_its_project_named_for_its_run_and_stamped(
 def test_a_draft_that_wrote_no_spikes_project_is_answered_with_nothing() -> None:
     missing = f"{plan_fixture_source.SOURCE}:never-written-{os.getpid()}-spikes"
 
-    assert spike_flow.prepare(missing, "flow-spikes") == []
+    assert spike_flow.prepare(QualifiedProjectId(missing), RunId("flow-spikes")) == []
 
 
 def test_a_settled_spikes_run_answers_its_spikes_once_each_kept_its_branch(
@@ -201,7 +202,7 @@ def test_a_run_with_no_ledger_record_has_not_settled(
     monkeypatch.setenv(spike_flow.RUNS_ROOT_ENV, str(tmp_path / "runs"))
 
     with pytest.raises(spike_flow.Stop, match="run flow has not settled"):
-        spike_flow.settled("flow")
+        spike_flow.settled(RunId("flow"))
 
 
 def _kept(
@@ -313,7 +314,8 @@ def test_branches_and_note_find_another_identity_from_a_registered_flow_checkout
     note = capsys.readouterr().out
     for spike, branch in (("spike-a", "spike-a"), ("spike-b", "spike-b-2")):
         assert (
-            f"- `{spike}`: report `{spike}-report`; branch `arbitrary/host/plan/{branch}`" in note
+            f"- `{spike}`: report `a-new-plan-{spike}-report`; "
+            f"branch `arbitrary/host/plan/{branch}`" in note
         )
 
     # Another registered identity still holds the same branch names. It cannot answer
@@ -353,7 +355,7 @@ def test_a_retried_spike_is_answered_as_the_spike_with_the_branch_its_retry_kept
     )
 
     assert spike_flow.main(["note", "authoring:a-new-plan", "flow-spikes"]) == 0
-    assert "- `spike-a`: report `spike-a-report`; branch `plan/spike-a-2`" in (
+    assert "- `spike-a`: report `a-new-plan-spike-a-report`; branch `plan/spike-a-2`" in (
         capsys.readouterr().out
     )
 
@@ -369,7 +371,7 @@ def test_a_ledger_naming_a_replacement_it_does_not_hold_has_not_settled(
     )
 
     with pytest.raises(spike_flow.Stop, match="superseded by 'spike-a-2', which it holds no node"):
-        spike_flow.settled("flow-spikes")
+        spike_flow.settled(RunId("flow-spikes"))
 
 
 def test_the_finalize_note_lists_every_report_and_branch_and_what_the_budgets_owe(
@@ -381,16 +383,41 @@ def test_the_finalize_note_lists_every_report_and_branch_and_what_the_budgets_ow
     assert spike_flow.main(["note", "authoring:a-new-plan", "flow-spikes"]) == 0
     budgeted = capsys.readouterr().out
     migrated = spike_flow.note(
-        "authoring:approved-budgets", {NodeId("spike-a"): Branch("plan/spike-a")}
+        QualifiedProjectId("authoring:approved-budgets"),
+        {NodeId("spike-a"): Branch("plan/spike-a")},
     )
 
-    assert "- `spike-a`: report `spike-a-report`; branch `plan/spike-a`" in budgeted
+    assert "- `spike-a`: report `a-new-plan-spike-a-report`; branch `plan/spike-a`" in budgeted
     assert "Keep the plan's budgets current with what the spikes found" in budgeted
     assert "`orchestrator.budgets` metadata" in budgeted
     assert "`orchestrator.plan-budgets` metadata" in budgeted
     assert "never in a budgets file" in budgeted
     assert "predates budgets" in migrated and "writes none" in migrated
     assert "escalated exception" in budgeted
+
+
+def test_the_finalize_note_names_an_old_id_report_only_where_it_alone_is_held() -> None:
+    """A plan whose spikes reported before ids named their plan is pointed at what it holds."""
+
+    def report(native: str) -> plan_store.StoreDocument:
+        return plan_store.StoreDocument(
+            qualified_id=plan_store.QualifiedDocumentId(f"authoring:{native}"),
+            title=native,
+            content="",
+            project="a-new-plan",
+            labels=[],
+            repositories=[],
+            metadata={"onetaskgraph.template": {"template": "onepipeline:spike-report"}},
+            location=None,
+        )
+
+    kept = {NodeId("spike-a"): Branch("plan/spike-a"), NodeId("spike-b"): Branch("plan/spike-b")}
+    held = [report("spike-a-report"), report("spike-b-report"), report("a-new-plan-spike-b-report")]
+
+    said = spike_flow.note(QualifiedProjectId("authoring:a-new-plan"), kept, {}, held)
+
+    assert "- `spike-a`: report `spike-a-report`; branch `plan/spike-a`" in said, said
+    assert "- `spike-b`: report `a-new-plan-spike-b-report`; branch `plan/spike-b`" in said, said
 
 
 def test_a_question_that_cannot_be_asked_exits_two(
@@ -459,7 +486,10 @@ def test_a_retry_can_keep_its_original_branch_without_session_labels(
     assert spike_flow.main(["branches", "flow-spikes"]) == 0
     assert capsys.readouterr().out == "spike-a\tplan/spike-a\n"
     assert spike_flow.main(["note", "authoring:a-new-plan", "flow-spikes"]) == 0
-    assert "- `spike-a`: report `spike-a-report`; branch `plan/spike-a`" in capsys.readouterr().out
+    assert (
+        "- `spike-a`: report `a-new-plan-spike-a-report`; branch `plan/spike-a`"
+        in capsys.readouterr().out
+    )
 
 
 def test_numeric_retry_matching_an_original_spike_is_refused(
@@ -520,7 +550,7 @@ def test_a_stage_run_launched_from_another_project_is_not_this_flows_stage(
 
 def test_a_note_for_a_plan_that_is_not_a_qualified_id_is_refused() -> None:
     with pytest.raises(ValueError, match="'a-new-plan' is not a qualified project id"):
-        spike_flow.note("a-new-plan", {})
+        spike_flow.note(QualifiedProjectId("a-new-plan"), {})
 
 
 @pytest.mark.parametrize(
@@ -544,7 +574,7 @@ SERVICE = "github.com/nickderobertis/some-service"
 OTHER = "github.com/nickderobertis/other-service"
 
 
-def _stacked(*tasks: dict[str, object]) -> str:
+def _stacked(*tasks: dict[str, object]) -> QualifiedProjectId:
     """A spikes project of ``tasks``, each a spike measuring the repository it names."""
     native = f"spike-flow-{os.getpid()}-{next(_SEQUENCE)}-spikes"
     write_plan_project(
@@ -557,7 +587,7 @@ def _stacked(*tasks: dict[str, object]) -> str:
         },
         native_id=native,
     )
-    return f"{plan_fixture_source.SOURCE}:{native}"
+    return QualifiedProjectId(f"{plan_fixture_source.SOURCE}:{native}")
 
 
 def test_each_spike_stacked_on_another_is_answered_with_the_spikes_above_it_nearest_first() -> None:
@@ -614,7 +644,12 @@ def test_spikes_on_no_one_stacking_chain_are_refused_rather_than_guessed_at(
 
 
 def test_a_spikes_project_the_store_does_not_hold_stacks_nothing() -> None:
-    assert spike_flow.stacking_chains(f"{plan_fixture_source.SOURCE}:no-such-plan-spikes") == {}
+    assert (
+        spike_flow.stacking_chains(
+            QualifiedProjectId(f"{plan_fixture_source.SOURCE}:no-such-plan-spikes")
+        )
+        == {}
+    )
 
 
 def test_the_finalize_note_names_the_spikes_above_each_stacked_spike_from_the_projects_edges() -> (
@@ -629,11 +664,20 @@ def test_the_finalize_note_names_the_spikes_above_each_stacked_spike_from_the_pr
         NodeId("spike-listing"): Branch("plan/spike-listing"),
     }
 
-    said = spike_flow.note(spikes.removesuffix("-spikes"), kept, spike_flow.stacking_chains(spikes))
-    flat = spike_flow.note(spikes.removesuffix("-spikes"), kept, {})
+    said = spike_flow.note(
+        QualifiedProjectId(spikes.removesuffix("-spikes")), kept, spike_flow.stacking_chains(spikes)
+    )
+    flat = spike_flow.note(QualifiedProjectId(spikes.removesuffix("-spikes")), kept, {})
 
-    assert "- `spike-harness`: report `spike-harness-report`; branch `plan/spike-harness`" in said
-    assert "- `spike-listing`: report `spike-listing-report`; branch `plan/spike-listing`" in said
+    native = spikes.removesuffix("-spikes").partition(":")[2]
+    harness = (
+        f"- `spike-harness`: report `{native}-spike-harness-report`; branch `plan/spike-harness`"
+    )
+    listing = (
+        f"- `spike-listing`: report `{native}-spike-listing-report`; branch `plan/spike-listing`"
+    )
+    assert harness in said, said
+    assert listing in said, said
     assert "- `spike-listing`: above it, `spike-harness`" in said, said
     assert "every spike above it in its stacking chain" in said
     assert "- `spike-harness`: above it" not in said
@@ -678,7 +722,7 @@ def test_spikes_skipped_behind_several_failures_name_every_failure(
     )
 
     with pytest.raises(spike_flow.Stop, match="spike-a, spike-b failed, and the engine skipped"):
-        spike_flow.settled("flow-spikes", spikes=True)
+        spike_flow.settled(RunId("flow-spikes"), spikes=True)
 
 
 @pytest.mark.parametrize(

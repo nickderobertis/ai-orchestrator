@@ -28,7 +28,7 @@ variables:
     description: >-
       The spikes this task builds on, one object per spike with three string keys: `spike`
       (the spike's node id, `spike-<topic>`), `report` (the document id of its report,
-      `<spike id>-report`, a document of this plan's own project) and `branch` (the
+      `<plan native id>-<spike id>-report`, a document of this plan's own project) and `branch` (the
       preserved branch its harness is kept on, ending `/<spike id>`, or `/<spike id>-<n>`
       where a retry of the spike cut its own). Rendered as a `## Spike
       evidence` section, so the worker starts from the measurements and the harness. Leave

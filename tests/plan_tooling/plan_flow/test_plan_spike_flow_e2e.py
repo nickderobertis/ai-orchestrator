@@ -41,6 +41,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, NamedTuple, NewType, cast
 
@@ -180,12 +181,17 @@ def _flow(
     plan: PlanProject | None = None,
     session: bool = True,
     topics: tuple[str, ...] = ("listing", "quota"),
+    spike_key: str | None = None,
     **scenario: object,
 ) -> Flow:
-    """A brief, a scratch registry and the doubled engine's scenario for one journey."""
+    """A brief, a scratch registry and the doubled engine's scenario for one journey.
+
+    Its spikes are `spike-<key>-<topic>`, or `spike-<spike_key>-<topic>` where two journeys'
+    plans spike one topic.
+    """
     run = RunId(f"spike-flow-{key}-{os.getpid()}")
     qualified = plan or PlanProject(f"{FIXTURE_SOURCE}:test-{os.getpid()}-{key}-plan")
-    named = tuple(SpikeId(f"spike-{key}-{topic}") for topic in topics if spikes)
+    named = tuple(SpikeId(f"spike-{spike_key or key}-{topic}") for topic in topics if spikes)
     repository = str(scenario.get("repository", PLANNING_FLOW_ORIGIN))
     identity = seeded(tmp_path / "identity", origin=repository, visibility="public")
     environment = dict(os.environ)
@@ -318,6 +324,11 @@ def _branches(flow: Flow) -> list[str]:
     return [f"{flow.plan.partition(':')[2]}/{spike}" for spike in flow.spikes]
 
 
+def _report(flow: Flow, spike: str) -> str:
+    """The id ``spike``'s report goes by in ``flow``'s plan, spelled as the planner states it."""
+    return f"{flow.plan.partition(':')[2]}-{spike}-report"
+
+
 def _acknowledged(flow: Flow) -> dict[str, str]:
     """Each branch this session acknowledged, and the reason it gave, from `just unpublished`."""
     listed = _just(flow, "unpublished", "--host", "--format", "json")
@@ -401,7 +412,8 @@ def test_the_finalize_planner_runs_after_the_spikes_and_its_closeout_before_the_
     content = str(task["item"]["content"])
     for spike, branch in zip(flow.spikes, _branches(flow), strict=True):
         assert (
-            f"- `{spike}`: report `{spike}-report`" in content and f"branch `{branch}`" in content
+            f"- `{spike}`: report `{_report(flow, spike)}`" in content
+            and f"branch `{branch}`" in content
         )
     assert "holds the plan at" in done.stdout + done.stderr
 
@@ -507,7 +519,7 @@ sys.stdout.write(os.environ["MALFORMED_ANSWER"])
 CHECKLIST = "config/plan-checklist.llmlint.yml"
 
 
-def _resolution(*rules: dict[str, object], framing: object = "x") -> str:
+def _resolution(*rules: Mapping[str, object], framing: object = "x") -> str:
     """A resolved configuration in llmlint's shape, holding these rules and a `plan` agent."""
     agents = {"plan": {"prompt_template": framing}}
     return json.dumps({"config": {"rules": list(rules), "agents": agents}})
@@ -686,7 +698,7 @@ def test_resume_spikes_finds_kept_branches_in_another_registered_repository(
     assert resumed.returncode == 0, resumed.stdout + resumed.stderr
     assert _runs_started(flow) == _stage_runs(flow), "the resume relaunched completed spikes"
     assert (
-        f"- `{spike}`: report `{spike}-report`; branch `{kept['branch']['branch']}`"
+        f"- `{spike}`: report `{_report(flow, spike)}`; branch `{kept['branch']['branch']}`"
         in _finalize_note(flow)
     )
 
@@ -969,7 +981,8 @@ def test_a_retried_spike_is_finalized_from_its_report_and_the_branch_its_retry_k
         )
     )
     content = str(task["item"]["content"])
-    assert "- `spike-retried-quota`: report `spike-retried-quota-report`" in content, content
+    retried = _report(flow, "spike-retried-quota")
+    assert f"- `spike-retried-quota`: report `{retried}`" in content, content
     assert f"branch `{branch}`" in content, content
 
 
@@ -1119,7 +1132,7 @@ def test_area_spikes_start_from_the_harness_spikes_kept_branch_and_finalize_link
     # and nothing the quota spike measured.
     content = _plan_task(flow)
     for spike in (listing, harness):
-        assert f"- `{spike}`: report `{spike}-report`" in content, content
+        assert f"- `{spike}`: report `{_report(flow, spike)}`" in content, content
     assert f"`{quota}`" not in content, content
     checked = _just(flow, "check-plan", flow.plan)
     assert checked.returncode == 0, checked.stdout + checked.stderr
@@ -1166,8 +1179,116 @@ def test_a_failed_harness_spike_stops_naming_it_and_each_skipped_dependent_then_
         assert _descends(flow, ledger[replacement]["head"], ledger[area]["head"])
     assert f"{native}/{replacement}" in _acknowledged(flow), _acknowledged(flow)
     note = _finalize_note(flow)
-    assert f"- `{harness}`: report `{harness}-report`; branch `{native}/{replacement}`" in note
+    linked = _report(flow, harness)
+    assert f"- `{harness}`: report `{linked}`; branch `{native}/{replacement}`" in note
     assert f"- `{listing}`: above it, `{harness}`" in note, note
     content = _plan_task(flow)
-    assert f"- `{harness}`: report `{harness}-report`" in content, content
+    assert f"- `{harness}`: report `{linked}`" in content, content
     assert f"branch `{native}/{replacement}`" in content, content
+
+
+def _report_document(flow: Flow, report: str) -> dict[str, Any]:
+    """The document ``report`` of ``flow``'s plan source, as the store shows it.
+
+    The store's ``--json`` answer is untyped JSON whose ``item`` carries every
+    field of a document, of several value types, and this test reads only two
+    of them, so the item stays a ``dict[str, Any]`` rather than a model of the
+    whole document the store, not this suite, owns.
+    """
+    (held,) = _items(_store(flow, "document", "show", f"{FIXTURE_SOURCE}:{report}"))
+    return cast(dict[str, Any], held["item"])
+
+
+def test_two_plans_spiking_one_topic_in_one_source_each_write_and_read_their_own_report(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    """A flat local-md source holds both plans' documents, and neither reads the other's.
+
+    Both plans spike `spike-collide-listing` and `spike-collide-quota` in the one
+    `test-fixtures` root this process keeps, so a report id naming the spike alone would be one
+    document both plans write and read.
+    """
+    for each in ("first", "second"):
+        (tmp_path / each).mkdir()
+    first = _flow(workspace, tmp_path / "first", "collide-first", spike_key="collide")
+    second = _flow(workspace, tmp_path / "second", "collide-second", spike_key="collide")
+    assert first.spikes == second.spikes
+
+    for flow in (first, second):
+        done = _plan(flow)
+        assert done.returncode == 0, done.stdout + done.stderr
+        assert _runs_started(flow) == _stage_runs(flow)
+
+    for flow, other in ((first, second), (second, first)):
+        native = flow.plan.partition(":")[2]
+        note = _finalize_note(flow)
+        content = _plan_task(flow)
+        for spike, branch in zip(flow.spikes, _branches(flow), strict=True):
+            report = _report(flow, spike)
+            held = _report_document(flow, report)
+            assert held["project"] == native, held
+            assert branch in str(held["content"]), held["content"]
+            assert _report(other, spike) != report
+            assert f"- `{spike}`: report `{report}`; branch `{branch}`" in note, note
+            assert f"- `{spike}`: report `{report}`" in content, content
+            assert _report(other, spike) not in note + content
+            assert f"report `{spike}-report`" not in note + content
+        checked = _just(flow, "check-plan", flow.plan)
+        assert checked.returncode == 0, checked.stdout + checked.stderr
+        approved = _just(flow, "approve-design", flow.plan)
+        assert approved.returncode == 0, approved.stdout + approved.stderr
+    for spike in first.spikes:
+        missing = subprocess.run(
+            [str(first.checkout / ".venv" / "bin" / "onetaskgraph"), "document", "show"]
+            + [f"{FIXTURE_SOURCE}:{spike}-report", "--json"],
+            cwd=first.checkout,
+            env=first.environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert missing.returncode != 0, missing.stdout
+
+
+def test_a_plan_whose_spikes_reported_under_the_old_id_finalizes_checks_and_approves_with_them(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    """A plan whose spikes wrote `<spike id>-report` before ids named their plan reads them."""
+    flow = _flow(workspace, tmp_path, "old-ids", legacy_reports=True)
+
+    done = _plan(flow)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert _runs_started(flow) == _stage_runs(flow)
+    note = _finalize_note(flow)
+    content = _plan_task(flow)
+    for spike, branch in zip(flow.spikes, _branches(flow), strict=True):
+        held = _report_document(flow, f"{spike}-report")
+        assert branch in str(held["content"]), held["content"]
+        assert f"- `{spike}`: report `{spike}-report`; branch `{branch}`" in note, note
+        assert f"- `{spike}`: report `{spike}-report`" in content, content
+        assert _report(flow, spike) not in note + content
+    checked = _just(flow, "check-plan", flow.plan)
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+    approved = _just(flow, "approve-design", flow.plan)
+    assert approved.returncode == 0, approved.stdout + approved.stderr
+
+
+def test_a_plan_holding_both_ids_for_a_spike_finalizes_and_checks_against_the_qualified_one(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    """The old id is read only where the qualified one is absent, never beside it."""
+    flow = _flow(workspace, tmp_path, "both-ids", stale_legacy_reports=True)
+
+    done = _plan(flow)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    note = _finalize_note(flow)
+    content = _plan_task(flow)
+    for spike, branch in zip(flow.spikes, _branches(flow), strict=True):
+        assert f"stale/{spike}" in str(_report_document(flow, f"{spike}-report")["content"])
+        assert f"- `{spike}`: report `{_report(flow, spike)}`; branch `{branch}`" in note, note
+        assert f"- `{spike}`: report `{_report(flow, spike)}`" in content, content
+        assert f"report `{spike}-report`" not in note + content
+    checked = _just(flow, "check-plan", flow.plan)
+    assert checked.returncode == 0, checked.stdout + checked.stderr

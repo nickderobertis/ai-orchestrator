@@ -7,7 +7,7 @@ metadata:
   "onepipeline.id": "docs"
   "orchestrator.unit": "Documentation"
   "onepipeline.persona": "docs-writer"
-  "onetaskgraph.template": {"answers_digest":"sha256:93bf1835f693573a6782e94802fe6abde2dfedf62bfa79c7656595aa058972ad","body_digest":"sha256:38585d5cd315f3525e0b4fb249f31a8b4d33ba42f9f235ee41bd162934601c24","digest":"sha256:3ad3814d294c7e78a9895d70d4007a528b97fe3a7949ff08ec1a5daf1d56b0fd","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:93bf1835f693573a6782e94802fe6abde2dfedf62bfa79c7656595aa058972ad","body_digest":"sha256:38585d5cd315f3525e0b4fb249f31a8b4d33ba42f9f235ee41bd162934601c24","digest":"sha256:02c4dffa2f5b549c69f5f1d78d6f19a934c864bcffc64548ba4051bc31086e94","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What
