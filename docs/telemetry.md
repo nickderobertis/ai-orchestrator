@@ -22,7 +22,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.74.1 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.75.0 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -160,7 +160,7 @@ a schema version, not a field to discover.
 `input`, `output`, `cache_read`, `cache_write`, and `cost_usd`, and each field
 omitted rather than zeroed when it was never measured.
 Everything said here about those fields was measured on records this host wrote
-after the 0.22.0/0.19.0 upgrade (`config/oneharness.version` and
+after the 0.22.0/0.19.5 upgrade (`config/oneharness.version` and
 `config/onejudge.version`), which is the boundary the older per-party accounting
 sat behind. What a run recorded *before* that pair reports is **not established
 here** — re-measure rather than assuming the shape carries backwards, and re-check
@@ -314,11 +314,17 @@ tags. The engine pin did not move, so the cores a dispatch's members link are un
 by it.
 The onejudge half then moved to 0.19.0 with the engine, on the same terms:
 `crates/onejudge/src/report.rs` and `crates/onejudge/src/usage.rs` are
-unchanged between `v0.17.2` and `onejudge-v0.19.0`, and the engine wheel links
-`oneharness-core` 0.24.2 for itself, onejudge 0.19.0 and oneagentgraph 0.5.7, read off its
-own SBOM. It was re-taken on four real judge turns the adopted onejudge ran through
+unchanged between `v0.17.2` and `onejudge-v0.19.0`. It was re-taken on four real judge
+turns onejudge 0.19.0 ran through
 `oneharness.judge.toml` and `oneharness.design-doc-judge.toml`, two on Codex and two on
 Claude Code: each record's `usage` block is the same five keys and nothing else.
+It moved again to 0.19.5 with the engine 0.75.0, and both files are unchanged between
+`onejudge-v0.19.0` and `onejudge-v0.19.5` too, and the engine wheel links
+`oneharness-core` 0.28.2 for itself, onejudge 0.19.5 and oneagentgraph 0.5.13, read off its
+own SBOM. Between `oneharness-core-v0.24.2` and `oneharness-core-v0.28.2`, `domain/usage.rs`
+gains the reset-credit report above and a millisecond RFC 3339 reader
+([oneharness#1464](https://github.com/nickderobertis/oneharness/pull/1464)), touching
+no per-turn token usage; this was read off the two tags and was not re-taken on judge turns.
 `dispatches`,
 `settled_done`, `no_diff`, `surfaces_queued`, and `surfaces_read` are the run's own
 counters; `surfaces_read` is what resets the planner-update pacemaker.
@@ -448,7 +454,7 @@ served them.
    `just telemetry-server` — or by `just dag-ui`, which is the same published server
    with the browser view built into it answering on the same origin) is the structured
    view. Measured against real runs on
-   **`onepipeline-api` 0.38.0**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.39.0**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
    what re-opens this paragraph: `telemetry_schema_version` 21 on the envelope, where
    0.13.0 served 20 and

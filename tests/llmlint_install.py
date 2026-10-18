@@ -11,8 +11,11 @@ from __future__ import annotations
 
 import importlib.metadata
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
+import pytest
 from packaging.requirements import Requirement
 from packaging.version import Version
 
@@ -39,6 +42,16 @@ def installer_floor() -> Version:
 def pinned_oneharness() -> Version:
     """The `oneharness-cli` release `config/oneharness.version` adopts."""
     return Version(ONEHARNESS_PIN_FILE.read_text(encoding="utf-8").strip())
+
+
+def host_tool_dir() -> Path:
+    """Where this host's `uv tool` installs live, as `uv` itself answers."""
+    uv = shutil.which("uv")
+    if uv is None:
+        pytest.skip("uv is not on PATH, so nothing here can name where llmlint would be installed")
+    located = subprocess.run([uv, "tool", "dir"], text=True, capture_output=True, check=False)
+    assert located.returncode == 0, f"`uv tool dir` failed: {located.stderr}"
+    return Path(located.stdout.strip())
 
 
 def installed_llmlint(tool_dir: Path) -> importlib.metadata.Distribution | None:

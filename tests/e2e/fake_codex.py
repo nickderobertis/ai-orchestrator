@@ -490,6 +490,12 @@ def llmlint_verdict(batch: Batch) -> str:
 
 
 def main() -> int:
+    if sys.argv[1:] == ["--version"]:
+        # The oneharness-core the 0.5.13 oneagentgraph links probes the binary's version
+        # before a turn. A probe is not a launch: counting it would shift every scripted
+        # answer and `FAKE_CODEX_UNAVAILABLE_ATTEMPTS` onto the wrong turn.
+        print("codex-cli 0.0.0 (fake_codex)")
+        return 0
     prompt = read_prompt(sys.argv[1:])
     batch = llmlint_batch(prompt)
     if batch is not None:

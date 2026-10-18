@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
+from llmlint_install import LLMLINT_DISTRIBUTION, host_tool_dir, installed_llmlint
 
 from orchestrator.root import REPO_ROOT
 
@@ -705,9 +706,9 @@ class LinkedCore(NamedTuple):
 #: wheels: `config/oneharness.version` reads 0.22.0 and names the `oneharness-cli`
 #: wheel, whose own CycloneDX SBOM declares the `oneharness-core` it is compiled
 #: against as 0.25.0 (`tests/test_engine_history_vocabulary.py` re-reads that pairing
-#: off the wheel for `docs/telemetry.md`), and the engine wheel links 0.24.2 for every
-#: dependent — while the sibling `oneagentgraph-cli` and `onejudge-cli` wheels still
-#: declare 0.24.0, which is the pairing
+#: off the wheel for `docs/telemetry.md`); on the adopted onepipeline 0.75.0 the
+#: engine wheel links 0.28.2 for every dependent — while the sibling `oneagentgraph-cli`
+#: and `onejudge-cli` wheels declare 0.28.1, which is the pairing
 #: `test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs`
 #: holds and a different artifact from the `oneharness-cli` this pin names. The pin's
 #: number and the crate's **differ on this adoption**, as they have on most adoptions
@@ -726,9 +727,9 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 #: third dependent appears — and it is the shape that survived the split collapsing,
 #: because it never counted the cores in the first place.
 LINKED_HARNESS_CORES = (
-    LinkedCore(dependent="oneagentgraph", dependent_version="0.5.7", core="0.24.2"),
-    LinkedCore(dependent="onejudge", dependent_version="0.19.0", core="0.24.2"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.74.1", core="0.24.2"),
+    LinkedCore(dependent="oneagentgraph", dependent_version="0.5.13", core="0.28.2"),
+    LinkedCore(dependent="onejudge", dependent_version="0.19.5", core="0.28.2"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.75.0", core="0.28.2"),
 )
 
 #: How a crate names itself in a compiled binary: cargo embeds the registry source
@@ -1006,6 +1007,137 @@ def test_no_engine_this_host_can_drive_a_dispatch_with_links_the_retired_bus_age
     )
 
 
+#: The YAML crates that are, or wrap, a machine translation of libyaml's C into Rust, which
+#: nobody maintains: the advisory that retired them names each one. The adopted engine
+#: and llmlint read YAML with `serde-saphyr` instead, and a later adoption that brings any
+#: of these back — through the engine itself or a sibling it links — is refused here, by
+#: the wheel's own bill of materials, rather than found by an audit this host never runs.
+BANNED_YAML_CRATES = frozenset(
+    {
+        "libyml",
+        "serde_norway",
+        "serde_yaml",
+        "serde_yaml_ng",
+        "serde_yml",
+        "unsafe-libyaml",
+        "unsafe-libyaml-norway",
+    }
+)
+
+
+def _sbom_path(installed: importlib.metadata.Distribution, subject: str) -> Path:
+    """The one CycloneDX SBOM an installed wheel ships under its `dist-info/sboms/`."""
+    sboms = [entry for entry in (installed.files or ()) if SBOM_DIRECTORY in Path(entry).parts]
+    assert len(sboms) == 1, (
+        f"{subject} must ship exactly one SBOM for what it links to be read from; "
+        f"found {[str(entry) for entry in sboms]}"
+    )
+    return Path(str(installed.locate_file(sboms[0])))
+
+
+def refuse_libyaml_translations(sbom: Path, subject: str) -> None:
+    """Fail naming each banned YAML crate `sbom` declares, as `name@version`.
+
+    Every component is read, not only the direct dependencies: a libyaml translation a
+    sibling brings in is linked into the same binary as one the subject names itself.
+    """
+    document = json.loads(sbom.read_text("utf-8"))
+    banned = sorted(
+        f"{component['name']}@{component['version']}"
+        for component in document["components"]
+        if component["name"] in BANNED_YAML_CRATES
+    )
+    assert not banned, (
+        f"{subject}'s SBOM ({sbom}) declares {', '.join(banned)}: a libyaml translation is "
+        "linked again. Adopt a release that reads YAML without one, or hold the pin"
+    )
+
+
+def _installed_llmlint() -> importlib.metadata.Distribution:
+    """The `llmlint-cli` this host's `uv tool` directory holds, or a skip naming where."""
+    tool_dir = host_tool_dir()
+    installed = installed_llmlint(tool_dir)
+    if installed is None:
+        pytest.skip(
+            f"no {LLMLINT_DISTRIBUTION} is installed under {tool_dir / LLMLINT_DISTRIBUTION}; "
+            "run 'just setup-llmlint' to install the release its floor names"
+        )
+    return installed
+
+
+def _guarded_sbom(subject: str) -> Path:
+    """The installed SBOM the guard reads for `subject`."""
+    if subject == LLMLINT_DISTRIBUTION:
+        return _sbom_path(_installed_llmlint(), subject)
+    return _sbom_path(importlib.metadata.distribution(subject), subject)
+
+
+def _with_component(sbom: Path, crate: str, copy: Path) -> Path:
+    """A copy of `sbom` declaring `crate` as one more component, shaped like its others."""
+    document = json.loads(sbom.read_text("utf-8"))
+    version = "0.0.1"
+    reference = f"registry+https://github.com/rust-lang/crates.io-index#{crate}@{version}"
+    document["components"].append(
+        {
+            **document["components"][0],
+            "bom-ref": reference,
+            "name": crate,
+            "version": version,
+            "purl": f"pkg:cargo/{crate}@{version}",
+        }
+    )
+    document.setdefault("dependencies", []).append({"ref": reference, "dependsOn": []})
+    copy.write_text(json.dumps(document), encoding="utf-8")
+    return copy
+
+
+def test_the_adopted_engine_links_no_libyaml_translation() -> None:
+    """The engine every dispatch runs declares none of the banned YAML crates."""
+    refuse_libyaml_translations(_guarded_sbom(ENGINE_DISTRIBUTION), ENGINE_DISTRIBUTION)
+
+
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_checkouts` is this
+# repository's tier mechanism rather than a shortcut around one: it routes a test to the
+# uncached target `orchestrator:test-checkouts`, which exists because no key over this
+# workspace can describe the host's `uv tool` directory the installed llmlint lives in.
+# `tests/tree_scans/test_nx_cache_scope.py` holds the selectors to a partition of the suite.
+@pytest.mark.reads_checkouts
+def test_the_installed_llmlint_links_no_libyaml_translation() -> None:
+    """The llmlint `scripts/setup-llmlint.sh` installed declares none of them either."""
+    refuse_libyaml_translations(_guarded_sbom(LLMLINT_DISTRIBUTION), LLMLINT_DISTRIBUTION)
+
+
+@pytest.mark.parametrize(
+    "subject",
+    [
+        ENGINE_DISTRIBUTION,
+        pytest.param(LLMLINT_DISTRIBUTION, marks=pytest.mark.reads_checkouts),
+    ],
+)
+@pytest.mark.parametrize("crate", sorted(BANNED_YAML_CRATES))
+def test_the_guard_refuses_an_sbom_declaring_a_banned_yaml_crate(
+    subject: str, crate: str, tmp_path: Path
+) -> None:
+    """Each banned crate added to a copy of the installed SBOM is refused by its name.
+
+    The copy is the real document with one component more, so what this proves is that
+    the guard above reads the shape these wheels actually publish, not a fixture's.
+    """
+    copy = _with_component(_guarded_sbom(subject), crate, tmp_path / "sbom.cyclonedx.json")
+
+    with pytest.raises(AssertionError) as refused:
+        refuse_libyaml_translations(copy, subject)
+
+    message = str(refused.value)
+    assert f"{crate}@0.0.1" in message, message
+    assert not [other for other in BANNED_YAML_CRATES - {crate} if f"{other}@" in message], (
+        f"the refusal names a crate the copy did not add: {message}"
+    )
+
+
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
+
+
 def test_the_engine_links_one_oneharness_core_for_every_dependent() -> None:
     """Which dependent brings which core — asserted as the mapping, not as a count.
 
@@ -1107,8 +1239,8 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
     own `oneharness-core`. Those two numbers are free to differ, and have on every
     adoption recorded here but one — so a reader who measured the sibling's own wheel
     would be measuring an artifact no dispatch loads. On this adoption they differ
-    again: each sibling wheel resolved 0.24.0 while the engine links 0.24.2 for it, including the
-    core carrying the failed-tool-call status. They coincided once, at 0.24.0, on an
+    again: each sibling wheel resolved 0.28.1 while the engine links 0.28.2 for it. They
+    coincided once, at 0.24.0, on an
     earlier adoption, and parted when the engine moved to 0.24.1 — a coincidence and not
     a contract: it is the reason the pairing below is written out rather than asserted
     as an inequality.
@@ -1128,8 +1260,8 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
     }
 
     assert measured == {
-        "oneagentgraph-cli": ("0.24.0", "0.24.2"),
-        "onejudge-cli": ("0.24.0", "0.24.2"),
+        "oneagentgraph-cli": ("0.28.1", "0.28.2"),
+        "onejudge-cli": ("0.28.1", "0.28.2"),
     }, (
         f"this host measures (sibling CLI wheel's own core, engine's core) as {measured}, "
         "not the pair this check was written against. Re-read what is installed now and "

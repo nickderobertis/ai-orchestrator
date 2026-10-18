@@ -5,6 +5,9 @@
   "tags": [
     "type:test-support"
   ],
+  "implicitDependencies": [
+    "support-llmlint-install"
+  ],
   "namedInputs": {
     "testSupport": [
       "{workspaceRoot}/tests/test_linked_libraries.py",

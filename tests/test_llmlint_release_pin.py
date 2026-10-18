@@ -13,15 +13,12 @@ outside this workspace and every cache key, hence `reads_checkouts`.
 
 from __future__ import annotations
 
-import shutil
-import subprocess
-from pathlib import Path
-
 import pytest
 from llmlint_install import (
     LLMLINT_DISTRIBUTION,
     ONEHARNESS_DISTRIBUTION,
     declared_oneharness_requirement,
+    host_tool_dir,
     installed_llmlint,
     pinned_oneharness,
 )
@@ -37,16 +34,6 @@ from llmlint_install import (
 pytestmark = pytest.mark.reads_checkouts
 
 
-def _host_tool_dir() -> Path:
-    """Where this host's `uv tool` installs live, as `uv` itself answers."""
-    uv = shutil.which("uv")
-    if uv is None:
-        pytest.skip("uv is not on PATH, so nothing here can name where llmlint would be installed")
-    located = subprocess.run([uv, "tool", "dir"], text=True, capture_output=True, check=False)
-    assert located.returncode == 0, f"`uv tool dir` failed: {located.stderr}"
-    return Path(located.stdout.strip())
-
-
 def test_the_installed_llmlint_declares_a_oneharness_requirement_the_pin_satisfies() -> None:
     """Fail naming both versions; skip naming the path when nothing is installed.
 
@@ -54,7 +41,7 @@ def test_the_installed_llmlint_declares_a_oneharness_requirement_the_pin_satisfi
     this guards against is what running it produces, and the metadata is what the
     installer's rule is stated over.
     """
-    tool_dir = _host_tool_dir()
+    tool_dir = host_tool_dir()
     llmlint = installed_llmlint(tool_dir)
     if llmlint is None:
         pytest.skip(

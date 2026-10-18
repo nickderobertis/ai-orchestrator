@@ -26,7 +26,11 @@ set -uo pipefail
 
 # Floor: llmlint >= 0.4.11: `llmlint fingerprint` prints the judge digest the cached
 # `workspace:lint-llm-diff` target keys on, a reply leaving a selected rule unanswered
-# is refused rather than read as a pass. It subsumes 0.4.6, under which --diff reviews
+# is refused rather than read as a pass. It is also the release the libyaml-removal plan
+# adopts: from 0.4.8 llmlint reads its configs with `serde-saphyr` in place of
+# `serde_yaml_ng` (https://github.com/nickderobertis/llmlint/pull/242), so the wheel's
+# SBOM declares no libyaml translation — which `tests/test_linked_libraries.py` holds of
+# the installed release. It subsumes 0.4.6, under which --diff reviews
 # a renamed file by its edits, not as an all-added new file, and holds an edited rename
 # to the version-bump rule, and 0.4.1, which keys the on-disk plugin cache by the
 # version it fetched and revalidates a stale entry instead of keeping the first version a host
