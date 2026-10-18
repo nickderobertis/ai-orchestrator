@@ -1,7 +1,8 @@
-# llmlint: ignore-file[changed_behavior_has_e2e] config parsing plus the real llmlint wrapper boundary (scripts/llmlint-oneharness.sh) prove this chain without spending another paid model invocation.
+# llmlint: ignore-file[changed_behavior_has_e2e] the judged tier's journeys and the plan checklist's (tests/e2e/workspace_copies/test_llmlint_cache_e2e.py, tests/e2e/registry_and_recipes/test_plan_checklist_e2e.py) run this chain through the real llmlint and oneharness without spending a paid model invocation.
 # LLM lint is a third, independent side of the harness, with its own priority
 # order — it keeps that order even though the worker's discovered oneharness.toml
-# prefers Claude Code. Forced by scripts/llmlint-oneharness.sh.
+# prefers Claude Code. Named under `oneharness.config` by `llmlint.yml` and
+# `config/plan-checklist.llmlint.yml`, so llmlint hands it to oneharness itself.
 #
 # It extends `oneharness.identities.toml` rather than `oneharness.dispatch.toml`: the
 # judged tier is run by a recipe rather than started by the engine, so there is no node
@@ -37,8 +38,8 @@ harnesses = [
 # outer container forbids. Grant network only: Codex retains its OS-enforced
 # read-only filesystem while avoiding that unsupported namespace operation.
 #
-# This lives here, per harness, rather than as the `-- <HARNESS_ARG>` passthrough
-# scripts/llmlint-oneharness.sh used to append: oneharness appends those trailing
+# This lives here, per harness, rather than as a trailing `-- <HARNESS_ARG>`
+# passthrough on the command line: oneharness appends those trailing
 # arguments to WHICHEVER harness fallback selects, and now that this chain reaches
 # Claude Code, `-c` there is claude's `--continue` boolean — so the permission
 # string would be swallowed as a positional prompt, silently replacing the lint

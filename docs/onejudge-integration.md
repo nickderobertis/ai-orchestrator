@@ -724,22 +724,21 @@ the other provider's two identities and then `claude-code:primary-backup` and
 routes them, and `tests/e2e/launch_monitor_observer/test_oneharness_timeout_e2e.py` reads them beside every other
 config's from the real CLI.
 
-**llmlint** uses `oneharness.llmlint.toml` through
-`scripts/llmlint-oneharness.sh`, and is **no longer Codex-only**: it carries the
+**llmlint** uses `oneharness.llmlint.toml`, which `llmlint.yml` and the plan
+checklist name under `oneharness.config`, and is **no longer Codex-only**: it carries the
 same six identities in the same supervisory order. That trade is deliberate — a
 blocking pre-push check that can still be judged beats one isolated from the Claude
 quota that is left. It does mean this tier can contend for the workers'
 subscriptions once both Codex accounts are exhausted.
 
-One thing had to move for that. The wrapper used to append Codex's sandbox grant as
-a trailing `-- -c 'sandbox_permissions=[...]'`, and oneharness appends a trailing
+One thing had to move for that. Codex's sandbox grant cannot travel as a trailing
+`-- -c 'sandbox_permissions=[...]'`, because oneharness appends a trailing
 `HARNESS_ARG` to **whichever** harness fallback selects. On claude-code, `-c` is
 `--continue` — a boolean — so the permission string would be swallowed as a
 positional prompt and silently replace the lint prompt, producing a confident
 verdict on the wrong input rather than an error. The grant now lives in
 `[harness.codex] args` in `oneharness.llmlint.toml`, where it reaches both Codex
-identities and no Claude one. `tests/test_llmlint_oneharness_wrapper.py` proves
-that at the real oneharness boundary.
+identities and no Claude one.
 
 ### How long one shell command may run on a dispatched worker
 
@@ -1043,11 +1042,11 @@ inside that gate.
 
 That inheritance is bounded by the same precedence, and the llmlint tier is where it
 shows. `llmlint` invokes oneharness with **no `--model` at all** — verified here with
-a spy binary in `LLMLINT_ONEHARNESS_BIN` recording its own argv, rather than inferred
+a spy binary named by `--oneharness-bin` recording its own argv, rather than inferred
 from llmlint's config schema:
 
 ```
-$ LLMLINT_ONEHARNESS_BIN=/tmp/spy.sh llmlint --diff --diff-base HEAD
+$ llmlint --oneharness-bin /tmp/spy.sh --diff --diff-base HEAD
   spy argv: run --system-file <tmp> --prompt 'Evaluate each rule ...' --schema <tmp>
             --cwd <repo> --timeout 600 --mode read-only --require-available --compact
   ONEHARNESS_MODEL=claude-opus-5     # inherited, and the argv names no model
@@ -1380,13 +1379,11 @@ no-unprivileged-userns host, dispatch codex with
 The same constraint applies inside a worker's gate: llmlint normally requests a
 read-only oneharness judge, which makes codex create a bubblewrap network
 namespace and can fail at loopback setup with `RTM_NEWADDR`. llmlint still has no
-mode override at the rename-aware `LLMLINT_MIN` floor that
-`scripts/setup-llmlint.sh` declares, so
-dispatches point `LLMLINT_ONEHARNESS_BIN` at
-`scripts/llmlint-oneharness.sh`. The wrapper keeps Codex in `read-only` mode and
-adds only its network permission, avoiding the unsupported network namespace
-while retaining the OS-enforced read-only filesystem; `scripts/session-setup.sh`
-also persists that setting for interactive sessions.
+mode override at the `LLMLINT_MIN` floor that `scripts/setup-llmlint.sh` declares,
+so `oneharness.llmlint.toml`, which every llmlint run here judges under, keeps Codex
+in `read-only` mode and adds only its network permission in `[harness.codex] args`,
+avoiding the unsupported network namespace while retaining the OS-enforced
+read-only filesystem.
 
 ### Streaming the agent side
 

@@ -7,7 +7,7 @@ metadata:
   "onepipeline.id": "api"
   "orchestrator.unit": "Shortener API"
   "onepipeline.persona": "engineer"
-  "onetaskgraph.template": {"answers_digest":"sha256:fb23bc8ecf0b928b4b9db11ee2643bddec12bc81cbf40bf07ef5cda6f5d5d876","body_digest":"sha256:92439b3624ae5efa93ac997302f5bd7349e01db693958ec0942a77a736fcedf3","digest":"sha256:5839c2551180e40b54ce7bf8c98b2406452ee3f43ccf9e99a7b9e76ce0899d1d","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:fb23bc8ecf0b928b4b9db11ee2643bddec12bc81cbf40bf07ef5cda6f5d5d876","body_digest":"sha256:c7dbebcc06737ce2f65100dde1cf9d6fdc1e7457ead40d78153eac92147e39f0","digest":"sha256:3ad3814d294c7e78a9895d70d4007a528b97fe3a7949ff08ec1a5daf1d56b0fd","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What
@@ -99,16 +99,16 @@ dispatch rather than somebody else's — and it is why `pgrep -f` cannot be wait
 process — itself — never the shell that invoked it. So any pattern naming the thing you are
 waiting for is, by construction, a substring of the command line of the shell doing the
 waiting: `until ! pgrep -f "just gate"` matches its own loop and never exits, and so does
-the same loop written against `llmlint-judge.sh`, `scripts/fetch-corpus.sh`, or
-`publish-branch`. That is a defect in the polling mechanism rather than a fact about gates,
+the same loop written against the judged lint tier's script, `scripts/fetch-corpus.sh`,
+or `publish-branch`. That is a defect in the polling mechanism rather than a fact about gates,
 so it applies to every wait you write.
 
 That has wedged four workers here, and then two more workers and the manager itself in one
 night: seven instances of one defect. A crozier corpus audit waited in `until ! pgrep -f
 'scripts/fetch-corpus.sh'` with no fetch running at all — the only two matches were its own
 polling shell and the manager's diagnostic shell — and waited until it was interrupted. A
-`check-plan-bar-conflict` dispatch waited on `! pgrep -f "llmlint-judge.sh"`, whose negation
-could never become true, and was cancelled and killed; its replacement then reached for
+`check-plan-bar-conflict` dispatch waited on `! pgrep -f` naming the judged lint tier's
+script, whose negation could never become true, and was cancelled and killed; its replacement then reached for
 `pkill -f` against three patterns, which is not a wait at all but the same self-match with a
 signal attached, and is refused above. And the manager, an hour after instructing a worker
 about this, guarded a launch with `pgrep -f "publish-branch" && echo ABORT || launch`, whose

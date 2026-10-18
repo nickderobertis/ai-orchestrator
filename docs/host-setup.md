@@ -47,7 +47,7 @@ idempotent. It:
 <!-- llmlint: ignore-end[no_redundant_instruction_pointers] -->
 - wires allowlister's codex `repo-write` PreToolUse hook — **only if allowlister is
   already installed** (see [step 6](#6-install-allowlister-nothing-automates-this));
-- persists the session's `PATH` (and `LLMLINT_ONEHARNESS_BIN`) into Claude Code's
+- persists the session's `PATH` into Claude Code's
   session env file, creating its parent directory when the config directory is new;
 - hands off to `scripts/setup-llmlint.sh`, which installs `llmlint-cli` with
   `uv tool` — that one install brings the llmlint judge tier and its bundled

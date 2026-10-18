@@ -7,7 +7,7 @@
 # portable indirection its variant maps into the child — CODEX_HOME for the second
 # Codex identity, CLAUDE_CONFIG_DIR for each alternate Claude subscription — and
 # oneharness refuses to start while one of them is unset. So they are resolved here,
-# exactly as `scripts/llmlint-oneharness.sh` resolves them for the judged lint tier,
+# exactly as `just lint-llm-diff` resolves them for the judged lint tier,
 # and an unauthenticated identity then falls through the chain rather than hard-failing
 # the whole command.
 #

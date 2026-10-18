@@ -5,7 +5,7 @@
   "tags": ["scope:workspace"],
   "targets": {
     "lint-llm-diff": {
-      "command": "./scripts/llmlint-judge.sh",
+      "command": "llmlint --diff --diff-base \"$LLMLINT_DIFF_BASE_SHA\"",
       "options": { "cwd": "." }
     },
     "validate-budgets": {

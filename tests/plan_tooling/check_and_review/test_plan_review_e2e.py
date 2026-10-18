@@ -1155,7 +1155,7 @@ def test_moving_the_review_bar_invalidates_every_record_granted_under_it(
 
     The bar is the files it is — `personas/planner.yaml` and the verdict schema — and
     the question `REVIEW_PROMPT` asks above them, and moving any part of it has to
-    invalidate every standing record: the same property `scripts/llmlint-fingerprint.sh`
+    invalidate every standing record: the same property `llmlint fingerprint`
     gives the judged lint tier, for the same reason a content-only key would leave a
     stale pass valid after the judge configuration moved. Both halves are driven rather
     than one, because they are digested by different routes — a journey moving only the

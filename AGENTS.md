@@ -1550,8 +1550,8 @@ decision:
   judges whether the prose reads plainly to a non-specialist, and its judge —
   `oneharness.design-doc-judge.toml` — is the one supervisory side off the cheaper
   tier, because this review *is* the deliverable's quality bar.
-- **LLM lint side** — `oneharness.llmlint.toml`, forced by
-  `scripts/llmlint-oneharness.sh`.
+- **LLM lint side** — `oneharness.llmlint.toml`, which `llmlint.yml` and the plan
+  checklist name under `oneharness.config`.
 
 Supervisory tiers reaching the workers' subscriptions is the operator's deliberate
 trade — a tier that can still run beats one isolated from the quota that is left — so
@@ -1856,9 +1856,10 @@ finding. `llmlint.yml` is a deliverable only when a task names it; otherwise a w
 fixes the code and reports a rule that looks wrong or misapplied instead of editing it.
 
 The judged tier is nondeterministic, so the run itself is cached and **only a green is
-cached**, keyed on the whole workspace, the resolved base commit, and the judge's
-fingerprint (`scripts/llmlint-fingerprint.sh`, taken through the environment the target
-judges with); `just lint-llm-diff <base> --skip-nx-cache` is the only re-judge lever.
+cached**: `workspace:lint-llm-diff` runs the llmlint CLI itself, keyed on the tracked
+tree, the resolved base commit and `llmlint fingerprint`, llmlint's own judge digest, so
+a pass replays in any worktree of one clone and never for another tree, base or judge;
+`just lint-llm-diff <base> --skip-nx-cache` is the only re-judge lever.
 The comparison base belongs to the **workstream**, not to one dispatch —
 `ONEVCS_COMPARISON_REMOTE` / `ONEVCS_COMPARISON_BASE`, exported to every dispatch and
 every publishing push — so the `pre-push` hook replays what the worker cleared instead

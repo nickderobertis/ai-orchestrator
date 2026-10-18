@@ -91,7 +91,7 @@
           "env": "LLMLINT_DIFF_BASE_SHA"
         },
         {
-          "runtime": "./scripts/llmlint-fingerprint.sh"
+          "runtime": "llmlint fingerprint"
         }
       ]
     },

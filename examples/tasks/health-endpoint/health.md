@@ -8,7 +8,7 @@ metadata:
   "orchestrator.unit": "Health endpoint"
   "onepipeline.repo_type": "team"
   "onepipeline.persona": "engineer"
-  "onetaskgraph.template": {"answers_digest":"sha256:74480dfe65907ea1fc572f7471831543188d0a6022ff14dad75bad7bd5a08e0f","body_digest":"sha256:20719e708ea8e830557cde74f13010c825961e68a1284515d831098802a94a7a","digest":"sha256:5839c2551180e40b54ce7bf8c98b2406452ee3f43ccf9e99a7b9e76ce0899d1d","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:74480dfe65907ea1fc572f7471831543188d0a6022ff14dad75bad7bd5a08e0f","body_digest":"sha256:4a15fecca67454f1c22f88b20bc4f4c826c088358849f4cd8e3257e4e803405f","digest":"sha256:3ad3814d294c7e78a9895d70d4007a528b97fe3a7949ff08ec1a5daf1d56b0fd","template":"onepipeline:plan-task"}
   "orchestrator.budgets": [{"basis":"estimate","check_runtime_seconds":3,"command":"python scripts/budgets/health_latency.py .budgets/health-requests.jsonl","direction":"max","evidence":"Estimate: the handler returns build metadata fixed at startup and reads no store, so its time is routing and serialization, a few milliseconds; 50 ms leaves headroom for a loaded test host.","file":"budgets.yaml","file_change":"add","id":"health-endpoint-p95-latency","inner_measure_reason":"","measure":"The 95th-percentile time a poller waits for `GET /health`, from the request sent to the response read through the service's real HTTP stack, over the requests the endpoint's request tests record; its analysis reports the median and the slowest request as its breakdown.","name":"Health endpoint p95 latency","repository":"github.com/nickderobertis/some-service","schema_version":2,"source":"telemetry","threshold":50,"unit":"ms","workload":"200 sequential `GET /health` requests against one service instance, the requests three monitoring probes polling every 10 s and a load balancer checking every 5 s make over about five minutes."}]
 ---
 ## What
@@ -117,16 +117,16 @@ dispatch rather than somebody else's — and it is why `pgrep -f` cannot be wait
 process — itself — never the shell that invoked it. So any pattern naming the thing you are
 waiting for is, by construction, a substring of the command line of the shell doing the
 waiting: `until ! pgrep -f "just gate"` matches its own loop and never exits, and so does
-the same loop written against `llmlint-judge.sh`, `scripts/fetch-corpus.sh`, or
-`publish-branch`. That is a defect in the polling mechanism rather than a fact about gates,
+the same loop written against the judged lint tier's script, `scripts/fetch-corpus.sh`,
+or `publish-branch`. That is a defect in the polling mechanism rather than a fact about gates,
 so it applies to every wait you write.
 
 That has wedged four workers here, and then two more workers and the manager itself in one
 night: seven instances of one defect. A crozier corpus audit waited in `until ! pgrep -f
 'scripts/fetch-corpus.sh'` with no fetch running at all — the only two matches were its own
 polling shell and the manager's diagnostic shell — and waited until it was interrupted. A
-`check-plan-bar-conflict` dispatch waited on `! pgrep -f "llmlint-judge.sh"`, whose negation
-could never become true, and was cancelled and killed; its replacement then reached for
+`check-plan-bar-conflict` dispatch waited on `! pgrep -f` naming the judged lint tier's
+script, whose negation could never become true, and was cancelled and killed; its replacement then reached for
 `pkill -f` against three patterns, which is not a wait at all but the same self-match with a
 signal attached, and is refused above. And the manager, an hour after instructing a worker
 about this, guarded a launch with `pgrep -f "publish-branch" && echo ABORT || launch`, whose

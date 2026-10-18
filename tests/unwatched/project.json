@@ -102,10 +102,6 @@
       "{workspaceRoot}/personas/planner.yaml",
       "{workspaceRoot}/personas/design-doc.yaml",
       "{workspaceRoot}/scripts/apply-repo-registry.sh",
-      "{workspaceRoot}/scripts/llmlint-fingerprint.sh",
-      "{workspaceRoot}/scripts/llmlint-judge.sh",
-      "{workspaceRoot}/scripts/llmlint-oneharness.sh",
-      "{workspaceRoot}/scripts/llmlint-runtime-env.sh",
       "{workspaceRoot}/scripts/setup-llmlint.sh"
     ]
   },

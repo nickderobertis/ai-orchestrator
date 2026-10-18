@@ -112,7 +112,7 @@ Six were put to the manager and answered; the rest I decided.
    `notignored`; that is where it was observed, not what decides it. What decides the judged
    base is `ONEVCS_COMPARISON_REMOTE` / `ONEVCS_COMPARISON_BASE`, exported by
    `crates/onevcs/src/merge_path.rs` and read here by `scripts/comparison-base.sh`, with
-   `scripts/llmlint-fingerprint.sh` folding the resolved base into the cached tier's key. The
+   the judged tier's fingerprint script folding the resolved base into the cached tier's key. The
    node measures which base a follow-up gets in three shapes and records the answer; a onevcs
    change is a follow-up it **names** rather than performs, because it cannot be specified
    before the measurement. Manager confirmed.

@@ -753,13 +753,9 @@ def test_persist_session_env_writes_worker_sandbox_environment_once(tmp_path: Pa
         assert proc.returncode == 0, proc.stderr
 
     lines = env_file.read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 2
+    assert len(lines) == 1
     assert lines[0].startswith("export PATH=")
     assert f"{tmp_path}/.local/node/bin" in lines[0]
-    assert (
-        lines[1]
-        == f"export LLMLINT_ONEHARNESS_BIN={tmp_path / 'checkout'}/scripts/llmlint-oneharness.sh"
-    )
 
 
 def test_persist_session_env_creates_the_first_sessions_absent_parent(tmp_path: Path) -> None:
@@ -791,13 +787,9 @@ def test_persist_session_env_creates_the_first_sessions_absent_parent(tmp_path: 
     assert proc.returncode == 0, proc.stderr
     assert proc.stderr == "", "the absent parent must not leak a raw shell redirect error"
     lines = env_file.read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 2
+    assert len(lines) == 1
     assert lines[0].startswith("export PATH=")
     assert f"{tmp_path}/.local/node/bin" in lines[0]
-    assert (
-        lines[1]
-        == f"export LLMLINT_ONEHARNESS_BIN={tmp_path / 'checkout'}/scripts/llmlint-oneharness.sh"
-    )
 
 
 def test_persist_session_env_reports_an_unwritable_env_file_without_shell_noise(
@@ -867,7 +859,7 @@ def test_persist_session_env_reports_a_parent_it_cannot_create(tmp_path: Path) -
     assert not env_file.exists()
 
 
-def test_persist_session_env_adds_wrapper_when_path_was_already_saved(tmp_path: Path) -> None:
+def test_persist_session_env_adds_nothing_when_path_was_already_saved(tmp_path: Path) -> None:
     env_file = tmp_path / "claude-env"
     saved_path = f"{tmp_path}/.local/node/bin:/usr/bin:/bin"
     env_file.write_text(f"export PATH={saved_path}\n", encoding="utf-8")
@@ -885,7 +877,4 @@ def test_persist_session_env_adds_wrapper_when_path_was_already_saved(tmp_path: 
     )
 
     assert proc.returncode == 0, proc.stderr
-    assert env_file.read_text(encoding="utf-8").splitlines() == [
-        f"export PATH={saved_path}",
-        f"export LLMLINT_ONEHARNESS_BIN={tmp_path / 'checkout'}/scripts/llmlint-oneharness.sh",
-    ]
+    assert env_file.read_text(encoding="utf-8").splitlines() == [f"export PATH={saved_path}"]

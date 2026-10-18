@@ -1267,9 +1267,9 @@ THE_PLAN = "the plan"
 #: files make up the plan; the rules and the verdict are llmlint's.
 CHECKLIST_CONFIG = Path("config") / "plan-checklist.llmlint.yml"
 CHECKLIST_SCRIPT = Path("scripts") / "plan-checklist.sh"
-#: The oneharness routing every llmlint run here judges through, which `llmlint config`
-#: renders from the environment and so is set to this checkout's before it is asked.
-CHECKLIST_ONEHARNESS_BIN = Path("scripts") / "llmlint-oneharness.sh"
+#: llmlint's one-line judge digest: 64 lowercase hex characters, as `llmlint fingerprint`
+#: prints it.
+JUDGE_DIGEST = re.compile(r"[0-9a-f]{64}")
 #: How the human report is asked for: the one llmlint prints for a person, which is what a
 #: refusal hands the operator verbatim.
 CHECKLIST_REPORT = ("--format", "human", "--color", "never", "--progress", "never")
@@ -1315,55 +1315,42 @@ def reviews_of(project: str, root: Path) -> Path:
 
 
 def checklist_fingerprint(root: Path = REPO_ROOT) -> str:
-    """A digest of the plan checklist in force: its configuration and what llmlint resolves.
+    """A digest of the plan checklist in force: its configuration and llmlint's judge digest.
 
-    The configuration's bytes, the installed llmlint's version, and the effective merged
-    configuration `llmlint config` prints — every rule each pinned plugin resolves to, as
-    `scripts/llmlint-fingerprint.sh` keys the repository's own judged tier — so a plugin
-    release the `@1` pin admits that changes a rule moves it as surely as an edit here does.
-    A release changing no rule may leave it standing: the pinned llmlint reports which
-    version a run resolved only in its error output, so nothing here can key on it, and a
-    follow-up asks llmlint for that report. The routing the environment names is the one
-    thing left out, as that script leaves it out: it says where a judge runs, never what it
-    is asked.
+    The configuration's bytes, and `llmlint fingerprint -c <configuration>` — llmlint's own
+    digest of everything that decides a verdict: its version, the effective merged
+    configuration with every plugin as the version it fetched, the prompt template, and the
+    oneharness configuration the judge runs under — so a plugin release the `@1` pin admits,
+    a new llmlint or a changed harness routing moves it as surely as an edit here does. It
+    runs from ``root``, where the configuration's `oneharness.config` path resolves, with
+    ``root``'s `.venv/bin` first on `PATH`, as `scripts/plan-checklist.sh` judges, so the
+    digest names the checkout's pinned `oneharness` whatever a caller's `PATH` holds; and it
+    holds nothing checkout-specific, so two checkouts of one bar agree.
     """
-    environment = {**os.environ, "LLMLINT_ONEHARNESS_BIN": str(root / CHECKLIST_ONEHARNESS_BIN)}
     config = root / CHECKLIST_CONFIG
-    answered: list[str] = []
-    for command in (("llmlint", "--version"), ("llmlint", "config", "-c", str(config))):
-        try:
-            ran = subprocess.run(  # noqa: S603 - the installed llmlint, asked what it resolves
-                command,
-                cwd=root,
-                env=environment,
-                text=True,
-                capture_output=True,
-                stdin=subprocess.DEVNULL,
-                check=False,
-            )
-        except OSError as exc:
-            raise OSError(
-                f"`{' '.join(command)}` could not run ({exc}); run `just setup-llmlint`"
-            ) from exc
-        if ran.returncode != 0:
-            raise OSError(
-                f"`{' '.join(command)}` failed (exit {ran.returncode}): {ran.stderr.strip()}"
-            )
-        answered.append(ran.stdout)
-    version, resolved = answered
+    command = ("llmlint", "fingerprint", "-c", str(config))
+    pinned = os.pathsep.join((str(root / ".venv" / "bin"), os.environ.get("PATH", "")))
     try:
-        # llmlint: ignore[boundary_inputs_validated] llmlint's own `config` document, read
-        # for its one `config` object and hashed whole; no field of it is trusted.
-        effective = json.loads(resolved)["config"]
-        effective["oneharness"].pop("bin", None)
-    except (ValueError, KeyError, TypeError, AttributeError) as exc:
-        raise OSError(f"`llmlint config` printed no effective configuration ({exc})") from exc
+        ran = subprocess.run(  # noqa: S603 - the installed llmlint, asked for its judge digest
+            command,
+            cwd=root,
+            env={**os.environ, "PATH": pinned},
+            text=True,
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            check=False,
+        )
+    except OSError as exc:
+        raise OSError(
+            f"`{' '.join(command)}` could not run ({exc}); run `just setup-llmlint`"
+        ) from exc
+    if ran.returncode != 0:
+        raise OSError(f"`{' '.join(command)}` failed (exit {ran.returncode}): {ran.stderr.strip()}")
+    judge = ran.stdout.strip()
+    if not JUDGE_DIGEST.fullmatch(judge):
+        raise OSError(f"`{' '.join(command)}` printed no judge digest: {judge!r}")
     digest = hashlib.sha256()
-    for part in (
-        config.read_bytes(),
-        version.strip().encode("utf-8"),
-        json.dumps(effective, sort_keys=True).replace(str(root), "{root}").encode("utf-8"),
-    ):
+    for part in (config.read_bytes(), judge.encode("utf-8")):
         digest.update(part)
         digest.update(b"\0")
     return digest.hexdigest()

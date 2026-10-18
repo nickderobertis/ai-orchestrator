@@ -17,10 +17,10 @@
 # `tasks/**/*.md`, since that is where the store keeps each.
 #
 # The judge's oneharness routing is `oneharness.llmlint.toml`'s, the same as this
-# repository's judged tier: `oneharness.bin` resolves against llmlint's working
-# directory, which is the plan-authoring root and not this checkout, so the script
-# names `scripts/llmlint-oneharness.sh` through `LLMLINT_ONEHARNESS_BIN` rather than
-# this file naming it.
+# repository's judged tier, named below under `oneharness.config`. llmlint hands that
+# path to oneharness as written, and both resolve it against the process's working
+# directory rather than `--cwd`, so the script runs llmlint from this checkout's root
+# and points `--cwd` at the plan-authoring root.
 #
 # A deliberate departure from a rule is one HTML comment on its own line in the departing
 # task's `additional_info` answer — `<!--`, then `llmlint: ignore-file`, then the rule's name
@@ -33,6 +33,8 @@ files:
 rationales: true
 history:
   max_runs: 200
+oneharness:
+  config: ["oneharness.llmlint.toml"]
 plugins:
   - "https://raw.githubusercontent.com/nickderobertis/dero-skills/main/skills/bootstrap/create-repo/assets/llmlint/tools/onebudgetspec.llmlint.yml@1"
   - "https://raw.githubusercontent.com/nickderobertis/dero-skills/main/skills/bootstrap/create-repo/assets/llmlint/project-graph.llmlint.yml@1"

@@ -102,8 +102,6 @@
       "{workspaceRoot}/scripts/follow-up-draft.sh",
       "{workspaceRoot}/scripts/follow-up-env.sh",
       "{workspaceRoot}/scripts/launcher-session.sh",
-      "{workspaceRoot}/scripts/llmlint-oneharness.sh",
-      "{workspaceRoot}/scripts/llmlint-runtime-env.sh",
       "{workspaceRoot}/scripts/lock-timeout.sh",
       "{workspaceRoot}/scripts/plan-check.sh",
       "{workspaceRoot}/scripts/plan-checklist.sh",

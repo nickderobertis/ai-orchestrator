@@ -43,7 +43,7 @@ thing that enforces quality.
 The passages that were never about the gate are unchanged, and so are their reasons. The
 rule on waiting was written as advice about waiting on a *gate*, and readers who had read
 it walked into the same trap against other patterns: a worker wedged on
-`scripts/fetch-corpus.sh`, another on `llmlint-judge.sh`, and the manager an hour after
+`scripts/fetch-corpus.sh`, another on the judged lint tier's script, and the manager an hour after
 issuing the rule on `publish-branch`. Seven instances are recorded in it: four workers
 before one night, and two workers and the manager during it. Which is why what is asserted
 below is the mechanism (`pgrep -f` matches whole command lines and excludes only its own
@@ -998,7 +998,7 @@ def test_the_polling_rule_is_about_pgrep_rather_than_about_gates(appendix: str) 
 
     It was written as advice about waiting on a *gate*, and readers who had read it
     walked into the same trap against other patterns: a worker wedged on
-    `scripts/fetch-corpus.sh`, another on `llmlint-judge.sh`, and the manager an hour
+    `scripts/fetch-corpus.sh`, another on the judged lint tier's script, and the manager an hour
     after issuing the rule on `publish-branch`. None of those is a gate, and every one
     of them is the same defect — `pgrep -f` matches against whole command lines and
     excludes only its own process, so the pattern naming what you are waiting for is by

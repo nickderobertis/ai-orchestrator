@@ -37,8 +37,11 @@
 # `ignore-file` line — are still honoured, and one naming a misspelled rule suppresses
 # nothing, so its rule still fires.
 #
-# The judge's oneharness routing is `scripts/llmlint-oneharness.sh`'s, through the
-# runtime environment the repository's own judged tier uses.
+# The judge's oneharness routing is `oneharness.llmlint.toml`, which the configuration
+# names under `oneharness.config`. llmlint and oneharness resolve that path against the
+# process's working directory, never `--cwd`, so llmlint runs from this checkout's root;
+# the identity directories that configuration's variants map are exported from the
+# shared resolvers, as `just lint-llm-diff` exports them.
 set -euo pipefail
 
 usage() {
@@ -79,10 +82,17 @@ esac
 for needed in "$store" "$python"; do
     [ -x "$needed" ] || fail "$needed is not installed; run 'just bootstrap' in $root, then retry"
 done
-# shellcheck source=scripts/llmlint-runtime-env.sh
-. "$root/scripts/llmlint-runtime-env.sh" ||
-    fail "$root/scripts/llmlint-runtime-env.sh could not be loaded; restore it from the repository or run 'just bootstrap', then retry"
-llmlint_runtime_env "$root"
+# The checkout's pinned `oneharness` is the one every judge here reaches, whatever a
+# caller's PATH holds; `checklist_fingerprint` keys the review on the same one.
+export PATH="$root/.venv/bin:$PATH"
+# shellcheck source=scripts/codex-alt-home.sh
+. "$root/scripts/codex-alt-home.sh" ||
+    fail "$root/scripts/codex-alt-home.sh could not be loaded; restore it from the repository, then retry"
+ensure_codex_alt_home plan-checklist || exit 2
+# shellcheck source=scripts/claude-alt-config-dir.sh
+. "$root/scripts/claude-alt-config-dir.sh" ||
+    fail "$root/scripts/claude-alt-config-dir.sh could not be loaded; restore it from the repository, then retry"
+resolve_claude_alt_config_dir plan-checklist || exit 2
 # Every oneharness record this run's judge calls write carries one label naming the run, so
 # the plan-checklist budgets (`orchestrator/plan_checklist_budgets.py`) tell one decision's
 # calls from the next: llmlint's own labels do not reach oneharness history.
@@ -291,6 +301,7 @@ fi
 command+=(${files[@]+"${files[@]}"})
 # llmlint: ignore-end[work_goes_through_command_surface]
 
+cd "$root" || fail "could not enter $root, whose oneharness.llmlint.toml the configuration names; repair its permissions, then retry"
 if [ -z "$empty" ]; then
     exec "${command[@]}"
 fi

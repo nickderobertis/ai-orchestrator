@@ -206,6 +206,11 @@ fi
         # has moved past it: doubling either would let a recipe that stopped consulting
         # it pass here.
         "base-freshness.sh",
+        # The shared identity resolvers the judged tier's recipe exports its harness
+        # configuration's identity directories from, and the reader one of them sources.
+        "codex-alt-home.sh",
+        "claude-alt-config-dir.sh",
+        "credentials-env.sh",
     ):
         shutil.copy2(ROOT / "scripts" / name, scripts / name)
     return checkout, trace
@@ -1707,10 +1712,8 @@ def test_gate_recipe_reports_the_coverage_total_it_measured(tmp_path: Path) -> N
     result = _recipe_run(checkout, trace, "gate", "origin", "main", FAKE_COVERAGE_TOTAL="95.07")
 
     assert result.returncode == 0, result.stderr + result.stdout
-    # One success line, carrying both things a passing gate measured: the coverage
-    # total, and which llmlint verdict the "green" is a claim about.
     (success,) = [line for line in result.stdout.splitlines() if line.startswith("gate: ")]
-    assert success.startswith("gate: complete gate passed (line coverage 95.07%); ")
+    assert success == "gate: complete gate passed (line coverage 95.07%)"
     assert not [line for line in result.stderr.splitlines() if line.startswith("gate: ")]
 
 
@@ -1882,25 +1885,14 @@ def test_gate_recipe_refuses_an_invalid_ignore_directive_before_any_judged_turn(
 @pytest.mark.skipif(
     shutil.which("llmlint") is None, reason="the gate's first stage is the installed llmlint"
 )
-@pytest.mark.parametrize("cache_skip", ["", "NX_SKIP_NX_CACHE", "NX_DISABLE_NX_CACHE"])
-def test_gate_recipe_validates_first_then_judges_then_checks(
-    tmp_path: Path, cache_skip: str
-) -> None:
+def test_gate_recipe_validates_first_then_judges_then_checks(tmp_path: Path) -> None:
     """A tree `validate` accepts goes on to the judge, and only then the deterministic tier.
 
     The one summary line comes after every stage, carrying the coverage the last stage
-    measured and the provenance the judged stage printed, including its warning when
-    it ignores either ambient global cache skip.
+    measured.
     """
     checkout, trace = _validating_gate_checkout(tmp_path, "robust_shell")
     (checkout / ".coverage").write_text("")
-    base = subprocess.run(
-        ["git", "rev-parse", "origin/main"],
-        cwd=checkout,
-        check=True,
-        text=True,
-        capture_output=True,
-    ).stdout.strip()
 
     result = _recipe_run(
         checkout,
@@ -1910,8 +1902,6 @@ def test_gate_recipe_validates_first_then_judges_then_checks(
         "main",
         REAL_LLMLINT=str(shutil.which("llmlint")),
         FAKE_COVERAGE_TOTAL="96.41",
-        NX_SKIP_NX_CACHE="true" if cache_skip == "NX_SKIP_NX_CACHE" else "",
-        NX_DISABLE_NX_CACHE="true" if cache_skip == "NX_DISABLE_NX_CACHE" else "",
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
@@ -1920,50 +1910,13 @@ def test_gate_recipe_validates_first_then_judges_then_checks(
     assert ran[1] == "nx.sh run workspace:lint-llm-diff", ran
     assert any(line.startswith("nx.sh ") and "-t format-check" in line for line in ran[2:]), ran
     assert not any("-t format-check" in line for line in ran[:2]), ran
-    note = " [ignored an ambient global Nx cache skip]" if cache_skip else ""
     assert [line for line in result.stdout.splitlines() if line.startswith("gate: ")] == [
-        "gate: complete gate passed (line coverage 96.41%); "
-        f"judged this diff against base {base} (Nx cache miss){note}"
+        "gate: complete gate passed (line coverage 96.41%)"
     ], result.stdout
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 # llmlint: ignore-end[shell_test_tiers_stay_split]
-
-
-#: How `just lint-llm-diff` tells a replayed verdict from a judged one: the pattern it
-#: matches Nx's own report against, lifted from the recipe rather than restated.
-REPLAY_PATTERN = re.compile(
-    r"grep -qE '\^(?P<summary>[^|]+)\|\^> nx run [^(]+\((?P<annotations>[^)]+)\)'"
-)
-
-
-def test_the_lint_recipe_matches_the_cache_wording_the_installed_nx_prints() -> None:
-    """The recipe's replay provenance is read off Nx's wording, so that wording is Nx's.
-
-    `just lint-llm-diff` reports a verdict as replayed only when Nx's report carries
-    its summary line or one of its cache annotations, and as freshly judged otherwise.
-    An Nx release that renamed either would make every replay read as a fresh
-    judgement without failing anything, so each phrase the recipe matches has to be one
-    the installed Nx prints. Read statically from Nx's own distribution: which change
-    replays the target is Nx's behaviour, and no Nx runs here.
-    """
-    recipe = (ROOT / "justfile").read_text(encoding="utf-8")
-    matched = REPLAY_PATTERN.search(recipe)
-    assert matched is not None, (
-        "the lint-llm-diff recipe no longer matches Nx's report as `^<summary>|^> nx run "
-        "<target> +[(<annotations>)`; lift its new form here"
-    )
-    dist = ROOT / "node_modules/nx/dist/src"
-    printed = "\n".join(
-        path.read_text(encoding="utf-8", errors="replace") for path in dist.rglob("*.js")
-    )
-    phrases = [matched["summary"], *(f"[{name}" for name in matched["annotations"].split("|"))]
-    missing = [phrase for phrase in phrases if phrase not in printed]
-    assert not missing, (
-        f"the installed Nx under {dist} prints none of {missing}, which the lint-llm-diff "
-        "recipe reads as a replayed verdict; match the wording this Nx release prints"
-    )
 
 
 UPGRADE_MANIFEST = ("package.json", "bun.lock")

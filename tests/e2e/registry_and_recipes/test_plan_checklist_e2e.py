@@ -14,7 +14,8 @@ that the checklist must never read. Its task bodies quote this host's dispatch a
 before any judge ran.
 
 Only the paid model is doubled, at the harness boundary: llmlint's judge reaches the real
-`oneharness` through `scripts/llmlint-oneharness.sh`, which spawns the codex stand-in, and
+`oneharness` under the `oneharness.llmlint.toml` the configuration names, which spawns the
+codex stand-in, and
 the guard directory refuses every other provider binary. The panel's harness sides speak
 onejudge's provider protocol through `judge_protocol_double.py`, as the panel journey does.
 What each process was handed is read back off the processes themselves: the script's argv
@@ -48,6 +49,7 @@ import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import NamedTuple
 
 import plan_root_variable
 import pytest
@@ -93,6 +95,7 @@ DOCUMENTS = {DESCRIPTION, *(f"tasks/{task.name}" for task in (FIXTURE / "tasks")
 # llmlint: ignore[e2e_not_mocked] Only the paid model is substituted; see the docstring.
 FAKE_CODEX = helper("fake_codex.py")
 PAID_PROVIDER_GUARD = helper("no-paid-provider")
+IDENTITY_STAND_IN = helper("identity_stand_in.py")
 DOUBLE = helper("judge_protocol_double.py")
 PINNED_ONEJUDGE = Path(sys.executable).with_name("onejudge")
 PINNED_ONEAGENTGRAPH = Path(sys.executable).with_name("oneagentgraph")
@@ -222,6 +225,105 @@ def _targets(prompt: str) -> set[str]:
     """The files a judge prompt lists under its `## Target files`."""
     listed = prompt.split("## Target files", 1)[1].split("## Rules to evaluate", 1)[0]
     return {line[2:].strip() for line in listed.splitlines() if line.startswith("- ")}
+
+
+class Identity(NamedTuple):
+    """One alternate identity, as a host exporting no identity variable resolves it."""
+
+    #: The provider binary its variant spawns.
+    provider: str
+    #: The indirection its variant maps into that child.
+    mapped: str
+    #: Its directory under `HOME`, as the shared resolvers derive it.
+    leaf: str
+
+
+#: Each identity, keyed by the variable the shared resolvers export for it.
+IDENTITY_DIRECTORIES = {
+    "ORCHESTRATOR_CODEX_ALT_HOME": Identity("codex", "CODEX_HOME", ".codex-alt"),
+    "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": Identity("claude", "CLAUDE_CONFIG_DIR", ".claude-alt"),
+    "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR": Identity("claude", "CLAUDE_CONFIG_DIR", ".claude-alt2"),
+    "ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR": Identity(
+        "claude", "CLAUDE_CONFIG_DIR", ".claude-primary-backup"
+    ),
+    "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR": Identity("claude", "CLAUDE_CONFIG_DIR", ".claude"),
+}
+#: The labels the checklist's caller hands down, which the judge's history has to keep.
+INHERITED_LABELS = {"onepipeline.run_id": "caller-run", "onepipeline.node": "caller-node"}
+
+
+# Only the paid provider processes are substituted, by the absolute seam every variant of
+# each family reaches; the script, the shared resolvers, llmlint and oneharness are real.
+# llmlint: ignore-block[e2e_not_mocked] see above
+def test_every_identity_directory_reaches_its_child_and_the_checklist_judge_is_labelled(
+    checklist: Checklist, tmp_path: Path
+) -> None:
+    """The checklist judges under `oneharness.llmlint.toml`, walking the whole chain.
+
+    The host exports no identity variable, so the shared resolvers the script sources
+    derive each directory from `HOME`; every provider refuses as a never-logged-in identity
+    except the primary Claude one, which answers. Each child records what it was handed,
+    and the judge session's history keeps `role=llmlint` beside its caller's labels.
+    """
+    home = tmp_path / "home"
+    for identity in IDENTITY_DIRECTORIES.values():
+        (home / identity.leaf).mkdir(parents=True, exist_ok=True)
+    recordings = tmp_path / "identity-recordings.jsonl"
+    pointers = tmp_path / "oneharness-pointers.jsonl"
+    environment = {
+        name: value
+        for name, value in checklist.environment.items()
+        if not name.startswith(("ORCHESTRATOR_", "CLAUDE", "CODEX"))
+    }
+    environment |= {
+        "HOME": str(home),
+        "XDG_CONFIG_HOME": str(home / ".config"),
+        "ONEHARNESS_BIN_CODEX": str(IDENTITY_STAND_IN),
+        "ONEHARNESS_BIN_CLAUDE_CODE": str(IDENTITY_STAND_IN),
+        "IDENTITY_RECORDINGS": str(recordings),
+        "IDENTITY_ANSWERING_DIR": str(home / ".claude"),
+        "IDENTITY_FAKE_CODEX": str(FAKE_CODEX),
+        "ONEHARNESS_HISTORY": "1",
+        "ONEHARNESS_HISTORY_POINTER_FILE": str(pointers),
+        "ONEHARNESS_HISTORY_LABELS": ",".join(f"{k}={v}" for k, v in INHERITED_LABELS.items()),
+    }
+
+    ran = subprocess.run(
+        [str(SCRIPT), "review", PROJECT, "--format", "json"],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=RUN_TIMEOUT_SECONDS,
+        check=False,
+    )
+
+    handed = recordings.read_text("utf-8") if recordings.exists() else "no provider was spawned"
+    assert ran.returncode == 0, f"{ran.stdout}{ran.stderr}\nproviders were handed:\n{handed}"
+    recorded = [json.loads(line) for line in handed.splitlines()]
+    resolved = {name: str(home / each.leaf) for name, each in IDENTITY_DIRECTORIES.items()}
+    for name, identity in IDENTITY_DIRECTORIES.items():
+        assert any(
+            entry["binary"] == identity.provider
+            and entry["environment"].get(identity.mapped) == resolved[name]
+            for entry in recorded
+        ), f"no {identity.provider} child was handed {identity.mapped}={resolved[name]}: {recorded}"
+    for entry in recorded:
+        assert {key: entry["environment"].get(key) for key in resolved} == resolved, entry
+    answered = []
+    for line in pointers.read_text("utf-8").splitlines():
+        history = Path(json.loads(line)["history_file"])
+        for text in history.read_text("utf-8").splitlines():
+            record = json.loads(text)
+            if record.get("type") == "run" and record.get("status") == "ok":
+                answered.append(record["labels"])
+    assert answered, f"no judge session ran to a verdict: {pointers.read_text('utf-8')}"
+    for labels in answered:
+        assert labels.get("role") == "llmlint", labels
+        assert {key: labels.get(key) for key in INHERITED_LABELS} == INHERITED_LABELS, labels
+
+
+# llmlint: ignore-end[e2e_not_mocked]
 
 
 def test_the_review_form_judges_exactly_the_plans_documents_as_a_plan(
@@ -762,7 +864,15 @@ sys.exit(answer["status"])
 """
 
 #: The script and what it sources, copied into a checkout of the stand-in's own.
-SCRIPT_FILES = ("plan-checklist.sh", "llmlint-runtime-env.sh", "plan-brief.sh")
+SCRIPT_FILES = (
+    "plan-checklist.sh",
+    "codex-alt-home.sh",
+    "claude-alt-config-dir.sh",
+    "credentials-env.sh",
+    "plan-brief.sh",
+)
+#: The harness configuration the checklist's configuration names, and the parent it extends.
+HARNESS_FILES = ("oneharness.llmlint.toml", "oneharness.identities.toml")
 
 
 def _stand_in_checkout(tmp_path: Path, *, without: str = "") -> Path:
@@ -779,6 +889,8 @@ def _stand_in_checkout(tmp_path: Path, *, without: str = "") -> Path:
         if name != without:
             shutil.copy(REPO_ROOT / "scripts" / name, checkout / "scripts" / name)
     shutil.copy(CONFIG, checkout / "config" / CONFIG.name)
+    for name in HARNESS_FILES:
+        shutil.copy(REPO_ROOT / name, checkout / name)
     (checkout / ".venv" / "bin" / "python3").symlink_to(sys.executable)
     if without != "onetaskgraph":
         # The plan store is the published CLI the script delegates the question to, doubled
@@ -934,7 +1046,8 @@ def test_a_store_answer_the_script_cannot_trust_is_refused_naming_it(
     ("missing", "reason"),
     [
         ("onetaskgraph", "is not installed; run 'just bootstrap'"),
-        ("llmlint-runtime-env.sh", "llmlint-runtime-env.sh could not be loaded"),
+        ("codex-alt-home.sh", "codex-alt-home.sh could not be loaded"),
+        ("claude-alt-config-dir.sh", "claude-alt-config-dir.sh could not be loaded"),
         ("plan-brief.sh", "plan-brief.sh could not be loaded"),
     ],
 )

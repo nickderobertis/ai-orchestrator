@@ -1806,28 +1806,40 @@ def test_a_checklist_that_does_not_complete_is_never_read_as_a_verdict(
         REAL_CHECKLIST("demo:plan")
 
 
-#: A stand-in for the installed llmlint: it answers its version, and `config` with an
-#: effective configuration naming the resolved fragment version `RESOLVED` holds and the
-#: routing `LLMLINT_ONEHARNESS_BIN` names — or, as `BROKEN` says, fails or answers nothing.
+#: A stand-in for the installed llmlint: `fingerprint` answers the judge digest `JUDGE` holds
+#: from the directory `-c` names, recording the directory it ran from and the first entry of
+#: its `PATH` — or, as `BROKEN`
+#: says, fails or answers no digest.
 LLMLINT_STAND_IN = """#!/bin/sh
-[ "$1" = --version ] && { echo "llmlint 0.4.7"; exit 0; }
+[ "$1" = fingerprint ] || { echo "the stand-in answers only fingerprint" >&2; exit 2; }
 [ "$BROKEN" = fails ] && { echo "the stand-in cannot load it" >&2; exit 2; }
-[ "$BROKEN" = garbles ] && { echo "not a document"; exit 0; }
-printf '{"config": {"version": "%s", "oneharness": {"bin": "%s"}, "rules": []}}\\n' \\
-    "$RESOLVED" "$LLMLINT_ONEHARNESS_BIN"
+[ "$BROKEN" = garbles ] && { echo "not a digest"; exit 0; }
+pwd >>"$RAN_FROM"
+echo "${PATH%%:*}" >>"$RAN_FROM.path"
+echo "$JUDGE"
 """
 
 
-def test_the_checklist_fingerprint_moves_with_its_configuration_and_what_llmlint_resolves(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The configuration's bytes and the resolved plugins move it; the routing does not."""
+def _llmlint_stand_in(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     stand_in = tmp_path / "bin"
     stand_in.mkdir()
     (stand_in / "llmlint").write_text(LLMLINT_STAND_IN, encoding="utf-8")
     (stand_in / "llmlint").chmod(0o755)
-    monkeypatch.setenv("PATH", f"{stand_in}{os.pathsep}{os.environ['PATH']}")
-    monkeypatch.setenv("RESOLVED", "1.1.1")
+    monkeypatch.setenv("PATH", f"{stand_in}{os.pathsep}/bin{os.pathsep}/usr/bin")
+    monkeypatch.setenv("RAN_FROM", str(tmp_path / "ran-from"))
+
+
+def test_the_checklist_fingerprint_moves_with_its_configuration_and_llmlints_judge_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The configuration's bytes and llmlint's own judge digest move it; the checkout does not.
+
+    It asks from the checkout's root, where the configuration's `oneharness.config` path
+    resolves, with that checkout's `.venv/bin` first on `PATH`, so the pinned `oneharness`
+    is the one it describes whatever the caller's `PATH` holds.
+    """
+    _llmlint_stand_in(tmp_path, monkeypatch)
+    monkeypatch.setenv("JUDGE", "a" * 64)
     root = tmp_path / "checkout"
     (root / "config").mkdir(parents=True)
     config = root / plan_review.CHECKLIST_CONFIG
@@ -1835,35 +1847,35 @@ def test_the_checklist_fingerprint_moves_with_its_configuration_and_what_llmlint
 
     first = REAL_FINGERPRINT(root)
     assert REAL_FINGERPRINT(root) == first
+    assert (tmp_path / "ran-from").read_text(encoding="utf-8").splitlines()[0] == str(root)
+    first_on_path = (tmp_path / "ran-from.path").read_text(encoding="utf-8").splitlines()[0]
+    assert first_on_path == str(root / ".venv" / "bin")
     elsewhere = tmp_path / "elsewhere"
     (elsewhere / "config").mkdir(parents=True)
     (elsewhere / plan_review.CHECKLIST_CONFIG).write_bytes(config.read_bytes())
-    assert REAL_FINGERPRINT(elsewhere) == first, "the routing's path moved the bar"
-    monkeypatch.setenv("RESOLVED", "1.1.2")
-    assert REAL_FINGERPRINT(root) != first, "a newer resolved plugin left the bar standing"
-    monkeypatch.setenv("RESOLVED", "1.1.1")
-    config.write_bytes(config.read_bytes() + b"\\n")
+    assert REAL_FINGERPRINT(elsewhere) == first, "the checkout's path moved the bar"
+    monkeypatch.setenv("JUDGE", "b" * 64)
+    assert REAL_FINGERPRINT(root) != first, "a new judge digest left the bar standing"
+    monkeypatch.setenv("JUDGE", "a" * 64)
+    config.write_bytes(config.read_bytes() + b"\n")
     assert REAL_FINGERPRINT(root) != first, "a moved configuration left the bar standing"
 
 
 @pytest.mark.parametrize(
     ("broken", "reason"),
     [
-        ("absent", "`llmlint --version` could not run"),
-        ("fails", "`llmlint config -c .*` failed \\(exit 2\\): the stand-in cannot load it"),
-        ("garbles", "printed no effective configuration"),
+        ("absent", "`llmlint fingerprint -c .*` could not run"),
+        ("fails", "`llmlint fingerprint -c .*` failed \\(exit 2\\): the stand-in cannot load it"),
+        ("garbles", "printed no judge digest"),
     ],
 )
 def test_the_checklist_fingerprint_refuses_an_llmlint_it_cannot_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, broken: str, reason: str
 ) -> None:
-    """No llmlint, one that cannot load the configuration, or one answering no configuration."""
-    stand_in = tmp_path / "bin"
-    stand_in.mkdir()
-    if broken != "absent":
-        (stand_in / "llmlint").write_text(LLMLINT_STAND_IN, encoding="utf-8")
-        (stand_in / "llmlint").chmod(0o755)
-    monkeypatch.setenv("PATH", f"{stand_in}{os.pathsep}/bin{os.pathsep}/usr/bin")
+    """No llmlint, one that cannot load the configuration, or one answering no digest."""
+    _llmlint_stand_in(tmp_path, monkeypatch)
+    if broken == "absent":
+        (tmp_path / "bin" / "llmlint").unlink()
     monkeypatch.setenv("BROKEN", broken)
 
     with pytest.raises(OSError, match=reason):

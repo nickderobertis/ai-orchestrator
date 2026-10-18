@@ -886,30 +886,28 @@ cached on the tree and the base commit, the re-run after a suite fix that leaves
 judged content unchanged replays it. Each refusal names the command to iterate with.
 
 A gate tier can end in a judge that is not reproducible — this repository's
-llmlint tier does — so the judge *run* is cached: `just lint-llm-diff` drives the
-cached Nx `workspace:lint-llm-diff` target, keyed on the whole workspace content,
-the resolved base **commit**, and the judge configuration fingerprint. Ask the same
-question twice and Nx replays the first run's own terminal output rather than
-rolling the dice again. The target's command is `scripts/llmlint-judge.sh`, which
-validates the base, stamps `role=llmlint` on the harness session, judges the diff
-with `llmlint --diff --diff-base <sha> -v`, and exits with the judge's own status —
-that last part is what leaves the caching decision entirely to Nx. The script owns
-the rest of how it runs; read it there rather than trusting a second copy of it
-here. Nothing writes a verdict record: `-v` makes
-the terminal report complete — every rule itemized, plus the `llmlint history <id>`
-pointer — and replaying that report *is* replaying the verdict.
+llmlint tier does — so the judge *run* is cached: `just lint-llm-diff` resolves its
+base to a **commit**, prints it, and drives the cached Nx `workspace:lint-llm-diff`
+target, whose command is `llmlint --diff --diff-base "$LLMLINT_DIFF_BASE_SHA"` with
+nothing between Nx and llmlint, keyed on the tracked tree, that commit, and
+`llmlint fingerprint`. Ask the same question twice and Nx replays the first run's
+own terminal output — llmlint's per-rule report, its summary line and its
+`llmlint history <id>` pointer — rather than rolling the dice again; replaying that
+report *is* replaying the verdict, and nothing writes a verdict record. llmlint's
+exit status is the task's, which leaves the caching decision entirely to Nx. The
+judge runs under `oneharness.llmlint.toml`, which `llmlint.yml` names under
+`oneharness.config`, and the recipe exports the identity directories that
+configuration's variants map from the shared resolvers.
 
-A green elides exactly one thing, and it is a size constraint rather than a taste
-one. `-v` also prints the oneharness debug view, of which two lines — one
-serialized judge call each, every judged file's content inside the prompt — are
-214KB of a 226KB run. Nx replays a cache hit as one burst and exits, and a burst
-larger than one pipe buffer loses its tail; through `scripts/nx.sh`, whose
-redaction filter is a pipe, a 226KB replay arrives cut off at ~64KB, taking the
-per-rule verdicts, the summary, and the history pointer with it. So the target
-keeps every diagnostic line on a green — including the pointer, which is where
-those payloads are retrievable in full — and elides only the payloads, naming each
-elision and its size. A failure prints all of it: failures are never cached, so
-they stream out as the judge produces them and never face a replay.
+Two Nx faults bear on that output, and both are settled outside this repository's
+code. Nx resolves a run-commands task on the child's `exit` before its pipes drain,
+so whenever its own stdout is not a terminal — CI, the gate, the pre-push hook — a
+fast failure's whole output could vanish; the recipe runs Nx with
+`NX_RUN_COMMANDS_DIRECTLY=false`, which the `spike-nx-output-loss` measurements found
+losing nothing, until Nx collects run-commands output on `close`. And Nx before
+23.1.2 cut a cache hit's replay off after about 64KB through a pipe, which 23.1.2
+fixed, so the lockfile resolves Nx to 23.1.3; Nx 23.3 and later print no task output
+inline under an AI agent, which is why it stays on 23.1.x.
 
 **Only a green is cached.** Nx caches successful tasks only, so findings (llmlint
 exit 1) and a toolchain that never reached a verdict (exit >= 2) fail the tier and
@@ -928,40 +926,22 @@ operator's call: a branch working through a red pays an honest re-roll each time
 and every roll lands in `llmlint history` (retained at `history.max_runs` in
 `llmlint.yml`).
 
-That only holds while the key is a function of the judged question alone, so
-`scripts/llmlint-fingerprint.sh` resolves the llmlint version *and* the merged
-config through `scripts/llmlint-runtime-env.sh` — the one environment
-`scripts/llmlint-judge.sh` also judges under. One helper, sourced by both ends, is
-the whole mechanism: neither end can read a value the other did not.
+That only holds while the key is a function of the judged question alone, so the
+judge part of it is llmlint's own: `llmlint fingerprint` prints one digest of
+llmlint's version, its resolved configuration and plugins, its prompt template, and
+the oneharness configuration and version the judge runs under — every `extends`
+parent included — with no absolute path in it, so a pass recorded in one worktree
+replays in another through `scripts/nx.sh`'s origin-keyed cache. Nx keeps its cache
+index in the main worktree's workspace data, which every worktree of one clone
+shares; two separate clones keep two indexes and judge again.
+`tests/e2e/workspace_copies/test_llmlint_cache_e2e.py` drives each of those
+invalidations through the real recipe, Nx and llmlint.
 
-`LLMLINT_ONEHARNESS_BIN` is the input that actually varied. `llmlint config`
-renders it into its output as `oneharness.bin`, and it is not one value: a
-dispatched agent inherits the dispatching checkout's root — the
-orchestrator's own checkout, never the worktree being linted, so the fingerprint's
-`{root}` fold-out cannot strip it — or `scripts/session-setup.sh`'s session path,
-or nothing at all where `dispatch.py` and `watchdog.py` drop it and the config
-renders `"bin": null`. Run the pre-fix fingerprint under those three and it emits
-three different digests for byte-identical content. That is the visible symptom:
-one judged diff hashes to a key per dispatch, the judge re-rolls on every run, and
-a branch collects opposite verdicts on the same code.
-
-Reading the caller's environment fails a second, quieter way. Nx scores a runtime
-input that exits non-zero as *no contribution* rather than as an error, so a
-fingerprint the caller can break does not fail the tier — it silently shrinks the
-key to the tree and the base. That is the worse half: a re-roll only costs a judge
-call, while a degraded key replays a verdict the judge configuration has since
-moved on from. Which change re-runs or replays the target is Nx's behaviour over
-that key, and no test here re-proves it against real Nx;
-`tests/e2e/workspace_copies/test_llmlint_cache_e2e.py` holds the fingerprint to
-naming a judge toolchain it cannot use rather than resolving to nothing.
-
-One residual is worth knowing when reading that helper: it *prepends*
-`.venv/bin`, but `scripts/setup-llmlint.sh` installs llmlint with `uv tool` into
-`~/.local/bin`, so `llmlint` itself is normally resolved from the inherited
-`PATH` rather than pinned by the checkout. That is not a split-key hazard, because
-the fingerprint and the judge resolve it from the same `PATH` and so can never
-disagree — but it does mean a host that upgrades llmlint invalidates recorded
-verdicts, which is correct invalidation rather than a miss to investigate.
+The recipe *prepends* `.venv/bin`, so the judge reaches this checkout's pinned
+`oneharness`, but `scripts/setup-llmlint.sh` installs llmlint with `uv tool` into
+`~/.local/bin`, so `llmlint` itself is resolved from the inherited `PATH` — the same
+one the fingerprint runs under. A host that upgrades llmlint therefore invalidates
+recorded verdicts, which is correct invalidation rather than a miss to investigate.
 
 A second residual sits one layer further out, and it is the other thing that can
 make "the failing rules differed this time" true. The remote plugins in
@@ -1029,8 +1009,8 @@ keeps the workstream's publication base:
 | A dispatch continuing the pinned branch of a stopped run | The original session's recorded base. | Resumption emits `session-opened` with `reused: true` on the original token; `s-064f1bc2517f`, for example, retained `base: main`. `workspace::resume` returns that record rather than constructing a new comparison point. | Every change on the resumed branch since that base, including work left by the stopped dispatch. |
 
 `scripts/comparison-base.sh` then turns the exported pair into the remote-tracking
-ref (for example `origin/main`), and `scripts/llmlint-fingerprint.sh` keys the
-verdict on the commit that ref resolves to. It has no session tip, previous dispatch
+ref (for example `origin/main`), and `just lint-llm-diff` keys the verdict on the
+commit that ref resolves to. It has no session tip, previous dispatch
 tip, or previous published branch tip from which it could select a narrower diff.
 Consequently a three-line follow-up can be failed by a judged-tier finding anywhere
 on the earlier branch surface. A worker can clear such a finding even though it is
@@ -1055,13 +1035,10 @@ Where the key genuinely differs the hook does judge again, and its verdict is
 then the authoritative one, because it is the only judgement of the content that
 will actually land: the base advanced after the worker settled and the merge
 changed what is being published, so the worker's clearance never covered it. To
-keep that honest rather than silent, a passing `just gate` reports which base
-commit was judged and whether the verdict was judged now or replayed from the
-cache — green is always a claim about one specific base commit. That provenance is
-read out of Nx's own cache reporting, not out of a side-channel marker, and
-`tests/e2e/workspace_copies/test_workspace_contract_e2e.py` holds each phrase the
-recipe matches to what the installed Nx prints, so an Nx upgrade that renames one
-fails the suite instead of quietly calling every run freshly judged.
+keep that honest rather than silent, the judged stage's log opens with the base
+commit `just lint-llm-diff` judged against — green is always a claim about one
+specific base commit — and Nx's own report says whether it replayed the run, in its
+`Nx read the output from the cache` line and its cache summary.
 
 The publishing push those verdicts decide is
 `tests/e2e/publish_and_landing/test_publish_branch_e2e.py`'s to drive, through the
@@ -2492,10 +2469,6 @@ namespaces, which this host disables, so `auto` can't initialize here anyway —
 you want a guardrail in place of the OS sandbox, the allowlister `repo-write` hook
 is still wired (see [onejudge-integration.md](./onejudge-integration.md)); with a
 container boundary it is belt-and-suspenders rather than the containment line.
-The lifecycle also exports `LLMLINT_ONEHARNESS_BIN` only when the resolved target
-identity is `https://github.com/nickderobertis/ai-orchestrator`. That wrapper is
-part of this harness's own gate; foreign repository workers inherit
-`ONEHARNESS_MODE` but explicitly receive no harness-specific llmlint wrapper.
 
 ## The two external seams (and how they're tested)
 

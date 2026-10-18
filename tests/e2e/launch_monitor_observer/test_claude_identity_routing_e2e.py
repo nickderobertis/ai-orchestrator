@@ -90,7 +90,7 @@ CLAUDE_ROLE_CONFIGS = tuple(
 )
 
 DISPATCH_ENVIRONMENT = REPO_ROOT / "scripts" / "dispatch-env.sh"
-LLMLINT_WRAPPER = REPO_ROOT / "scripts" / "llmlint-oneharness.sh"
+LLMLINT_CONFIG = REPO_ROOT / "oneharness.llmlint.toml"
 
 #: An envelope carrying a command, which is what the envelope validator judges.
 ENVELOPE = json.dumps(
@@ -272,15 +272,17 @@ def test_on_an_existing_host_the_agent_config_starts_a_real_turn(tmp_path: Path)
     }
 
 
-# Only the paid provider executables (`claude`, `codex`) are substituted; the real llmlint
-# wrapper, config and `oneharness` CLI classify the candidate and fall through it above them.
+# Only the paid provider executables (`claude`, `codex`) are substituted; the real shared
+# resolvers, the llmlint tier's config and the `oneharness` CLI classify the candidate and
+# fall through it above them.
 # llmlint: ignore[e2e_not_mocked, tests_mirror_real_usage] see the reason above
 def test_a_never_logged_in_primary_backup_falls_through_as_auth_where_nothing_filters_it(
     tmp_path: Path,
 ) -> None:
     """An entry point that filters nothing still reaches the primary, and says why it skipped.
 
-    The llmlint wrapper forwards its selection untouched, so the candidate whose directory
+    The llmlint tier's config, under the indirections the shared resolvers export as the
+    recipes that run llmlint export them, filters nothing, so the candidate whose directory
     was never created reaches the real CLI, which classifies it `auth` without spawning
     anything and continues to the primary under `$HOME/.claude`.
     """
@@ -289,8 +291,12 @@ def test_a_never_logged_in_primary_backup_falls_through_as_auth_where_nothing_fi
 
     turn = _run(
         [
-            str(LLMLINT_WRAPPER),
-            "run",
+            "bash",
+            "-c",
+            ". scripts/codex-alt-home.sh; ensure_codex_alt_home probe; "
+            ". scripts/claude-alt-config-dir.sh; resolve_claude_alt_config_dir probe; "
+            'exec oneharness run --config "$0" "$@"',
+            str(LLMLINT_CONFIG),
             "--harness",
             "claude-code:primary-backup,claude-code:primary",
             "--mode",
@@ -422,7 +428,6 @@ class EntryPoint(NamedTuple):
 #: Every entry point that calls `resolve_claude_alt_config_dir` and then runs `uv` or
 #: `oneharness`, with arguments that carry it to that hand-off.
 ENTRY_POINTS = (
-    EntryPoint("llmlint-oneharness.sh", ("run", "--mode", "read-only", "--prompt", "record")),
     EntryPoint("oneharness-usage.sh", ("--harness", "claude-code:primary")),
     EntryPoint("onepipeline.sh", ("start", "plans:identity-routing-probe")),
     EntryPoint("review-plan.sh", ("plans:identity-routing-probe",)),

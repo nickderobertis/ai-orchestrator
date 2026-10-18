@@ -30,7 +30,6 @@ items were replaced by three recipe-coverage items.
 | `tests/test_dispatch_cwd_does_not_shadow.py` | Keep all | Proves this checkout's agent wrapper and installed-CLI boundary. |
 | `tests/test_dispatch_environment_contract.py` | Keep all | Reconciles this checkout's wrappers, hook, and isolation fixture. |
 | `tests/test_labels.py` | Keep all | Unit contract for surviving `orchestrator/labels.py`. |
-| `tests/test_llmlint_oneharness_wrapper.py` | Keep all | Proves this checkout's llmlint harness routing. |
 | `tests/tree_scans/test_nx_cache_scope.py` | Convert | Keeps the static drift gates over this checkout's Nx keys and tiers; its scans of which tier a diff can deselect are removed with the journeys they kept valid. |
 | `tests/test_oneharness_usage_wrapper.py` | Keep all | Proves this checkout's usage/fallback wrapper. |
 | `tests/release_pins/test_onejudge_version.py` | Keep all | Drift gate over this checkout's adopted pin. |

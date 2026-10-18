@@ -82,7 +82,10 @@ tell one outcome from another deterministically:
   it is not counted in ``FAKE_CODEX_ATTEMPT_LOG``, takes no ``FAKE_CODEX_ANSWERS`` entry,
   and is recorded in ``FAKE_CODEX_LLMLINT_PROMPT_LOG`` rather than ``FAKE_CODEX_PROMPT_LOG``,
   so a journey scripting or reading a reviewer's turns in order is not shifted by an
-  llmlint judge running beside it.
+  llmlint judge running beside it. ``FAKE_CODEX_LLMLINT_OMIT`` beside it is a JSON list of
+  rule names that batch's answer leaves out altogether, ``["*"]`` leaving out every one:
+  the incomplete reply a model can give, which llmlint has to refuse rather than read as a
+  pass.
 
 Keep this deterministic and stdlib-only — this file *is* the provider binary.
 """
@@ -456,8 +459,11 @@ def in_scope(path: str, scope: str, targets: list[str]) -> bool:
 def llmlint_verdict(batch: Batch) -> str:
     """The answer to one llmlint batch: each rule holds unless scripted to fail in scope."""
     failing = json.loads(os.environ.get("FAKE_CODEX_LLMLINT_FAIL") or "{}")
+    omitted = json.loads(os.environ.get("FAKE_CODEX_LLMLINT_OMIT") or "[]")
     answered: dict[str, RuleVerdict] = {}
     for name, rule in batch.rules.items():
+        if name in omitted or "*" in omitted:
+            continue
         scripted = failing.get(name)
         violations: list[Violation] = (
             [

@@ -1,518 +1,606 @@
-"""E2E proof of what the llmlint tier's recipe and target refuse, report and pass on.
+"""E2E proof that the judged tier replays a pass only for the tree, base and judge it judged.
 
-`just lint-llm-diff` resolves its base, refuses one it cannot judge or one its own
-origin ref has moved past, and routes the judge run through the
-`workspace:lint-llm-diff` target with `-v`. These journeys drive the real recipe, the
-real `scripts/nx.sh`, the real Nx target definition, and the real `llmlint config`
-resolution in a throwaway copy of this repository, and read what each run says: the
-refusals, the green report and what it elides, a red's whole report, the labels a
-run carries, and the ambient cache skip the recipe names and drops. Which change
-replays or re-runs the target is Nx's behaviour over its configuration, and no
-journey here asserts it. Only the billed judge run is faked — the same boundary the
-rest of the e2e suite fakes — so `llmlint --diff` is recorded rather than paid for,
-while `llmlint config` still merges a real plugin off disk.
+`just lint-llm-diff` resolves its base, refuses one it cannot judge or one its own origin
+ref has moved past, prints the commit, and runs the cached Nx target
+`workspace:lint-llm-diff`, whose command is the llmlint CLI itself and whose cache key is
+the tracked tree, `LLMLINT_DIFF_BASE_SHA` and `llmlint fingerprint`. These journeys drive
+the real recipe, the real `scripts/nx.sh`, real Nx and the installed llmlint, which runs
+the real `oneharness` under the copy's own `oneharness.llmlint.toml` — named by the copy's
+`llmlint.yml`, as this repository's is. Only the paid model is substituted: every provider
+binary on `PATH` is the `no-paid-provider` guard, which hands the turn to
+`tests/e2e/fake_codex.py`, and that stand-in answers llmlint's batch and records each judge
+call. A replay is read off the stand-in recording no new call and off Nx's own
+`Nx read the output from the cache` line, never off one task annotation.
 
-llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] This module has always
-been where it is, and every one of its journeys drives real Nx, real git and a recorded
-judge under the same whole-workspace `reads_docs` key — none is cheaper than the others,
-so the placement is the module's rather than any one test's. Excepting a single journey
-would split a suite whose fixture and fake judge are shared while leaving the cost
-exactly where it is.
+llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] Every journey here drives
+real Nx, real git, the installed llmlint and the real oneharness over a copy of the whole
+tree under the same whole-workspace `reads_docs` key; none is cheaper than the others, so
+the placement is the module's rather than any one test's.
 
 llmlint: ignore-file[shell_test_tiers_stay_split] Same placement, same reason. What could
 be kept out of this tier was: `tests/e2e/publish_and_landing/test_base_freshness_e2e.py`
-drives the same `scripts/base-freshness.sh` with no Nx and no judge at all, from the
-recipe-scoped tier keyed on `scripts/**`.
+drives the same `scripts/base-freshness.sh` with no Nx and no judge at all.
 
 llmlint: ignore-file[test_tiers_split_by_project_not_by_marker] Same placement, same
 reason. `reads_docs` here is not a deselecting tier either: it names the whole-workspace
 key this module's own premise — copying the tracked tree, prose included — requires.
 
-llmlint: ignore-file[e2e_not_mocked] The judge run is this repository's paid model
-boundary, faked here exactly as tests/e2e/fake_backend.py fakes the agent harness.
-It is also the one thing these journeys cannot use for real: the claims under test
-are about which report a given verdict produces and whether a refusal stopped the
-judge being paid, which a non-deterministic judge cannot demonstrate. Recording each
-`--diff` invocation is what proves a refused run never reached it; every other
-boundary — the recipe, Nx, git, and llmlint's own config resolution — is real.
+llmlint: ignore-file[e2e_not_mocked] The provider process behind oneharness is this
+repository's paid model boundary, substituted here exactly as the rest of the e2e suite
+substitutes it; the recipe, Nx, git, llmlint and oneharness are all real.
 """
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import shutil
+import signal
 import subprocess
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
+import short_state
+import yaml
 from nx_workspace import copy_working_tree, share_this_checkouts_install
+from project_fixtures import helper
+from waits import timeout as e2e_timeout
 
-PASS_VERDICT = "fake-judge: 16 passed, 0 failed"
-FAIL_VERDICT = "fake-judge: 15 passed, 1 failed"
-FAIL_FINDING = "fake-judge finding: robust_shell in scripts/llmlint-judge.sh"
-#: Emitted only when the tier asks for `-v`: the per-rule itemization and the
-#: pointer into `llmlint history` are what the tier's report is for.
-VERBOSE_DETAIL = "fake-judge detail: local_rule passed on 6 files"
-HISTORY_POINTER = "fake-judge: run logged as 0ff1ce — see `llmlint history 0ff1ce`"
-#: `-v` also sends the oneharness debug view to stderr: short diagnostics, plus one
-#: enormous line per judge call carrying every judged file inside the prompt. A green
-#: report stays small by eliding that payload and keeping the pointer to where it can
-#: be retrieved.
-DEBUG_DIAGNOSTIC = "fake-judge: see full results with `llmlint history 0ff1ce`"
-DEBUG_PAYLOAD = "fake-judge serialized judge call: " + "x" * 3000
-ELISION = f"elided a {len(DEBUG_PAYLOAD)}-character serialized judge call"
+from orchestrator.root import REPO_ROOT
 
 pytestmark = [
     pytest.mark.skipif(
         shutil.which("llmlint") is None,
-        reason="llmlint resolves the judge configuration this tier runs under; "
-        "run 'just setup-llmlint'",
+        reason="the judged tier runs the installed llmlint; run 'just setup-llmlint'",
     ),
-    # Copying the whole tree is this journey's premise, and the tree includes
-    # its prose: this belongs to the whole-workspace tier by construction.
+    # Copying the whole tree is this journey's premise, and the tree includes its prose:
+    # this belongs to the whole-workspace tier by construction.
     pytest.mark.reads_docs,
 ]
+
+# llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
+FAKE_CODEX = helper("fake_codex.py")
+IDENTITY_STAND_IN = helper("identity_stand_in.py")
+PAID_PROVIDER_GUARD = helper("no-paid-provider")
+
+#: The origin every copy names, so `scripts/nx.sh` keys every copy's cache as one
+#: repository's, as it keys two worktrees of this one.
+ORIGIN = "https://example.invalid/nickderobertis/ai-orchestrator.git"
+#: The two rules the copy's `llmlint.yml` holds, so a reply can answer some of them.
+RULES = ("local_rule", "second_rule")
+#: The tracked file each copy's change commit edits, and so the one file judged.
+CHANGED = "scripts/base-freshness.sh"
+#: A plugin rule, loaded from outside the tree.
+PLUGIN = (
+    "version: 1\nrules:\n"
+    "  - name: plugin_rule\n"
+    "    description: Every new operator entry point is documented.\n"
+)
+#: What Nx prints when it replayed the task instead of running it.
+REPLAYED = "Nx read the output from the cache instead of running the command"
+#: llmlint's one-line summary of a run.
+SUMMARY = re.compile(r"^.*\b\d+ passed\b.*$", re.MULTILINE)
+#: Every commit the copies make is dated here, so the same content is the same commit id
+#: in every copy.
+DATED = {
+    "GIT_AUTHOR_DATE": "2026-01-01T00:00:00Z",
+    "GIT_COMMITTER_DATE": "2026-01-01T00:00:00Z",
+}
+
+
+def _llmlint_config(plugin: Path) -> str:
+    """The copy's `llmlint.yml`: two local rules, and this repository's harness routing.
+
+    The repository's own plugins are fetched from the network, so the copy holds two local
+    rules in their place; its `oneharness` block is read out of this repository's file, so
+    the routing the copy judges under is the one this repository ships. It selects only
+    the files the journeys edit, because every other file's ignore directives name this
+    repository's rules rather than the copy's two, which `llmlint validate` refuses. One
+    more rule comes from ``plugin``, a file outside the tree, which only the judge's
+    fingerprint can see change.
+    """
+    routed = yaml.safe_load((REPO_ROOT / "llmlint.yml").read_text(encoding="utf-8"))
+    return yaml.safe_dump(
+        {
+            "files": {"include": [CHANGED, "README.md", "llmlint.yml"]},
+            "oneharness": routed["oneharness"],
+            "plugins": [str(plugin)],
+            "rules": [
+                {"name": RULES[0], "description": "Every touched shell script stays POSIX-safe."},
+                {"name": RULES[1], "description": "Every touched script names its purpose."},
+            ],
+        },
+        sort_keys=False,
+    )
 
 
 @dataclass(frozen=True)
 class Workspace:
-    """A throwaway checkout wired to record judge runs instead of paying for them."""
+    """One copy of this checkout, judged through the real tier with a recorded model."""
 
     root: Path
-    judge_log: Path
     env: dict[str, str]
+    judge_log: Path
 
-    def lint(self, base: str, *nx_args: str, **overrides: str) -> subprocess.CompletedProcess[str]:
+    def lint(self, base: str, **overrides: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            ["just", "lint-llm-diff", base, *nx_args],
+            ["just", "lint-llm-diff", base],
             cwd=self.root,
             env={**self.env, **overrides},
+            stdin=subprocess.DEVNULL,
             check=False,
             text=True,
             capture_output=True,
+            timeout=e2e_timeout(300),
         )
 
-    def judge_runs(self) -> int:
-        return len(self.judge_log.read_text().splitlines())
+    def gate_llmlint(self, remote: str, base: str) -> str:
+        """Run `just gate` under the lifecycle's comparison base through its judged stage.
 
-    def judge_arguments(self) -> list[str]:
-        """The argument line each judge run was actually invoked with."""
-        return [line.split("\t", 1)[0] for line in self.judge_log.read_text().splitlines()]
+        The gate runs the whole deterministic suite after its judged stage, which is not
+        this journey's subject, so the gate this test started is stopped — by the process
+        group it was started in — once that stage has passed and the next one has opened
+        its log. Returns the judged stage's log.
+        """
+        logs = self.root / ".logs"
+        said = self.root.parent / f"{self.root.name}-gate.log"
+        with said.open("w", encoding="utf-8") as output:
+            gate = subprocess.Popen(
+                ["just", "gate"],
+                cwd=self.root,
+                env={
+                    **self.env,
+                    "ONEVCS_COMPARISON_REMOTE": remote,
+                    "ONEVCS_COMPARISON_BASE": base,
+                },
+                stdin=subprocess.DEVNULL,
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        try:
+            deadline = time.monotonic() + e2e_timeout(300)
+            while not (logs / "gate-check.log").exists():
+                assert gate.poll() is None, said.read_text(encoding="utf-8")
+                assert time.monotonic() < deadline, "the gate never reached its next stage"
+                time.sleep(0.5)
+        finally:
+            if gate.poll() is None:
+                os.killpg(gate.pid, signal.SIGTERM)
+            gate.wait(timeout=e2e_timeout(60))
+        return (logs / "gate-llmlint.log").read_text(encoding="utf-8")
 
-    def judge_labels(self) -> list[str]:
-        """The `ONEHARNESS_HISTORY_LABELS` each judge run was actually handed."""
-        return [line.split("\t", 1)[1] for line in self.judge_log.read_text().splitlines()]
+    def judge_calls(self) -> int:
+        if not self.judge_log.exists():
+            return 0
+        return len(self.judge_log.read_text(encoding="utf-8").splitlines())
 
-    def commit(self, message: str, *, allow_empty: bool = False) -> str:
-        empty = ["--allow-empty"] if allow_empty else []
-        self._git("add", "-A")
-        self._git("commit", "-q", "-m", message, *empty)
-        return self.head()
+    def fingerprint(self) -> str:
+        """`llmlint fingerprint` as the target's runtime input runs it, from the copy's root."""
+        ran = subprocess.run(
+            ["llmlint", "fingerprint"],
+            cwd=self.root,
+            env=self.env,
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=e2e_timeout(60),
+        )
+        return ran.stdout.strip()
 
-    def head(self) -> str:
-        return self._git("rev-parse", "HEAD").strip()
+    def edit(self, relative: str, change: Callable[[str], str]) -> None:
+        path = self.root / relative
+        path.write_text(change(path.read_text(encoding="utf-8")), encoding="utf-8")
 
-    def _git(self, *args: str) -> str:
+    def commit(self, message: str) -> str:
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", message)
+        return self.git("rev-parse", "HEAD").strip()
+
+    def git(self, *args: str) -> str:
         return subprocess.run(
             ["git", "-c", "user.name=e2e", "-c", "user.email=e2e@invalid", *args],
             cwd=self.root,
+            env={**self.env, **DATED},
             check=True,
             text=True,
             capture_output=True,
         ).stdout
 
 
-def _write_fake_judge(directory: Path) -> None:
-    """Install an `llmlint` that counts `--diff` runs but resolves config for real."""
-    directory.mkdir(parents=True, exist_ok=True)
-    fake = directory / "llmlint"
-    fake.write_text(
-        "#!/usr/bin/env bash\n"
-        "set -euo pipefail\n"
-        'if [[ ${1:-} == "--version" ]]; then\n'
-        '  echo "llmlint ${FAKE_LLMLINT_VERSION:-0.0.0-e2e}"\n'
-        "  exit 0\n"
-        "fi\n"
-        'if [[ ${1:-} == "config" ]]; then\n'
-        '  exec "$REAL_LLMLINT" "$@"\n'
-        "fi\n"
-        # One line per run, so counting them still counts judge runs; the arguments
-        # and the labels the recipe handed over ride along on it because they are
-        # the other things a run of this tier is supposed to carry.
-        'printf "%s\\t%s\\n" "$*" "${ONEHARNESS_HISTORY_LABELS:-}" >>"$FAKE_LLMLINT_LOG"\n'
-        # The detail a bare run omits, so a report that carries it proves the tier
-        # asked for `-v`.
-        'if [[ " $* " == *" -v "* ]]; then\n'
-        # Single-quoted: the pointer quotes the command with backticks, which a
-        # double-quoted echo would run instead of print.
-        f"  echo '{VERBOSE_DETAIL}'\n"
-        f"  echo '{HISTORY_POINTER}'\n"
-        # Both halves of what `-v` puts on stderr: a short diagnostic that has to
-        # survive a replay, and the payload that would sink one.
-        f"  echo '{DEBUG_DIAGNOSTIC}' >&2\n"
-        f"  echo '{DEBUG_PAYLOAD}' >&2\n"
-        "fi\n"
-        "if [[ ${FAKE_LLMLINT_EXIT:-0} != 0 ]]; then\n"
-        f'  echo "{FAIL_FINDING}"\n'
-        f'  echo "{FAIL_VERDICT}"\n'
-        '  exit "$FAKE_LLMLINT_EXIT"\n'
-        "fi\n"
-        f'echo "{PASS_VERDICT}"\n',
-        encoding="utf-8",
-    )
-    fake.chmod(0o755)
+@dataclass(frozen=True)
+class Copies:
+    """A first copy holding a base commit and a change on it, and a way to make more."""
+
+    first: Workspace
+    base: str
+    make: Callable[[str], Workspace]
+    #: The plugin outside every copy's tree that each copy's `llmlint.yml` loads.
+    plugin: Path
 
 
-def _run_fingerprint(workspace: Workspace, **overrides: str) -> subprocess.CompletedProcess[str]:
-    """Run the fingerprint the way an operator diagnosing a cache miss would."""
-    return subprocess.run(
-        [str(workspace.root / "scripts" / "llmlint-fingerprint.sh")],
-        cwd=workspace.root,
-        env={**workspace.env, **overrides},
-        check=False,
-        text=True,
-        capture_output=True,
-    )
+def _exclude_install(root: Path) -> None:
+    """Keep the shared install's links out of every commit a copy makes.
+
+    `.gitignore` names `node_modules/`, which matches a directory and not the symlink
+    `share_this_checkouts_install` puts there.
+    """
+    (root / ".git" / "info" / "exclude").write_text("/node_modules\n/.venv\n", encoding="utf-8")
 
 
 @pytest.fixture
-def workspace(tmp_path: Path) -> Workspace:
-    root = tmp_path / "checkout"
-    copy_working_tree(root)
-    shared = share_this_checkouts_install(root)
-
-    # A plugin outside the tree, so `llmlint config` merges a real plugin off disk
-    # the way the judge configuration fingerprint reads one.
-    plugin = tmp_path / "external-plugin.yml"
-    plugin.write_text(
-        "version: 1\nrules:\n"
-        "  - name: plugin_rule\n"
-        "    description: The change documents every new operator entry point.\n",
-        encoding="utf-8",
-    )
-    (root / "llmlint.yml").write_text(
-        f'files:\n  exclude:\n    - "**/.git/**"\nplugins:\n  - "{plugin}"\n'
-        "rules:\n  - name: local_rule\n"
-        "    description: The change keeps every touched shell script POSIX-safe.\n",
-        encoding="utf-8",
-    )
-
-    binaries = tmp_path / "bin"
-    real_llmlint = shutil.which("llmlint")
-    assert real_llmlint is not None
-    _write_fake_judge(binaries)
-    # The copy's own link to the pinned judge, replaced by the recording one.
-    pinned = root / ".venv/bin" / "llmlint"
-    pinned.unlink(missing_ok=True)
-    pinned.symlink_to(binaries / "llmlint")
-
-    judge_log = tmp_path / "judge-runs.log"
-    judge_log.write_text("", encoding="utf-8")
-    env = {
-        **os.environ,
-        "PATH": f"{binaries}{os.pathsep}{os.environ['PATH']}",
-        # Isolate both the Nx cache (scripts/nx.sh roots it here) and llmlint's own
-        # plugin cache from the developer's real ones.
-        "XDG_CACHE_HOME": str(tmp_path / "cache"),
-        "FAKE_LLMLINT_LOG": str(judge_log),
-        "REAL_LLMLINT": real_llmlint,
-        **shared,
-    }
-    env.pop("UV_PROJECT_ENVIRONMENT", None)
-    workspace = Workspace(root=root, judge_log=judge_log, env=env)
-    workspace._git("init", "-q")
-    workspace.commit("checkout under test")
-    return workspace
-
-
-def test_an_ambient_global_cache_skip_is_reported_and_ignored(workspace: Workspace) -> None:
-    """The only supported re-judge lever is per-tier, so a global one is named and dropped.
-
-    Each run here is green, so it is also where the green report is read: the `-v`
-    report is the product — per-rule detail and the pointer into `llmlint history` —
-    and the short diagnostic survives while the serialized payload that would push a
-    real report past a pipe buffer, and take the lines above with it, is elided.
-    """
-    base = workspace.head()
-
-    first = workspace.lint(base, NX_SKIP_NX_CACHE="true")
-    second = workspace.lint(base, NX_DISABLE_NX_CACHE="true")
-
-    assert workspace.judge_arguments()[0] == f"--diff --diff-base {base} -v"
-    for result in (first, second):
-        assert result.returncode == 0, result.stdout + result.stderr
-        assert "ignoring the ambient global Nx cache skip" in result.stderr
-        assert f"just lint-llm-diff {base} --skip-nx-cache" in result.stderr
-        assert PASS_VERDICT in result.stdout
-        assert VERBOSE_DETAIL in result.stdout
-        assert HISTORY_POINTER in result.stdout
-        report = result.stdout + result.stderr
-        assert DEBUG_DIAGNOSTIC in report
-        assert DEBUG_PAYLOAD not in report
-        assert ELISION in report
-        # "Green" is a claim about one base commit, so the one line of provenance
-        # names it.
-        assert f"base {base}" in result.stderr
-
-
-def test_findings_fail_the_tier_with_the_whole_report(workspace: Workspace) -> None:
-    """Findings fail the tier, and the whole report reaches the operator who must act on it."""
-    base = workspace.head()
-
-    result = workspace.lint(base, FAKE_LLMLINT_EXIT="1")
-
-    report = result.stdout + result.stderr
-    assert result.returncode != 0, report
-    assert FAIL_FINDING in report
-    assert FAIL_VERDICT in report
-    # Only a green is elided: a red's whole debug view, payload included, is what the
-    # operator diagnoses from.
-    assert DEBUG_PAYLOAD in report
-    assert ELISION not in report
-
-
-def test_a_judge_that_never_reached_a_verdict_fails_and_says_what_it_saw(
-    workspace: Workspace,
-) -> None:
-    """A broken judge toolchain is not a verdict: the tier fails and says what it saw."""
-    base = workspace.head()
-
-    result = workspace.lint(base, FAKE_LLMLINT_EXIT="2")
-
-    report = result.stdout + result.stderr
-    assert result.returncode != 0, report
-    # Whatever the broken toolchain managed to say still reaches the operator — its
-    # report and its debug view both.
-    assert FAIL_FINDING in report
-    assert DEBUG_PAYLOAD in report
-
-
-def _stub(directory: Path, name: str, body: str) -> Path:
-    directory.mkdir(parents=True, exist_ok=True)
-    stub = directory / name
-    stub.write_text(f"#!/usr/bin/env bash\n{body}\n", encoding="utf-8")
-    stub.chmod(0o755)
-    return directory
-
-
-def _run_target(
-    workspace: Workspace, **overrides: str
-) -> tuple[subprocess.CompletedProcess[str], str]:
-    """Invoke the Nx target the way someone who skipped the recipe would.
-
-    Returns the run and every refusal the tier said, wherever it arrived. Nx can drop a
-    refusal from its terminal output (`scripts/llmlint-judge.sh` says when), so the tier
-    also appends each one to the file `LLMLINT_DIFF_REFUSALS` names, which is how `just
-    lint-llm-diff` still relays it; this reads both, as the recipe does.
-    """
-    refusals = workspace.root.parent / "lint-llm-diff-refusals.log"
-    refusals.unlink(missing_ok=True)
-    result = subprocess.run(
-        ["./scripts/nx.sh", "run", "workspace:lint-llm-diff"],
-        cwd=workspace.root,
-        env={**workspace.env, "LLMLINT_DIFF_REFUSALS": str(refusals), **overrides},
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    said = result.stderr + (refusals.read_text(encoding="utf-8") if refusals.exists() else "")
-    return result, said
-
-
-@pytest.mark.parametrize(
-    ("base_sha", "expected"),
-    [
-        ("", "must be a resolved commit id"),
-        ("origin/main", "must be a resolved commit id"),
-        ("0" * 40, "missing from this checkout"),
-    ],
-)
-# The recipe resolves the base itself, so these states arise only when someone
-# drives the cached target directly — the misuse this guard names, and the only
-# way to reach it.
-# llmlint: ignore[tests_mirror_real_usage] Only a direct target run reaches this state.
-def test_the_target_refuses_a_base_it_cannot_judge(
-    workspace: Workspace, base_sha: str, expected: str
-) -> None:
-    result, said = _run_target(workspace, LLMLINT_DIFF_BASE_SHA=base_sha)
-
-    assert result.returncode != 0
-    assert expected in said
-    assert workspace.judge_runs() == 0
-
-
-@pytest.mark.parametrize(
-    ("stub_body", "expected"),
-    [
-        ('[[ ${1:-} == "--version" ]] && exit 1\nexit 0', "'llmlint --version' failed"),
-        ('[[ ${1:-} == "config" ]] && exit 1\necho "llmlint 0.0.0-e2e"', "'llmlint config' failed"),
-    ],
-)
-def test_the_fingerprint_names_an_unusable_judge_toolchain(
-    workspace: Workspace, tmp_path: Path, stub_body: str, expected: str
-) -> None:
-    stubs = _stub(tmp_path / "judge-stub", "llmlint", f"set -uo pipefail\n{stub_body}")
-    pinned = workspace.root / ".venv/bin/llmlint"
-    pinned.unlink()
-    pinned.symlink_to(stubs / "llmlint")
-
-    result = _run_fingerprint(workspace)
-
-    assert result.returncode != 0
-    assert expected in result.stderr
-
-
-@pytest.mark.parametrize("entrypoint", ["fingerprint", "target"])
-def test_a_missing_pinned_runtime_helper_is_actionable(
-    workspace: Workspace, entrypoint: str
-) -> None:
-    (workspace.root / "scripts/llmlint-runtime-env.sh").unlink()
-
-    if entrypoint == "fingerprint":
-        result = _run_fingerprint(workspace)
-        said = result.stderr
-        expected = "llmlint fingerprint: could not load the pinned runtime environment"
-    else:
-        result, said = _run_target(workspace, LLMLINT_DIFF_BASE_SHA=workspace.head())
-        expected = "lint-llm-diff: could not load the pinned runtime environment"
-
-    assert result.returncode != 0
-    assert expected in said
-    assert "restore scripts/llmlint-runtime-env.sh and retry" in said
-    assert workspace.judge_runs() == 0
-
-
-@pytest.mark.parametrize(
-    ("labels_body", "expected"),
-    [
-        ("exit 1", "could not derive harness history labels"),
-        ("echo 'not labels at all'", "not comma-separated key=value pairs"),
-    ],
-)
-def test_the_recipe_refuses_unusable_harness_history_labels(
-    workspace: Workspace, tmp_path: Path, labels_body: str, expected: str
-) -> None:
-    stubs = _stub(tmp_path / "label-stub", "uv", labels_body)
-
-    result = workspace.lint(workspace.head(), PATH=f"{stubs}{os.pathsep}{workspace.env['PATH']}")
-
-    assert result.returncode != 0
-    # Whatever the task says — findings or a refusal like this one — comes back on
-    # the report stream, because Nx's terminal output is what the tier replays.
-    assert expected in result.stdout + result.stderr
-    assert workspace.judge_runs() == 0
-
-
-def test_labels_the_tier_only_passes_through_reach_the_judge_unnarrowed(
-    workspace: Workspace,
-) -> None:
-    """A dispatched agent's own gate carries labels this tier did not set.
-
-    `orchestrator/labels.py` is the declared trust boundary for the label contract,
-    and that contract allows a dot or a hyphen in a key and a space in a value. The
-    recipe layers `role=llmlint` over whatever it inherited; a second, narrower
-    opinion of the contract in the recipe failed the whole gate over a label it was
-    only meant to pass along.
-    """
-    base = workspace.head()
-
-    judged = workspace.lint(base, ONEHARNESS_HISTORY_LABELS="ticket-id=ENG 123,agent.role=worker")
-
-    assert judged.returncode == 0, judged.stdout + judged.stderr
-    assert PASS_VERDICT in judged.stdout
-    assert workspace.judge_runs() == 1
-    assert workspace.judge_labels() == ["ticket-id=ENG 123,agent.role=worker,role=llmlint"]
-
-
-def test_an_unresolvable_base_is_rejected_before_the_judge_is_paid(
-    workspace: Workspace,
-) -> None:
-    result = workspace.lint("no-such-ref")
-
-    assert result.returncode != 0
-    assert "does not resolve to a commit" in result.stderr
-    assert workspace.judge_runs() == 0
-
-
-def _tracking(workspace: Workspace, origin: Path) -> None:
-    """Give this checkout a real origin with `main` on it, tracked the ordinary way."""
-    subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
-    workspace._git("checkout", "-q", "-B", "main")
-    workspace._git("remote", "add", "origin", str(origin))
-    workspace._git("push", "-q", "-u", "origin", "main")
-
-
-def test_a_base_its_own_origin_ref_has_moved_past_is_refused_and_no_other_state_is(
-    workspace: Workspace, tmp_path: Path
-) -> None:
-    """A stale base names a real commit, so nothing downstream can see it is the wrong one.
-
-    `main` inside a session clone is the ordinary case rather than an odd one: the branch
-    is cut once and the origin moves on, and the name goes on resolving. Everything below
-    the recipe then behaves perfectly — the commit keys the cache, the judge reads the
-    range it was given, and what comes back is a valid verdict over commits the branch
-    does not carry. The one thing that can notice is the recipe, and the one thing a
-    reader needs is which two refs disagree, so the refusal names both and both commits.
-
-    Refused strictly for being behind, and the other three states are what say so. A base
-    level with its origin ref, one ahead of it, and one with no origin ref at all are each
-    driven through the same real recipe against the same real repository and each judged
-    over its own commit — because a refusal that also fired on those would refuse the
-    default gate, every worker on an unpushed branch, and every base named by commit.
-    """
-    _tracking(workspace, tmp_path / "origin.git")
-
-    level = workspace.head()
-    at_level = workspace.lint("main")
-
-    assert at_level.returncode == 0, at_level.stdout + at_level.stderr
-    assert PASS_VERDICT in at_level.stdout
-    assert f"base {level}" in at_level.stderr, (
-        f"a base level with its origin ref was not judged over its own commit:\n{at_level.stderr}"
-    )
-
-    ahead = workspace.commit("work the origin has not seen", allow_empty=True)
-    at_ahead = workspace.lint("main")
-
-    assert at_ahead.returncode == 0, (
-        f"a base ahead of its own origin ref was refused, which is every worker on a "
-        f"branch they have not pushed:\n{at_ahead.stdout}{at_ahead.stderr}"
-    )
-    assert f"base {ahead}" in at_ahead.stderr, at_ahead.stderr
-
-    # The same commit the local branch just had, now on the origin and no longer on the
-    # branch: `main` is a strict ancestor of `origin/main`, which is the one shape where
-    # the extra commits are unambiguously work this base has not caught up with.
-    workspace._git("push", "-q", "origin", "main")
-    workspace._git("reset", "--hard", "-q", "HEAD~1")
-    assert workspace.head() == level
-    judged_so_far = workspace.judge_runs()
-
-    behind = workspace.lint("main")
-
-    assert behind.returncode != 0, (
-        f"a base its own origin ref had moved past was judged, so the verdict covers "
-        f"commits this branch does not carry:\n{behind.stdout}{behind.stderr}"
-    )
-    assert "is behind its own origin ref" in behind.stderr, behind.stderr
-    for named in ("'main'", "'origin/main'", level, ahead):
-        assert named in behind.stderr, (
-            f"the refusal does not name {named}, so the reader is not told which two "
-            f"refs disagree or where each of them is:\n{behind.stderr}"
+def copies(tmp_path: Path) -> Copies:
+    cache = tmp_path / "cache"
+    judge_log = tmp_path / "judge-calls.jsonl"
+    identities = tmp_path / "identities"
+    environment = {
+        name: value
+        for name, value in os.environ.items()
+        if not name.startswith(
+            ("ONEHARNESS_", "LLMLINT_", "FAKE_CODEX_", "NX_", "ONEVCS_", "ORCHESTRATOR_")
         )
-    assert workspace.judge_runs() == judged_so_far, (
-        "the stale base was refused and the judge was paid for it anyway"
-    )
+        # The session's own Claude Code and Codex variables name its provider binary and
+        # identity, which no journey here may reach.
+        and not name.startswith(("CLAUDE", "CODEX"))
+        and name not in {"UV_PROJECT_ENVIRONMENT", "CI", "AI_AGENT"}
+    }
+    environment |= {
+        "PATH": os.pathsep.join([str(PAID_PROVIDER_GUARD), environment["PATH"]]),
+        # Every provider is named by absolute path: under an Nx task `node_modules/.bin`
+        # and Node's own bin directory, where a host's npm-installed `codex` and `claude`
+        # live, precede the caller's `PATH`, so a `PATH` guard alone is shadowed there.
+        # Codex answers; every Claude candidate refuses, so no turn reaches a paid one.
+        # llmlint: ignore[e2e_not_mocked] Only the paid provider processes are substituted.
+        "ONEHARNESS_BIN_CODEX": str(FAKE_CODEX),
+        "ONEHARNESS_BIN_CLAUDE_CODE": str(IDENTITY_STAND_IN),
+        "FAKE_CODEX_LLMLINT_PROMPT_LOG": str(judge_log),
+        # One Nx cache (scripts/nx.sh roots it here) and one plugin cache for every copy,
+        # neither of them the developer's.
+        "XDG_CACHE_HOME": str(cache),
+        "XDG_STATE_HOME": str(short_state.state_home(tmp_path)),
+        "LLMLINT_HISTORY_DIR": str(tmp_path / "llmlint-history"),
+        "ONEHARNESS_HISTORY": "false",
+        "ORCHESTRATOR_CODEX_ALT_HOME": str(identities / "codex-alt"),
+        **{
+            variable: str(identities / variable)
+            for variable in (
+                "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR",
+                "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR",
+                "ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR",
+                "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR",
+            )
+        },
+    }
 
-    # A branch of its own with nothing tracking it: no upstream, and no `origin/side`
-    # either, so there is no ref that could have moved past it.
-    workspace._git("checkout", "-q", "-b", "side")
-    untracked = workspace.commit("work on a branch nothing tracks", allow_empty=True)
-    at_untracked = workspace.lint("side")
+    plugin = tmp_path / "plugin.llmlint.yml"
+    plugin.write_text(PLUGIN, encoding="utf-8")
+    first_root = tmp_path / "copies" / "first"
+    copy_working_tree(first_root)
+    (first_root / "llmlint.yml").write_text(_llmlint_config(plugin), encoding="utf-8")
+    shared = share_this_checkouts_install(first_root)
+    environment |= shared
+    first = Workspace(first_root, {**environment, "PYTHONPATH": str(first_root)}, judge_log)
+    first.git("init", "-q", "-b", "main")
+    _exclude_install(first_root)
+    first.git("remote", "add", "origin", ORIGIN)
+    base = first.commit("base")
+    first.edit(CHANGED, lambda text: text + "# changed under test\n")
+    first.commit("change")
 
-    assert at_untracked.returncode == 0, (
-        f"a base with no origin ref of its own was refused, which is every base named "
-        f"by commit:\n{at_untracked.stdout}{at_untracked.stderr}"
+    def make(name: str) -> Workspace:
+        # A worktree of the first copy, as a pool slot is of its checkout: Nx keeps its
+        # cache index in the main worktree's workspace data, which every worktree of one
+        # repository shares, while the outputs live in the cache `scripts/nx.sh` keys on
+        # the origin.
+        root = tmp_path / "copies" / name
+        first.git("worktree", "add", "-q", "--detach", str(root), "HEAD")
+        share_this_checkouts_install(root)
+        return Workspace(root, {**environment, "PYTHONPATH": str(root)}, judge_log)
+
+    return Copies(first, base, make, plugin)
+
+
+def _summary(result: subprocess.CompletedProcess[str]) -> str:
+    found = SUMMARY.findall(result.stdout + result.stderr)
+    assert found, result.stdout + result.stderr
+    return found[-1].strip()
+
+
+def _judged(workspace: Workspace, base: str, commit: str | None = None) -> str:
+    """Run the tier once, expecting a fresh judgement; returns llmlint's summary line.
+
+    ``commit`` is the commit ``base`` resolves to, where ``base`` names a ref.
+    """
+    before = workspace.judge_calls()
+    result = workspace.lint(base)
+    report = result.stdout + result.stderr
+    assert result.returncode == 0, report
+    assert f"lint-llm-diff: judging this diff against base {commit or base}" in report, report
+    assert workspace.judge_calls() > before, report
+    assert REPLAYED not in report, report
+    return _summary(result)
+
+
+def _replayed(workspace: Workspace, base: str) -> str:
+    """Run the tier once, expecting a replay; returns llmlint's summary line."""
+    before = workspace.judge_calls()
+    result = workspace.lint(base)
+    report = result.stdout + result.stderr
+    assert result.returncode == 0, report
+    assert f"lint-llm-diff: judging this diff against base {base}" in report, report
+    assert workspace.judge_calls() == before, report
+    assert REPLAYED in report, report
+    return _summary(result)
+
+
+def test_a_pass_is_replayed_for_an_unchanged_tree_base_and_judge(copies: Copies) -> None:
+    """The first run judges; the second replays the same summary with no judge call."""
+    first = _judged(copies.first, copies.base)
+
+    assert _replayed(copies.first, copies.base) == first
+
+
+def test_a_pass_judged_in_one_copy_replays_in_another_at_a_different_path(
+    copies: Copies,
+) -> None:
+    summary = _judged(copies.first, copies.base)
+    second = copies.make("second")
+    assert second.root != copies.first.root
+
+    assert _replayed(second, copies.base) == summary
+
+
+def test_each_base_commit_is_judged_and_then_replays_its_own_pass(copies: Copies) -> None:
+    workspace = copies.first
+    _judged(workspace, copies.base)
+    # A second base: the base commit with one more commit on it, which the change is not on.
+    workspace.git("branch", "other-base", copies.base)
+    workspace.git("checkout", "-q", "other-base")
+    workspace.edit("README.md", lambda text: text + "\nAnother base.\n")
+    other = workspace.commit("another base")
+    workspace.git("checkout", "-q", "main")
+
+    _judged(workspace, other)
+    _replayed(workspace, copies.base)
+    _replayed(workspace, other)
+
+
+def test_a_changed_rule_is_judged_again(copies: Copies) -> None:
+    workspace = copies.first
+    _judged(workspace, copies.base)
+    before = workspace.fingerprint()
+    workspace.edit("llmlint.yml", lambda text: text.replace("POSIX-safe", "portable"))
+    workspace.commit("reword a rule")
+
+    assert workspace.fingerprint() != before
+    _judged(workspace, copies.base)
+    _replayed(workspace, copies.base)
+
+
+def test_a_changed_rule_in_a_plugin_outside_the_tree_is_judged_again(copies: Copies) -> None:
+    """No tracked file moves, so only the `llmlint fingerprint` input can miss the cache."""
+    workspace = copies.first
+    _judged(workspace, copies.base)
+    before = workspace.fingerprint()
+    copies.plugin.write_text(PLUGIN.replace("documented", "named in the README"), "utf-8")
+
+    assert workspace.fingerprint() != before
+    _judged(workspace, copies.base)
+    _replayed(workspace, copies.base)
+
+
+@pytest.mark.parametrize("config", ["oneharness.llmlint.toml", "oneharness.identities.toml"])
+def test_a_changed_judge_model_is_judged_again(copies: Copies, config: str) -> None:
+    """A model moved in the role file, or in the parent it `extends`, keys a new judge."""
+    workspace = copies.first
+    _judged(workspace, copies.base)
+    before = workspace.fingerprint()
+    if config == "oneharness.llmlint.toml":
+        # The role's own codex model, declared beside its arguments.
+        workspace.edit(
+            config,
+            lambda text: text.replace(
+                "[harness.codex]\n", '[harness.codex]\nmodel = "a-new-model"\n', 1
+            ),
+        )
+    else:
+        workspace.edit(
+            config,
+            lambda text: re.sub(r'(?m)^model = "[^"]*"', 'model = "a-new-model"', text, count=1),
+        )
+    workspace.commit(f"move a model in {config}")
+
+    assert workspace.fingerprint() != before
+    _judged(workspace, copies.base)
+
+
+def test_a_changed_tracked_file_is_judged_again(copies: Copies) -> None:
+    workspace = copies.first
+    _judged(workspace, copies.base)
+    workspace.edit("README.md", lambda text: text + "\nA tracked change.\n")
+    workspace.commit("a tracked change")
+
+    _judged(workspace, copies.base)
+
+
+def test_a_failing_verdict_fails_with_its_finding_and_is_judged_again(copies: Copies) -> None:
+    """No terminal, `CI` and an agent's marker set: the finding still reaches the caller."""
+    workspace = copies.first
+    failing = {RULES[0]: {"file": CHANGED, "line": 1, "message": "the stand-in's scripted finding"}}
+    overrides = {"FAKE_CODEX_LLMLINT_FAIL": json.dumps(failing), "CI": "true", "CLAUDECODE": "1"}
+
+    for attempt in (1, 2):
+        result = workspace.lint(copies.base, **overrides)
+        report = result.stdout + result.stderr
+        assert result.returncode != 0, report
+        assert RULES[0] in report, report
+        assert CHANGED in report, report
+        assert "the stand-in's scripted finding" in report, report
+        assert workspace.judge_calls() == attempt, report
+        assert REPLAYED not in report, report
+
+
+@pytest.mark.parametrize("omitted", [["*"], [RULES[1]]], ids=["none-answered", "some-answered"])
+def test_a_reply_leaving_rules_unanswered_fails_naming_them_and_is_judged_again(
+    copies: Copies, omitted: list[str]
+) -> None:
+    workspace = copies.first
+    unanswered = RULES if omitted == ["*"] else tuple(omitted)
+    overrides = {"FAKE_CODEX_LLMLINT_OMIT": json.dumps(omitted)}
+
+    for _ in (1, 2):
+        before = workspace.judge_calls()
+        result = workspace.lint(copies.base, **overrides)
+        report = result.stdout + result.stderr
+        assert result.returncode != 0, report
+        for rule in unanswered:
+            assert rule in report, report
+        assert workspace.judge_calls() > before, report
+        assert REPLAYED not in report, report
+
+
+def test_a_base_that_does_not_resolve_is_refused_before_any_judge_call(copies: Copies) -> None:
+    result = copies.first.lint("no-such-base")
+
+    assert result.returncode != 0
+    refusal = "lint-llm-diff: 'no-such-base' does not resolve to a commit"
+    assert refusal in result.stderr.splitlines(), result.stderr
+    assert copies.first.judge_calls() == 0
+
+
+def test_a_base_its_origin_ref_has_moved_past_is_refused_before_any_judge_call(
+    copies: Copies,
+) -> None:
+    workspace = copies.first
+    head = workspace.git("rev-parse", "HEAD").strip()
+    workspace.git("branch", "stale", copies.base)
+    workspace.git("update-ref", "refs/remotes/origin/stale", head)
+
+    result = workspace.lint("stale")
+
+    assert result.returncode != 0
+    assert "so judging it would judge commits this branch does not carry" in result.stderr, (
+        result.stderr
     )
-    assert f"base {untracked}" in at_untracked.stderr, at_untracked.stderr
+    assert workspace.judge_calls() == 0
+
+
+def test_the_gate_judges_against_the_comparison_base_and_replays_another_copys_pass(
+    copies: Copies,
+) -> None:
+    """`ONEVCS_COMPARISON_*` names the base; a pass recorded against it in another copy replays."""
+    recorder = copies.make("recorder")
+    gate = copies.make("gate")
+    # The branch the gate compares against, as the origin's, at the base commit.
+    copies.first.git("update-ref", "refs/remotes/origin/release", copies.base)
+
+    _judged(recorder, "origin/release", copies.base)
+    before = gate.judge_calls()
+
+    log = gate.gate_llmlint("origin", "release")
+
+    assert f"lint-llm-diff: judging this diff against base {copies.base}" in log, log
+    assert REPLAYED in log, log
+    assert gate.judge_calls() == before, log
+
+
+class Identity(NamedTuple):
+    """One alternate identity, as a host exporting no identity variable resolves it."""
+
+    #: The provider binary its variant spawns.
+    provider: str
+    #: The indirection its variant maps into that child.
+    mapped: str
+    #: Its directory under `HOME`, as the shared resolvers derive it.
+    leaf: str
+
+
+#: Each identity, keyed by the variable the shared resolvers export for it.
+IDENTITY_DIRECTORIES = {
+    "ORCHESTRATOR_CODEX_ALT_HOME": Identity("codex", "CODEX_HOME", ".codex-alt"),
+    "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": Identity("claude", "CLAUDE_CONFIG_DIR", ".claude-alt"),
+    "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR": Identity("claude", "CLAUDE_CONFIG_DIR", ".claude-alt2"),
+    "ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR": Identity(
+        "claude", "CLAUDE_CONFIG_DIR", ".claude-primary-backup"
+    ),
+    "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR": Identity("claude", "CLAUDE_CONFIG_DIR", ".claude"),
+}
+#: The labels a dispatch's caller hands down, which the judge's history has to keep.
+INHERITED_LABELS = {"onepipeline.run_id": "caller-run", "onepipeline.node": "caller-node"}
+
+
+def test_every_identity_directory_reaches_its_child_and_the_judge_session_is_labelled(
+    copies: Copies, tmp_path: Path
+) -> None:
+    """The real oneharness walks the whole chain under the identities the recipe exported.
+
+    The host exports no identity variable, so the shared resolvers derive each directory
+    from `HOME`; every provider refuses as a never-logged-in identity except the primary
+    Claude one, which answers. Each child records what it was handed, and the judge
+    session's history keeps `role=llmlint` beside the labels its caller set.
+    """
+    home = tmp_path / "home"
+    for identity in IDENTITY_DIRECTORIES.values():
+        (home / identity.leaf).mkdir(parents=True, exist_ok=True)
+    recordings = tmp_path / "identity-recordings.jsonl"
+    pointers = tmp_path / "oneharness-pointers.jsonl"
+    environment = {
+        name: value
+        for name, value in copies.first.env.items()
+        if not name.startswith("ORCHESTRATOR_")
+    }
+    environment |= {
+        "HOME": str(home),
+        # The host's own identities file must not reach the resolvers.
+        "XDG_CONFIG_HOME": str(home / ".config"),
+        # The recording stand-in is every provider, by the absolute seam every variant of
+        # each family reaches.
+        "ONEHARNESS_BIN_CODEX": str(IDENTITY_STAND_IN),
+        "ONEHARNESS_BIN_CLAUDE_CODE": str(IDENTITY_STAND_IN),
+        "IDENTITY_RECORDINGS": str(recordings),
+        "IDENTITY_ANSWERING_DIR": str(home / ".claude"),
+        "IDENTITY_FAKE_CODEX": str(FAKE_CODEX),
+        "ONEHARNESS_HISTORY": "1",
+        "ONEHARNESS_HISTORY_POINTER_FILE": str(pointers),
+        "ONEHARNESS_HISTORY_LABELS": ",".join(f"{k}={v}" for k, v in INHERITED_LABELS.items()),
+    }
+    workspace = Workspace(copies.first.root, environment, copies.first.judge_log)
+
+    result = workspace.lint(copies.base)
+
+    report = result.stdout + result.stderr
+    handed = recordings.read_text("utf-8") if recordings.exists() else "no provider was spawned"
+    assert result.returncode == 0, f"{report}\nproviders were handed:\n{handed}"
+    recorded = [json.loads(line) for line in recordings.read_text("utf-8").splitlines()]
+    resolved = {name: str(home / each.leaf) for name, each in IDENTITY_DIRECTORIES.items()}
+    for name, identity in IDENTITY_DIRECTORIES.items():
+        assert any(
+            entry["binary"] == identity.provider
+            and entry["environment"].get(identity.mapped) == resolved[name]
+            for entry in recorded
+        ), f"no {identity.provider} child was handed {identity.mapped}={resolved[name]}: {recorded}"
+    for entry in recorded:
+        handed = {key: entry["environment"].get(key) for key in resolved}
+        assert handed == resolved, entry
+    _assert_judge_history_labelled(pointers)
+
+
+def _assert_judge_history_labelled(pointers: Path) -> None:
+    """The judge session's history record carries `role=llmlint` and the caller's labels."""
+    answered = []
+    for line in pointers.read_text("utf-8").splitlines():
+        pointer = json.loads(line)
+        history = Path(pointer["history_file"])
+        for text in history.read_text("utf-8").splitlines():
+            entry = json.loads(text)
+            if entry.get("type") == "run" and entry.get("status") == "ok":
+                answered.append(entry["labels"])
+    assert answered, f"no judge session ran to a verdict: {pointers.read_text('utf-8')}"
+    for labels in answered:
+        assert labels.get("role") == "llmlint", labels
+        assert {key: labels.get(key) for key in INHERITED_LABELS} == INHERITED_LABELS, labels

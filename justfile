@@ -94,17 +94,10 @@ check:
 # replays it rather than judging again, and only a fix that moves the tree re-judges.
 #
 # A passing run says everything it has to say on one line, printed once every stage
-# has passed: the line coverage `just check` measured, which base commit the llmlint
-# verdict covers, and whether that verdict was judged now or replayed. The judge is
-# non-deterministic and a clean run of it is cached, so "green" is a claim about one
-# judged diff against one base commit — and a worker whose gate replayed a cached run
-# needs to know that, and which base commit it covers, before it settles. The coverage
-# total is measured either way; printing it here is what stops a reader opening
-# `.coverage` by hand. The judged stage and the deterministic one share one shell line
-# because that line is what carries the provenance to the summary: `just` runs each
-# line in its own shell, and the log the judged stage wrote can be a diverted path
-# (`scripts/preserved-log.sh`) that no later line could re-derive.
-# llmlint: ignore[changed_behavior_has_e2e] Running the complete gate from a test would recursively run this same suite; the stage order, refusals and summary are driven through traced Nx and llmlint doubles in tests/e2e/workspace_copies/test_workspace_contract_e2e.py, and the tier whose provenance is passed through here is proven end to end in tests/e2e/workspace_copies/test_llmlint_cache_e2e.py.
+# has passed: the line coverage `just check` measured, which printing here is what
+# stops a reader opening `.coverage` by hand. The base commit the llmlint verdict
+# covers is the first line of that stage's log, as `just lint-llm-diff` prints it.
+# llmlint: ignore[changed_behavior_has_e2e] Running the complete gate from a test would recursively run this same suite; the stage order, refusals and summary are driven through traced Nx and llmlint doubles in tests/e2e/workspace_copies/test_workspace_contract_e2e.py, and its judged stage against the comparison base is proven end to end in tests/e2e/workspace_copies/test_llmlint_cache_e2e.py.
 # Both arguments default to empty and are passed straight through, because
 # `scripts/comparison-base.sh` is the one source of which remote and base the gate
 # judges against — including the environment chain the lifecycle exports it under.
@@ -114,7 +107,7 @@ check:
 gate remote="" base="":
     @comparison=$(scripts/comparison-base.sh "$1" "$2")
     @source ./scripts/preserved-log.sh; comparison=$(scripts/comparison-base.sh "$1" "$2"); preserved_log_open "{{repo_root}}" gate-llmlint-validate; log=$PRESERVED_LOG; just lint-llm-validate --diff-base "$comparison" 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "gate: llmlint validate failed; fix the llmlint config or ignore directive it names (a rule that does not exist, or a fragment edited without its version bump) against 'just lint-llm-validate --diff-base $comparison' alone, then rerun 'just gate ${comparison%%/*} ${comparison#*/}' (full output: $log)" >&2; exit 1; }
-    @source ./scripts/preserved-log.sh; comparison=$(scripts/comparison-base.sh "$1" "$2"); preserved_log_open "{{repo_root}}" gate-llmlint; log=$PRESERVED_LOG; just lint-llm-diff "$comparison" 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "gate: llmlint failed; clear the reported findings against 'just lint-llm-diff $comparison' alone, then rerun 'just gate ${comparison%%/*} ${comparison#*/}' once to confirm (full output: $log)" >&2; exit 1; }; provenance=$(grep -m1 -E '^lint-llm-diff: (judged|replayed) ' "$log" || echo "lint-llm-diff: verdict provenance unavailable"); note=$(grep -q '^lint-llm-diff: ignoring ' "$log" && echo " [ignored an ambient global Nx cache skip]" || true); preserved_log_open "{{repo_root}}" gate-check; log=$PRESERVED_LOG; just check 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "gate: deterministic checks failed; fix the reported findings against 'just check' alone, then rerun 'just gate ${comparison%%/*} ${comparison#*/}' (full output: $log)" >&2; exit 1; }; total=$(./scripts/coverage-total.sh "{{repo_root}}"); echo "gate: complete gate passed${total:+ (line coverage ${total}%)}; ${provenance#lint-llm-diff: }${note}"
+    @source ./scripts/preserved-log.sh; comparison=$(scripts/comparison-base.sh "$1" "$2"); preserved_log_open "{{repo_root}}" gate-llmlint; log=$PRESERVED_LOG; just lint-llm-diff "$comparison" 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "gate: llmlint failed; clear the reported findings against 'just lint-llm-diff $comparison' alone, then rerun 'just gate ${comparison%%/*} ${comparison#*/}' once to confirm (full output: $log)" >&2; exit 1; }; preserved_log_open "{{repo_root}}" gate-check; log=$PRESERVED_LOG; just check 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "gate: deterministic checks failed; fix the reported findings against 'just check' alone, then rerun 'just gate ${comparison%%/*} ${comparison#*/}' (full output: $log)" >&2; exit 1; }; total=$(./scripts/coverage-total.sh "{{repo_root}}"); echo "gate: complete gate passed${total:+ (line coverage ${total}%)}"
 
 # Whole suite (unit + e2e) with coverage enforced on the orchestrator package.
 #
@@ -1003,14 +996,12 @@ setup-llmlint:
 # LLM-judge lint over the whole tree (or pass paths to narrow). Run once with
 # `just setup-llmlint` first in a plain terminal.
 #
-# `role=llmlint` stamps this tier's own harness sessions so they are separable from
-# the agent/judge sessions of the work being linted (whose roles come from
-# oneharness.toml / oneharness.judge.toml). It is layered over — not substituted
-# for — the graph labels inherited when a dispatched agent runs its own gate, so a
-# finding stays attributable to the run and node that provoked it.
+# The judge runs under `oneharness.llmlint.toml`, which `llmlint.yml` names and whose
+# `history_labels` stamp `role=llmlint` over any labels a dispatch inherits; the
+# identity directories its variants map are exported from the shared resolvers.
 lint-llm *paths: _provisioned
     @command -v llmlint >/dev/null 2>&1 || { echo "llmlint not installed — run 'just setup-llmlint'"; exit 1; }
-    @PATH="{{repo_root}}/.venv/bin:$PATH" LLMLINT_ONEHARNESS_BIN="{{repo_root}}/scripts/llmlint-oneharness.sh" ONEHARNESS_HISTORY_LABELS="$(uv run orchestrator-history-labels role=llmlint)" llmlint "$@"
+    @source ./scripts/codex-alt-home.sh || { echo "lint-llm: scripts/codex-alt-home.sh could not be loaded; restore it from the repository, then retry" >&2; exit 1; }; ensure_codex_alt_home lint-llm; source ./scripts/claude-alt-config-dir.sh || { echo "lint-llm: scripts/claude-alt-config-dir.sh could not be loaded; restore it from the repository, then retry" >&2; exit 1; }; resolve_claude_alt_config_dir lint-llm; PATH="{{repo_root}}/.venv/bin:$PATH" llmlint "$@"
 
 # Deterministic, model-free llmlint gate: config structure, ignore directives name
 # real rules, edited fragments bumped their version. The fast pre-flight.
@@ -1021,53 +1012,21 @@ lint-llm-validate *args:
 # llmlint scoped to the merge-base diff with main — judges only what the branch
 # changed. This is the blocking pre-push check.
 #
-# The judge is non-deterministic, so the cached Nx `workspace:lint-llm-diff` target
-# caches the judge run itself: an unchanged tree judged against an unchanged base
-# replays that run's own `-v` report — every rule itemized, plus the
-# `llmlint history <id>` pointer — instead of rolling the dice again. There is no
-# verdict record to write, restore, or race on; Nx's task cache is the whole
-# mechanism. The base ref is resolved to a commit here, before Nx hashes it, so a
-# rebased or advanced base misses rather than replaying a verdict computed against
-# a different base. The resolved base commit is reported with the verdict, because
-# "green" means green *against that commit*: a gate run and the publication rebuild
-# that judge different base commits are answering different questions.
+# The cached Nx target `workspace:lint-llm-diff` runs `llmlint --diff` itself, and
+# Nx's task cache is the whole record: a clean run is replayed for an unchanged
+# tracked tree, base commit and `llmlint fingerprint` (llmlint's digest of its
+# version, config, plugins, prompt and the oneharness configuration it judges
+# under), in any worktree, while findings and a run that reached no verdict are
+# never cached and re-judge. `just lint-llm-diff <base> --skip-nx-cache` forces a
+# re-judge. The base is resolved to a commit here, before Nx hashes it, and printed,
+# because "green" means green against that commit. A base its own origin ref has
+# moved past is refused first — `scripts/base-freshness.sh` decides it — because a
+# stale name yields a valid verdict over commits the branch does not carry.
 #
-# A base its **own origin ref has moved past** is refused before any of that, naming
-# both refs and both commits — `scripts/base-freshness.sh` decides it. A stale name
-# resolves silently and keys the cache perfectly well, so nothing downstream can see
-# the disagreement: what comes back is a valid verdict over the wrong range, and a
-# worker inside a session clone naming `main` gets one by default. Only strictly
-# behind is refused; a base with no origin ref of its own, one level with it, one
-# ahead of it, and one that has diverged from it are all judged as before.
-#
-# Only a clean run is cached, because Nx caches successful tasks only. Findings
-# (llmlint exit 1) and a toolchain that never reached a verdict (exit >= 2) both
-# re-judge on the next invocation. That is the deliberate trade for deleting the
-# record/replay protocol this tier used to smuggle failures through Nx with: a red
-# costs a fresh roll every time, and every roll lands in `llmlint history`. A wrong
-# *green* still sticks until the tree, the base commit, or the judge configuration
-# moves — `--skip-nx-cache` re-judges but neither reads nor writes the cache under
-# this Nx, so the next ordinary run replays the same stale entry.
-#
-# `just lint-llm-diff <base> --skip-nx-cache` is the one supported way to force a
-# real re-judge, and it is deliberately per-invocation. An ambient global Nx cache
-# skip (`NX_SKIP_NX_CACHE` / `NX_DISABLE_NX_CACHE`, exported to re-judge this tier
-# and inherited by everything else) is reported and ignored here: it would re-roll
-# a non-deterministic judge from every unrelated command. Every other Nx target
-# still honours it.
-#
-# Provenance comes from Nx's own cache reporting: the task line it annotates, or the
-# summary line it prints, only when it replayed a task instead of running it. Both
-# are matched because only the first is safe at any size — Nx replays a hit as one
-# burst and exits, so a replay larger than a pipe buffer arrives here truncated and
-# its summary never does. `tests/e2e/workspace_copies/test_workspace_contract_e2e.py`
-# holds every phrase matched here to what the installed Nx prints, so an Nx upgrade
-# that renames one fails the suite rather than quietly reporting every run as freshly
-# judged. Nx's full output is
-# shown because it *is* the report now — except a refusal Nx dropped before relaying
-# it, which the tier also hands back through LLMLINT_DIFF_REFUSALS and this prints
-# (scripts/llmlint-judge.sh says why).
+# The judge runs under `oneharness.llmlint.toml`, which `llmlint.yml` names; the
+# identity directories its variants map are exported here from the shared resolvers.
 lint-llm-diff base="origin/main" *nx_args:
     @command -v llmlint >/dev/null 2>&1 || { echo "llmlint not installed — run 'just setup-llmlint'"; exit 1; }
-    @# llmlint: ignore[tool_output_is_signal] The judge's per-rule report and its one-line provenance are this tier's product; a quiet success here would delete the tier's result and leave a replayed run saying less than a fresh one. `@#` so the directive itself stays out of that report.
-    @base_sha=$(git rev-parse --verify --quiet "{{base}}^{commit}") || { echo "lint-llm-diff: '{{base}}' does not resolve to a commit; fetch it or pass an existing base" >&2; exit 1; }; behind=$(./scripts/base-freshness.sh "{{base}}") || { echo "lint-llm-diff: whether '{{base}}' still matches its own origin ref could not be decided; run 'scripts/base-freshness.sh {{base}}' to see why" >&2; exit 1; }; if [[ -n "$behind" ]]; then echo "lint-llm-diff: $behind, so judging it would judge commits this branch does not carry; fetch and fast-forward '{{base}}', or name the origin ref as the base" >&2; exit 1; fi; if [[ -n "${NX_SKIP_NX_CACHE:-}${NX_DISABLE_NX_CACHE:-}" ]]; then echo "lint-llm-diff: ignoring the ambient global Nx cache skip; force a fresh judgement of this tier alone with 'just lint-llm-diff {{base}} --skip-nx-cache'" >&2; fi; unset NX_SKIP_NX_CACHE NX_DISABLE_NX_CACHE; report=$(mktemp) && refusals=$(mktemp) || { echo "lint-llm-diff: could not open temporary storage for the judge report; free disk space and retry" >&2; exit 1; }; trap 'rm -f "$report" "$refusals"' EXIT; status=0; LLMLINT_DIFF_BASE_SHA="$base_sha" LLMLINT_DIFF_REFUSALS="$refusals" AI_ORCHESTRATOR_NX_SHOW_OUTPUT=1 ./scripts/nx.sh run workspace:lint-llm-diff {{nx_args}} >"$report" 2>&1 || status=$?; cat "$report"; if ((status != 0)) && [[ -s "$refusals" ]] && ! grep -qF -- "$(tail -n 1 "$refusals")" "$report"; then echo "lint-llm-diff: Nx exited without relaying the tier's refusal, which was:" >&2; cat "$refusals" >&2; fi; if grep -qE '^Nx read the output from the cache instead of running the command|^> nx run workspace:lint-llm-diff +\[(local cache|remote cache|existing outputs match the cache)' "$report"; then echo "lint-llm-diff: replayed the recorded verdict for base $base_sha (Nx cache hit)" >&2; else echo "lint-llm-diff: judged this diff against base $base_sha (Nx cache miss)" >&2; fi; exit "$status"
+    @# Nx 23.1 resolves a run-commands task on the child's `exit` before its pipes drain, so with no terminal (CI, the gate, the pre-push hook) a fast failure's output is lost; NX_RUN_COMMANDS_DIRECTLY=false lost none in 750 runs (the spike-nx-output-loss report). Remove it once Nx collects run-commands output on `close`.
+    @# llmlint: ignore[tool_output_is_signal] The judge's per-rule report and the base it is for are this tier's product, replayed as Nx prints it; a quiet success here would delete the tier's result. The unresolvable-base refusal is one line naming the base with no remedy clause, by the manager's ruling for this tier. `@#` so the directive itself stays out of that report.
+    @base_sha=$(git rev-parse --verify --quiet "{{base}}^{commit}") || { echo "lint-llm-diff: '{{base}}' does not resolve to a commit" >&2; exit 1; }; behind=$(./scripts/base-freshness.sh "{{base}}") || { echo "lint-llm-diff: whether '{{base}}' still matches its own origin ref could not be decided; run 'scripts/base-freshness.sh {{base}}' to see why" >&2; exit 1; }; if [[ -n "$behind" ]]; then echo "lint-llm-diff: $behind, so judging it would judge commits this branch does not carry; fetch and fast-forward '{{base}}', or name the origin ref as the base" >&2; exit 1; fi; source ./scripts/codex-alt-home.sh || { echo "lint-llm-diff: scripts/codex-alt-home.sh could not be loaded; restore it from the repository, then retry" >&2; exit 1; }; ensure_codex_alt_home lint-llm-diff; source ./scripts/claude-alt-config-dir.sh || { echo "lint-llm-diff: scripts/claude-alt-config-dir.sh could not be loaded; restore it from the repository, then retry" >&2; exit 1; }; resolve_claude_alt_config_dir lint-llm-diff; export PATH="{{repo_root}}/.venv/bin:$PATH" LLMLINT_DIFF_BASE_SHA="$base_sha"; echo "lint-llm-diff: judging this diff against base $base_sha"; NX_RUN_COMMANDS_DIRECTLY=false AI_ORCHESTRATOR_NX_SHOW_OUTPUT=1 ./scripts/nx.sh run workspace:lint-llm-diff {{nx_args}}

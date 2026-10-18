@@ -91,10 +91,6 @@ readonly JUST_MIN="1.42.4"
 readonly NODE_BIN="$HOME/.local/node/bin"   # npm global prefix (codex lands here)
 readonly PROJECT_VENV_BIN="$REPO_ROOT/.venv/bin"
 export PATH="$PROJECT_VENV_BIN:$BIN_DIR:$CARGO_BIN:$NODE_BIN:$PATH"
-# llmlint forces its nested judge into oneharness read-only mode. The wrapper
-# retains that filesystem boundary while granting network capability so codex
-# does not ask bubblewrap to configure loopback in a forbidden namespace.
-export LLMLINT_ONEHARNESS_BIN="$REPO_ROOT/scripts/llmlint-oneharness.sh"
 
 log() { printf 'session-setup: %s\n' "$*" >&2; }
 
@@ -410,15 +406,13 @@ append_session_env() {
 
 persist_session_env() {
   [ -n "${CLAUDE_ENV_FILE:-}" ] || return 0
-  local env_dir env_export has_path=0 has_llmlint_bin=0
+  local env_dir env_export has_path=0
   env_dir="$(dirname "$CLAUDE_ENV_FILE")"
   # On the FIRST session inside a freshly created config directory — a new machine,
   # or a newly authenticated subscription — the parent of the file Claude Code names
   # does not exist yet. Create it rather than skipping: it is the directory of the
   # harness's own path, and skipping would cost that session its toolchain PATH for
-  # good. Best effort either way, and never the script's exit status; a lost export
-  # costs only PATH, since scripts/llmlint-runtime-env.sh re-derives
-  # LLMLINT_ONEHARNESS_BIN for both ends of the llmlint tier.
+  # good. Best effort either way, and never the script's exit status.
   if ! mkdir -p "$env_dir"; then
     log "cannot persist the session environment: $env_dir could not be created"
     return 0
@@ -429,16 +423,11 @@ persist_session_env() {
     while IFS= read -r env_export; do
       case "$env_export" in
         "export PATH="*"$NODE_BIN"*) has_path=1 ;;
-        "export LLMLINT_ONEHARNESS_BIN="*) has_llmlint_bin=1 ;;
       esac
     done <"$CLAUDE_ENV_FILE"
   fi
   if [ "$has_path" -eq 0 ]; then
     printf -v env_export 'export PATH=%q' "$PATH"
-    append_session_env "$env_export" || return 0
-  fi
-  if [ "$has_llmlint_bin" -eq 0 ]; then
-    printf -v env_export 'export LLMLINT_ONEHARNESS_BIN=%q' "$LLMLINT_ONEHARNESS_BIN"
     append_session_env "$env_export" || return 0
   fi
 }
