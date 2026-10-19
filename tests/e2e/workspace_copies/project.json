@@ -58,6 +58,7 @@
       "{workspaceRoot}/tests/e2e/project.json",
       "{workspaceRoot}/tests/e2e/publish_and_landing/project.json",
       "{workspaceRoot}/tests/e2e/registry_and_recipes/project.json",
+      "{workspaceRoot}/tests/e2e/repos_apply_credentials/project.json",
       "{workspaceRoot}/tests/e2e/suite_helpers/project.json",
       "{workspaceRoot}/tests/family_scans/project.json",
       "{workspaceRoot}/tests/manager_guidance/project.json",

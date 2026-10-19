@@ -288,11 +288,16 @@ validation_register() {
 # the producer's declaration cannot be read to carry — a fact about that checkout's
 # momentary state, which the table below reports per producer, not about the file.
 # Its directory name is the alias `onevcs` derives, so it is one no listed checkout
-# shares: a second registration under one alias replaces the first.
+# shares: a second registration under one alias replaces the first. Its origin exists
+# nowhere, so the credential helpers it would otherwise ask when `release targets` reads
+# that remote are cleared: one such helper, `gh auth git-credential` holding no token in
+# its config, falls back to a keyring that autolaunches a session bus daemon outliving
+# the apply.
 synthetic_path="$validation_home/apply-repo-registry-validation"
 if ! mkdir "$synthetic_path" || \
     ! git -C "$synthetic_path" init -q -b main || \
-    ! git -C "$synthetic_path" remote add origin https://github.com/validation/registry-rules.git; then
+    ! git -C "$synthetic_path" remote add origin https://github.com/validation/registry-rules.git || \
+    ! git -C "$synthetic_path" config credential.helper ""; then
     echo "apply-repo-registry: could not prepare a checkout for rules validation" >&2
     exit 1
 fi

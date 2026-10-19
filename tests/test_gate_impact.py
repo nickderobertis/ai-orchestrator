@@ -17,6 +17,7 @@ module stays in `orchestrator:test`: that tier's measurement is the one the 100%
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import io
 import json
@@ -808,6 +809,139 @@ def test_an_orphan_that_exits_is_reaped_at_once(tmp_path: Path) -> None:
     ran = _recorder(tmp_path, "run", "--", "bash", "-c", gate)
     assert ran.returncode == 0, ran.stderr
     assert "0 leaked process(es)" in ran.stderr
+
+
+#: How many idle processes outside the recorder's tree the busy-host tests run beside it.
+UNRELATED = 1000
+
+
+@contextlib.contextmanager
+def _unrelated_processes() -> Iterator[None]:
+    """:data:`UNRELATED` idle processes this test starts, none of them the recorder's."""
+    started: list[subprocess.Popen[bytes]] = []
+    try:
+        for _ in range(UNRELATED):
+            started.append(subprocess.Popen(["sleep", "600"], stdin=subprocess.DEVNULL))
+        yield
+    finally:
+        for process in started:
+            process.kill()
+        for process in started:
+            process.wait()
+
+
+#: Run as its own process, because a reap in this worker would take its other children.
+#: An audit hook sees every file and directory the reap opens, so the absence of any read
+#: of ``/proc`` is observed rather than inferred from how long the reap took.
+REAPS_WITHOUT_PROC = """
+import os, sys, time
+from orchestrator.gate_impact import Tree, _stat
+
+opened = []
+reaping = False
+
+def audit(event, arguments):
+    if reaping and event in ("open", "os.listdir", "os.scandir"):
+        opened.append(str(arguments[0]))
+
+sys.addaudithook(audit)
+tree = Tree()
+orphan = os.posix_spawnp("true", ["true"], os.environ)
+deadline = time.monotonic() + 30
+while (_stat(orphan) is None or _stat(orphan).state != "Z") and time.monotonic() < deadline:
+    time.sleep(0.01)
+reaping = True
+tree.reap()
+reaping = False
+assert _stat(orphan) is None, f"{orphan} is still a zombie"
+assert not any(path.startswith("/proc") for path in opened), opened
+"""
+
+
+def test_a_reap_reads_nothing_of_the_host_s_other_processes(tmp_path: Path) -> None:
+    """With a thousand idle processes beside it, a reap takes its exited child without
+    opening ``/proc`` at all, so no unrelated process adds anything to what it does."""
+    with _unrelated_processes():
+        ran = subprocess.run(
+            [str(PYTHON), "-c", REAPS_WITHOUT_PROC],
+            cwd=REPO_ROOT,
+            env=_environment(tmp_path),
+            text=True,
+            capture_output=True,
+            timeout=e2e_timeout(60),
+            check=False,
+        )
+    assert ran.returncode == 0, ran.stderr
+
+
+def test_a_leak_is_recorded_beside_many_unrelated_processes(tmp_path: Path) -> None:
+    """The walk still finds the gate's own leaked process among a thousand unrelated ones,
+    and records it alone."""
+    gate = "setsid sleep 600 >/dev/null 2>&1 &\nexit 0"
+    summary = tmp_path / "summary.json"
+    with _unrelated_processes():
+        ran = _recorder(tmp_path, "run", "--summary", str(summary), "--", "bash", "-c", gate)
+    assert ran.returncode == 0, ran.stderr
+    leaked = _summary(summary).leaked
+    assert [(process.command, process.stopped_by) for process in leaked] == [
+        ("sleep 600", StoppedBy.TERM)
+    ]
+
+
+def test_the_walk_reads_pids_above_the_recorder_s_before_the_rest() -> None:
+    """Every process with a pid above the one the walk is for is read before any at or
+    below it: read for the pid just below a process's own, that process is read first, and
+    read for its own pid, after every process above it. Each pid is chosen from the child's,
+    so both hold however the kernel's pids have wrapped."""
+    child = subprocess.Popen(["sleep", "30"])
+    try:
+        just_below = list(gate_impact._table(child.pid - 1))
+        its_own = list(gate_impact._table(child.pid))
+    finally:
+        child.kill()
+        child.wait()
+    assert just_below[0] == child.pid, just_below[:5]
+    higher = [index for index, pid in enumerate(its_own) if pid > child.pid]
+    assert child.pid in its_own, f"{child.pid} was not read at all"
+    assert all(index < its_own.index(child.pid) for index in higher), its_own[:5]
+
+
+#: Run as its own process, because a reap in this worker would take its other children.
+BEHIND_A_COMMAND = """
+import os, time
+from orchestrator.gate_impact import Tree, _stat
+
+def zombie(pid):
+    proc = _stat(pid)
+    return proc is not None and proc.state == "Z"
+
+tree = Tree()
+command = tree.start_excluded(["true"])
+orphan = os.posix_spawnp("true", ["true"], os.environ)
+deadline = time.monotonic() + 30
+while not (zombie(command.pid) and zombie(orphan)) and time.monotonic() < deadline:
+    time.sleep(0.01)
+tree.reap()
+assert zombie(command.pid) and zombie(orphan), "the command's status did not stand ahead"
+tree.communicate(command)
+assert command.returncode == 0, command.returncode
+assert _stat(orphan) is None, f"{orphan} is still a zombie"
+"""
+
+
+def test_an_orphan_behind_an_unread_command_is_reaped_once_it_is_read(tmp_path: Path) -> None:
+    """A reap that met a sampler command's unread status first stops there, leaving the
+    child that exited behind it; reading that command to its end reaps the child too."""
+    ran = subprocess.run(
+        [str(PYTHON), "-c", BEHIND_A_COMMAND],
+        cwd=REPO_ROOT,
+        env=_environment(tmp_path),
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert ran.returncode == 0, ran.stderr
 
 
 def test_a_registration_reaching_home_is_left_alone_and_overlaps_counted_once(

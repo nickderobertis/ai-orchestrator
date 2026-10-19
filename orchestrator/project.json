@@ -84,6 +84,7 @@
       "!{workspaceRoot}/tests/e2e/publish_and_landing/test_*.py",
       "!{workspaceRoot}/tests/e2e/registry_and_recipes/test_*.py",
       "!{workspaceRoot}/tests/e2e/suite_helpers/test_*.py",
+      "!{workspaceRoot}/tests/e2e/repos_apply_credentials/test_*.py",
       "!{workspaceRoot}/tests/e2e/spike_brief/test_*.py",
       "!{workspaceRoot}/tests/e2e/workspace_copies/test_*.py",
       "!{workspaceRoot}/tests/e2e/launch_monitor_observer/oneharness_resolved/**/*"

@@ -429,18 +429,35 @@ class Proc:
 
 
 def _stat(pid: int) -> Proc | None:
+    # One open and one read, rather than a Path's text read: a walk makes one of these
+    # per process on the host, and on a busy host that is thousands of them.
     try:
-        raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
+        descriptor = os.open(f"/proc/{pid}/stat", os.O_RDONLY)
+        try:
+            raw = os.read(descriptor, 4096).decode(errors="replace")
+        finally:
+            os.close(descriptor)
     except OSError:
         return None
     fields = raw[raw.rfind(")") + 2 :].split()
     return Proc(pid, int(fields[1]), fields[0], int(fields[19]))
 
 
-def _table() -> dict[int, Proc]:
+def _table(after: int) -> dict[int, Proc]:
+    """Every process on the host, those with a pid above ``after`` read first.
+
+    The kernel hands out pids in ascending order until it wraps, so ``after``'s
+    descendants are read before the thousands of unrelated processes a busy host runs,
+    any of which a short-lived descendant could otherwise exit behind. The order changes
+    only how soon each is read, never which are.
+    """
+    pids = sorted(
+        (int(name) for name in os.listdir("/proc") if name.isdigit()),
+        key=lambda pid: (pid <= after, pid),
+    )
     table: dict[int, Proc] = {}
-    for name in os.listdir("/proc"):
-        if name.isdigit() and (proc := _stat(int(name))) is not None:
+    for pid in pids:
+        if (proc := _stat(pid)) is not None:
             table[proc.pid] = proc
     return table
 
@@ -454,14 +471,37 @@ class Tree:
         # interrupts, which may be one already holding it.
         self._lock = threading.RLock()
         self._excluded: set[int] = set()
+        #: Children a waiter of their own reads the status of, such as the gate's process.
+        self._waited: set[int] = set()
+
+    def wait_on(self, pid: int) -> None:
+        """Leave ``pid``'s status to the waiter that started it, until :meth:`waited`."""
+        with self._lock:
+            self._waited.add(pid)
+
+    def waited(self, pid: int) -> None:
+        with self._lock:
+            self._waited.discard(pid)
 
     def include(self, pid: int) -> None:
         with self._lock:
             self._excluded.discard(pid)
 
+    def communicate(self, process: subprocess.Popen[bytes]) -> tuple[bytes, bytes]:
+        """Read one of the recorder's own commands to its end, then count it again.
+
+        An orphan that exited while that command's unread status stood ahead of it was
+        left by the reap its exit set off, so it is reaped here.
+        """
+        try:
+            return process.communicate()
+        finally:
+            self.include(process.pid)
+            self.reap()
+
     def walk(self) -> dict[int, Proc]:
         """Every live (non-zombie) process under the recorder at any depth."""
-        table = _table()
+        table = _table(self.root)
         children: dict[int, list[int]] = defaultdict(list)
         for proc in table.values():
             children[proc.ppid].append(proc.pid)
@@ -478,19 +518,29 @@ class Tree:
                 found[pid] = table[pid]
         return found
 
-    def reap(self, protected: set[int]) -> None:
-        """Reap every zombie re-parented to the recorder that nothing here waits on.
+    def reap(self) -> None:
+        """Reap every zombie child of the recorder that nothing here waits on.
 
-        Under the lock a walk is started and excluded under, so a sampler command that
-        exits at once is never reaped from under the waiter that reads its status.
+        The kernel is asked which child has exited, never ``/proc``, so reaping costs the
+        same however many unrelated processes the host runs. It is asked without reaping,
+        and a child whose own waiter reads its status is left to it and ends the pass:
+        the kernel may answer that child again until it is reaped, so its waiter reaps what
+        stood behind it once it has read that status. Under the lock a command is started
+        and excluded under, so a sampler command that exits at once is never reaped from
+        under the waiter that reads its status.
         """
         with self._lock:
-            protected = protected | self._excluded
-            for proc in _table().values():
-                if proc.ppid == self.root and proc.state == "Z" and proc.pid not in protected:
-                    # A zombie its own waiter reaped between the read and here is gone.
-                    with contextlib.suppress(ChildProcessError):
-                        os.waitpid(proc.pid, os.WNOHANG)
+            protected = self._waited | self._excluded
+            while True:
+                try:
+                    exited = os.waitid(os.P_ALL, 0, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+                except ChildProcessError:
+                    return
+                if exited is None or exited.si_pid in protected:
+                    return
+                # A zombie its own waiter reaped between the question and here is gone.
+                with contextlib.suppress(ChildProcessError):
+                    os.waitpid(exited.si_pid, os.WNOHANG)
 
     def start_excluded(self, command: list[str]) -> subprocess.Popen[bytes]:
         """Start one of the recorder's own commands, excluded from the tree from its start."""
@@ -538,7 +588,7 @@ def _signal(procs: dict[int, Proc], number: int) -> None:
 def _wait_until(done: Callable[[], bool], seconds: float, tree: Tree) -> None:
     deadline = time.monotonic() + seconds
     while True:
-        tree.reap(set())
+        tree.reap()
         if done() or time.monotonic() >= deadline:
             return
         time.sleep(POLL_SECONDS)
@@ -600,10 +650,7 @@ def _du(tmp: Path, registered: list[Path], tree: Tree) -> Walk:
     process = tree.start_excluded(
         ["du", "-0", "-a", "-d", "1", "--block-size=1", "--", *map(str, existing)]
     )
-    try:
-        output, errors = process.communicate()
-    finally:
-        tree.include(process.pid)
+    output, errors = tree.communicate(process)
     total = 0
     top: list[PeakEntry] = []
     arguments = {str(path) for path in existing}
@@ -880,6 +927,7 @@ def _run_gate(command: Sequence[str], root: Path, tree: Tree, caller: int) -> Ex
         for number, handler in previous.items():
             signal.signal(number, handler)
         raise
+    tree.wait_on(process.pid)
     forward.attach(process)
     cancelling = Cancelling(tree, forward)
 
@@ -887,7 +935,7 @@ def _run_gate(command: Sequence[str], root: Path, tree: Tree, caller: int) -> Ex
     # a zombie left until the next look reads as alive to anything that asks, and a
     # test killing a process and then asking whether it is gone would be answered wrong.
     def reap(_number: int, _frame: FrameType | None) -> None:
-        tree.reap({process.pid})
+        tree.reap()
 
     previous[signal.SIGCHLD] = signal.signal(signal.SIGCHLD, reap)
     try:
@@ -906,6 +954,7 @@ def _run_gate(command: Sequence[str], root: Path, tree: Tree, caller: int) -> Ex
         signal.signal(signal.SIGCHLD, previous.pop(signal.SIGCHLD))
         sampler.sample()
         status = _status(process.wait())
+        tree.waited(process.pid)
     finally:
         for number, handler in previous.items():
             signal.signal(number, handler)

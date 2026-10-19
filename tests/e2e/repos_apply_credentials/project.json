@@ -1,0 +1,58 @@
+{
+  "name": "repos-apply-credentials",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/e2e/repos_apply_credentials",
+  "tags": [
+    "scope:repos-apply-credentials",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-fake-gh",
+    "support-follow-up-variables",
+    "support-nx-inputs",
+    "support-onejudge-bundle",
+    "support-onevcs-state-snapshot",
+    "support-plan-fixture-source",
+    "support-plan-root-variable",
+    "support-plan-sources",
+    "support-registered-checkouts",
+    "support-short-state",
+    "support-waits"
+  ],
+  "namedInputs": {
+    "reposApplyCredentialsWorkspace": [
+      "{workspaceRoot}/config/onevcs.releases.yml",
+      "{workspaceRoot}/config/onevcs.rules.yml",
+      "{workspaceRoot}/config/onevcs.version",
+      "{workspaceRoot}/config/onevcs.workspaces.yml",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/orchestrator/host_installs.py",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/orchestrator/workspaces_overlay.py",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/scripts/apply-repo-registry.sh",
+      "{workspaceRoot}/scripts/registered-checkouts.sh",
+      "{workspaceRoot}/scripts/require-provisioned.sh",
+      "{workspaceRoot}/uv.lock",
+      "{projectRoot}/**/*"
+    ]
+  },
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/e2e/repos_apply_credentials -n 4 --dist loadgroup --no-cov",
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "reposApplyCredentialsWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ]
+    }
+  }
+}
