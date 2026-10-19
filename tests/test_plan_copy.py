@@ -80,8 +80,8 @@ def _reads(monkeypatch: pytest.MonkeyPatch, *tasks: StoreTask, planned: bool = T
     }
     key = plan_review.plan_key(plan, plan_review.plan_bar_fingerprint())
     record = {"metadata": {plan_review.RECORD_KEY: {"key": key}} if planned else {}}
-    monkeypatch.setattr(plan_store, "read_tasks", lambda _project: list(tasks))
-    monkeypatch.setattr(plan_store, "read_plan", lambda _project, _records: plan)
+    monkeypatch.setattr(plan_store, "read_tasks", lambda *_arguments: list(tasks))
+    monkeypatch.setattr(plan_store, "read_plan", lambda *_arguments: plan)
     monkeypatch.setattr(plan_store, "project_record", lambda _project: record)
     # The document measure reads the plan's documents before the copy; none by default, and
     # `_holds` answers with some where a test is about them.
@@ -238,7 +238,12 @@ def test_a_plan_reviewed_task_by_task_but_never_whole_refuses_the_copy_before_th
 def test_a_project_record_the_store_cannot_answer_is_neither_reviewed_nor_refused(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The third outcome again, one read later: the store stopped answering."""
+    """The third outcome again: the store did not answer the project's record.
+
+    That record is the first thing read, once, and handed to the task listing, the plan and
+    the plan-level review check alike, so a store that cannot answer it refuses the copy
+    before any of them runs.
+    """
     _reads(monkeypatch, _reviewed("route"))
     monkeypatch.setattr(
         plan_store,
@@ -249,8 +254,31 @@ def test_a_project_record_the_store_cannot_answer_is_neither_reviewed_nor_refuse
 
     assert plan_copy.main(["authoring:demo"]) == plan_copy.UNREADABLE
     reported = capsys.readouterr().err
-    assert "cannot read the plan-level review record of authoring:demo" in reported, reported
+    assert "cannot read project authoring:demo" in reported, reported
     assert "the store answered nothing" in reported, reported
+    assert "nothing was copied" in reported, reported
+
+
+def test_a_plan_the_store_answers_but_cannot_be_read_as_one_is_neither_reviewed_nor_refused(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The third outcome once more, after the record answered: the plan it states is unreadable.
+
+    The record and the tasks were read, so the refusal names the plan-level review record
+    the copy could not check rather than the project.
+    """
+    _reads(monkeypatch, _reviewed("route"))
+    monkeypatch.setattr(
+        plan_store,
+        "read_plan",
+        lambda *_arguments: (_ for _ in ()).throw(ValueError("metadata is not a plan")),
+    )
+    monkeypatch.setattr(plan_copy, "copy", lambda *_: pytest.fail("the copy ran"))
+
+    assert plan_copy.main(["authoring:demo"]) == plan_copy.UNREADABLE
+    reported = capsys.readouterr().err
+    assert "cannot read the plan-level review record of authoring:demo" in reported, reported
+    assert "metadata is not a plan" in reported, reported
     assert "nothing was copied" in reported, reported
 
 
@@ -261,7 +289,9 @@ def test_a_fully_reviewed_plan_reaches_the_store_with_the_caller_s_own_arguments
     _reads(monkeypatch, _reviewed("route"))
     seen: dict[str, object] = {}
 
-    def record(project: str, destination: str, passthrough: Sequence[str]) -> int:
+    def record(
+        project: str, destination: str, passthrough: Sequence[str], _documents: object
+    ) -> int:
         seen.update(project=project, destination=destination, passthrough=list(passthrough))
         return plan_copy.OK
 
@@ -284,7 +314,7 @@ def test_naming_no_destination_copies_onto_the_board_this_repository_plans_again
     _reads(monkeypatch, _reviewed("route"))
     seen: list[str] = []
     monkeypatch.setattr(
-        plan_copy, "copy", lambda _p, destination, _t: seen.append(destination) or plan_copy.OK
+        plan_copy, "copy", lambda _p, destination, _t, _d: seen.append(destination) or plan_copy.OK
     )
 
     assert plan_copy.main(["authoring:demo"]) == plan_copy.OK
@@ -360,7 +390,7 @@ def test_a_design_document_within_the_limit_is_warned_about_and_copied(
     _holds(monkeypatch, _document("demo-design", "x" * task_body.WARN_FROM))
     copied: list[str] = []
     monkeypatch.setattr(
-        plan_copy, "copy", lambda project, _d, _t: copied.append(project) or plan_copy.OK
+        plan_copy, "copy", lambda project, _d, _t, _r: copied.append(project) or plan_copy.OK
     )
 
     assert plan_copy.main(["authoring:demo"]) == plan_copy.OK
@@ -383,3 +413,13 @@ def test_documents_the_store_cannot_answer_are_neither_measured_nor_copied(
     reported = capsys.readouterr().err
     assert "cannot read the documents of authoring:demo to measure them" in reported, reported
     assert "lost the source" in reported, reported
+
+
+def test_an_unqualified_project_id_is_refused_before_the_store_is_asked_for_its_record(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The id is held to `<source>:<native>` first, so the refusal says what to pass."""
+    assert plan_copy.main(["demo"]) == plan_copy.UNREADABLE
+    reported = capsys.readouterr().err
+    assert "cannot read project demo" in reported, reported
+    assert "must be qualified as <source>:<native>" in reported, reported

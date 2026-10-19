@@ -70,7 +70,9 @@
       "{workspaceRoot}/templates/plan-description.md.j2",
       "{workspaceRoot}/templates/plan-task-budgets.md.j2",
       "{workspaceRoot}/config/budgets-migration.yaml",
-      "{workspaceRoot}/tests/e2e/board_copy_approval/test_board_copy_spike_evidence_e2e.py"
+      "{workspaceRoot}/tests/e2e/board_copy_approval/test_board_copy_spike_evidence_e2e.py",
+      "{workspaceRoot}/tests/e2e/board_copy_approval/test_board_copy_store_reads_e2e.py",
+      "{workspaceRoot}/orchestrator/plan_locations.py"
     ]
   },
   "targets": {

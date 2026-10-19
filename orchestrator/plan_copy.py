@@ -44,7 +44,7 @@ import argparse
 import inspect
 import sys
 from collections.abc import Sequence
-from typing import TypedDict
+from typing import NamedTuple, TypedDict
 
 from onetaskgraph_sdk import CopyReport, GlobalId
 
@@ -133,8 +133,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         help=f"the configured source to copy into (default: {BOARD})",
     )
     args, passthrough = parser.parse_known_args(argv)
+    # Each local record this reads before the copy is read once and handed on: the project's
+    # own record to the task listing, the plan and its review check, and the documents from
+    # the measurement to the copy that carries them.
     try:
-        records = plan_store.read_tasks(args.project)
+        plan_store.qualified(args.project)
+        record = plan_store.project_record(args.project)
+        records = plan_store.read_tasks(args.project, record)
     except (OSError, ValueError) as exc:
         print(
             f"copy-plan: cannot read project {args.project}: {exc}; nothing was copied. "
@@ -172,9 +177,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     # store is asked to write anything, for the reason the per-task refusal is: a board
     # is not a directory, and a plan copied without this record can never earn one there.
     try:
-        plan = plan_store.read_plan(args.project, records)
+        plan = plan_store.read_plan(args.project, records, record)
         pending_plan = plan_review.plan_unreviewed(
-            plan_store.project_record(args.project),
+            record,
             plan,
             owned=plan_review.owned_by_node(records),
         )
@@ -197,12 +202,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return UNREVIEWED
     measured = _measure_documents(args.project, args.destination)
-    if measured != OK:
-        return measured
-    return copy(args.project, args.destination, passthrough)
+    if measured.status != OK:
+        return measured.status
+    return copy(args.project, args.destination, passthrough, measured.documents)
 
 
-def _measure_documents(project: str, destination: str) -> int:
+class Measurement(NamedTuple):
+    """What measuring a plan's documents answered, and the documents it read to answer it."""
+
+    #: :data:`OK`, or the refusal the measurement reached.
+    status: int
+    #: The documents read, carried to the copy rather than listed a second time.
+    documents: list[plan_store.StoreDocument]
+
+
+def _measure_documents(project: str, destination: str) -> Measurement:
     """Refuse ``project`` when a document's issue body is one the board would refuse.
 
     Asked here, before the store writes anything, rather than left to the board: the
@@ -212,6 +226,9 @@ def _measure_documents(project: str, destination: str) -> int:
     document-writing launch exists and runs this copy after it — this is the one step that
     always reads the document and always precedes the write. A document from
     :data:`~orchestrator.task_body.WARN_FROM` up to the limit is warned about and copied.
+
+    Answers the status beside the documents it read, so the copy carries those over rather
+    than listing them again.
     """
     try:
         documents = plan_store.read_documents(project)
@@ -226,12 +243,12 @@ def _measure_documents(project: str, destination: str) -> int:
             f"nothing was copied. Run this command again once the store answers",
             file=sys.stderr,
         )
-        return UNREADABLE
+        return Measurement(UNREADABLE, [])
     for warned in task_body.document_warnings(documents):
         print(warned, file=sys.stderr)
     refused = task_body.document_refusals(documents)
     if not refused:
-        return OK
+        return Measurement(OK, documents)
     for line in refused:
         print(line, file=sys.stderr)
     print(
@@ -239,15 +256,21 @@ def _measure_documents(project: str, destination: str) -> int:
         f"shorter where it was drafted, have it approved again, then copy the plan up",
         file=sys.stderr,
     )
-    return OVERSIZED
+    return Measurement(OVERSIZED, documents)
 
 
-def copy(project: str, destination: str, passthrough: Sequence[str]) -> int:
+def copy(
+    project: str,
+    destination: str,
+    passthrough: Sequence[str],
+    documents: Sequence[plan_store.StoreDocument] | None = None,
+) -> int:
     """Run the store's own copy verb, and answer what an operator should read it as.
 
     The verb's per-record report — one line naming each project and task and whether it
     was created, updated or unchanged — is this command's product, so it is left to
-    reach the caller's own streams rather than captured and summarized.
+    reach the caller's own streams rather than captured and summarized. ``documents`` are
+    the plan's documents when the caller has already read them.
     """
     options = _copy_options(passthrough)
     try:
@@ -268,10 +291,15 @@ def copy(project: str, destination: str, passthrough: Sequence[str]) -> int:
             file=sys.stderr,
         )
         return COPY_REFUSED
-    return _documents(project, destination, passthrough)
+    return _documents(project, destination, passthrough, documents)
 
 
-def _documents(project: str, destination: str, passthrough: Sequence[str]) -> int:
+def _documents(
+    project: str,
+    destination: str,
+    passthrough: Sequence[str],
+    read: Sequence[plan_store.StoreDocument] | None = None,
+) -> int:
     """Copy ``project``'s documents after its project record landed, and report the same way.
 
     Read through `orchestrator/plan_store.py` rather than by asking the store for ids in a
@@ -281,12 +309,13 @@ def _documents(project: str, destination: str, passthrough: Sequence[str]) -> in
 
     A document that a *previous* copy already put on the destination carries that copy's
     recorded origin, so the store updates it rather than duplicating it and nothing has to
-    say how the two correspond.
+    say how the two correspond. ``read`` is the documents the caller already read, which
+    are carried over rather than listed a second time.
     """
     try:
-        documents = plan_store.read_documents(project)
-    # tests/test_plan_copy.py drives this: reaching it through the recipe means breaking
-    # the store between the pre-flight read above and this one.
+        documents = list(read) if read is not None else plan_store.read_documents(project)
+    # tests/test_plan_copy.py drives this: the recipe hands this the documents its
+    # pre-flight read, so only a caller handing none reaches the read at all.
     # llmlint: ignore[changed_behavior_has_e2e] see the note above this line
     except OSError as exc:
         print(

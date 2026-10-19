@@ -89,7 +89,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -789,8 +789,12 @@ def one_document(project: str, documents: Sequence[StoreDocument]) -> StoreDocum
     return documents[0]
 
 
-def stamped_launch(project: str) -> StampedLaunch | None:
+def stamped_launch(
+    project: str, record: Mapping[str, object] | None = None
+) -> StampedLaunch | None:
     """The exempt launch that wrote ``project``, or ``None``.
+
+    Read off ``record``, the project's own record, when the caller has already read it.
 
     ``None`` for every project stating no exempt stamp, and for one whose stamp this
     cannot read — an unreadable claim to an exemption is answered as no claim at all,
@@ -810,7 +814,8 @@ def stamped_launch(project: str) -> StampedLaunch | None:
     the exemption would then report as the launch's nodes is not what the stamp says. So is
     a :data:`FOLLOW_UPS` stamp naming anything but one node, because that launch writes one.
     """
-    match plan_store.project_record(project).get("metadata"):
+    held = plan_store.project_record(project) if record is None else record
+    match held.get("metadata"):
         # A guard rather than a pattern over the elements: a sequence pattern says how many
         # there are, and what is asked here is of every one of them however many that is.
         case {_STAMP.key: {_STAMP.kind: str() as kind, _STAMP.nodes: [*written]}} if (
@@ -907,8 +912,10 @@ def approve(project: str) -> Approved:
     """
     documents = plan_store.read_documents(project)
     document = one_document(project, documents)
-    unshown(project, document, documents)
-    repository = design_chain.plan_repository(project)
+    # The project's record, read once by id and handed to every reader below that needs it.
+    record = plan_store.project_record(project)
+    unshown(project, document, documents, record)
+    repository = design_chain.plan_repository(project, record)
     key = approval_key(document, resolved_digest(TEMPLATE_ROOT, repository), repository)
     # After the key, which refuses a document that is not a rendering of the chain in force:
     # only such a rendering's table is the one the template's shape is read against.
@@ -928,14 +935,20 @@ def approve(project: str) -> Approved:
     return Approved(document.qualified_id, location, held=False)
 
 
-def unshown(project: str, document: StoreDocument, documents: Sequence[StoreDocument]) -> None:
+def unshown(
+    project: str,
+    document: StoreDocument,
+    documents: Sequence[StoreDocument],
+    record: Mapping[str, object] | None = None,
+) -> None:
     """Refuse a design whose rendered visual entries or image bytes differ from current evidence.
 
     Read the selected report and the design themselves, including copies with no stored
     answers. Nonvisual plans pass; invalid explicit selections refuse through the shared
-    resolver before any approval can be honored.
+    resolver before any approval can be honored. ``record`` is the project's own record
+    when the caller has already read it.
     """
-    report = spike_plan.current_visual_report(project, documents)
+    report = spike_plan.current_visual_report(project, documents, record)
     if report is None:
         return
     expected = visual_evidence(report)
@@ -1057,21 +1070,23 @@ def assess(project: str) -> Assessment:
     which falls out of asking for it before the exemption is granted: the store's own
     words become the refusal, because a bound this cannot check is one that cannot hold.
     """
-    stamped = stamped_launch(project)
+    # The project's record, read once by id and handed to every reader below that needs it.
+    record = plan_store.project_record(project)
+    stamped = stamped_launch(project, record)
     note: str | None = None
     try:
         all_documents = plan_store.read_documents(project)
         documents = design_documents(project, all_documents)
         if stamped is not None:
-            held = frozenset(task.node_id for task in plan_store.read_tasks(project))
+            held = frozenset(task.node_id for task in plan_store.read_tasks(project, record))
             beyond = tuple(sorted(held - stamped.nodes))
             unheld = tuple(sorted(stamped.nodes - held))
             if not beyond and not unheld and not documents:
                 return Assessment(exemption=exemption(project, stamped.nodes, stamped.kind))
             note = lapsed(project, beyond, unheld, documents, stamped.kind)
         document = one_document(project, documents)
-        unshown(project, document, all_documents)
-        repository = design_chain.plan_repository(project)
+        unshown(project, document, all_documents, record)
+        repository = design_chain.plan_repository(project, record)
         key = approval_key(document, resolved_digest(TEMPLATE_ROOT, repository), repository)
     except OSError as exc:
         return Assessment(refusal=stated(str(exc), note))

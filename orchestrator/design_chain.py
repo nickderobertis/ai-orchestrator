@@ -23,7 +23,7 @@ from __future__ import annotations
 import argparse
 import shlex
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from orchestrator import plan_store
 
@@ -61,14 +61,18 @@ def resolve_command(repository: str | None) -> str:
     return shlex.join([*words, *resolve_arguments(repository), "--json"])
 
 
-def plan_repository(project: str) -> str | None:
-    """The origin the rule picks for the plan ``project``, read out of the plan store."""
+def plan_repository(project: str, record: Mapping[str, object] | None = None) -> str | None:
+    """The origin the rule picks for the plan ``project``, read out of the plan store.
+
+    ``record`` is the project's own record when the caller has already read it, so the
+    approval and the launch gate ask the store for it once.
+    """
     # The home's tasks and its members', as `plan_store.read_tasks` reads them: a plan the
     # store spread across sources keys its approval on the repositories of all of them, the
     # same chain wherever the home landed and the same one it had where it was drafted.
     repositories = [
         [repository.model_dump() for repository in held.item.repositories]
-        for held in plan_store.plan_listing(project)
+        for held in plan_store.plan_listing(project, record)
     ]
     return chosen(repositories)
 

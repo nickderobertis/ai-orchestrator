@@ -539,16 +539,19 @@ VISUAL_REPORT_KEY = "orchestrator.visual-report"
 
 
 def current_visual_report(
-    project: str, documents: Sequence[plan_store.StoreDocument]
+    project: str,
+    documents: Sequence[plan_store.StoreDocument],
+    record: Mapping[str, object] | None = None,
 ) -> plan_store.StoreDocument | None:
     """Resolve current evidence by full id or copy origin, refusing explicit bad selections.
 
     Selections are opaque qualified document names, scoped to this project's documents.
     Null, non-string, blank, malformed, missing, wrong-kind, wrong-project and ambiguous
     selections fail closed; only an absent key delegates to :func:`visual_report`.
+    ``record`` is the project's own record when the caller has already read it.
     """
     drafted = _drafted_for(project, documents)
-    metadata = plan_store.project_record(project).get("metadata")
+    metadata = (plan_store.project_record(project) if record is None else record).get("metadata")
     if not isinstance(metadata, Mapping) or VISUAL_REPORT_KEY not in metadata:
         return visual_report(plan_native(project), documents, drafted)
     selected = metadata[VISUAL_REPORT_KEY]

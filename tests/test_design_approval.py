@@ -122,7 +122,7 @@ def _the_working_directory_layer_answers(monkeypatch: pytest.MonkeyPatch) -> Non
     are driven against real stores in
     `tests/plan_tooling/plan_flow/test_approve_design_recipe_e2e.py`.
     """
-    monkeypatch.setattr(design_approval.design_chain, "plan_repository", lambda _project: None)
+    monkeypatch.setattr(design_approval.design_chain, "plan_repository", lambda *_arguments: None)
     monkeypatch.setattr(design_approval, "fits_in_place", lambda *_arguments: True)
     # Key tests use fabricated document records; the real-store tests restore this reader.
     monkeypatch.setattr(design_approval, "validate_document_content", lambda _document: None)
@@ -270,7 +270,7 @@ def _tasks(monkeypatch: pytest.MonkeyPatch, *node_ids: str) -> None:
     monkeypatch.setattr(
         plan_store,
         "read_tasks",
-        lambda _project: [
+        lambda *_arguments: [
             StoreTask(
                 qualified_id=QualifiedTaskId(f"authoring:demo-{node_id}"),
                 node_id=NodeId(node_id),

@@ -300,21 +300,26 @@ def _named_members(project: str, metadata: object) -> frozenset[QualifiedProject
     return frozenset(QualifiedProjectId(member) for member in named)
 
 
-def plan_listing(project: str) -> list[QualifiedTask]:
+def plan_listing(project: str, recorded: Mapping[str, object] | None = None) -> list[QualifiedTask]:
     """Every task of ``project`` and of each member project it names, each held to being one.
 
     Which read is decided by what the store states about the project, never by catching a
-    refusal: its record, from its own source's project listing, names the members a routed
-    copy tied to it, and only then is the store's own members read asked for (`task list
-    --project <home> --members`) — so a plan whose petsinc tasks the store routed to Linear
-    is read as one plan wherever its home lives, and any failure of that read is the plan's
-    refusal, never an empty or partial plan. A project the store holds no record of names
-    no members and is read by its plain listing, as it always was. A task in the home's own
-    source is held to the home, and one anywhere else to a member its record names.
+    refusal: its record names the members a routed copy tied to it, and only then is the
+    store's own members read asked for (`task list --project <home> --members`) — so a plan
+    whose tasks the store routed to another source is read as one plan wherever its home
+    lives, and any failure of that read is the plan's refusal, never an empty or partial
+    plan. A task in the home's own source is held to the home, and one anywhere else to a
+    member its record names.
+
+    The record is ``recorded`` when a caller has already read it, and otherwise the one
+    project read by id (:func:`project_record`) — never a listing of its source, which on
+    the `plans` board walked every project ever filed to find this one, and past GitHub's
+    1,000-result search cap did not even see them all. So a project the store holds no
+    record of is refused here, as every other read of it already was.
     """
     source, native = qualified(project)
-    recorded = next((held for held in read_projects(source) if held.qualified_id == project), None)
-    named = frozenset() if recorded is None else _named_members(project, recorded.metadata)
+    held_record = project_record(project) if recorded is None else recorded
+    named = _named_members(project, held_record.get("metadata"))
     if named:
         listed = every_page(
             f"project {project!r}",
@@ -347,9 +352,14 @@ def plan_listing(project: str) -> list[QualifiedTask]:
     return held
 
 
-def read_tasks(project: str) -> list[StoreTask]:
+def read_tasks(project: str, recorded: Mapping[str, object] | None = None) -> list[StoreTask]:
+    """Every task of ``project``, as :func:`plan_listing` reads it, its dependencies resolved.
+
+    ``recorded`` is the project's own record when the caller has read it already, so one
+    invocation asks the store for it once.
+    """
     records = []
-    for held in plan_listing(project):
+    for held in plan_listing(project, recorded):
         held_id = held.id.model_dump()
         filed = None if held.item.project is None else held.item.project.model_dump()
         item, metadata = held.item, held.item.metadata
@@ -418,8 +428,14 @@ def task_record(task: str) -> Mapping[str, object]:
     return dict(answer.items[0].item.model_dump(mode="python"))
 
 
-def read_plan(project: str, records: Sequence[StoreTask]) -> dict[str, object]:
-    held = project_record(project)
+def read_plan(
+    project: str, records: Sequence[StoreTask], recorded: Mapping[str, object] | None = None
+) -> dict[str, object]:
+    """The plan ``project`` is, in the engine's loaded shape, from its tasks ``records``.
+
+    ``recorded`` is the project's own record when the caller has read it already.
+    """
+    held = project_record(project) if recorded is None else recorded
     raw_metadata = held.get("metadata")
     metadata = raw_metadata if isinstance(raw_metadata, Mapping) else {}
     plan = {
@@ -448,8 +464,12 @@ def read_plan(project: str, records: Sequence[StoreTask]) -> dict[str, object]:
 
 
 def read_project(project: str) -> tuple[dict[str, object], list[StoreTask]]:
-    records = read_tasks(project)
-    return read_plan(project, records), records
+    # Refused as unqualified before the store is asked for the record, as the task listing
+    # refused it when it was this function's first read.
+    qualified(project)
+    record = project_record(project)
+    records = read_tasks(project, record)
+    return read_plan(project, records, record), records
 
 
 def read_documents(project: str) -> list[StoreDocument]:

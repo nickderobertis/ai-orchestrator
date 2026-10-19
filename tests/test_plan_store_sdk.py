@@ -674,6 +674,10 @@ def test_a_task_the_store_created_is_read_as_its_projects_whatever_the_source_na
             "item": held.item.model_copy(update={"project": held.item.project.__class__("other")})
         }
     )
+    # The project's own record, read for real before the task listing is replaced, so the
+    # replaced answer below is only ever read as the task listing it stands in for.
+    record = plan_store.project_record("sdksource:demo")
+    monkeypatch.setattr(plan_store, "project_record", lambda _project: record)
     monkeypatch.setattr(
         plan_store, "sdk", lambda _answer: listed.model_copy(update={"items": [elsewhere]})
     )
@@ -717,6 +721,10 @@ def test_typed_listings_are_still_held_to_the_requested_source(
     with pytest.raises(OSError, match="outside its own ids"):
         plan_store.read_projects("sdksource")
 
+    # The project listing is the store's own record and has its guard above; these are the
+    # task listing's, so the project's record names no members and the plain listing answers.
+    shown_record = plan_store.project_record
+    monkeypatch.setattr(plan_store, "project_record", lambda _project: {"metadata": {}})
     duplicate = tasks.model_copy(update={"items": [tasks.items[0], tasks.items[0]]})
     monkeypatch.setattr(
         plan_store,
@@ -735,12 +743,10 @@ def test_typed_listings_are_still_held_to_the_requested_source(
     monkeypatch.setattr(
         plan_store, "sdk", lambda _answer: tasks.model_copy(update={"items": [outside]})
     )
-    # The project listing is the store's own record and has its guard above; this is the
-    # task listing's, so the project holds no record and the plain listing answers.
-    monkeypatch.setattr(plan_store, "read_projects", lambda _source: [])
     with pytest.raises(OSError, match="outside itself"):
         plan_store.read_tasks("sdksource:demo")
 
+    monkeypatch.setattr(plan_store, "project_record", shown_record)
     monkeypatch.setattr(
         plan_store,
         "client",
@@ -1004,13 +1010,19 @@ def test_the_routes_of_a_source_are_read_in_every_shape_the_store_resolves_them(
     assert plan_store.routed_sources("followups") == ()
 
 
-def test_a_project_the_store_holds_no_record_of_reads_as_no_tasks_and_no_members(
+def test_a_project_the_store_holds_no_record_of_is_refused_rather_than_read_as_empty(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The members read refuses a project nothing holds; the plan reads empty, as it did."""
+    """Its record is read by id, so a project nothing holds is the store's refusal.
+
+    Which members a plan has is read off its own record, and that record is asked for by
+    id rather than found in a listing of every project its source holds; a project the
+    store has no record of is then the store's own refusal, never an empty plan.
+    """
     _source(monkeypatch, "home", tmp_path)
 
-    assert plan_store.read_tasks("home:nothing-here") == []
+    with pytest.raises(OSError, match="no project with that id"):
+        plan_store.read_tasks("home:nothing-here")
 
 
 def test_a_home_with_no_tasks_of_its_own_refuses_when_its_member_cannot_be_read(

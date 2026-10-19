@@ -11,8 +11,11 @@ has no way to tell.
 
 The correspondence is the point. A destination names its own records — a board mints a
 number where a directory keeps the name — so nothing about the source's id survives the
-copy for a reader to compose an address out of. What survives is the origin stamp the
-store writes onto every record it creates by copying, and that is what is read here.
+copy for a reader to compose an address out of. What survives is the link the store
+records on the plan when it copies it and the origin stamp it writes onto every record it
+creates by copying, and those are what is read here: the link to find the copy by id, the
+stamp to hold what it names to being this plan's copy. A link naming a project that is not
+stamped as this plan's copy is a fourth refusal.
 """
 
 from __future__ import annotations
@@ -59,13 +62,52 @@ def _document(qualified: str, location: dict[str, object] | None) -> StoreDocume
     )
 
 
+def _linked(
+    monkeypatch: pytest.MonkeyPatch,
+    held: dict[str, list[StoreProject]],
+    links: dict[str, str],
+) -> None:
+    """Answer each source of ``held`` with its projects, and the plan's record with ``links``.
+
+    The plan's own record carries the store's copy link, keyed by destination source; every
+    other record is the project ``held`` names by that id, as ``project show`` answers it.
+    """
+    records = {
+        str(project.qualified_id): {
+            "title": project.title,
+            "metadata": dict(project.metadata),
+            "location": project.location,
+        }
+        for projects in held.values()
+        for project in projects
+    }
+
+    def shown(project: str) -> dict[str, object]:
+        if project == DRAFTED:
+            return {"title": "drafted", "metadata": {plan_store.COPIES_KEY: dict(links)}}
+        if project not in records:
+            raise OSError(f"no project with that id: {project}")
+        return records[project]
+
+    monkeypatch.setattr(plan_store, "project_record", shown)
+    monkeypatch.setattr(plan_store, "read_projects", lambda source: list(held.get(source, [])))
+
+
 def _holds(
     monkeypatch: pytest.MonkeyPatch,
     projects: list[StoreProject],
     documents: list[StoreDocument] | None = None,
+    link: str | None = None,
 ) -> None:
-    """Answer the destination with ``projects``, and each project's own ``documents``."""
-    monkeypatch.setattr(plan_store, "read_projects", lambda _source: list(projects))
+    """Answer the destination with ``projects``, and each project's own ``documents``.
+
+    The plan's copy link names ``link``, or by default the first of ``projects`` stamped as
+    copied from it, as the store records it on a copy.
+    """
+    stamped = [held for held in projects if held.metadata.get(plan_store.ORIGIN_KEY) == DRAFTED]
+    named = link if link is not None else (str(stamped[0].qualified_id) if stamped else None)
+    source = projects[0].qualified_id.partition(":")[0] if projects else "board"
+    _linked(monkeypatch, {source: projects}, {} if named is None else {source: named})
     monkeypatch.setattr(plan_store, "read_documents", lambda _project: list(documents or []))
     monkeypatch.setattr(plan_store, "routed_sources", lambda _source: ())
     monkeypatch.setattr(plan_store, "members", lambda _project: frozenset())
@@ -169,12 +211,68 @@ def test_a_destination_holding_two_copies_of_one_plan_is_refused_and_names_both(
     reporting whichever this walked into first is the answer that reads as sound from
     every side afterwards.
     """
-    _holds(monkeypatch, [_project("board:42"), _project("board:88")])
+    _holds(monkeypatch, [_project("board:42"), _project("board:88")], link="board:42")
 
     assert plan_locations.main([DRAFTED, "--in", "board"]) == plan_locations.UNREADABLE
     refusal = capsys.readouterr().err
     assert "board:42" in refusal and "board:88" in refusal, refusal
     assert "is not this command's to guess" in refusal, refusal
+    assert DRAFTED in refusal, refusal
+
+
+def test_a_link_naming_a_project_not_stamped_as_this_plans_copy_is_refused(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The link is the store's, but what it names is held to the stamp that makes it a copy.
+
+    A link left pointing at a project somebody since reused for another plan would otherwise
+    send a reviewer to that plan; the origin stamp on the record it names is what says the
+    two correspond.
+    """
+    _holds(
+        monkeypatch,
+        [_project("board:9", origin="authoring:something-else")],
+        link="board:9",
+    )
+
+    assert plan_locations.main([DRAFTED, "--in", "board"]) == plan_locations.UNREADABLE
+    refusal = capsys.readouterr().err
+    assert f"{DRAFTED}'s copy link names board:9" in refusal, refusal
+    assert f"does not record as copied from {DRAFTED}" in refusal, refusal
+
+
+def test_a_link_naming_a_project_the_store_cannot_show_is_refused_naming_the_plan(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A copy since deleted from the destination leaves a link to nothing, said as such."""
+    _holds(monkeypatch, [], link="board:404")
+
+    assert plan_locations.main([DRAFTED, "--in", "board"]) == plan_locations.UNREADABLE
+    refusal = capsys.readouterr().err
+    assert f"{DRAFTED}'s copy link names board:404" in refusal, refusal
+    assert "could not read" in refusal, refusal
+
+
+@pytest.mark.parametrize("link", ["elsewhere:9", "not-a-qualified-id"])
+def test_a_link_naming_no_project_of_the_source_it_is_kept_under_is_refused_unread(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], link: str
+) -> None:
+    """A link is where the copy reached in the one source it is kept under, and nowhere else.
+
+    One naming a project of another source — even one stamped as this plan's copy — is not
+    the copy this step was asked to find there, so it is refused before anything is read.
+    """
+    _linked(
+        monkeypatch,
+        {"board": [], "elsewhere": [_project("elsewhere:9")]},
+        {"board": link},
+    )
+    monkeypatch.setattr(plan_store, "routed_sources", lambda _source: ())
+
+    assert plan_locations.main([DRAFTED, "--in", "board"]) == plan_locations.UNREADABLE
+    refusal = capsys.readouterr().err
+    assert f"{DRAFTED}'s copy link for source 'board' names '{link}'" in refusal, refusal
+    assert "no project of that source" in refusal, refusal
 
 
 def test_a_destination_whose_store_cannot_be_read_is_the_same_refusal_as_a_missing_copy(
@@ -187,10 +285,10 @@ def test_a_destination_whose_store_cannot_be_read_is_the_same_refusal_as_a_missi
     the store themselves — the same thing they do about a destination that holds no copy.
     """
 
-    def refuses(_source: str) -> list[StoreProject]:
+    def refuses(_project: str) -> dict[str, object]:
         raise OSError("the board answered nothing")
 
-    monkeypatch.setattr(plan_store, "read_projects", refuses)
+    monkeypatch.setattr(plan_store, "project_record", refuses)
     monkeypatch.setattr(plan_store, "routed_sources", lambda _source: ())
 
     assert plan_locations.main([DRAFTED, "--in", "board"]) == plan_locations.UNREADABLE
@@ -225,10 +323,11 @@ def test_an_unqualified_plan_id_is_refused_before_the_destination_is_asked_anyth
     the argument they typed.
     """
 
-    def never(_source: str) -> list[StoreProject]:
+    def never(_argument: str) -> list[StoreProject]:
         raise AssertionError("the destination was read for an unqualified plan id")
 
     monkeypatch.setattr(plan_store, "read_projects", never)
+    monkeypatch.setattr(plan_store, "project_record", never)
 
     assert plan_locations.main(["cursor-shape", "--in", "board"]) == plan_locations.UNREADABLE
     assert "qualified" in capsys.readouterr().err
@@ -273,7 +372,7 @@ def test_a_home_the_store_routed_away_is_found_there_and_names_its_id_and_member
             )
         ],
     }
-    monkeypatch.setattr(plan_store, "read_projects", lambda source: list(held[source]))
+    _linked(monkeypatch, held, {"linear": "linear:abc"})
     monkeypatch.setattr(plan_store, "routed_sources", lambda _source: ("linear",))
     monkeypatch.setattr(
         plan_store, "members", lambda _project: frozenset({QualifiedProjectId("board:77")})
