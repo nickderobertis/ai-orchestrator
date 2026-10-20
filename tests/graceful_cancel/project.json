@@ -41,6 +41,7 @@
       "{workspaceRoot}/config/plan-review-verdict.schema.json",
       "{workspaceRoot}/graphs/node-scope.yaml",
       "{workspaceRoot}/graphs/pr-author.yaml",
+      "{workspaceRoot}/graphs/review-reply.yaml",
       "{workspaceRoot}/personas/planner.yaml",
       "{workspaceRoot}/templates/design-doc.md.j2",
       "{workspaceRoot}/templates/templates.yaml",

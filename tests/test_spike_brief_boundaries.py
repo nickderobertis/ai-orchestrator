@@ -69,6 +69,36 @@ def test_a_failed_copy_item_records_no_board_project() -> None:
     assert spike_brief_flow.recorded_project(beside, source, "plans:board") == "plans:board"
 
 
+def test_a_skipped_copy_item_records_no_board_project() -> None:
+    """A copy the store skipped for the project reached no destination, so nothing is recorded."""
+    raw = json.loads((FIXTURES / "copy-report.json").read_text())
+    skipped = {
+        "source": "authoring:preview",
+        "action": "skipped",
+        "reason": "status proposed is not one of todo",
+    }
+    source = plan_store.QualifiedProjectId("authoring:preview")
+    with pytest.raises(ValueError, match=r"SDK returned \[\]"):
+        spike_brief_flow.recorded_project(
+            CopyReport.model_validate({"items": [skipped]}), source, "plans:board"
+        )
+    beside = CopyReport.model_validate({"items": [skipped, *raw["items"]]})
+    assert spike_brief_flow.recorded_project(beside, source, "plans:board") == "plans:board"
+
+
+def test_a_copy_item_of_another_source_records_no_board_project() -> None:
+    """Only the item copied from the plan's own source names the board project it reached."""
+    raw = json.loads((FIXTURES / "copy-report.json").read_text())
+    other = {"source": "authoring:other", "action": "created", "destination": "plans:other"}
+    source = plan_store.QualifiedProjectId("authoring:preview")
+    with pytest.raises(ValueError, match=r"SDK returned \[\]"):
+        spike_brief_flow.recorded_project(
+            CopyReport.model_validate({"items": [other]}), source, "plans:board"
+        )
+    beside = CopyReport.model_validate({"items": [other, *raw["items"]]})
+    assert spike_brief_flow.recorded_project(beside, source, "plans:board") == "plans:board"
+
+
 def test_a_dry_run_copy_item_records_no_board_project() -> None:
     """A copy that would create the project created nothing, so it names no destination."""
     raw = json.loads((FIXTURES / "copy-report.json").read_text())

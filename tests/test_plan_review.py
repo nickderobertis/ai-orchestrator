@@ -1247,7 +1247,7 @@ def _untyped(schema: Mapping[str, Any], where: str) -> list[str]:
 
 
 def test_every_schema_a_harness_is_handed_is_one_every_harness_accepts() -> None:
-    """The verdict and the drafter's body are the two, in the subset Claude accepts.
+    """The verdict and the two drafters' answers are the three, in the subset Claude accepts.
 
     The verdict is handed by both reviewer roles, per task and whole plan. Both reach a
     chain that falls through to Claude Code, whose `--json-schema` refuses a dialect it
@@ -1262,6 +1262,7 @@ def test_every_schema_a_harness_is_handed_is_one_every_harness_accepts() -> None
         "oneharness.plan-review.toml": plan_review.BAR_FILES[1],
         "oneharness.plan-review-whole.toml": plan_review.BAR_FILES[1],
         "oneharness.pr-author.toml": Path("config") / "pr-author-body.schema.json",
+        "oneharness.review-reply.toml": Path("config") / "review-reply.schema.json",
     }, schemas
     for name, path in schemas.items():
         schema = json.loads(path.read_text(encoding="utf-8"))

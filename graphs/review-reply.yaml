@@ -1,0 +1,74 @@
+# The reply-drafting agent graph `just orchestrate` attaches to every run it launches.
+#
+# `onepipeline start --review-reply-graph <REF>` names it, recorded in the launch record
+# as `review_reply_graph`, and the engine runs it once per reworked draft whose
+# reviewer comments are owed a reply — from `onepipeline review`, which `just
+# review-comments` runs — and once per `decline` a manager sends. Naming none is the
+# shipped default: a run that names no reply graph posts no reply, raises
+# `review-reply-pending` for a rework's owed comments, and refuses a `decline`. So
+# this host opts in by naming this file, as it names `graphs/pr-author.yaml`.
+#
+# What the engine composes for this graph is a fixed preamble, then `## Change
+# request`, `## Comments` (each comment's id, URL, author, location and text),
+# `## Commits` (each commit the rework added: sha, subject and URL; empty for a
+# decline), `## Reason` (the rework's reason and instruction, or the decline's reason)
+# and `## Worker transcript` (the retained transcript's path, or the engine's
+# no-transcript sentence). Those headings and that sentence are the engine's literals:
+# tests/test_engine_contracts.py reads them out of this file and holds each to the
+# pinned `onepipeline`. The engine then holds the answer to rules beyond its schema —
+# every comment once, an `answered` body linking a supplied commit, a `declined` one
+# linking none — and posts nothing from an answer that breaks them.
+#
+# Every ref below is relative to THIS file's directory. `schema_file` is not here: it
+# lives in ../oneharness.review-reply.toml and resolves against that file's directory.
+#
+# Schema 4, for `{task}` interpolation, exactly as `graphs/pr-author.yaml` states.
+version: 4
+name: review-reply
+members:
+  # The drafter. One single-sided turn per drafting: read the sections, answer with the
+  # replies, exit. No judge side: ../oneharness.review-reply.toml's `schema_file` is the
+  # review, and the engine's own rules are the second one.
+  #
+  # `../personas/review-reply.yaml` is named for the LABEL alone, as `pr-author`'s is:
+  # a single-sided member layers no persona, so the prose below is all the model is
+  # given. It claims its own `task` and opens by interpolating `{task}` back in,
+  # because the composed task is the only thing that names the change request and its
+  # comments to this member.
+  #
+  # The member is `drafter` rather than the graph's own name: `oneagentgraph` composes a
+  # controlled turn's socket from both, and `review-reply-…-review-reply-skill.sock`
+  # outgrows what tests/short_state.py reserves for one.
+  drafter:
+    kind: oneharness
+    oneharness_config: ../oneharness.review-reply.toml
+    persona: ../personas/review-reply.yaml
+    task: |
+      {task}
+
+      You are the change request's author answering its reviewers, and the sections
+      above are everything you know: `## Change request` names it, `## Comments` holds
+      each comment you answer, `## Commits` the commits a rework added, `## Reason` why
+      the work went the way it did, and `## Worker transcript` where to read what the
+      worker did.
+
+      Answer every comment under `## Comments` with exactly one reply, naming the
+      comment by the id its `###` heading gives. Keep each reply terse and pithy: a
+      sentence or two, no preamble, no greeting, and no restating of the comment.
+
+      An `answered` reply says what changed and links the specific commit or commits
+      that answer that comment, by the URLs `## Commits` gives — chosen for that
+      comment, not every commit listed.
+
+      A `declined` reply says in one sentence why the comment is left as it is, from
+      the reason under `## Reason`, and links nothing.
+
+      Where `## Worker transcript` names a path, you may read it to see what the worker
+      did. Where it reads `No worker transcript is available on this host; draft from
+      the sections above.` — always so for a decline — draft from the other sections
+      alone, and state nothing about the work that they do not.
+
+      Never say or imply that a thread is resolved; the reviewer decides that.
+
+      Answer with the JSON object the response schema declares: one `replies` list,
+      one entry per comment, each `{comment, disposition, body}`.

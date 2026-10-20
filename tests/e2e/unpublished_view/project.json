@@ -39,6 +39,7 @@
       "{workspaceRoot}/scripts/onepipeline.sh",
       "{workspaceRoot}/scripts/template-env.sh",
       "{workspaceRoot}/graphs/pr-author.yaml",
+      "{workspaceRoot}/graphs/review-reply.yaml",
       "{workspaceRoot}/config/onepipeline.version",
       "{workspaceRoot}/.claude/settings.json"
     ]

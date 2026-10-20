@@ -107,6 +107,10 @@ allowed_tools = [
     # llmlint: ignore-end[least_privilege_grants]
     # llmlint: ignore[least_privilege_grants] Approved in the branch-retirement design; the verb bounds it, since `onevcs reclaim` refuses a `keep` branch and any a live session holds (driven by tests/e2e/unpublished_view/test_superseded_branches_e2e.py).
     "Bash(just reclaim-branch:*)",
+    # llmlint: ignore-block[least_privilege_grants] `just review-comments` and `just readjust-stack`: each suffix is only the run id the one engine verb names, and the verb bounds it — `onepipeline review` surfaces comments and posts only the replies a settled rework owes, `onepipeline readjust` moves a run's own drafts onto what landed through the identity's merge path, and both refuse a run nothing drives unless this session launched it.
+    "Bash(just review-comments:*)",
+    "Bash(just readjust-stack:*)",
+    # llmlint: ignore-end[least_privilege_grants]
     # llmlint: ignore-block[least_privilege_grants] `onevcs release acknowledge`, `onevcs release status`, `onevcs rules check` and `onevcs pool status`: each suffix is only the reference, target, version or repository the one verb names, and the verb bounds it — the last three read, and `release acknowledge` records a release on an automated target only, refusing a landing whose probed baseline was established.
     "Bash(onevcs release acknowledge:*)",
     "Bash(onevcs release status:*)",

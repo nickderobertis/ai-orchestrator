@@ -22,8 +22,8 @@ if [ ! -f "$hook" ] || [ ! -x "$hook" ]; then
     exit 2
 fi
 
-flags=(--dag-graph --pr-author-graph --success-hook --failure-hook)
-values=(graphs/dag-scope.yaml graphs/pr-author.yaml "$hook" "$hook")
+flags=(--dag-graph --pr-author-graph --review-reply-graph --success-hook --failure-hook)
+values=(graphs/dag-scope.yaml graphs/pr-author.yaml graphs/review-reply.yaml "$hook" "$hook")
 defaults=()
 for index in "${!flags[@]}"; do
     flag=${flags[$index]}

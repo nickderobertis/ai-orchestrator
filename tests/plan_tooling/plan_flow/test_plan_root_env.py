@@ -393,11 +393,16 @@ def _configuration_home() -> dict[str, str]:
 
 
 class ReportWrite(NamedTuple):
-    """A report write from another repository: the process, and where it should land."""
+    """A report write from another repository: the process, and where it should land.
+
+    `configuration` is what the store reported, from that repository and under the same
+    environment, once the write succeeded: `onetaskgraph config show --json`.
+    """
 
     written: subprocess.CompletedProcess[str]
     root: Path
     project: str
+    configuration: Path
 
 
 def _report_from_another_repository(tmp_path: Path, **environment: str) -> ReportWrite:
@@ -439,6 +444,7 @@ def _report_from_another_repository(tmp_path: Path, **environment: str) -> Repor
         '; printf "%s" "$template" | "$1" document create authoring --project "$3"'
         ' --title "Cache spike" --id spike-cache-report --answers "$5"'
         " --template-loader - --no-interactive --json"
+        '; "$1" config show --json > "$6"'
     )
     written = subprocess.run(  # noqa: S603 - this repository's own helper and the pinned CLIs
         [
@@ -451,6 +457,7 @@ def _report_from_another_repository(tmp_path: Path, **environment: str) -> Repor
             project,
             str(foreign),
             str(answers),
+            str(tmp_path / "configuration.json"),
         ],
         cwd=REPO_ROOT,
         env={
@@ -467,7 +474,12 @@ def _report_from_another_repository(tmp_path: Path, **environment: str) -> Repor
         capture_output=True,
         check=False,
     )
-    return ReportWrite(written=written, root=tmp_path / "plans", project=project)
+    return ReportWrite(
+        written=written,
+        root=tmp_path / "plans",
+        project=project,
+        configuration=tmp_path / "configuration.json",
+    )
 
 
 def test_a_spike_in_another_repository_writes_its_report_into_the_plans_own_project(
@@ -476,7 +488,7 @@ def test_a_spike_in_another_repository_writes_its_report_into_the_plans_own_proj
     """The launch names the `authoring` source whole, so a foreign worktree can write to it.
 
     Exporting the root alone handed such a dispatch half a source, which the store refuses
-    as `sources.authoring: missing field plugin` before writing anything.
+    to every command naming it as an `incomplete-source` before writing anything.
     """
     report = _report_from_another_repository(tmp_path)
     written, root, project = report.written, report.root, report.project
@@ -514,18 +526,21 @@ def test_a_spike_in_another_repository_writes_its_report_into_the_plans_own_proj
     )
 
 
-def test_a_source_overlaid_without_its_plugin_is_left_for_the_store_to_refuse(
+def test_a_source_overlaid_without_its_plugin_is_left_incomplete_beside_the_report(
     tmp_path: Path,
 ) -> None:
-    """Only `authoring` is completed: a half-overlaid source stays the plan store's refusal.
+    """Only `authoring` is completed: a half-overlaid source stays half a source.
 
     Completing it here would mean a second copy of that source's definition, so the
-    launch leaves the overlay as it found it, exports no plugin for it, and the write is
-    refused naming that source. The refusal stands until the store stops rejecting an
-    overlay of a source the command never names.
+    launch leaves the overlay as it found it and exports no plugin for it. The adopted
+    store leaves such a source unconfigured, refusing only a command that names it, so
+    the report still lands while the store reports the overlaid source incomplete.
     """
-    written = _report_from_another_repository(tmp_path, **{PARTIAL_OVERLAY: "ENG"}).written
+    report = _report_from_another_repository(tmp_path, **{PARTIAL_OVERLAY: "ENG"})
 
-    assert written.returncode != 0, written.stdout + written.stderr
-    assert "sources.hiddenco-plans: missing field `plugin`" in written.stderr, written.stderr
-    assert "sources.authoring" not in written.stderr, written.stderr
+    assert report.written.returncode == 0, report.written.stdout + report.written.stderr
+    configuration = json.loads(report.configuration.read_text(encoding="utf-8"))
+    assert configuration["incomplete_sources"] == ["hiddenco-plans"], configuration
+    assert not any(
+        setting["key"] == "sources.hiddenco-plans.plugin" for setting in configuration["settings"]
+    ), configuration["settings"]

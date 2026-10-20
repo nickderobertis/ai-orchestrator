@@ -25,6 +25,7 @@
       "{workspaceRoot}/config/onevcs.checkouts",
       "{workspaceRoot}/graphs/node-scope.yaml",
       "{workspaceRoot}/graphs/pr-author.yaml",
+      "{workspaceRoot}/graphs/review-reply.yaml",
       "{workspaceRoot}/justfile",
       "{workspaceRoot}/nx.json",
       "{workspaceRoot}/onetaskgraph.yaml",

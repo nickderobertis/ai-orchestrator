@@ -30,6 +30,7 @@ __all__ = [
     "FIELD_TYPES",
     "LIVENESS",
     "NODE_STATUSES",
+    "OPTIONAL_FIELDS",
     "READING_FIELDS",
     "SCHEMA_VERSION",
     "WORDS",
@@ -48,8 +49,8 @@ RunId = NewType("RunId", str)
 SCHEMA_VERSION = 1
 #: The JSON type of every field of each object the document carries, keyed by the name
 #: the schema gives the object (`RunReading` for the document itself). A type is a JSON
-#: type name, another object's name, or `array[<item type>]`; every field is always
-#: present, so each object's fields are exactly its keys here.
+#: type name, another object's name, or `array[<item type>]`. Every field is present
+#: unless :data:`OPTIONAL_FIELDS` names it, which the engine omits when it is empty.
 FIELD_TYPES: dict[str, dict[str, frozenset[str]]] = {
     "RunReading": {
         "schema_version": frozenset({"integer"}),
@@ -59,6 +60,7 @@ FIELD_TYPES: dict[str, dict[str, frozenset[str]]] = {
         "driven": frozenset({"boolean"}),
         "ending": frozenset({"Ending", "null"}),
         "paused": frozenset({"Paused", "null"}),
+        "unanswered": frozenset({"array[UnansweredEnvelope]"}),
     },
     "Ending": {"kind": frozenset({"EndingKind"}), "nodes": frozenset({"array[EndedNode]"})},
     "EndedNode": {
@@ -70,9 +72,18 @@ FIELD_TYPES: dict[str, dict[str, frozenset[str]]] = {
         "human_actions": frozenset({"array[string]"}),
         "blocking_surface": frozenset({"boolean"}),
     },
+    "UnansweredEnvelope": {
+        "envelope": frozenset({"string"}),
+        "delivery": frozenset({"Delivery", "null"}),
+    },
 }
-#: Every field the document carries.
-READING_FIELDS = frozenset(FIELD_TYPES["RunReading"])
+#: The fields of each object the schema leaves out of its `required`.
+OPTIONAL_FIELDS: dict[str, frozenset[str]] = {
+    "RunReading": frozenset({"unanswered"}),
+    "UnansweredEnvelope": frozenset({"delivery"}),
+}
+#: Every field the document always carries.
+READING_FIELDS = frozenset(FIELD_TYPES["RunReading"]) - OPTIONAL_FIELDS["RunReading"]
 #: The word `status` and `runs` print for a run.
 WORDS = frozenset(
     {
@@ -111,6 +122,10 @@ NODE_STATUSES = frozenset(
 )
 #: The fields of a pause.
 PAUSE_FIELDS = frozenset(FIELD_TYPES["Paused"])
+#: The fields every envelope the run has claimed and not answered carries.
+UNANSWERED_FIELDS = (
+    frozenset(FIELD_TYPES["UnansweredEnvelope"]) - OPTIONAL_FIELDS["UnansweredEnvelope"]
+)
 
 
 class Unreadable(ValueError):
@@ -152,9 +167,13 @@ def _item(declared: frozenset[str]) -> frozenset[str]:
     return frozenset(each.removeprefix("array[").removesuffix("]") for each in declared)
 
 
-def _object(value: object, fields: frozenset[str], what: str) -> dict[str, object]:
-    if not isinstance(value, dict) or set(value) != fields:
-        raise Unreadable(f"{what} does not carry exactly {', '.join(sorted(fields))}")
+def _object(
+    value: object, fields: frozenset[str], what: str, optional: frozenset[str] = frozenset()
+) -> dict[str, object]:
+    if not isinstance(value, dict) or not fields <= set(value) <= fields | optional:
+        carried = ", ".join(sorted(fields))
+        also = f" and at most {', '.join(sorted(optional))}" if optional else ""
+        raise Unreadable(f"{what} does not carry exactly {carried}{also}")
     return {str(key): held for key, held in value.items()}
 
 
@@ -177,6 +196,24 @@ def _ending(value: object) -> None:
         _word(node["status"], NODE_STATUSES, "the status of a node of its ending")
         if not _is(node["outcome"], FIELD_TYPES["EndedNode"]["outcome"]):
             raise Unreadable("a node of its ending has an outcome that is not a string")
+
+
+def _unanswered(value: object) -> None:
+    """Check the envelopes the run claimed and has not answered, which decide nothing."""
+    if not isinstance(value, list):
+        raise Unreadable("its unanswered envelopes are not a list")
+    for listed in value:
+        envelope = _object(
+            listed,
+            UNANSWERED_FIELDS,
+            "an unanswered envelope",
+            OPTIONAL_FIELDS["UnansweredEnvelope"],
+        )
+        if not _is(envelope["envelope"], FIELD_TYPES["UnansweredEnvelope"]["envelope"]):
+            raise Unreadable("an unanswered envelope has an id that is not a string")
+        delivery = envelope.get("delivery")
+        if delivery is not None and not isinstance(delivery, dict):
+            raise Unreadable("an unanswered envelope's delivery is not an object")
 
 
 def _waiting(value: object) -> str:
@@ -202,7 +239,7 @@ def decide(answer: str, run: RunId) -> Decided:
         parsed: object = json.loads(answer)
     except ValueError as error:
         raise Unreadable("the answer is not one JSON document") from error
-    reading = _object(parsed, READING_FIELDS, "the reading")
+    reading = _object(parsed, READING_FIELDS, "the reading", OPTIONAL_FIELDS["RunReading"])
     version = reading["schema_version"]
     if isinstance(version, bool) or version != SCHEMA_VERSION:
         raise Unreadable(f"it is schema {json.dumps(version)}, not {SCHEMA_VERSION}")
@@ -213,6 +250,8 @@ def decide(answer: str, run: RunId) -> Decided:
     driven = reading["driven"]
     if not _is(driven, FIELD_TYPES["RunReading"]["driven"]):
         raise Unreadable("its driven field is not true or false")
+    if "unanswered" in reading:
+        _unanswered(reading["unanswered"])
     ending, paused = reading["ending"], reading["paused"]
     if ending is not None:
         _ending(ending)

@@ -16,6 +16,7 @@
       "{workspaceRoot}/graphs/node-scope.yaml",
       "{workspaceRoot}/graphs/planner.yaml",
       "{workspaceRoot}/graphs/pr-author.yaml",
+      "{workspaceRoot}/graphs/review-reply.yaml",
       "{workspaceRoot}/orchestrator/root.py",
       "{projectRoot}/project.json"
     ]

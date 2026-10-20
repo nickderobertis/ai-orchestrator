@@ -29,8 +29,10 @@ def recorded_project(
     if isinstance(payload, CopyReport):
         for item in payload.items:
             outcome = item.root
-            # A failed item reached no destination, so it records no board project.
-            if outcome.action == "failed" or outcome.source.model_dump() != source:
+            # A failed or skipped item reached no destination, so it records no board project.
+            if outcome.action == "failed" or outcome.action == "skipped":
+                continue
+            if outcome.source.model_dump() != source:
                 continue
             if outcome.destination is not None:
                 arrived.append(outcome.destination.model_dump())

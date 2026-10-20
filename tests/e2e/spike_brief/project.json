@@ -108,6 +108,7 @@
       "{workspaceRoot}/scripts/require-provisioned.sh",
       "{workspaceRoot}/scripts/template-env.sh",
       "{workspaceRoot}/graphs/pr-author.yaml",
+      "{workspaceRoot}/graphs/review-reply.yaml",
       "{workspaceRoot}/personas/planner.yaml",
       "{workspaceRoot}/config/plan-review-verdict.schema.json",
       "{workspaceRoot}/scripts/review-plan.sh",

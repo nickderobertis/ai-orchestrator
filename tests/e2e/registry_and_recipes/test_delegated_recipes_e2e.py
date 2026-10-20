@@ -194,6 +194,9 @@ class Delegation(NamedTuple):
 RUN_ENDED = f"{CHECKOUT}/scripts/run-ended.sh"
 #: Both hooks as a launch the caller named neither of carries them, in the order added.
 HOOKS = f"--success-hook {RUN_ENDED} --failure-hook {RUN_ENDED}"
+#: The reply-drafting graph a launch the caller named none of carries, after the body
+#: drafter's: `scripts/orchestrate.sh` adds its defaults in one fixed order.
+REVIEW_REPLY = " --review-reply-graph graphs/review-reply.yaml"
 #: A release a proof installed by hand in place of the pin.
 HAND_INSTALLED_ENGINE = "0.37.0"
 
@@ -205,23 +208,23 @@ HAND_INSTALLED_ENGINE = "0.37.0"
 #: way, or reaching only the first of the verbs it composes, fails here rather than in
 #: an operator's terminal.
 DELEGATIONS = (
-    # The two graph flags and the two hooks are the recipe's own addition, and the reason
-    # it exists: all four ship defaulted to nothing, so a bare launch runs with no agent
-    # watching it, opens its change requests with no drafted body, and ends with nothing
-    # verifying what it drafted. The hooks name the run-ended script by its absolute path
-    # in the checkout the recipe ran in.
+    # The three graph flags and the two hooks are the recipe's own addition, and the reason
+    # it exists: all five ship defaulted to nothing, so a bare launch runs with no agent
+    # watching it, opens its change requests with no drafted body, answers no reviewer,
+    # and ends with nothing verifying what it drafted. The hooks name the run-ended script
+    # by its absolute path in the checkout the recipe ran in.
     Delegation(
         "orchestrate",
         ("authoring:probe",),
         f"{ENGINE} start {DEFAULTS} authoring:probe --dag-graph graphs/dag-scope.yaml"
-        f" --pr-author-graph graphs/pr-author.yaml {HOOKS}",
+        f" --pr-author-graph graphs/pr-author.yaml{REVIEW_REPLY} {HOOKS}",
     ),
     Delegation(
         "orchestrate",
         ("authoring:probe", "--detach"),
         f"{ENGINE} start {DEFAULTS} authoring:probe --detach"
         " --dag-graph graphs/dag-scope.yaml"
-        f" --pr-author-graph graphs/pr-author.yaml {HOOKS}",
+        f" --pr-author-graph graphs/pr-author.yaml{REVIEW_REPLY} {HOOKS}",
     ),
     # A caller who names one keeps it: the flags refuse to be given twice, so adding
     # a default over an explicit one would break the launch outright. Per flag, so
@@ -230,25 +233,37 @@ DELEGATIONS = (
         "orchestrate",
         ("authoring:probe", "--dag-graph", "off"),
         f"{ENGINE} start {DEFAULTS} authoring:probe --dag-graph off"
-        f" --pr-author-graph graphs/pr-author.yaml {HOOKS}",
+        f" --pr-author-graph graphs/pr-author.yaml{REVIEW_REPLY} {HOOKS}",
     ),
     Delegation(
         "orchestrate",
         ("authoring:probe", "--dag-graph=graphs/other.yaml"),
         f"{ENGINE} start {DEFAULTS} authoring:probe --dag-graph=graphs/other.yaml"
-        f" --pr-author-graph graphs/pr-author.yaml {HOOKS}",
+        f" --pr-author-graph graphs/pr-author.yaml{REVIEW_REPLY} {HOOKS}",
     ),
     Delegation(
         "orchestrate",
         ("authoring:probe", "--pr-author-graph", "graphs/other.yaml"),
         f"{ENGINE} start {DEFAULTS} authoring:probe --pr-author-graph graphs/other.yaml"
-        f" --dag-graph graphs/dag-scope.yaml {HOOKS}",
+        f" --dag-graph graphs/dag-scope.yaml{REVIEW_REPLY} {HOOKS}",
     ),
     Delegation(
         "orchestrate",
         ("authoring:probe", "--pr-author-graph=graphs/other.yaml", "--dag-graph=off"),
         f"{ENGINE} start {DEFAULTS} authoring:probe"
-        f" --pr-author-graph=graphs/other.yaml --dag-graph=off {HOOKS}",
+        f" --pr-author-graph=graphs/other.yaml --dag-graph=off{REVIEW_REPLY} {HOOKS}",
+    ),
+    Delegation(
+        "orchestrate",
+        ("authoring:probe", "--review-reply-graph", "graphs/other.yaml"),
+        f"{ENGINE} start {DEFAULTS} authoring:probe --review-reply-graph graphs/other.yaml"
+        f" --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml {HOOKS}",
+    ),
+    Delegation(
+        "orchestrate",
+        ("authoring:probe", "--review-reply-graph="),
+        f"{ENGINE} start {DEFAULTS} authoring:probe --review-reply-graph="
+        f" --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml {HOOKS}",
     ),
     # Each hook is kept per flag too, in either spelling and including a blank value,
     # which is how a caller says this launch has none.
@@ -257,14 +272,14 @@ DELEGATIONS = (
         ("authoring:probe", "--success-hook", "/elsewhere/on-success"),
         f"{ENGINE} start {DEFAULTS} authoring:probe"
         " --success-hook /elsewhere/on-success"
-        " --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml"
+        f" --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml{REVIEW_REPLY}"
         f" --failure-hook {RUN_ENDED}",
     ),
     Delegation(
         "orchestrate",
         ("authoring:probe", "--failure-hook=", "--success-hook="),
         f"{ENGINE} start {DEFAULTS} authoring:probe --failure-hook= --success-hook="
-        " --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml",
+        f" --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml{REVIEW_REPLY}",
     ),
     # The dispatch-env hook and the maintenance schedule are `scripts/onepipeline.sh`'s
     # own defaults rather than the recipe's, and each is kept per flag the same way: a
@@ -276,28 +291,32 @@ DELEGATIONS = (
         ("authoring:probe", "--dispatch-env-hook", "/elsewhere/refresh-env"),
         f"{ENGINE} start {BUS_CONFIG} {MAINTENANCE_CONFIG} authoring:probe"
         " --dispatch-env-hook /elsewhere/refresh-env"
-        f" --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml {HOOKS}",
+        " --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml"
+        f"{REVIEW_REPLY} {HOOKS}",
     ),
     Delegation(
         "orchestrate",
         ("authoring:probe", "--dispatch-env-hook="),
         f"{ENGINE} start {BUS_CONFIG} {MAINTENANCE_CONFIG} authoring:probe"
         " --dispatch-env-hook="
-        f" --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml {HOOKS}",
+        " --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml"
+        f"{REVIEW_REPLY} {HOOKS}",
     ),
     Delegation(
         "orchestrate",
         ("authoring:probe", "--maintenance-config", "/elsewhere/schedule.yaml"),
         f"{ENGINE} start {BUS_CONFIG} {DISPATCH_ENV_HOOK} authoring:probe"
         " --maintenance-config /elsewhere/schedule.yaml"
-        f" --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml {HOOKS}",
+        " --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml"
+        f"{REVIEW_REPLY} {HOOKS}",
     ),
     Delegation(
         "orchestrate",
         ("authoring:probe", "--maintenance-config="),
         f"{ENGINE} start {BUS_CONFIG} {DISPATCH_ENV_HOOK} authoring:probe"
         " --maintenance-config="
-        f" --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml {HOOKS}",
+        " --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml"
+        f"{REVIEW_REPLY} {HOOKS}",
     ),
     # Naming both, in either spelling, leaves the bus configuration alone as the default.
     Delegation(
@@ -305,7 +324,8 @@ DELEGATIONS = (
         ("authoring:probe", "--dispatch-env-hook=", "--maintenance-config="),
         f"{ENGINE} start {BUS_CONFIG} authoring:probe"
         " --dispatch-env-hook= --maintenance-config="
-        f" --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml {HOOKS}",
+        " --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml"
+        f"{REVIEW_REPLY} {HOOKS}",
     ),
     # Adoption attaches a fresh driver to an intact ledger, which already records the
     # graphs, hooks and dispatch-env hook its launch chose, so no default is added to it.
@@ -591,6 +611,11 @@ DELEGATIONS = (
         "uv run onepipeline repo-recover --pr-author-graph graphs/pr-author.yaml "
         "claude/work --repo /checkout --body-file /tmp/body.md",
     ),
+    # The two review recipes reach the engine's own verbs over the run they name, with
+    # nothing added: the reply drafter is the one the run's launch recorded.
+    Delegation("review-comments", ("run-1",), "uv run onepipeline review run-1"),
+    Delegation("review-comments", ("run-1", "--json"), "uv run onepipeline review run-1 --json"),
+    Delegation("readjust-stack", ("run-1",), "uv run onepipeline readjust run-1"),
     Delegation("recoverable", (), "uv run onevcs recoverable"),
     # Scoped to one identity from wherever it runs. The wrapper reads its arguments only
     # for `--json`, so `--repo` has to arrive at the verb whole, beside its value.
@@ -1460,6 +1485,111 @@ def test_the_publish_branch_recipe_forwards_a_title_as_one_word(tmp_path: Path) 
         "--title",
         title,
     ]
+
+
+#: `uv`, recording each call's argument vector, the environment it was handed and whether
+#: it had a terminal, as one JSON line apiece: an environment is on no command line, so the
+#: shared trace cannot say what a drafting turn below the verb would be handed.
+ENVIRONMENT_RECORDING_UV = """#!/usr/bin/env python3
+import json, os, sys
+
+try:
+    open("/dev/tty").close()
+    terminal = True
+except OSError:
+    terminal = False
+with open(os.environ["TRACE_FILE"], "a", encoding="utf-8") as trace:
+    trace.write(json.dumps({
+        "argv": sys.argv[1:],
+        "env": dict(os.environ),
+        "stdin_is_a_terminal": os.isatty(0),
+        "stdin": sys.stdin.read(),
+        "terminal": terminal,
+    }) + "\\n")
+"""
+
+#: A credential this checkout supplies from its own `.env`, and the value planted for it.
+#: Not a real one: what is asserted is that the name reached the verb.
+REVIEW_CREDENTIAL = "REVIEW_PROBE_CREDENTIAL"
+REVIEW_CREDENTIAL_VALUE = "not-a-real-credential-planted-by-this-journey"
+
+#: Each identity indirection a drafting turn's `env_from` reads, and the directory under
+#: `HOME` the one helper that establishes it defaults to.
+IDENTITY_DIRECTORIES = {
+    "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": ".claude-alt",
+    "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR": ".claude-alt2",
+    "ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR": ".claude-primary-backup",
+    "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR": ".claude",
+    "ORCHESTRATOR_CODEX_ALT_HOME": ".codex-alt",
+}
+
+
+class RecordedCall(NamedTuple):
+    """One call the recording `uv` traced."""
+
+    argv: list[str]
+    env: dict[str, str]
+    stdin_is_a_terminal: bool
+    stdin: str
+    terminal: bool
+
+
+@pytest.mark.parametrize(
+    ("recipe", "verb"),
+    [("review-comments", "review"), ("readjust-stack", "readjust")],
+    ids=["review-comments", "readjust-stack"],
+)
+def test_a_review_recipe_runs_its_verb_unattended_with_a_drafting_turns_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recipe: str, verb: str
+) -> None:
+    """`onepipeline review` and `readjust` get the run, no terminal, and a drafter's environment.
+
+    Both verbs can spend a drafting turn or dispatch a draft's worker in this process when
+    nothing drives the run — a reply drafting under `oneharness.review-reply.toml`, a
+    restack's conflict — so they need what a drafting turn's `env_from` and the store read:
+    this checkout's `.env` credentials, every Claude identity's config directory and the
+    alternate Codex home, as `just publish-branch` is handed them. And a manager runs them
+    from a watch or a script, so nothing they start may wait on a terminal: the recipe is
+    run detached from one with standard input closed, and the verb must see neither.
+    """
+    # The indirections this suite inherits from the dispatch running it would otherwise be
+    # what the verb saw; the helpers derive each from `HOME` when it is unset.
+    for name in IDENTITY_DIRECTORIES:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv(REVIEW_CREDENTIAL, raising=False)
+    home = tmp_path / "home"
+    home.mkdir()
+    checkout, trace = _checkout(tmp_path)
+    (checkout / "bin/uv").write_text(ENVIRONMENT_RECORDING_UV)
+    (checkout / ".env").write_text(
+        f"{REVIEW_CREDENTIAL}={REVIEW_CREDENTIAL_VALUE}\n", encoding="utf-8"
+    )
+
+    result = _run(
+        checkout,
+        trace,
+        recipe,
+        "review-run",
+        env={"HOME": str(home), "XDG_CONFIG_HOME": str(tmp_path / "config")},
+        detached=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    calls = [RecordedCall(**json.loads(line)) for line in trace.read_text().splitlines()]
+    assert [call.argv for call in calls] == [["run", "onepipeline", verb, "review-run"]], (
+        f"`just {recipe} review-run` reached {[call.argv for call in calls]}"
+    )
+    (call,) = calls
+    assert (call.terminal, call.stdin_is_a_terminal, call.stdin) == (False, False, ""), (
+        f"`onepipeline {verb}` was started with a terminal or something on standard input, "
+        "so a step below it could stop and wait on a person"
+    )
+    assert call.env.get(REVIEW_CREDENTIAL) == REVIEW_CREDENTIAL_VALUE, (
+        f"`onepipeline {verb}` was not handed {REVIEW_CREDENTIAL} from this checkout's .env"
+    )
+    assert {name: call.env.get(name) for name in IDENTITY_DIRECTORIES} == {
+        name: str(home / directory) for name, directory in IDENTITY_DIRECTORIES.items()
+    }, f"`onepipeline {verb}` was not handed every identity a drafting turn's chain reads"
 
 
 def test_lint_llm_validate_reaches_the_validator(tmp_path: Path) -> None:

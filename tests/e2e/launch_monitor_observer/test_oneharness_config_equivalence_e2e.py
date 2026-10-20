@@ -1,6 +1,6 @@
 """Every role's effective oneharness configuration, held to a committed record.
 
-The twelve `oneharness.<role>.toml` files state their identities through `extends`, so
+The fourteen `oneharness.<role>.toml` files state their identities through `extends`, so
 what each one resolves to is a claim about a chain rather than about a file. This
 module holds every role's resolved configuration to a committed record under
 `oneharness_resolved/`, and holds each variant's reported credential mask as a property
@@ -335,7 +335,7 @@ def test_the_plan_store_roles_still_carry_the_plan_store_credentials(
     `codex:primary` is the variant this nearly broke. Its only masks anywhere here are the
     plan store's credentials, so for these three roles the correct mask is EMPTY — and an empty
     child list inherits rather than clears, so no child can say it. Both parents
-    therefore state no mask at that variant and the nine roles that mask it say so
+    therefore state no mask at that variant and the eleven roles that mask it say so
     themselves.
     """
     still_masked = [

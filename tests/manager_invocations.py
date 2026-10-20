@@ -136,6 +136,11 @@ _IMPORT = (
     "`just import-branch <branch> --repo <checkout>` makes a branch finished in a session worktree"
 )
 _RECLAIM = "answered with `just reclaim-branch <branch> --repo <checkout>`"
+_REVIEW_COMMENTS = "`just review-comments <run-id>` pulls a run's review feedback in"
+_READJUST_STACK = (
+    "`just readjust-stack <run-id>`, rework, restack, continuing launch or adoption detects "
+    "a draft merged on the host before anything else"
+)
 _SYNC = "`just sync` fast-forwards a publication checkout"
 _REPOS = (
     "confirm the identity and its checkout aliases with `just repos` and its resolved "
@@ -325,6 +330,8 @@ INVOCATIONS: tuple[Invocation, ...] = (
     _allow("integrate", "just integrate --repo {co}", _VERBS),
     _allow("import-branch", "just import-branch {branch} --repo {co}", _IMPORT),
     _allow("reclaim-branch", "just reclaim-branch {branch} --repo {co}", _RECLAIM),
+    _allow("review-comments", "just review-comments {run}", _REVIEW_COMMENTS),
+    _allow("readjust-stack", "just readjust-stack {run}", _READJUST_STACK),
     _allow("sync", "just sync", _SYNC),
     _allow("repos", "just repos", _REPOS),
     _allow("repos-apply", "just repos-apply", _REPOS_APPLY),

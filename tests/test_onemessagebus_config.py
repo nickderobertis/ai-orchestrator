@@ -39,6 +39,7 @@ from pathlib import Path
 import monitor_conversation
 import onejudge_bundle
 import pytest
+import yaml
 from onejudge_bundle import LoopbackOrigin
 
 from orchestrator.root import REPO_ROOT
@@ -65,8 +66,8 @@ BINDING = "monitor"
 #: The monitor's refused ops, each with the reason the bus's built-in profile gave it
 #: before this host declared the monitor itself (onemessagebus 0.4.0's
 #: `crates/onemessagebus-agent/src/channel.rs`), verbatim, so a refusal the monitor meets
-#: reads exactly as it did. `rework` and `retitle` postdate that profile, so their reasons
-#: are this host's own, in the same form.
+#: reads exactly as it did. `rework`, `decline` and `retitle` postdate that profile, so
+#: their reasons are this host's own, in the same form.
 REFUSED = {
     "complete": "whether the run is finished is the planner's verdict, not an observation",
     "attest": "a human action is attested by the person who took it, never by a watcher",
@@ -77,7 +78,9 @@ REFUSED = {
     "planner's decision rather than an observation",
     "settle": "settling a node from evidence declares an outcome this run never observed, "
     "which is the planner's decision rather than an observation",
-    "rework": "reworking a review draft answers its reviewers with new instructions, which is "
+    "rework": "starting work on a reviewer's feedback answers its reviewers with new "
+    "instructions, which is the planner's decision rather than an observation",
+    "decline": "declining a reviewer's feedback answers its reviewer for the change, which is "
     "the planner's decision rather than an observation",
     "retitle": "a change request's title is the subject that lands on the base, which is the "
     "planner's decision rather than an observation",
@@ -182,6 +185,33 @@ def test_the_monitor_is_refused_every_other_op_for_the_reason_the_bus_once_gave(
     )
     assert unknown.returncode == 1, unknown.stdout
     assert "the envelope's author `pacemaker` is not declared" in unknown.stderr, unknown.stderr
+
+
+#: The review loop's ops: what starts work on a reviewer's comment, answers it with a
+#: decline, or retitles the change request it sits on. The planner — the one author the
+#: linked layout grants every op — is the only one that may send them.
+REVIEW_LOOP_OPS = ("rework", "decline", "retitle")
+
+
+def test_no_author_but_the_planner_is_granted_the_review_loops_ops() -> None:
+    """Every author this file declares is refused each review-loop op, by name and reason.
+
+    Read off the parsed document rather than its lines, so an author added later — with
+    grants of its own — is held to the same rule: a watcher granted `rework` could start
+    work on a comment nobody decided to act on. That each refusal really reads back through
+    the release is `test_the_monitor_is_refused_every_other_op_for_the_reason_the_bus_once_gave`.
+    """
+    authors = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))["authors"]
+    assert authors, "config/onemessagebus.yaml declares no author, so nothing here is held"
+    for name, author in authors.items():
+        granted = sorted(set(REVIEW_LOOP_OPS) & set(author.get("capabilities", [])))
+        assert not granted, f"author `{name}` is granted {granted}, which only the planner may send"
+        refusals = author.get("refusals", {})
+        unrefused = [op for op in REVIEW_LOOP_OPS if not refusals.get(op)]
+        assert not unrefused, (
+            f"author `{name}` gives no reason for refusing {unrefused}, so its refusal would "
+            "not say that the decision is the planner's"
+        )
 
 
 def test_the_binding_opens_on_the_reply_window_and_the_engines_asker() -> None:

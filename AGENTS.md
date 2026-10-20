@@ -189,7 +189,12 @@ or `provider-failed` node whose work landed says *landed on its base* with the c
 `done` can be unlanded by design, its dependents proceeding: `change-draft` is a draft
 the plan asked for, and `change-review-draft` is a change whose required checks are green,
 on a `change-open` identity whose approvals are required, kept as a draft for its user's
-review until that person lifts it on the host or with `onevcs change ready <session>`. A node
+review until that person lifts it on the host or with `onevcs change ready <session>`.
+`change-review-draft-unchecked` is that same draft republished — by a rework, a restack or a
+readjustment — whose check verdict was deferred at the push, and the next review trigger's
+read settles it green or re-dispatches it red. `merged-during-rework` is a failure that is
+no refusal: a person merged the change request while its rework ran, so the rework kept its
+work on its branch and published nothing, and its surface names how to go on. A node
 declaring `publish: "preserve"` settles `done` as `preserved`: a branch kept on its origin
 at the head the settlement names and never landed, which `just unpublished` counts until
 it is acknowledged; `just reclaim-branch <branch> --repo <checkout> --discard` deletes it
@@ -308,6 +313,10 @@ not maintained — and a sweep that ran something is the `pool-maintenance` reco
 `just results` names. A dispatched session is placed by the `onevcs` the engine links,
 so `config/onepipeline.version` governs where a node works while `config/onevcs.version`
 governs the pool verbs you run.
+
+**A draft is stacked on the unlanded drafts it depends on**: its change request targets
+that work and carries the Stack block the engine writes, so each draft's diff is its own and
+a reviewer reads the stack as it was built.
 
 A version bump is adopted **between** runs — a live driver keeps the binary it launched
 with, so no retry inside a run picks one up. A plan is one live graph accepting edits at
@@ -960,7 +969,8 @@ every other unpublished branch here.
 <!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 
 After `just orchestrate`, use **only** `just channel-next`, `just channel-reply`, `just
-stop`, `just shutdown`, `just watch`, and the read-only `just monitor` / `just runs` / `just status` /
+stop`, `just shutdown`, `just watch`, `just review-comments`, `just readjust-stack`, and the
+read-only `just monitor` / `just runs` / `just status` /
 `just unwatched` / `just unpublished` / `just unfinished` views. Nothing advances a run; the engine reconciles continuously.
 `just channel-next` and `just monitor` read through the `planner` profile — the
 pipeline's decisions and settlements, not every worker's turns; `--filter detailed`
@@ -976,7 +986,7 @@ gate`, which this host stopped asking a dispatch to run — and review the evide
 surfaces rather than a judge verdict alone; relevant checks must not have skipped. Judge
 a dispatched branch against its own base (`merge-base` / `base..branch`), never a moving
 `origin/main`, which can make a healthy branch appear to delete files. Treat unresolved
-same-identity dependencies as stack prerequisites, not merely scheduling edges, and
+same-identity dependencies as stack parents, not merely scheduling edges, and
 preserve them across replans until their content reaches the root base. Accuracy and
 quality come first; saving time or tokens never relaxes their bar.
 
@@ -991,6 +1001,36 @@ nor the engine builds the monitor in. A finding it or the
 pacemaker calls a rule violation names the file and line the rule comes from, and its
 own supervisor sends an observation back until it is one. None of these roles authors
 target-project content.
+
+### Review feedback on a run's drafts
+
+**Comments are found only when you ask.** `just review-comments <run-id>` pulls a run's
+review feedback in, surfacing each pending comment once per revision as a non-blocking
+`review-comment` against the node owning its change request; nothing schedules it and no
+driver polls for comments, by the user's decision. **Nothing starts work on a comment
+until you send `rework` or `decline`.** A rework continues the same draft and change
+request and restacks every draft above it; a decline posts its replies and changes
+nothing else; the reply drafter, `graphs/review-reply.yaml`, writes one terse reply per
+comment and never resolves a thread. A rework whose title nothing verified raises
+`title-unverified`, answered by `retitle`. No author but the planner is granted `rework`,
+`decline` or `retitle`.
+
+<!-- llmlint: ignore-block[agents_md_durable_and_terse] The task that adopted readjustment requires the manager's document to state what is done for each out-of-order merge, because a manager decides from that outcome — absorbed, landed with it, reopened, or a blocking question — before reading the lifecycle doc, which holds the full rule. -->
+**A person's merge is read where it is next looked for.** The next `just review-comments`,
+`just readjust-stack <run-id>`, rework, restack, continuing launch or adoption detects a
+draft merged on the host before anything else, and moves every draft above it onto its
+nearest unlanded ancestors or the base; nothing polls for landings. Out of order, a draft
+merged into another's branch is recorded absorbed into it, an unlanded parent's work
+riding a merge into the base is recorded landed with it, a draft the host closed because
+its landed parent's branch was deleted is reopened and retargeted, and a merge into a
+branch the run does not know is a blocking question.
+<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
+
+**A project is carried on from the board on any host.** `just orchestrate plans:<project>`
+continues what the store recorded — the same drafts, never a second set — and `--fresh`,
+refused while a draft is unlanded, starts over. A launch is refused while another run
+claims the project, until `--take-over` passes the claim; the claim is best-effort, and two
+launches on different hosts at the same moment are not prevented.
 
 ### Follow-ups: drafted while a run works, verified once it ends
 
@@ -1526,7 +1566,7 @@ its intended order. **Every identity in every chain is spelled as a variant**, t
 `env_file` are declarable on a variant only, so a bare harness id in a chain is one
 candidate no per-identity environment rule reaches — the credential masks and the
 `XDG_RUNTIME_DIR` repoint, each explained beside its rule. `codex:primary`'s
-plan-store credential mask is the one no parent may hold, so each of the nine roles that
+plan-store credential mask is the one no parent may hold, so each of the eleven roles that
 masks either declares it. That variant deliberately declares no `unset_env` for `CODEX_HOME`,
 which is ambient configuration a developer may export and this is the identity that
 honours it; `tests/e2e/launch_monitor_observer/test_dispatch_environment_e2e.py` reads what a turn is handed
@@ -1552,6 +1592,10 @@ decision:
   schema), a finite deadline because it sits between a finished branch and its
   publication, and `stream = false`, forced because a structured answer is validated
   against the complete response.
+- **Reply-drafting side** — `oneharness.review-reply.toml`: the judge's sol-first chain
+  with both Codex identities on Sol, no judge side (the review is the reply schema and the
+  engine's rules on it), a finite deadline because a review pass or a `decline` waits on
+  it, and `stream = false` for the drafter's reason.
 - **Design-doc writing side** — `oneharness.design-doc.toml`: the reverse pairing.
   Codex writes, because this host prefers its Claude subscriptions on the side that
   judges whether the prose reads plainly to a non-specialist, and its judge —

@@ -57,6 +57,7 @@
       "{workspaceRoot}/graphs/follow-up.yaml",
       "{workspaceRoot}/graphs/node-scope.yaml",
       "{workspaceRoot}/graphs/pr-author.yaml",
+      "{workspaceRoot}/graphs/review-reply.yaml",
       "{workspaceRoot}/personas/follow-up.yaml",
       "{workspaceRoot}/personas/planner.yaml",
       "{workspaceRoot}/scripts/**/*",

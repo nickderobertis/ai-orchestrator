@@ -944,6 +944,51 @@ def test_an_orphan_behind_an_unread_command_is_reaped_once_it_is_read(tmp_path: 
     assert ran.returncode == 0, ran.stderr
 
 
+#: Run as its own process for the same reason. The walk's table read is made to stand
+#: still while the sampler's side finishes a command: killed, read to its end and counted
+#: again, which a walk must see either all of or none of.
+FINISHED_DURING_A_WALK = """
+import signal, threading
+from orchestrator import gate_impact
+from orchestrator.gate_impact import Tree
+
+tree = Tree()
+command = tree.start_excluded(["sleep", "30"])
+read = gate_impact._table
+finished = threading.Thread(target=tree.communicate, args=(command,))
+
+def table_then_finish(after):
+    table = read(after)
+    command.send_signal(signal.SIGKILL)
+    finished.start()
+    finished.join(timeout=2)
+    return table
+
+gate_impact._table = table_then_finish
+walked = tree.walk()
+finished.join()
+assert command.pid not in walked, f"the finished command {command.pid} read as leaked"
+"""
+
+
+def test_a_command_finished_while_the_tree_is_walked_is_never_read_as_leaked(
+    tmp_path: Path,
+) -> None:
+    """A sampler command that ends between the walk reading the process table and the walk
+    reading what is excluded is still left out, rather than reported as a leaked process
+    with no command line that had already exited."""
+    ran = subprocess.run(
+        [str(PYTHON), "-c", FINISHED_DURING_A_WALK],
+        cwd=REPO_ROOT,
+        env=_environment(tmp_path),
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert ran.returncode == 0, ran.stderr
+
+
 def test_a_registration_reaching_home_is_left_alone_and_overlaps_counted_once(
     tmp_path: Path,
 ) -> None:

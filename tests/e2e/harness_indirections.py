@@ -69,6 +69,7 @@ INDIRECTION_SOURCES = (
 SINGLE_SIDED_CONFIGS = (
     REPO_ROOT / "oneharness.check-in.toml",
     REPO_ROOT / "oneharness.pr-author.toml",
+    REPO_ROOT / "oneharness.review-reply.toml",
 )
 
 

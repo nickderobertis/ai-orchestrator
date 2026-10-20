@@ -29,6 +29,7 @@
       "{workspaceRoot}/graphs/dag-scope.yaml",
       "{workspaceRoot}/graphs/node-scope.yaml",
       "{workspaceRoot}/graphs/pr-author.yaml",
+      "{workspaceRoot}/graphs/review-reply.yaml",
       "{workspaceRoot}/justfile",
       "{workspaceRoot}/nx.json",
       "{workspaceRoot}/oneharness.check-in.toml",

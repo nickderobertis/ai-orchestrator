@@ -28,8 +28,9 @@
 # refuses a source the environment names without a plugin, so a spike there could not
 # write its report into the plan's own project. The plugin is the one the resolution
 # below already holds the source to — it refuses any other — and only `authoring`'s is
-# exported: another source an environment overlays without its plugin stays the store's
-# to refuse, never completed here from a second copy of `onetaskgraph.yaml`.
+# exported: another source an environment overlays without its plugin is left as the
+# store leaves it — unconfigured, refused only to a command naming it — never completed
+# here from a second copy of `onetaskgraph.yaml`.
 #
 # It is a helper rather than a line in the launcher for the reason its two siblings are:
 # what the name is, what the value is, and what happens when the root cannot be resolved

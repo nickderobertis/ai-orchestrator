@@ -64,7 +64,7 @@ concerns (persona defaults, session), never harness/model selection.
 ### Where the identities are stated, and what a role file carries
 
 Every role config above extends a shared parent, so the six identities are written down
-once rather than twelve times:
+once rather than fourteen times:
 
 | File | What it holds |
 | --- | --- |
@@ -115,7 +115,7 @@ But `codex:primary`'s mask cannot live in a parent at all. That identity honours
 ambient `CODEX_HOME` and masks nothing except the plan store's two credentials, so for those three
 roles its correct mask is *empty* — and empty is exactly what a child cannot say, since
 an empty list inherits. So `oneharness.identities.toml` and `oneharness.dispatch.toml`
-state no mask at that variant, and each of the nine roles that masks either says so
+state no mask at that variant, and each of the eleven roles that masks either says so
 itself — the board-live worker masking the Linear key alone. It is the one place the six-identity block is not the whole
 story, and both parents carry a note at that variant explaining why.
 
@@ -138,7 +138,7 @@ credential isolation true, which is what a reviewer and the equivalence record b
 both read. A follow-up against oneharness is what retires them.
 
 Both halves are held, and it takes both.
-`tests/e2e/launch_monitor_observer/test_oneharness_config_equivalence_e2e.py` holds all twelve roles' reported
+`tests/e2e/launch_monitor_observer/test_oneharness_config_equivalence_e2e.py` holds all fourteen roles' reported
 configurations to a committed record under `tests/e2e/launch_monitor_observer/oneharness_resolved/`, so a
 deliberate routing change is a visible update to that record in the same commit.
 `tests/e2e/launch_monitor_observer/test_dispatch_environment_e2e.py` drives a **real turn** on every identity of
@@ -967,7 +967,8 @@ precedence, applied only to the dag-scope launch and not live-editable.
 - **The dag-scope observer** (`graphs/dag-scope.yaml`) keeps the configuration it was
   launched with for the life of the run; only the launch's dag-scope list reaches it.
 - **The `pr-author` drafting dispatch** receives none of the node overrides: it runs
-  `graphs/pr-author.yaml` as that graph states.
+  `graphs/pr-author.yaml` as that graph states. **The `review-reply` drafting** is
+  composed the same way, from `graphs/review-reply.yaml` alone.
 - **A turn in flight** keeps its launch configuration, as above.
 
 Do not put `ONEHARNESS_HARNESSES` in the graph's `env`: it is process-wide **and
@@ -1523,7 +1524,7 @@ from its process table.
   `ONEHARNESS_TIMEOUT` any more**, and nothing should: since oneharness 0.7.0 an
   absent per-turn deadline means *no* deadline, and the worker, judge, and llmlint
   configs take that default deliberately while `oneharness.orchestrator.toml`,
-  `oneharness.check-in.toml`, `oneharness.pr-author.toml`,
+  `oneharness.check-in.toml`, `oneharness.pr-author.toml`, `oneharness.review-reply.toml`,
   `oneharness.design-doc.toml`, and `oneharness.design-doc-judge.toml` set their own. The
   variable is process-wide for a whole graph run and beats every file, so setting it
   moves every member at once — see [Choosing a deadline per

@@ -1,12 +1,28 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "The change request body a pr-author turn answers with",
-  "description": "The structured answer `oneharness.pr-author.toml` validates every drafting turn against, and the whole contract between this repository's drafter and `onepipeline`, which reads the drafted body out of `results[].structured.body` of the retained member report. One required field, and nothing beside it: a drafter that answered with a `title`, a `summary`, or its own commentary would have that extra silently ignored downstream, so the schema refuses it here — where oneharness re-prompts, up to `schema_max_retries` — rather than downstream where nothing is watching.",
+  "description": "The structured answer `oneharness.pr-author.toml` validates every drafting turn against, and the whole contract between this repository's drafter and `onepipeline`, which reads the drafted body out of `results[].structured.body` of the retained member report and, on a rework, the drafter's verdict on the change request's title out of `results[].structured.title_check`. Closed beside those two fields: a drafter that answered with a `summary` or its own commentary would have that extra silently ignored downstream, so the schema refuses it here — where oneharness re-prompts, up to `schema_max_retries` — rather than downstream where nothing is watching.",
   "type": "object",
   "properties": {
     "body": {
       "type": "string",
       "description": "The change request body, in whatever shape the drafting task asked for — that task is the one place the shape is stated, so it is not restated here. Markdown, not JSON-escaped prose: `onevcs` opens the change request with exactly these characters."
+    },
+    "title_check": {
+      "type": "object",
+      "description": "Answered on a rework only, whose drafting task carries `## Rework` and `## Net diff`: whether the change request's current subject still describes the net change. `keeps` leaves the title as it is; `replaced` names, in `title`, the Conventional Commit subject the engine retitles it to. Optional, so every answer outside a rework is accepted exactly as before; the engine refuses a `replaced` subject its title rule refuses and leaves the title unverified rather than writing it.",
+      "required": ["verdict"],
+      "additionalProperties": false,
+      "properties": {
+        "verdict": {
+          "type": "string",
+          "enum": ["keeps", "replaced"]
+        },
+        "title": {
+          "type": "string",
+          "description": "The replacement subject, given with `replaced`: a Conventional Commit subject within onevcs's subject limit."
+        }
+      }
     }
   },
   "required": ["body"],

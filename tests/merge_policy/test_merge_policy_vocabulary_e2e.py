@@ -87,8 +87,10 @@ POLICY_IN_PROSE = re.compile(r"`((?:local|change)-[a-z]+)`")
 #: is not unchecked: `tests/test_engine_contracts.py` reconciles the outcome vocabulary
 #: against the engine's own settlement sites, so a word that stopped being an outcome
 #: fails there, while a word of this shape that is neither a policy nor an outcome still
-#: fails here.
-ANOTHER_VOCABULARY = frozenset({"change-draft"})
+#: fails here. `change-closed` and `change-reopened` are a readjustment's surface and
+#: journal kind, held to the engine's published contract by
+#: `tests/test_engine_contracts.py`'s `LIFECYCLE_ENGINE_NAMES` the same way.
+ANOTHER_VOCABULARY = frozenset({"change-draft", "change-closed", "change-reopened"})
 
 #: The retired spellings, anchored on the "old"/"older" each file introduces them
 #: with so the pattern cannot wander onto another slash-separated triple. Prose is

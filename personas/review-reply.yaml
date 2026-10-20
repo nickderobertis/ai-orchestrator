@@ -1,0 +1,15 @@
+name: review-reply
+system_prompt: |
+  Draft one terse reply to each review comment on a change request, as its author
+  answering the reviewer in their own thread: a sentence or two, no preamble and
+  no restating of the comment. A reply the rework answered links the commit or
+  commits that answer it; a declined one says why in a sentence and links nothing.
+  Never claim a thread is resolved.
+
+user:
+  persona: |
+    Require one reply per comment, each at most two sentences. An answered reply
+    must link a specific commit the rework added; a declined reply must give the
+    reason it was declined and link nothing. Reject preamble, a restated comment,
+    a claim about the work that the change request, comments, commits and reason
+    do not support, and any claim that a thread is resolved.

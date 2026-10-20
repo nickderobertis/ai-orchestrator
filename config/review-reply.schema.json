@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "The replies a review-reply turn answers with",
+  "description": "The structured answer `oneharness.review-reply.toml` validates every reply-drafting turn against, and the shape `onepipeline` reads out of `results[].structured` of the retained member report before it posts one reply per comment in that comment's own thread. Closed at every level, so a drafter that invented a field is re-prompted here, up to `schema_max_retries`, rather than having it silently dropped downstream. The engine holds the result to further rules this schema cannot state — every comment it named exactly once, an `answered` body linking a commit it supplied, a `declined` one linking none — and refuses a result that breaks them without posting anything.",
+  "type": "object",
+  "required": ["replies"],
+  "additionalProperties": false,
+  "properties": {
+    "replies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["comment", "disposition", "body"],
+        "additionalProperties": false,
+        "properties": {
+          "comment": {
+            "type": "string",
+            "description": "The id of the comment this reply answers, exactly as the `### <id>` heading under `## Comments` names it."
+          },
+          "disposition": {
+            "type": "string",
+            "enum": ["answered", "declined"],
+            "description": "`answered` where the commits under `## Commits` answer the comment, `declined` where the change leaves it as it is."
+          },
+          "body": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "description": "The reply as posted, in Markdown. 500 characters is the engine's own limit on a reply body."
+          }
+        }
+      }
+    }
+  }
+}

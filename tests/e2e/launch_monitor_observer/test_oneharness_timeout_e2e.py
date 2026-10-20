@@ -83,6 +83,16 @@ PR_AUTHOR_MEMBER = "pr-author"
 #: measurement behind the number is beside it in that file.
 DRAFTER_DEADLINE_SECONDS = 600
 
+#: The reply-drafting graph and its one member, whose config is one more copy of the
+#: supervisory routing: the judge's sol-first chain, both Codex identities on the Sol tier
+#: the shared parent states, and a structured answer under its own finite deadline —
+#: `oneharness.pr-author.toml`'s, because a reply drafting sits inside a manager's
+#: `just review-comments` or a `decline` that waits for it.
+REVIEW_REPLY_GRAPH = REPO_ROOT / "graphs" / "review-reply.yaml"
+REVIEW_REPLY_MEMBER = "drafter"
+REPLY_DRAFTER_DEADLINE_SECONDS = 600
+REPLY_DRAFTER_CODEX_MODEL = "gpt-6.1-sol"
+
 #: The plan reviewer's config, which is the fourth copy of the supervisory routing.
 #: It is named here rather than read out of a graph because nothing dispatches it: it
 #: is a command of this repository, run by `just review-plan`, and
@@ -158,9 +168,9 @@ SPIKE_BRIEF_MEMBER = "worker"
 SPIKE_BRIEF_DEADLINE_SECONDS = 300
 SPIKE_BRIEF_CHAIN = ["codex:primary", "codex:alternate"]
 
-#: The identity order every side resolves. Two orders cover twelve of the thirteen configs:
+#: The identity order every side resolves. Two orders cover thirteen of the fourteen configs:
 #: the worker, its board-live copy and the design-doc reviewer lead with the Claude
-#: subscriptions, every other side with Codex, and all twelve name the same six identities
+#: subscriptions, every other side with Codex, and all thirteen name the same six identities
 #: with the primary-backup Claude subscription immediately before the primary one, which is
 #: last everywhere. The spike brief is the one Codex-only chain, as its constant says.
 INTENDED_CHAINS = {
@@ -171,6 +181,7 @@ INTENDED_CHAINS = {
     "monitor": DESIGN_DOC_WRITER_CHAIN,
     "pacemaker": DESIGN_DOC_WRITER_CHAIN,
     "drafter": DESIGN_DOC_WRITER_CHAIN,
+    "reply drafter": DESIGN_DOC_WRITER_CHAIN,
     "reviewer": DESIGN_DOC_WRITER_CHAIN,
     "whole reviewer": DESIGN_DOC_WRITER_CHAIN,
     "design-doc writer": DESIGN_DOC_WRITER_CHAIN,
@@ -486,10 +497,11 @@ def test_timeout_kills_process_tree_and_preserves_real_partial_telemetry(
 def test_every_side_resolves_its_intended_effective_deadline(
     oneharness_bin: str,
 ) -> None:
-    """Prove all thirteen turn configs together from oneharness's effective values."""
+    """Prove all fourteen turn configs together from oneharness's effective values."""
     monitor = _named_config(DAG_SCOPE_GRAPH, MONITOR_MEMBER, "agent.oneharness_config")
     pacemaker = _named_config(DAG_SCOPE_GRAPH, "check-in", "oneharness_config")
     drafter = _named_config(PR_AUTHOR_GRAPH, PR_AUTHOR_MEMBER, "oneharness_config")
+    reply_drafter = _named_config(REVIEW_REPLY_GRAPH, REVIEW_REPLY_MEMBER, "oneharness_config")
     writer = _named_config(DESIGN_DOC_GRAPH, DESIGN_DOC_MEMBER, "agent.oneharness_config")
     design_doc_reviewer = _named_config(
         DESIGN_DOC_GRAPH, DESIGN_DOC_MEMBER, "judge.oneharness_config"
@@ -499,15 +511,17 @@ def test_every_side_resolves_its_intended_effective_deadline(
         monitor,
         pacemaker,
         drafter,
+        reply_drafter,
         PLAN_REVIEW_CONFIG,
         PLAN_REVIEW_WHOLE_CONFIG,
         writer,
         design_doc_reviewer,
         follow_up,
     }
-    assert len(own) == 8, (
+    assert len(own) == 9, (
         f"the monitor ({monitor}), the check-in pacemaker ({pacemaker}), the "
-        f"pr-author drafter ({drafter}), the plan reviewer ({PLAN_REVIEW_CONFIG}), the "
+        f"pr-author drafter ({drafter}), the review-reply drafter ({reply_drafter}), the "
+        f"plan reviewer ({PLAN_REVIEW_CONFIG}), the "
         f"whole-plan reviewer ({PLAN_REVIEW_WHOLE_CONFIG}), the "
         f"design-doc writer ({writer}), the design-doc reviewer "
         f"({design_doc_reviewer}) and the follow-up agent ({follow_up}) must each name "
@@ -523,6 +537,7 @@ def test_every_side_resolves_its_intended_effective_deadline(
         "monitor": monitor,
         "pacemaker": pacemaker,
         "drafter": drafter,
+        "reply drafter": reply_drafter,
         "reviewer": PLAN_REVIEW_CONFIG,
         "whole reviewer": PLAN_REVIEW_WHOLE_CONFIG,
         "design-doc writer": writer,
@@ -623,6 +638,31 @@ def test_every_side_resolves_its_intended_effective_deadline(
     assert effective["drafter"]["schema_file"]["value"], (
         "oneharness.pr-author.toml must name the schema a drafted body is validated "
         "against; without it a turn's answer reaches publication unchecked"
+    )
+    # The reply drafter answers under a schema of its own, so it is held to the same pair
+    # the body drafter is — a finite deadline and no streaming — and to the Sol tier on
+    # both Codex identities, which it inherits rather than restating the body drafter's
+    # Astra.
+    assert effective["reply drafter"]["timeout"] == {
+        "value": REPLY_DRAFTER_DEADLINE_SECONDS,
+        "source": str(reply_drafter),
+    }, (
+        f"the review-reply drafter must retain its explicit finite "
+        f"{REPLY_DRAFTER_DEADLINE_SECONDS}-second deadline: a manager's review pass waits on it"
+    )
+    assert effective["reply drafter"]["stream"]["value"] is False, (
+        "oneharness.review-reply.toml must keep `stream = false`: a schema run does not stream"
+    )
+    assert (
+        effective["reply drafter"]["schema_file"]["value"] == "config/review-reply.schema.json"
+    ), "oneharness.review-reply.toml must name the schema every reply is validated against"
+    codex_variants = effective["reply drafter"]["harness"]["codex"]["variant"]
+    assert {name: codex_variants[name]["model"]["value"] for name in ("primary", "alternate")} == {
+        "primary": REPLY_DRAFTER_CODEX_MODEL,
+        "alternate": REPLY_DRAFTER_CODEX_MODEL,
+    }, (
+        f"both Codex identities of oneharness.review-reply.toml must run "
+        f"{REPLY_DRAFTER_CODEX_MODEL}: {codex_variants}"
     )
     assert effective["reviewer"]["timeout"] == {
         "value": REVIEWER_DEADLINE_SECONDS,

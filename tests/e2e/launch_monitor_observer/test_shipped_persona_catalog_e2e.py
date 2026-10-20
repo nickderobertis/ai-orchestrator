@@ -38,12 +38,19 @@ from orchestrator.root import REPO_ROOT
 SHIPPED_ROLES = ("docs-writer", "engineer", "planner", "researcher", "reviewer")
 
 #: Names this repository uses that are deliberately NOT built in. `orchestrator` and
-#: `check-in` are `graphs/dag-scope.yaml`'s members and `pr-author` is
-#: `graphs/pr-author.yaml`'s, and every one of them is named there BY PATH because of
+#: `check-in` are `graphs/dag-scope.yaml`'s members, `pr-author` is
+#: `graphs/pr-author.yaml`'s and `review-reply` is `graphs/review-reply.yaml`'s drafter's, and
+#: every one of them is named there BY PATH because of
 #: what this file measures. `crozier/crozier-corpus` is the repo-specific catalog
 #: entry, and `no-such-role` is the control: whatever happens to an invented name is
 #: what happens to these.
-NOT_SHIPPED = ("orchestrator", "check-in", "pr-author", "crozier/crozier-corpus")
+NOT_SHIPPED = (
+    "orchestrator",
+    "check-in",
+    "pr-author",
+    "review-reply",
+    "crozier/crozier-corpus",
+)
 CONTROL_NAME = "no-such-role"
 
 #: The graph schema that admits a member-facing `personas` catalog directory, which is
@@ -133,7 +140,7 @@ def test_a_shipped_role_collides_with_a_catalog_entry_of_the_same_name(
 
 @pytest.mark.parametrize("name", (*NOT_SHIPPED, CONTROL_NAME))
 def test_a_name_this_crate_does_not_ship_is_left_to_the_catalog(tmp_path: Path, name: str) -> None:
-    """`orchestrator`, `check-in`, and `pr-author` behave exactly like an invented name.
+    """`orchestrator`, `check-in`, `pr-author` and `review-reply` act like an invented name.
 
     The control is the point. Each of these validates beside a catalog entry claiming
     it, which under the rule the test above establishes means nothing is compiled in

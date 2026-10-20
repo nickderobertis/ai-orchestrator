@@ -37,7 +37,7 @@
 #
 # Schema 4, for the one field the member below needs. Its own `task` requires 3;
 # that task interpolates `{task}`, which `oneagentgraph` expands only from 4 — under
-# 3 the token reaches the model as its six literal characters. oneagentgraph 0.5.13
+# 3 the token reaches the model as its six literal characters. oneagentgraph 0.5.14
 # reads 1 through 10.
 version: 4
 name: pr-author
@@ -103,6 +103,20 @@ members:
       Under every template, what stays out: agent-turn and iteration counts,
       dispatch details, orchestrator-to-agent handoff phrasing, pasted task prose.
 
-      Answer with the JSON object the response schema declares: exactly one `body`
-      field, holding that Markdown. It is written verbatim as the change request's
-      description.
+      Where the task carries a Stack block — the lines between
+      `<!-- onepipeline:stack -->` and `<!-- /onepipeline:stack -->` — that block is
+      the engine's: it names the base this change is drafted against and the change
+      requests it is stacked on, and the engine writes it into the description itself.
+      Read it to know what the diff sits on, and write no Stack section of your own.
+
+      Where the task carries a `## Rework` section and a `## Net diff` section, this
+      change request was reworked and its title may no longer say what it does. Read
+      the patch under `## Net diff` — the whole change against its base, not just the
+      rework's commits — and answer `title_check` beside `body`: `{"verdict": "keeps"}`
+      when the current subject still describes that net change, or
+      `{"verdict": "replaced", "title": "<subject>"}` with a Conventional Commit subject
+      that does. Outside a rework, answer no `title_check`.
+
+      Answer with the JSON object the response schema declares: one `body` field,
+      holding that Markdown, and `title_check` only on a rework. The body is written
+      verbatim as the change request's description.

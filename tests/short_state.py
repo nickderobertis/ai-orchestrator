@@ -27,7 +27,7 @@ SOCKET_LAYOUT = "/oneharness/sessions/control/"
 #: A decision rather than a copy of anybody's value — nothing published states a maximum
 #: session name — and `tests/test_short_state_budget.py` is what keeps it a sufficient
 #: one, against the longest name the graphs and members this repository ships compose.
-RESERVED_FOR_A_SESSION = 54
+RESERVED_FOR_A_SESSION = 55
 
 #: What is left for a state root, which is what `state_home` refuses to spend past. The
 #: byte taken off the top is the terminating NUL the limit above counts, so an address of

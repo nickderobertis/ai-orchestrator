@@ -15,9 +15,10 @@ does, and it went stale here first.
 So the prose is reconciled rather than trusted, in six shapes:
 
 * **The outcome table**, against every settlement site in `onepipeline` — the
-  `Settlement::plain(…, Some(…))` calls, the `failed(node, …)` helper, and
-  `vcs::outcome_of`, which is where `onevcs`'s five publication endings become this
-  crate's words. A word on either side and not the other fails, in the direction
+  `Settlement::plain(…, Some(…))` calls, a struct literal spreading one, a
+  `(NodeStatus::…, Some(…))` pair a match arm settles on, the `failed(node, …)`
+  helper, and `vcs::outcome_of`, which is where `onevcs`'s five publication endings
+  become this crate's words. A word on either side and not the other fails, in the direction
   that says which way it drifted. The two words the prose declares *absent* are held
   absent by the same read, so the denial fails the moment either becomes real.
 * **Every closed vocabulary the prose enumerates exhaustively**, against the engine
@@ -147,10 +148,26 @@ CONSTANT_SETTLEMENTS = re.compile(
 FAILED_HELPER_NODE = r"\bfailed\(\s*&?[a-z_][a-z_0-9]*(?:\.id)?\s*,\s*"
 FAILED_HELPER = re.compile(FAILED_HELPER_NODE + r"\"([a-z][a-z-]*)\"\s*\)")
 FAILED_HELPER_CONSTANT = re.compile(FAILED_HELPER_NODE + r"([A-Z][A-Z_]*)\s*\)")
-OUTCOME_CONSTANT = re.compile(r"pub const ([A-Z][A-Z_]*): &(?:'static )?str = \"([a-z][a-z-]*)\";")
+OUTCOME_CONSTANT = re.compile(
+    r"pub(?:\(crate\))? const ([A-Z][A-Z_]*): &(?:'static )?str = \"([a-z][a-z-]*)\";"
+)
 FAILED_HELPER_STATUS = re.compile(
     r"fn failed\(\s*node:\s*&str,\s*outcome:\s*&str\s*\)[^{]*\{\s*"
     r"Settlement::plain\(\s*node,\s*NodeStatus::(\w+),\s*Some\(outcome\)\s*\)"
+)
+
+#: The two shapes a settlement whose outcome is a crate constant takes beside
+#: `Settlement::plain(…, Some(CONST))`: a struct literal naming its `outcome` and taking
+#: its status from the `..Settlement::plain(…)` it spreads — a republished review draft's
+#: `change-review-draft-unchecked` — and a `(NodeStatus::…, Some(CONST))` pair a match
+#: arm hands the settlement it builds — a rework a person merged under, `merged-during-
+#: rework`. The struct literal is read within one literal, never across into the next.
+STRUCT_SETTLEMENTS = re.compile(
+    r"outcome:\s*Some\((?:crate::\w+::)?([A-Z][A-Z_]*)\.to_owned\(\)\),"
+    r"(?:(?!\bSettlement\s*\{)[\s\S])*?\.\.Settlement::plain\([^,]+,\s*NodeStatus::(\w+)"
+)
+PAIRED_SETTLEMENTS = re.compile(
+    r"=>\s*\(\s*NodeStatus::(\w+),\s*Some\((?:crate::\w+::)?([A-Z][A-Z_]*)\),?\s*\)"
 )
 
 #: The function that turns `onevcs`'s publication endings into this crate's words,
@@ -1423,6 +1440,12 @@ def engine_settlements() -> frozenset[tuple[str, str]]:
     found.update(
         (word_for(status), constants[name])
         for status, name in CONSTANT_SETTLEMENTS.findall(shipped)
+    )
+    found.update(
+        (word_for(status), constants[name]) for name, status in STRUCT_SETTLEMENTS.findall(shipped)
+    )
+    found.update(
+        (word_for(status), constants[name]) for status, name in PAIRED_SETTLEMENTS.findall(shipped)
     )
     found.update(
         (word_for(helper_status.group(1)), constants[name])
@@ -4006,6 +4029,218 @@ def test_the_drafter_starts_from_sections_the_pinned_engine_composes() -> None:
             f"the installed onepipeline does not carry {heading!r}, which "
             "graphs/pr-author.yaml tells the drafter to read its starting point from"
         )
+
+
+#: What each drafting graph's prompt reads by name out of the task the engine composes
+#: for it, every one an engine literal: the reply drafter's five sections and the
+#: sentence `## Worker transcript` carries where this host's journal holds no
+#: transcript, and the body drafter's two rework sections and the markers of the Stack
+#: block the engine writes. The prompt quotes each in backticks, so a reword on either
+#: side breaks the pair.
+COMPOSED_LITERALS_BY_GRAPH = (
+    (
+        "review-reply.yaml",
+        (
+            "## Change request",
+            "## Comments",
+            "## Commits",
+            "## Reason",
+            "## Worker transcript",
+            "No worker transcript is available on this host; draft from the sections above.",
+        ),
+    ),
+    (
+        "pr-author.yaml",
+        (
+            "## Rework",
+            "## Net diff",
+            "<!-- onepipeline:stack -->",
+            "<!-- /onepipeline:stack -->",
+        ),
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("graph", "literals"),
+    COMPOSED_LITERALS_BY_GRAPH,
+    ids=[g for g, _ in COMPOSED_LITERALS_BY_GRAPH],
+)
+def test_each_drafting_graph_reads_literals_the_pinned_engine_composes(
+    graph: str, literals: tuple[str, ...]
+) -> None:
+    """Each literal a drafting prompt names is one the installed engine writes.
+
+    Read from the installed binary, as the test above reads the body drafter's starting
+    points: a section the engine renamed would leave a drafter told to read something its
+    task no longer carries — a reply drafter looking for commits under a heading nobody
+    writes, or a body drafter writing a Stack section beside the engine's own.
+    """
+    # The two-line sentence is wrapped in the prompt's block scalar, so the prompt is
+    # compared with its whitespace collapsed.
+    prompt = " ".join((REPO_ROOT / "graphs" / graph).read_text(encoding="utf-8").split())
+    engine = (REPO_ROOT / ".venv" / "bin" / "onepipeline").read_bytes()
+    for literal in literals:
+        assert f"`{literal}`" in prompt, (
+            f"graphs/{graph} no longer names {literal!r} in backticks, so this gate reads a "
+            "literal the prompt does not rely on; move the gate with the prompt"
+        )
+        assert literal.encode("utf-8") in engine, (
+            f"the installed onepipeline does not carry {literal!r}, which graphs/{graph} "
+            "tells its drafter to read"
+        )
+
+
+def _divergence_record(entry: int) -> dict[str, object]:
+    """The machine-readable block of one `docs/contract-divergences.md` entry, at the pin.
+
+    Each entry this host's drafters answer to closes on one fenced JSON block that the
+    engine's own `tests/contract.rs` holds to its public types, so that block — not this
+    repository's reading of the prose around it — is the published contract.
+    """
+    document = _source(ONEPIPELINE_DOCS, "contract-divergences.md")
+    heading = re.search(rf"^## {entry}\. .*$", document, re.MULTILINE)
+    assert heading is not None, (
+        f"onepipeline {ONEPIPELINE_DOCS.ref} carries no divergence entry {entry}; the drafter "
+        "contract this gate reads moved, so re-read where the engine states it now"
+    )
+    following = re.search(r"^## \d+\. ", document[heading.end() :], re.MULTILINE)
+    section = document[heading.end() : heading.end() + (following.start() if following else None)]
+    block = re.search(r"```json\n(.*?)\n```", section, re.DOTALL)
+    assert block is not None, f"divergence entry {entry} closes on no JSON block"
+    record: dict[str, object] = json.loads(block.group(1))
+    return record
+
+
+def test_the_reply_schema_is_the_reply_contract_the_pinned_engine_publishes() -> None:
+    """`config/review-reply.schema.json` admits the engine's dispositions, limit and example.
+
+    The schema is this host's restatement of what `onepipeline` reads a reply drafting's
+    answer as, so it is held to entry 130's block: the dispositions are the enum, the body
+    limit is the schema's `maxLength`, and the engine's own example result validates.
+    """
+    record = _divergence_record(130)
+    schema = json.loads((REPO_ROOT / "config/review-reply.schema.json").read_text("utf-8"))
+    reply = schema["properties"]["replies"]["items"]["properties"]
+
+    assert reply["disposition"]["enum"] == record["dispositions"], (
+        f"the reply schema admits {reply['disposition']['enum']} while onepipeline "
+        f"{ONEPIPELINE_DOCS.ref} reads {record['dispositions']}"
+    )
+    assert reply["body"]["maxLength"] == record["body_limit"], (
+        f"the reply schema allows {reply['body']['maxLength']} characters while onepipeline "
+        f"{ONEPIPELINE_DOCS.ref} posts at most {record['body_limit']}"
+    )
+    jsonschema.validate(record["result"], schema)
+
+
+def test_the_body_schema_admits_the_title_check_the_pinned_engine_reads() -> None:
+    """`config/pr-author-body.schema.json`'s `title_check` is entry 121's.
+
+    Its verdict enum is the engine's `title_check_verdicts`, and the engine's own example —
+    a `replaced` verdict with its subject — validates beside a body.
+    """
+    record = _divergence_record(121)
+    schema = json.loads((REPO_ROOT / "config/pr-author-body.schema.json").read_text("utf-8"))
+    title_check = schema["properties"]["title_check"]
+
+    assert title_check["properties"]["verdict"]["enum"] == record["title_check_verdicts"], (
+        f"the body schema admits verdicts {title_check['properties']['verdict']['enum']} "
+        f"while onepipeline {ONEPIPELINE_DOCS.ref} reads {record['title_check_verdicts']}"
+    )
+    jsonschema.validate({"body": "## What\nIt.\n", "title_check": record["title_check"]}, schema)
+
+
+#: Every name `docs/repo-lifecycle.md` restates from the stacking, rework, reply and
+#: readjustment contracts the pinned engine publishes: a branch template, a replacement-id
+#: template, a store key, and the journal kinds and surface names a manager reads.
+LIFECYCLE_ENGINE_NAMES = (
+    "stack-base/<plan name>/<node id>",
+    "<lineage root>-rework-<n>",
+    "onepipeline.rework",
+    "node-restack-started",
+    "node-restacked",
+    "title-unverified",
+    "review-reply-pending",
+    "decline-not-posted",
+    "stack-merged-out-of-order",
+    "stack-landed-out-of-order",
+    "change-reopened",
+    "change-closed",
+    "change-merged-elsewhere",
+)
+
+
+def test_the_lifecycle_guide_names_only_what_the_pinned_engine_publishes() -> None:
+    """Each engine name the lifecycle guide restates is one the pinned contract states.
+
+    Both sides are read with their whitespace collapsed, so a reflow moves nothing, and a
+    name the engine renames or drops fails here rather than reading as current.
+    """
+    contract = " ".join(_source(ONEPIPELINE_DOCS, "contract-divergences.md").split())
+    lifecycle = " ".join((REPO_ROOT / "docs/repo-lifecycle.md").read_text("utf-8").split())
+    unstated = [name for name in LIFECYCLE_ENGINE_NAMES if f"`{name}`" not in lifecycle]
+    assert not unstated, f"docs/repo-lifecycle.md no longer names {unstated}; drop them here"
+    unpublished = [name for name in LIFECYCLE_ENGINE_NAMES if name not in contract]
+    assert not unpublished, (
+        f"onepipeline {ONEPIPELINE_DOCS.ref}'s contract states none of {unpublished}, "
+        "which docs/repo-lifecycle.md restates"
+    )
+
+
+def test_the_lifecycle_guide_states_the_stacked_settlement_the_pinned_engine_writes() -> None:
+    """The settlement keys the lifecycle guide describes are entry 115's record's.
+
+    The guide says a lifecycle settlement carries `base`, `head` and `stack` — each
+    parent's node, branch and head, and the stack base — so those are held to the
+    engine's own example settlement rather than to this repository's reading of it.
+    """
+    settlement = _divergence_record(115)["settlement"]
+    assert isinstance(settlement, dict)
+    assert {"base", "head", "stack"} <= settlement.keys(), sorted(settlement)
+    stack = settlement["stack"]
+    assert isinstance(stack, dict) and set(stack) == {"parents", "stack_base"}, stack
+    assert all(set(parent) == {"node", "branch", "head"} for parent in stack["parents"]), stack
+    lifecycle = " ".join((REPO_ROOT / "docs/repo-lifecycle.md").read_text("utf-8").split())
+    stated = (
+        "A lifecycle settlement carries `base` (what its change request targets), `head` (the "
+        "commit its branch stands at) and, where it had stack parents, `stack` — each "
+        "parent's node, branch and head, and the stack base or `null`."
+    )
+    assert stated in lifecycle, f"docs/repo-lifecycle.md must state that {stated!r}"
+
+
+#: How onevcs declares the schema version its registry store is written at.
+STORE_VERSION = re.compile(r"^pub const VERSION: u32 = (\d+);$", re.MULTILINE)
+
+
+def test_the_declared_onevcs_divergence_shares_one_registry_schema() -> None:
+    """The onevcs CLI pinned past the linked copy writes the registry that copy reads.
+
+    `onevcs` migrates its host registry to its own schema on any verb's first contact, so
+    a CLI ahead of the engine's linked copy is safe only while both releases state one
+    store version. Read from each release's own `store.rs`, and held to the sentence
+    `docs/repo-lifecycle.md` states it in.
+    """
+    linked = _linked_version("onevcs")
+    pinned = (REPO_ROOT / "config/onevcs.version").read_text("utf-8").strip()
+    if pinned == linked:
+        pytest.skip("the onevcs CLI pin is the linked release, so no divergence is declared")
+    versions = {
+        release: STORE_VERSION.findall(
+            _source(Engine("onevcs", f"v{release}", "crates/onevcs/src"), "store.rs")
+        )
+        for release in (linked, pinned)
+    }
+    assert all(len(found) == 1 for found in versions.values()), versions
+    assert versions[linked] == versions[pinned], (
+        f"onevcs {pinned} writes registry schema {versions[pinned]} while the engine's linked "
+        f"onevcs {linked} reads {versions[linked]}: the CLI pin would migrate the registry "
+        "under every live dispatch. Move the pin back to the linked release"
+    )
+    lifecycle = " ".join((REPO_ROOT / "docs/repo-lifecycle.md").read_text("utf-8").split())
+    stated = f"store schema is version {versions[linked][0]} at both {linked} and {pinned}"
+    assert stated in lifecycle, f"docs/repo-lifecycle.md must state that {stated!r}"
 
 
 #: Found by its top-level key, since the contract carries several JSON fixtures.

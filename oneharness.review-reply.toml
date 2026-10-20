@@ -1,0 +1,70 @@
+# The `review-reply` drafter's harness config: WHICH harness + model writes the replies
+# a reworked or declined review comment is answered with. Named by
+# `graphs/review-reply.yaml`'s one member, which `onepipeline` runs once per rework
+# whose replies are owed and once per `decline`. See docs/onejudge-integration.md and
+# docs/repo-lifecycle.md.
+#
+# It extends `oneharness.identities.toml` rather than `oneharness.dispatch.toml`, as
+# `oneharness.pr-author.toml` does and for its reason: a reply drafting runs inside
+# `onepipeline review` or a `decline`'s application, not inside a node's dispatch, so
+# there is no node scratch directory for the runtime-directory repoint to point at.
+#
+# `schema_file`, `schema_max_retries`, `stream` and the deadline below are this side's
+# alone, and `schema_file` is a path this file has to state itself, for the reason
+# `oneharness.pr-author.toml` gives at the same keys.
+extends = "oneharness.identities.toml"
+
+# timeout: the per-turn deadline in seconds, `oneharness.pr-author.toml`'s. A reply
+# drafting reads a change request, its comments, the commits a rework added and, where
+# this host holds it, the worker's transcript, and answers with a few short replies —
+# no more reading than the body drafter does, and its turn sits inside a manager's
+# `just review-comments` or a `decline` that waits for it. A drafting that misses the
+# deadline posts nothing and leaves its comments owed for the next pass, so a generous
+# bound costs nothing but a wedged turn's wait.
+timeout = 600
+
+# schema_file: the structured answer every turn is validated against — the `replies`
+# list the engine posts from. Relative to THIS file's directory.
+schema_file = "config/review-reply.schema.json"
+
+# schema_max_retries: two, as the body drafter's, for the same failure: a model
+# wrapping its answer in prose or adding a field, which one re-prompt with the
+# validation error usually settles.
+schema_max_retries = 2
+
+# stream = false, and it is not a preference: oneharness validates a structured answer
+# against the COMPLETE response, so a schema run cannot stream and `oneagentgraph`
+# refuses a member that asks for both.
+stream = false
+
+# `role` names the SIDE of the conversation: the drafter is a single-sided agent turn.
+# It is this host's key, beside the `onepipeline.*` keys the engine stamps, none of
+# which says which side of a conversation a session is.
+history_labels = { role = "agent" }
+
+# The supervisory order — both Codex identities first, then the workers' alternate
+# Claude subscriptions, the primary Claude identity last — exactly as
+# `oneharness.judge.toml` and `oneharness.follow-up.toml` declare it, so a reply
+# drafting never queues ahead of the workers on the Claude subscriptions they lead with.
+# llmlint: ignore[changed_behavior_has_e2e] tests/e2e/launch_monitor_observer/test_oneharness_timeout_e2e.py proves this list against the real CLI's effective configuration; paid-provider quota rejection cannot be deterministic.
+harnesses = [
+    "codex:primary",
+    "codex:alternate",
+    "claude-code:alternate",
+    "claude-code:alternate2",
+    "claude-code:primary-backup",
+    "claude-code:primary",
+]
+
+# Both Codex identities run on the Sol tier `oneharness.identities.toml` states, which
+# this file inherits rather than restates: unlike the body drafter, whose description is
+# the change request's permanent account and earns the Astra tier, a reply is a
+# sentence or two. The ChatGPT-app connector tools are switched off for this
+# supervisory role, for the reason `oneharness.judge.toml` states at the same table.
+[harness.codex]
+args = ["-c", "features.apps=false"]
+
+# The plan-store credential mask, which no parent may hold: `oneharness.identities.toml`
+# says why this variant has to state it in every role that masks.
+[harness.codex.variant.primary]
+unset_env = ["GH_PROJECTS_TOKEN", "HELLOPATIENT_LINEAR_API_KEY"]

@@ -40,6 +40,7 @@
       "{workspaceRoot}/docs/repo-lifecycle.md",
       "{workspaceRoot}/docs/telemetry.md",
       "{workspaceRoot}/graphs/pr-author.yaml",
+      "{workspaceRoot}/graphs/review-reply.yaml",
       "{workspaceRoot}/personas/planner.yaml",
       "{workspaceRoot}/templates/dispatch-appendix.md",
       "{workspaceRoot}/orchestrator/**/*",

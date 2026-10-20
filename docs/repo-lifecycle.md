@@ -13,18 +13,30 @@ onejudge dispatch mechanics are in [onejudge-integration.md](./onejudge-integrat
 Everything below about engine behaviour was read out of the engines' own source
 rather than remembered, and the load-bearing part of it — [the outcome
 vocabulary](#the-outcome-vocabulary-is-closed-and-it-is-this) — is reconciled against
-that source on every `just check` rather than restated: **`onepipeline` v0.75.0**
-(`config/onepipeline.version`) and **`onevcs` 0.52.0**, read from the installed
-engine wheel's SBOM. That is the copy a dispatched lifecycle node publishes through
+that source on every `just check` rather than restated: **`onepipeline` v0.79.0**
+(`config/onepipeline.version`) and **`onevcs` 0.56.2**, read from the installed engine wheel's SBOM. That is the copy a dispatched lifecycle node publishes through
 and the copy `just publish-branch`, `just repo-recover` and `just integrate` land
 through, since all three run the engine's own landing verbs, each supervised as its
 manager's work. The other manager verbs — `just recoverable`, `just work-status` — run
-the `onevcs` CLI `config/onevcs.version` pins, also 0.52.0. `tests/test_linked_libraries.py` holds that
-CLI to the engine's linked library and the UI to the same engine. Read a version
-with the tool beside it: each pin governs a different artifact. Re-read the source
-before trusting a claim here against a later pin.
+the `onevcs` CLI `config/onevcs.version` pins, which is **0.56.3** and deliberately
+not the linked release: the engine's lock resolved 0.56.2, and the manager ruled the
+host's CLI onto the onevcs release the review-feedback plan produced. `tests/test_linked_libraries.py` holds that CLI to the engine's linked
+library — this pair as its one declared divergence, named with both versions and why
+— and the UI to the same engine. Read a version with the tool beside it: each pin
+governs a different artifact. Re-read the source before trusting a claim here against
+a later pin.
 
-**What the move to these pins brought.** From onepipeline 0.74.1, onepipeline-ui 0.38.0,
+**What the move to these pins brought.** From onepipeline 0.75.0, onepipeline-ui 0.39.0,
+onevcs 0.52.0, oneagentgraph 0.5.13 and onetaskgraph 0.7.1: the engine 0.79.0 carries the
+review-feedback loop — a draft placed on the unlanded
+work it depends on, with the Stack block the engine writes; `rework`, `retitle` and
+`decline`; `onepipeline review` and its reply drafter; `onepipeline readjust` and the
+readjustment every review trigger runs first; and a project continued from the plan store
+on any host, under a best-effort claim — each described below, where it acts. The engine
+links onevcs 0.56.2, oneagentgraph 0.5.14 and the onetaskgraph 0.8.0 store crates, so those
+two CLI pins follow it, while the onevcs CLI moves to 0.56.3 as above. Its store schema is version 7 at both 0.56.2 and
+0.56.3, so the CLI forces no registry migration on a dispatch's linked copy.
+From onepipeline 0.74.1, onepipeline-ui 0.38.0,
 oneagentgraph 0.5.7, onejudge 0.19.0 and onebudgetspec 0.1.4: the engine 0.75.0 and the
 read API 0.39.0 read YAML with `serde-saphyr` and link the onejudge 0.19.5, oneagentgraph
 0.5.13 and onetaskgraph 0.7.1 releases that do, so neither wheel's SBOM declares a libyaml
@@ -88,6 +100,7 @@ A node's `outcome` is not free text. `onepipeline` writes exactly these words, a
 | `done` | `change-open` | A change request is open, which the policy asked for. On the adopted engine it was a draft while its required checks ran and was lifted once they were green, so a red check or an elapsed bound under `change-open` settles `checks-failed` or `checks-unsettled` like any other policy. |
 | `done` | `change-review-draft` | The required checks are green and the change request is **kept as a draft for its user's review**: the outcome of a `change-open` identity whose approvals are required, from onevcs 0.36.0's draft lifecycle (onepipeline 0.57.0). Unlanded, with its URL on the settlement; its dependents proceed and a run whose nodes all settle so fires its success hook. Lifted by that user on the host or with `onevcs change ready <session>`. |
 | `done` | `change-draft` | The plan asked for a draft — `onepipeline.draft: true` — and the change request is left as one for a person to lift. Unlanded, and its dependents proceed. A green check never lifts it, on any retry. |
+| `done` | `change-review-draft-unchecked` | A review draft **republished** — by a rework, a restack, a readjustment or a repair — whose check watch was deferred at the push. Unlanded; the next review trigger's read records its verdict: green reads as `change-review-draft`, red re-dispatches it onto its branch. See [Readjusting a stack as its parents land](#readjusting-a-stack-as-its-parents-land). |
 | `done` | `queued` | The host took the merge and will land it once its checks pass. |
 | `done` | `preserved` | The node declared `publish: "preserve"`, so nothing was drafted or published: its session closed and its branch was put on the identity's origin with `onevcs preserve`, the settlement naming the branch, the commit it stands at and where the push went. It never lands. `just unpublished` counts it until it is acknowledged, and `just reclaim-branch <branch> --repo <checkout> --discard` deletes it once nothing needs it. |
 | `done` | `no-changes` | Every step declared no diff, or the base already carried the branch's content. |
@@ -103,6 +116,7 @@ A node's `outcome` is not free text. `onepipeline` writes exactly these words, a
 | `failed` | `push-rejected` | The publishing push was refused by the merge path, and the budget is spent. |
 | `failed` | `sync-conflict` | The branch conflicts with its moved base and the budget is spent. Each dispatch whose session opened over the conflict was handed the merge to conclude (see [Merge-path verification](#merge-path-verification)), and the last publication found it unconcluded. Where any dispatch was handed it, a blocking `session-conflict` finding follows, asking for a `retry` and never for a hand merge. |
 | `failed` | `pushed-unverified` | The publishing push **reached the remote** and the merge path could not then be read, and the budget is spent. The one failure word whose work is already on the origin: its reason names both the commit it landed at and what stopped the read, and a further attempt re-reads that path rather than re-pushing. |
+| `failed` | `merged-during-rework` | A person merged the change request while its rework ran, so the rework published nothing and kept its work on its branch; its surface names how to go on — `add`, the node that absorbed it, or the question about an unknown merge. |
 | `failed` | `task-failed` | The dispatch failed its own judge. |
 | `failed` | `task-failed-change-open` | It failed its judge having already opened a change request — the URL is on the settlement. |
 | `failed` | `dispatch-died` | The dispatch started and the agent worked, but the dispatch process then ended without an agent verdict; unlike a pre-work infrastructure refusal, it is not retried. Its `died:` line in `just results`, and its line in `just status`, say where the work stands in one of three forms (https://github.com/nickderobertis/onepipeline/pull/726): **landed on its base** at the landed commit, where the run recorded the node's landing; **retired** as holding no work beyond its base, where an idle pass of the driver deleted the branch; and otherwise the branch that may carry finished work, at its head where one is recorded. Read the landed form before recovering anything: that work is already on the base. |
@@ -114,7 +128,8 @@ A node's `outcome` is not free text. `onepipeline` writes exactly these words, a
 
 **This table is reconciled, not copied.**
 `tests/test_engine_contracts.py` reads every settlement the adopted
-`onepipeline` release composes — `Settlement::plain`, the `failed(node, …)` helper,
+`onepipeline` release composes — `Settlement::plain`, a struct literal or match arm
+pairing a status with an outcome constant, the `failed(node, …)` helper,
 `vcs::outcome_of`, and the words `vcs::Preserving::outcome` declares for a
 publication a further attempt could answer — across the crate whole rather than a
 named handful of files,
@@ -715,7 +730,7 @@ the merge left in progress**, and reports it as the session's `conflict` (`paths
 the refusal at open that used to be the only answer, and nothing on this host asks for
 it. A publication over a merge nobody concluded is refused as a
 sync conflict before anything is committed or pushed, and a session's teardown aborts
-the merge and keeps every commit. onepipeline 0.75.0 dispatches the worker into that
+the merge and keeps every commit. onepipeline 0.79.0 dispatches the worker into that
 session — a node's first step, a pinned continuation, or the re-dispatch after a
 `sync-conflict` — with the conflict under `## Planner context` and one engine-written
 criterion under `### Merge resolution` at the end of `## Acceptance criteria`, so the
@@ -778,7 +793,7 @@ gate-skipping switch to inherit. The `Node` schema is `deny_unknown_fields`, so
 `recorded_gate`, `verify_cmd`, `skip_verify`, and `no_identity_gate` are not
 "accepted and ignored" — a plan carrying any of them is **refused while it loads**. `verify_via_ci` was the one
 survivor and is no longer even that: it is not a field of `Node` on onepipeline
-v0.75.0 and is refused **by its own name**, at every schema version and on a live
+v0.79.0 and is refused **by its own name**, at every schema version and on a live
 edit's `add` alike, because a plan's author has to act on the field rather than on
 a version number. The refusal says where what it asked for went, which is the whole
 of the change: nothing ever read the flag, and the host's own required checks are
@@ -1502,8 +1517,8 @@ today's behaviour on a host that declares no release targets, which this one is.
 field held only in `tests/fixtures/legacy-runs/`; a plan that writes one is refused,
 and so is `verify_via_ci`, which this schema once accepted. Independent top-level nodes run
 concurrently, and a node whose dependency failed is skipped. Cross-repository dependencies only schedule. A
-successful same-identity dependency not landed on the root base becomes a stack
-prerequisite:
+same-repository dependency that settled as a draft nothing has landed is a **stack
+parent**, and the node is placed on it, as [Stacked drafts](#stacked-drafts) states.
 
 The default PR title is derived from the most significant Conventional Commit
 subject on the branch, with a non-releasing `chore:` fallback when none is usable
@@ -1519,23 +1534,170 @@ holds a publication subject to`.
 All explicit task, base, anchor, and recovery branch names pass Git's literal
 branch validator before any Git command.
 
-- one prerequisite is the child's checkout and PR base;
-- root-landed prerequisites are dropped using branch ancestry or the recorded PR
-  state (which also covers squash merges and deleted head branches); legacy
-  anchors without an identity fall back to their normalized repository slug;
-- ancestor duplicates collapse to the descendant first. Several remaining
-  prerequisites are merged in declared order into a pushed
-  `ai-orchestrator/stack-base/*` branch cut from the root;
-  that synthetic branch has no PR and remains remote while it is a PR base;
-- stack prerequisites override an explicit `base_branch` as checkout/PR base,
-  while that explicit/default branch remains the root for multi-parent assembly;
-  an anchor recorded for a different root is a `stack-conflict` rather than being
-  silently retargeted;
-- a merge conflict aborts before child dispatch/publication as `stack-conflict`,
-  cleans its unpublished local synthetic branch, and causes descendants to skip.
+### Stacked drafts
 
-The child PR body lists dependency PR links and stack bases. Its merge path judges
-the complete stack, but the PR diff against its stack base is child-only.
+What follows is what the adopted onepipeline does — its `docs/contract-divergences.md`
+entries 115, 121, 125, 126 and 130 are the authority, and each names the journeys that
+drive it.
+
+**Placement.** A lifecycle node's **stack parents** are its direct dependencies on the
+same identity that settled `done` with landing `unlanded` and a recorded branch — a
+`change-review-draft`, `change-draft` or `change-open` parent. A dependency that is an
+ancestor of another stack parent collapses into it, and a landed one is no stack parent:
+its work is on the base. Placement reads the landings the run has recorded when the node
+starts.
+
+- **None**: the node is placed as before, on the root or its `base_branch`.
+- **One**: its session is cut from that parent's branch, and its change request targets
+  that branch.
+- **Several**: the engine has `onevcs` assemble a **stack base**, the host's branch prefix
+  followed by `stack-base/<plan name>/<node id>`, merging the parents in the node's
+  declared dependency order over the root, and the node's session and change request are
+  based on it. A conflict there is handed to the node's own worker with the merge in
+  progress, and an assembly that cannot conclude settles the node `failed` as
+  `infrastructure-failure` before its session opens.
+
+An explicit `base_branch` stays the **root** of assembly while the stack parents set the
+checkout and change-request base. `publish: "preserve"` stacking is unchanged.
+
+**The Stack block is the engine's.** The node's rendered task ends with a `## Stack`
+section naming each parent's node, branch and change request and the node's base. After
+each publication the engine writes into the change request's description one block
+between `<!-- onepipeline:stack -->` and `<!-- /onepipeline:stack -->` — a `## Stack`
+heading, the base, each parent's change request — appended where the description holds
+none and replaced between its markers where it does, touching nothing else. The body
+drafter reads that block and writes no Stack section of its own, which
+`graphs/pr-author.yaml` tells it. Each draft's diff against its base is its own; its merge
+path still judges the whole stack.
+
+**The settlement says where.** A lifecycle settlement carries `base` (what its change
+request targets), `head` (the commit its branch stands at) and, where it had stack
+parents, `stack` — each parent's node, branch and head, and the stack base or `null`.
+`status` and `results` list every node holding a change request nothing has landed with
+what it is drafted against.
+
+### Reworking a draft, and the restack above it
+
+A draft in review is reworked in place by the planner's `rework` op — `id`, `reason`,
+`instruction`, optionally the `comments` it answers, a `title` and a `replacement` id. It
+supersedes the node as a `retry` builds one, by default as `<lineage root>-rework-<n>`,
+with its branch pinned to the one the node's settlement recorded and its task followed by
+a `## Rework` section. Its direct dependents are rewired onto the replacement and stay
+`done`. The worker works on the same branch, on top of its commits, and its publication
+adopts the change request already open from it and keeps it a draft, so reviewers see one
+change request move. The replacement's task on the store carries `onepipeline.rework`, so
+any host knows which comments a rework answers. A rework is refused for a node that has
+landed — `add` builds on landed work — and for one a dispatch or restack is in flight for.
+
+**The title is checked against the net change.** A rework's drafting task carries
+`## Rework`, `## Current title` and `## Net diff` — the branch's whole patch against its
+base — and asks the body drafter for `title_check`: `keeps`, or `replaced` with a
+Conventional Commit subject. The op's own `title` wins, then a valid `replaced`, else the
+title stays. Where nothing verified it — no drafter, a failed drafting, no valid
+`title_check` — the node still settles as a review draft, its views read the title as
+unverified, and a non-blocking `title-unverified` surface names the remedy: `retitle`,
+with the new subject and a reason.
+
+**Restack.** Once a draft pushes new commits — a rework's, or a restack whose merge added
+some — every draft stacked on it, directly or through a stack base, is restacked, and so
+on up the stack, each waiting for its parents' pushes and never for their checks. A stack
+base is advanced first; then the draft's own branch is opened with its base's new head
+merged in. **Merge only** — never a rebase, a squash or a force-push, so each draft's diff
+stays its own. A clean merge is published with no agent turn and no drafting, body and
+title untouched; a conflict dispatches the draft's own worker with the merge in progress,
+then publishes with drafting. A restack its publication refused follows the
+retry-on-the-same-branch rules, and a driver adopting a run whose restack died restacks
+it afresh. `node-restack-started` and `node-restacked` journal each.
+
+### Replies to a reviewer
+
+Review comments reach a run only when a manager runs `just review-comments <run-id>`,
+which is `onepipeline review`: it readjusts the drafts first, then reads every draft's
+comments in one batched read per repository and surfaces each pending one, once per
+comment revision, as a non-blocking `review-comment` against the node owning its change
+request. Nothing schedules it, no driver polls, and it starts no work. A comment is
+answered by the planner's `rework`, whose replies the next pass posts once the rework has
+settled as a review draft, or by `decline` — `id`, the `comments`, a `reason` — whose
+application **is** posting its replies: one fresh read, one drafting, one reply per
+comment labelled `declined`, before the edit commits, with no worker, no branch move and
+no store write.
+
+Every reply is drafted by the reply drafter the launch names — this host's
+`graphs/review-reply.yaml` — from a task of `## Change request`, `## Comments`,
+`## Commits` (each commit the rework added, empty for a decline), `## Reason` and
+`## Worker transcript`, which reads *No worker transcript is available on this host; draft
+from the sections above.* for a decline and for a rework drafted on a host that did not run
+its worker. It answers `{replies: [{comment, disposition, body}]}` under
+`config/review-reply.schema.json`, and the engine posts nothing from an answer that does not
+name every comment once, link a supplied commit from each `answered` body, link none from a
+`declined` one, or keep a body within 500 characters. A drafting that cannot post raises a
+non-blocking `review-reply-pending` and the next pass drafts it again; a `decline` that
+cannot post is refused as `decline-not-posted`, and sending it again posts only the rest.
+Each reply carries a key every host derives alike, so whether a comment is answered is
+read off the host and a reply is never posted twice. No reply resolves a thread.
+
+### Readjusting a stack as its parents land
+
+A person merges drafts on the host, and nothing polls for it: the engine reads the host
+again only at a **trigger** — `just review-comments`, `just readjust-stack <run-id>`
+(`onepipeline readjust`, the same pass on its own), applying a `rework` and its
+republication, a restack or a placement on unlanded drafts, and a continuing launch or
+an adoption, after the store and journal are folded and before the first dispatch. Each
+trigger readjusts first, with one batched read per repository and root, and records what
+it found:
+
+- **Merged into the base**: the draft is recorded landed, and every draft connected to
+  it by same-repository dependencies is owed a readjustment.
+- **Merged into another draft's branch**: it is recorded absorbed into that draft, with
+  a non-blocking `stack-merged-out-of-order`.
+- **Merged into the base with an unlanded parent's work riding along**: that work is
+  recorded landed with it, with a `stack-landed-out-of-order` surface.
+- **Closed because its landed parent's branch was deleted** — the host closes a draft
+  whose base disappears: it is reopened, the parent's branch restored at its merged head
+  just long enough to retarget the draft, and journalled `change-reopened`.
+- **Closed otherwise**: recorded `change-closed`, with a surface of that name, and never
+  restacked.
+- **Merged into a branch the run does not know**: a **blocking** `change-merged-elsewhere`
+  question, and nothing readjusts the node or anything depending on it until it is
+  answered.
+
+Each owed draft is placed again over the fresh record — a landed dependency dropped, an
+absorbed one replaced by what absorbed it — so it moves onto its nearest unlanded
+ancestors or the base, and is restacked by the procedure above with cause `readjust`.
+After its push its change request is retargeted, its Stack block rewritten, and it stays a
+draft. A draft failed or parked with its change request is retargeted with no merge and
+a non-blocking `readjust-pending` naming `retry`; one a person retargeted by hand is moved
+back, with `change-base-overridden`.
+
+**A republication's verdict is read later.** A first publication watches its checks. A
+republication of a review draft — by a readjustment, a restack, a rework or a repair —
+settles `done` at its push as **`change-review-draft-unchecked`**, its landing still
+`unlanded`, and the next trigger's read records its verdict: green reads as
+`change-review-draft`, `failed` re-dispatches the node onto its same branch with the
+failed checks as its refusal, as a `checks-failed` publication's re-dispatch does, and
+`pending` stays outstanding for the trigger after. `status`, `results` and both receipts
+name every draft whose verdict is outstanding. A rework whose change request a person
+merged while it ran publishes nothing and settles `failed` as **`merged-during-rework`**,
+its work kept on its branch, with a non-blocking surface naming how to go on: `add`, the
+node that absorbed it, or the question about an unknown merge.
+
+### Continuing a project on another host
+
+A launch continues its project from the store. `just orchestrate <source:project>` reads
+each task's recorded settlement: a node whose head settled `done` is continued — its
+branch, change request, base, head, landing and stack restored, nothing dispatched — and
+a lifecycle node that failed, was cancelled or parked, or was mid-dispatch is pinned to
+its branch, so its next dispatch continues it and adopts the change request open from
+it. A draft merged on the host since the store was written is the readjustment's, before
+the first dispatch. `status` and `results` read a continued node as `continued from the
+store on <branch>`. `--fresh` ignores what the store recorded and is refused while any
+draft is unlanded, because it would open a second change request beside each.
+
+The project carries the claim of the run driving it — run, host, session, when — written
+by its driver and released at closeout. A launch finding a claim is refused as `project
+driven elsewhere refused:`, naming `--take-over` and, when the claim is this host's,
+adoption. `--take-over` passes it. The claim is **best-effort**: two launches on
+different hosts at the same moment are not prevented.
 
 ### Diff-derived PR descriptions
 
@@ -1675,7 +1837,7 @@ warn on the node — `onepipeline: node '<id>': … so it publishes with no body
 publish with no body at all. There is no deterministic body it falls back to and no
 retry of the graph run.
 
-**It is not silent either, on the adopted onepipeline 0.75.0.** Where a drafting
+**It is not silent either, on the adopted onepipeline 0.79.0.** Where a drafting
 dispatch was *configured and attempted* and produced no body, the run records a
 `body-not-drafted` event against the node carrying `ending` and `detail`, and the
 same `detail` lands on the node's own settlement — after the publication's reason
@@ -1751,8 +1913,8 @@ goes when the session does.
 
 **A pause pushes nothing and opens nothing.** The conclusion is unchanged and the
 reason it used to rest on is gone: both engines now have a draft change request —
-`onevcs` 0.52.0 answers `PublishOutcome::ChangeDraft`, *"change request open as a draft
-… which cannot land while it is one"*, and `onepipeline` v0.75.0 settles the node that
+`onevcs` 0.56.2 answers `PublishOutcome::ChangeDraft`, *"change request open as a draft
+… which cannot land while it is one"*, and `onepipeline` v0.79.0 settles the node that
 made one `complete-but-draft` where a release is awaited — so "no notion of one" is no
 longer why. A draft is a **publication** outcome, reached once the last step has settled and
 the publication starts, because a release the node adopted early has not happened yet,
@@ -2443,7 +2605,9 @@ of truth. For an interrupted
 run, inspect its worktrees and remote branch, then attach a fresh driver with
 `just orchestrate --adopt <run-id>`. Recovery may reclaim a `running` record, so
 use it only after proving its owner is gone; never remove or reset an active
-worktree.
+worktree. A project is carried to another machine through its plan store rather than its
+ledger: launching it there continues what the store recorded, as [Continuing a project on
+another host](#continuing-a-project-on-another-host) states.
 
 Switch publication workflow only between runs, and only by editing the rule that
 matches the repository — one rule resolves the policy for every alias of the
@@ -2504,7 +2668,7 @@ exist.
 **The cost analysis that used to follow this section has been removed rather than
 corrected.** It measured a Python lifecycle implementation that no longer exists —
 `run_repo_task`, `MAX_AUTOMATIC_STEP_RESUMES`, `terminate_process_group`, and every
-journey it named are absent from `onepipeline` v0.75.0 — so every number in it was a
+journey it named are absent from `onepipeline` v0.79.0 — so every number in it was a
 measurement of something else. The one part of it that still holds is the shape:
 **read a journey's price as its number of dispatches times the price of one**, since
 the clone, the worktree, the commit and the push are not the cost and never were.

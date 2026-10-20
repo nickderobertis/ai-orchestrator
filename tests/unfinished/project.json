@@ -38,7 +38,8 @@
       "{workspaceRoot}/scripts/onepipeline.sh",
       "{workspaceRoot}/scripts/template-env.sh",
       "{workspaceRoot}/scripts/host-sweep.sh",
-      "{workspaceRoot}/graphs/pr-author.yaml"
+      "{workspaceRoot}/graphs/pr-author.yaml",
+      "{workspaceRoot}/graphs/review-reply.yaml"
     ]
   },
   "targets": {

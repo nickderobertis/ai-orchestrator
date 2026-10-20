@@ -18,6 +18,7 @@ the role-specific parts live here.
 | `researcher` | Answering questions with evidence cited from the actual source. |
 | `reviewer` | Reviewing and integrating several agents' independently produced work in a complex DAG. |
 | `pr-author` | Names the role that drafts a terse PR body for a completed lifecycle change from its diff, the description the worker left on its draft, and the worker's transcript. This file is `graphs/pr-author.yaml`'s member **label** and nothing else: a single-sided member layers no persona, so the drafting prose it is actually given lives in that member's own `task`. Never dispatched as a plan node's persona either, which `onepipeline` refuses by name. |
+| `review-reply` | Names the role that drafts the replies a reworked or declined review comment is answered with, one terse reply per comment in its own thread. This file is `graphs/review-reply.yaml`'s member **label** and nothing else, exactly as `pr-author` is `graphs/pr-author.yaml`'s: the drafting prose that member is given lives in its own `task`. Never dispatched as a plan node's persona either, which `onepipeline` refuses by name. |
 | `design-doc` | Writing the design document a person reviews a finished plan as — and reviewing it. Its sections, their order, and the rules it is judged on are stated once, in the guidance comments and variable descriptions of this host's `design-doc` template (`templates/design-doc.md.j2`) as the resolve command its task names reaches it; this file sends both sides there and restates none of it. Dispatched by path (`../personas/design-doc.yaml`), never by this catalog name, which would resolve against the roles built into `oneagentgraph` and read no file here. `graphs/design-doc.yaml` is the node-scope graph that pairs it with the two harness configs whose identity order is deliberately the reverse of this host's ordinary pairing. |
 | `follow-up` | Names the role that verifies a finished run's drafted follow-ups, groups what stands by root cause, and puts one verified ticket per root cause on the `followups` board. This file is `graphs/follow-up.yaml`'s member **label** and nothing else: that member is single-sided with no judge and layers no persona, so the instructions it is given are the task `just follow-ups` renders from the `follow-up-task` template, `templates/follow-up-task.md.j2`. Named by path (`../personas/follow-up.yaml`) on that recipe's one direct node, because the engine refuses a direct agent node that names no persona. |
 | `crozier/crozier-corpus` | Crozier-specific corpus research and curation. |
@@ -59,8 +60,9 @@ read graphs/crozier/crozier-corpus`, and equally why `orchestrator` and `check-i
 do. Those two are not built in and never were; `graphs/dag-scope.yaml` names them
 `../personas/orchestrator.yaml` and `../personas/check-in.yaml` for that reason, and
 naming either as a plan node's `persona` fails the same way `crozier/…` does.
-`pr-author` is refused earlier still and by name: `onepipeline` dispatches change
-request drafting under it, so a plan node's own worker may not run as it.
+`pr-author` and `review-reply` are refused earlier still and by name: `onepipeline`
+dispatches change request drafting and reply drafting under them, so a plan node's own
+worker may not run as either.
 
 That the shipped set is those five and no more is measured two ways — once against
 the oneagentgraph CLI `config/oneagentgraph.version` pins, and once against the
@@ -71,7 +73,7 @@ runs each:
 - A graph carrying its own `personas` catalog is refused when one of its files
   collides with a shipped name (`persona "engineer" names both …/engineer.yaml in
   this graph's catalog and one this crate ships`). Only those five collide;
-  `orchestrator`, `check-in`, and `pr-author` are accepted alongside the catalog
+  `orchestrator`, `check-in`, `pr-author` and `review-reply` are accepted alongside the catalog
   exactly as an invented name is, because nothing ships under them.
 - A plan node naming `persona: orchestrator` settles `failed
   (infrastructure-failure)` with `oneagentgraph: invalid config: cannot read
@@ -79,7 +81,7 @@ runs each:
   no built-in claimed the name first. It costs no agent turn: the dispatch dies in
   config validation, before a harness is launched.
 
-Three consequences, the first two re-measured against onepipeline 0.75.0 and the
+Three consequences, the first two re-measured against onepipeline 0.79.0 and the
 oneagentgraph it links, by launching a plan whose two nodes name `engineer` and
 `reviewer` and reading the completion criterion each dispatch's supervisor was
 handed. Do **not** argue one of them forward from a source file that stayed
@@ -191,7 +193,7 @@ authoritative spec for all of it.
 Two different ones, and what they have to agree on is the persona **shape**.
 `just validate-personas` runs the oneagentgraph **CLI** that
 `config/oneagentgraph.version` pins; what reads a persona at **dispatch** is the
-oneagentgraph `onepipeline` links, which is `0.5.13` at onepipeline v0.75.0. Read that
+oneagentgraph `onepipeline` links, which is `0.5.14` at onepipeline v0.79.0. Read that
 from what the release *resolved*, never from its `Cargo.toml` requirement — that
 requirement is a caret one and permits versions the build did not resolve, so it is
 not evidence of what a dispatch reads. The installed wheel is the source and
@@ -199,7 +201,7 @@ not evidence of what a dispatch reads. The installed wheel is the source and
 CycloneDX SBOM under its `dist-info/sboms/` declaring one version per linked crate,
 and that gate reconciles this sentence against it on every gate run. So the two
 numbers agree today and do not have to: the pin names the same release, and the linked reader is
-0.5.13. They have not always. In an earlier cycle they read 0.3.3 and 0.3.4, and what
+0.5.14. They have not always. In an earlier cycle they read 0.3.3 and 0.3.4, and what
 separated them is how long a cancelled process tree is left before Windows ends its
 job, that a member whose tree cannot be found is not a member proven idle, and — in
 0.3.3 — the conversation label and the oneharness-session pointer a member's turns
@@ -236,7 +238,7 @@ does. That pair has been confused once already.
 That agreement is why the shape here moved in one change rather than two. The
 previous spelling put the role in a top-level `agent:` block, and 0.2.18 refused
 today's shape exactly as hard as the reverse: there is no alias, no flag, and no
-deprecation period in either direction. The pinned oneagentgraph 0.5.13 refuses the
+deprecation period in either direction. The pinned oneagentgraph 0.5.14 refuses the
 previous shape outright, naming the field to write instead:
 
 ```

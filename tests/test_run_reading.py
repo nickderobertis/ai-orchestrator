@@ -67,8 +67,31 @@ def _read(reading: object) -> run_reading.Decided:
             "paused a blocking surface is waiting",
         ),
         (CRASHED, "crashed DRIVER DEAD"),
+        (
+            DRIVEN
+            | {
+                "unanswered": [
+                    {"envelope": "7"},
+                    {
+                        "envelope": "8",
+                        "delivery": {"state": "delivering", "node": "a", "since": "x"},
+                    },
+                    {"envelope": "9", "delivery": None},
+                ]
+            },
+            "driven ACTIVE",
+        ),
     ],
-    ids=["failed", "complete", "stopped", "driven", "paused", "surface-only", "crashed"],
+    ids=[
+        "failed",
+        "complete",
+        "stopped",
+        "driven",
+        "paused",
+        "surface-only",
+        "crashed",
+        "driven-with-unanswered-envelopes",
+    ],
 )
 def test_each_reading_the_engine_gives_is_decided(reading: object, line: str) -> None:
     assert _read(reading).line() == line
@@ -81,6 +104,19 @@ def test_each_reading_the_engine_gives_is_decided(reading: object, line: str) ->
         ("[]", "the reading does not carry exactly"),
         (json.dumps(ENDED | {"extra": 1}), "the reading does not carry exactly"),
         (json.dumps(ENDED | {"schema_version": 2}), "it is schema 2, not 1"),
+        (json.dumps(DRIVEN | {"unanswered": {}}), "its unanswered envelopes are not a list"),
+        (
+            json.dumps(DRIVEN | {"unanswered": [{"delivery": None}]}),
+            "an unanswered envelope does not carry exactly envelope and at most delivery",
+        ),
+        (
+            json.dumps(DRIVEN | {"unanswered": [{"envelope": 7}]}),
+            "an unanswered envelope has an id that is not a string",
+        ),
+        (
+            json.dumps(DRIVEN | {"unanswered": [{"envelope": "7", "delivery": "held"}]}),
+            "an unanswered envelope's delivery is not an object",
+        ),
         (json.dumps(ENDED | {"schema_version": True}), "it is schema true, not 1"),
         (json.dumps(ENDED | {"run_id": "run-2"}), 'it reads run "run-2", not run-1'),
         (json.dumps(ENDED | {"word": ["SETTLED"]}), 'its word is ["SETTLED"], which'),
@@ -219,7 +255,14 @@ def test_the_vocabulary_the_reader_restates_is_the_published_schemas() -> None:
     properties = schema["properties"]
     assert isinstance(properties, dict)
 
-    assert frozenset(schema["required"]) == run_reading.READING_FIELDS == frozenset(properties)
+    assert frozenset(schema["required"]) == run_reading.READING_FIELDS
+    assert (
+        frozenset(properties)
+        == run_reading.READING_FIELDS | run_reading.OPTIONAL_FIELDS["RunReading"]
+    )
+    for name, optional in run_reading.OPTIONAL_FIELDS.items():
+        declared = schema if name == "RunReading" else _definition(schema, name)
+        assert frozenset(declared["properties"]) - frozenset(declared["required"]) == optional, name
     assert properties["schema_version"]["const"] == run_reading.SCHEMA_VERSION
     assert _enum(schema, "word") == run_reading.WORDS
     assert _enum(schema, "liveness") == run_reading.LIVENESS

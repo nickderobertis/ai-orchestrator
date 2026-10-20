@@ -34,7 +34,7 @@ one plan at a time until 2026-08-29, and the local Markdown store this repositor
 to in the meantime is gone: the two defects that forced it were repaired upstream and
 adopted here as onetaskgraph 0.2.12 — a release this host has since moved past — and,
 in the engine that carries the write-back repair and every release since,
-onepipeline 0.75.0. The whole of that reasoning —
+onepipeline 0.79.0. The whole of that reasoning —
 the defects, the releases, what was measured against the real board, and why the retreat
 was undone by deleting a source rather than repointing this one — is recorded once, in
 [Where a plan of this repository
@@ -565,7 +565,7 @@ It never writes the project's title, description or labels, and on an item it na
 the fields a projection changed — the status word, the engine's own `onepipeline.*` keys,
 and, where the node's definition moved, its title, body, `delivers` and `depends_on` — so
 a body somebody authored on the board survives every settlement of every run launched from
-it, re-read on the adopted onepipeline 0.75.0, and a person's edit to any field stands
+it, re-read on the adopted onepipeline 0.79.0, and a person's edit to any field stands
 until the run next changes that same field. Below the 0.16.3 that fixed it, it did not:
 the shadow project a copy wrote over the board was built with the body hardcoded to an
 empty string and the copy is a total replacement by contract, so every destination
@@ -587,7 +587,7 @@ is written, and the destination is left exactly as it was. A read that could fal
 a default is a read that can delete, so this is the property that makes the preservation
 above worth anything. It is held in onepipeline's own suite rather than here: since
 https://github.com/nickderobertis/onepipeline/pull/542 the engine — the adopted onepipeline
-0.75.0 among them — reads and projects plans through the linked onetaskgraph crates and
+0.79.0 among them — reads and projects plans through the linked onetaskgraph crates and
 ignores `ONETASKGRAPH_BIN`, so no host seam can
 inject a refused read into the store in process any more, and
 `store::a_refusal_of_the_member_read_the_copy_or_the_project_read_stops_the_retry_timer`
@@ -600,7 +600,7 @@ prompt first retry to a one-minute ceiling instead of retrying about four times 
 resets that schedule once it recovers, and retries until the projection lands; stopping or
 settling stays prompt during a long backoff. Since
 https://github.com/nickderobertis/onepipeline/pull/285, in force on the adopted onepipeline
-0.75.0, that schedule answers only the failures a retry can change. A projection the store
+0.79.0, that schedule answers only the failures a retry can change. A projection the store
 **refuses**, by the `class` of its own failure document, is reported once and put on no
 timer: the driver's line and the finding the run raises each carry the store's `class` and
 `kind` and say the projection is attempted again when the run's graph next changes. A
@@ -945,7 +945,7 @@ The tracked-plan contract is the published `onepipeline` plan schema, and declar
 a `schema_version` is required: a plan that omits it, or declares a number this
 build does not read, is refused at launch naming the ones it does. **Write version
 3** — what every plan here declares, and the one the fields below describe. The
-adopted `onepipeline` 0.75.0 also still reads 2 and 1, so an older plan file an
+adopted `onepipeline` 0.79.0 also still reads 2 and 1, so an older plan file an
 operator kept a copy of launches rather than failing; that is a courtesy to old
 copies, not a version to write. There is no compatibility ladder to read a version
 number against any more — the node shapes this repository grew through its own
@@ -1080,7 +1080,7 @@ still meet that run's later nodes on the same repository.
 
 ## The agent graphs a run launches
 
-Three files in `graphs/` decide what a run's agents actually are, and all three are
+Four files in `graphs/` decide what a run's agents actually are, and all four are
 this repository's to write. `onepipeline` ships the **flag and the path**, not the
 files: they name the operator's own onejudge base config, oneharness configs, and
 personas, so a crate that shipped them would be naming files it cannot know.
@@ -1127,7 +1127,7 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   not claim one. A member's own `task` **replaces** it, so a member that claims one
   must interpolate it back in to learn which run it is on. `onepipeline` does also
   export `ONEPIPELINE_RUN_ID`, set to the run id, to an observer member — measured
-  against onepipeline 0.75.0 by dumping both sides of a monitor member's whole
+  against onepipeline 0.79.0 by dumping both sides of a monitor member's whole
   environment on a real launch. `tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` re-takes
   that measurement on the judge side of a real observer member every gate run, and
   `tests/e2e/launch_monitor_observer/test_monitor_cursor_e2e.py` on a monitor member's agent side, so a
@@ -1169,7 +1169,26 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   named for the member's **label** alone: a single-sided member has no onejudge base
   config to layer a persona delta over, which is why the role prose lives in `task`.
 
-All three paths are resolved **relative to the directory the run is launched from**,
+  On a rework its task also carries `## Rework`, `## Current title` and `## Net diff`,
+  and the drafter answers an optional `title_check` beside `body` — `keeps`, or
+  `replaced` with a Conventional Commit subject — which the schema admits and closes.
+  Where its task carries the Stack block between `<!-- onepipeline:stack -->` markers,
+  the block is the engine's to write and the drafter writes none; see
+  [Stacked drafts](repo-lifecycle.md#stacked-drafts).
+- **`graphs/review-reply.yaml`** is the **reply** graph: one single-sided member that
+  answers the review comments a rework answered or a `decline` declined, one terse reply
+  per comment. `--review-reply-graph <REF>` ships naming nothing — a run naming none
+  posts no reply, surfaces a rework's owed replies as `review-reply-pending`, and refuses
+  every `decline` — so `just orchestrate` names this file. Its routing,
+  `../oneharness.review-reply.toml`, is the judge's sol-first chain with both Codex
+  identities on Sol, a finite deadline, `stream = false` and
+  `config/review-reply.schema.json`, whose `{replies: [{comment, disposition, body}]}` the
+  engine further holds to its own rules before it posts. It declares schema 4 for the
+  body drafter's reason, and `../personas/review-reply.yaml` is its label. The task
+  sections it reads and when its worker-transcript section carries the no-transcript
+  sentence are [the reply flow's](repo-lifecycle.md#replies-to-a-reviewer).
+
+All four paths are resolved **relative to the directory the run is launched from**,
 which is why `just orchestrate` is run from the repository root; every ref *inside*
 a graph is resolved relative to that graph file instead.
 `tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` proves the refusal a missing observer
@@ -1356,7 +1375,8 @@ it](#a-run-outlives-the-turn-that-launched-it).
 the actual frontier toward a desired graph continuously, and the planner may edit
 that graph while nodes run; there is no boundary to wait for and no verb to
 advance. The driver alone writes the graph, journal, and ledger. After launch the
-planner uses only the channel, `just stop`, and the read-only `just monitor` /
+planner uses only the channel, `just stop`, the two review recipes — `just
+review-comments` and `just readjust-stack` — and the read-only `just monitor` /
 `just runs` views. Runs are owned by the session that launched them — see [Who
 launched a run, and who may stop
 it](#who-launched-a-run-and-who-may-stop-it).
@@ -1516,7 +1536,7 @@ from the end of a harness transcript, and named its identity against
 The channel directory is the run's own, and the judge command composes it from
 `ONEPIPELINE_RUNS_DIR` and `ONEPIPELINE_RUN_ID`, which the engine exports to both sides
 of an observer member — `ONEPIPELINE_RUN_ID` set to the run id, measured against
-onepipeline 0.75.0 in the judge command's own environment on a real launch, and re-taken
+onepipeline 0.79.0 in the judge command's own environment on a real launch, and re-taken
 on every gate run by `tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py`.
 
 | Frame | What the binding does |
@@ -1688,7 +1708,7 @@ once](#a-planner-writes-a-reply-once).
 `ONEPIPELINE_RUN_ID` names the run to ask on, and an unset one is refused rather than
 guessed at. What sets it depends on the launch, measured per shape by
 `tests/ask_seam/launch/test_launch_ask_seam_e2e.py`: **every node dispatch of a run carries it
-as of onepipeline 0.75.0**, composed where the dispatch is made, so all three `just
+as of onepipeline 0.79.0**, composed where the dispatch is made, so all three `just
 orchestrate` shapes reach a worker that can ask. That names the release in force rather
 than the one it arrived in — `executor::dispatch_env` has composed the pair since
 https://github.com/nickderobertis/onepipeline/pull/76, and `AGENTS.md` carries that
@@ -1965,7 +1985,7 @@ events stay the record of what an edit became, and are where a `queued` one is r
 **A `queued` receipt resolves even across a driver's death.** A driver claims an
 envelope — moves the channel's command cursor past it — before it answers it, so one
 that died between the two used to take the claimed edits and notes with it. On the
-adopted onepipeline 0.75.0 every record an envelope's effects leave — `edit-committed`,
+adopted onepipeline 0.79.0 every record an envelope's effects leave — `edit-committed`,
 `command-accepted`, `edit-rejected` and `note-shown` — names that `envelope`, and `just
 orchestrate --adopt` replays each envelope the dead driver claimed and never answered
 exactly once: one the journal already shows applied is answered from that record rather
@@ -2526,6 +2546,7 @@ The accepted commands are:
 | `amend` | `id`; `text` | Replace the binding amendment that becomes part of the node's effective task for its next and later dispatches. Blank text and a node already settled `done` are refused. |
 | `settle` | `id`; `outcome`: `done` or `failed`; `evidence`; optional `landing`, `release` | Settle a node at what an operator can see it reached, from evidence this run never observed — the case being a change that merged while the node's own record read `failed`. It mutates no edge and moves no lineage: the node keeps its id and its dependents, and only its recorded state moves, which is the thing that was wrong. `evidence` is required and never blank, and is journalled as the reason the node is in the state it is. A settle that changes nothing is refused as a duplicate; a node that settled *something else* is exactly what it is for, and the earlier settlement stays in the journal beside it. `landing` names **where the work landed** — the commit its change reached its base at, or the change request a person reads it in, either being a spelling `onevcs` resolves. It is the authoritative landing for manager-facing results and release correlation, with the stated-commit or stated-change-request evidence tier instead of a re-read of the superseded branch. An envelope without `landing` keeps the prior settlement behavior, and a present but unusable landing is refused rather than recorded. `release` may accompany a landing with the release target and semantic version that carry it; the engine records that attribution against the stated landing, while an invalid version is refused. |
 | `rework` | `id`; `reason`; `instruction`; optional `comments` (each `id` and `url`), `title`, `replacement` | Rework a lifecycle node settled `done` as an unlanded review draft, on its own branch and change request: supersede it as a `retry` would, with its branch pinned to the one its settlement recorded and its task followed by a `## Rework` section, rewiring its direct dependents onto the replacement, which stay `done`. The replacement adopts the change request already open from that branch, so reviewers see the same draft move. `title` retitles that change request; blank `reason` or `instruction` is refused. |
+| `decline` | `id`; `comments` (each `id` and `url`); `reason` | Answer review comments on a node's change request by declining them: one fresh read of the change request, one reply drafting with no commits and the op's `reason`, and one reply per comment posted in its own thread, labelled `declined`, before the edit commits as `decline-applied`. No worker is dispatched, no branch moves and nothing is written to the plan store. Refused — each as a typed refusal on the outcome — for a comment no read of the node's lineage journalled (`comment-not-read`), a blank reason, a comment a rework's reply already answers or one already declined (`already-answered`, so the same decline sent twice posts nothing), and a drafting or post that failed (`decline-not-posted`), where the same decline sent again posts only what is left. |
 | `retitle` | `id`; `title`; `reason` | Change the title of a node's open change request to a new Conventional Commit subject without reworking it — the answer to a rework whose title nothing verified. Blank `reason` is refused. |
 | `review` | none | Run one review-discovery pass over the run's unlanded drafts, surfacing each pending reviewer comment against the node owning its change request, once per comment revision; it changes no graph and starts no work. Refused beside any other command in one envelope. |
 | `readjust` | none | Readjust the run's unlanded drafts onto what has landed on the host — the same pass `onepipeline readjust <run>` runs, and the one every review trigger runs first: a draft whose parent merged is retargeted onto the base rather than left showing merged work. Refused beside any other command in one envelope. |
@@ -2748,6 +2769,46 @@ The grace period is configurable for a whole run by exporting
 engine's to state, and `onepipeline`'s own surfaces name the number of seconds
 they are counting. An unusable value falls back to that default rather than
 turning every cancel into an immediate kill.
+
+### Review feedback, stacks and continuation on the channel
+
+A run's drafts reach the channel in three ways, and none of them by a schedule: the
+engine reads the host only when a trigger asks it to — a review pass, a readjustment, a
+rework, a restack or placement, a continuing launch or an adoption — and nothing polls.
+
+- **`just review-comments <run-id>`** is `onepipeline review`. It surfaces each pending
+  reviewer comment once per revision as a non-blocking **`review-comment`** against the
+  node owning its change request — the comment, its author and location, and the
+  `rework` and `decline` ops that answer it — and posts the replies a settled rework owes.
+  It changes no graph and starts no work: the `review` op is the same pass sent over the
+  channel, refused beside any other command in one envelope.
+- **`rework`**, **`decline`** and **`retitle`** are the ops that answer what it surfaced,
+  each in the [table above](#live-graph-edits). A reply that cannot be drafted or posted
+  raises a non-blocking **`review-reply-pending`**, and a rework whose title nothing
+  verified a non-blocking **`title-unverified`** naming `retitle`.
+- **`just readjust-stack <run-id>`** is `onepipeline readjust`, the readjustment every
+  trigger runs first, on its own; the `readjust` op is the same pass. What it found is said
+  as non-blocking `stack-merged-out-of-order`, `stack-landed-out-of-order`,
+  `change-closed`, `readjust-pending`, `change-base-overridden` and `merged-during-rework`
+  surfaces, and as the one
+  **blocking** question, `change-merged-elsewhere`, for a draft merged into a branch the
+  run does not know: nothing readjusts that node or what depends on it until it is
+  answered.
+
+**Only the planner may start work on feedback.** The planner-channel layout grants the
+planner every op and declares no other author; `config/onemessagebus.yaml`'s monitor is
+refused `rework`, `decline` and `retitle`, each by a reason in the channel's words, and
+`tests/test_onemessagebus_config.py` holds that no declared author is granted any of the
+three. A monitor that sees a comment worth acting on raises a `finding` instead.
+
+**A launch continues its project.** `just orchestrate <source:project>` on any host reads
+what the store recorded: settled nodes are continued without a dispatch, a failed,
+parked or mid-dispatch lifecycle node is pinned to its branch, and the run's views say
+`continued from the store`. `--fresh` ignores the record and is refused while a draft is
+unlanded; a project another run claims refuses the launch as `project driven elsewhere
+refused:` until `--take-over` passes it, and that claim is best-effort — two launches on
+different hosts at the same moment are not prevented. [The lifecycle
+doc](repo-lifecycle.md#continuing-a-project-on-another-host) states what is restored.
 
 ### Parking a node, and picking it up again
 
@@ -3017,7 +3078,9 @@ a re-dispatch either.
 The engine starts every node whose dependencies are `done`, bounded by
 `concurrency`, and keeps doing so until the graph is terminal. Lifecycle
 dependencies on the same repository identity also carry publication/stack
-ancestry; cross-repository dependencies only schedule. [Live
+ancestry — a dependency settled as an unlanded draft places its dependent on its
+branch, as [Stacked drafts](repo-lifecycle.md#stacked-drafts) states; cross-repository
+dependencies only schedule. [Live
 edits](#live-graph-edits) change the desired graph and the reconciler applies the
 new reachable frontier on its next pass — there is nothing to wait for, because
 there is no barrier between a node settling and the next one starting.
@@ -3717,7 +3780,7 @@ the contract.
 
 **A landing a manager starts is owed the same way, from before it acts until it closes.**
 `just publish-branch`, `just repo-recover` and `just integrate` run the engine's own landing
-verbs, which on the adopted onepipeline 0.75.0 register each landing as supervised work of the
+verbs, which on the adopted onepipeline 0.79.0 register each landing as supervised work of the
 session that started it — in the live flow of that session the verb runs inside, or in a
 flow registered for that landing alone — before drafting, preparing or pushing anything,
 and print it:
@@ -4193,7 +4256,7 @@ engine collapsed `context` into it and removed `context` from the reply envelope
 outright, so an envelope still carrying that op is refused by name at the wire. The
 field set, each field's default, and the dispositions the op answers with are declared
 once, on `onepipeline::channel::Command::Note`; everything below derives from that
-declaration as it stands in onepipeline 0.75.0 rather than restating it independently.
+declaration as it stands in onepipeline 0.79.0 rather than restating it independently.
 
 A note carries `id`, a required `addressee` of `worker`, `supervisor` or `both`,
 `text`, and three optional fields: a `criterion`, a `deliver` of `live` or `next`
@@ -4272,7 +4335,7 @@ through `just channel-reply`.
 **A `cancel` does not wait behind a note its node never answers.** An envelope naming a
 node is held, in claim order, behind a live note to that node still awaiting its
 answer, so a worker wedged in one turn used to hold every later edit to its node —
-the `cancel` meant to stop it included. On the adopted onepipeline 0.75.0 a `cancel`
+the `cancel` meant to stop it included. On the adopted onepipeline 0.79.0 a `cancel`
 its envelope would apply preempts that outstanding live note: each live note into the
 node not yet taken is answered `refused` with a reason naming the cancelling envelope,
 and journalled through `edit-rejected` like any refused envelope. Envelopes naming the node that were claimed

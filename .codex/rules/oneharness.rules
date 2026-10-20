@@ -124,6 +124,12 @@ prefix_rule(pattern=["just", "sweep"], decision="allow")
 # allowed_tools: Bash(just reclaim-branch:*)
 prefix_rule(pattern=["just", "reclaim-branch"], decision="allow")
 
+# allowed_tools: Bash(just review-comments:*)
+prefix_rule(pattern=["just", "review-comments"], decision="allow")
+
+# allowed_tools: Bash(just readjust-stack:*)
+prefix_rule(pattern=["just", "readjust-stack"], decision="allow")
+
 # allowed_tools: Bash(onevcs release acknowledge:*)
 prefix_rule(pattern=["onevcs", "release", "acknowledge"], decision="allow")
 

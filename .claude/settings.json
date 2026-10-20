@@ -101,6 +101,8 @@
       "Bash(just register-repo:*)",
       "Bash(just sweep:*)",
       "Bash(just reclaim-branch:*)",
+      "Bash(just review-comments:*)",
+      "Bash(just readjust-stack:*)",
       "Bash(onevcs release acknowledge:*)",
       "Bash(onevcs release status:*)",
       "Bash(onevcs rules check:*)",

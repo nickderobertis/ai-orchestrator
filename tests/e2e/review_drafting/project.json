@@ -1,0 +1,59 @@
+{
+  "name": "review-drafting",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/e2e/review_drafting",
+  "tags": [
+    "type:tests"
+  ],
+  "//": "llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] support-conftest is tests/conftest.py, which pytest loads for every tier under tests/, so no project collecting there can drop it, and tests/tree_scans/test_nx_cache_scope.py refuses a project that omits a unit its tiers reach. The edge this project could narrow, support-project-fixtures, is gone: its journeys resolve their stand-ins themselves.",
+  "implicitDependencies": [
+    "support-conftest",
+    "support-fake-codex",
+    "support-harness-indirections",
+    "support-no-paid-provider",
+    "support-pytest-temp-root",
+    "support-short-state",
+    "support-waits"
+  ],
+  "// end": "llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]",
+  "namedInputs": {
+    "reviewDraftingWorkspace": [
+      "{projectRoot}/**/*",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/config/oneagentgraph.version",
+      "{workspaceRoot}/config/oneharness.version",
+      "{workspaceRoot}/graphs/pr-author.yaml",
+      "{workspaceRoot}/graphs/review-reply.yaml",
+      "{workspaceRoot}/oneharness.identities.toml",
+      "{workspaceRoot}/oneharness.pr-author.toml",
+      "{workspaceRoot}/oneharness.review-reply.toml",
+      "{workspaceRoot}/config/pr-author-body.schema.json",
+      "{workspaceRoot}/config/review-reply.schema.json",
+      "{workspaceRoot}/personas/pr-author.yaml",
+      "{workspaceRoot}/personas/review-reply.yaml",
+      "{workspaceRoot}/scripts/claude-alt-config-dir.sh",
+      "{workspaceRoot}/scripts/codex-alt-home.sh"
+    ]
+  },
+  "targets": {
+    "test": {
+      "command": "rm -rf .telemetry/review-drafting/test && env -u FORCE_COLOR NO_COLOR=1 BUDGET_TELEMETRY_DIR=.telemetry/review-drafting/test uv run pytest tests/e2e/review_drafting -n 4 --dist loadgroup --no-cov",
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "reviewDraftingWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ],
+      "outputs": [
+        "{workspaceRoot}/.telemetry/review-drafting/test"
+      ]
+    }
+  }
+}

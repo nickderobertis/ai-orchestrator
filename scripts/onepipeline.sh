@@ -130,13 +130,21 @@ esac
 # publish also spend a drafting turn under `oneharness.pr-author.toml`, whose chain's
 # `env_from` names the same identity indirections a dispatch's do, so they carry those
 # too; `integrate` drafts nothing and carries nothing else a launch does.
-if [ "${1:-}" = publish-branch ] || [ "${1:-}" = repo-recover ]; then
+#
+# The two review verbs carry both for the same reasons. `review` drafts each owed reply
+# under `oneharness.review-reply.toml`, and both readjust a run's drafts first — a restack
+# that pushes through that same lock, and that dispatches the draft's own worker where
+# the merge conflicts — so on a run nothing drives they do in this process what a driver
+# would do with a launch's environment.
+if [ "${1:-}" = publish-branch ] || [ "${1:-}" = repo-recover ] \
+    || [ "${1:-}" = review ] || [ "${1:-}" = readjust ]; then
     # shellcheck source=scripts/dispatch-env.sh
     # llmlint: ignore[boundary_inputs_validated, robust_shell, tool_output_is_signal] A tracked sibling is a checkout invariant, not an input at a trust boundary: one that is missing or will not load is a broken checkout, and the shell says so on the line it fails the source at.
     . "$script_dir/dispatch-env.sh"
     export_dispatch_environment onepipeline || exit $?
 fi
-if [ "${1:-}" = publish-branch ] || [ "${1:-}" = repo-recover ] || [ "${1:-}" = integrate ]; then
+if [ "${1:-}" = publish-branch ] || [ "${1:-}" = repo-recover ] || [ "${1:-}" = integrate ] \
+    || [ "${1:-}" = review ] || [ "${1:-}" = readjust ]; then
     # shellcheck source=scripts/lock-timeout.sh
     # llmlint: ignore[boundary_inputs_validated, robust_shell, tool_output_is_signal] A tracked sibling is a checkout invariant, not an input at a trust boundary: one that is missing or will not load is a broken checkout, and the shell says so on the line it fails the source at.
     . "$script_dir/lock-timeout.sh"

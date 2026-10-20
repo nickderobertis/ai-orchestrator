@@ -56,6 +56,7 @@
       "{workspaceRoot}/oneharness.judge.toml",
       "{workspaceRoot}/oneharness.orchestrator.toml",
       "{workspaceRoot}/oneharness.pr-author.toml",
+      "{workspaceRoot}/oneharness.review-reply.toml",
       "{workspaceRoot}/oneharness.toml",
       "{workspaceRoot}/onetaskgraph.yaml",
       "{workspaceRoot}/orchestrator/**/*",

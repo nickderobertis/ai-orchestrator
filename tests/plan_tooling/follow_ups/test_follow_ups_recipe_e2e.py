@@ -4183,6 +4183,22 @@ FAILED_ENDING = {"kind": "failed", "nodes": [{"id": "a", "status": "failed", "ou
             0,
             "it reads driven and yet ended or paused",
         ),
+        (_malformed(unanswered={}), 0, "its unanswered envelopes are not a list"),
+        (
+            _malformed(unanswered=[{"delivery": None}]),
+            0,
+            "an unanswered envelope does not carry exactly envelope and at most delivery",
+        ),
+        (
+            _malformed(unanswered=[{"envelope": 7}]),
+            0,
+            "an unanswered envelope has an id that is not a string",
+        ),
+        (
+            _malformed(unanswered=[{"envelope": "e-1", "delivery": "live"}]),
+            0,
+            "an unanswered envelope's delivery is not an object",
+        ),
         ("", 3, "'onepipeline status --json' exited 3, with the engine's diagnostic above"),
     ],
     ids=[
@@ -4210,6 +4226,10 @@ FAILED_ENDING = {"kind": "failed", "nodes": [{"id": "a", "status": "failed", "ou
         "pause-fields",
         "pause-actions",
         "driven-and-paused",
+        "unanswered-not-a-list",
+        "unanswered-fields",
+        "unanswered-id",
+        "unanswered-delivery",
         "exit",
     ],
 )
@@ -4245,6 +4265,45 @@ def test_a_status_answer_that_is_not_the_engines_reading_is_refused_as_unreadabl
     traced = trace.read_text(encoding="utf-8").splitlines()
     assert "uv run onepipeline status run-1 --json" in traced, traced
     assert not any(" start " in line for line in traced), traced
+
+
+@pytest.mark.parametrize(
+    "unanswered",
+    [
+        [],
+        [{"envelope": "e-1"}],
+        [{"envelope": "e-1", "delivery": None}, {"envelope": "e-2", "delivery": {"to": "a"}}],
+    ],
+    ids=["none", "no-delivery", "deliveries"],
+)
+def test_an_ended_reading_carrying_unanswered_envelopes_is_read_and_followed_up(
+    tmp_path: Path, unanswered: list[dict[str, object]]
+) -> None:
+    """Envelopes the run claimed and never answered decide nothing, so the ending is read.
+
+    The engine omits the field when no envelope is in flight and carries it otherwise; either
+    way the recipe reads the run as ended and goes on toward the launch, rather than refusing
+    a reading the engine's own schema allows.
+    """
+    checkout, trace = delegation_checkout.delegation_checkout(tmp_path)
+    (checkout / "runs" / "run-1").mkdir(parents=True)
+    drafts = checkout / ".follow-ups" / "tasks" / "run-1" / "drafts"
+    drafts.mkdir(parents=True)
+    (drafts / "20260101T000000Z-noticed.md").write_text("a draft\n", encoding="utf-8")
+
+    followed = delegation_checkout.run_recipe(
+        checkout,
+        trace,
+        "follow-ups",
+        "run-1",
+        env={delegation_checkout.STATUS_ANSWER_ENV: _malformed(unanswered=unanswered)},
+    )
+
+    assert "could not be read" not in followed.stderr, followed.stdout + followed.stderr
+    traced = trace.read_text(encoding="utf-8").splitlines()
+    assert "uv run onepipeline status run-1 --json" in traced, traced
+    # The landed changes' telemetry is read only past an `ended` decision.
+    assert any(line.endswith("onepipeline telemetry run-1 --changes --json") for line in traced)
 
 
 def test_a_reading_the_toolchain_cannot_check_is_refused_naming_bootstrap(

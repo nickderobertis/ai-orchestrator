@@ -400,6 +400,7 @@ def run_recipe(
     stdin: str | None = None,
     env: dict[str, str] | None = None,
     stdin_fd: int | None = None,
+    detached: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
     environment["PATH"] = f"{checkout / 'bin'}{os.pathsep}{environment['PATH']}"
@@ -500,4 +501,7 @@ def run_recipe(
         else None
         if stdin is not None
         else subprocess.DEVNULL,
+        # A recipe a script or a watch runs has no controlling terminal: a new session is
+        # how a journey states that, since this suite may itself have been started from one.
+        start_new_session=detached,
     )

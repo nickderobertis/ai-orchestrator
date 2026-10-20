@@ -184,8 +184,8 @@ upgrade:
 # monitor` defaults to: the read-time profiles are options of the reading verbs, and
 # a launch takes none. Reattach with `just monitor <run-id>` for the narrower one.
 #
-# The two graph flags this adds are the whole difference between this recipe and a
-# bare `onepipeline start`. Both ship defaulted to nothing, because the published
+# The three graph flags this adds are the whole difference between this recipe and a
+# bare `onepipeline start`. All three ship defaulted to nothing, because the published
 # crate ships the flags and not the documents — the documents name this operator's
 # own oneharness configs and personas — so naming them is what makes an operator on
 # this host get them and a bare `onepipeline start` elsewhere not:
@@ -197,6 +197,9 @@ upgrade:
 #     change requests with the body its plan states, or with none, which is how
 #     every pull request this harness opened came to carry `Published by onevcs.`
 #     as its Why.
+#   * `--review-reply-graph graphs/review-reply.yaml` — a launch naming none answers
+#     no reviewer: a rework's owed replies stay owed and surfaced, and a `decline` is
+#     refused, so `just review-comments` would find comments nothing could reply to.
 #   * `--success-hook` and `--failure-hook`, both naming `scripts/run-ended.sh` by
 #     an absolute path in this checkout — a launch naming none fires nothing when it
 #     ends. A run whose every node ended `done` launches its follow-up run detached
@@ -210,7 +213,7 @@ upgrade:
 # `just orchestrate --adopt <run-id>` is `onepipeline adopt`: the published surface
 # splits adoption into its own verb, and this recipe keeps the one spelling the
 # planner doctrine names. `--adopt` has to lead, because everything after it is the
-# adopt verb's own. It takes none of the four flags — adoption attaches a fresh driver
+# adopt verb's own. It takes none of the five flags — adoption attaches a fresh driver
 # to an intact ledger, which already records the graphs and hooks its launch chose.
 # `scripts/orchestrate.sh` is the mechanism.
 #
@@ -587,6 +590,39 @@ publish-branch *args:
 # llmlint: ignore[tool_output_is_signal] what this verified, what it attested, and where it published the branch — the merge path's verdict, the recovered marker, and the change request's URL — is the product an operator runs it for, exactly as for `publish-branch` above.
 repo-recover *args:
     @./scripts/onepipeline.sh repo-recover --pr-author-graph graphs/pr-author.yaml "$@"
+
+# Pull review feedback into a run: `just review-comments <run-id> [--json]`.
+#
+# `onepipeline review`: it readjusts the run's unlanded drafts onto what has landed on
+# the host first, then reads every draft's reviewer comments in one batched read per
+# repository, surfaces each pending one to the planner as a `review-comment` against the
+# node owning its change request, and drafts and posts every reply a settled rework owes
+# through `graphs/review-reply.yaml` — the graph this host's launches name. It starts no
+# work on a comment: that is the manager's `rework` or `decline`. Comments are found only
+# when this recipe is run; nothing schedules it and no driver polls for them.
+#
+# It runs with the environment a drafting turn needs, as `just publish-branch` does —
+# `scripts/onepipeline.sh` says why — and with standard input closed, so a manager's
+# watch or a script can run it and nothing it starts waits on a terminal.
+# llmlint: ignore[tool_output_is_signal] the receipt — what was readjusted, which comments were surfaced against which node, which replies were posted — is the product a manager runs it for.
+[doc("Readjust a run's drafts, surface their pending review comments and post the replies its reworks owe.")]
+review-comments *args:
+    @./scripts/onepipeline.sh review "$@" </dev/null
+
+# Readjust a run's drafts onto what has landed on the host: `just readjust-stack
+# <run-id> [--json]`.
+#
+# `onepipeline readjust`, the pass every review trigger runs first, on its own: a draft a
+# person merged on the host is recorded landed, and every draft above it is moved onto
+# its nearest unlanded ancestors or the base — merged in, republished and retargeted,
+# with no agent turn unless the merge conflicts, when the draft's own worker is
+# dispatched to conclude it. Nothing polls for landings, so this is how a manager asks
+# for that move without pulling review comments. Same environment and closed standard
+# input as `just review-comments`, for the same reasons.
+# llmlint: ignore[tool_output_is_signal] the receipt — what each draft was moved onto, what landed, which verdicts are still outstanding — is the product a manager runs it for.
+[doc("Readjust a run's drafts onto what has landed on the host.")]
+readjust-stack *args:
+    @./scripts/onepipeline.sh readjust "$@" </dev/null
 
 # The across-round derivation this recipe used to print has no successor verb,
 # because it has no successor step: the engine reconciles a live desired graph

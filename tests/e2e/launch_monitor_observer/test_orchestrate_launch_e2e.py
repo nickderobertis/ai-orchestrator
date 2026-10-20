@@ -124,6 +124,9 @@ DAG_SCOPE_STREAM = "agent:dag-scope-"
 #: and that the adopted reader accepts the document.
 PR_AUTHOR_GRAPH = "graphs/pr-author.yaml"
 PR_AUTHOR_BODY_SCHEMA = "config/pr-author-body.schema.json"
+#: The reply-drafting graph every run launches, which `onepipeline review` and a `decline`
+#: reach; driven in `test_review_drafting_graphs_e2e.py`, recorded by the launch here.
+REVIEW_REPLY_GRAPH = "graphs/review-reply.yaml"
 
 #: A composed drafting task, stated by this journey rather than copied from
 #: `onepipeline`. What the member owes is version-independent — its own `task`
@@ -1181,7 +1184,7 @@ def test_a_launch_reports_a_missing_dag_scope_graph(tmp_path: Path, oneharness_b
 def test_the_recipe_opts_the_launch_into_this_hosts_drafting_graph(
     launched: Launched,
 ) -> None:
-    """A real launch records `graphs/pr-author.yaml` as the graph that drafts its bodies.
+    """A real launch records the graphs that draft its bodies and its review replies.
 
     `--pr-author-graph` ships naming nothing, so a launch that does not name one opens
     its change requests with the body its plan states, or with none — which is how
@@ -1204,6 +1207,13 @@ def test_the_recipe_opts_the_launch_into_this_hosts_drafting_graph(
         f"the launch recorded {recorded.get('pr_author_graph')!r} as its drafting graph; "
         f"`just orchestrate` must name {PR_AUTHOR_GRAPH} so this host's change requests "
         "are drafted rather than opened with no body"
+    )
+    # The reply drafter rides the same launch for the same reason: a run that names none
+    # posts no reply to a reviewer and refuses every `decline`, and still settles.
+    assert recorded.get("review_reply_graph") == str(REPO_ROOT / REVIEW_REPLY_GRAPH), (
+        f"the launch recorded {recorded.get('review_reply_graph')!r} as its reply drafter; "
+        f"`just orchestrate` must name {REVIEW_REPLY_GRAPH} so a rework's reviewers are "
+        "answered and a manager's `decline` can post"
     )
 
 

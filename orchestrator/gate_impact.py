@@ -500,13 +500,18 @@ class Tree:
             self.reap()
 
     def walk(self) -> dict[int, Proc]:
-        """Every live (non-zombie) process under the recorder at any depth."""
-        table = _table(self.root)
+        """Every live (non-zombie) process under the recorder at any depth.
+
+        The table is read under the lock its exclusions change under, so a sampler command
+        reaped and counted again meanwhile is read either still excluded or already gone,
+        never as a live process nothing excludes.
+        """
+        with self._lock:
+            table = _table(self.root)
+            excluded = set(self._excluded)
         children: dict[int, list[int]] = defaultdict(list)
         for proc in table.values():
             children[proc.ppid].append(proc.pid)
-        with self._lock:
-            excluded = set(self._excluded)
         found: dict[int, Proc] = {}
         stack = list(children[self.root])
         while stack:

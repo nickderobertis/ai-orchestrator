@@ -15,6 +15,7 @@
       "{workspaceRoot}/oneharness.check-in.toml",
       "{workspaceRoot}/oneharness.identities.toml",
       "{workspaceRoot}/oneharness.pr-author.toml",
+      "{workspaceRoot}/oneharness.review-reply.toml",
       "{workspaceRoot}/orchestrator/root.py",
       "{projectRoot}/project.json"
     ]

@@ -177,6 +177,19 @@ class Pushed:
         (line,) = self.results(budget)
         return line
 
+    def refused_over(self) -> list[str]:
+        """The budgets the step's one strict refusal names as over, in its own order.
+
+        Read off the refusal line rather than matched as a phrase, because that line names
+        every root budget the push is over at once — `budget a, b is over` — so a journey
+        holding one budget to it still reads it when the host also put another over, a
+        process some other program left under the recorder among them.
+        """
+        (refusal,) = [line for line in self.stderr.splitlines() if "this push is refused" in line]
+        named, marker, _ = refusal.removeprefix("pre-push: budget ").partition(" is over in ")
+        assert marker, refusal
+        return named.split(", ")
+
     def conditions(self, budget: str = "gate-time") -> dict[str, str]:
         """The host conditions the result line names, by name."""
         _, _, host = self.result(budget).partition("; host: ")
@@ -511,7 +524,7 @@ def test_a_gate_over_a_strict_budget_is_refused_and_told_to_optimize(host: Host)
     _ran_once(host, pushed)
     assert "— within" in pushed.result(), pushed.result()
     assert "— over" in pushed.result("strict-probe"), pushed.stdout
-    assert "budget strict-probe is over" in pushed.stderr, pushed.stderr
+    assert "strict-probe" in pushed.refused_over(), pushed.stderr
     assert "this push is refused" in pushed.stderr and "optimize" in pushed.stderr
     assert "host conditions" in pushed.stderr and "manager" in pushed.stderr, pushed.stderr
     assert "warning:" not in pushed.stderr, pushed.stderr
@@ -528,8 +541,34 @@ def test_a_host_variable_over_beside_a_strict_over_is_still_refused(host: Host) 
     assert "— over" in pushed.result(), pushed.result()
     assert "— over" in pushed.result("strict-probe"), pushed.stdout
     (refusal,) = [line for line in pushed.stderr.splitlines() if "this push is refused" in line]
-    assert "budget strict-probe is over" in refusal and "optimize" in refusal, refusal
-    assert "gate-time" not in refusal, refusal
+    assert "strict-probe" in pushed.refused_over() and "optimize" in refusal, refusal
+    assert "gate-time" not in pushed.refused_over(), refusal
+
+
+def test_a_strict_over_is_refused_by_name_beside_another_root_budget_over(host: Host) -> None:
+    """The refusal names the strict budget whatever else the same push is over.
+
+    One publication of this repository had its gate fail here because the host also
+    reported `gate-leaked-processes` over, so the refusal read `budget
+    gate-leaked-processes, strict-probe is over` and a phrase match missed it. A second
+    strict budget stands in for that report. The push with only the other one over is
+    the control: the refusal still has to name `strict-probe`, and there it does not.
+    """
+    other = _strict("other-probe", ["sleep", "1.5"])
+    budgets = host.budgets(extra=[other, _strict("strict-probe", ["sleep", "1.5"])])
+
+    pushed = _push(host, budgets, host.gate("true"))
+
+    assert pushed.returncode == 1, pushed.stdout + pushed.stderr
+    assert pushed.refused_over() == ["other-probe", "strict-probe"], pushed.stderr
+    assert "optimize" in pushed.stderr and "warning:" not in pushed.stderr, pushed.stderr
+
+    host.gate_runs.unlink()
+    control = _push(host, host.budgets(extra=[other]), host.gate("true"))
+
+    assert control.returncode == 1, control.stdout + control.stderr
+    assert control.refused_over() == ["other-probe"], control.stderr
+    assert "strict-probe" not in control.refused_over(), control.stderr
 
 
 def test_a_host_variable_over_beside_a_strict_error_is_refused_naming_the_file(
