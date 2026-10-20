@@ -79,7 +79,7 @@ _HISTORY_DIR = tempfile.TemporaryDirectory(prefix="ai-orchestrator-fixture-histo
 _HISTORY = Path(_HISTORY_DIR.name)
 
 
-def local_project(content: str, name: str) -> str:
+def local_project(content: str, name: str, *, approve: bool = True) -> str:
     """Write one unique authoring project, with its design document approved, and answer its id.
 
     **The approval is part of what a launchable project is**, which is why it is here and
@@ -97,7 +97,8 @@ def local_project(content: str, name: str) -> str:
     `reviewed` below reaches its own record through, so no journey built on this begins
     from state the exercised interface cannot produce. What the recipe *decides* is proven in
     `tests/plan_tooling/plan_flow/test_approve_design_recipe_e2e.py`; what it does here is put a
-    fixture project into the one state a launch accepts.
+    fixture project into the one state a launch accepts. ``approve=False`` leaves the
+    document unapproved, for a journey whose subject is that recipe's own answer.
     """
     slug = re.sub(r"[^a-z0-9-]+", "-", name.lower()).strip("-")
     native = f"test-{os.getpid()}-{next(_PROJECT_SEQUENCE)}-{slug}"
@@ -116,7 +117,8 @@ def local_project(content: str, name: str) -> str:
         plan_fixture_source.SOURCE, native, no_budgets(plan_repositories(plan)), resolving(project)
     )
     _designed(native)
-    approved(project)
+    if approve:
+        approved(project)
     return project
 
 
@@ -608,9 +610,9 @@ def designed(
         raise AssertionError(f"the fixture's design document was not created: {created.stderr}")
 
 
-def project_from_plan(plan: Path, name: str | None = None) -> str:
+def project_from_plan(plan: Path, name: str | None = None, *, approve: bool = True) -> str:
     """Store a JSON plan as a local project through the committed source layout."""
-    return local_project(plan.read_text(encoding="utf-8"), name or plan.stem)
+    return local_project(plan.read_text(encoding="utf-8"), name or plan.stem, approve=approve)
 
 
 def reviewed(project: str) -> str:
