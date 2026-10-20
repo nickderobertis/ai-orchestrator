@@ -8,9 +8,9 @@ names, and `tests/plan_store_user_layer.py` keeps the host's real layer out of e
 suite starts. So a journey about a host layer installs its own: the example as it is, or the
 example with a Linear source replaced by a folder of Markdown — no check may reach a Linear
 workspace — whose status mapping reads the state names the example's Linear mapping writes,
-resolved through the store itself. The tracked configuration lands the store's public boundary
-off and any declared `visibility` switches it on, so the example declares none, and a journey
-about the boundary installs `screened()`, which declares what a host switching it on declares.
+resolved through the store itself. The tracked configuration switches the store's public
+boundary on, so the example declares every source it defines private, as a host doing an
+organization's work declares them before adopting it, and a stand-in keeps that declaration.
 
 `installed()` writes the layer under a configuration home of the journey's own that mirrors
 the one this process was handed entry by entry, so every other tool reads what it read
@@ -26,7 +26,6 @@ from collections.abc import Collection, Mapping
 from pathlib import Path
 from typing import Any
 
-import boundary_home
 import yaml
 from published_tools import ONETASKGRAPH_BIN
 
@@ -131,8 +130,7 @@ def stand_in(
 ) -> dict[str, Any]:
     """A `local-md` source at ``root`` reading the state names ``source`` writes.
 
-    Declaring no visibility, as the example's own sources declare none; `screened()` declares
-    it private with the rest of the layer.
+    Declared `visibility: private`, as the example declares the source it stands in for.
 
     ``copied`` names each status a journey copies onto the stand-in carrying that category's
     own word as its name. Linear writes a copy's status by category, through its mapping; a
@@ -153,16 +151,20 @@ def stand_in(
     # example's Linear source, because no check may reach a Linear workspace; the example's
     # Linear configuration is held to the plugin's own schema by
     # `tests/test_plan_source_roots.py` instead.
-    return {"plugin": "local-md", "config": {"root": str(root), "status_mapping": mapping}}
+    return {
+        "visibility": "private",
+        "plugin": "local-md",
+        "config": {"root": str(root), "status_mapping": mapping},
+    }
     # llmlint: ignore-end[e2e_not_mocked]
 
 
 def without_private_stores(document: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """``document`` (the example unless named) without the host's own private stores.
 
-    Under a switched-on boundary the store reads every source declared private on each
-    dependency read, and a journey about an organization's routing holds no credential for
-    the host's own boards, which no route reaches anyway.
+    The store reads every source declared private on each dependency read, and a journey
+    about an organization's routing holds no credential for the host's own boards, which no
+    route reaches anyway.
     """
     layer = dict(example() if document is None else document)
     layer["sources"] = {
@@ -170,27 +172,6 @@ def without_private_stores(document: Mapping[str, Any] | None = None) -> dict[st
         for name, source in layer["sources"].items()
         if name not in (PRIVATE_PLANS, PRIVATE_FOLLOWUPS)
     }
-    return layer
-
-
-def screened(document: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """``document`` (the example unless named) switching the store's public boundary on.
-
-    The tracked configuration lands the boundary off; a journey about the boundary declares
-    what a host switching it on declares: the write policy and the two boards public
-    (`boundary_home.WRITE_POLICY`), each board's own keys kept, and every source the layer
-    defines private.
-    """
-    layer = dict(example() if document is None else document)
-    policy = yaml.safe_load(boundary_home.WRITE_POLICY)
-    layer["write_policy"] = policy["write_policy"]
-    sources = {
-        name: {**dict(source), "visibility": "private"} if "plugin" in source else dict(source)
-        for name, source in layer["sources"].items()
-    }
-    for name, declared in policy["sources"].items():
-        sources[name] = {**dict(sources.get(name) or {}), **declared}
-    layer["sources"] = sources
     return layer
 
 

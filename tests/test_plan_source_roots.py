@@ -470,25 +470,52 @@ def test_the_drafts_source_is_a_local_directory_no_plan_listing_reads() -> None:
     assert ignored.returncode == 0, "a draft under .follow-ups/ is not gitignored"
 
 
-#: The keys that switch the store's public boundary on: its write policy's two commands. The
-#: tracked document lands the boundary off, so it resolves none of them and declares no
-#: `visibility` on any source (`docs/orchestration.md`, *The public write boundary*).
-WRITE_POLICY_KEYS = ("write_policy.visibility_command", "write_policy.check_command")
+#: The keys that switch the store's public boundary on: its write policy's two commands, and
+#: what the tracked document declares them as (`docs/orchestration.md`, *The public write
+#: boundary*): the pinned `onevcs` answering each repository's visibility and screening every
+#: write to a source not declared private.
+WRITE_POLICY = {
+    "write_policy.visibility_command": ["onevcs", "boundary", "inspect", "--input", "-"],
+    "write_policy.check_command": [
+        "onevcs",
+        "boundary",
+        "check",
+        "--destination",
+        "public",
+        "--input",
+        "-",
+    ],
+}
+WRITE_POLICY_KEYS = tuple(WRITE_POLICY)
+#: Each source the tracked document declares a visibility for: the two boards public, and the
+#: two folders of this machine a plan and a follow-up launch are written to private. `drafts`,
+#: `examples` and `test-fixtures` declare none.
+DECLARED_VISIBILITY = {
+    "plans": "public",
+    "followups": "public",
+    "authoring": "private",
+    "follow-up-runs": "private",
+}
 
 
 @pytest.mark.reads_checkouts
-def test_the_tracked_document_leaves_the_public_boundary_off() -> None:
-    """The installed CLI resolves no write policy and no source's visibility.
+def test_the_tracked_document_switches_the_public_boundary_on() -> None:
+    """The installed CLI resolves the write policy and each declared visibility, and no other.
 
     Read through the store's own resolution, because the store switches the boundary on as
     soon as either is resolved, whatever document states it.
     """
     resolved = _resolved_configuration()
-    assert {key: resolved.get(key) for key in WRITE_POLICY_KEYS} == dict.fromkeys(WRITE_POLICY_KEYS)
-    declared = sorted(
-        key for key, value in resolved.items() if key.endswith(".visibility") and value
-    )
-    assert declared == [], declared
+    assert {key: resolved.get(key) for key in WRITE_POLICY_KEYS} == WRITE_POLICY
+    declared = {
+        key.removeprefix("sources.").removesuffix(".visibility"): value
+        for key, value in resolved.items()
+        if key.endswith(".visibility") and value
+    }
+    assert declared == DECLARED_VISIBILITY, declared
+    for source, visibility in DECLARED_VISIBILITY.items():
+        if visibility == "private":
+            assert resolved[f"sources.{source}.plugin"] == WRITABLE_PLUGIN, source
 
 
 @pytest.mark.reads_checkouts
@@ -497,8 +524,8 @@ def test_the_tracked_document_declares_no_private_source_and_no_route() -> None:
 
     Read off the installed CLI's resolution of this checkout's document alone — the suite
     keeps the host's user layer out of every process (`tests/plan_store_user_layer.py`) — so a
-    Linear source, a route, or a source declared private that crept back into the tracked
-    file fails here.
+    Linear source, a route, or a source declared private beyond this machine's own two folders
+    that crept back into the tracked file fails here.
     """
     resolved = _resolved_configuration()
     plugins = {key: value for key, value in resolved.items() if key.endswith(".plugin")}
@@ -508,7 +535,11 @@ def test_the_tracked_document_declares_no_private_source_and_no_route() -> None:
     private = sorted(
         key for key, value in resolved.items() if key.endswith(".visibility") and value == "private"
     )
-    assert private == [], private
+    assert private == sorted(
+        f"sources.{source}.visibility"
+        for source, visibility in DECLARED_VISIBILITY.items()
+        if visibility == "private"
+    ), private
     assert plan_store.routed_sources("plans") == ()
     assert plan_store.routed_sources("followups") == ()
     configured = set(read_plan_sources(_configuration()))
@@ -623,22 +654,31 @@ def test_the_example_layer_declares_each_linear_source_as_a_host_writes_it(
 def test_the_example_layer_adds_destinations_and_loosens_nothing(
     example_resolved: dict[str, object],
 ) -> None:
-    """Under the layer the tracked default sources still hold, and the layer names no policy.
+    """Under the layer the tracked default sources and policy still hold, and it adds private ones.
 
     The project document reads above the user layer, so a layer can add a source or a route
-    and never move what the tracked file states; the example names no write policy and
-    declares no visibility, which a host switching the boundary on adds deliberately and all
-    at once; and no route reaches the host's private stores, because a classification route
+    and never move what the tracked file states: the write policy and every visibility the
+    tracked document declares resolve as they do without the layer. Every source the example
+    defines is declared private, as a host doing an organization's work declares its sources
+    before adopting the tracked document, which screens every write to a source not declared
+    private; and no route reaches the host's private stores, because a classification route
     would be tried before every repository route and capture the organization's work too.
     """
-    assert {key: example_resolved.get(key) for key in WRITE_POLICY_KEYS} == dict.fromkeys(
-        WRITE_POLICY_KEYS
-    )
+    assert {key: example_resolved.get(key) for key in WRITE_POLICY_KEYS} == WRITE_POLICY
+    assert "write_policy" not in onetaskgraph_user_layer.example()
     assert example_resolved["default_sources"] == read_default_sources(_configuration())
-    declared = sorted(
-        key for key, value in example_resolved.items() if key.endswith(".visibility") and value
-    )
-    assert declared == [], declared
+    declared = {
+        key.removeprefix("sources.").removesuffix(".visibility"): value
+        for key, value in example_resolved.items()
+        if key.endswith(".visibility") and value
+    }
+    defined = [
+        name
+        for name, source in onetaskgraph_user_layer.example()["sources"].items()
+        if "plugin" in source
+    ]
+    assert sorted(defined) == sorted([*LINEAR_SOURCES, *PRIVATE_STORES]), defined
+    assert declared == DECLARED_VISIBILITY | dict.fromkeys(defined, "private"), declared
     for name in PRIVATE_STORES:
         assert example_resolved[f"sources.{name}.plugin"] == "github-projects", name
     targets = {

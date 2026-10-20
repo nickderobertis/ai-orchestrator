@@ -561,6 +561,15 @@ def configured_settings() -> dict[str, object]:
     }
 
 
+def declared_private(source: str) -> bool:
+    """Whether the store's resolution of every layer declares ``source`` `visibility: private`.
+
+    A copy out of such a source carries no :data:`ORIGIN_KEY`: the store keeps the
+    correspondence on the private side alone, as :data:`COPIES_KEY`.
+    """
+    return configured_settings().get(f"sources.{source}.visibility") == "private"
+
+
 def routed_sources(source: str) -> tuple[str, ...]:
     """The sources ``source``'s `routes` send an item to, in the order its entries name them.
 

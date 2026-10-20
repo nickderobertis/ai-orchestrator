@@ -17,13 +17,13 @@
 #     classification route is tried before every repository route and routes never chain, so
 #     one there would capture the organization's work too.
 #
-# No source here declares a `visibility`. The tracked document lands the store's public
-# boundary off, and any visibility declared in this layer switches it on for every checkout on
-# the host, as a `write_policy` does (`docs/orchestration.md`, *The public write boundary*). A
-# host switching it on declares every source here `visibility: private`, the tracked boards
-# `visibility: public`, and the `write_policy` beside them, all at once; a private item written
-# to `plans` is then refused, which is the safe failure. A layer adds destinations and that
-# policy, never a looser one.
+# Every source here declares `visibility: private`. The tracked document switches the store's
+# public boundary on, screening every write to a source not declared private, so a host doing an
+# organization's work declares that organization's sources private here before it adopts the
+# tracked document: an undeclared tracker would refuse every task routed to it
+# (`docs/orchestration.md`, *The public write boundary*). A layer adds destinations, never a
+# looser policy: the tracked document's `write_policy` and its boards' `visibility: public` stand
+# above it.
 sources:
   plans:
     routes:
@@ -36,6 +36,7 @@ sources:
   # The organization's tracker for plans: a Linear team, verified private once per source by
   # the store, its credential named rather than held.
   hiddenco-plans:
+    visibility: private
     plugin: linear
     config:
       api_key_env: HIDDENCO_LINEAR_API_KEY
@@ -58,6 +59,7 @@ sources:
   # read and create of this source is scoped to it. The same eight states as its plans source,
   # because both write the team's one workflow.
   hiddenco-followups:
+    visibility: private
     plugin: linear
     config:
       api_key_env: HIDDENCO_LINEAR_API_KEY
@@ -80,6 +82,7 @@ sources:
   # This host's own private plans board: a GitHub Project and the issue repository its items
   # live in, both private, which the store reads before every write.
   private-plans:
+    visibility: private
     plugin: github-projects
     config:
       owner: sample-owner
@@ -95,6 +98,7 @@ sources:
       enabled: true
   # This host's own private follow-up board, shaped as `followups` is.
   private-followups:
+    visibility: private
     plugin: github-projects
     config:
       owner: sample-owner

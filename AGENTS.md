@@ -599,14 +599,14 @@ host declares, never by choice** — in onetaskgraph's user layer, outside every
 so no tracked file names the organization or where its work goes (`docs/orchestration.md`,
 *Host-local sources and routes*). A follow-up ticket whose repositories all match such a
 route is filed there; read where one lands with `just plans sources route plans --repository
-<origin>`. While the store's public boundary is off, as this host lands it, a plan whose
-every task is routed lands whole in the routed tracker, and any other plan's home stays on
-`plans` beside a member project there; approve and launch the home id `just finish-plan`
-reports. **A host that switches the boundary on never splits a plan touching private work
-across a public board**: its tasks are private and so is the plan, which `plans` refuses
-whatever the routes say, so an all-organization plan is copied straight to its tracker
-(`just finish-plan <brief> --to <source>`) and a mixed one is authored as two
-(`docs/orchestration.md`, *The public write boundary*). On a routed Linear tracker a plan
+<origin>`. **The store's public boundary is on**: every write to a source not declared private
+is screened, plans are drafted in the private `authoring` source, and **a host doing an
+organization's work declares that organization's sources `visibility: private` in its user
+layer before it adopts that**, since an undeclared tracker refuses every task routed to it. A
+plan touching private work is never split across a public board: its tasks are private and
+so is the plan, which `plans` refuses whatever the routes say, so an all-organization plan is
+copied straight to its tracker (`just finish-plan <brief> --to <source>`) and a mixed one is
+authored as two (`docs/orchestration.md`, *The public write boundary*). On a routed Linear tracker a plan
 task reads Todo once copied, Queued once a run claims it, In Progress while its node works, Needs Attention when that node
 failed, parked or was skipped, and Done once it settled; Proposed, Backlog and Canceled are
 proposed, deferred and withdrawn. The member project reads Planned once copied,

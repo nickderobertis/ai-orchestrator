@@ -7,11 +7,11 @@ native id — a board mints a number where a directory keeps the name — and it
 where a record lives, so a path or a URL assembled from a project name is one that names
 nothing the moment the destination is a board.
 
-So both are **read back out of the destination**. The landed project is found by the
-link the store records on the plan when it copies it, and held to the origin stamp the
-store writes onto every record it creates by copying — the two records the store keeps to
-tie a copy to its plan — so it is read by id rather than by listing every project the
-destination holds; its location and its one document's location are then the store's own
+So both are **read back out of the destination**. The landed project is found by the link the store
+records on the plan when it copies it, and held to the origin stamp the store writes onto every
+record it creates by copying — the two records the store keeps to tie a copy to its plan, the stamp
+left off a copy out of a private source — so it is read by id rather than by listing every project
+the destination holds; its location and its one document's location are then the store's own
 answers, rendered by the one reading of them :func:`~orchestrator.plan_store.located` owns.
 
 It is a command of its own rather than a line inside the copy because the copy's product
@@ -106,7 +106,10 @@ def copied(project: str, destination: str) -> plan_store.StoreProject:
     because the store puts a plan's home in a routed source when every task routes there.
     What the link names is then held to the stamp that makes it a copy of this plan —
     :data:`~orchestrator.plan_store.ORIGIN_KEY` — so a link left pointing at somebody
-    else's project is refused rather than reported.
+    else's project is refused rather than reported. A copy out of a source declared private
+    carries no stamp, because the store keeps the correspondence on the private side alone,
+    so there the link is the record and what it names is refused only when it carries a
+    stamp naming another plan.
 
     Two copies of one plan are refused rather than picked between, by
     :func:`stamped_copies` — a state somebody has to resolve, and reporting one of them
@@ -149,7 +152,11 @@ def copied(project: str, destination: str) -> plan_store.StoreProject:
             f"{project}'s copy link names {linked}, which the store could not read ({exc}), "
             f"so there is nothing there to point a reviewer at"
         ) from exc
-    if landed.metadata.get(plan_store.ORIGIN_KEY) != project:
+    origin = landed.metadata.get(plan_store.ORIGIN_KEY)
+    unstamped_private = origin is None and plan_store.declared_private(
+        plan_store.qualified(project)[0]
+    )
+    if origin != project and not unstamped_private:
         raise OSError(
             f"{project}'s copy link names {linked}, which the store does not record as "
             f"copied from {project}, so it is not this plan's copy and there is nothing "

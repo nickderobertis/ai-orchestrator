@@ -1,16 +1,15 @@
 """No plan-store user layer of the invoking user's reaches a fixture of this suite.
 
-`tests/plan_store_user_layer.py` is the rule, and the incident behind it; `tests/conftest.py`
-arms it. The first journey runs a real fixture of this
-tier — the copy `test_plan_copy_destination_ids_e2e.py` makes through `just plans` — as a
-pytest session of its own loading this suite's conftest, under a configuration home holding
-a declaration that refuses it: a private store of the host's whose root cannot be read. The second holds the sandbox to linking every other
-entry of that home, and to leaving the home itself as it found it; the third holds back
-ai-orchestrator's own host checkout list and rules overlay while linking that directory's
-other entries. The next holds the
-helper's reading of where a configuration home is to the store's own, and the last three
-hold real Bun to the cache the user's `.npmrc` names once the home moves, to a cache the
-environment already states, and to stating none when `bun pm cache` cannot answer.
+`tests/plan_store_user_layer.py` is the rule, and the incident behind it; `tests/conftest.py` arms
+it. The first journey runs a real fixture of this tier — the copy
+`test_plan_copy_destination_ids_e2e.py` makes through `just plans` — as a pytest session of its own
+loading this suite's conftest, under a configuration home holding a declaration that refuses it: a
+private store of the host's whose root cannot be read. The second holds the sandbox to linking every
+other entry of that home, and to leaving the home itself as it found it; the third holds back
+ai-orchestrator's own host checkout list and rules overlay while linking that directory's other
+entries. The next holds the helper's reading of where a configuration home is to the store's own,
+and the last three hold real Bun to the cache the user's `.npmrc` names once the home moves, to a
+cache the environment already states, and to stating none when `bun pm cache` cannot answer.
 """
 
 from __future__ import annotations

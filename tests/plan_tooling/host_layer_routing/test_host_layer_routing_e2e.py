@@ -1,9 +1,9 @@
 """The store's public boundary and a host layer's routes, driven over synthetic identities.
 
-The tracked `onetaskgraph.yaml` lands the store's public boundary off, and a host switches it
-on in its own user layer — a `write_policy` naming `onevcs boundary inspect` and `onevcs
-boundary check`, and both boards declared `visibility: public` — beside the organization's own
-trackers and the repository routes that send its work there
+The tracked `onetaskgraph.yaml` switches the store's public boundary on — a `write_policy`
+naming `onevcs boundary inspect` and `onevcs boundary check`, and both boards declared
+`visibility: public` — and a host declares the organization's own trackers private in its user
+layer, beside the repository routes that send its work there
 (`config/onetaskgraph.user-layer.example.yaml`). The layer installed here is that host's. These
 journeys drive both halves through this checkout's real recipes, the installed plan-store CLI
 and the pinned `onevcs`, answering from a registry this module writes through `onevcs` itself
@@ -97,10 +97,8 @@ def layer(tmp_path: Path) -> Iterator[Layer]:
             onetaskgraph_user_layer.ORGANIZATION_FOLLOWUPS,
         )
     }
-    document: dict[str, Any] = onetaskgraph_user_layer.screened(
-        onetaskgraph_user_layer.without_private_stores(
-            onetaskgraph_user_layer.with_stand_ins(stood_in)
-        )
+    document: dict[str, Any] = onetaskgraph_user_layer.without_private_stores(
+        onetaskgraph_user_layer.with_stand_ins(stood_in)
     )
     for name, visibility in ((PUBLIC_STAND_IN, "public"), (PRIVATE_STAND_IN, "private")):
         folders[name].mkdir()

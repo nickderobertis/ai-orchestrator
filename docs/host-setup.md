@@ -601,6 +601,22 @@ shape on the way across, none of them silently:
 | identity `repo_type` / `workflow` / merge strategy | a rule's `publication` + `approvals` | The registry's own copies were `register`'s derivation and unsettable, and onevcs 0.21.0 removed them; the rules file is what every verb reads. |
 | a gate template with `{base}` | nothing — the rules file names no verifier | onevcs 0.11.0 removed the gate concept. What verifies a change is the repository's own merge path, which reads the comparison identity from `$ONEVCS_COMPARISON_REMOTE` / `$ONEVCS_COMPARISON_BASE`. |
 
+### An organization's plan-store sources, declared private first
+
+The tracked `onetaskgraph.yaml` switches the plan store's public write boundary on: every
+write to a source not declared private is screened, and one naming a private repository is
+refused. **A host doing an organization's work declares that organization's sources
+`visibility: private` in its own plan-store user layer,
+`${XDG_CONFIG_HOME:-$HOME/.config}/onetaskgraph/config.yaml`, before it adopts that
+configuration** — every tracker its routes send the organization's work to, and each private
+store of the host's own beside them. `config/onetaskgraph.user-layer.example.yaml` is the
+shape, over synthetic names, and nothing tracked names the real ones. A tracker left
+undeclared is screened like a public board and refuses every task routed to it, which is why
+the declaration comes first. A host without the organization's credential needs nothing
+more: it reads those sources as unavailable and every other plan-store command goes on.
+`just plans sources list` reads each source's state, and `just plans config show` where each
+`visibility` came from (`docs/orchestration.md`, *The public write boundary*).
+
 ## 8. Verify the host
 
 Spend real agent-harness turns end to end — one on the agent chain, and the trust probe

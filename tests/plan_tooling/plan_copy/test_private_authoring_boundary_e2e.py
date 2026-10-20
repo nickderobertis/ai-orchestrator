@@ -1,10 +1,9 @@
 """An organization's plan is drafted in the private `authoring` source and never leaves it.
 
-`authoring` is declared `visibility: private` here, and the store's public boundary is switched
-on through a `write_policy` in a configuration home of this module's own, since the tracked
-`onetaskgraph.yaml` lands it switched off (`boundary_home.screening`): the pinned `onevcs
-boundary inspect` answers each repository's visibility and `onevcs boundary check` screens
-every write to a source not declared private. These journeys drive that configuration as a
+The tracked `onetaskgraph.yaml` declares `authoring` `visibility: private` and switches the
+store's public boundary on through its `write_policy`: the pinned `onevcs boundary inspect`
+answers each repository's visibility and `onevcs boundary check` screens every write to a source
+not declared private. These journeys drive that configuration as a
 planner and a design-doc dispatch meet it:
 
 * an organization's plan — its task naming a private repository — is written into
@@ -46,8 +45,7 @@ from orchestrator.root import REPO_ROOT
 PRIVATE_REPOSITORY = "github.com/hiddenco/qh-api"
 #: This repository, registered public.
 PUBLIC_REPOSITORY = boundary_home.THIS_REPOSITORY
-#: The public board a plan is copied onto, declared `visibility: public` by the screening layer
-#: (`boundary_home.WRITE_POLICY`) this journey switches the boundary on with.
+#: The public board a plan is copied onto, declared `visibility: public` by the tracked document.
 BOARD = "plans"
 
 
@@ -68,12 +66,6 @@ def bench(tmp_path: Path) -> Bench:
     )
     environment = boundary_home.environment(None, home)
     environment.update(_prepare_plan_sources(authoring))
-    # The boundary switched on, in a configuration home of this journey's own.
-    environment["XDG_CONFIG_HOME"] = str(boundary_home.screened_config_home(tmp_path))
-    # Declared private at the store's environment layer: the tracked document declares no
-    # source's visibility while the boundary is landed switched off, which waits for the store
-    # to walk a public task's dependencies without authenticating every private source.
-    environment[f"ONETASKGRAPH_SOURCES__{AUTHORING_SOURCE.upper()}__VISIBILITY"] = "private"
     return Bench(authoring, environment)
 
 

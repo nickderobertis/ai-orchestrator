@@ -77,33 +77,37 @@ carry it, each read beneath or in place of a tracked one:
 
 ### The public write boundary
 
-**The plan store's public write boundary is landed switched off, so no write is screened.**
-Switched on, a write to any source not declared private is screened and one naming a private
-repository is refused: a `write_policy` names two commands of the pinned `onevcs`, `boundary
-inspect`, which answers each repository an item names as public or private, a rule's
-declaration first and the host otherwise, and `boundary check`, which refuses a write carrying a
-private repository's terms, with the store's own refusal naming the source and nothing written.
-The store turns it on as soon as its configuration names a `write_policy` or any source declares
-a `visibility` — in the tracked document or in a host's user layer — so the tracked
-`onetaskgraph.yaml` does neither, and a host's user layer that declares one switches the
-boundary on for that host.
+**The plan store's public write boundary is switched on, and every write to a source not
+declared private is screened.** The tracked `onetaskgraph.yaml` names a `write_policy` of two
+commands of the pinned `onevcs`: `boundary inspect`, which answers each repository an item names
+as public or private, a rule's declaration first and the host otherwise, and `boundary check`,
+which refuses a write carrying a private repository's terms. A write naming a private repository
+to a source not declared private is refused, with the store's own refusal naming the source and
+nothing written. The tracked document declares the two boards, `plans` and `followups`, public,
+and two folders of this machine private: `authoring`, where every plan, design document, spike
+report and budget answer is drafted, so an organization's plan is drafted there like any other,
+and `follow-up-runs`, where a follow-up launch writes its project, because its task quotes drafts
+and board comments that may name private work. `drafts` declares no visibility, so a follow-up
+draft naming a private repository is refused there; `examples` and `test-fixtures`, the shipped
+examples and the suite's fixtures, declare none either.
+Session setup creates both private folders, because the store walks every private source on each
+dependency read and an absent root fails that read whatever source the task is in.
 
-It stays off because the pinned store walks every source declared private on each dependency
-read of a task in any other source, and fails the read when one cannot be authenticated. An
-organization's Linear sources in a host's user layer would have to be declared private for its
-plan to be routed to them while the boundary is on, and a dispatch that does not hold the Linear
-credential could then walk no dependency at all; with them left undeclared, the boundary would
-refuse every private repository's task routed there. Turning it on waits for the store to answer
-such a read with what the reader can see. Meanwhile a follow-up launch writes its project into
-`follow-up-runs`, a folder under the drafts root that is declared private once the boundary is
-on, rather than into `authoring`, because its task quotes drafts and board comments that may
-name private work, and `just follow-ups` creates that folder before any store command.
+**A host doing an organization's work declares that organization's sources `visibility:
+private` in its own user layer before it adopts this**, as `config/onetaskgraph.user-layer.example.yaml`
+shows over synthetic names, and declares each of its own private stores private beside them. An
+undeclared source is screened, so an organization's tracker left undeclared refuses every task
+routed to it, and the order is the point: the layer first, then this configuration. A host that
+does not hold an organization's credential reads its sources as unavailable and goes on: the
+adopted store answers a dependency read and a review with what the reader can see.
 
-The boundary's tests switch it on in a configuration home of their own
-(`tests/boundary_home.py`'s `screening`), whose plan-store user layer names the policy, and read
-none of this host's sources: `tests/plan_tooling/plan_copy/test_private_authoring_boundary_e2e.py`
-drives a private source receiving an organization's plan and the public board refusing it, and
-`tests/e2e/board_copy_approval/test_board_copy_spike_evidence_e2e.py` a plan copied out of a
+`tests/plan_tooling/host_layer_routing/test_screened_host_states_e2e.py` drives the plan-store
+recipes in each host state — no user layer, the example's shape with its organization's sources
+declared private, and that layer with no credential for them — and drives content naming a
+synthetic private repository to the private sources it may reach and away from the public ones
+it may not. `tests/plan_tooling/plan_copy/test_private_authoring_boundary_e2e.py` drives an
+organization's plan, its budget answers and its design document into `authoring`, and
+`tests/e2e/board_copy_approval/test_board_copy_spike_evidence_e2e.py` a plan copied out of the
 private `authoring` whose spike reports resolve through the copy link the store records there.
 
 ### Where a plan's tasks land: the board, or a routed organization's tracker
@@ -115,20 +119,10 @@ task whose `repositories` all match it to the routed source — an organization'
 <origin>` answers where one would land. A follow-up ticket is copied as a task, so an
 organization's root cause reaches its tracker by that route.
 
-**While the boundary is off, a mixed plan is split by its routes.** A plan whose every task
-is routed lands whole in the routed tracker: its project, its tasks and its design document.
-Any other plan's home stays on `plans` with its design document and its unrouted tasks, and
-its routed tasks go into one member project in the routed source, tied to the home by
-`onetaskgraph.members` on the home and `onetaskgraph.member_of` on the member. `just
-finish-plan` reports the home's qualified id; `just approve-design <home>` records the approval
-on the design document wherever it is, and `just orchestrate <home>` runs the home with its
-members as one run, writing each settlement to the task's own item.
-
-**Once a host switches the boundary on, a plan touching private work is never split across a
-public board.** An organization's repositories then answer private, so its tasks are private
-and the project holding any of them is private too; the adopted store refuses a private
-project at a source not declared private before writing anything, whatever its tasks' routes
-say. So:
+**A plan touching private work is never split across a public board.** An organization's
+repositories answer private, so its tasks are private and the project holding any of them is
+private too; the adopted store refuses a private project at a source not declared private before
+writing anything, whatever its tasks' routes say. So:
 
 - a plan whose every task is an organization's is finished straight into that organization's
   tracker with `just finish-plan <brief> --to <its source>`, and launched, approved and

@@ -304,8 +304,8 @@ def _environment(tmp: Path, remote: Mapping[str, str]) -> dict[str, str]:
     environment[root_name] = str(tmp / "follow-ups")
     environment[plugin_name] = WRITABLE_PLUGIN
     environment[plan_root_variable.name()] = str(tmp / "authoring")
-    # The delivery plan names private work and stays in this fixture's local source.
-    environment["ONETASKGRAPH_SOURCES__AUTHORING__VISIBILITY"] = "private"
+    # The delivery plan names private work and stays in this fixture's local source, which the
+    # tracked document declares private.
     environment["CLAUDE_CODE_SESSION_ID"] = LAUNCHING_SESSION
     environment["ONEPIPELINE_RUNS_DIR"] = str(tmp / "runs")
     environment["ONETASKGRAPH_SECRETS_FILE"] = str(tmp / "no-secrets.env")
@@ -653,7 +653,7 @@ def routed(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Routed]:
     )
     onetaskgraph_user_layer.installed(
         tmp / "config-home",
-        onetaskgraph_user_layer.screened(onetaskgraph_user_layer.without_private_stores(layer)),
+        onetaskgraph_user_layer.without_private_stores(layer),
     )
     shared = share_this_checkouts_install(checkout)
     _recording(checkout)

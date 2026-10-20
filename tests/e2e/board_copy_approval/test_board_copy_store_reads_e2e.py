@@ -37,6 +37,7 @@ from project_fixtures import designed, graph_image, reviewed
 from test_board_copy_design_approval_e2e import (
     CLOSING,
     _copied,
+    _drafted_in_a_public_source,
     _location,
     _on_the_board,
     _recipe,
@@ -437,8 +438,12 @@ def test_the_plan_location_step_refuses_a_plan_it_cannot_point_a_reviewer_at(
     """No copy, a link to no copy of this plan on the board, and two copies: each refused.
 
     Each refusal names the plan, and none reports a location a reviewer would be sent to.
-    The dangling link is the one a copy since deleted from the board leaves behind.
+    The dangling link is the one a copy since deleted from the board leaves behind. The
+    plan is drafted in a source not declared private, because what tells a link left naming
+    somebody else's project, and a second copy, is the origin a copy out of such a source
+    carries.
     """
+    _drafted_in_a_public_source(monkeypatch)
     environment = _drafted(tmp_path, monkeypatch)
     with _serving_board() as remote:
         on_the_board = {**environment, **remote}
