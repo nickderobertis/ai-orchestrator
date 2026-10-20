@@ -30,7 +30,7 @@ from typing import NamedTuple
 import boundary_home
 import pytest
 from github_board import AUTHORING_ROOT_ENV, AUTHORING_SOURCE, _plan_environment, _serving_board
-from project_fixtures import budgeted, no_budgets, reviewed
+from project_fixtures import budgeted, designed, no_budgets, reviewed
 from test_board_copy_design_approval_e2e import _copied, _on_the_board, _recipe
 
 from orchestrator import design_approval, plan_store, spike_plan
@@ -176,6 +176,7 @@ def test_a_finalized_plan_copied_onto_the_board_resolves_and_checks_each_tasks_r
 ) -> None:
     """Each report resolves on the board copy, by its origin or by the drafting source's link.
 
+    The plan's design document is copied beside them and approved on the board copy.
     Drafted where the tracked document declares it, in the private `authoring`, the copy
     carries no `onetaskgraph.origin`: the store records the correspondence on the private
     side, as `onetaskgraph.copies`, and the report resolves through that link
@@ -192,6 +193,7 @@ def test_a_finalized_plan_copied_onto_the_board_resolves_and_checks_each_tasks_r
     boundary_home.answering(monkeypatch, public=(REPOSITORY,))
     environment = _environment(root)
     _finalized(root, environment)
+    designed(AUTHORING_SOURCE, PROJECT, [], environment)
     drafted = _recipe(environment, "check-plan", QUALIFIED)
     assert drafted.returncode == 0, drafted.stdout + drafted.stderr
 
@@ -201,6 +203,7 @@ def test_a_finalized_plan_copied_onto_the_board_resolves_and_checks_each_tasks_r
         assert copied.returncode == 0, copied.stdout + copied.stderr
         board = QualifiedProjectId(_copied(copied.stdout)[QUALIFIED])
         checked = _recipe(on_the_board, "check-plan", board)
+        approved = _recipe(on_the_board, "approve-design", board)
         _on_the_board(monkeypatch, remote)
         tasks = plan_store.read_tasks(board)
         documents = plan_store.read_documents(board)
@@ -210,6 +213,9 @@ def test_a_finalized_plan_copied_onto_the_board_resolves_and_checks_each_tasks_r
         f"`just check-plan` has to pass the board copy {board}, whose reports the board gave "
         f"ids of its own:\n{checked.stdout}{checked.stderr}"
     )
+    # The design document copied beside the reports is approved on the board copy.
+    assert approved.returncode == 0, approved.stdout + approved.stderr
+    assert "recorded the approval of" in approved.stdout, approved.stdout
     assert {task.node_id for task in tasks} == {one.node for one in LINKED}
     for task in tasks:
         expected = next(one for one in LINKED if one.node == task.node_id)

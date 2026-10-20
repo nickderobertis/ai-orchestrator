@@ -101,11 +101,19 @@ routed to it, and the order is the point: the layer first, then this configurati
 does not hold an organization's credential reads its sources as unavailable and goes on: the
 adopted store answers a dependency read and a review with what the reader can see.
 
-`tests/plan_tooling/host_layer_routing/test_screened_host_states_e2e.py` drives the plan-store
-recipes in each host state — no user layer, the example's shape with its organization's sources
-declared private, and that layer with no credential for them — and drives content naming a
-synthetic private repository to the private sources it may reach and away from the public ones
-it may not. `tests/plan_tooling/plan_copy/test_private_authoring_boundary_e2e.py` drives an
+`tests/plan_tooling/host_layer_routing/test_screened_host_states_e2e.py`, its
+`follow_ups/` and `plan_flow/` siblings `test_screened_host_states_follow_ups_e2e.py` and
+`test_screened_host_states_plan_flow_e2e.py` drive the plan-store recipes in each host state —
+no user layer, the example's shape with its organization's sources declared private, and that
+layer with no credential for them — and the first drives content naming a synthetic private
+repository to the private sources it may reach and away from the public ones it may not. One
+gap of the pinned store stands in the third state: its copy authenticates every private
+source, so a plan's copy onto a public destination and a follow-up ticket's copy onto the
+board are refused there naming the organization's source and its missing credential, with
+nothing written; the journeys accept that refusal or a copy that lands. And a design document
+copied out of the private `authoring` keeps its tasks' local locations rather than their board
+addresses, because the pinned store finds a reference's counterpart only by the origin a copy
+out of a private source does not carry. `tests/plan_tooling/plan_copy/test_private_authoring_boundary_e2e.py` drives an
 organization's plan, its budget answers and its design document into `authoring`, and
 `tests/e2e/board_copy_approval/test_board_copy_spike_evidence_e2e.py` a plan copied out of the
 private `authoring` whose spike reports resolve through the copy link the store records there.
