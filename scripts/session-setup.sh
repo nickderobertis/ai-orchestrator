@@ -327,12 +327,14 @@ warm_schema_cache() {
 }
 
 create_plan_root() {
-  # The gitignored `local-md` root `onetaskgraph.yaml` configures. The source refuses a
-  # root it cannot canonicalize, and it refuses it for the *whole* read: one absent
-  # directory makes `just plans project list` exit 4 across every source. A fresh
-  # checkout carries none, so it is created here rather than on first write. `.plans` is
-  # what `just plan` authors into.
-  mkdir -p "$REPO_ROOT/.plans/tasks" "$REPO_ROOT/.plans/projects"
+  # The gitignored `local-md` roots `onetaskgraph.yaml` declares private. The source refuses
+  # a root it cannot canonicalize, and it refuses it for the *whole* read: one absent
+  # directory makes `just plans project list` exit 4 across every source, and the store
+  # walks every private source on each dependency read, so an absent private root fails
+  # `task deps` whatever source the task is in. A fresh checkout carries neither, so both
+  # are created here rather than on first write. `.plans` is what `just plan` authors into,
+  # and `.follow-ups/runs` is where `just follow-ups` writes its launch projects.
+  mkdir -p "$REPO_ROOT/.plans/tasks" "$REPO_ROOT/.plans/projects" "$REPO_ROOT/.follow-ups/runs"
 }
 
 install_bun() {

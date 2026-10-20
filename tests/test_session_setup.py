@@ -472,6 +472,7 @@ def test_full_setup_reports_every_published_tool_it_verified(tmp_path: Path) -> 
     assert "releases are required" not in result.stderr
     assert (tmp_path / "repo" / ".plans" / "tasks").is_dir()
     assert (tmp_path / "repo" / ".plans" / "projects").is_dir()
+    assert (tmp_path / "repo" / ".follow-ups" / "runs").is_dir()
 
 
 @pytest.mark.parametrize(
@@ -624,6 +625,7 @@ def test_provision_only_installs_the_checkouts_toolchain_and_nothing_about_the_h
     assert "host sweep" not in proc.stderr
     assert "sibling checkout bootstrap" not in proc.stderr
     assert not (tmp_path / "repo" / ".plans").exists()
+    assert not (tmp_path / "repo" / ".follow-ups").exists()
 
 
 def test_provision_only_fails_when_the_locked_workspace_install_fails(tmp_path: Path) -> None:
