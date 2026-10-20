@@ -1,18 +1,15 @@
 {
-  "name": "support-linear-stand-in",
+  "name": "support-plan-store-credentials",
   "$schema": "../../../node_modules/nx/schemas/project-schema.json",
   "projectType": "library",
   "tags": [
     "type:test-support"
   ],
-  "implicitDependencies": [
-    "support-published-tools"
-  ],
+  "implicitDependencies": [],
   "namedInputs": {
     "testSupport": [
-      "{workspaceRoot}/tests/linear_stand_in.py",
-      "{workspaceRoot}/onetaskgraph.yaml",
-      "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/tests/plan_store_credentials.py",
+      "{workspaceRoot}/oneharness.dispatch.toml",
       "{projectRoot}/project.json"
     ]
   },

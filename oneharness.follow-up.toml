@@ -8,7 +8,7 @@
 #
 #   * a finite `timeout`, because the turn runs after settlement and nothing else is
 #     watching it — an unbounded deadline would leave a wedged verification alive forever;
-#   * `GH_PROJECTS_TOKEN` and `HELLOPATIENT_LINEAR_API_KEY` are unmasked on every
+#   * `GH_PROJECTS_TOKEN` and an organization's production Linear key are unmasked on every
 #     identity, because this role's whole deliverable is reading and writing the
 #     `followups` board through `onetaskgraph`.
 #     Every other mask is kept;
@@ -73,7 +73,7 @@ env = { BASH_MAX_TIMEOUT_MS = "3600000" }
 args = ["-c", "background_terminal_max_timeout=3600000"]
 
 # **Each variant below restates a whole `unset_env` to leave `GH_PROJECTS_TOKEN`
-# and `HELLOPATIENT_LINEAR_API_KEY` travelling, which is this role's whole point** — the board credential is this role's deliverable and a masked one writes no ticket. A child replaces the parent's
+# and an organization's production Linear key travelling, which is this role's whole point** — the board credential is this role's deliverable and a masked one writes no ticket. A child replaces the parent's
 # mask only with a non-empty list, so "the parent's mask minus two names" is written by
 # stating what remains. Do NOT fold these into `oneharness.identities.toml`: each is
 # the parent's list with both plan-store credentials taken out.

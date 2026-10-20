@@ -14,6 +14,12 @@
 # A path this host does not have is reported as skipped rather than failing the
 # run, so a second machine registers the checkouts it does have.
 #
+# Every entry here is a public repository. A host that also works in private ones keeps
+# its own complete list outside every checkout, at
+# `${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.checkouts`: when that file
+# exists `just repos-apply` and `just repos-bootstrap` — session setup's call included —
+# read it in place of this one, whole, so it repeats the public entries it wants.
+#
 # That is what the duplicate-looking entries below are. The two hosts this
 # repository dispatches from lay the same checkouts out differently: one keeps its
 # own clones at the top of `$HOME` and the engine repositories under `~/projects`,
@@ -37,6 +43,10 @@
 # `llmlint.yml` and drives from `just lint-llm-diff`.
 # Each under whichever of the two layouts its host clones it into.
 ~/projects/oneagentgraph
+# onevcs publishes from the alias that sorts first, so a host holding both spellings
+# publishes these two from the clone, which is therefore listed first.
+~/.ai-orchestrator/repos/nickderobertis__onepipeline
+~/.ai-orchestrator/repos/nickderobertis__onepipeline-ui
 ~/projects/onepipeline
 ~/projects/onepipeline-ui
 ~/projects/onevcs
@@ -46,8 +56,6 @@
 ~/.ai-orchestrator/repos/nickderobertis__oneharness-ui
 ~/.ai-orchestrator/repos/nickderobertis__onejudge
 ~/.ai-orchestrator/repos/nickderobertis__onemessagebus
-~/.ai-orchestrator/repos/nickderobertis__onepipeline
-~/.ai-orchestrator/repos/nickderobertis__onepipeline-ui
 ~/.ai-orchestrator/repos/nickderobertis__onevcs
 
 # `cargo-prune-superseded`, the shared pruner each Rust repository's declared pool
@@ -68,9 +76,9 @@
 ~/.ai-orchestrator/repos/nickderobertis__allowlister
 ~/.ai-orchestrator/repos/nickderobertis__allowlister-remote
 ~/.ai-orchestrator/repos/nickderobertis__allowlister-terminal-approval-plugin
+~/.ai-orchestrator/repos/nickderobertis__cloud-agent-dev-env
 ~/.ai-orchestrator/repos/nickderobertis__crozier
 ~/.ai-orchestrator/repos/nickderobertis__dero-skills
-~/.ai-orchestrator/repos/nickderobertis__ev-trip-planner
 ~/.ai-orchestrator/repos/nickderobertis__github-secrets
 ~/.ai-orchestrator/repos/nickderobertis__nick-derobertis-site
 ~/.ai-orchestrator/repos/nickderobertis__notignored
@@ -88,14 +96,7 @@
 ~/.ai-orchestrator/repos/nickderobertis__printobserver
 ~/.ai-orchestrator/repos/nickderobertis__printobserver-isolated
 
-~/.ai-orchestrator/repos/nickderobertis__printops
 ~/.ai-orchestrator/repos/nickderobertis__screencomp
 ~/.ai-orchestrator/repos/nickderobertis__skilltest
 ~/.ai-orchestrator/repos/nickderobertis__spanish-language-tutor
-~/.ai-orchestrator/repos/nickderobertis__vibe-stl
-~/.ai-orchestrator/repos/petsinc__cd-chat-tool-call-challenge
-~/.ai-orchestrator/repos/petsinc__hellopatient
-~/.ai-orchestrator/repos/petsinc__referral-app
-~/.ai-orchestrator/repos/petsinc__skills
 ~/projects/notignored
-~/projects/org-apps

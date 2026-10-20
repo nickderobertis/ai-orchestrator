@@ -100,7 +100,7 @@ rather than two. That is the rule a real turn applies, and it shapes the layout 
 
 "The parent's mask minus one name" is written by stating what remains, which is what the
 three roles that reach the plan store — the design-document pair and the follow-up agent
-— do to leave `GH_PROJECTS_TOKEN` and `HELLOPATIENT_LINEAR_API_KEY` travelling.
+— do to leave `GH_PROJECTS_TOKEN` and an organization's production Linear key travelling.
 
 `oneharness.board-live.toml` does the same for the board token alone. It is
 `oneharness.toml` verbatim — chain, models, mode, deadline, streaming and labels — for a

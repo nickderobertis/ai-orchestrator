@@ -29,6 +29,7 @@ composition added outside it.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -81,6 +82,7 @@ def _drive(
         env={
             "PATH": path or f"{REPO_ROOT / '.venv' / 'bin'}:/usr/bin:/bin",
             "HOME": str(Path.home()),
+            **_configuration_home(),
             **plan_store_cache.handed(),
             **plan_store_user_layer.handed(),
             **environment,
@@ -336,6 +338,7 @@ def test_the_helper_exports_the_authoring_plugin_beside_the_root(tmp_path: Path)
             env={
                 "PATH": f"{REPO_ROOT / '.venv' / 'bin'}:/usr/bin:/bin",
                 "HOME": str(Path.home()),
+                **_configuration_home(),
                 **plan_store_cache.handed(),
                 **plan_store_user_layer.handed(),
                 **root,
@@ -364,10 +367,10 @@ def test_an_inherited_authoring_plugin_no_plan_could_be_stored_in_is_refused(
     assert "github-projects" in driven.stderr, driven.stderr
 
 
-#: A source a host's `.env` overlays with one setting and no plugin, as this host's does:
-#: this checkout's `onetaskgraph.yaml` completes it, and a configuration that declares no
-#: such source leaves it half a source.
-PARTIAL_OVERLAY = "ONETASKGRAPH_SOURCES__HELLOPATIENT__CONFIG__TEAM"
+#: A source a host's `.env` overlays with one setting and no plugin: the host's user layer
+#: completes it — the example layer's organization tracker here — and a configuration that
+#: declares no such source leaves it half a source.
+PARTIAL_OVERLAY = "ONETASKGRAPH_SOURCES__HIDDENCO_PLANS__CONFIG__TEAM"
 
 #: The report a spike writes: the `spike-report` template's required answers, nothing more.
 REPORT_ANSWERS = {
@@ -378,6 +381,15 @@ REPORT_ANSWERS = {
     "candidates": [],
     "findings": [],
 }
+
+
+def _configuration_home() -> dict[str, str]:
+    """The configuration home the suite exports, stated beside a journey's own `HOME`.
+
+    It carries no host user layer (`tests/plan_store_user_layer.py`); an environment naming
+    none would have the store read the host's own layer beneath every document.
+    """
+    return {"XDG_CONFIG_HOME": os.environ["XDG_CONFIG_HOME"]}
 
 
 class ReportWrite(NamedTuple):
@@ -444,6 +456,7 @@ def _report_from_another_repository(tmp_path: Path, **environment: str) -> Repor
         env={
             "PATH": f"{REPO_ROOT / '.venv' / 'bin'}:/usr/bin:/bin",
             "HOME": str(Path.home()),
+            **_configuration_home(),
             **plan_store_cache.handed(),
             **plan_store_user_layer.handed(),
             plan_root_variable.name(): str(tmp_path / "plans"),
@@ -484,6 +497,7 @@ def test_a_spike_in_another_repository_writes_its_report_into_the_plans_own_proj
         env={
             "PATH": f"{REPO_ROOT / '.venv' / 'bin'}:/usr/bin:/bin",
             "HOME": str(Path.home()),
+            **_configuration_home(),
             **plan_store_cache.handed(),
             **plan_store_user_layer.handed(),
             plan_root_variable.name(): str(root),
@@ -513,5 +527,5 @@ def test_a_source_overlaid_without_its_plugin_is_left_for_the_store_to_refuse(
     written = _report_from_another_repository(tmp_path, **{PARTIAL_OVERLAY: "ENG"}).written
 
     assert written.returncode != 0, written.stdout + written.stderr
-    assert "sources.hellopatient: missing field `plugin`" in written.stderr, written.stderr
+    assert "sources.hiddenco-plans: missing field `plugin`" in written.stderr, written.stderr
     assert "sources.authoring" not in written.stderr, written.stderr

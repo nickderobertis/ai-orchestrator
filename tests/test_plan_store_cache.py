@@ -14,6 +14,7 @@ import re
 import subprocess
 from pathlib import Path
 
+import onetaskgraph_user_layer
 import plan_store_cache
 import pytest
 from published_tools import ONETASKGRAPH_BIN
@@ -112,14 +113,16 @@ def test_an_unguarded_block_states_why_and_holds_spawns_again_after_it() -> None
 
 
 @pytest.mark.reads_checkouts
-@pytest.mark.parametrize("source", ["followups", "hellopatient-followups"])
+@pytest.mark.parametrize("source", ["followups", onetaskgraph_user_layer.ORGANIZATION_FOLLOWUPS])
 def test_the_store_reads_a_source_s_cache_dir_from_the_variable_the_suite_drops(
     source: str, tmp_path: Path
 ) -> None:
     """The variable spelling the suite drops is the one the installed store resolves.
 
     Read through `config show`, whose answer names the layer each value came from, with every
-    other `ONETASKGRAPH_` name left out, as `tests/test_plan_source_roots.py` reads the file.
+    other `ONETASKGRAPH_` name left out, as `tests/test_plan_source_roots.py` reads the file,
+    and with the example user layer installed, which is where a host's own follow-up tracker
+    is declared.
     """
     variable = f"ONETASKGRAPH_SOURCES__{source.upper().replace('-', '_')}__CACHE__DIR"
     assert plan_store_cache.CACHE_DIR_VARIABLE.match(variable), variable
@@ -127,6 +130,8 @@ def test_the_store_reads_a_source_s_cache_dir_from_the_variable_the_suite_drops(
         key: value for key, value in os.environ.items() if not key.startswith("ONETASKGRAPH_")
     }
     named = tmp_path / "named"
+    home = onetaskgraph_user_layer.installed(tmp_path / "config-home")
+    environment[onetaskgraph_user_layer.XDG_CONFIG_HOME] = str(home)
     shown = subprocess.run(
         [str(ONETASKGRAPH_BIN), "--json", "config", "show"],
         cwd=REPO_ROOT,

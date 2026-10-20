@@ -23,7 +23,8 @@ from orchestrator.root import REPO_ROOT
 def test_no_tracked_file_names_the_store_s_test_linear_key() -> None:
     """Nothing here names the key onetaskgraph's own live lane reads.
 
-    This host's Linear key is `HELLOPATIENT_LINEAR_API_KEY`. A tracked file naming the bare
+    A host's organization Linear key is named for that organization — the example layer's
+    is `HIDDENCO_LINEAR_API_KEY`. A tracked file naming the bare
     default — in a config, a mask, an `.env` template — is one edit away from a source or a
     dispatch reading the test workspace's key in place of the production one, or handing the
     production one to a lane that expects the test one.

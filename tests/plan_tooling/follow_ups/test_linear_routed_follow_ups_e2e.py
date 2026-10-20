@@ -1,12 +1,17 @@
-"""A petsinc root cause's follow-up ticket lands in Hello Patient's Linear, the rest on the board.
+"""A hiddenco root cause's follow-up ticket lands in Hidden Co's Linear, the rest on the board.
 
-The tracked `followups` board routes every `github.com/petsinc/*` repository to the
-`hellopatient-followups` Linear source, and every follow-up command takes `followups` as the
-root of those boards and acts on each ticket at the board its repository routes it to. One
-copy of this checkout carries the whole life of a ticket on each destination, phase by phase,
-through the real recipes:
+A host's onetaskgraph user layer — here the tracked example's, installed under this journey's
+own configuration home — routes every `github.com/hiddenco/*` repository from `followups` to
+the organization's `hiddenco-followups` Linear source, declared `visibility: private`, and
+every follow-up command takes `followups` as the root of those boards and acts on each ticket
+at the board its repository routes it to. The store's public boundary is on, switched on in
+that layer as a host switching it on declares it: the state root every launch reads registers
+the hiddenco repository private and the board's own public, so the hiddenco ticket may land
+only on the private tracker and the other on the public board. One copy of this checkout
+carries the whole life of a ticket on each destination, phase by phase, through the real
+recipes:
 
-* **filing** — `just follow-ups` over a run whose drafts name a petsinc root cause and a
+* **filing** — `just follow-ups` over a run whose drafts name a hiddenco root cause and a
   nickderobertis one files the first in Linear at `Proposed` and the second on the board at
   `Proposal`, and its attached closeout's board check across both destinations is green;
 * **re-dispatch** — the same run re-dispatched binds both tickets and files no duplicate;
@@ -21,8 +26,15 @@ through the real recipes:
 * **delivery** — a plan node delivering the Linear ticket at `Todo` moves it to `Queued`
   before any worker turn and to `Done` when the node settles.
 
-**`hellopatient-followups` is a folder of Markdown here** (`linear_stand_in.py` beside this
-module says why and how), and the copy's own plan-store CLI records each command it is handed
+**The binding survives both destinations.** A copy onto the public board records the store's
+link from the ticket to its item, as before. A copy onto the private tracker records the
+ticket's origin on the item, which the origin query reads, but no link from the `drafts`
+ticket, a source not declared private, to the private item; the copy binds the ticket and points
+its own `onetaskgraph.origin` at the item instead, which every later copy follows by the store's
+origin rule — so the re-dispatch phase updates both items and files no duplicate.
+
+**`hiddenco-followups` is a folder of Markdown here** (`tests/onetaskgraph_user_layer.py` says
+why and how), and the copy's own plan-store CLI records each command it is handed
 before running the real one, which is how the seeded search is shown to list nothing.
 GitHub's Projects API is the loopback board `tests/github_board.py` serves, and the paid model
 is the provider's stand-in. The recipes, the engine, the store and its routing, the follow-up
@@ -47,6 +59,7 @@ from typing import NamedTuple
 import follow_up_boundary
 import follow_up_variables
 import github_board
+import onetaskgraph_user_layer
 import plan_root_variable
 import pytest
 import short_state
@@ -56,7 +69,6 @@ from github_board import (
     FOLLOWUPS_ENV_PREFIX,
     FOLLOWUPS_OPTIONS,
     FOLLOWUPS_PROJECT_NUMBER,
-    LINEAR_FOLLOWUPS_ENDPOINT_ENV,
     SIBLING_REPOSITORY,
     _board_cost,
     _follow_up_ticket,
@@ -65,7 +77,6 @@ from github_board import (
     _Repository,
     _serving_board,
 )
-from linear_stand_in import stand_in
 from nx_workspace import (
     answering_this_checkouts_origin,
     copy_working_tree,
@@ -94,13 +105,16 @@ PAID_PROVIDER_GUARD = helper("no-paid-provider")
 #: A reviewer's one answer for a launched plan: a pass naming no finding.
 PASSING_VERDICT = json.dumps({"passes": True, "findings": []})
 
-#: The two destinations, by the names the tracked configuration gives them.
+#: The two destinations: the tracked board, and the tracker the example user layer routes to.
 BOARD = tickets.BOARD
-LINEAR = "hellopatient-followups"
+LINEAR = onetaskgraph_user_layer.ORGANIZATION_FOLLOWUPS
+#: The organization's plans tracker the example layer also declares, stood in for as well so
+#: that nothing here can build a Linear source.
+LINEAR_PLANS = onetaskgraph_user_layer.ORGANIZATION_PLANS
 
-#: The repository each destination files: a petsinc one the board's route sends to Linear, and
+#: The repository each destination files: a hiddenco one the board's route sends to Linear, and
 #: one of the board's owner the loopback board knows.
-PETSINC = _Repository("petsinc", "hp-api")
+HIDDENCO = _Repository("hiddenco", "qh-api")
 LIBRARY = SIBLING_REPOSITORY
 
 #: The runs of this life: the one that files, the one that already filed what a later run
@@ -271,16 +285,20 @@ def _recording(checkout: Path) -> None:
 
 
 def _environment(tmp: Path, remote: Mapping[str, str]) -> dict[str, str]:
-    """What every launch here runs under: its own stores, ledger and provider stand-ins."""
+    """What every launch here runs under: its own stores, ledger and provider stand-ins.
+
+    Its configuration home carries the user layer the `routed` fixture installed, and its
+    `onevcs` state root registers every identity the journey's tickets name, the hiddenco one
+    private; the stand-in tracker is a folder, which takes no Linear endpoint.
+    """
     environment = {
         name: value
         for name, value in os.environ.items()
         if name not in INHERITED and not name.startswith(FOLLOWUPS_ENV_PREFIX)
     }
-    # The copy's `hellopatient-followups` is a folder, which takes no Linear endpoint.
-    environment.update(
-        {name: value for name, value in remote.items() if name != LINEAR_FOLLOWUPS_ENDPOINT_ENV}
-    )
+    environment.update(remote)
+    environment = follow_up_boundary.environment(environment)
+    environment[onetaskgraph_user_layer.XDG_CONFIG_HOME] = str(tmp / "config-home")
     environment[f"{FOLLOWUPS_ENV_PREFIX}CONFIG__PACING__MIN_MUTATION_INTERVAL_MS"] = "0"
     root_name, plugin_name, _ = follow_up_variables.all_names()
     environment[root_name] = str(tmp / "follow-ups")
@@ -304,7 +322,7 @@ def _environment(tmp: Path, remote: Mapping[str, str]) -> dict[str, str]:
     # A follow-up task is rendered from its template, so its launch runs under the
     # `require_rendered` default every launch outside the suite does.
     environment.pop(plan_check.REQUIRE_RENDERED_ENV, None)
-    return follow_up_boundary.environment(environment)
+    return environment
 
 
 def _run(bench: Bench, *command: str, seconds: float = 900) -> subprocess.CompletedProcess[str]:
@@ -624,9 +642,19 @@ def routed(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Routed]:
     copy_working_tree(checkout)
     answering_this_checkouts_origin(checkout)
     linear = tmp / LINEAR
-    linear.mkdir()
-    # llmlint: ignore[e2e_not_mocked] This node's amended criteria require a `local-md` source to stand in for `hellopatient-followups`, because no check may reach the production Linear workspace; `tests/test_plan_source_roots.py` holds the tracked source to the Linear plugin's schema.  # noqa: E501 - a directive is one line, and its reason is longer than the limit
-    stand_in(checkout, LINEAR, linear, copied=[tickets.Status.PROPOSED.value], visibility="private")
+    # llmlint: ignore[e2e_not_mocked] A `local-md` source stands in for each Linear source of the example user layer, because no check may reach a Linear workspace; `tests/test_plan_source_roots.py` holds the example's Linear sources to the Linear plugin's schema.  # noqa: E501 - a directive is one line, and its reason is longer than the limit
+    layer = onetaskgraph_user_layer.with_stand_ins(
+        {
+            LINEAR: onetaskgraph_user_layer.stand_in(
+                LINEAR, linear, tmp, copied=[tickets.Status.PROPOSED.value]
+            ),
+            LINEAR_PLANS: onetaskgraph_user_layer.stand_in(LINEAR_PLANS, tmp / LINEAR_PLANS, tmp),
+        }
+    )
+    onetaskgraph_user_layer.installed(
+        tmp / "config-home",
+        onetaskgraph_user_layer.screened(onetaskgraph_user_layer.without_private_stores(layer)),
+    )
     shared = share_this_checkouts_install(checkout)
     _recording(checkout)
     yield Routed(tmp, checkout, linear, shared)
@@ -640,8 +668,8 @@ def routed(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Routed]:
 # reads that one fixture rather than launching.
 # llmlint: ignore-block[e2e_not_mocked] Three boundaries are doubled and no more: the paid
 # provider process; GitHub's Projects API, the loopback board, because the live board is shared
-# by every run of this repository; and Linear, the folder the copy declares
-# `hellopatient-followups` as, because no check may reach the production workspace. The recipes,
+# by every run of this repository; and Linear, the folder the journey's user layer declares
+# `hiddenco-followups` as, because no check may reach the production workspace. The recipes,
 # engine, store, routing, follow-up tooling and every record read back are real.
 @pytest.fixture(scope="module")
 def life(routed: Routed, oneharness_bin: str) -> Iterator[Life]:  # noqa: PLR0915 - one life, phase by phase
@@ -673,14 +701,14 @@ def life(routed: Routed, oneharness_bin: str) -> Iterator[Life]:  # noqa: PLR091
         assert fields.returncode == 0, fields.stdout + fields.stderr
 
         # Filing: one draft per destination, verified into one ticket each and copied.
-        linear_draft = _draft(bench, FILER, "The intake form drops a field", PETSINC)
+        linear_draft = _draft(bench, FILER, "The intake form drops a field", HIDDENCO)
         board_draft = _draft(bench, FILER, "The listing cursor skips the last page", LIBRARY)
         linear_path = tickets.ticket_path(bench.drafts_root, FILER, FILED_LINEAR)
         board_path = tickets.ticket_path(bench.drafts_root, FILER, FILED_BOARD)
-        linear_ticket = _ticket(FILER, FILED_LINEAR, PETSINC, (linear_draft,))
+        linear_ticket = _ticket(FILER, FILED_LINEAR, HIDDENCO, (linear_draft,))
         board_ticket = _ticket(FILER, FILED_BOARD, LIBRARY, (board_draft,))
         filing = [
-            _searched(bench, PETSINC, FILED_LINEAR, tmp / "filer-search-linear.json"),
+            _searched(bench, HIDDENCO, FILED_LINEAR, tmp / "filer-search-linear.json"),
             _searched(bench, LIBRARY, FILED_BOARD, tmp / "filer-search-board.json"),
             _placed_and_copied(
                 bench,
@@ -787,7 +815,7 @@ def life(routed: Routed, oneharness_bin: str) -> Iterator[Life]:  # noqa: PLR091
 
         # The seeded search: an earlier run already filed both of the later run's root causes,
         # and one more run left evidence on the Linear one.
-        seeded_linear_item = _filed_earlier(bench, SEEDED_LINEAR, PETSINC)
+        seeded_linear_item = _filed_earlier(bench, SEEDED_LINEAR, HIDDENCO)
         seeded_board_item = _filed_earlier(bench, SEEDED_BOARD, LIBRARY)
         _commented(
             bench,
@@ -796,12 +824,12 @@ def life(routed: Routed, oneharness_bin: str) -> Iterator[Life]:  # noqa: PLR091
         )
         seeded_linear_before = _item(bench, seeded_linear_item)
         later_drafts = {
-            SEEDED_LINEAR: _draft(bench, LATER, "The intake sync retries forever", PETSINC),
+            SEEDED_LINEAR: _draft(bench, LATER, "The intake sync retries forever", HIDDENCO),
             SEEDED_BOARD: _draft(bench, LATER, "The export drops a column", LIBRARY),
         }
         later_commands: list[list[str]] = []
         for cause, repository, item in (
-            (SEEDED_LINEAR, PETSINC, seeded_linear_item),
+            (SEEDED_LINEAR, HIDDENCO, seeded_linear_item),
             (SEEDED_BOARD, LIBRARY, seeded_board_item),
         ):
             later_commands.append(_searched(bench, repository, cause, tmp / f"later-{cause}.json"))
@@ -1086,20 +1114,21 @@ def _queued_or_as_it_stands(bench: Bench, issue: str) -> dict[str, object]:
         time.sleep(0.2)
 
 
-def test_one_run_files_a_petsinc_root_cause_in_linear_and_another_on_the_board(
+def test_one_run_files_a_hiddenco_root_cause_in_linear_and_another_on_the_board(
     life: Life,
 ) -> None:
-    """The petsinc ticket lands in the Linear stand-in at `Proposed`, the other at `Proposal`.
+    """The hiddenco ticket lands in the Linear stand-in at `Proposed`, the other at `Proposal`.
 
-    `Proposed` is the state the tracked mapping writes `backlog` as; the stand-in reads the
-    copy at that category, under the word the copy carried (`linear_stand_in.py` says why).
+    `Proposed` is the state the example layer's mapping writes `backlog` as; the stand-in reads
+    the copy at that category, under the word the copy carried (`onetaskgraph_user_layer.py`
+    says why).
     """
     assert life.filed_linear_item.startswith(f"{LINEAR}:{FILER}/tickets/"), life.filed_linear_item
-    # The category the tracked mapping writes as `Proposed`, under the word the copy carried.
+    # The category the example's mapping writes as `Proposed`, under the word the copy carried.
     assert _status(life.linear_after_filing) == ("backlog", "backlog")
     assert tickets.linear_state(tickets.Status.PROPOSED) == "Proposed"
     assert life.linear_files_after_filing == [f"tasks/{FILER}/tickets/{FILED_LINEAR}.md"]
-    assert _record(life.linear_after_filing)["repository"] == _hosted(PETSINC)
+    assert _record(life.linear_after_filing)["repository"] == _hosted(HIDDENCO)
     assert _status(life.board_after_filing) == ("backlog", "proposal")
     assert life.board_issues_after_filing == 1
     assert _record(life.board_after_filing)["repository"] == _hosted(LIBRARY)
@@ -1117,6 +1146,12 @@ def test_the_closeouts_board_check_across_both_destinations_is_green(life: Life)
 
 
 def test_a_re_dispatch_binds_both_tickets_and_files_no_duplicate(life: Life) -> None:
+    """Both tickets stay bound, each to the item its first copy created, by what each copy kept.
+
+    The public board's item is followed by the store's link; the private tracker's, for which
+    the store records no link on the `drafts` ticket, by the ticket's own origin naming it. Both
+    items record the ticket they were copied from as their origin.
+    """
     linear_native = life.filed_linear_item.partition(":")[2]
     board_native = life.filed_board_item.partition(":")[2]
     assert [copy["destination"] for copy in life.redispatch_copies] == [
@@ -1127,19 +1162,25 @@ def test_a_re_dispatch_binds_both_tickets_and_files_no_duplicate(life: Life) -> 
     assert life.linear_files_after_redispatch == life.linear_files_after_filing
     assert life.board_issues_after_redispatch == life.board_issues_after_filing == 1
     linear, board = life.bindings[FILED_LINEAR], life.bindings[FILED_BOARD]
-    # The private item's copy link cannot be written into undeclared drafts. The
-    # existing binding mechanism steers subsequent copies by its explicit origin instead.
-    assert (linear.board_item, linear.link(LINEAR), linear.link(BOARD)) == (
+    assert (linear.board_item, linear.link(LINEAR), linear.link(BOARD), linear.origin) == (
         linear_native,
         None,
         None,
+        life.filed_linear_item,
     )
-    assert linear.origin == life.filed_linear_item
-    assert (board.board_item, board.link(BOARD), board.link(LINEAR)) == (
+    assert (board.board_item, board.link(BOARD), board.link(LINEAR), board.origin) == (
         board_native,
         board_native,
         None,
+        None,
     )
+    for item, cause in (
+        (life.linear_after_filing, FILED_LINEAR),
+        (life.board_after_filing, FILED_BOARD),
+    ):
+        metadata = item["metadata"]
+        assert isinstance(metadata, Mapping)
+        assert metadata[tickets.ORIGIN_KEY] == tickets.qualified_id(FILER, cause)
 
 
 def test_a_later_run_finds_each_destinations_open_ticket_by_root_cause_and_lists_nothing(

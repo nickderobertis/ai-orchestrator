@@ -1104,6 +1104,11 @@ def _one_task_plan(tmp_path: Path, tasks: object) -> dict[str, str]:
         ),
         (["lint", "-c", "x"], {}, "names --cwd 0 time(s)"),
         (["lint", "--cwd", ".", "--cwd=."], {}, "names --cwd 2 time(s)"),
+        (
+            ["lint", "--cwd", ".", "--cwd=."],
+            {"tasks": [{"task": "A brief naming no plan project.\n"}]},
+            "names --cwd 2 time(s)",
+        ),
         (["lint", "--cwd"], {}, "'--cwd' names no directory"),
     ],
 )
@@ -1114,12 +1119,19 @@ def test_an_invocation_the_script_cannot_serve_is_refused_naming_it(
     environment: dict[str, object],
     reason: str,
 ) -> None:
-    """Neither of its two forms, or a planning run it cannot read a brief from: exit 2."""
+    """Neither of its two forms, or a planning run it cannot read a brief from: exit 2.
+
+    A refusal leaves nothing in the temporary directory it was handed, the empty
+    directory a plan with no document is judged from included.
+    """
     tasks = environment.pop("tasks", None)
+    temporary = tmp_path / "temporary"
+    temporary.mkdir()
     planning = _one_task_plan(tmp_path, tasks) if tasks is not None else {}
     named = {
         "ONEPIPELINE_RUNS_DIR": str(tmp_path / "runs"),
         "ONEPIPELINE_RUN_ID": "plan-journey",
+        "TMPDIR": str(temporary),
         **planning,
         **{key: str(value) for key, value in environment.items()},
     }
@@ -1139,6 +1151,7 @@ def test_an_invocation_the_script_cannot_serve_is_refused_naming_it(
     assert ran.returncode == 2, ran.stdout + ran.stderr
     assert reason in ran.stderr, ran.stderr
     assert checklist.llmlint_runs() == [], "an invocation it could not serve reached llmlint"
+    assert sorted(path.name for path in temporary.iterdir()) == [], "a refusal left scratch behind"
 
 
 def test_without_llmlint_on_path_the_script_says_how_to_install_it(

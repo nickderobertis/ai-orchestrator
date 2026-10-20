@@ -93,7 +93,7 @@
               "ANTHROPIC_AUTH_TOKEN",
               "CLAUDE_CODE_OAUTH_TOKEN",
               "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
-              "HELLOPATIENT_LINEAR_API_KEY"
+              "<organization-linear-key>"
             ]
           }
         },
@@ -140,7 +140,7 @@
               "ANTHROPIC_AUTH_TOKEN",
               "CLAUDE_CODE_OAUTH_TOKEN",
               "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
-              "HELLOPATIENT_LINEAR_API_KEY"
+              "<organization-linear-key>"
             ]
           }
         },
@@ -187,7 +187,7 @@
               "ANTHROPIC_AUTH_TOKEN",
               "CLAUDE_CODE_OAUTH_TOKEN",
               "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
-              "HELLOPATIENT_LINEAR_API_KEY"
+              "<organization-linear-key>"
             ]
           }
         },
@@ -234,7 +234,7 @@
               "ANTHROPIC_AUTH_TOKEN",
               "CLAUDE_CODE_OAUTH_TOKEN",
               "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
-              "HELLOPATIENT_LINEAR_API_KEY"
+              "<organization-linear-key>"
             ]
           }
         }
@@ -310,7 +310,7 @@
           "unset_env": {
             "value": [
               "OPENAI_API_KEY",
-              "HELLOPATIENT_LINEAR_API_KEY"
+              "<organization-linear-key>"
             ]
           }
         },
@@ -350,7 +350,7 @@
           },
           "unset_env": {
             "value": [
-              "HELLOPATIENT_LINEAR_API_KEY"
+              "<organization-linear-key>"
             ]
           }
         }

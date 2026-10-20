@@ -43,14 +43,33 @@ AUTHORING_SOURCE = "authoring"
 AUTHORING_ROOT_ENV = f"ONETASKGRAPH_SOURCES__{AUTHORING_SOURCE.upper()}__CONFIG__ROOT"
 
 
-#: The credential the tracked `hellopatient` Linear source names.
-LINEAR_KEY_ENV = "HELLOPATIENT_LINEAR_API_KEY"
-#: Where every board journey points that source: a loopback port nothing listens on, so a
-#: request to it is refused on this machine and never reaches the production workspace.
+#: The credential the example user layer's Linear sources name
+#: (`config/onetaskgraph.user-layer.example.yaml`); the tracked document declares none.
+LINEAR_KEY_ENV = "HIDDENCO_LINEAR_API_KEY"
+#: Where a board journey whose user layer declares the example's Linear sources points them:
+#: a loopback port nothing listens on, so a request to one is refused on this machine and
+#: never reaches a Linear workspace.
 UNSERVED_LINEAR = "http://127.0.0.1:9/graphql"
-#: Where the `hellopatient-followups` source's endpoint is named, which the store spells with
-#: the source name's hyphen as an underscore.
-LINEAR_FOLLOWUPS_ENDPOINT_ENV = "ONETASKGRAPH_SOURCES__HELLOPATIENT_FOLLOWUPS__CONFIG__ENDPOINT"
+#: Where the example's `hiddenco-plans` and `hiddenco-followups` sources' endpoints are named,
+#: which the store spells with each source name's hyphen as an underscore.
+LINEAR_PLANS_ENDPOINT_ENV = "ONETASKGRAPH_SOURCES__HIDDENCO_PLANS__CONFIG__ENDPOINT"
+LINEAR_FOLLOWUPS_ENDPOINT_ENV = "ONETASKGRAPH_SOURCES__HIDDENCO_FOLLOWUPS__CONFIG__ENDPOINT"
+
+
+def unserved_linear(linear: bool) -> dict[str, str]:
+    """What points the example layer's Linear sources at :data:`UNSERVED_LINEAR`, if ``linear``.
+
+    Only a journey whose user layer declares those sources as Linear ones names ``linear``:
+    the tracked document declares neither, so an endpoint stated for one would be half a
+    source the store refuses, and a layer standing a folder in for one refuses the key.
+    """
+    if not linear:
+        return {}
+    return {
+        LINEAR_KEY_ENV: "fixture-linear-key",
+        LINEAR_PLANS_ENDPOINT_ENV: UNSERVED_LINEAR,
+        LINEAR_FOLLOWUPS_ENDPOINT_ENV: UNSERVED_LINEAR,
+    }
 
 
 @dataclass(frozen=True)
@@ -1804,6 +1823,8 @@ def _serving_board(
     refusal: _Refusal | None = None,
     options: tuple[_StatusOption, ...] = STATUS_OPTIONS,
     number: int = CONFIGURED_PROJECT_NUMBER,
+    *,
+    linear: bool = False,
 ) -> Iterator[dict[str, str]]:
     """Serve the board fixture, yielding the environment that points `plans` at it.
 
@@ -1816,6 +1837,8 @@ def _serving_board(
     diagnostic the source composes, and the source retries before it composes one.
     ``options`` are the Status options the board carries, and ``number`` the board number
     the source being served is configured with, which an issue's membership answers under.
+    ``linear`` says the caller's user layer declares the example's Linear sources, which
+    are then pointed at a port nothing serves (:func:`unserved_linear`).
     """
     _GitHubFixture.refusal = refusal
     try:
@@ -1824,13 +1847,11 @@ def _serving_board(
                 "GH_PROJECTS_TOKEN": "fixture-token",
                 "ONETASKGRAPH_SOURCES__PLANS__CONFIG__ENDPOINT": endpoint,
                 "ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__ENDPOINT": endpoint,
-                # A copy onto `plans` builds the source its route names, `hellopatient`, which
-                # refuses to build without its key; a journey that ever routed a task there
-                # fails on the refused connection instead of reaching the production workspace.
-                LINEAR_KEY_ENV: "fixture-linear-key",
-                "ONETASKGRAPH_SOURCES__HELLOPATIENT__CONFIG__ENDPOINT": UNSERVED_LINEAR,
-                # The same for the source the `followups` route names, `hellopatient-followups`.
-                LINEAR_FOLLOWUPS_ENDPOINT_ENV: UNSERVED_LINEAR,
+                # A copy onto `plans` or `followups` builds every source their routes name,
+                # which a Linear source refuses to do without its key; a journey whose user
+                # layer routes to the example's Linear sources says so, and a task routed
+                # there fails on the refused connection instead of reaching a workspace.
+                **unserved_linear(linear),
             }
     finally:
         _GitHubFixture.refusal = None

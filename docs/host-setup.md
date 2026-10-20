@@ -126,8 +126,9 @@ just repos-bootstrap
 
 It runs each registered checkout's **own** `just bootstrap` — every target repository
 defines one, and each is idempotent by that repository's design — reading the checkouts
-from the same tracked `config/onevcs.checkouts` that `just repos-apply` registers,
-through the same reader, and skipping a path this host does not have the same way. Two
+from the same list `just repos-apply` registers — this host's own complete
+`${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.checkouts` when it exists, the
+tracked `config/onevcs.checkouts` otherwise — through the same reader, and skipping a path this host does not have the same way. Two
 kinds of checkout are skipped on purpose: a checkout of this repository, because the
 session setup calling it is one of this repository's own and running
 `workspace-install.sh --force` in a checkout another manager is working in would
@@ -432,12 +433,22 @@ tracked, in four files, and one recipe applies them:
 just repos-apply
 ```
 
-- **`config/onevcs.checkouts`** — every checkout to register, one path per line.
+- **`config/onevcs.checkouts`** — every public checkout to register, one path per line.
   `onevcs register` resolves each path's own `origin` to a repository identity, so
   several checkouts of one origin (this repository's publication checkout and its
-  two safety clones) share one identity and therefore one policy.
-- **`config/onevcs.rules.yml`** — the rules file, installed to
-  `$ONEVCS_HOME/rules.yml`. First match wins; each rule names a repository and sets
+  two safety clones) share one identity and therefore one policy. **A host that also
+  works in private repositories keeps its own complete list** at
+  `${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.checkouts`, outside every
+  checkout: when it exists the recipe — and `just repos-bootstrap`, session setup's call
+  included — reads it in place of the tracked one, whole, so it repeats the public
+  entries it wants (`scripts/registered-checkouts.sh` makes the one choice for both).
+- **`config/onevcs.rules.yml`** — the base rules file, installed to
+  `$ONEVCS_HOME/rules.yml` by `onevcs rules apply --base config/onevcs.rules.yml`, with
+  this host's overlay `${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.rules.yml`
+  laid over it as `--overlay` when that file exists. The verb composes, validates and
+  installs atomically at the registry's own rules reference; a private repository's rule
+  lives only in the overlay, declaring the identity's `visibility: private` so the host
+  is never asked. First match wins; each rule names a repository and sets
   how it publishes (`publication`), whether somebody else has to approve
   (`approvals`), and what verifies it (`gate`). Its `trailer_prefix` is separate
   from the rules and applies to all of them: `Orchestrator-` is the prefix every
@@ -455,8 +466,7 @@ just repos-apply
   which is what a consumer naming no `consumes` waits for. Every rule merges the
   producer's own `release-targets.toml` and restates no target of its own, and the
   file's header says why this repository's rung is `published`. The candidate is
-  validated through `onevcs release targets` in the same scratch home
-  the rules are, so a document `onevcs` cannot load — a rung it does not know, a
+  validated through `onevcs release targets` in a scratch home, so a document `onevcs` cannot load — a rung it does not know, a
   `default_target` naming no target — is refused by name and replaces nothing.
 - **`config/onevcs.workspaces.yml`** — the workspaces file, installed to
   `$ONEVCS_HOME/workspaces.yml`. It sizes each identity's pool of warm worktree slots

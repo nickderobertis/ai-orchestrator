@@ -18,7 +18,11 @@ links every entry of the invoking user's configuration home — `gh`, `uv`,
 `ai-orchestrator` and the rest — so every other tool reading its own directory there reads
 exactly what it read before; the one entry it does not link is the plan store's own
 directory, which it holds empty, so neither the user layer nor the store's `secrets.env`
-reaches a test. A test that exercises a user layer writes one under a configuration home
+reaches a test. The same holds for ai-orchestrator's own host layers, its complete checkout
+list and its rules overlay (`HOST_LAYERS`), which `just repos-apply` and `just repos-bootstrap`
+select in place of the tracked files and which would make either answer for this host's
+private registrations instead of the tracked tree: that directory is linked entry by entry
+with those two left out. A test that exercises a user layer writes one under a configuration home
 it names itself, which overrides this one in the environment it composes; a test that
 redirects `HOME` to sandbox a program deriving its configuration from it names
 `XDG_CONFIG_HOME` beside it, because this export would otherwise win over that derivation.
@@ -66,6 +70,10 @@ USER_DOCUMENT = "config.yaml"
 #: Where the invoking user's configuration home is, for a pytest process this one starts.
 #: No tool reads it.
 HOST_CONFIG_HOME_ENV = "ORCHESTRATOR_TEST_HOST_CONFIG_HOME"
+#: ai-orchestrator's directory under a configuration home, and the host layers in it that
+#: `scripts/registered-checkouts.sh` and `just repos-apply` read in place of tracked files.
+ORCHESTRATOR_DIRECTORY = "ai-orchestrator"
+HOST_LAYERS = ("onevcs.checkouts", "onevcs.rules.yml")
 #: The prefix of every setting the store reads for one source from the environment.
 SOURCE_SETTING_PREFIX = "ONETASKGRAPH_SOURCES__"
 #: The variable Bun reads its install cache from before any configuration file.
@@ -115,7 +123,7 @@ def bun_cache(environment: Mapping[str, str]) -> str | None:
 
 
 def isolate() -> Path:
-    """Export a configuration home linking the host's, with an empty plan-store directory.
+    """Export a configuration home linking the host's, with no plan-store or checkout layer.
 
     Bun's cache is stated first, where Bun finds it now, because the move would change it,
     and every plan-store source setting the environment carries is unset, because it is the
@@ -131,9 +139,14 @@ def isolate() -> Path:
     atexit.register(shutil.rmtree, sandbox, ignore_errors=True)
     if host is not None and host.is_dir():
         for entry in host.iterdir():
-            if entry.name != STORE_DIRECTORY:
+            if entry.name not in (STORE_DIRECTORY, ORCHESTRATOR_DIRECTORY):
                 (sandbox / entry.name).symlink_to(entry)
     (sandbox / STORE_DIRECTORY).mkdir()
+    (sandbox / ORCHESTRATOR_DIRECTORY).mkdir()
+    if host is not None and (host / ORCHESTRATOR_DIRECTORY).is_dir():
+        for entry in (host / ORCHESTRATOR_DIRECTORY).iterdir():
+            if entry.name not in HOST_LAYERS:
+                (sandbox / ORCHESTRATOR_DIRECTORY / entry.name).symlink_to(entry)
     if host is not None:
         os.environ[HOST_CONFIG_HOME_ENV] = str(host)
     os.environ[CONFIG_HOME_ENV] = str(sandbox)

@@ -1,0 +1,120 @@
+# The shape of a host's onetaskgraph user layer, over synthetic names.
+#
+# A host keeps the real one at `${XDG_CONFIG_HOME:-$HOME/.config}/onetaskgraph/config.yaml`,
+# outside every checkout, and the store reads it beneath this repository's `onetaskgraph.yaml`:
+# a key the tracked document leaves unset — a source it does not define, a source's `routes` —
+# comes from here. Nothing in this file is read on any host; it states the shape the real layer
+# takes, every name in it synthetic, and the suite's journeys install it, with their own stand-in
+# roots, as the layer they drive (`docs/orchestration.md`, *Host-local sources and routes*).
+#
+# What a host puts here and nowhere tracked:
+#
+#   - an organization's own sources — its tracker for plans and for follow-up tickets — and
+#     the repository routes that send that organization's work to them from `plans` and
+#     `followups`;
+#   - this host's own private stores, which a person writes to by naming them. No
+#     classification route reaches them from `plans` or `followups`: under the adopted store a
+#     classification route is tried before every repository route and routes never chain, so
+#     one there would capture the organization's work too.
+#
+# No source here declares a `visibility`. The tracked document lands the store's public
+# boundary off, and any visibility declared in this layer switches it on for every checkout on
+# the host, as a `write_policy` does (`docs/orchestration.md`, *The public write boundary*). A
+# host switching it on declares every source here `visibility: private`, the tracked boards
+# `visibility: public`, and the `write_policy` beside them, all at once; a private item written
+# to `plans` is then refused, which is the safe failure. A layer adds destinations and that
+# policy, never a looser one.
+sources:
+  plans:
+    routes:
+      - repositories: ["github.com/hiddenco/*"]
+        to: hiddenco-plans
+  followups:
+    routes:
+      - repositories: ["github.com/hiddenco/*"]
+        to: hiddenco-followups
+  # The organization's tracker for plans: a Linear team, verified private once per source by
+  # the store, its credential named rather than held.
+  hiddenco-plans:
+    plugin: linear
+    config:
+      api_key_env: HIDDENCO_LINEAR_API_KEY
+      team: ENG
+      # Categories describe both a plan task and its member project: backlog is proposed,
+      # draft deferred, todo accepted but unclaimed, queued claimed but not started,
+      # in-progress working, unknown needing attention, done finished, cancelled withdrawn.
+      status_mapping:
+        backlog: { task: Proposed, project: Proposal }
+        draft: { task: Backlog, project: Idea }
+        todo: { task: Todo, project: Planned }
+        queued: { task: Queued, project: Accepted }
+        in-progress: In Progress
+        unknown: { task: Needs Attention, project: Blocked }
+        done: { task: Done, project: Completed }
+        cancelled: Canceled
+    cache:
+      enabled: true
+  # The organization's tracker for follow-up tickets: one project of the same team, so every
+  # read and create of this source is scoped to it. The same eight states as its plans source,
+  # because both write the team's one workflow.
+  hiddenco-followups:
+    plugin: linear
+    config:
+      api_key_env: HIDDENCO_LINEAR_API_KEY
+      team: ENG
+      project: 0f3c9d2a-5b1e-4c7a-9e21-6d8b4a1f2c03
+      # `Triage` and the review states — `Ready for Review`, `In Review`, `Reviewed`,
+      # `Ready To Merge`, `Blocked`, `Duplicate` and `Cannot Reproduce` — are people's, and no
+      # follow-up run writes them.
+      status_mapping:
+        backlog: Proposed
+        draft: Backlog
+        todo: Todo
+        queued: Queued
+        in-progress: In Progress
+        unknown: Needs Attention
+        done: Done
+        cancelled: Canceled
+    cache:
+      enabled: true
+  # This host's own private plans board: a GitHub Project and the issue repository its items
+  # live in, both private, which the store reads before every write.
+  private-plans:
+    plugin: github-projects
+    config:
+      owner: sample-owner
+      project_number: 41
+      repository: sample-owner/private-store
+      token_env: GH_PROJECTS_TOKEN
+      status_mapping:
+        unknown: Needs attention
+        queued: Queued
+        done: Done
+        cancelled: Cancelled
+    cache:
+      enabled: true
+  # This host's own private follow-up board, shaped as `followups` is.
+  private-followups:
+    plugin: github-projects
+    config:
+      owner: sample-owner
+      project_number: 42
+      repository: sample-owner/private-store
+      token_env: GH_PROJECTS_TOKEN
+      status_mapping:
+        backlog: Proposal
+        draft: Deferred
+        queued: Queued
+        done: Done
+        cancelled: Cancelled
+      priority_mapping:
+        urgent: Urgent
+        high: High
+        medium: Medium
+        low: Low
+      metadata_fields:
+        - field: Host
+          key: orchestrator.follow-up
+          path: [host]
+    cache:
+      enabled: true

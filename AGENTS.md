@@ -584,13 +584,21 @@ run's settlements are projected back to the project it was launched from
 source, the board every session's verified follow-up tickets accumulate on, are never
 repointed either, because a later run comments on an earlier run's issue there.
 
-<!-- llmlint: ignore-block[agents_md_durable_and_terse] This node's acceptance criteria require the manager's own document to state where a plan's home and members land and what each Linear state means for a plan task, because a manager reads a plan's Linear items from here; docs/orchestration.md keeps the fuller table, and tests/plan_guidance/test_plan_store_guidance.py holds this paragraph's state names and route to the configured mapping and route. -->
-**A task of a `github.com/petsinc/*` repository lands in Hello Patient's Linear,
-`hellopatient`, by the `plans` route and never by choice**, so author a plan spanning both orgs
-as one project. Its home goes to `hellopatient` only when every task is petsinc's, and
-otherwise stays on `plans` beside a `hellopatient` member project; approve and launch the
-home id `just finish-plan` reports. There a plan task reads Todo once copied,
-Queued once a run claims it, In Progress while its node works, Needs Attention when that node
+<!-- llmlint: ignore-block[agents_md_durable_and_terse] This node's acceptance criteria require the manager's own document to state where a plan's home and members land and what each Linear state means for a plan task, because a manager reads a routed plan's Linear items from here; docs/orchestration.md keeps the fuller table, and tests/plan_guidance/test_plan_store_guidance.py holds this paragraph's state names to the mapping `config/onetaskgraph.user-layer.example.yaml` declares. -->
+**An organization's repositories land in that organization's own tracker by a route the
+host declares, never by choice** — in onetaskgraph's user layer, outside every checkout,
+so no tracked file names the organization or where its work goes (`docs/orchestration.md`,
+*Host-local sources and routes*). A follow-up ticket whose repositories all match such a
+route is filed there; read where one lands with `just plans sources route plans --repository
+<origin>`. While the store's public boundary is off, as this host lands it, a plan whose
+every task is routed lands whole in the routed tracker, and any other plan's home stays on
+`plans` beside a member project there; approve and launch the home id `just finish-plan`
+reports. **A host that switches the boundary on never splits a plan touching private work
+across a public board**: its tasks are private and so is the plan, which `plans` refuses
+whatever the routes say, so an all-organization plan is copied straight to its tracker
+(`just finish-plan <brief> --to <source>`) and a mixed one is authored as two
+(`docs/orchestration.md`, *The public write boundary*). On a routed Linear tracker a plan
+task reads Todo once copied, Queued once a run claims it, In Progress while its node works, Needs Attention when that node
 failed, parked or was skipped, and Done once it settled; Proposed, Backlog and Canceled are
 proposed, deferred and withdrawn. The member project reads Planned once copied,
 Accepted once claimed, In Progress while working, Blocked when attention is needed, and
@@ -1170,9 +1178,8 @@ updates whichever carrier the store lists first.
 changes. One whose fix changes one repository has its issue created in it, which must be
 under the board's owner, as an item of the one board; a ticket naming a repository outside
 that owner is refused and reported, never filed — unless the board's route sends it
-elsewhere: a `github.com/petsinc/*` root cause's ticket is filed in Hello Patient's Linear,
-`hellopatient-followups`, an issue of its Agent Follow-ups project, where that team triages
-it under the same contract. One listing several is filed as the store files a task naming
+elsewhere: a route the host declares in its user layer files an organization's root cause
+in that organization's own tracker, where its team triages it under the same contract. One listing several is filed as the store files a task naming
 several — in the board's configured repository, and routed only when every repository it
 lists matches the route. A ticket's record's `host` names the
 machine its verification ran on, and its evidence states the same host. The `followups`
@@ -1247,7 +1254,7 @@ hold the board to the recount.
 
 **A brief for a run that works accepted tickets has each node's task record name its
 ticket** in the store's `delivers` field, as a qualified `followups:<native-id>` — or
-`hellopatient-followups:<native-id>` for a ticket filed in Hello Patient's Linear — one
+`<routed source>:<native-id>` for a ticket a host route filed elsewhere — one
 ticket per node of a plan. Name a ticket only once it is at `Todo`, on either destination:
 one at `Proposal` or `Deferred` (Linear's `Proposed` or `Backlog`) is left alone. The ticket's status follows its node by the store's rule over
 every task delivering it, which onetaskgraph's documentation states. A failed first
@@ -1727,8 +1734,8 @@ environment already defines; so do the board recipes — `just plans`, `just che
 that file when the store refuses for a credential this process does not hold, because
 a board read needs the board's token where a run view needs nothing and loads nothing.
 A dispatch is handed none of it: every `oneharness.*.toml` masks the plan store's two
-credentials, `GH_PROJECTS_TOKEN` and the production Linear key
-`HELLOPATIENT_LINEAR_API_KEY`, from its chain except the design-document pair and the
+credentials, `GH_PROJECTS_TOKEN` and an organization's production Linear key
+(named in the masks themselves), from its chain except the design-document pair and the
 follow-up role, which read and write the store, and `oneharness.board-live.toml`, which
 releases the board token alone to a plan node that names it, while the board nomination travels so a lane handed it and no token
 skips and says why. That file wins over onetaskgraph's machine-wide `secrets.env` by

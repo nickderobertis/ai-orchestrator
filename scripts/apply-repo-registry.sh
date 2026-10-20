@@ -2,8 +2,15 @@
 # Bring this host's `onevcs` registry up to the tracked repository configuration.
 #
 # Four tracked files describe it: `config/onevcs.checkouts` lists every checkout to
-# register, `config/onevcs.rules.yml` is the rules file that decides how each
-# resulting identity publishes and what verifies it, `config/onevcs.releases.yml`
+# register — unless this host keeps its own complete list at
+# `${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.checkouts`, which then replaces
+# it whole (`scripts/registered-checkouts.sh` makes that choice for this script and for
+# `scripts/repos-bootstrap.sh` alike) — `config/onevcs.rules.yml` is the base rules file
+# that decides how each resulting identity publishes and what verifies it, installed by
+# `onevcs rules apply` with this host's overlay at
+# `${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.rules.yml` laid over it when
+# that file exists, so a private identity's rule never sits in a tracked file,
+# `config/onevcs.releases.yml`
 # is the release override that decides which rung a node of each repository adopts a
 # dependency's release on and which of a producer's targets a consumer naming none
 # waits for, and `config/onevcs.workspaces.yml` is the workspaces file that sizes
@@ -19,7 +26,9 @@
 # It is the reproducible form of the migration off the pre-adoption
 # `~/.ai-orchestrator/repos.json` registry, and it is re-runnable: registration is
 # keyed by alias and each installed file is a whole-file replacement, so a second run
-# leaves the same registry a first one did. Run it after editing any tracked file,
+# leaves the same registrations and policy a first one did — only the visibility
+# observation `onevcs` stamps on each identity it re-registers moves. Run it after
+# editing any tracked file or this host's overlay,
 # and on a new host after cloning the checkouts.
 #
 # Registration goes through `onevcs register`, never through the registry document
@@ -55,7 +64,7 @@ valid_alias() {
     [[ $1 =~ ^[A-Za-z0-9._-]+$ ]]
 }
 
-checkouts_file="$repo_root/config/onevcs.checkouts"
+checkouts_file=$(default_checkouts_file "$repo_root")
 rules_file="$repo_root/config/onevcs.rules.yml"
 releases_file="$repo_root/config/onevcs.releases.yml"
 workspaces_file="$repo_root/config/onevcs.workspaces.yml"
@@ -66,8 +75,10 @@ usage() {
 usage: apply-repo-registry.sh [--dry-run] [--checkouts FILE] [--rules FILE] [--releases FILE] [--workspaces FILE]
 
   --dry-run         Report what would change and change nothing.
-  --checkouts FILE  Read the checkout list from FILE (default config/onevcs.checkouts).
-  --rules FILE      Install FILE as the rules file (default config/onevcs.rules.yml).
+  --checkouts FILE  Read the checkout list from FILE (default: this host's
+                    ${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.checkouts when
+                    it exists, else config/onevcs.checkouts).
+  --rules FILE      Use FILE as the base rules file (default config/onevcs.rules.yml).
   --releases FILE   Install FILE as the release override (default config/onevcs.releases.yml).
   --workspaces FILE Install FILE as the workspaces file (default config/onevcs.workspaces.yml).
 
@@ -75,6 +86,9 @@ The registry it writes is `$ONEVCS_HOME` (`~/.onevcs` when that is unset). The
 workspaces file it installs is the candidate overlaid by this host's own
 `${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/workspaces.yml` when that exists —
 its `default` keys and its `rules` by `match` win — and the candidate alone otherwise.
+The rules are installed by `onevcs rules apply --base FILE`, with
+`${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.rules.yml` as its `--overlay`
+when that exists.
 USAGE
 }
 
@@ -122,8 +136,6 @@ if [[ -z ${HOME:-} || $HOME != /* || ! -d $HOME ]]; then
     exit 2
 fi
 
-registry_document="$onevcs_home/registry.json"
-installed_rules="$onevcs_home/rules.yml"
 installed_releases="$onevcs_home/releases.yml"
 installed_workspaces="$onevcs_home/workspaces.yml"
 
@@ -135,6 +147,16 @@ if [[ ${XDG_CONFIG_HOME-} == /* ]]; then
     host_workspaces="$XDG_CONFIG_HOME/ai-orchestrator/workspaces.yml"
 else
     host_workspaces="$HOME/.config/ai-orchestrator/workspaces.yml"
+fi
+host_rules="$(dirname -- "$host_workspaces")/onevcs.rules.yml"
+# The arguments `onevcs rules apply` composes and installs the rules from: the base, then
+# this host's overlay when it has one. Composition, validation and the atomic install at
+# the registry's own rules reference are the verb's, so nothing here re-implements them.
+rules_apply=(--base "$rules_file")
+rules_source="$rules_file"
+if [[ -f $host_rules ]]; then
+    rules_apply+=(--overlay "$host_rules")
+    rules_source="$rules_file overlaid by $host_rules"
 fi
 
 # The same `uv run` the `onevcs` recipes reach the CLI through, for the two verbs no
@@ -156,30 +178,6 @@ unchanged_install() {
         *) echo "apply-repo-registry: comparing $1 with $2 failed" >&2; exit 1 ;;
     esac
 }
-
-# A registry that names its own rules file elsewhere would ignore the one installed
-# below, so the policy an operator reads here and the policy a publication resolves
-# would be different documents. There is no command that repoints it, so this stops
-# rather than writing a file nothing reads.
-if [[ -f $registry_document ]]; then
-    if ! referenced=$(python3 -c '
-import json, sys
-document = json.load(open(sys.argv[1], encoding="utf-8"))
-rules = document.get("rules")
-if rules is not None and not isinstance(rules, str):
-    raise ValueError("registry rules must be a path string")
-print(rules or "")
-' "$registry_document"); then
-        echo "apply-repo-registry: cannot read a valid registry from $registry_document" >&2
-        exit 1
-    fi
-    if [[ -n $referenced && $referenced != "$installed_rules" ]]; then
-        echo "apply-repo-registry: $registry_document names its rules file as $referenced," >&2
-        echo "  so the copy this script installs at $installed_rules would be ignored." >&2
-        echo "  Point that reference at $installed_rules, or install the rules there instead." >&2
-        exit 1
-    fi
-fi
 
 echo "apply-repo-registry: registry $onevcs_home"
 
@@ -205,23 +203,32 @@ if [[ -f $host_workspaces ]]; then
         echo "apply-repo-registry: could not create scratch for the composed workspaces file" >&2
         exit 1
     }
+    # Armed as soon as the scratch exists, so every refusal from here on — the rules,
+    # the checkout list, the validation home — removes it too.
+    trap discard_composed EXIT
     if ! uv run --project "$repo_root" orchestrator-workspaces-overlay \
         "$workspaces_file" "$host_workspaces" >"$composed_workspaces"; then
         echo "apply-repo-registry: $host_workspaces cannot be overlaid on $workspaces_file" >&2
-        discard_composed
         exit 1
     fi
     workspaces_source="$workspaces_file overlaid by $host_workspaces"
 fi
 
-rules_unchanged=$(unchanged_install "$rules_file" "$installed_rules")
 releases_unchanged=$(unchanged_install "$releases_file" "$installed_releases")
 workspaces_unchanged=$(unchanged_install "$composed_workspaces" "$installed_workspaces")
+
+# The rules are validated before anything is registered, by the verb that installs them:
+# a dry run composes and validates the base and overlay and installs nothing. Its report
+# is the composed document, which names whatever the overlay names, so it is not echoed.
+if ! validation=$(repo_onevcs rules apply "${rules_apply[@]}" --dry-run 2>&1 >/dev/null); then
+    echo "$validation" >&2
+    echo "apply-repo-registry: $rules_source is not a valid onevcs rules composition" >&2
+    exit 1
+fi
 
 present=0
 skipped=0
 aliases=()
-first_path=""
 
 # The list is read whole before anything is registered, so a line the reader refuses
 # refuses the run before it has changed the registry at all.
@@ -233,7 +240,6 @@ while IFS= read -r path; do
         skipped=$((skipped + 1))
         continue
     fi
-    [[ -n $first_path ]] || first_path=$path
     if [[ $dry_run == true ]]; then
         echo "  would register  $path"
         present=$((present + 1))
@@ -254,16 +260,15 @@ while IFS= read -r path; do
     present=$((present + 1))
 done <<<"$listed"
 
-# Validate the supplied rules through `onevcs` before replacing the live file.
-# A scratch registration gives `rules check` a real identity to resolve while
-# keeping malformed configuration away from the registry this run is repairing.
+# The release override and the workspaces file are validated in a scratch home before the
+# live copies move, through the verbs that load them.
 validation_home=$(mktemp -d) || {
-    echo "apply-repo-registry: could not create temporary rules validation storage" >&2
+    echo "apply-repo-registry: could not create temporary validation storage" >&2
     exit 1
 }
 cleanup_validation() {
     if [[ -d $validation_home ]] && ! rm -rf -- "$validation_home"; then
-        echo "apply-repo-registry: could not remove temporary rules validation storage" >&2
+        echo "apply-repo-registry: could not remove temporary validation storage" >&2
     fi
     discard_composed
 }
@@ -271,13 +276,13 @@ trap cleanup_validation EXIT
 validation_register() {
     if ! registration=$(ONEVCS_HOME=$validation_home repo_recipe register-repo "$1" 2>&1); then
         echo "$registration" >&2
-        echo "apply-repo-registry: could not prepare rules validation with $1" >&2
+        echo "apply-repo-registry: could not prepare validation with $1" >&2
         exit 1
     fi
     registered_alias=$(awk '/^ *alias: /{print $2; exit}' <<<"$registration")
     if ! valid_alias "$registered_alias"; then
         echo "$registration" >&2
-        echo "apply-repo-registry: rules validation registration named no alias" >&2
+        echo "apply-repo-registry: validation registration named no alias" >&2
         exit 1
     fi
     echo "$registered_alias"
@@ -298,23 +303,10 @@ if ! mkdir "$synthetic_path" || \
     ! git -C "$synthetic_path" init -q -b main || \
     ! git -C "$synthetic_path" remote add origin https://github.com/validation/registry-rules.git || \
     ! git -C "$synthetic_path" config credential.helper ""; then
-    echo "apply-repo-registry: could not prepare a checkout for rules validation" >&2
+    echo "apply-repo-registry: could not prepare a checkout for validation" >&2
     exit 1
 fi
 synthetic_alias=$(validation_register "$synthetic_path")
-validation_alias=$synthetic_alias
-if [[ -n $first_path ]]; then
-    validation_alias=$(validation_register "$first_path")
-fi
-if ! cp -- "$rules_file" "$validation_home/rules.yml"; then
-    echo "apply-repo-registry: could not stage $rules_file for validation" >&2
-    exit 1
-fi
-if ! validation=$(ONEVCS_HOME=$validation_home repo_recipe repo-policy "$validation_alias" 2>&1); then
-    echo "$validation" >&2
-    echo "apply-repo-registry: $rules_file is not a valid onevcs rules file" >&2
-    exit 1
-fi
 # The override is validated in the same scratch home, through the one verb that loads
 # it: `release targets` refuses a malformed document by name, and a rule matching
 # nothing — every rule, against the synthetic identity — is fine.
@@ -344,7 +336,7 @@ if ! validation=$(ONEVCS_HOME=$validation_home repo_onevcs pool status "$synthet
     exit 1
 fi
 if ! rm -rf -- "$validation_home"; then
-    echo "apply-repo-registry: could not remove temporary rules validation storage" >&2
+    echo "apply-repo-registry: could not remove temporary validation storage" >&2
     exit 1
 fi
 trap - EXIT
@@ -352,11 +344,7 @@ trap - EXIT
 trap discard_composed EXIT
 
 if [[ $dry_run == true ]]; then
-    if [[ $rules_unchanged == true ]]; then
-        echo "  rules      unchanged  $installed_rules"
-    else
-        echo "  rules      would install  $installed_rules"
-    fi
+    echo "  rules      would install  (from $rules_source)"
     if [[ $releases_unchanged == true ]]; then
         echo "  releases   unchanged  $installed_releases"
     else
@@ -388,12 +376,12 @@ install_whole() {
     fi
 }
 
-if [[ $rules_unchanged == true ]]; then
-    echo "  rules      unchanged  $installed_rules"
-else
-    install_whole "$rules_file" "$installed_rules"
-    echo "  rules      installed  $installed_rules"
+if ! installed=$(repo_onevcs rules apply "${rules_apply[@]}" 2>&1); then
+    echo "$installed" >&2
+    echo "apply-repo-registry: installing the rules from $rules_source failed" >&2
+    exit 1
 fi
+echo "  rules      ${installed#installed: }  (from $rules_source)"
 if [[ $releases_unchanged == true ]]; then
     echo "  releases   unchanged  $installed_releases"
 else
@@ -446,7 +434,7 @@ for alias_name in ${aliases[@]+"${aliases[@]}"}; do
 done
 
 if [[ ${#unmatched[@]} -gt 0 ]]; then
-    echo "apply-repo-registry: no rule in $rules_file matches ${unmatched[*]}," >&2
+    echo "apply-repo-registry: no rule in $rules_source matches ${unmatched[*]}," >&2
     echo "  so each would publish under the reviewed default instead of this host's policy." >&2
     echo "  Add a rule naming its host, owner, and name, then re-run." >&2
     exit 1

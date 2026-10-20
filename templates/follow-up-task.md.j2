@@ -222,9 +222,9 @@ louder rather than duplicated.
   `repositories` lists route it to — a route takes it only when every one of them matches —
   which `{{ plan_store }} sources route {{ board }} --repository <each repository it lists> --json`
   answers from configuration alone — `{{ board }}` itself, a GitHub Projects board whose
-  items are GitHub issues, or the source one of its routes names, such as Hello Patient's
-  Linear, whose Agent Follow-ups project holds a `github.com/petsinc/*` root cause's ticket as
-  a Linear issue. Every command below that takes `--board` takes `{{ board }}` and acts on each
+  items are GitHub issues, or the source one of its routes names, such as an organization's
+  own tracker, which a route this host declares outside every checkout sends that
+  organization's root causes to. Every command below that takes `--board` takes `{{ board }}` and acts on each
   ticket at its own board, and an item there is named `<its board>:<id>`. A board is never
   listed whole: reading every item of one spends a share of its API's allowance — GitHub's
   hourly one on `{{ board }}` — that grows with the board, and every session on this host
@@ -494,17 +494,16 @@ A ticket is a local Markdown task in the `{{ shape.drafts_source }}` source, wri
   repository lists that one, and the record's `repository` — the repository its issue is
   filed in — names it too: on a GitHub board its issue is created in that one repository
   and added to the board as an item, and that repository must belong to the board's owner, as
-  `github.com/<owner>/<name>`. A repository one of the board's routes names —
-  `github.com/petsinc/*`, which goes to Hello Patient's Linear — is filed as an issue of the
-  source that route names instead, whatever its owner.
+  `github.com/<owner>/<name>`. A repository one of the board's routes names is filed as an
+  issue of the source that route names instead, whatever its owner.
 - **A ticket listing several repositories is filed in the board's default repository rather
   than in any one of them**, as the store files a task naming several: on a GitHub board its
   issue is created in the repository that board's configuration names, and its record's
   `repository` names that default repository — `{{ validate }}` refuses the ticket naming it
   otherwise. It takes a route only when every repository it lists matches that route, so a
-  ticket listing a `github.com/petsinc/*` repository beside one elsewhere stays on
-  `{{ board }}`; one a route takes to a board filing no issue in a repository, such as Hello
-  Patient's Linear, names one of the repositories it lists as its record's `repository`.
+  ticket listing a routed repository beside one elsewhere stays on `{{ board }}`; one a route
+  takes to a board filing no issue in a repository, such as a Linear tracker, names one of the
+  repositories it lists as its record's `repository`.
 - Its title is `<repository name>: <the invariant in one line>`, at most
   {{ shape.title_limit }} characters, where the repository name is the last segment of `repository`,
   and its `<root-cause>` slug names the invariant rather than a file.

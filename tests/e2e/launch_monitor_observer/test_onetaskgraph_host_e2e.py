@@ -40,7 +40,6 @@ from github_board import (
     FOLLOWUPS_OPTIONS,
     FOLLOWUPS_PROJECT_NUMBER,
     LARGEST_PAGE,
-    LINEAR_KEY_ENV,
     MEASURED_SEARCH_PAGE_PRICES,
     NEEDS_ATTENTION,
     OTHER_ITEMS,
@@ -56,7 +55,6 @@ from github_board import (
     STATUS_OPTIONS,
     STORE_FIRST_SEARCH_PAGE,
     TICKET_LIFECYCLE_BUDGET,
-    UNSERVED_LINEAR,
     RequestCost,
     _audit_follow_up_calls,
     _Board,
@@ -365,10 +363,6 @@ def _serving_both_boards() -> Iterator[dict[str, str]]:
             "ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__ENDPOINT": followups,
             "ONETASKGRAPH_SOURCES__PLANS__CONFIG__PACING__MIN_MUTATION_INTERVAL_MS": "0",
             "ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__PACING__MIN_MUTATION_INTERVAL_MS": "0",
-            # The source the `plans` route names, built by every copy onto `plans`, for the
-            # reason `_serving_board` gives.
-            LINEAR_KEY_ENV: "fixture-linear-key",
-            "ONETASKGRAPH_SOURCES__HELLOPATIENT__CONFIG__ENDPOINT": UNSERVED_LINEAR,
         }
 
 
@@ -428,7 +422,7 @@ def _write_local_project(root: Path) -> None:
 
 
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split] This journey's placement in its module's tier, now `launch-monitor-observer:test`, predates this change, which only accounts  # noqa: E501
-# for the `hellopatient` source the adopted configuration adds; it is a Python journey over the
+# for the routed source the adopted configuration once added; it is a Python journey over the
 # real recipe like every board journey beside it, and re-homing them is enforcement
 # configuration this change may not move.
 def test_credentialed_plan_store_reads_local_and_remote_sources(tmp_path: Path) -> None:
@@ -454,9 +448,8 @@ def test_credentialed_plan_store_reads_local_and_remote_sources(tmp_path: Path) 
 
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
-    # `hellopatient` is a default source too, and Linear is not what this serves: its own
-    # read refuses, and no other source may.
-    assert {error["source"] for error in payload["errors"]} <= {"hellopatient"}, payload["errors"]
+    # Every default source is the tracked document's and answers here: no source refuses.
+    assert payload["errors"] == [], payload["errors"]
     titles = {item["item"]["title"] for item in payload["items"]}
     assert {"launch", BOARD_PROJECT_TITLE}.issubset(titles)
     assert BOARD.title not in titles, (
@@ -490,7 +483,7 @@ def test_credentialed_plan_store_reads_local_and_remote_sources(tmp_path: Path) 
 
 
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split] This journey's placement in its module's tier, now `launch-monitor-observer:test`, predates this change, which only accounts  # noqa: E501
-# for the `hellopatient` source the adopted configuration adds; it is a Python journey over the
+# for the routed source the adopted configuration once added; it is a Python journey over the
 # real recipe like every board journey beside it, and re-homing them is enforcement
 # configuration this change may not move.
 def test_project_copy_files_its_issues_in_the_configured_repository(tmp_path: Path) -> None:
@@ -1903,10 +1896,10 @@ def test_a_follow_up_copy_carries_the_decided_priority_onto_the_boards_priority_
     )
 
 
-#: Two repositories outside the board's owner that the committed `followups` route sends to
-#: Hello Patient's Linear, and the local folder a journey points that route at instead.
-PETSINC_API = "github.com/petsinc/hp-api"
-PETSINC_WEB = "github.com/petsinc/hp-web"
+#: Two repositories of a synthetic organization a host's `followups` route sends to its own
+#: tracker, which a journey points at a private local folder in place of Linear.
+HIDDENCO_API = "github.com/hiddenco/qh-api"
+HIDDENCO_WEB = "github.com/hiddenco/qh-web"
 ROUTED_FOLLOWUPS = "routedfollowups"
 
 
@@ -1924,21 +1917,21 @@ def _spanning_ticket(filed_in: str, *listed: str) -> follow_up_tickets.Ticket:
     )
 
 
-def _routing_petsinc_to_a_folder(environment: dict[str, str], root: Path) -> dict[str, str]:
+def _routing_hiddenco_to_a_folder(environment: dict[str, str], root: Path) -> dict[str, str]:
     """``environment`` with the `followups` route pointed at a local folder rather than Linear."""
     root.mkdir()
     return environment | {
         "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__PLUGIN": plan_store.WRITABLE_PLUGIN,
         "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__CONFIG__ROOT": str(root),
         "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__VISIBILITY": "private",
-        "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__REPOSITORIES": "github.com/petsinc/*",
+        "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__REPOSITORIES": "github.com/hiddenco/*",
         "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__TO": ROUTED_FOLLOWUPS,
     }
 
 
 @pytest.mark.parametrize(
     "listed",
-    [(_hosted(SIBLING_REPOSITORY), PETSINC_API), (PETSINC_API, _hosted(SIBLING_REPOSITORY))],
+    [(_hosted(SIBLING_REPOSITORY), HIDDENCO_API), (HIDDENCO_API, _hosted(SIBLING_REPOSITORY))],
     ids=["owner-first", "routed-first"],
 )
 def test_a_ticket_whose_fix_changes_several_repositories_is_filed_in_the_boards_own_repository(
@@ -1957,7 +1950,7 @@ def test_a_ticket_whose_fix_changes_several_repositories_is_filed_in_the_boards_
     environment, drafts_root = _followups_environment(tmp_path)
     filed_in = _hosted(CONFIGURED_REPOSITORY)
     ticket = _written_ticket(drafts_root, _spanning_ticket(filed_in, *listed))
-    routed = _routing_petsinc_to_a_folder(environment, tmp_path / "routed")
+    routed = _routing_hiddenco_to_a_folder(environment, tmp_path / "routed")
 
     with _serving_followups(routed, fields=True):
         destination = _decided_and_copied(routed, ticket)
@@ -1989,15 +1982,17 @@ def test_a_ticket_whose_fix_changes_only_routed_repositories_is_filed_where_the_
     the local folder the route is pointed at holds the copy, carrying both.
     """
     environment, drafts_root = _followups_environment(tmp_path)
-    ticket = _written_ticket(drafts_root, _spanning_ticket(PETSINC_API, PETSINC_API, PETSINC_WEB))
-    routed = _routing_petsinc_to_a_folder(environment, tmp_path / "routed")
+    ticket = _written_ticket(
+        drafts_root, _spanning_ticket(HIDDENCO_API, HIDDENCO_API, HIDDENCO_WEB)
+    )
+    routed = _routing_hiddenco_to_a_folder(environment, tmp_path / "routed")
 
     with _serving_followups(routed, fields=True):
         destination = _decided_and_copied(routed, ticket)
         shown = _followups_item(routed, destination)
 
     assert destination.startswith(f"{ROUTED_FOLLOWUPS}:"), destination
-    assert shown["repositories"] == [PETSINC_API, PETSINC_WEB]
+    assert shown["repositories"] == [HIDDENCO_API, HIDDENCO_WEB]
     assert BOARD.created == [], "a ticket the route takes reached the GitHub board"
 
 
@@ -2011,8 +2006,8 @@ def test_a_ticket_whose_fix_changes_several_repositories_is_refused_naming_where
     """
     environment, drafts_root = _followups_environment(tmp_path)
     sibling = _hosted(SIBLING_REPOSITORY)
-    ticket = _written_ticket(drafts_root, _spanning_ticket(sibling, sibling, PETSINC_API))
-    routed = _routing_petsinc_to_a_folder(environment, tmp_path / "routed")
+    ticket = _written_ticket(drafts_root, _spanning_ticket(sibling, sibling, HIDDENCO_API))
+    routed = _routing_hiddenco_to_a_folder(environment, tmp_path / "routed")
 
     with _serving_followups(routed, fields=True):
         decided = _board_status(routed, ticket)
@@ -3192,16 +3187,16 @@ def test_one_tickets_filing_re_copy_withdrawal_and_comment_answer_read_only_thei
         assert commented.returncode == 0, commented.stdout + commented.stderr
         (person,) = item.comments
         _GitHubFixture.requests.clear()
-        # The gathering reads every board of the family `followups` roots, and its route names
-        # Hello Patient's Linear, which no journey reaches: that route is pointed at an empty
-        # local folder, so the one board this measures is the one GitHub serves.
+        # The gathering reads every board of the family `followups` roots, and a host's route
+        # names an organization's Linear, which no journey reaches: that route is pointed at an
+        # empty local folder, so the one board this measures is the one GitHub serves.
         routed_root = tmp_path / "routed-followups"
         routed_root.mkdir()
         routed = environment | {
             "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__PLUGIN": plan_store.WRITABLE_PLUGIN,
             "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__CONFIG__ROOT": str(routed_root),
             "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__VISIBILITY": "private",
-            "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__REPOSITORIES": "github.com/petsinc/*",
+            "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__REPOSITORIES": "github.com/hiddenco/*",
             "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__TO": "routedfollowups",
         }
         passing = [
@@ -3660,7 +3655,7 @@ def test_a_realistic_comment_pass_reads_the_board_once_before_its_replies_and_on
         "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__PLUGIN": plan_store.WRITABLE_PLUGIN,
         "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__CONFIG__ROOT": str(routed_root),
         "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__VISIBILITY": "private",
-        "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__REPOSITORIES": "github.com/petsinc/*",
+        "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__REPOSITORIES": "github.com/hiddenco/*",
         "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__TO": "routedfollowups",
     }
     host = socket.gethostname()
@@ -4339,7 +4334,7 @@ def test_the_projected_words_the_board_journey_feeds_are_the_engines_own() -> No
 
 
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split] This journey's placement in its module's tier, now `launch-monitor-observer:test`, predates this change, which only accounts  # noqa: E501
-# for the `hellopatient` source the adopted configuration adds; it is a Python journey over the
+# for the routed source the adopted configuration once added; it is a Python journey over the
 # real recipe like every board journey beside it, and re-homing them is enforcement
 # configuration this change may not move.
 def test_missing_remote_credential_keeps_local_plan_launchable(
@@ -4348,13 +4343,12 @@ def test_missing_remote_credential_keeps_local_plan_launchable(
     """A missing remote token costs `plans`, not a local project's execution."""
     _write_local_project(tmp_path)
     environment = _plan_environment(tmp_path)
-    # Both remote credentials are held set and empty rather than removed: both recipes below
+    # The board's credential is held set and empty rather than removed: both recipes below
     # load this checkout's gitignored `.env` for every name the environment leaves *unset*, so
-    # a removed token comes back from that file in a checkout that has one — and a Linear key
-    # coming back would send this read to the live workspace. An empty value is one the
-    # loader never overrides, and the store refuses it exactly as it refuses an absent one.
+    # a removed token comes back from that file in a checkout that has one. An empty value is
+    # one the loader never overrides, and the store refuses it exactly as it refuses an absent
+    # one. The tracked document declares no other remote source.
     environment["GH_PROJECTS_TOKEN"] = ""
-    environment["HELLOPATIENT_LINEAR_API_KEY"] = ""
     result = subprocess.run(
         ["just", "plans", "project", "list", "--allow-partial", "--json"],
         cwd=REPO_ROOT,
@@ -4366,13 +4360,12 @@ def test_missing_remote_credential_keeps_local_plan_launchable(
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
     assert "launch" in [item["item"]["title"] for item in payload["items"]]
-    # Each remote source refuses for its own missing credential — the board's token and the
-    # Linear source's key, neither held here — and the local plan is read regardless.
+    # The remote board refuses for its missing credential, and the local plan is read
+    # regardless.
     errors = {error["source"]: error["error"] for error in payload["errors"]}
-    assert set(errors) == {"plans", "hellopatient"}, payload["errors"]
+    assert set(errors) == {"plans"}, payload["errors"]
     assert {error["kind"] for error in errors.values()} == {"auth"}, errors
     assert "GH_PROJECTS_TOKEN" in errors["plans"]["message"]
-    assert "HELLOPATIENT_LINEAR_API_KEY" in errors["hellopatient"]["message"]
 
     launched_environment = _launch_environment(tmp_path / "execution", oneharness_bin)
     launched_environment.update(
@@ -4383,7 +4376,6 @@ def test_missing_remote_credential_keeps_local_plan_launchable(
         }
     )
     launched_environment["GH_PROJECTS_TOKEN"] = ""
-    launched_environment["HELLOPATIENT_LINEAR_API_KEY"] = ""
     launched = subprocess.run(
         [
             "just",

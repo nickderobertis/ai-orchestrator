@@ -20,6 +20,7 @@ import os
 import subprocess
 
 import jsonschema
+import onetaskgraph_user_layer
 import pytest
 from plan_sources import read_default_sources, read_plan_sources, shared_roots
 from published_tools import ONETASKGRAPH_BIN
@@ -265,12 +266,13 @@ def test_each_board_source_resolves_queued_to_an_option_of_its_own(source: str) 
 #: The `Priority` option each priority a follow-up ticket carries is written to on the
 #: `followups` board. Stated here for the reason :data:`MAPPED_OPTIONS` is: the other party
 #: is the live board, so what is held is the mapping the installed CLI resolves.
-#: The sources the store keeps its per-host cache of: the four boards, and nothing local.
-CACHED_SOURCES = {"plans", "followups", "hellopatient", "hellopatient-followups"}
+#: The sources the tracked document keeps a per-host cache of: its two boards, and nothing
+#: local. A host's own trackers, in its user layer, turn theirs on there.
+CACHED_SOURCES = {"plans", "followups"}
 
 
 @pytest.mark.reads_checkouts
-def test_the_cache_is_on_for_the_four_boards_alone_at_its_default_directory() -> None:
+def test_the_cache_is_on_for_the_two_boards_alone_at_its_default_directory() -> None:
     """Exactly the board sources resolve `cache.enabled`, and none names a `cache.dir`.
 
     Read through the installed CLI's own resolution, because a key the store does not
@@ -324,9 +326,8 @@ def test_the_follow_ups_board_maps_every_priority_and_the_plans_board_maps_none(
 
 #: The board text field each follow-up ticket's record value is projected onto, per
 #: source. Stated here for the reason :data:`FOLLOWUPS_PRIORITIES` is: the other party is the
-#: live board, so what is held is the projection the installed CLI resolves. Linear keeps a
-#: ticket's host in its description's metadata slot, as it keeps the origin, so the
-#: `hellopatient-followups` source projects nothing.
+#: live board, so what is held is the projection the installed CLI resolves. The tracked
+#: document declares no other board; a host's own follow-up trackers are its user layer's.
 FOLLOWUPS_METADATA_FIELDS = [
     {"field": "Host", "key": follow_up_tickets.KEY, "path": [follow_up_tickets.HOST_FIELD]}
 ]
@@ -469,18 +470,64 @@ def test_the_drafts_source_is_a_local_directory_no_plan_listing_reads() -> None:
     assert ignored.returncode == 0, "a draft under .follow-ups/ is not gitignored"
 
 
-#: The values the `hellopatient` Linear source is declared with, which are never repointed:
-#: a plan's tasks of a `petsinc` repository are routed there, and a live run's settlements are
-#: projected back to the item each lives on. Literals for the reason :data:`BOARDS` gives.
-HELLOPATIENT = {
+#: The keys that switch the store's public boundary on: its write policy's two commands. The
+#: tracked document lands the boundary off, so it resolves none of them and declares no
+#: `visibility` on any source (`docs/orchestration.md`, *The public write boundary*).
+WRITE_POLICY_KEYS = ("write_policy.visibility_command", "write_policy.check_command")
+
+
+@pytest.mark.reads_checkouts
+def test_the_tracked_document_leaves_the_public_boundary_off() -> None:
+    """The installed CLI resolves no write policy and no source's visibility.
+
+    Read through the store's own resolution, because the store switches the boundary on as
+    soon as either is resolved, whatever document states it.
+    """
+    resolved = _resolved_configuration()
+    assert {key: resolved.get(key) for key in WRITE_POLICY_KEYS} == dict.fromkeys(WRITE_POLICY_KEYS)
+    declared = sorted(
+        key for key, value in resolved.items() if key.endswith(".visibility") and value
+    )
+    assert declared == [], declared
+
+
+@pytest.mark.reads_checkouts
+def test_the_tracked_document_declares_no_private_source_and_no_route() -> None:
+    """A private tracker and the route to it are a host's, so the tracked file holds neither.
+
+    Read off the installed CLI's resolution of this checkout's document alone — the suite
+    keeps the host's user layer out of every process (`tests/plan_store_user_layer.py`) — so a
+    Linear source, a route, or a source declared private that crept back into the tracked
+    file fails here.
+    """
+    resolved = _resolved_configuration()
+    plugins = {key: value for key, value in resolved.items() if key.endswith(".plugin")}
+    assert "linear" not in plugins.values(), plugins
+    routes = sorted(key for key in resolved if ".routes" in key)
+    assert routes == [], routes
+    private = sorted(
+        key for key, value in resolved.items() if key.endswith(".visibility") and value == "private"
+    )
+    assert private == [], private
+    assert plan_store.routed_sources("plans") == ()
+    assert plan_store.routed_sources("followups") == ()
+    configured = set(read_plan_sources(_configuration()))
+    assert set(read_default_sources(_configuration())) <= configured
+
+
+#: The values the example layer's Linear sources are declared with. A host's real layer is
+#: shaped as the example is, so the example is what a check here holds: a source of the shape
+#: the store would refuse fails before any host copies it. Literals for the reason
+#: :data:`BOARDS` gives.
+ORGANIZATION_PLANS = {
     "plugin": "linear",
     "team": "ENG",
-    "api_key_env": "HELLOPATIENT_LINEAR_API_KEY",
+    "api_key_env": "HIDDENCO_LINEAR_API_KEY",
 }
 #: Linear's own API, which the source reaches when its configuration names no endpoint.
 LINEAR_ENDPOINT = "https://api.linear.app/graphql"
-#: The ENG workflow state each category is written as, which the user decided.
-HELLOPATIENT_STATES = {
+#: The workflow state each category is written as on the organization's tracker.
+ORGANIZATION_STATES = {
     "backlog": "Proposed",
     "draft": "Backlog",
     "todo": "Todo",
@@ -491,7 +538,7 @@ HELLOPATIENT_STATES = {
     "cancelled": "Canceled",
 }
 #: Member projects use the workspace's separate status vocabulary.
-HELLOPATIENT_PROJECT_STATUSES = {
+ORGANIZATION_PROJECT_STATUSES = {
     "backlog": "Proposal",
     "draft": "Idea",
     "todo": "Planned",
@@ -501,30 +548,51 @@ HELLOPATIENT_PROJECT_STATUSES = {
     "done": "Completed",
     "cancelled": "Canceled",
 }
-HELLOPATIENT_MAPPING = {
+ORGANIZATION_MAPPING = {
     category: state
-    if state == HELLOPATIENT_PROJECT_STATUSES[category]
-    else {"task": state, "project": HELLOPATIENT_PROJECT_STATUSES[category]}
-    for category, state in HELLOPATIENT_STATES.items()
+    if state == ORGANIZATION_PROJECT_STATUSES[category]
+    else {"task": state, "project": ORGANIZATION_PROJECT_STATUSES[category]}
+    for category, state in ORGANIZATION_STATES.items()
 }
-#: Where the `plans` source sends a task whose repositories are all Hello Patient's.
-PLANS_ROUTES = [{"repositories": ["github.com/petsinc/*"], "to": "hellopatient"}]
-#: The values the `hellopatient-followups` Linear source is declared with, which are never
-#: repointed: every follow-up ticket of a `petsinc` root cause is filed there, and a later run
-#: finds an open ticket for its root cause by searching it, as on the `followups` board.
-#: `project` is the Agent Follow-ups project every read and create is scoped to.
-HELLOPATIENT_FOLLOWUPS = {
+#: Where the layer's `plans` route sends a task whose repositories are all the organization's.
+PLANS_ROUTES = [
+    {
+        "repositories": [onetaskgraph_user_layer.ORGANIZATION_REPOSITORIES],
+        "to": onetaskgraph_user_layer.ORGANIZATION_PLANS,
+    }
+]
+#: The organization's follow-up tracker: one project of the same team, every read and create
+#: scoped to it.
+ORGANIZATION_FOLLOWUPS = {
     "plugin": "linear",
     "team": "ENG",
-    "api_key_env": "HELLOPATIENT_LINEAR_API_KEY",
-    "project": "986a467e-775a-4f8f-80dd-aca405063cf4",
+    "api_key_env": "HIDDENCO_LINEAR_API_KEY",
+    "project": "0f3c9d2a-5b1e-4c7a-9e21-6d8b4a1f2c03",
 }
-#: Where the `followups` board sends a ticket whose root cause is Hello Patient's.
-FOLLOWUPS_ROUTES = [{"repositories": ["github.com/petsinc/*"], "to": "hellopatient-followups"}]
-#: Each Linear source this repository writes to, with the values it is never repointed from.
-LINEAR_SOURCES = {"hellopatient": HELLOPATIENT, "hellopatient-followups": HELLOPATIENT_FOLLOWUPS}
+#: Where the layer's `followups` route sends a ticket whose root cause is the organization's.
+FOLLOWUPS_ROUTES = [
+    {
+        "repositories": [onetaskgraph_user_layer.ORGANIZATION_REPOSITORIES],
+        "to": onetaskgraph_user_layer.ORGANIZATION_FOLLOWUPS,
+    }
+]
+#: Each Linear source the example declares, with the values it is declared with.
+LINEAR_SOURCES = {
+    onetaskgraph_user_layer.ORGANIZATION_PLANS: ORGANIZATION_PLANS,
+    onetaskgraph_user_layer.ORGANIZATION_FOLLOWUPS: ORGANIZATION_FOLLOWUPS,
+}
+#: The host's own private stores the example declares, which a person writes to by name.
+PRIVATE_STORES = (onetaskgraph_user_layer.PRIVATE_PLANS, onetaskgraph_user_layer.PRIVATE_FOLLOWUPS)
 
 
+@pytest.fixture(scope="module")
+def example_resolved(tmp_path_factory: pytest.TempPathFactory) -> dict[str, object]:
+    """Every setting the installed CLI resolves here with the example as the user layer."""
+    home = onetaskgraph_user_layer.installed(tmp_path_factory.mktemp("example-layer"))
+    return onetaskgraph_user_layer.resolved(home)
+
+
+@pytest.mark.reads_checkouts
 @pytest.mark.parametrize(
     ("name", "setting", "expected"),
     [
@@ -533,37 +601,64 @@ LINEAR_SOURCES = {"hellopatient": HELLOPATIENT, "hellopatient-followups": HELLOP
         for setting, expected in sorted(settings.items())
     ],
 )
-def test_the_linear_source_is_left_exactly_as_it_was(
-    name: str, setting: str, expected: str
+def test_the_example_layer_declares_each_linear_source_as_a_host_writes_it(
+    example_resolved: dict[str, object], name: str, setting: str, expected: str
 ) -> None:
-    """Each Linear source keeps its plugin, its team, the credential it names and its scope.
+    """Each Linear source resolves its plugin, team, credential and scope.
 
     The credential is named by its own variable rather than the plugin's default name,
     which is onetaskgraph's test key: a source falling back to that would write a plan's
     tasks, or a follow-up ticket, into the test workspace.
     """
-    source = read_plan_sources(_configuration())[name]
-    actual = source.plugin if setting == "plugin" else source.settings.get(setting)
-    assert actual == expected, (
-        f"onetaskgraph.yaml's `{name}` source names {setting} {actual!r} where it "
-        f"carried {expected!r}; it is never repointed"
+    key = (
+        f"sources.{name}.{setting}" if setting == "plugin" else (f"sources.{name}.config.{setting}")
+    )
+    assert example_resolved.get(key) == expected, (
+        f"the example layer's `{name}` source resolves {setting} "
+        f"{example_resolved.get(key)!r} where a host's layer carries {expected!r}"
     )
 
 
-def test_the_linear_follow_ups_source_is_no_default_source() -> None:
-    """`hellopatient-followups` is read only by a command that names it, as `followups` is."""
-    assert "hellopatient-followups" not in read_default_sources(_configuration()), (
-        "the hellopatient-followups source is among default_sources, so every plan listing "
-        "reads Hello Patient's follow-up tickets"
-    )
+@pytest.mark.reads_checkouts
+def test_the_example_layer_adds_destinations_and_loosens_nothing(
+    example_resolved: dict[str, object],
+) -> None:
+    """Under the layer the tracked default sources still hold, and the layer names no policy.
 
-
-def test_a_plan_home_may_live_in_the_linear_source() -> None:
-    """`hellopatient` is a default source, because an all-petsinc plan's home lives there."""
-    assert "hellopatient" in read_default_sources(_configuration()), (
-        "the hellopatient source is not among default_sources, so a plan whose home the "
-        "store routed there is unlisted by every read that names no source"
+    The project document reads above the user layer, so a layer can add a source or a route
+    and never move what the tracked file states; the example names no write policy and
+    declares no visibility, which a host switching the boundary on adds deliberately and all
+    at once; and no route reaches the host's private stores, because a classification route
+    would be tried before every repository route and capture the organization's work too.
+    """
+    assert {key: example_resolved.get(key) for key in WRITE_POLICY_KEYS} == dict.fromkeys(
+        WRITE_POLICY_KEYS
     )
+    assert example_resolved["default_sources"] == read_default_sources(_configuration())
+    declared = sorted(
+        key for key, value in example_resolved.items() if key.endswith(".visibility") and value
+    )
+    assert declared == [], declared
+    for name in PRIVATE_STORES:
+        assert example_resolved[f"sources.{name}.plugin"] == "github-projects", name
+    targets = {
+        str(value)
+        for key, value in example_resolved.items()
+        if ".routes" in key and key.endswith(".to")
+    } | {
+        str(entry["to"])
+        for key, value in example_resolved.items()
+        if key.endswith(".routes") and isinstance(value, list)
+        for entry in value
+        if isinstance(entry, dict)
+    }
+    assert targets == set(LINEAR_SOURCES), targets
+    classified = [
+        key
+        for key, value in example_resolved.items()
+        if ".routes" in key and "classification" in key
+    ]
+    assert classified == [], classified
 
 
 def _linear_schema() -> dict[str, object]:
@@ -606,35 +701,48 @@ def _schema_refusals(config: dict[str, object]) -> list[str]:
 # installed plan-store CLI, in the `reads_checkouts` tier the sibling checks of this file's
 # board sources already use, which keeps it out of every memoized tier.
 @pytest.mark.reads_checkouts
-def test_the_linear_sources_resolve_their_states_endpoint_and_routes() -> None:
+def test_the_example_linear_sources_resolve_their_states_endpoint_and_routes(
+    example_resolved: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The installed CLI resolves each Linear source's eight states, its endpoint, and each route.
 
-    Read through the CLI's own resolution for the reason the board mappings above are.
-    The endpoint is held to the schema's default and to no setting of this file's, so the
-    source reaches Linear itself and never a fixture address left behind.
+    Read through the CLI's own resolution for the reason the board mappings above are, with
+    the example installed as the user layer. The endpoint is held to the schema's default and
+    to no setting of the layer's, so the source reaches Linear itself and never a fixture
+    address left behind. `plan_store.routed_sources` is read under the same layer, because it
+    is how a copy's home is looked for among the routed sources.
     """
-    resolved = _resolved_configuration()
     properties = _linear_schema()["properties"]
     assert isinstance(properties, dict)
     assert properties["endpoint"]["default"] == LINEAR_ENDPOINT, properties["endpoint"]
     for name in LINEAR_SOURCES:
-        config = _resolved_block(resolved, f"sources.{name}.config.")
+        config = _resolved_block(example_resolved, f"sources.{name}.config.")
         mapping = config.get("status_mapping")
-        expected = HELLOPATIENT_MAPPING if name == "hellopatient" else HELLOPATIENT_STATES
+        expected = (
+            ORGANIZATION_MAPPING
+            if name == onetaskgraph_user_layer.ORGANIZATION_PLANS
+            else ORGANIZATION_STATES
+        )
         assert mapping == expected, (name, config)
         assert isinstance(mapping, dict)
         task_states = {
             category: entry["task"] if isinstance(entry, dict) else entry
             for category, entry in mapping.items()
         }
-        assert task_states == HELLOPATIENT_STATES
+        assert task_states == ORGANIZATION_STATES
         assert "endpoint" not in config, (name, config)
-    assert resolved["sources.plans.routes"] == PLANS_ROUTES, resolved["sources.plans.routes"]
-    assert plan_store.routed_sources("plans") == ("hellopatient",)
-    assert resolved["sources.followups.routes"] == FOLLOWUPS_ROUTES, resolved[
-        "sources.followups.routes"
-    ]
-    assert plan_store.routed_sources("followups") == ("hellopatient-followups",)
+    assert example_resolved["sources.plans.routes"] == PLANS_ROUTES
+    assert example_resolved["sources.followups.routes"] == FOLLOWUPS_ROUTES
+    for name in [name for name in os.environ if name.startswith("ONETASKGRAPH_")]:
+        monkeypatch.delenv(name)
+    home = onetaskgraph_user_layer.installed(tmp_path_factory.mktemp("routed-layer"))
+    monkeypatch.setenv(onetaskgraph_user_layer.XDG_CONFIG_HOME, str(home))
+    assert plan_store.routed_sources("plans") == (onetaskgraph_user_layer.ORGANIZATION_PLANS,)
+    assert plan_store.routed_sources("followups") == (
+        onetaskgraph_user_layer.ORGANIZATION_FOLLOWUPS,
+    )
 
 
 # llmlint: ignore-end[shell_test_tiers_stay_split]
@@ -645,23 +753,25 @@ def test_the_linear_sources_resolve_their_states_endpoint_and_routes() -> None:
 # board sources already use, which keeps it out of every memoized tier.
 @pytest.mark.reads_checkouts
 @pytest.mark.parametrize("name", sorted(LINEAR_SOURCES))
-def test_the_linear_source_configuration_is_one_the_linear_plugin_accepts(name: str) -> None:
+def test_the_example_linear_source_configuration_is_one_the_linear_plugin_accepts(
+    example_resolved: dict[str, object], name: str
+) -> None:
     """Each Linear source's `config` validates against the plugin's own published schema.
 
     The other party is Linear, which no check here may reach, so the configuration is held
     to the schema the installed store reports for its `linear` plugin: a key it does not
-    take, or a mapping key that is no status category, fails here rather than at the first
-    write. A configuration carrying one of each is refused, which says a green here is a
-    validation rather than a reader that found nothing to check.
+    take, or a mapping key that is no status category, fails here rather than at a host's
+    first write. A configuration carrying one of each is refused, which says a green here
+    is a validation rather than a reader that found nothing to check.
     """
-    config = _resolved_block(_resolved_configuration(), f"sources.{name}.config.")
+    config = _resolved_block(example_resolved, f"sources.{name}.config.")
     assert config, f"the installed CLI resolves no `{name}` configuration"
 
     assert _schema_refusals(config) == []
     mapping = config["status_mapping"]
     assert isinstance(mapping, dict)
     refused = _schema_refusals(
-        config | {"workspace": "hello-patient", "status_mapping": mapping | {"triage": "Triage"}}
+        config | {"workspace": "mistvale", "status_mapping": mapping | {"triage": "Triage"}}
     )
     assert len(refused) == 2 and any("workspace" in one for one in refused), refused
     assert any("triage" in one for one in refused), refused

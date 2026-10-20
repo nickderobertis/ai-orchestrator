@@ -264,6 +264,8 @@ if [ "${#located[@]}" -gt 0 ]; then
 else
     # llmlint: ignore[changed_behavior_has_e2e] A host failure: `mktemp -d` refusing on a full or unwritable temporary filesystem, which a journey cannot produce without breaking the filesystem it runs on.
     empty=$(mktemp -d) || fail "could not make the empty directory a plan with no document is judged from; free space in the temporary directory, then retry"
+    # Removed on every exit, a refusal below included, so no path leaves it behind.
+    trap 'rmdir -- "$empty" || echo "plan-checklist: the empty directory $empty could not be removed; delete it by hand" >&2' EXIT
     cwd=$empty
     files=()
 fi
@@ -307,5 +309,4 @@ if [ -z "$empty" ]; then
 fi
 status=0
 "${command[@]}" || status=$?
-rmdir "$empty" || echo "plan-checklist: the empty directory $empty could not be removed; delete it by hand" >&2
 exit "$status"

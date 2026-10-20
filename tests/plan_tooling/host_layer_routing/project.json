@@ -1,0 +1,64 @@
+{
+  "name": "plan-tooling-host-layer-routing",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/plan_tooling/host_layer_routing",
+  "tags": [
+    "scope:plan-tooling-host-layer-routing",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-boundary-home",
+    "support-conftest",
+    "support-github-board",
+    "support-onetaskgraph-user-layer",
+    "support-published-tools",
+    "support-waits"
+  ],
+  "namedInputs": {
+    "planToolingHostLayerRoutingWorkspace": [
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/onetaskgraph.yaml",
+      "{workspaceRoot}/scripts/credentials-env.sh",
+      "{workspaceRoot}/scripts/plan-store.sh",
+      "{workspaceRoot}/config/onetaskgraph.user-layer.example.yaml",
+      "{workspaceRoot}/config/onetaskgraph.version",
+      "{workspaceRoot}/config/onevcs.rules.yml",
+      "{workspaceRoot}/config/onevcs.version",
+      "{workspaceRoot}/orchestrator/design_approval.py",
+      "{workspaceRoot}/orchestrator/design_chain.py",
+      "{workspaceRoot}/orchestrator/follow_up_drafts.py",
+      "{workspaceRoot}/orchestrator/follow_up_tickets.py",
+      "{workspaceRoot}/orchestrator/host_installs.py",
+      "{workspaceRoot}/orchestrator/plan_budgets.py",
+      "{workspaceRoot}/orchestrator/plan_store.py",
+      "{workspaceRoot}/orchestrator/plan_units.py",
+      "{workspaceRoot}/orchestrator/project_store.py",
+      "{workspaceRoot}/orchestrator/publication_guard.py",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/orchestrator/spike_plan.py",
+      "{workspaceRoot}/orchestrator/task_body.py",
+      "{workspaceRoot}/tests/plan_tooling/host_layer_routing/**/*"
+    ]
+  },
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 COVERAGE_FILE=.coverage.plan-tooling-host-layer-routing uv run pytest tests/plan_tooling/host_layer_routing -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0",
+      "options": {
+        "cwd": "."
+      },
+      "outputs": [
+        "{workspaceRoot}/.coverage.plan-tooling-host-layer-routing"
+      ],
+      "inputs": [
+        "planToolingHostLayerRoutingWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ]
+    }
+  }
+}

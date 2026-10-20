@@ -58,6 +58,11 @@ from command_ceiling import (
 )
 from harness_configs import harness_routing
 from harness_indirections import established_indirections
+from plan_store_credentials import (
+    PLAN_STORE_CREDENTIALS,
+    from_placeholder,
+    organization_linear_key,
+)
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
@@ -134,7 +139,7 @@ PLAN_STORE_CONFIGS = (
 #: sibling's live lane handed the board's owner, number and repository but no token
 #: skips and prints its reason, where one handed nothing at all cannot tell a
 #: misconfigured lane from a deliberate one.
-CREDENTIALS = ("GH_PROJECTS_TOKEN", "HELLOPATIENT_LINEAR_API_KEY")
+CREDENTIALS = PLAN_STORE_CREDENTIALS
 NOMINATION = ("GH_PROJECTS_OWNER", "GH_PROJECTS_NUMBER", "GH_PROJECTS_REPOSITORY")
 
 #: The configs whose role reaches no plan store, so the credentials stop at the config. The
@@ -378,7 +383,9 @@ def _worker_masks(identity: str) -> list[str]:
     """What `oneharness.toml`'s committed record masks on `identity`."""
     # llmlint: ignore[boundary_inputs_validated] The committed record beside this module,
     # captured from `oneharness config`; the one list read out of it is narrowed here.
-    record = json.loads((RESOLVED_RECORDS / "oneharness.toml.json").read_text("utf-8"))
+    record = json.loads(
+        from_placeholder((RESOLVED_RECORDS / "oneharness.toml.json").read_text("utf-8"))
+    )
     family, _, variant = identity.partition(":")
     masked = record["harness"][family]["variant"][variant]["unset_env"]["value"]
     assert isinstance(masked, list) and masked, (
@@ -402,7 +409,7 @@ def test_the_board_live_worker_is_handed_the_board_token_and_nothing_else_the_wo
     of those is planted in the environment the turn arrives with, so its absence is the mask.
     """
     expected_masked = [name for name in _worker_masks(candidate.identity) if name != BOARD_TOKEN]
-    assert "HELLOPATIENT_LINEAR_API_KEY" in expected_masked
+    assert organization_linear_key() in expected_masked
     planted = {
         name: f"not-a-real-{name.lower()}-planted-by-this-journey" for name in expected_masked
     }

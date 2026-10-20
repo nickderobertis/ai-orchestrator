@@ -1152,7 +1152,7 @@ split at those seams rather than at convenient ones:
   few its own gates open by path.
 - **The journey projects under `tests/e2e/`** — `publish-and-landing`,
   `launch-monitor-observer`, `budget-gate`, `registry-and-recipes`, `workspace-copies`,
-  `suite-helpers` and `repos-apply-credentials`, beside the narrower ones that predate them — each own one
+  `suite-helpers`, `repos-apply-credentials` and `host-local-registration`, beside the narrower ones that predate them — each own one
   directory of journeys, and `e2e-root` the few modules left directly under
   `tests/e2e/`, and each `test` target is keyed on what that family reads,
   child processes included, plus the units its modules import. So an edit to one

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -12,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+import boundary_home
 import onetaskgraph_sdk
 import pytest
 from onetaskgraph_sdk import QueryResponseOfQualifiedTask
@@ -29,9 +31,36 @@ from orchestrator.root import REPO_ROOT
 OLDER_PLAN_STORE = helper("older-plan-store")
 
 
-def _source(monkeypatch: pytest.MonkeyPatch, name: str, root: Path) -> None:
+def _source(
+    monkeypatch: pytest.MonkeyPatch, name: str, root: Path, visibility: str | None = None
+) -> None:
     monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{name.upper()}__PLUGIN", "local-md")
     monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{name.upper()}__CONFIG__ROOT", str(root))
+    if visibility is not None:
+        monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{name.upper()}__VISIBILITY", visibility)
+
+
+def _registered(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    public: list[str],
+    private: tuple[str, ...] = (),
+) -> None:
+    """Point this process's store at an `onevcs` root answering each identity's visibility.
+
+    The write policy `boundary_home` switches the boundary on with asks `onevcs boundary
+    inspect` for every repository an item names, and a repository it has no record of is
+    private, so a fixture naming one has it registered with the visibility the test means
+    it to have.
+    """
+    home = boundary_home.registered_home(tmp_path / "boundary", public=public, private=private)
+    for name, value in boundary_home.environment(None, home).items():
+        if os.environ.get(name) != value:
+            monkeypatch.setenv(name, value)
+
+
+#: The ticket a fixture task delivers, held by a local source the test configures.
+DELIVERED = "sdktickets:board/ticket"
 
 
 def test_sdk_helpers_read_and_copy_a_real_local_plan(
@@ -49,12 +78,15 @@ def test_sdk_helpers_read_and_copy_a_real_local_plan(
                 task="Do second.",
                 deps=["first"],
                 repo="github.com/acme/service",
-                delivers=["followups:I_1"],
+                delivers=[DELIVERED],
             ),
         ],
     }
     write_plan_project(source, plan)
     drafts = tmp_path / "drafts"
+    # The draft source holds the project its document is filed under, because the store's
+    # boundary refuses an item under a project its source cannot classify.
+    write_plan_project(drafts, {"name": "demo", "tasks": []})
     documents = drafts / "documents"
     documents.mkdir(parents=True)
     # Provenance built here in the shape a rendering of this body records, so the approval
@@ -78,6 +110,14 @@ def test_sdk_helpers_read_and_copy_a_real_local_plan(
         ),
         encoding="utf-8",
     )
+    _registered(monkeypatch, tmp_path, public=["github.com/acme/service"])
+    # The ticket a task delivers is one a configured source holds, because the store's
+    # boundary refuses to write a reference whose item it cannot classify.
+    tickets = tmp_path / "tickets"
+    write_plan_project(
+        tickets, {"name": "board", "tasks": [PlanNode(id="ticket", title="Ticket", task="Fix.")]}
+    )
+    _source(monkeypatch, "sdktickets", tickets)
     _source(monkeypatch, "sdksource", source)
     _source(monkeypatch, "sdkdestination", destination)
     _source(monkeypatch, "sdkdraft", drafts)
@@ -88,7 +128,7 @@ def test_sdk_helpers_read_and_copy_a_real_local_plan(
     assert read["name"] == "demo"
     assert read["tasks"][1]["deps"] == ["first"]
     assert read["tasks"][1]["repo"] == "github.com/acme/service"
-    assert read["tasks"][1]["delivers"] == ["followups:I_1"]
+    assert read["tasks"][1]["delivers"] == [DELIVERED]
     assert plan_store.task_record("sdksource:demo/first")["title"] == "First"
     assert plan_store.read_projects("sdksource")[0].title == "demo"
     # No task there carries a comment, so the narrowed query keeps none of them.
@@ -871,29 +911,71 @@ def test_a_defaulted_task_field_decodes_to_its_default_and_an_explicit_null_is_r
 
 
 #: The repository a routed source takes, and the one that stays in the plan's own source.
-ROUTED_REPOSITORY = "github.com/petsinc/hp-api"
+ROUTED_REPOSITORY = "github.com/hiddenco/qh-api"
 HOME_REPOSITORY = "github.com/nickderobertis/onevcs"
 
 
-def _routed_sources(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """A draft source, a home source routing petsinc repositories, and the member source."""
-    for name in ("draft", "home", "member"):
+def _routed_sources(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, home: str | None = None
+) -> None:
+    """A draft source, a home source routing hiddenco repositories, and the member source.
+
+    The hiddenco repository is registered private and the member source declared private,
+    as a host's organization tracker is, and the other repository registered public; the
+    home is declared ``home``, undeclared unless the test names it.
+    """
+    _registered(monkeypatch, tmp_path, public=[HOME_REPOSITORY], private=(ROUTED_REPOSITORY,))
+    visibility = {"draft": None, "home": home, "member": "private"}
+    for name, declared in visibility.items():
         (tmp_path / name).mkdir()
-        _source(monkeypatch, name, tmp_path / name)
+        _source(monkeypatch, name, tmp_path / name, declared)
     monkeypatch.setenv("ONETASKGRAPH_SOURCES__HOME__ROUTES__0__TO", "member")
     monkeypatch.setenv(
-        "ONETASKGRAPH_SOURCES__HOME__ROUTES__0__REPOSITORIES", "github.com/petsinc/*"
+        "ONETASKGRAPH_SOURCES__HOME__ROUTES__0__REPOSITORIES", "github.com/hiddenco/*"
     )
 
 
 def _copied_home(name: str, tasks: list[PlanNode], tmp_path: Path) -> str:
-    """Draft ``tasks`` as one plan and copy it to the routing source, answering its home."""
+    """Draft ``tasks`` as one plan and copy it to the routing source, answering its home.
+
+    The copy is the real store's, in a directory whose own document declares the three
+    sources and no public boundary. With the boundary on, the store refuses a plan holding a
+    private task at a home not declared private before any route places a task
+    (`test_a_public_home_refuses_a_plan_holding_a_private_task_and_routes_a_task_copy`), so
+    a plan split across a home and a member is one the store routed before the boundary — a
+    record a reader still meets on a board — and the reads below are held to that record.
+    """
     write_plan_project(tmp_path / "draft", {"name": name, "tasks": tasks})
-    report = plan_store.sdk(plan_store.client().project_copy(f"draft:{name}", to="home"))
+    unbounded = tmp_path / "unbounded"
+    unbounded.mkdir(exist_ok=True)
+    (unbounded / "onetaskgraph.yaml").write_text(
+        "sources:\n"
+        + "".join(
+            f"  {source}:\n    plugin: local-md\n    config:\n      root: {tmp_path / source}\n"
+            for source in ("draft", "member")
+        )
+        + f"  home:\n    plugin: local-md\n    config:\n      root: {tmp_path / 'home'}\n"
+        + '    routes:\n      - repositories: ["github.com/hiddenco/*"]\n        to: member\n',
+        encoding="utf-8",
+    )
+    environment = {
+        key: value for key, value in os.environ.items() if not key.startswith("ONETASKGRAPH_")
+    }
+    environment["XDG_CONFIG_HOME"] = str(tmp_path / "no-user-layer")
+    copied = subprocess.run(
+        [str(ONETASKGRAPH_BIN), "--json", "project", "copy", f"draft:{name}", "--to", "home"],
+        cwd=unbounded,
+        env=environment,
+        text=True,
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        check=False,
+    )
+    assert copied.returncode == 0, copied.stderr
     (home,) = [
-        str(item.root.destination.root)
-        for item in report.items
-        if item.root.source.root == f"draft:{name}" and item.root.destination is not None
+        str(item["destination"])
+        for item in json.loads(copied.stdout)["items"]
+        if item["source"] == f"draft:{name}" and item.get("destination")
     ]
     return home
 
@@ -903,7 +985,7 @@ def test_a_plan_the_store_routed_across_sources_is_read_as_one_with_its_members(
 ) -> None:
     """The home's tasks and its member's are one plan, with edges both ways between them.
 
-    The real store routes the petsinc task into a member project of the second source; the
+    The real store routes the hiddenco task into a member project of the second source; the
     read names every node once, each under its own source and project, and resolves the
     dependency edges that cross sources in either direction.
     """
@@ -951,7 +1033,7 @@ def test_a_plan_the_store_routed_across_sources_is_read_as_one_with_its_members(
 def test_a_plan_every_task_of_which_routes_away_lands_whole_in_the_routed_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An all-petsinc plan's home is the routed source's, resolving through that repository."""
+    """An all-hiddenco plan's home is the routed source's, resolving through that repository."""
     _routed_sources(monkeypatch, tmp_path)
     home = _copied_home(
         "routed",
@@ -972,6 +1054,42 @@ def test_a_plan_every_task_of_which_routes_away_lands_whole_in_the_routed_source
     assert plan_store.members(home) == frozenset()
     assert {task.node_id for task in plan_store.read_tasks(home)} == {"first", "second"}
     assert design_chain.plan_repository(home) == ROUTED_REPOSITORY
+
+
+def test_a_public_home_refuses_a_plan_holding_a_private_task_and_routes_a_task_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Onto a public home a plan naming a private repository is refused whole, never split.
+
+    The plan is a private item whether every task routes away or one does, and the store
+    refuses a private item at a source not declared private before its routes place any
+    task, so nothing reaches either source. A single task copy is routed, which is how a
+    follow-up ticket of the organization reaches its own tracker.
+    """
+    _routed_sources(monkeypatch, tmp_path, home="public")
+    for name, repositories in (
+        ("routed", [ROUTED_REPOSITORY, ROUTED_REPOSITORY]),
+        ("mixed", [HOME_REPOSITORY, ROUTED_REPOSITORY]),
+    ):
+        write_plan_project(
+            tmp_path / "draft",
+            {
+                "name": name,
+                "tasks": [
+                    PlanNode(id=f"task-{index}", title=f"Task {index}", task="Do it.", repo=repo)
+                    for index, repo in enumerate(repositories)
+                ],
+            },
+        )
+        with pytest.raises(OSError, match="is private, and source home is not declared private"):
+            plan_store.sdk(plan_store.client().project_copy(f"draft:{name}", to="home"))
+    assert not list((tmp_path / "home").rglob("*.md"))
+    assert not list((tmp_path / "member").rglob("*.md"))
+
+    report = plan_store.sdk(plan_store.client().task_copy(["draft:routed/task-0"], to="home"))
+    assert [str(item.root.destination.root) for item in report.items if item.root.destination] == [
+        "member:routed/task-0"
+    ]
 
 
 def test_a_home_naming_its_members_in_any_other_shape_is_refused_by_name(
@@ -1030,7 +1148,7 @@ def test_a_home_with_no_tasks_of_its_own_refuses_when_its_member_cannot_be_read(
 ) -> None:
     """A routed task the store cannot read is a refusal, never an empty or partial plan.
 
-    The real routed copy files the petsinc task in the member source and records the member
+    The real routed copy files the hiddenco task in the member source and records the member
     on the home. The home's own task is then removed, so its own listing is empty, and the
     member source is pointed at a directory that is not there: the read of the home asks for
     its members because its record names them, and reports the member's refusal.

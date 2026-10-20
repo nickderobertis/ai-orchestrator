@@ -1,7 +1,13 @@
+# This host's plan store. Every source here is public or this checkout's own folder; a
+# host's private sources, and the routes that send an organization's work to its own
+# backend, live in onetaskgraph's user layer, `${XDG_CONFIG_HOME:-$HOME/.config}/onetaskgraph/
+# config.yaml`, outside every checkout and read beneath this document.
+# `config/onetaskgraph.user-layer.example.yaml` is that layer's shape, over synthetic names.
+#
 # The plan store's public write boundary is deliberately left switched off: no `write_policy`
 # and no `visibility` is declared here. `docs/orchestration.md` (The public write boundary)
 # says why and what switching it on takes.
-default_sources: [authoring, examples, plans, hellopatient, test-fixtures]
+default_sources: [authoring, examples, plans, test-fixtures]
 sources:
   examples:
     plugin: local-md
@@ -55,19 +61,10 @@ sources:
         done: Done
         cancelled: Cancelled
         # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
-    # A task whose repositories are all Hello Patient's (`petsinc`) lands in that team's
-    # Linear, where its work is planned; every other task stays on this board. A plan's home
-    # goes there only when every task it carries does, and otherwise stays here with a
-    # member project in `hellopatient` for the routed tasks. Beside `plugin` and `config`
-    # because it is the store's, not the plugin's, and it repoints none of the five values
-    # above.
-    routes:
-      - repositories: ["github.com/petsinc/*"]
-        to: hellopatient
     # The store's per-host cache of this board, at its default directory under
     # `${XDG_CACHE_HOME:-$HOME/.cache}/onetaskgraph/`, shared by every process here. It serves
     # only a read pinned to a change token the store already holds; `AGENTS.md`'s plan-store
-    # section says which readers that is. The same on the three sources below.
+    # section says which readers that is. The same on `followups` below.
     cache:
       enabled: true
   followups:
@@ -126,84 +123,5 @@ sources:
         - field: Host
           key: orchestrator.follow-up
           path: [host]
-    # A follow-up ticket whose root cause lives in a Hello Patient (`petsinc`) repository is
-    # filed in that team's Linear, in its Agent Follow-ups project, where the team triages it;
-    # every other ticket stays on this board. Beside `plugin` and `config` for the reason the
-    # `plans` route gives, repointing none of the five values above.
-    routes:
-      - repositories: ["github.com/petsinc/*"]
-        to: hellopatient-followups
-    cache:
-      enabled: true
-  # Hello Patient's Linear team, which a plan task of a `petsinc` repository is routed to by
-  # the `plans` route above. Below `plans` and `followups` because readers here take the
-  # first `owner:`, `repository:` and `project_number:` lines as `plans`'.
-  hellopatient:
-    plugin: linear
-    config:
-      # The production key, from this checkout's `.env`. Named here so the source never
-      # falls back to the plugin's default name, which is onetaskgraph's own test key.
-      api_key_env: HELLOPATIENT_LINEAR_API_KEY
-      team: ENG
-      # Categories describe both a plan task and its member project: backlog is proposed,
-      # draft deferred, todo accepted but unclaimed, queued claimed but not started,
-      # in-progress working, unknown needing attention, done finished, cancelled withdrawn.
-      # Task names resolve in ENG's workflow; project names resolve among the workspace's
-      # project statuses. Compare both live with `just plans sources fields hellopatient`.
-      # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] These user-approved
-      # names are the source configuration, not a second implementation of Linear's
-      # vocabulary. Dispatches lack the production credential, so the manager compares
-      # them live after settlement with the fields command above; schema and resolution
-      # are held here by tests/test_plan_source_roots.py. Missing names fail at the write.
-      status_mapping:
-        backlog: { task: Proposed, project: Proposal }
-        draft: { task: Backlog, project: Idea }
-        todo: { task: Todo, project: Planned }
-        queued: { task: Queued, project: Accepted }
-        in-progress: In Progress
-        unknown: { task: Needs Attention, project: Blocked }
-        done: { task: Done, project: Completed }
-        cancelled: Canceled
-      # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
-    cache:
-      enabled: true
-  # Hello Patient's Linear Agent Follow-ups project, which the `followups` route above files a
-  # `petsinc` root cause's ticket in. Not a default source, for the reason `followups` is not:
-  # a verified follow-up ticket is not a plan. Last, below the GitHub sources, for the reason
-  # `hellopatient` is below them. Linear's priority is the issue's own, so this source needs
-  # no `priority_mapping`.
-  hellopatient-followups:
-    plugin: linear
-    config:
-      # The production key, named for the reason `hellopatient` names it.
-      api_key_env: HELLOPATIENT_LINEAR_API_KEY
-      team: ENG
-      # The Agent Follow-ups project: every read and create of this source is scoped to it.
-      project: 986a467e-775a-4f8f-80dd-aca405063cf4
-      status_mapping:
-        # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The same eight
-        # states as `hellopatient`, because both write the ENG team's one workflow;
-        # `tests/test_plan_source_roots.py` holds the two mappings equal. Its other party is
-        # that live workflow, which no check here may read, since that needs the production
-        # key. `Triage` and the review states — `Ready for Review`, `In Review`, `Reviewed`,
-        # `Ready To Merge`, `Blocked`, `Duplicate` and `Cannot Reproduce` — are people's, and
-        # no follow-up run writes them.
-        # A ticket a follow-up run filed, awaiting a person's decision: `Proposal` on the board.
-        backlog: Proposed
-        # Deferred by a person, picked up by no agent: `Deferred` on the board.
-        draft: Backlog
-        # Accepted by a person, and nothing has claimed it.
-        todo: Todo
-        # Claimed by a launched run through a node's `delivers`.
-        queued: Queued
-        # Taken up.
-        in-progress: In Progress
-        # A node delivering it failed, parked or was skipped.
-        unknown: Needs Attention
-        # Finished.
-        done: Done
-        # Withdrawn.
-        cancelled: Canceled
-        # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
     cache:
       enabled: true

@@ -1,4 +1,9 @@
-"""A checkout of the declared planning interfaces, with only its unused Linear route removed."""
+"""A checkout of the declared planning interfaces.
+
+The tracked `onetaskgraph.yaml` routes nothing to a Linear source — an organization's routes
+live in a host's user layer, which the suite never hands a test — so the copy launches against
+no real tracker as it stands.
+"""
 
 from __future__ import annotations
 
@@ -22,19 +27,6 @@ def checkout(destination: Path) -> Path:
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(REPO_ROOT / relative, target)
-    configuration = destination / "onetaskgraph.yaml"
-    lines = configuration.read_text().splitlines()
-    start = lines.index("  plans:")
-    end = start + 1
-    while end < len(lines) and (lines[end].startswith("    ") or not lines[end].strip()):
-        end += 1
-    route = lines.index("    routes:", start, end)
-    assert lines[route + 1 : route + 3] == [
-        '      - repositories: ["github.com/petsinc/*"]',
-        "        to: hellopatient",
-    ], "plans route shape moved; refuse before launching against a real source"
-    del lines[route : route + 3]
-    configuration.write_text("\n".join(lines) + "\n")
     subprocess.run(
         ["uv", "sync", "--locked", "--offline"],
         cwd=destination,

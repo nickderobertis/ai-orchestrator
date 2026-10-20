@@ -26,6 +26,7 @@
     "support-nx-inputs",
     "support-older-plan-store",
     "support-onejudge-bundle",
+    "support-onetaskgraph-user-layer",
     "support-onevcs-stand-in",
     "support-onevcs-state-snapshot",
     "support-persona-identifiers",
@@ -85,6 +86,7 @@
       "!{workspaceRoot}/tests/e2e/registry_and_recipes/test_*.py",
       "!{workspaceRoot}/tests/e2e/suite_helpers/test_*.py",
       "!{workspaceRoot}/tests/e2e/repos_apply_credentials/test_*.py",
+      "!{workspaceRoot}/tests/e2e/host_local_registration/test_*.py",
       "!{workspaceRoot}/tests/e2e/spike_brief/test_*.py",
       "!{workspaceRoot}/tests/e2e/workspace_copies/test_*.py",
       "!{workspaceRoot}/tests/e2e/launch_monitor_observer/oneharness_resolved/**/*"
@@ -129,7 +131,7 @@
       ]
     },
     "coverage": {
-      "command": "rm -f .coverage && env -u FORCE_COLOR NO_COLOR=1 uv run coverage combine --keep .coverage.parallel .coverage.budget-gate .coverage.dispatch-bar .coverage.e2e-root .coverage.family-scans .coverage.launch-monitor-observer .coverage.manager-guidance .coverage.plan-guidance .coverage.plan-tooling-check-and-review .coverage.plan-tooling-follow-ups .coverage.plan-tooling-plan-copy .coverage.plan-tooling-plan-flow .coverage.publish-and-landing .coverage.registry-and-recipes .coverage.release-pins .coverage.spike-brief .coverage.tree-scans .coverage.workspace-copies && env -u FORCE_COLOR NO_COLOR=1 uv run coverage report",
+      "command": "rm -f .coverage && env -u FORCE_COLOR NO_COLOR=1 uv run coverage combine --keep .coverage.parallel .coverage.budget-gate .coverage.dispatch-bar .coverage.e2e-root .coverage.family-scans .coverage.launch-monitor-observer .coverage.manager-guidance .coverage.plan-guidance .coverage.plan-tooling-check-and-review .coverage.plan-tooling-follow-ups .coverage.plan-tooling-host-layer-routing .coverage.plan-tooling-plan-copy .coverage.plan-tooling-plan-flow .coverage.publish-and-landing .coverage.registry-and-recipes .coverage.release-pins .coverage.spike-brief .coverage.tree-scans .coverage.workspace-copies && env -u FORCE_COLOR NO_COLOR=1 uv run coverage report",
       "options": {
         "cwd": "."
       },
@@ -145,6 +147,7 @@
         {"projects": ["plan-guidance"], "target": "test"},
         {"projects": ["plan-tooling-check-and-review"], "target": "test"},
         {"projects": ["plan-tooling-follow-ups"], "target": "test"},
+        {"projects": ["plan-tooling-host-layer-routing"], "target": "test"},
         {"projects": ["plan-tooling-plan-copy"], "target": "test"},
         {"projects": ["plan-tooling-plan-flow"], "target": "test"},
         {"projects": ["publish-and-landing"], "target": "test"},

@@ -34,6 +34,7 @@ from types import SimpleNamespace
 
 import follow_up_boundary
 import follow_up_variables
+import onetaskgraph_user_layer
 import pytest
 from follow_up_ticket_shape import DUPLICATE_SEARCH as SHARED_DUPLICATE_SEARCH
 from follow_up_ticket_shape import (
@@ -1675,9 +1676,8 @@ def test_the_contract_renders_the_ticket_with_every_key_heading_and_status_rule(
         "route"
     ) in flat
     assert (
-        "A repository one of the board's routes names — `github.com/petsinc/*`, which goes to "
-        "Hello Patient's Linear — is filed as an issue of the source that route names instead, "
-        "whatever its owner."
+        "A repository one of the board's routes names is filed as an issue of the source that "
+        "route names instead, whatever its owner."
     ) in flat
     assert f"{tickets.OUTSIDE_OWNER} when the ticket's repository is not one of the board's" in flat
     assert (
@@ -2847,7 +2847,7 @@ def test_board_status_over_a_queued_item_prints_queued_and_refuses_to_withdraw_i
 def test_the_status_vocabulary_says_what_each_status_is_and_that_only_todo_is_picked_up() -> None:
     vocabulary = tickets.status_vocabulary()
     bullets = [line for line in vocabulary.splitlines() if line.startswith("- ")]
-    # Each status's place on the GitHub board and its state in Hello Patient's Linear, as the
+    # Each status's place on the GitHub board and its state in Hidden Co's Linear, as the
     # user decided them.
     shown = [
         ("Board status `Proposal`", "Proposed"),
@@ -6806,16 +6806,17 @@ def test_board_reads_refuse_incomplete_details_through_the_cli_protocol(
     assert expected in capsys.readouterr().err
 
 
-#: A second local store the stand-in board's route sends a `petsinc` root cause to, as the
-#: committed `followups` sends one to `hellopatient-followups`, and a repository it routes.
+#: A second local store the stand-in board's route sends a `hiddenco` root cause to, as a
+#: host's user layer sends one from `followups` to the organization's own tracker, declared
+#: private as that tracker is; and a repository it routes, registered private.
 ROUTED = "ticketrouted"
-ROUTED_REPOSITORY = "github.com/petsinc/hp-api"
+ROUTED_REPOSITORY = "github.com/hiddenco/qh-api"
 ROUTED_CAUSE = "intake-form-drops-a-field"
 
 
 @pytest.fixture
 def routed(board: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """The routed store's root, with the stand-in board routing every `petsinc` repository to it.
+    """The routed store's root, with the stand-in board routing every `hiddenco` repository to it.
 
     The route is stated through the store's own environment layer, whose entries replace the
     document's list whole, so it is the stand-in board's one route.
@@ -6825,7 +6826,7 @@ def routed(board: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path
     monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{ROUTED.upper()}__PLUGIN", WRITABLE_PLUGIN)
     monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{ROUTED.upper()}__CONFIG__ROOT", str(root))
     monkeypatch.setenv(
-        f"ONETASKGRAPH_SOURCES__{BOARD.upper()}__ROUTES__0__REPOSITORIES", "github.com/petsinc/*"
+        f"ONETASKGRAPH_SOURCES__{BOARD.upper()}__ROUTES__0__REPOSITORIES", "github.com/hiddenco/*"
     )
     monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{BOARD.upper()}__ROUTES__0__TO", ROUTED)
     follow_up_boundary.enable(monkeypatch, public=(BOARD,), private=(ROUTED,))
@@ -6838,7 +6839,7 @@ def _routed_ticket(**departures: object) -> tickets.Ticket:
     return _ticket(
         root_cause=tickets.RootCause(ROUTED_CAUSE),
         repository=origin,
-        title="hp-api: the intake form drops a field",
+        title="qh-api: the intake form drops a field",
         basis=(tickets.Basis(origin, tickets.Commit(COMMIT)),),
         drafts=(tickets.QualifiedDraftId(DRAFT),),
         **departures,
@@ -6897,7 +6898,7 @@ def test_a_routed_ticket_is_filed_bound_decided_and_searched_on_the_board_its_ro
         "",
     )
     assert _listed(capsys, *query) == (tickets.SOUND, [], ""), "the root board alone was asked"
-    assert _listed(capsys, *query, "--repository", "petsinc/hp-api")[0] == tickets.UNRUNNABLE
+    assert _listed(capsys, *query, "--repository", "hiddenco/qh-api")[0] == tickets.UNRUNNABLE
 
 
 def test_a_ticket_no_route_names_stays_on_the_root_board(
@@ -6912,8 +6913,8 @@ def test_a_ticket_no_route_names_stays_on_the_root_board(
     assert not any(routed.rglob("*.md"))
 
 
-#: A second `petsinc` repository, which the stand-in board's route matches as it does the first.
-ROUTED_SIBLING = "github.com/petsinc/hp-web"
+#: A second `hiddenco` repository, which the stand-in board's route matches as it does the first.
+ROUTED_SIBLING = "github.com/hiddenco/qh-web"
 
 
 def test_a_ticket_listing_several_repositories_takes_a_route_only_when_every_one_matches(
@@ -7178,10 +7179,37 @@ def test_a_dependency_on_any_board_of_the_family_is_held_and_one_outside_it_is_r
         assert reason in reported
 
 
-def test_a_petsinc_root_cause_passes_the_owner_rule_by_its_route_and_an_outsider_is_refused() -> (
-    None
-):
-    """Against the committed `followups`: its route files a `petsinc` repository in Linear.
+#: The organization's follow-up tracker the example user layer routes `hiddenco` work to.
+ORGANIZATION_FOLLOWUPS = onetaskgraph_user_layer.ORGANIZATION_FOLLOWUPS
+
+
+@pytest.fixture
+def example_layer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The tracked example user layer installed beneath the committed boards, as a host's is."""
+    home = onetaskgraph_user_layer.installed(tmp_path / "config-home")
+    monkeypatch.setenv(onetaskgraph_user_layer.XDG_CONFIG_HOME, str(home))
+    return home
+
+
+def test_the_committed_followups_alone_routes_nothing_and_files_an_outsider_nowhere() -> None:
+    """The tracked `followups` declares no route: every ticket's board is `followups` itself.
+
+    An organization's route is a host's, in its user layer; with none installed a `hiddenco`
+    repository is outside the board's owner like any other and is refused, naming the owner.
+    """
+    owner = tickets.board_owner(tickets.BOARD)
+
+    assert tickets.boards(tickets.BOARD) == (tickets.BOARD,)
+    assert tickets.ticket_board(tickets.BOARD, [ROUTED_REPOSITORY]) == tickets.BOARD
+    refusal = tickets.owner_refusal(tickets.BOARD, owner, ROUTED_REPOSITORY, tickets.BOARD)
+    assert isinstance(refusal, tickets.OutsideOwner)
+    assert "no route of the board sends it elsewhere" in str(refusal)
+
+
+def test_a_hiddenco_root_cause_passes_the_owner_rule_by_its_route_and_an_outsider_is_refused(
+    example_layer: Path,
+) -> None:
+    """Under the example user layer: its route files a `hiddenco` repository in Linear.
 
     A repository neither of the board's owner nor matched by a route is still refused, naming
     the owner; the route is read from configuration alone, so nothing reaches either board.
@@ -7189,7 +7217,7 @@ def test_a_petsinc_root_cause_passes_the_owner_rule_by_its_route_and_an_outsider
     owner = tickets.board_owner(tickets.BOARD)
     linear = tickets.ticket_board(tickets.BOARD, [ROUTED_REPOSITORY])
 
-    assert linear == "hellopatient-followups"
+    assert linear == ORGANIZATION_FOLLOWUPS
     assert tickets.boards(tickets.BOARD) == (tickets.BOARD, linear)
     assert tickets.owner_refusal(tickets.BOARD, owner, ROUTED_REPOSITORY, linear) is None
     assert tickets.owner_refusal(tickets.BOARD, owner, REPOSITORY, tickets.BOARD) is None
@@ -7200,18 +7228,19 @@ def test_a_petsinc_root_cause_passes_the_owner_rule_by_its_route_and_an_outsider
     assert "no route of the board sends it elsewhere" in str(refusal)
 
 
-def test_the_committed_followups_files_a_ticket_listing_several_in_its_configured_repository() -> (
-    None
-):
+def test_the_committed_followups_files_a_ticket_listing_several_in_its_configured_repository(
+    example_layer: Path,
+) -> None:
     """A ticket listing one is filed in it; several, where the store files a parentless task.
 
     The committed `followups` configures `nickderobertis/ai-orchestrator`, which a ticket
-    listing several is created in; Hello Patient's Linear, which a route sends a ticket listing
-    only `petsinc` repositories to, configures none, so it files no issue in a repository.
+    listing several is created in; the example layer's Linear tracker, which its route sends a
+    ticket listing only `hiddenco` repositories to, configures none, so it files no issue in a
+    repository.
     """
     linear = tickets.ticket_board(tickets.BOARD, [ROUTED_REPOSITORY, ROUTED_SIBLING])
 
-    assert linear == "hellopatient-followups"
+    assert linear == ORGANIZATION_FOLLOWUPS
     assert tickets.ticket_board(tickets.BOARD, [REPOSITORY, ROUTED_REPOSITORY]) == tickets.BOARD
     assert tickets.filing_repository(tickets.BOARD, [REPOSITORY]) == REPOSITORY
     assert tickets.filing_repository(tickets.BOARD, [REPOSITORY, ROUTED_REPOSITORY]) == (
@@ -7241,7 +7270,7 @@ def test_the_committed_followups_files_a_ticket_listing_several_in_its_configure
         ),
         (
             _spanning(ROUTED_REPOSITORY, ROUTED_SIBLING),
-            "so it is filed on 'hellopatient-followups', which files no issue in any repository",
+            f"so it is filed on {ORGANIZATION_FOLLOWUPS!r}, which files no issue in any repository",
         ),
     ],
     ids=[
@@ -7256,12 +7285,17 @@ def test_the_committed_followups_files_a_ticket_listing_several_in_its_configure
     ],
 )
 def test_validate_holds_a_ticket_to_where_the_committed_followups_files_its_issue(
+    example_layer: Path,
     drafts_root: Path,
     capsys: pytest.CaptureFixture[str],
     ticket: tickets.Ticket,
     refusal: str | None,
 ) -> None:
-    """The `validate` the agent runs, against the committed boards' configuration alone."""
+    """The `validate` the agent runs, against the committed boards' configuration alone.
+
+    Beneath them, the example user layer, whose route sends a ticket listing only `hiddenco`
+    repositories to the organization's tracker.
+    """
     path = _write(drafts_root, ticket)
 
     status = tickets.main(["validate", str(path)])
@@ -7383,13 +7417,15 @@ def test_a_runs_markers_read_back_as_its_own_from_a_linear_comment_and_are_never
 # installed plan-store CLI's resolution of the tracked configuration, in the `reads_checkouts`
 # tier `tests/test_plan_source_roots.py`'s source checks use.
 @pytest.mark.reads_checkouts
-def test_each_statuss_linear_state_is_the_one_the_linear_source_writes_it_as() -> None:
-    """The vocabulary's Linear names are the tracked `hellopatient-followups` mapping's.
+def test_each_statuss_linear_state_is_the_one_the_linear_source_writes_it_as(
+    example_layer: Path,
+) -> None:
+    """The vocabulary's Linear names are the example layer's organization tracker mapping's.
 
     And none of the states a run never writes is one the mapping writes a status as.
     """
     settings = plan_store.configured_settings()
-    prefix = "sources.hellopatient-followups.config.status_mapping."
+    prefix = f"sources.{ORGANIZATION_FOLLOWUPS}.config.status_mapping."
     mapping = {
         key.removeprefix(prefix): value for key, value in settings.items() if key.startswith(prefix)
     }

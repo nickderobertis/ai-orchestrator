@@ -5,7 +5,9 @@ arms it. The first journey runs a real fixture of this
 tier — the copy `test_plan_copy_destination_ids_e2e.py` makes through `just plans` — as a
 pytest session of its own loading this suite's conftest, under a configuration home holding
 the very declaration that refused it. The second holds the sandbox to linking every other
-entry of that home, and to leaving the home itself as it found it. The next holds the
+entry of that home, and to leaving the home itself as it found it; the third holds back
+ai-orchestrator's own host checkout list and rules overlay while linking that directory's
+other entries. The next holds the
 helper's reading of where a configuration home is to the store's own, and the last three
 hold real Bun to the cache the user's `.npmrc` names once the home moves, to a cache the
 environment already states, and to stating none when `bun pm cache` cannot answer.
@@ -168,6 +170,47 @@ def test_the_sandbox_links_every_other_entry_and_leaves_the_users_home_unchanged
     # A pytest process this one starts links the same user's home, not this sandbox.
     nested = plan_store_user_layer.isolate()
     assert (nested / "gh").resolve() == (config_home / "gh").resolve()
+    assert {path: path.read_bytes() for path in config_home.rglob("*") if path.is_file()} == (
+        before
+    )
+
+
+def test_the_sandbox_holds_back_the_hosts_checkout_list_and_rules_overlay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ai-orchestrator's two host layers stay out; its other entries are the user's own.
+
+    Read through `scripts/registered-checkouts.sh`, the selection `just repos-apply` and `just
+    repos-bootstrap` make: with the host's own list held back it answers the tracked one, and
+    the user's home is left as it was found.
+    """
+    config_home = tmp_path / "config"
+    orchestrator = config_home / plan_store_user_layer.ORCHESTRATOR_DIRECTORY
+    orchestrator.mkdir(parents=True)
+    for layer in plan_store_user_layer.HOST_LAYERS:
+        (orchestrator / layer).write_text("# the host's own\n", encoding="utf-8")
+    (orchestrator / "workspaces.yml").write_text("version: 1\n", encoding="utf-8")
+    before = {path: path.read_bytes() for path in config_home.rglob("*") if path.is_file()}
+    for key, value in _invoking_user(config_home).items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv(plan_store_user_layer.HOST_CONFIG_HOME_ENV, raising=False)
+
+    sandbox = plan_store_user_layer.isolate()
+
+    held = sandbox / plan_store_user_layer.ORCHESTRATOR_DIRECTORY
+    assert held.is_dir() and not held.is_symlink()
+    assert sorted(entry.name for entry in held.iterdir()) == ["workspaces.yml"]
+    assert (held / "workspaces.yml").resolve() == (orchestrator / "workspaces.yml").resolve()
+    selected = subprocess.run(
+        ["bash", "-c", 'source scripts/registered-checkouts.sh && default_checkouts_file "$PWD"'],
+        cwd=REPO_ROOT,
+        env=dict(os.environ),
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=True,
+    )
+    assert selected.stdout.strip() == str(REPO_ROOT / "config" / "onevcs.checkouts")
     assert {path: path.read_bytes() for path in config_home.rglob("*") if path.is_file()} == (
         before
     )

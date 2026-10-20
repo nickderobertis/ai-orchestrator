@@ -30,11 +30,12 @@ journeys read the board back through :func:`from_store_item` and :func:`comment_
 
 **A ticket is filed on the board its repositories route it to.** `followups` is the root of a
 run's **destination family**: it and every source its `routes` send a ticket to
-(`onetaskgraph.yaml` sends a `github.com/petsinc/*` root cause to Hello Patient's Linear,
-`hellopatient-followups`). Every command taking `--board` takes that root and acts on each
-ticket at **its board** — :func:`ticket_board`, the store's own `sources route` for every
-repository the ticket's `repositories` lists — so a ticket's binding, origin search, survivor,
-estimate and copy all live where its item does, and nothing here names the routed source. A
+(a route this host declares in its onetaskgraph user layer, outside every checkout, sends an
+organization's root cause to that organization's own tracker). Every command taking
+`--board` takes that root and acts on each ticket at **its board** — :func:`ticket_board`, the
+store's own `sources route` for every repository the ticket's `repositories` lists — so a
+ticket's binding, origin search, survivor, estimate and copy all live where its item does, and
+nothing here names the routed source. A
 ticket whose fix changes several repositories lists them all and is filed exactly as the store
 files a parentless task naming several (:func:`filing_problems`), never by any one of them.
 
@@ -263,8 +264,8 @@ class _Place(NamedTuple):
 
 
 #: Each status's place on both destinations: the `followups` board's option, and the workflow
-#: state of Hello Patient's Linear the `hellopatient-followups` source writes it as.
-#: `tests/test_follow_up_tickets.py` holds the Linear names to that source's `status_mapping`.
+#: state a routed Linear tracker writes it as. `tests/test_follow_up_tickets.py` holds the
+#: Linear names to the `status_mapping` `config/onetaskgraph.user-layer.example.yaml` declares.
 _PLACES = {
     Status.PROPOSED: _Place(
         "Board status `Proposal`", "Proposed", "a follow-up run's first copy of a new ticket"
@@ -488,7 +489,9 @@ FREQUENCY_FIELD = "frequency"
 #: creates. A ticket bound to an item already on the board, which the store's link does not
 #: name — the one case the store cannot be told which of several carriers is meant — is
 #: steered by the ticket's own :data:`ORIGIN_KEY` naming its binding instead, which the store
-#: follows by its origin rule; no ticket whose item a copy creates is given one. Both commands
+#: follows by its origin rule; no ticket whose item a copy creates is given one. A ticket copied
+#: onto a source declared private, on which the store records no link back on the `drafts`
+#: ticket, is steered by its own :data:`ORIGIN_KEY` naming its binding the same way. Both commands
 #: refuse, naming both ids, when the link or the store's destination is any other item.
 BINDING_FIELD = "board_item"
 #: **Which budget an overrun ticket was filed for.** Optional, and carried only by a ticket

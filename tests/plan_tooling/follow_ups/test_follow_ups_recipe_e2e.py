@@ -4843,7 +4843,15 @@ def test_follow_ups_measures_each_repository_before_dispatch_and_refuses_an_unac
     monkeypatch: pytest.MonkeyPatch,
     overrun: bool,
 ) -> None:
-    monkeypatch.setenv("ONEVCS_HOME", str(tmp_path / "delivery-registry"))
+    # The two repositories this journey registers are public ones, declared so before they
+    # are registered: an undeclared one is probed on the host, reads `unknown` — private —
+    # and its name then refuses the follow-up task written about it.
+    delivery = follow_up_boundary.declared_home(
+        tmp_path / "delivery-registry",
+        public=("github.com/example/budgeted", "github.com/example/unlabelled"),
+        private=(),
+    )
+    monkeypatch.setenv("ONEVCS_HOME", str(delivery))
     checkout, trace = delegation_checkout.delegation_checkout(tmp_path)
     _creates_tasks(checkout)
     bins = checkout / ".venv/bin"
@@ -5194,7 +5202,16 @@ def test_real_follow_ups_disposes_of_open_cancelled_and_changed_budget_causes(
         hook_snapshot = Path(command[command.index("--measured") + 1])
         assert not hook_snapshot.is_relative_to(bench.drafts_root)
         watched = _run(
-            [str(ENGINE), "watch", followed.run, "--until", "settled", "--timeout", "60"], bench
+            [
+                str(ENGINE),
+                "watch",
+                followed.run,
+                "--until",
+                "settled",
+                "--timeout",
+                str(int(e2e_timeout(60))),
+            ],
+            bench,
         )
         assert watched.returncode == 0, watched.stdout + watched.stderr
         deadline = time.monotonic() + e2e_timeout(60)
@@ -5269,7 +5286,16 @@ def test_real_follow_ups_disposes_of_open_cancelled_and_changed_budget_causes(
         assert retry_launch["success_hook"] != str(hook)
         assert (
             _run(
-                [str(ENGINE), "watch", again.run, "--until", "settled", "--timeout", "60"], bench
+                [
+                    str(ENGINE),
+                    "watch",
+                    again.run,
+                    "--until",
+                    "settled",
+                    "--timeout",
+                    str(int(e2e_timeout(60))),
+                ],
+                bench,
             ).returncode
             == 0
         )
@@ -5333,7 +5359,16 @@ def test_failed_detached_follow_up_closes_its_budget_account_without_launching_a
     command = shlex.split(hook.read_text().split("exec ", 1)[1])
     snapshot = Path(command[command.index("--measured") + 1])
     failed = _run(
-        [str(ENGINE), "watch", followed.run, "--until", "settled", "--timeout", "60"], bench
+        [
+            str(ENGINE),
+            "watch",
+            followed.run,
+            "--until",
+            "settled",
+            "--timeout",
+            str(int(e2e_timeout(60))),
+        ],
+        bench,
     )
     assert failed.returncode == 3, failed.stdout + failed.stderr
     assert "nothing-driving" in failed.stdout

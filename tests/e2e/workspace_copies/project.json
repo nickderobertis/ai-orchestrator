@@ -54,6 +54,7 @@
       "{workspaceRoot}/scripts/workspace-install.sh",
       "{workspaceRoot}/tests/dispatch_bar/project.json",
       "{workspaceRoot}/tests/e2e/budget_gate/project.json",
+      "{workspaceRoot}/tests/e2e/host_local_registration/project.json",
       "{workspaceRoot}/tests/e2e/launch_monitor_observer/project.json",
       "{workspaceRoot}/tests/e2e/project.json",
       "{workspaceRoot}/tests/e2e/publish_and_landing/project.json",

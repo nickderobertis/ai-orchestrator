@@ -112,7 +112,7 @@ class Loopback:
 
 @pytest.fixture
 def loopback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Loopback]:
-    """The loopback board served as `followups`, its route kept off Hello Patient's Linear."""
+    """The loopback board served as `followups`, its route kept off Hidden Co's Linear."""
     environment, root = remote._followups_environment(tmp_path)
     routed = tmp_path / "routed-followups"
     routed.mkdir()
@@ -120,7 +120,7 @@ def loopback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Loopba
         "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__PLUGIN": plan_store.WRITABLE_PLUGIN,
         "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__CONFIG__ROOT": str(routed),
         "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__VISIBILITY": "private",
-        "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__REPOSITORIES": "github.com/petsinc/*",
+        "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__REPOSITORIES": "github.com/hiddenco/*",
         "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__TO": "routedfollowups",
     }
     # The state root the store's public boundary classifies every ticket's repositories by.

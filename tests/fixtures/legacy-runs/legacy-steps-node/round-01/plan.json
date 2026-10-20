@@ -3,15 +3,15 @@
   "concurrency": 1,
   "tasks": [
     {
-      "id": "ivr-real-api",
-      "repo": "petsinc/org-apps",
+      "id": "service-real-api",
+      "repo": "hiddenco/stillwater",
       "repo_type": "team",
       "steps": [
         {
           "id": "e2e-real-api-path",
           "persona": "engineer",
           "max_turns": 40,
-          "task": "## What\nGive the ivr app a real-API e2e path."
+          "task": "## What\nGive the service a real-API e2e path."
         },
         {
           "id": "sign-off",

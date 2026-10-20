@@ -10,7 +10,7 @@ every ticket, board item, comment and snapshot is written and read through. The 
 **The board is the loopback GitHub, never the live `followups` board**: `tests/github_board.py`
 serves it in this process as `followups`, and the locked plan store reads and writes it through
 its real `github-projects` plugin with the cache this checkout's `onetaskgraph.yaml` turns on,
-under a cache home of the journey's own. Its route to Hello Patient's Linear is pointed at an
+under a cache home of the journey's own. Its route to Hidden Co's Linear is pointed at an
 empty local folder, as every loopback journey points it. What reaches the board is read off the
 loopback's own request log, so the journeys hold what the pass asks the board rather than what
 a stand-in store says it was asked. A comment a person writes, or edits, is planted on the
@@ -298,7 +298,7 @@ def _launching_checkout(tmp: Path, store: str = RECORDING_STORE) -> Path:
 def _serving(bench: Bench) -> Iterator[None]:
     """The loopback board served as `followups` for every process ``bench`` starts.
 
-    Its route to Hello Patient's Linear goes to an empty local folder instead, its listing is
+    Its route to Hidden Co's Linear goes to an empty local folder instead, its listing is
     paged at :data:`PAGE_SIZE`, and a comment a write adds is dated by the wall clock, which is
     what every boundary and watermark here is reasoned in.
     """
@@ -311,7 +311,7 @@ def _serving(bench: Bench) -> Iterator[None]:
             "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__PLUGIN": plan_store.WRITABLE_PLUGIN,
             "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__CONFIG__ROOT": str(routed),
             "ONETASKGRAPH_SOURCES__ROUTEDFOLLOWUPS__VISIBILITY": "private",
-            "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__REPOSITORIES": "github.com/petsinc/*",
+            "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__REPOSITORIES": "github.com/hiddenco/*",
             "ONETASKGRAPH_SOURCES__FOLLOWUPS__ROUTES__0__TO": "routedfollowups",
             "ONETASKGRAPH_PAGE_SIZE": str(PAGE_SIZE),
             "ONETASKGRAPH_SECRETS_FILE": str(bench.tmp / "no-secrets.env"),
@@ -1607,9 +1607,13 @@ def test_a_write_landing_fewer_parts_than_it_asked_for_is_partial_and_the_next_p
         again.report
     )
     retries = [one for one in again.requests if one.operation in WRITES | {_Operation.UPDATE_ISSUE}]
-    assert [one.operation for one in retries] == [
-        _Operation.UPDATE_ISSUE_WHOLE if settled else _Operation.UPDATE_ISSUE
-    ], again.operations()
+    # Whether settle's read held a version is what its write says: `--expect` names it, and a
+    # version GitHub answered under load without the agent's wait goes `--expect` too.
+    (update,) = [one.argv for one in again.recorded if one.argv[:2] == ["task", "update"]]
+    if settled:
+        assert "--expect" in update, update
+    expected = _Operation.UPDATE_ISSUE_WHOLE if "--expect" in update else _Operation.UPDATE_ISSUE
+    assert [one.operation for one in retries] == [expected], (update, again.operations())
     sent = retries[0].variables.get("input")
     assert isinstance(sent, dict) and "body" in sent and "title" not in sent, sent
     assert after.priority == "High" and "3 occurrences" in after.body, after.body

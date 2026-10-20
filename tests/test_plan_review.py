@@ -155,7 +155,7 @@ def test_the_key_changes_with_every_authored_field() -> None:
         "cross-DAG deps": _task(metadata=_metadata(deps=["run:r-upstream#adopt"])),
         "expects_no_diff": _task(metadata=_metadata(expects_no_diff=True)),
         "repo (hosted)": _task(repositories=["github.com/nickderobertis/elsewhere"]),
-        "repo (local checkout)": _task(metadata=_metadata(repo="/home/nick/projects/org-apps")),
+        "repo (local checkout)": _task(metadata=_metadata(repo="/home/nick/projects/stillwater")),
         "adoption": _task(metadata=_metadata(adoption="published")),
         "consumes": _task(metadata=_metadata(consumes={"engine": "crate"})),
         "merge_policy": _task(metadata=_metadata(merge_policy="change-auto")),
@@ -527,7 +527,7 @@ def test_the_reviewer_is_asked_the_three_questions_that_moved_here() -> None:
             _task(repositories=["github.com/nickderobertis/elsewhere"]), True, id="hosted repo"
         ),
         pytest.param(
-            _task(metadata=_metadata(repo="/home/nick/projects/org-apps")),
+            _task(metadata=_metadata(repo="/home/nick/projects/stillwater")),
             True,
             id="local checkout",
         ),
@@ -2929,7 +2929,7 @@ def test_the_planner_is_told_how_to_state_its_budgets_in_general_terms() -> None
         "`orchestrator.plan-budgets`",
     ):
         assert rule in stated, rule
-    for host_name in ("nickderobertis", "ai-orchestrator", "petsinc", "hellopatient"):
+    for host_name in ("nickderobertis", "ai-orchestrator", "hiddenco", "quietharbor"):
         assert host_name not in section, host_name
 
 

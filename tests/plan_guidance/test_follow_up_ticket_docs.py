@@ -11,9 +11,9 @@ classified by what they look like, and every name of each kind has to be one its
 * a **status category** is any word the installed store's category vocabulary holds, read
   off `onetaskgraph task list --help` rather than restated, and has to be a ticket status;
 * a **board option** is a capitalised word or phrase, and has to be named by the block of
-  `onetaskgraph.yaml` of a source a follow-up ticket is filed in — `followups`, or the Linear
-  `hellopatient-followups` its route names — in its mapping or the comment naming what the
-  board carries;
+  `onetaskgraph.yaml` or the example user layer for a source a follow-up ticket is filed in
+  — `followups`, or the Linear `hiddenco-followups` a host's route names — in its mapping
+  or the comment naming what the board carries;
 * a **record key** is a name written as a record's (`` record's `name` ``) or as a key
   (`` `name` key ``), or a `snake_case` name, and has to be a key of the ticket's record —
   or, for a `snake_case` name, a setting `onetaskgraph.yaml` holds, or the store's own
@@ -72,13 +72,18 @@ def store_categories() -> frozenset[str]:
     return frozenset(re.findall(r"^\s+- ([a-z-]+):", listed, re.MULTILINE))
 
 
-#: The sources a follow-up ticket is filed in: the board, and the Linear source it routes to.
-FOLLOW_UP_SOURCES = ("followups", "hellopatient-followups")
+#: The sources a follow-up ticket is filed in, by the document declaring each: the tracked
+#: board, and the Linear tracker a host's route sends an organization's ticket to, as the
+#: example user layer declares it — the tracked document routes nothing.
+FOLLOW_UP_SOURCES = (
+    ("onetaskgraph.yaml", "followups"),
+    ("config/onetaskgraph.user-layer.example.yaml", "hiddenco-followups"),
+)
 
 
-def source_block(name: str) -> str:
-    """One source's block of `onetaskgraph.yaml`, comments included."""
-    text = (REPO_ROOT / "onetaskgraph.yaml").read_text(encoding="utf-8")
+def source_block(document: str, name: str) -> str:
+    """One source's block of ``document``, comments included."""
+    text = (REPO_ROOT / document).read_text(encoding="utf-8")
     opened = text.index(f"\n  {name}:\n") + 1
     following = re.compile(r"^  \S", re.MULTILINE).search(text, opened + 1)
     return text[opened : following.start() if following else len(text)]
@@ -86,7 +91,7 @@ def source_block(name: str) -> str:
 
 def followups_block() -> str:
     """The blocks of every source a follow-up ticket is filed in, comments included."""
-    return "".join(source_block(name) for name in FOLLOW_UP_SOURCES)
+    return "".join(source_block(document, name) for document, name in FOLLOW_UP_SOURCES)
 
 
 def unheld(prose: str, categories: frozenset[str]) -> set[str]:

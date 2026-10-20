@@ -34,6 +34,7 @@ from typing import Any, TypedDict
 
 import pytest
 from harness_configs import extends_chain, harness_routing
+from plan_store_credentials import PLAN_STORE_CREDENTIALS, from_placeholder
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
@@ -71,7 +72,6 @@ DISPATCHED_ROLES = (
 #: deliverable is writing the `followups` board. Every other role masks both. What is
 #: held here is that the layering did not move which side of that line a role sits on,
 #: and that no variant masks one without the other.
-PLAN_STORE_CREDENTIALS = ("GH_PROJECTS_TOKEN", "HELLOPATIENT_LINEAR_API_KEY")
 PLAN_STORE_CONFIGS = (
     "oneharness.design-doc.toml",
     "oneharness.design-doc-judge.toml",
@@ -258,7 +258,11 @@ def test_every_role_config_resolves_to_its_committed_configuration(
     it: a later edit to a shared parent or a role file that changes ANY resolved value
     fails here, and a deliberate change is an update to the record in the same commit.
     """
-    expected = json.loads((RECORDS / f"{config}.json").read_text(encoding="utf-8"))
+    # A record spells the Linear key's name as its placeholder, so it is compared as the
+    # name the resolver reports.
+    expected = json.loads(
+        from_placeholder((RECORDS / f"{config}.json").read_text(encoding="utf-8"))
+    )
     actual = _comparable(_effective_config(oneharness_bin, REPO_ROOT / config))
 
     assert actual == expected, (

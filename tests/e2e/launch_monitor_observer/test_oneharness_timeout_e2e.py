@@ -43,6 +43,7 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+import plan_store_credentials
 from command_ceiling import CEILING_MS, CLAUDE_CODE_CEILING, CODEX_CEILING_ARGS
 from waits import deadline
 from waits import timeout as e2e_timeout
@@ -210,7 +211,7 @@ FOLLOW_UP_DEADLINE_SECONDS = 7200
 #: The credentials that config alone leaves unmasked — the board token and the production
 #: Linear key — and the one field besides the four above it may differ from the judge's in:
 #: the history labels that say which side ran.
-PLAN_STORE_CREDENTIALS = ["GH_PROJECTS_TOKEN", "HELLOPATIENT_LINEAR_API_KEY"]
+PLAN_STORE_CREDENTIALS = list(plan_store_credentials.PLAN_STORE_CREDENTIALS)
 FOLLOW_UP_DIFFERENCES = {"timeout", "stream", "history_labels", "harness", "mode"}
 
 #: The worker's agent side for a plan node that must prove behaviour against the real
@@ -791,7 +792,7 @@ def test_every_side_resolves_its_intended_effective_deadline(
             f"oneharness.board-live.toml's {identity} still masks {BOARD_TOKEN}, the one "
             "credential that config exists to let travel"
         )
-        assert "HELLOPATIENT_LINEAR_API_KEY" in masks, (
+        assert plan_store_credentials.organization_linear_key() in masks, (
             f"oneharness.board-live.toml's {identity} no longer masks the production Linear "
             "key, which only the board token was meant to be released from"
         )

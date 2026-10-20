@@ -5,8 +5,9 @@ review-plan`, `just plan`, the registered check script, the installed engine and
 `oneharness run`, up to a whole launch driven to settlement.
 
 - **One project per subject, each keyed on what it reads.** `check_and_review/`,
-  `follow_ups/`, `plan_flow/` and `plan_copy/` are the `plan-tooling-check-and-review`,
-  `-follow-ups`, `-plan-flow` and `-plan-copy` projects, and `tests/nx_inputs.py`'s
+  `follow_ups/`, `host_layer_routing/`, `plan_flow/` and `plan_copy/` are the
+  `plan-tooling-check-and-review`, `-follow-ups`, `-host-layer-routing`, `-plan-flow` and
+  `-plan-copy` projects, and `tests/nx_inputs.py`'s
   `PLAN_TOOLING_PROJECTS` names each one's key and the trace it was measured from, so an
   edit one subject never reads re-runs none of its journeys. A subject holding journeys
   that build a *copy* of this checkout has a second target, `test-docs`, keyed on the

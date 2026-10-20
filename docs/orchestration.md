@@ -58,6 +58,23 @@ it, which is why a board can still be listed by a checkout that names none.
 a copy of a local project files its issues in the configured repository, and a
 repository the credential cannot reach refuses the copy before anything is created.
 
+### Host-local sources and routes
+
+**What is private to a host is configured outside every checkout, and nothing tracked names
+it.** Three files under the host's configuration home, `${XDG_CONFIG_HOME:-$HOME/.config}`,
+carry it, each read beneath or in place of a tracked one:
+
+- `onetaskgraph/config.yaml`, onetaskgraph's **user layer**, read beneath this repository's
+  `onetaskgraph.yaml`: an organization's own sources and the repository routes that send its
+  work to them from `plans` and `followups`, and this host's own private stores.
+  `config/onetaskgraph.user-layer.example.yaml` is its shape over synthetic names;
+- `ai-orchestrator/onevcs.checkouts`, a **complete** checkout list that `just repos-apply` and
+  `just repos-bootstrap` — session setup's call included — read in place of the tracked
+  `config/onevcs.checkouts` whenever it exists (`scripts/registered-checkouts.sh`);
+- `ai-orchestrator/onevcs.rules.yml`, the **rules overlay** `just repos-apply` lays over the
+  tracked `config/onevcs.rules.yml` through `onevcs rules apply --base … --overlay …`, where
+  each private identity's rule declares its visibility.
+
 ### The public write boundary
 
 **The plan store's public write boundary is landed switched off, so no write is screened.**
@@ -67,12 +84,14 @@ inspect`, which answers each repository an item names as public or private, a ru
 declaration first and the host otherwise, and `boundary check`, which refuses a write carrying a
 private repository's terms, with the store's own refusal naming the source and nothing written.
 The store turns it on as soon as its configuration names a `write_policy` or any source declares
-a `visibility`, so the tracked `onetaskgraph.yaml` does neither.
+a `visibility` — in the tracked document or in a host's user layer — so the tracked
+`onetaskgraph.yaml` does neither, and a host's user layer that declares one switches the
+boundary on for that host.
 
 It stays off because the pinned store walks every source declared private on each dependency
-read of a task in any other source, and fails the read when one cannot be authenticated. The
-two Linear plan sources would have to be declared private for an organization's plan to be
-routed to them while the boundary is on, and a dispatch that does not hold the Linear
+read of a task in any other source, and fails the read when one cannot be authenticated. An
+organization's Linear sources in a host's user layer would have to be declared private for its
+plan to be routed to them while the boundary is on, and a dispatch that does not hold the Linear
 credential could then walk no dependency at all; with them left undeclared, the boundary would
 refuse every private repository's task routed there. Turning it on waits for the store to answer
 such a read with what the reader can see. Meanwhile a follow-up launch writes its project into
@@ -87,29 +106,51 @@ drives a private source receiving an organization's plan and the public board re
 `tests/e2e/board_copy_approval/test_board_copy_spike_evidence_e2e.py` a plan copied out of a
 private `authoring` whose spike reports resolve through the copy link the store records there.
 
-### Where a plan's tasks land: the board, or Hello Patient's Linear
+### Where a plan's tasks land: the board, or a routed organization's tracker
 
 **A task's destination follows its repository, through the store's routes, and nobody
-chooses it.** The `plans` source in `onetaskgraph.yaml` carries one route: a task whose
-`repositories` are all under `github.com/petsinc/*` lands in `hellopatient`, the Linear team
-`ENG` where Hello Patient plans its work, and every other task stays on the board. The store
-applies it when `just copy-plan` copies a plan onto `plans`, so a plan spanning both orgs is
-still authored as one project in `authoring` and copied with one command.
+chooses it.** A route a host declares on `plans` or `followups` in its user layer sends a
+task whose `repositories` all match it to the routed source — an organization's own tracker
+— and every other task stays on the board; `just plans sources route plans --repository
+<origin>` answers where one would land. A follow-up ticket is copied as a task, so an
+organization's root cause reaches its tracker by that route.
 
-**The plan's home goes to Linear only when every task does.** An all-petsinc plan lands whole
-in `hellopatient`: its project, its tasks and its design document, a Linear Document on that
-project. Any other plan's home stays on `plans` with its design document and its non-petsinc
-tasks, and its petsinc tasks go into one member project in `hellopatient`, tied to the home by
+**While the boundary is off, a mixed plan is split by its routes.** A plan whose every task
+is routed lands whole in the routed tracker: its project, its tasks and its design document.
+Any other plan's home stays on `plans` with its design document and its unrouted tasks, and
+its routed tasks go into one member project in the routed source, tied to the home by
 `onetaskgraph.members` on the home and `onetaskgraph.member_of` on the member. `just
 finish-plan` reports the home's qualified id; `just approve-design <home>` records the approval
 on the design document wherever it is, and `just orchestrate <home>` runs the home with its
 members as one run, writing each settlement to the task's own item.
-`tests/plan_tooling/plan_flow/test_linear_routed_plans_e2e.py` drives both shapes,
-`tests/test_plan_source_roots.py` holds the source and the route, and
-`tests/plan_guidance/test_plan_store_guidance.py` holds the table below and the routing prose to them.
 
-What each `hellopatient` category means for a plan task and its member project,
-as its `status_mapping` writes it:
+**Once a host switches the boundary on, a plan touching private work is never split across a
+public board.** An organization's repositories then answer private, so its tasks are private
+and the project holding any of them is private too; the adopted store refuses a private
+project at a source not declared private before writing anything, whatever its tasks' routes
+say. So:
+
+- a plan whose every task is an organization's is finished straight into that organization's
+  tracker with `just finish-plan <brief> --to <its source>`, and launched, approved and
+  settled there;
+- a plan mixing an organization's tasks with public ones is refused at `plans`, and is
+  authored as two plans instead, one per destination;
+- personal private work has no route onto a public board at all. Under the adopted store a
+  source's classification routes are tried before its repository routes for a private item,
+  and routes never chain, so a `{classification: private}` route on `plans` would send an
+  organization's work to the personal store too; a user layer declares none, a task naming
+  a private repository no route matches is refused at `plans`, and a person writes it to a
+  private store by naming that store.
+
+A public-only plan copies onto `plans` exactly as before.
+`tests/plan_tooling/host_layer_routing/test_host_layer_routing_e2e.py` and
+`tests/plan_tooling/plan_flow/test_linear_routed_plans_e2e.py` drive each case through a user
+layer over synthetic identities, `tests/test_plan_source_roots.py` holds the tracked sources
+and the example layer, and `tests/plan_guidance/test_plan_store_guidance.py` holds the table
+below and the routing prose to them.
+
+What each category means for a plan task and its member project on a routed Linear tracker,
+as the example layer's `status_mapping` writes it:
 
 | category | Linear task state | Linear project status | meaning for task and member project |
 | --- | --- | --- | --- |
@@ -2222,9 +2263,9 @@ A ticket's `repositories` lists every repository its fix changes. A ticket listi
 its issue created in that repository, as an item of the one board; it must be under the
 board's owner, and `board-status` refuses a ticket naming a repository outside that owner
 before anything is asked of the board, so it is reported rather than filed. The one
-exception is a repository the board's route sends elsewhere: a `github.com/petsinc/*` root
-cause's ticket is filed in Hello Patient's Linear, `hellopatient-followups`, as an issue of
-its Agent Follow-ups project, where that team triages it. A ticket listing several is filed
+exception is a repository the board's route sends elsewhere: a route a host declares on
+`followups` in its user layer (*Host-local sources and routes*) files an organization's root
+cause in that organization's own tracker, where its team triages it. A ticket listing several is filed
 exactly as the store files a parentless task naming several: in the board's configured
 repository, which its record's `repository` names, and routed only when every repository it
 lists matches a route. Every command a follow-up run
@@ -2270,7 +2311,7 @@ from `hostname` rather than typed, and its `## Evidence` section states that hos
 reader of the issue sees it. The `followups` source's `metadata_fields` also projects that
 host onto the board's `Host` text field, so the board filters a ticket by the machine it
 came from as it filters by its origin, while the description's metadata slot stays the
-record's one home; Linear has no such field, so `hellopatient-followups` keeps it in that
+record's one home; Linear has no such field, so a routed Linear tracker keeps it in that
 slot alone. The field is created on the board by `just plans sources fields followups
 --apply`, the plan-store verb, and never by a hand-written mutation; a copy onto a board
 lacking it is refused before anything is written, the store's message naming `sources

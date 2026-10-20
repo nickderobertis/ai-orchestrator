@@ -384,9 +384,9 @@ def _documents(environment: dict[str, str], project: str) -> dict[str, Any]:
 def _partial_overlays(environment: Mapping[str, str]) -> set[str]:
     """Each inherited setting of a source the environment names no plugin for.
 
-    Such an overlay completes a source this checkout's `onetaskgraph.yaml` declares, as the
-    host's `.env` overlays `hellopatient`'s team, and the spike's turn runs in the target's
-    worktree, where nothing declares it, so the plan store refuses every command with it
+    Such an overlay completes a source the host's own plan-store user layer declares, as a
+    `.env` setting overlays an organization source's team, and the spike's turn runs in the
+    target's worktree, where nothing declares it, so the plan store refuses every command with it
     present, naming that source — `test_plan_root_env.py` shows that refusal standing. The
     launch completes only `authoring`, so this is removed here only until the plan store
     stops refusing an overlay of a source the command never names; every source setting

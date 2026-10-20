@@ -18,6 +18,7 @@
     "support-no-paid-provider",
     "support-nx-inputs",
     "support-onejudge-bundle",
+    "support-onetaskgraph-user-layer",
     "support-onevcs-state-snapshot",
     "support-plan-fixture-source",
     "support-plan-root-variable",

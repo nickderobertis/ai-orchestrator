@@ -14,8 +14,8 @@ installed. The operator rule for adding a board `Status` option is read both way
 prose has to state the verb and its `--apply` flag once, and the installed CLI has to
 carry them, because a rule naming a verb the binary lacks sends an operator back to the
 hand-written mutation the rule exists to forbid. The Linear routing prose in the manager's
-document, the operator's and the planner's prompt is held to the configured route and to
-every state the `hellopatient` mapping writes.
+document, the operator's and the planner's prompt is held to every state the example user
+layer's organization tracker writes, and to stating that a host declares the route.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ import re
 import subprocess
 from pathlib import Path
 
+import onetaskgraph_user_layer
 import pytest
 from plan_sources import read_default_sources, read_plan_sources
 from published_tools import ONETASKGRAPH_BIN
@@ -344,68 +345,56 @@ def test_the_packages_plan_store_reads_run_the_locked_install_the_roster_names()
     )
 
 
-#: The documents that tell a reader where a plan's petsinc tasks land and what each Linear
+#: The documents that tell a reader where a routed plan's tasks land and what each Linear
 #: state means for one: the manager's, the operator's, and the planner's own prompt.
 PLANNER = "personas/planner.yaml"
 ROUTED_DOCUMENTS = (MANAGER, ORCHESTRATION, PLANNER)
-#: The Linear source a `plans` route sends a petsinc task to.
-LINEAR = "hellopatient"
+#: The organization's plans tracker the example user layer declares: the tracked document
+#: routes nothing, so a host's layer, of the example's shape, is where the mapping lives.
+LINEAR = onetaskgraph_user_layer.ORGANIZATION_PLANS
+#: What each document says about where a route comes from: a host's own configuration.
+HOST_DECLARED = re.compile(r"route[^.]*\b(?:the )?host\b|\bhost\b[^.]*\broute", re.I)
 
 
-def _linear_states() -> dict[str, str]:
-    """The workflow state each category is written as, as the store resolves the mapping."""
-    prefix = f"sources.{LINEAR}.config.status_mapping."
-    states = {
-        key[len(prefix) :]: str(value)
-        for key, value in plan_store.configured_settings().items()
-        if key.startswith(prefix)
-    }
-    assert states, f"onetaskgraph.yaml maps no workflow state for `{LINEAR}`"
-    return states
-
-
-def _route_patterns() -> list[str]:
-    """Each repository pattern a `plans` route sends to the Linear source."""
-    routes = plan_store.configured_settings().get(f"sources.{BOARD}.routes")
-    assert isinstance(routes, list), routes
-    patterns = [
-        str(pattern)
-        for route in routes
-        if isinstance(route, dict) and route.get("to") == LINEAR
-        for pattern in route.get("repositories", [])
-    ]
-    assert patterns, f"`{BOARD}` routes nothing to `{LINEAR}`"
-    return patterns
+@pytest.fixture(scope="module")
+def linear_states(tmp_path_factory: pytest.TempPathFactory) -> dict[str, str]:
+    """The workflow state each category is written as, as the store resolves the example."""
+    return onetaskgraph_user_layer.example_states(LINEAR, tmp_path_factory.mktemp("example"))
 
 
 @pytest.mark.parametrize("name", ROUTED_DOCUMENTS)
-def test_each_document_names_every_linear_state_and_the_route_the_store_applies(
-    name: str,
+def test_each_document_names_every_linear_state_and_that_a_host_declares_the_route(
+    name: str, linear_states: dict[str, str]
 ) -> None:
-    """The prose's state names and route are the configuration's, not remembered ones.
+    """The prose's state names are the example layer's, and its route a host's own.
 
-    A state renamed in the mapping, or a route moved to another organization, leaves a
-    document telling a manager to look for a state or a repository nothing writes.
+    A state renamed in the mapping leaves a document telling a manager to look for a state
+    nothing writes; a document naming a route of its own would be a second, tracked
+    statement of what only a host's configuration says.
     """
     text = _flat(_document(name))
     missing = [
         state
-        for state in _linear_states().values()
+        for state in linear_states.values()
         if re.search(rf"\b{re.escape(state)}\b", text) is None
     ]
     assert not missing, f"{name} never names the Linear state(s) {missing} a plan task reads"
-    for pattern in _route_patterns():
-        assert pattern in text or pattern.removesuffix("*") in text, (
-            f"{name} never names {pattern}, the repositories `{BOARD}` routes to `{LINEAR}`"
+    assert HOST_DECLARED.search(text), f"{name} never says a host declares the route"
+    for pattern in onetaskgraph_user_layer.example()["sources"]["plans"]["routes"][0][
+        "repositories"
+    ]:
+        assert pattern.removesuffix("*") not in text, (
+            f"{name} names the example's synthetic route {pattern}, which only a host states"
         )
-    assert f"`{LINEAR}`" in text, f"{name} never names the `{LINEAR}` source"
 
 
 # llmlint: ignore-block[shell_test_tiers_stay_split] This is a Python documentation
 # drift check, not a shell journey: it compares table rows with the installed CLI's
 # local config resolution, contacting no service and dispatching no worker. It runs in the
 # `plan-guidance` project beside the neighboring routing-prose check of that resolution.
-def test_the_orchestration_table_gives_each_state_the_category_the_source_writes_it_for() -> None:
+def test_the_orchestration_table_gives_each_state_the_category_the_source_writes_it_for(
+    linear_states: dict[str, str],
+) -> None:
     """Every row of the state table is one entry of the mapping, and every entry has a row."""
     rows = {
         category: (task, project)
@@ -417,7 +406,7 @@ def test_the_orchestration_table_gives_each_state_the_category_the_source_writes
             re.M,
         )
     }
-    states = _linear_states()
+    states = linear_states
     categories = {key.split(".")[0] for key in states}
     expected = {
         category: (
@@ -427,7 +416,7 @@ def test_the_orchestration_table_gives_each_state_the_category_the_source_writes
         for category in categories
     }
     assert rows == expected, (
-        f"{ORCHESTRATION}'s Linear state table reads {rows}, and onetaskgraph.yaml maps {expected}"
+        f"{ORCHESTRATION}'s Linear state table reads {rows}, and the example layer maps {expected}"
     )
 
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# The one reading of `config/onevcs.checkouts`, shared by every script that walks it.
+# The one reading of the checkout list, shared by every script that walks it, and the one
+# choice of which list that is.
 #
 # Sourced, never executed: `scripts/apply-repo-registry.sh` registers the listed
 # checkouts and `scripts/repos-bootstrap.sh` provisions their gates, and the two have
@@ -14,6 +15,28 @@
 # function below reports its own refusal and returns a status the caller acts on.
 #
 # shellcheck shell=bash
+
+# Print the checkout list a caller naming none reads: this host's own complete list,
+# `${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.checkouts`, when that file
+# exists, and the tracked `config/onevcs.checkouts` under the repository root $1 otherwise.
+#
+# The host's file replaces the tracked one whole rather than adding to it, so a host whose
+# registrations include private repositories keeps them outside every checkout and lists
+# its public ones there too; nothing merges two lists. `XDG_CONFIG_HOME` is honoured only
+# when absolute, as `scripts/claude-alt-config-dir.sh` resolves the identities file beside it.
+default_checkouts_file() {
+    local repo_root=$1 config_home
+    if [[ ${XDG_CONFIG_HOME-} == /* ]]; then
+        config_home=$XDG_CONFIG_HOME
+    else
+        config_home="${HOME:-}/.config"
+    fi
+    if [[ $config_home == /* && -f $config_home/ai-orchestrator/onevcs.checkouts ]]; then
+        printf '%s\n' "$config_home/ai-orchestrator/onevcs.checkouts"
+    else
+        printf '%s\n' "$repo_root/config/onevcs.checkouts"
+    fi
+}
 
 # Print every path the list at $1 names, one per line, `~` expanded against `$HOME`.
 #

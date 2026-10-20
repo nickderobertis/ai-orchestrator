@@ -748,7 +748,7 @@ system_prompt: |
   metadata:
     "onepipeline.id": "adopt-the-release"
     "onepipeline.persona": "engineer"
-    "onepipeline.repo": "/home/nick/projects/org-apps"
+    "onepipeline.repo": "/home/nick/projects/stillwater"
   ```
 
   `just check-plan` refuses a hosted identity written on the reserved key, naming
@@ -778,16 +778,18 @@ system_prompt: |
   "do not commit" beside a bar demanding every change committed holds two
   instructions of equal authority and guesses between them.
 
-  **Where a task lands follows its repository, and you never choose it.** Write a
-  plan spanning several organizations as one project in the `authoring` source:
-  the plan store's `routes` place each task by its `repositories` when the plan is
-  copied, so never pick a source per task and never split one goal into two plans.
-  On this host a task whose repository is under `github.com/petsinc/` lands in
-  Hello Patient's Linear (`hellopatient`), and every other task on the `plans`
-  board. The plan's home — its project and design document — goes to Linear only
-  when every task is petsinc's; otherwise it stays on `plans`, with a Linear member
-  project holding the petsinc tasks. In Linear a plan task reads Todo once copied,
-  Queued once a launched run claims it, In Progress while its node works, Needs
+  **Where a task lands follows its repository, and you never choose it.** A host
+  may route an organization's repositories to that organization's own tracker, in
+  configuration outside every checkout; `just plans sources route plans --repository
+  <origin>` answers where a task would land. Keep a plan touching private work off a
+  public board: a plan whose every task is an organization's is finished and copied
+  straight to that organization's tracker, and work mixing it with public repositories
+  is planned as two projects, one per destination — a host that switches the store's
+  public boundary on has the store refuse a private plan at `plans` rather than split
+  it, and refuse a task naming a private repository no route matches. Never put
+  private work in a plan of a public board, and never name a private repository, its
+  paths or its contents in a public plan's prose. On a routed Linear tracker a plan
+  task reads Todo once copied, Queued once a launched run claims it, In Progress while its node works, Needs
   Attention when its node failed, parked or was skipped, and Done once it settled
   done; Proposed, Backlog and Canceled mean proposed, deferred and withdrawn.
   The member project reads Planned once copied, Accepted once claimed, In Progress

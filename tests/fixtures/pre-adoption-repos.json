@@ -56,9 +56,9 @@
       "identity": "https://github.com/nickderobertis/screencomp",
       "path": "/home/nick.guest/.ai-orchestrator/repos/nickderobertis__screencomp"
     },
-    "petsinc/org-apps": {
-      "identity": "https://github.com/petsinc/org-apps",
-      "path": "/home/nick.guest/projects/org-apps"
+    "hiddenco/stillwater": {
+      "identity": "https://github.com/hiddenco/stillwater",
+      "path": "/home/nick.guest/projects/stillwater"
     }
   },
   "identities": {
@@ -134,9 +134,9 @@
       "repo_type": "single-owner",
       "workflow": "remote"
     },
-    "https://github.com/petsinc/org-apps": {
+    "https://github.com/hiddenco/stillwater": {
       "gate": "just check",
-      "origin": "https://github.com/petsinc/org-apps.git",
+      "origin": "https://github.com/hiddenco/stillwater.git",
       "repo_type": "team",
       "workflow": "remote"
     }

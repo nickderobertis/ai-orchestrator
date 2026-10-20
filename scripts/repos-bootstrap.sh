@@ -34,8 +34,10 @@ usage: repos-bootstrap.sh [--checkouts FILE] [--detach]
 Run each registered sibling checkout's own `just bootstrap`, once per change to that
 checkout's HEAD or bootstrap inputs, one caller at a time per checkout.
 
-  --checkouts FILE  Read the checkout list from FILE (default config/onevcs.checkouts,
-                    or the file ORCHESTRATOR_REPOS_BOOTSTRAP_CHECKOUTS names).
+  --checkouts FILE  Read the checkout list from FILE (default: the file
+                    ORCHESTRATOR_REPOS_BOOTSTRAP_CHECKOUTS names, else this host's
+                    ${XDG_CONFIG_HOME:-$HOME/.config}/ai-orchestrator/onevcs.checkouts
+                    when it exists, else config/onevcs.checkouts).
   --detach          Start each bootstrap that is due as a job detached from this
                     process and return at once, reporting the jobs earlier calls
                     started instead of waiting on them. Session setup runs this.
@@ -46,7 +48,7 @@ under `${XDG_CACHE_HOME:-$HOME/.cache}/ai-orchestrator/repos-bootstrap/`.
 USAGE
 }
 
-checkouts_file="$repo_root/config/onevcs.checkouts"
+checkouts_file=$(default_checkouts_file "$repo_root")
 if [[ -n ${!CHECKOUTS_VARIABLE:-} ]]; then
     checkouts_file=${!CHECKOUTS_VARIABLE}
 fi

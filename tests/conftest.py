@@ -125,8 +125,10 @@ onevcs_state_snapshot.snapshot()
 
 # Every plan-store read and write this process and its children make resolves no user
 # layer of the invoking user's, which the store reads beneath every project document from
-# the configuration home and would otherwise decide what a fixture's write does. At import
-# for the reason the snapshot above is. `tests/plan_store_user_layer.py` is the rule.
+# the configuration home and would otherwise decide what a fixture's write does; nor do
+# `just repos-apply` and `just repos-bootstrap` find the host's own checkout list or rules
+# overlay there. At import for the reason the snapshot above is.
+# `tests/plan_store_user_layer.py` is the rule.
 plan_store_user_layer.isolate()
 
 # Every verb that loads `config/onemessagebus.yaml` resolves its schema link first, and the

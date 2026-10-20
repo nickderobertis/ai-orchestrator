@@ -1,0 +1,28 @@
+{
+  "name": "support-onetaskgraph-user-layer",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "tags": [
+    "type:test-support"
+  ],
+  "implicitDependencies": [
+    "support-boundary-home",
+    "support-published-tools"
+  ],
+  "namedInputs": {
+    "testSupport": [
+      "{workspaceRoot}/tests/onetaskgraph_user_layer.py",
+      "{workspaceRoot}/config/onetaskgraph.user-layer.example.yaml",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{projectRoot}/project.json"
+    ]
+  },
+  "targets": {
+    "test-support": {
+      "executor": "nx:noop",
+      "inputs": [
+        "testSupport"
+      ]
+    }
+  }
+}

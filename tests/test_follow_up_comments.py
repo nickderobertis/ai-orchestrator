@@ -45,10 +45,10 @@ CAUSE = "cursor-skips-last-page"
 SHARED_CAUSE = "sweep-trailer-omits-a-family"
 PERSON = "a-reviewer"
 HOST = socket.gethostname()
-#: A second local store the stand-in board routes a `petsinc` root cause's ticket to, as the
-#: committed `followups` routes one to `hellopatient-followups`, and a ticket filed there.
+#: A second local store the stand-in board routes a `hiddenco` root cause's ticket to, as
+#: a host's `followups` route sends one to its organization's tracker, and a ticket filed there.
 ROUTED = "commentrouted"
-ROUTED_REPOSITORY = "github.com/petsinc/hp-api"
+ROUTED_REPOSITORY = "github.com/hiddenco/qh-api"
 ROUTED_CAUSE = "intake-form-drops-a-field"
 #: The issue URL Linear reports, as onetaskgraph-linear's recorded fixture spells one.
 LINEAR_ISSUE_URL = "https://linear.app/acme/issue/ENG-1"
@@ -1283,13 +1283,13 @@ def test_a_written_plan_meets_its_readers_schema_and_reads_back_as_itself(
 
 @pytest.fixture
 def routed(board: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A second local store the stand-in board routes every `petsinc` repository to."""
+    """A second local store the stand-in board routes every `hiddenco` repository to."""
     root = tmp_path / "routed"
     root.mkdir()
     monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{ROUTED.upper()}__PLUGIN", WRITABLE_PLUGIN)
     monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{ROUTED.upper()}__CONFIG__ROOT", str(root))
     monkeypatch.setenv(
-        f"ONETASKGRAPH_SOURCES__{BOARD.upper()}__ROUTES__0__REPOSITORIES", "github.com/petsinc/*"
+        f"ONETASKGRAPH_SOURCES__{BOARD.upper()}__ROUTES__0__REPOSITORIES", "github.com/hiddenco/*"
     )
     monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{BOARD.upper()}__ROUTES__0__TO", ROUTED)
     follow_up_boundary.enable(monkeypatch, public=(BOARD,), private=(ROUTED,))
@@ -1309,7 +1309,7 @@ def test_a_gathering_reads_every_board_of_the_family_each_from_its_own_watermark
     """
     own = _filed(drafts_root, RUN, CAUSE)
     routed_issue = _filed(drafts_root, RUN, ROUTED_CAUSE, repository=ROUTED_REPOSITORY)
-    assert routed_issue.startswith(f"{ROUTED}:"), "the store did not route the petsinc ticket"
+    assert routed_issue.startswith(f"{ROUTED}:"), "the store did not route the hiddenco ticket"
     held = comments.write_watermark(drafts_root, BOARD, datetime(2026, 1, 1, tzinfo=UTC))
     _next_second()
     on_own = _commented(own, "Please add page 9.\n")
@@ -1416,7 +1416,7 @@ def test_on_linear_a_comment_naming_no_user_is_an_integrations_and_a_named_one_a
     assert not comments.is_bot(None)
     issue = comments.Issue(
         QualifiedTaskId(f"{ROUTED}:ENG-1"),
-        "hp-api: the intake form drops a field",
+        "qh-api: the intake form drops a field",
         tickets.RunId(RUN),
         None,
         comments._web_url(LINEAR_ISSUE_URL),
@@ -1757,7 +1757,7 @@ def test_scoped_gatherings_read_a_ticket_bound_on_the_board_its_repository_route
     """A binding names an item of the board the ticket's repositories route it to, and a
     gathering scoped to its run or its issue reads it there, listing neither board."""
     routed_issue = _filed(drafts_root, RUN, ROUTED_CAUSE, repository=ROUTED_REPOSITORY)
-    assert routed_issue.startswith(f"{ROUTED}:"), "the store did not route the petsinc ticket"
+    assert routed_issue.startswith(f"{ROUTED}:"), "the store did not route the hiddenco ticket"
     _next_second()
     asked = _commented(routed_issue, "Does the intake form still drop it?\n")
 

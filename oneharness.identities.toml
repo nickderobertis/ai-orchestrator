@@ -61,7 +61,7 @@ model = "gpt-6.1-sol"
 model = "gpt-6.1-sol"
 # **This variant deliberately declares no `unset_env`, and it is the one variant that
 # cannot.** Its only masks anywhere on this host are the plan store's credentials,
-# `GH_PROJECTS_TOKEN` and `HELLOPATIENT_LINEAR_API_KEY`, and that is a per-ROLE policy
+# `GH_PROJECTS_TOKEN` and an organization's production Linear key, and that is a per-ROLE policy
 # rather than a property of the identity: eight roles never reach the plan store and
 # stop both here, three exist to read and write the store and must let them travel, and
 # one — the board-live worker — lets the board token alone travel.

@@ -1,31 +1,29 @@
-"""A plan's petsinc tasks land in Hello Patient's Linear, and the plan stays one plan.
+"""A plan's hiddenco tasks land in Hidden Co's Linear, and the plan stays one plan.
 
-The tracked `plans` source routes every `github.com/petsinc/*` task to the `hellopatient`
-source, and the store decides where a plan's home goes from that alone: into
-`hellopatient` when every task routes there, and otherwise onto `plans`, with the routed
-tasks in a member project of `hellopatient`. These journeys drive both shapes through the
-real `just finish-plan`:
+A host's onetaskgraph user layer — here the tracked example's, installed under this module's
+own configuration home — routes every `github.com/hiddenco/*` task from `plans` to the
+organization's `hiddenco-plans` source, and the store decides where a plan's home goes from
+that alone: into `hiddenco-plans` when every task routes there, and otherwise onto `plans`,
+with the routed tasks in a member project of `hiddenco-plans`. The store's public boundary is
+off, as the tracked configuration lands it, and the example layer declares no `visibility`
+that would switch it on. These journeys drive both shapes through the real `just finish-plan`:
 
-* **shape 1**, an all-petsinc plan, whose home, tasks and design document all land in
-  `hellopatient`;
-* **shape 2**, a mixed plan, whose home, design document and non-petsinc tasks land on the
-  loopback `plans` board and whose petsinc task lands in a `hellopatient` member project.
+* **shape 1**, an all-hiddenco plan, whose home, tasks and design document all land in
+  `hiddenco-plans`;
+* **shape 2**, a mixed plan, whose home, design document and non-hiddenco tasks land on the
+  loopback `plans` board and whose hiddenco task lands in a `hiddenco-plans` member project.
 
 None launches the plan: the copy runs on this checkout's install, and a launch strips the
-`PYTHONPATH` that points the copy's `orchestrator` at its own configuration, so a launch
-from the copy would read this checkout's `hellopatient`, the real Linear workspace.
+`PYTHONPATH` that points the copy's `orchestrator` at its own configuration.
 
-**`hellopatient` is a folder of Markdown here, and that is the one substitution.** No check
-may reach the production Linear workspace, so the copied checkout's own configuration
-declares `hellopatient` as a `local-md` source whose status mapping reads the eight state
-names the tracked Linear mapping writes — read off the tracked file through the store's
-resolution, so a mapping that moved moves this stand-in with it. It is made in a copy of this
-checkout because the store's environment layer merges into the file rather than replacing a
-source, so a `local-md` plugin would arrive beside the Linear keys and be refused for them;
-`tests/test_plan_source_roots.py` holds the tracked `hellopatient` to the Linear plugin's own
-schema. GitHub's Projects API is the loopback board `tests/github_board.py` serves, and the
-paid model is the stand-in every journey here uses. The recipes, the engine, the store and
-its routing, and every record read back are real.
+**`hiddenco-plans` is a folder of Markdown here, and that is the one substitution.** No check
+may reach a Linear workspace, so the journey's user layer is the tracked example
+(`config/onetaskgraph.user-layer.example.yaml`) with each Linear source replaced by a
+`local-md` folder reading the state names the example's mapping writes
+(`tests/onetaskgraph_user_layer.py`); `tests/test_plan_source_roots.py` holds the example's
+Linear sources to the Linear plugin's own schema. GitHub's Projects API is the loopback board
+`tests/github_board.py` serves, and the paid model is the stand-in every journey here uses.
+The recipes, the engine, the store and its routing, and every record read back are real.
 """
 
 from __future__ import annotations
@@ -40,6 +38,7 @@ from pathlib import Path
 from typing import NamedTuple, NewType
 
 import follow_up_variables
+import onetaskgraph_user_layer
 import plan_root_variable
 import pytest
 import short_state
@@ -47,8 +46,7 @@ from fake_backend import (
     PROMPT_LOG_ENV,
     RUN_ON_MARKER_ENV,
 )
-from github_board import LINEAR_KEY_ENV, _serving_board
-from linear_stand_in import stand_in
+from github_board import _serving_board
 from nx_workspace import (
     answering_this_checkouts_origin,
     copy_working_tree,
@@ -83,18 +81,18 @@ ENGINE_BIN = REPO_ROOT / ".venv" / "bin" / "onepipeline"
 PASSING_VERDICT = json.dumps({"passes": True, "findings": []})
 
 #: The two sources under test, by the names the tracked configuration gives them.
-LINEAR = "hellopatient"
+LINEAR = onetaskgraph_user_layer.ORGANIZATION_PLANS
 BOARD = "plans"
 AUTHORING = "authoring"
 
-#: The petsinc repository every routed task names, registered as a scratch identity so its
+#: The hiddenco repository every routed task names, registered as a scratch identity so its
 #: lifecycle node has somewhere to publish.
-PETSINC = "github.com/petsinc/hp-api"
-EXECUTION_ALIAS = "hp-api-execution"
+HIDDENCO = "github.com/hiddenco/qh-api"
+EXECUTION_ALIAS = "qh-api-execution"
 
 #: The line a design-doc dispatch's task carries, which says the turn is that one.
 DESIGN_TASK_MARKER = "Write the design document a person reviews the plan"
-#: The line a petsinc node's task carries, which says the turn commits on its branch.
+#: The line a hiddenco node's task carries, which says the turn commits on its branch.
 COMMIT_MARKER = "Leave one file behind on your branch, and commit it."
 COMMIT_COMMANDS = [
     [
@@ -119,20 +117,17 @@ INHERITED_ENVIRONMENT = (
     "CODEX_SESSION_ID",
 )
 
-#: What the board fixture hands a journey for the tracked Linear source, which the copy's
-#: folder stand-in takes none of.
-LINEAR_ENVIRONMENT = (LINEAR_KEY_ENV, f"ONETASKGRAPH_SOURCES__{LINEAR.upper()}__CONFIG__ENDPOINT")
-#: The store's environment layer for the tracked Linear source. A host's `.env` may set a key
-#: of it, such as the team, and the layer merges that into the copy's folder stand-in, whose
-#: plugin refuses every Linear key, so none is inherited from the process running the suite.
-LINEAR_LAYER = f"ONETASKGRAPH_SOURCES__{LINEAR.upper()}__"
+#: The store's environment layer for the organization's sources, which the store spells with a
+#: source name's hyphen as an underscore. A key of it inherited from the process running the
+#: suite would merge into the layer's folder stand-in, whose plugin refuses every Linear key.
+LINEAR_LAYER = "ONETASKGRAPH_SOURCES__HIDDENCO_"
 
 #: What a journey building a copy of this checkout reads: everything git tracks.
 COPIES_THE_TRACKED_TREE = pytest.mark.reads_docs
 
 
 class Routed(NamedTuple):
-    """A copy of this checkout whose `hellopatient` is a folder, and that folder."""
+    """A copy of this checkout, the folder its user layer routes to, and its environment."""
 
     checkout: Path
     linear: Path
@@ -151,10 +146,21 @@ def routed(tmp_path_factory: pytest.TempPathFactory) -> Routed:
     copy_working_tree(checkout)
     answering_this_checkouts_origin(checkout)
     linear = tmp_path / LINEAR
-    linear.mkdir()
-    # llmlint: ignore[e2e_not_mocked] A `local-md` source stands in for `hellopatient`, because no check may reach the production Linear workspace; `tests/test_plan_source_roots.py` holds the tracked source to the Linear plugin's schema.  # noqa: E501 - a directive is one line, and its reason is longer than the limit
-    stand_in(checkout, LINEAR, linear)
+    # llmlint: ignore[e2e_not_mocked] A `local-md` folder stands in for each of the example layer's Linear trackers, because no check may reach a Linear workspace; `tests/test_plan_source_roots.py` holds the example's Linear sources to the plugin's schema.  # noqa: E501 - a directive is one line, and its reason is longer than the limit
+    stood_in = {
+        name: onetaskgraph_user_layer.stand_in(name, root, tmp_path)
+        for name, root in (
+            (LINEAR, linear),
+            (
+                onetaskgraph_user_layer.ORGANIZATION_FOLLOWUPS,
+                tmp_path / onetaskgraph_user_layer.ORGANIZATION_FOLLOWUPS,
+            ),
+        )
+    }
+    layer = onetaskgraph_user_layer.with_stand_ins(stood_in)
+    home = onetaskgraph_user_layer.installed(tmp_path / "config-home", layer)
     shared = share_this_checkouts_install(checkout)
+    shared[onetaskgraph_user_layer.XDG_CONFIG_HOME] = str(home)
     return Routed(checkout=checkout, linear=linear, environment=shared)
 
 
@@ -170,15 +176,15 @@ class Bench(NamedTuple):
     environment: dict[str, str]
     authoring: Path
     tmp_path: Path
-    #: What reaching the petsinc stand-in's hosted origin over git needs.
+    #: What reaching the hiddenco stand-in's hosted origin over git needs.
     identity: dict[str, str]
 
 
 def _bench(
     tmp_path: Path, oneharness_bin: str, remote: Mapping[str, str], shared: Mapping[str, str]
 ) -> Bench:
-    """The environment a shape's flow runs in, with the petsinc stand-in registered."""
-    identity = seeded(tmp_path / "identity", execution=EXECUTION_ALIAS, origin=PETSINC)
+    """The environment a shape's flow runs in, with the hiddenco stand-in registered."""
+    identity = seeded(tmp_path / "identity", execution=EXECUTION_ALIAS, origin=HIDDENCO)
     authoring = tmp_path / "authoring"
     authoring.mkdir()
     environment = dict(os.environ)
@@ -210,11 +216,8 @@ def _bench(
     environment.pop(command_name, None)
     environment[root_name] = str(tmp_path / "follow-ups")
     environment[plugin_name] = plan_store.WRITABLE_PLUGIN
-    # The board fixture's Linear key and endpoint are for the tracked Linear source; the
-    # copy's `hellopatient` is a folder, which takes neither.
-    environment.update(
-        {name: value for name, value in remote.items() if name not in LINEAR_ENVIRONMENT}
-    )
+    # The board fixture's Linear key and endpoint name no source the layer's folders take.
+    environment.update(remote)
     return Bench(
         environment=environment,
         authoring=authoring,
@@ -227,7 +230,7 @@ def _task(what: str) -> str:
     """A task body that carries its bar, as a planner writes one."""
     return (
         f"## What\n\n{what}\n\n"
-        "## Why\n\nHello Patient's work is planned where that team tracks it.\n\n"
+        "## Why\n\nHidden Co's work is planned where that team tracks it.\n\n"
         "## Acceptance criteria\n\n"
         "- The change is in place and a test drives it end to end.\n"
         "- Every claim the dispatch makes about the finished work is true of the tree as it "
@@ -241,27 +244,27 @@ NodeId = NewType("NodeId", str)
 
 
 class Node(NamedTuple):
-    """One planned task: its node id, title, dependencies, and whether it is petsinc's."""
+    """One planned task: its node id, title, dependencies, and whether it is hiddenco's."""
 
     id: NodeId
     title: str
     deps: tuple[NodeId, ...]
-    petsinc: bool
+    hiddenco: bool
 
 
 def _draft(bench: Bench, name: str, nodes: tuple[Node, ...]) -> str:
     """Author ``nodes`` as one plan in the authoring source, answering its qualified id.
 
-    A petsinc node is a lifecycle node in the registered stand-in: the first one commits
+    A hiddenco node is a lifecycle node in the registered stand-in: the first one commits
     on its branch, so a worker turn happens, and any other declares `expects_no_diff`. A
     node of no repository is a direct node, which stays on `plans`.
     """
-    committing = next(node.id for node in nodes if node.petsinc)
+    committing = next(node.id for node in nodes if node.hiddenco)
     write_plan_project(
         bench.authoring,
         {
             "schema_version": 3,
-            "goal": {"text": "Ship Hello Patient's change and the library it consumes"},
+            "goal": {"text": "Ship Hidden Co's change and the library it consumes"},
             "name": name,
             "tasks": [
                 {
@@ -269,18 +272,18 @@ def _draft(bench: Bench, name: str, nodes: tuple[Node, ...]) -> str:
                     "title": node.title,
                     **({"deps": list(node.deps)} if node.deps else {}),
                     **(
-                        {"repo": PETSINC, "execution_checkout": EXECUTION_ALIAS}
-                        if node.petsinc
+                        {"repo": HIDDENCO, "execution_checkout": EXECUTION_ALIAS}
+                        if node.hiddenco
                         else {}
                     ),
                     # A node settled with no dispatch takes no persona.
                     **(
                         {"expects_no_diff": True}
-                        if node.petsinc and node.id != committing
+                        if node.hiddenco and node.id != committing
                         else {"persona": "engineer"}
                     ),
                     "task": _task(COMMIT_MARKER if node.id == committing else "Reply with done."),
-                    "unit": "Petsinc change" if node.petsinc else "Library",
+                    "unit": "Hiddenco change" if node.hiddenco else "Library",
                 }
                 for node in nodes
             ],
@@ -291,7 +294,7 @@ def _draft(bench: Bench, name: str, nodes: tuple[Node, ...]) -> str:
     budgeted(
         AUTHORING,
         name,
-        no_budgets([PETSINC] if any(node.petsinc for node in nodes) else []),
+        no_budgets([HIDDENCO] if any(node.hiddenco for node in nodes) else []),
         bench.environment,
     )
     return f"{AUTHORING}:{name}"
@@ -300,13 +303,13 @@ def _draft(bench: Bench, name: str, nodes: tuple[Node, ...]) -> str:
 def _design_answers(nodes: tuple[Node, ...]) -> dict[str, object]:
     """What a design-doc dispatch's model would compose for the plan of ``nodes``."""
     return {
-        "what": "Hello Patient's change and the library it consumes.",
+        "what": "Hidden Co's change and the library it consumes.",
         "why": "The team plans in Linear.",
         "architecture": "One library, one consumer.",
         "units": [
             {
                 "name": "Change",
-                "repository": "hp-api",
+                "repository": "qh-api",
                 "part": "",
                 "summary": "The change and what it consumes.",
                 "reversible": [],
@@ -328,7 +331,7 @@ def _design_answers(nodes: tuple[Node, ...]) -> dict[str, object]:
 
 
 def _scripted(bench: Bench, name: str, nodes: tuple[Node, ...]) -> None:
-    """Script the design-doc dispatch's store command and the petsinc worker's commit.
+    """Script the design-doc dispatch's store command and the hiddenco worker's commit.
 
     The document is rendered by the pinned engine's resolve and stored by the store's own
     `document create`, run where the dispatch runs; the resolve names the plan's one
@@ -336,7 +339,7 @@ def _scripted(bench: Bench, name: str, nodes: tuple[Node, ...]) -> None:
     """
     answers = bench.tmp_path / f"{name}-design.json"
     answers.write_text(json.dumps(_design_answers(nodes)), encoding="utf-8")
-    repository = PETSINC if all(node.petsinc for node in nodes) else ""
+    repository = HIDDENCO if all(node.hiddenco for node in nodes) else ""
     keyed = bench.tmp_path / "commands.json"
     keyed.write_text(
         json.dumps(
@@ -392,7 +395,7 @@ def _brief(bench: Bench, project: str) -> Path:
     """A manager's brief naming the plan the flow finishes."""
     brief = bench.tmp_path / "brief.md"
     brief.write_text(
-        "## What\nShip Hello Patient's change.\n\n"
+        "## What\nShip Hidden Co's change.\n\n"
         f"Plan project: {project}\n\n"
         "## Why\nThe team plans in Linear.\n\n"
         "## Acceptance criteria\n- The change ships.\n",
@@ -456,13 +459,13 @@ def gated(
         yield _bench(tmp_path, oneharness_bin, remote, routed.environment), remote
 
 
-ALL_PETSINC = (
-    Node(NodeId("migrate"), "feat: migrate the patient record", (), petsinc=True),
+ALL_HIDDENCO = (
+    Node(NodeId("migrate"), "feat: migrate the intake record", (), hiddenco=True),
     Node(
         NodeId("backfill"),
         "feat: backfill the migrated records",
         (NodeId("migrate"),),
-        petsinc=True,
+        hiddenco=True,
     ),
 )
 
@@ -474,22 +477,22 @@ ALL_PETSINC = (
 # default-board flow copies a checkout behind the same marker for the same reason.
 # llmlint: ignore-block[e2e_not_mocked] Three boundaries are doubled and no more: the paid
 # provider process, GitHub's Projects API (the loopback board, because the live board is shared
-# by every run of this repository), and Linear (the folder the copy declares `hellopatient` as,
-# because no check may reach the production workspace). The recipes, engine, store, routing
-# and every record read back are real.
+# by every run of this repository), and Linear (the folder the journey's user layer declares
+# `hiddenco-plans` as, because no check may reach a Linear workspace). The recipes, engine,
+# store, routing and every record read back are real.
 @COPIES_THE_TRACKED_TREE
 @pytest.mark.xdist_group("linear-routed")
-def test_an_all_petsinc_plan_lands_whole_in_linear(
+def test_an_all_hiddenco_plan_lands_whole_in_linear(
     routed: Routed, gated: tuple[Bench, Mapping[str, str]]
 ) -> None:
-    """Every task petsinc's: the home, its tasks and its design document are Linear's.
+    """Every task hiddenco's: the home, its tasks and its design document are Linear's.
 
     Copied by `just finish-plan` onto `plans`, as every plan is, and placed by the store's
     routing alone.
     """
     bench, _ = gated
-    name = f"test-{os.getpid()}-all-petsinc"
-    home, reported = _finished(routed, bench, name, ALL_PETSINC)
+    name = f"test-{os.getpid()}-all-hiddenco"
+    home, reported = _finished(routed, bench, name, ALL_HIDDENCO)
 
     assert home.startswith(f"{LINEAR}:"), f"the home landed at {home}, not in {LINEAR}"
     for said in (
@@ -507,25 +510,25 @@ def test_an_all_petsinc_plan_lands_whole_in_linear(
         f"the design document did not land in {LINEAR}: {landed}"
     )
     stored = _items(routed, bench, home)
-    assert set(stored) == {node.id for node in ALL_PETSINC}, stored
+    assert set(stored) == {node.id for node in ALL_HIDDENCO}, stored
     assert {str(held["id"]).partition(":")[0] for held in stored.values()} == {LINEAR}, stored
     # llmlint: ignore-end[e2e_not_mocked]
     # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]  # noqa: E501
 
 
 MIXED = (
-    Node(NodeId("library"), "feat: add the record client to the library", (), petsinc=False),
+    Node(NodeId("library"), "feat: add the record client to the library", (), hiddenco=False),
     Node(
         NodeId("consumer"),
         "feat: consume the record client",
         (NodeId("library"),),
-        petsinc=True,
+        hiddenco=True,
     ),
     Node(
         NodeId("rollout"),
         "feat: roll the client out behind its flag",
         (NodeId("consumer"),),
-        petsinc=False,
+        hiddenco=False,
     ),
 )
 
@@ -540,8 +543,8 @@ def test_a_mixed_plan_lands_as_one_board_home_and_its_linear_member(
 ) -> None:
     """A plan spanning both orgs is one home and one member.
 
-    The home lands on the `plans` board with the design document and the non-petsinc tasks;
-    the petsinc task lands in the home's `hellopatient` member project.
+    The home lands on the `plans` board with the design document and the non-hiddenco tasks;
+    the hiddenco task lands in the home's `hiddenco-plans` member project.
     """
     bench, _ = gated
     name = f"test-{os.getpid()}-mixed"
@@ -602,7 +605,7 @@ def test_modern_budget_links_are_recomputed_after_a_routed_copy(
             "source": "telemetry",
             "check_runtime_seconds": 1,
             "basis": "design",
-            "repository": PETSINC,
+            "repository": HIDDENCO,
             "file": "apps/web/budgets.yaml",
             "file_change": change,
             "measure": "elapsed seconds of loopback copy",
@@ -621,7 +624,7 @@ def test_modern_budget_links_are_recomputed_after_a_routed_copy(
             [budget],
             bench.environment,
             answers={
-                "what": COMMIT_MARKER if node.petsinc else "Reply with done.",
+                "what": COMMIT_MARKER if node.hiddenco else "Reply with done.",
                 "why": "Exercise routing with a modern budget record.",
                 "acceptance_criteria": [
                     "The route is exercised end to end.",
@@ -630,7 +633,7 @@ def test_modern_budget_links_are_recomputed_after_a_routed_copy(
                 ],
             },
         )
-    answers = no_budgets([PETSINC])
+    answers = no_budgets([HIDDENCO])
     answers.update(schema_version=2, checklist=[], repo_wide_effects=[])
     budgeted(AUTHORING, name, answers, bench.environment)
     _scripted(bench, name, MIXED)
