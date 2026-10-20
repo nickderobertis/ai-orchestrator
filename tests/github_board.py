@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import ClassVar, Literal, NamedTuple, NewType
 
 import follow_up_variables
+import onetaskgraph_user_layer
 from follow_up_ticket_shape import FIX, current_section, impact_prose
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
@@ -69,6 +70,53 @@ def unserved_linear(linear: bool) -> dict[str, str]:
         LINEAR_PLANS_ENDPOINT_ENV: UNSERVED_LINEAR,
         LINEAR_FOLLOWUPS_ENDPOINT_ENV: UNSERVED_LINEAR,
     }
+
+
+class HostState(StrEnum):
+    """The three hosts every plan-store recipe is driven on, the store's boundary switched on.
+
+    `no-user-layer` is a host doing no organization's work, which declares nothing beneath the
+    tracked document. `organization-private` declares the organization's sources and its own
+    private stores private in its user layer, the example's shape over synthetic names, before
+    adopting the tracked document. `organization-uncredentialed` is that layer in a process
+    holding no credential for the organization's sources, as a dispatch whose harness masks it.
+    """
+
+    NO_USER_LAYER = "no-user-layer"
+    ORGANIZATION_PRIVATE = "organization-private"
+    ORGANIZATION_UNCREDENTIALED = "organization-uncredentialed"
+
+
+def host_state(state: HostState, scratch: Path) -> dict[str, str | None]:
+    """What places a process on ``state``: each variable to set, or to unset where `None`.
+
+    The layer is the example (`config/onetaskgraph.user-layer.example.yaml`), every source of
+    it declared private, installed under ``scratch``. The host's own two private boards are
+    stood in by folders in both organization states, because their GitHub endpoint is not the
+    loopback board and no check may reach the live one. The organization's two Linear trackers
+    are stood in by folders where they are credentialed, because no check may reach a Linear
+    workspace; uncredentialed, they stay Linear sources whose credential is unset and whose
+    endpoint is :data:`UNSERVED_LINEAR`, so even a request made past it stays on this machine.
+    """
+    if state is HostState.NO_USER_LAYER:
+        return {}
+    boards = (onetaskgraph_user_layer.PRIVATE_PLANS, onetaskgraph_user_layer.PRIVATE_FOLLOWUPS)
+    trackers = (
+        onetaskgraph_user_layer.ORGANIZATION_PLANS,
+        onetaskgraph_user_layer.ORGANIZATION_FOLLOWUPS,
+    )
+    stood_in = boards if state is HostState.ORGANIZATION_UNCREDENTIALED else (*boards, *trackers)
+    layer = onetaskgraph_user_layer.with_stand_ins(
+        {
+            name: onetaskgraph_user_layer.stand_in(name, scratch / "stand-ins" / name, scratch)
+            for name in stood_in
+        }
+    )
+    if state is HostState.ORGANIZATION_UNCREDENTIALED:
+        for name in trackers:
+            layer["sources"][name]["config"]["endpoint"] = UNSERVED_LINEAR
+    home = onetaskgraph_user_layer.installed(scratch / "config-home", layer)
+    return {onetaskgraph_user_layer.XDG_CONFIG_HOME: str(home), LINEAR_KEY_ENV: None}
 
 
 @dataclass(frozen=True)

@@ -331,6 +331,9 @@ def _bench(tmp: Path) -> Bench:
     environment[root_name] = str(drafts_root)
     environment[plugin_name] = WRITABLE_PLUGIN
     environment[plan_root_variable.name()] = str(tmp / "authoring")
+    # Made now, as session setup makes `.plans`: the tracked document declares `authoring`
+    # private, and the store fails a read that walks a private source whose root is absent.
+    (tmp / "authoring").mkdir(parents=True, exist_ok=True)
     plans = drafts_root / "runs"
     # Made now, as the recipe makes it: the store builds every source declared private on
     # each dependency walk, and a folder root that does not exist fails that walk.

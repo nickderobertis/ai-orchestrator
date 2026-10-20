@@ -8,6 +8,7 @@
   "implicitDependencies": [
     "support-follow-up-ticket-shape",
     "support-follow-up-variables",
+    "support-onetaskgraph-user-layer",
     "support-published-tools",
     "support-waits"
   ],
