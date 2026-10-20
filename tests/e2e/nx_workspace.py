@@ -24,6 +24,11 @@ from orchestrator.root import REPO_ROOT
 OFFLINE_INSTALLS = {"UV_OFFLINE": "1", "BUN_CONFIG_REGISTRY": "http://127.0.0.1:9/"}
 
 
+#: The gitignored roots of the plan-store sources the tracked document declares private, as
+#: session setup creates them.
+PRIVATE_PLAN_ROOTS = (".plans/tasks", ".plans/projects", ".follow-ups/runs")
+
+
 def copy_working_tree(destination: Path) -> None:
     """Copy exactly the files Nx would hash: everything git would commit from here.
 
@@ -57,6 +62,11 @@ def share_this_checkouts_install(copy: Path) -> dict[str, str]:
     writes this checkout's environment. The interpreter reports the copy's `.venv` as
     `sys.prefix`, so the copy passes `scripts/require-provisioned.sh` on its own.
 
+    The copy also holds the two plan-store folders the tracked `onetaskgraph.yaml` declares
+    private, which session setup creates in every checkout it provisions
+    (`scripts/session-setup.sh`'s `create_plan_root`): the store walks each private source
+    on every dependency read, and an absent root fails that read.
+
     The returned variables go into every command run in the copy: `PYTHONPATH=<copy>`
     precedes the editable install's `.pth`, which names this checkout, so `orchestrator`
     — and the `REPO_ROOT` it resolves — is the copy's; `UV_NO_SYNC=1` keeps a `uv run`
@@ -71,6 +81,8 @@ def share_this_checkouts_install(copy: Path) -> dict[str, str]:
             (overlay / name).symlink_to(source / name)
     for entry in (source / "bin").iterdir():
         (overlay / "bin" / entry.name).symlink_to(entry)
+    for root in PRIVATE_PLAN_ROOTS:
+        (copy / root).mkdir(parents=True, exist_ok=True)
     return {"PYTHONPATH": str(copy), "UV_NO_SYNC": "1"}
 
 
