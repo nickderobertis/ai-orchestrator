@@ -609,12 +609,47 @@ def test_full_setup_reports_the_real_installers_failure_and_carries_on(tmp_path:
     assert not (tmp_path / "repo" / "node_modules").exists()
 
 
+def _write_plan_store_document(repo: Path, absolute_root: Path) -> None:
+    """A `onetaskgraph.yaml` whose `local-md` roots take each spelling the setup must read:
+    relative, nested, quoted, absolute and commented, beside a source that has no root and
+    a top-level key after the `sources:` block whose `root` is no source's."""
+    repo.mkdir(parents=True, exist_ok=True)
+    (repo / "onetaskgraph.yaml").write_text(
+        "# A header comment.\n"
+        "default_sources: [authoring]\n"
+        "sources:\n"
+        "  authoring:\n"
+        "    plugin: local-md\n"
+        "    config:\n"
+        "      root: .plans\n"
+        "  runs:\n"
+        "    plugin: local-md\n"
+        "    config:\n"
+        "      # A comment inside the source.\n"
+        '      root: ".follow-ups/runs"  # trailing comment\n'
+        "  elsewhere:\n"
+        "    plugin: 'local-md'\n"
+        "    config:\n"
+        f"      root: {absolute_root}\n"
+        "  board:\n"
+        "    plugin: github-projects\n"
+        "    config:\n"
+        "      owner: someone\n"
+        "cache:\n"
+        "  root: not-a-plan-root\n",
+        encoding="utf-8",
+    )
+
+
 def test_provision_only_installs_the_checkouts_toolchain_and_nothing_about_the_host(
     tmp_path: Path,
 ) -> None:
     """The mode the pre-push hook runs in a publication worktree: this checkout's `.venv`
-    and `node_modules`, and none of the session's host steps."""
+    and `node_modules`, the plan store's configured roots its gate budgets read, and none
+    of the session's host steps."""
     _write_bun(tmp_path / ".local" / "node" / "bin" / "bun")
+    repo = tmp_path / "repo"
+    _write_plan_store_document(repo, tmp_path / "absolute-root")
 
     proc = _run_full_setup_without_bun(tmp_path, args=("--provision-only",))
 
@@ -623,7 +658,26 @@ def test_provision_only_installs_the_checkouts_toolchain_and_nothing_about_the_h
     assert not (tmp_path / SETUP_LLMLINT_CALLS).exists()
     assert "host sweep" not in proc.stderr
     assert "sibling checkout bootstrap" not in proc.stderr
-    assert not (tmp_path / "repo" / ".plans").exists()
+    assert (repo / ".plans" / "tasks").is_dir()
+    assert (repo / ".follow-ups" / "runs").is_dir()
+    assert (tmp_path / "absolute-root").is_dir()
+    assert not (repo / "not-a-plan-root").exists()
+
+
+def test_setup_fails_naming_a_configured_plan_root_it_cannot_create(tmp_path: Path) -> None:
+    """A root the store will refuse every read for is a provisioning failure, said by name."""
+    _write_bun(tmp_path / ".local" / "node" / "bin" / "bun")
+    blocker = tmp_path / "blocker"
+    blocker.write_text("a file where a directory must go\n", encoding="utf-8")
+    _write_plan_store_document(tmp_path / "repo", blocker / "root")
+
+    proc = _run_full_setup_without_bun(tmp_path, args=("--provision-only",))
+
+    assert proc.returncode == 1
+    assert (
+        f"plan roots: {blocker / 'root'}, a local-md root onetaskgraph.yaml configures,"
+        " could not be created"
+    ) in proc.stderr
 
 
 def test_provision_only_fails_when_the_locked_workspace_install_fails(tmp_path: Path) -> None:

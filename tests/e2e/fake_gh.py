@@ -54,11 +54,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Literal, NamedTuple, TypedDict, cast, get_args
+from typing import Literal, NamedTuple, NotRequired, TypedDict, cast, get_args
 
 #: Where each call's argv is appended, one JSON list per line.
 CALLS_ENV = "FAKE_GH_CALLS"
@@ -193,6 +194,9 @@ class Change(TypedDict):
     #: Whether `pr merge --auto` armed it, for the host to merge once it may.
     armed: bool
     mergedAt: str | None
+    #: The issues the host says it closes, each `owner/name#N`: written only where a journey
+    #: has a person merge it closing some (:func:`merged_by_person`), and none otherwise.
+    closes: NotRequired[list[str]]
 
 
 #: Where a check run stands, in the words the check script and GitHub's API use.
@@ -380,6 +384,35 @@ def merge(state: Path, repository: Repository, *, number: int, commit: Commit) -
     return record
 
 
+def merged_by_person(
+    state: Path, repository: Repository, origin: Path, *, number: int, closes: list[str]
+) -> Change:
+    """A person squash-merging change request `number` of `repository`, closing `closes`.
+
+    The squash is made in the bare origin as GitHub makes one — the head's tree on the base —
+    so the commit the host then reports merged is one real git put there, and the issues
+    are the ones GitHub would answer as the change's `closingIssuesReferences`.
+    """
+    path = records(state, repository) / f"pr-{number}.json"
+    # `cast` for the same reason as in `_remembered`: `hold` wrote this file.
+    record = cast(Change, json.loads(path.read_text(encoding="utf-8")))
+    record["closes"] = closes
+    path.write_text(json.dumps(record), encoding="utf-8")
+    return _merge_now(path, record, repository, origin=str(origin))
+
+
+def _closing_references(record: Change) -> list[dict[str, object]]:
+    """The issues a change closes, in `gh`'s shape for `closingIssuesReferences`."""
+    references: list[dict[str, object]] = []
+    for reference in record.get("closes", []):
+        slug, number = reference.split("#")
+        owner, name = slug.split("/")
+        references.append(
+            {"number": int(number), "repository": {"name": name, "owner": {"login": owner}}}
+        )
+    return references
+
+
 def close(state: Path, repository: Repository, *, number: int) -> Change:
     """A person closing change request `number` of `repository` without merging it."""
     path = records(state, repository) / f"pr-{number}.json"
@@ -410,6 +443,7 @@ def _view(number: str, call: Call) -> int:
         "statusCheckRollup": [check.rollup(lifted=not record["isDraft"]) for check in _checks()],
         "mergeable": "MERGEABLE",
         "mergeStateStatus": "CLEAN",
+        "closingIssuesReferences": _closing_references(record),
     }
     script = _state() / "checks.json"
     if script.exists() and "statusCheckRollup" in call.fields:
@@ -459,9 +493,11 @@ def _merge(number: str, call: Call, *, auto: bool) -> int:
     return 0
 
 
-def _merge_now(path: Path, record: Change, repository: Repository) -> Change:
+def _merge_now(
+    path: Path, record: Change, repository: Repository, *, origin: str | None = None
+) -> Change:
     """Squash the head's tree onto the base in the bare origin, and record the merge."""
-    origin = _origin(repository)
+    origin = origin or _origin(repository)
 
     def plumbing(*args: str) -> str:
         return subprocess.run(
@@ -558,6 +594,68 @@ def _merge_scripted(number: str, call: Call) -> int:
     return 0
 
 
+#: Each change request a standings read names, as its alias and number.
+STANDINGS_ALIAS = re.compile(r"\bc(\d+): pullRequest\(number: (\d+)\)")
+
+
+def _field(argv: list[str], name: str) -> str:
+    """The value of `-f <name>=<value>` in an `api graphql` call."""
+    for at, word in enumerate(argv[:-1]):
+        if word in ("-f", "-F") and argv[at + 1].startswith(f"{name}="):
+            return argv[at + 1].split("=", 1)[1]
+    return ""
+
+
+def _empty(connection: str) -> dict[str, object]:
+    return {connection: {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": []}}
+
+
+def _standings(argv: list[str]) -> int:
+    """The batched read of a repository's change requests `onevcs` reconciles a run's against.
+
+    Each alias `c<n>` answers its change request as the host holds it — merged by a person
+    included, with the issues it closes — and the repository declares no ruleset and no
+    classic protection, so nothing is required of any base. Review connections, when the
+    read asks for them, are empty: no change request here was ever reviewed.
+    """
+    query = _field(argv, "query")
+    repository = f"{_field(argv, 'owner')}/{_field(argv, 'name')}"
+    answered: dict[str, object] = {}
+    if "defaultBranchRef" in query:
+        answered |= {"defaultBranchRef": {"name": "main"}}
+        answered |= _empty("rulesets") | _empty("branchProtectionRules")
+    for alias, number in STANDINGS_ALIAS.findall(query):
+        path = records(_state(), repository) / f"pr-{number}.json"
+        if not path.exists():
+            answered[f"c{alias}"] = None
+            continue
+        # `cast` for the same reason as in `_remembered`: `hold` wrote this file.
+        record = cast(Change, json.loads(path.read_text(encoding="utf-8")))
+        pull: dict[str, object] = {
+            "url": record["url"],
+            "number": record["number"],
+            "state": record["state"],
+            "isDraft": record["isDraft"],
+            "body": (path.parent / f"pr-{number}.body").read_text(encoding="utf-8")
+            if (path.parent / f"pr-{number}.body").exists()
+            else "",
+            "baseRefName": record["base"],
+            "headRefName": record["head"],
+            "headRefOid": record["headRefOid"],
+            "mergedAt": record["mergedAt"],
+            "mergeCommit": record["mergeCommit"],
+            "baseRef": {"name": record["base"]},
+            "closingIssuesReferences": {"nodes": _closing_references(record)},
+            "headRef": {"target": {"statusCheckRollup": {"contexts": {"nodes": []}}}},
+        }
+        if "reviewThreads" in query:
+            pull |= _empty("reviewThreads") | _empty("comments") | _empty("reviews")
+        answered[f"c{alias}"] = pull
+    document = {"data": {"rateLimit": {"cost": 1}, "repository": answered}}
+    sys.stdout.write(json.dumps(document) + "\n")
+    return 0
+
+
 def _list(call: Call) -> int:
     """Every change request in the asked state for that head and base, as `gh` filters them."""
     matched = [
@@ -580,6 +678,8 @@ def main(argv: list[str]) -> int:
     _record(argv)
     call = _call(argv)
     match argv:
+        case ["api", "graphql", *_] if "pullRequest(number:" in _field(argv, "query"):
+            return _standings(argv)
         case ["api", "user", *_]:
             sys.stdout.write("tester\n")
             return 0

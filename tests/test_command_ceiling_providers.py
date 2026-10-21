@@ -49,13 +49,29 @@ def _installed(binary: str) -> str:
 
 
 def _executable(binary: str) -> Path:
-    """The file `binary` runs, seen through an asdf shim, which `exec`s asdf in its place.
+    """The file `binary` runs on this host's PATH, through every launcher in front of it."""
+    return _resolved(binary, Path(_installed(binary)))
 
-    A shim is a shell script, so reading it reads nothing of the tool; the asdf it names
-    answers which installed executable the shim would run.
+
+def _resolved(binary: str, launched: Path) -> Path:
+    """The file `launched` finally runs, seen through `/bin/sh` launchers and an asdf shim.
+
+    A launcher or a shim is a shell script, so reading it reads nothing of the tool. A
+    `/bin/sh` launcher, such as a host's wrapper that waits out a reinstall, runs the tool
+    by the absolute path its last `exec` names, which is followed; one naming none cannot
+    be followed and fails naming the launcher. An asdf shim `exec`s asdf in the tool's
+    place, and the asdf it names answers which installed executable the shim would run.
     """
-    found = Path(_installed(binary)).resolve()
-    shim = re.search(rb"^exec (\S+) exec ", found.read_bytes()[:4096], re.MULTILINE)
+    found = launched.resolve()
+    head = found.read_bytes()[:4096]
+    if head.startswith(b"#!/bin/sh"):
+        targets = re.findall(rb"^\s*exec (/\S+)", head, re.MULTILINE)
+        assert targets, (
+            f"the /bin/sh launcher at {found} execs no absolute path, so the {binary} it "
+            "runs cannot be read"
+        )
+        return _resolved(binary, Path(targets[-1].decode()))
+    shim = re.search(rb"^exec (\S+) exec ", head, re.MULTILINE)
     if shim is None:
         return found
     which = subprocess.run(
@@ -129,6 +145,38 @@ def test_claude_code_reads_each_named_timeout_from_its_environment(variable: str
     assert re.search(rb"\." + variable.encode() + rb"\b", bundle), (
         f"the Claude Code bundle at {executable} reads no `{variable}` from its environment"
     )
+
+
+def _stand_in(path: Path, content: str) -> Path:
+    path.write_text(content)
+    path.chmod(0o755)
+    return path
+
+
+def test_a_direct_binary_is_read_where_it_stands(tmp_path: Path) -> None:
+    bundle = _stand_in(tmp_path / "claude.exe", f"\x7fELF ... env.{CLAUDE_CODE_CEILING} ...")
+
+    assert _resolved("claude", bundle) == bundle.resolve()
+
+
+def test_a_sh_launcher_is_followed_to_the_binary_its_last_exec_names(tmp_path: Path) -> None:
+    """The shape of this host's launcher: a guarded `exec "$t"`, then a fallback `exec`."""
+    bundle = _stand_in(tmp_path / "claude.exe", f"\x7fELF ... env.{CLAUDE_CODE_CEILING} ...")
+    launcher = _stand_in(
+        tmp_path / "claude",
+        f'#!/bin/sh\nt={tmp_path}/elsewhere\n[ -x "$t" ] && exec "$t" "$@"\nexec {bundle} "$@"\n',
+    )
+
+    assert _resolved("claude", launcher) == bundle.resolve()
+
+
+def test_a_sh_launcher_naming_no_absolute_exec_fails_naming_the_launcher(
+    tmp_path: Path,
+) -> None:
+    launcher = _stand_in(tmp_path / "claude", '#!/bin/sh\nexec claude.exe "$@"\n')
+
+    with pytest.raises(AssertionError, match=re.escape(str(launcher.resolve()))):
+        _resolved("claude", launcher)
 
 
 # llmlint: ignore-end[shell_test_tiers_stay_split]

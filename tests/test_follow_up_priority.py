@@ -259,8 +259,23 @@ def _decided(path: Path, capsys: pytest.CaptureFixture[str]) -> str:
 
 
 def _copied(path: Path, capsys: pytest.CaptureFixture[str]) -> str:
-    """`board-status`, then the follow-up `copy`, as the task sequences them: the item's id."""
-    assert _decided(path, capsys) in {f"{status.value}\n" for status in tickets.Status}
+    """`board-status`, then the follow-up `copy`, as the task sequences them: the item's id.
+
+    The word `board-status` prints is written as the ticket's `status`, as the task has the
+    agent write it, which is what `copy` holds the ticket to.
+    """
+    decided = _decided(path, capsys)
+    assert decided in {f"{status.value}\n" for status in tickets.Status}
+    path.write_text(
+        re.sub(
+            r'^status: "[^"]*"$',
+            f'status: "{decided.strip()}"',
+            path.read_text(encoding="utf-8"),
+            count=1,
+            flags=re.MULTILINE,
+        ),
+        encoding="utf-8",
+    )
     validated = tickets.main(["validate", str(path)])
     assert validated == tickets.SOUND, capsys.readouterr().err
     capsys.readouterr()

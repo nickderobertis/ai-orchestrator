@@ -362,7 +362,11 @@ def registered_paths(scratch: Path, *, strict: bool = False) -> list[Path]:
     """
     found: list[Path] = []
     try:
-        entries = sorted(scratch.iterdir(), key=lambda entry: entry.stat().st_mtime_ns)
+        # Two registrations inside one tick of the filesystem's clock share an mtime, so
+        # the name — the registering pid and its monotonic clock — breaks the tie.
+        entries = sorted(
+            scratch.iterdir(), key=lambda entry: (entry.stat().st_mtime_ns, entry.name)
+        )
     except OSError as error:
         if strict:
             raise Unmeasured(

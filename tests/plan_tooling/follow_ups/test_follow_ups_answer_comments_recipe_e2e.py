@@ -1053,7 +1053,9 @@ def test_the_dry_run_names_where_each_comment_would_go_and_why_the_rest_are_left
     assert said(marker).endswith(f": marked by run {runs['A']}")
     # Verified on another host, so the store's narrowing never returned it to be read.
     assert issues["a-elsewhere"] not in dry.report
-    assert said(ON_TODO).endswith(": item at Todo")
+    # At `Todo`, so the copy, keeping only the statuses it answers, never listed it.
+    assert issues["a-todo"] not in dry.report
+    assert life.urls[life.ids[ON_TODO]] not in dry.report
     assert said(BY_APP).endswith(f": bot author {APP}")
     assert f"at or before run {runs['C']}'s boundary " in said(BEFORE_BOUNDARY)
     assert said(ON_GONE).endswith(f": no records for owning run {runs['G']} here")
@@ -1315,7 +1317,10 @@ def test_a_run_scoped_gathering_launches_only_that_run_and_leaves_the_watermark(
     snapshot = scoped.snapshot
     assert snapshot is not None
     bound = {issue for key, issue in life.issues.items() if key.startswith("a")}
-    assert {one.id for one in snapshot.items} == bound, snapshot.items
+    # Run A's `Todo` item is copied by id like the rest, and answered `skipped` for its status.
+    assert {one.id for one in snapshot.items} == bound - {life.issues["a-todo"]}, snapshot.items
+    (todo,) = [one for one in snapshot.left if one.issue == life.issues["a-todo"]]
+    assert todo.comment is None and todo.reason.endswith("status todo is not one of backlog, draft")
 
 
 # llmlint: ignore-end[shell_test_tiers_stay_split]
@@ -1617,6 +1622,191 @@ def test_a_write_landing_fewer_parts_than_it_asked_for_is_partial_and_the_next_p
     sent = retries[0].variables.get("input")
     assert isinstance(sent, dict) and "body" in sent and "title" not in sent, sent
     assert after.priority == "High" and "3 occurrences" in after.body, after.body
+
+
+#: The operations whose answer carries an issue's comments, which a pass must send for no item
+#: it does not answer.
+COMMENT_READS = frozenset(
+    {
+        _Operation.ISSUE_DETAIL,
+        _Operation.ISSUE_DETAILS,
+        _Operation.ISSUE_COPY_DETAILS,
+        _Operation.COMMENTS,
+    }
+)
+
+
+def _comments_read(requests: list[remote._GraphQLRequest]) -> set[str]:
+    """The content id of every issue a request of ``requests`` read the comments of."""
+    read: set[str] = set()
+    for request in requests:
+        if request.operation in COMMENT_READS:
+            read |= {
+                str(value)
+                for name, value in request.variables.items()
+                if name == "id" or re.fullmatch(r"id[0-9]+", name)
+            }
+    return read
+
+
+def test_a_pass_copies_only_answered_items_and_reads_no_comment_of_any_other(
+    tmp_path: Path,
+) -> None:
+    """Items commented on since the watermark at `Proposal`, `Deferred`, `Todo`, `Done`, and
+    closed as completed while their Status still read `Todo`, beside a `Proposal` item the store
+    cannot capture: the gathering's copy keeps `--status backlog --status draft`, the board is
+    asked for no comment of an item outside them, the run owning the `Proposal` and `Deferred`
+    items it captured launches answering both, and the one it could not is recorded not captured
+    with the store's own reason. A pass scoped to the run copies each bound item by id with the
+    same statuses: the store answers each item outside them `skipped`, and `snapshot.json`
+    records it left out with its status, its comments unread. A pass scoped by `--issue` to the
+    `Todo` item, and one to the `Done` item, leaves each out the same way, rather than refusing
+    it as owned by no run for want of the record the copy never read.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    bench = _bench(tmp_path)
+    checkout = _launching_checkout(tmp_path)
+    record, log, reads = (tmp_path / name for name in ("record.jsonl", "prompts.jsonl", "reads"))
+    bench.environment.update(
+        {
+            # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
+            "FAKE_CODEX_RUN_ON_MARKER": str(tmp_path / "commands.json"),
+            "FAKE_CODEX_RUN_ON_MARKER_LOG": str(tmp_path / "commands-ran.jsonl"),
+            "FAKE_CODEX_PROMPT_LOG": str(log),
+            "UV_NO_SYNC": "1",
+        }
+    )
+    run = tickets.RunId(f"ac-status-{os.getpid()}")
+    launched: list[str] = []
+    with _serving(bench):
+        try:
+            issues = {
+                "proposal": _filed(bench, run, "listing-cursor-skips-last-page"),
+                "deferred": _filed(bench, run, "cache-keys-ignore-the-locale"),
+                "uncaptured": _filed(bench, run, "export-drops-a-column"),
+                "todo": _filed(bench, run, "retry-loop-never-backs-off"),
+                "done": _filed(bench, run, "library-parses-dates-wrong"),
+                "closed": _filed(bench, run, "sweep-follows-a-symlink"),
+            }
+            _moved(bench, issues["deferred"], tickets.Status.DEFERRED.value)
+            _moved(bench, issues["todo"], tickets.Status.ACCEPTED.value)
+            _moved(bench, issues["done"], tickets.Status.FINISHED.value)
+            _moved(bench, issues["closed"], tickets.Status.ACCEPTED.value)
+            # llmlint: ignore[tests_mirror_real_usage] An issue closed on GitHub while its card still reads `Todo` is a person's act on github.com, the state the closure lag leaves; the loopback's row is where it lands, and every read after it is the locked store.  # noqa: E501 - a directive is one line, and its reason is longer than the limit
+            _row(issues["closed"]).state, _row(issues["closed"]).state_reason = (
+                "CLOSED",
+                "COMPLETED",
+            )
+            # llmlint: ignore[tests_mirror_real_usage] As `life` writes it: the watermark an earlier complete gathering left, written with the module's own writer, which is the recipe's only writer of it, rather than waiting out `OVERLAP`.  # noqa: E501 - a directive is one line, and its reason is longer than the limit
+            comments.write_watermark(
+                bench.drafts_root,
+                BOARD,
+                datetime.now(UTC).replace(microsecond=0) + comments.OVERLAP,
+            )
+            _next_second()
+            ids = {
+                key: _commented(bench, issue, f"On the {key} item.\n", REVIEWER)
+                for key, issue in issues.items()
+            }
+            # The uncaptured item's comments span pages, and a person edits one each time the
+            # copy reads past the first, so no two reads agree and the store reports it `failed`.
+            for at in range(2):
+                _commented(bench, issues["uncaptured"], f"More, {at}.\n", REVIEWER)
+            remote.BOARD.comment_page = 1
+            edits = iter(range(1000))
+            uncaptured_row = _row(issues["uncaptured"])
+
+            def edited_while_read() -> None:
+                _edited(issues["uncaptured"], ids["uncaptured"], f"Edited ({next(edits)}).\n")
+                _GitHubFixture.before_operation[_Operation.ISSUE_DETAIL] = edited_while_read
+
+            _GitHubFixture.before_operation[_Operation.ISSUE_DETAIL] = edited_while_read
+            _scripted(bench, {run: [_replying(bench, run, log, reads)]})
+            real = _answer(bench, checkout, record)
+            launched.extend(_follow_up_runs(bench))
+            _GitHubFixture.before_operation.pop(_Operation.ISSUE_DETAIL, None)
+            scoped = _answer(bench, checkout, record, "--run", run, "--dry-run")
+            issue_scoped = {
+                key: _answer(bench, checkout, record, "--issue", issues[key], "--dry-run")
+                for key in ("todo", "done")
+            }
+            content = {key: str(_row(issue).content_id) for key, issue in issues.items()}
+            rows = {key: _row(issues[key]) for key in ("done", "closed")}
+            uncaptured_content = str(uncaptured_row.content_id)
+        finally:
+            for one in launched:
+                if (bench.runs / one).exists():
+                    _run(["just", "stop", one], bench)
+
+    answered = ("proposal", "deferred", "uncaptured")
+    for invocation in (real, scoped, *issue_scoped.values()):
+        copies = [one.argv for one in invocation.recorded if one.argv[:2] == ["task", "copy"]]
+        assert copies, invocation.recorded
+        for argv in copies:
+            pairs = list(zip(argv, argv[1:], strict=False))
+            assert ("--status", "backlog") in pairs and ("--status", "draft") in pairs, argv
+        read = _comments_read(invocation.requests)
+        assert not read & {content[key] for key in content if key not in answered}, (
+            read,
+            content,
+        )
+        # Nothing here reconciles a closure: no Status write, or any other, to a closed item.
+        for key in ("done", "closed"):
+            assert not remote.writes_naming(rows[key], invocation.requests), key
+
+    assert real.result.returncode == OK, real.report + real.result.stderr + _ran(bench)
+    assert launched == [f"{run}{SUFFIX}"], launched
+    assert [(rows[key].status, rows[key].state) for key in ("done", "closed")] == [
+        ("Done", "CLOSED"),
+        ("Todo", "CLOSED"),
+    ], rows
+    snapshot = real.snapshot
+    assert snapshot is not None, real.report
+    assert {one.comment for one in snapshot.selection[run]} == {ids["proposal"], ids["deferred"]}
+    assert {one.id for one in snapshot.items} == {issues["proposal"], issues["deferred"]}
+    (uncaptured,) = [one for one in snapshot.left if one.comment is None]
+    assert uncaptured.issue == issues["uncaptured"], snapshot.left
+    assert uncaptured.outcome is comments.LeftOutcome.NOT_CAPTURED, uncaptured
+    reason = uncaptured.reason.removeprefix(comments.NOT_CAPTURED.format(error=""))
+    assert reason and uncaptured.reason != reason, uncaptured.reason
+    assert f"not captured: {issues['uncaptured']}: " in real.report, real.report
+    for key in ("todo", "done", "closed"):
+        assert issues[key] not in real.report, real.report
+    assert uncaptured_content in content.values()
+
+    assert scoped.result.returncode == OK, scoped.report + scoped.result.stderr
+    held = scoped.snapshot
+    assert held is not None, scoped.report
+    assert {one.id for one in held.items} == {
+        issues["proposal"],
+        issues["deferred"],
+        issues["uncaptured"],
+    }
+    statuses = {"todo": "todo", "done": "done", "closed": "done"}
+    left = {one.issue: one for one in held.left if one.comment is None}
+    assert set(left) == {issues[key] for key in statuses}, held.left
+    for key, category in statuses.items():
+        entry = left[issues[key]]
+        assert entry.outcome is comments.LeftOutcome.NOT_ANSWERED, entry
+        assert entry.reason == comments.NOT_ANSWERED.format(
+            reason=f"status {category} is not one of backlog, draft"
+        ), entry
+        assert f"not answered: {issues[key]}: {entry.reason}" in scoped.report, scoped.report
+    assert held.captured_all, held.left
+
+    # Scoped to the one item instead, the item is owned by the local binding alone — its
+    # record went unread with its comments — so the pass leaves it out rather than refusing.
+    for key, invocation in issue_scoped.items():
+        assert invocation.result.returncode == OK, invocation.report + invocation.result.stderr
+        alone = invocation.snapshot
+        assert alone is not None, invocation.report
+        assert not alone.items, alone.items
+        (entry,) = [one for one in alone.left if one.comment is None]
+        assert (entry.issue, entry.reason) == (
+            issues[key],
+            comments.NOT_ANSWERED.format(reason=f"status {key} is not one of backlog, draft"),
+        ), alone.left
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

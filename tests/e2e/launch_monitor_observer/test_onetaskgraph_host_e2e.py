@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
-from typing import ClassVar, Literal, NamedTuple, NewType, TypedDict
+from typing import Literal, NamedTuple, NewType, TypedDict
 
 import boundary_home
 import budget_telemetry
@@ -57,7 +57,6 @@ from github_board import (
     TICKET_LIFECYCLE_BUDGET,
     RequestCost,
     _audit_follow_up_calls,
-    _Board,
     _board_cost,
     _BoardField,
     _BoardItemId,
@@ -82,8 +81,8 @@ from github_board import (
     _request_points,
     _search_points,
     _sent,
-    _served,
     _serving_board,
+    _serving_both_boards,
     _serving_followups,
     _StatusOption,
     _wide_pages,
@@ -321,49 +320,6 @@ def _mutation_gaps(requests: list[_GraphQLRequest]) -> list[float]:
     """
     sent = [request.received for request in requests if request.is_mutation]
     return [later - earlier for earlier, later in zip(sent, sent[1:], strict=False)]
-
-
-class _FollowUpsFixture(_GitHubFixture):
-    """The second board, served beside the first so one journey can reach both.
-
-    A subclass rather than a second instance because the stdlib builds a handler per
-    request and takes the class: its own `board` and its own `requests` are what keep
-    `followups`'s items off `plans` and let each board's traffic be read apart from the
-    other's. One journey needs that — a launch claims its plan's items on one board and
-    the ticket a node delivers on the other — and a single board answering both sources
-    would file every item on whichever number it was configured with.
-    """
-
-    requests: ClassVar[list[_GraphQLRequest]] = []
-
-
-#: The board the `followups` source reaches when both are served, kept beside the `plans`
-#: one so a journey reads each board's own items rather than one shared list.
-FOLLOWUPS_BOARD = _Board()
-
-
-@contextmanager
-def _serving_both_boards() -> Iterator[dict[str, str]]:
-    """Serve `plans` and `followups` as two boards, yielding the environment for both.
-
-    Two servers rather than one, because the two sources are configured with different
-    project numbers and an issue's board membership is answered under the number of the
-    board holding it: one server would file every item under one number, and the source
-    configured with the other would find none of its own.
-    """
-    with (
-        _served(_GitHubFixture, BOARD, STATUS_OPTIONS, CONFIGURED_PROJECT_NUMBER) as plans,
-        _served(
-            _FollowUpsFixture, FOLLOWUPS_BOARD, FOLLOWUPS_OPTIONS, FOLLOWUPS_PROJECT_NUMBER
-        ) as followups,
-    ):
-        yield {
-            "GH_PROJECTS_TOKEN": "fixture-token",
-            "ONETASKGRAPH_SOURCES__PLANS__CONFIG__ENDPOINT": plans,
-            "ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__ENDPOINT": followups,
-            "ONETASKGRAPH_SOURCES__PLANS__CONFIG__PACING__MIN_MUTATION_INTERVAL_MS": "0",
-            "ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__PACING__MIN_MUTATION_INTERVAL_MS": "0",
-        }
 
 
 # llmlint: ignore-end[e2e_not_mocked]
@@ -3712,10 +3668,17 @@ def test_a_realistic_comment_pass_reads_the_board_once_before_its_replies_and_on
         assert previewed.returncode == 0, previewed.stdout + previewed.stderr
         spent[_PassPhase.GATHERING] = list(_GitHubFixture.requests)
         _GitHubFixture.requests.clear()
-        # Four pages of the narrowed search over this host's eighty items, twenty a page, and the
-        # twenty proposals commented on since copied in four batches: exactly, and nothing else.
+        # Four pages of the narrowed search over this host's eighty items, twenty a page, then the
+        # copy's details for the items its `--status backlog --status draft` keeps — the twenty
+        # proposals and the other items at Proposal or Deferred, forty-four — the store's
+        # `COPY_DETAIL_BATCH` (21) at a time: exactly, and nothing else.
+        kept = COMMENT_PASS_PROPOSALS + sum(
+            statuses[at % len(statuses)]
+            in (follow_up_tickets.Status.PROPOSED, follow_up_tickets.Status.DEFERRED)
+            for at in range(COMMENT_PASS_OTHER_ITEMS)
+        )
         assert [one.operation for one in spent[_PassPhase.GATHERING]] == (
-            [_Operation.SEARCH] * 4 + [_Operation.ISSUE_COPY_DETAILS] * 4
+            [_Operation.SEARCH] * 4 + [_Operation.ISSUE_COPY_DETAILS] * -(-kept // 21)
         ), spent[_PassPhase.GATHERING]
         printed = re.search(r"--from (\S+)$", previewed.stdout, re.M)
         assert printed is not None, previewed.stdout

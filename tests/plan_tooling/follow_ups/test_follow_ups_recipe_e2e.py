@@ -4847,13 +4847,45 @@ def _launch_follow_up_validation(
 def test_follow_up_launch_validation_checks_the_board_once_and_refuses_a_late_change(
     tmp_path: Path,
 ) -> None:
-    """Last dispatch check and attached closeout check the board once, including refusal."""
+    """Last dispatch check and attached closeout check the board once, including refusal.
+
+    Beside the run's ticket, an accepted card whose issue was closed outside the stack — the
+    accepted lag — is left as it stands: neither launch of the recipe writes a Status, or
+    anything else, to it, because nothing here reconciles a closure.
+    """
     environment, root = host_board._followups_environment(tmp_path)
     environment = follow_up_boundary.environment(environment)
     trace = host_board._audit_follow_up_calls(tmp_path, environment)
     ticket = host_board._follow_up_ticket(host_board.SIBLING_REPOSITORY)
     path = host_board._written_ticket(root, ticket)
+    lagging = host_board._follow_up_ticket(
+        host_board.SIBLING_REPOSITORY, cause="accepted-and-closed-by-hand"
+    )
+    lagging_path = host_board._written_ticket(root, lagging)
     with host_board._serving_followups(environment, fields=True):
+        assert host_board._decided_status(environment, lagging_path) == tickets.Status.PROPOSED
+        placed = host_board._follow_up_step(
+            environment, "copy", "--board", tickets.BOARD, str(lagging_path)
+        )
+        assert placed.returncode == 0, placed.stderr
+        lagging_issue = json.loads(placed.stdout)["destination"]
+        # Its card stands on the board; its local ticket goes, so the run's account names it not.
+        lagging_path.unlink()
+        accepted = host_board._followups_command(
+            environment,
+            [str(ONETASKGRAPH_BIN), "task", "status", "set", lagging_issue, "todo", "--json"],
+        )
+        assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+        (lagging_row,) = [
+            one
+            for one in host_board.BOARD.issues
+            if one.content_id == lagging_issue.partition(":")[2]
+        ]
+        # The acceptance was a Status write naming the row, as a reconcile's would be.
+        assert host_board.writes_naming(lagging_row), "the Status write named no row"
+        # A person closes the issue on github.com, leaving the card's face at `Todo`.
+        host_board.closed_through_rest(lagging_row, environment, "completed")
+        assert (lagging_row.status, lagging_row.state_reason) == ("Todo", "COMPLETED")
         assert host_board._decided_status(environment, path) == tickets.Status.PROPOSED
         copied = host_board._follow_up_step(
             environment, "copy", "--board", tickets.BOARD, str(path)
@@ -4886,6 +4918,8 @@ def test_follow_up_launch_validation_checks_the_board_once_and_refuses_a_late_ch
             _launch_follow_up_validation(
                 launch_root, environment, root, trace, issue, corrupt=corrupt
             )
+            assert not host_board.writes_naming(lagging_row), host_board.writes_naming(lagging_row)
+            assert (lagging_row.status, lagging_row.state) == ("Todo", "CLOSED"), lagging_row
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, e2e_not_mocked]  # noqa: E501 - directive rule lists occupy one line

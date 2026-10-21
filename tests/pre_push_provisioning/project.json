@@ -33,6 +33,9 @@
       "{workspaceRoot}/scripts/nx.sh",
       "{workspaceRoot}/scripts/require-provisioned.sh",
       "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/onetaskgraph.yaml",
+      "{workspaceRoot}/config/onetaskgraph.version",
+      "{workspaceRoot}/examples/**/*",
       "{workspaceRoot}/tests/pre_push_provisioning/**/*"
     ]
   },

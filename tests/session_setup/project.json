@@ -31,6 +31,7 @@
       "{workspaceRoot}/scripts/require-provisioned.sh",
       "{workspaceRoot}/scripts/repos-bootstrap.sh",
       "{workspaceRoot}/scripts/registered-checkouts.sh",
+      "{workspaceRoot}/examples/**/*",
       "{workspaceRoot}/tests/session_setup/**/*",
       "{workspaceRoot}/orchestrator/root.py"
     ]

@@ -46,9 +46,12 @@ paths, the source name and the lines it writes.
 3. **`snapshot.json`** (:data:`SNAPSHOT_RECORD`, schema :data:`SNAPSHOT_SCHEMA`) is the
    authoritative record of the pass, :class:`Snapshot` field for field. `queried_at` is the
    instant every watermark, boundary and feedback stamp derives from; `left` holds every
-   comment left out with its reason, and an item the copy reported `failed` as an entry with no
-   comment: such an item is **not captured**, none of its comments is quoted from this
-   snapshot, and a pass from it moves no watermark, so the next gathering reads it again.
+   comment left out with its reason, and each item read without its comments as an entry with
+   no comment, its `outcome` (:class:`LeftOutcome`) saying which: an item the copy reported
+   `failed` is **not captured**, none of its comments is quoted from this snapshot, and a pass
+   from it moves no watermark, so the next gathering reads it again; an item a scoped copy
+   answered `skipped` is **not answered**, which moves nothing. Schema 1, which named no
+   `outcome` and recorded no item not answered, is still read.
 4. **`launched.json`** (:data:`SNAPSHOT_LAUNCHED`) is absent until a launch claims the snapshot,
    and written exclusively before any feedback file, holding the claim's instant and whether
    the launch was fresh or `--from`.
@@ -91,6 +94,14 @@ read, and nothing picks up a "latest" snapshot by itself.
 What is read
 ------------
 
+* **Every copy keeps only the statuses whose comments are answered**, `--status backlog
+  --status draft` (:data:`ANSWERED_CATEGORIES`), so no comment of an item at another status is
+  read: by query the store lists no such item, and by id it answers it `skipped`, read only as
+  far as its status, which `left` records as an entry with no comment, the store's reason
+  naming the status (:data:`NOT_ANSWERED`). Such an item is not answered rather than not
+  captured, so it holds no watermark. Beside `--status` the adopted store refuses a copy by
+  ids whole when one id names an item it no longer holds, so a scoped pass bound to a deleted
+  item is refused naming it.
 * **`--issue QUALIFIED-ID`** copies that one item by id and lists nothing. Its comments go to
   the run under this drafts root whose ticket's `board_item` binding
   (:data:`follow_up_tickets.BINDING_FIELD`) names it, found by one narrowed listing of the local
@@ -100,8 +111,7 @@ What is read
   lists no board.
 * **Unscoped**, every board of the family `--to` roots (:func:`follow_up_tickets.boards`) is
   copied by the query the store narrows to this host's items, `--commented-since <its since>
-  --metadata <record>/host=<this hostname>` (:func:`host_query`). No status filter is sent,
-  because a comment on an item at another status is still reported, skipped with its reason.
+  --metadata <record>/host=<this hostname>` (:func:`host_query`).
   The store keeps an item when one of its comments was created or last edited at or after the
   instant, so a comment edited after its reply comes back through the same query.
 
@@ -129,7 +139,8 @@ reason, tried in this order; the first two are never met unscoped:
 * **an owning run no launch takes** — its id is outside `just follow-ups`' run-id grammar;
 * **no records for the owning run** — nothing of that run is under this drafts root;
 * **item at a status** — only an item at `Proposal` or `Deferred` (store categories `backlog`
-  and `draft`; `Proposed` and `Backlog` on Linear) is answered;
+  and `draft`; `Proposed` and `Backlog` on Linear) is answered, which the copy's own `--status`
+  already holds it to, so this rule is the second line behind that copy;
 * **marked** — a comment whose last line is any run's marker, of either kind, is not a
   person's;
 * **bot author** — on a GitHub board, `github-actions` or a login ending `[bot]`; on a Linear
@@ -209,6 +220,7 @@ import tempfile
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from pathlib import Path
 from typing import (
     Literal,
@@ -301,7 +313,9 @@ SNAPSHOT_ITEMS = "items"
 SNAPSHOT_RECORD = "snapshot.json"
 SNAPSHOT_LAUNCHED = "launched.json"
 PENDING = "pending.json"
-SNAPSHOT_SCHEMA = 1
+SNAPSHOT_SCHEMA = 2
+#: The earlier `snapshot.json` schema still read: its `left` entries carry no `outcome`.
+SNAPSHOT_SCHEMA_WITHOUT_OUTCOME = 1
 LAUNCHED_SCHEMA = 1
 PENDING_SCHEMA = 1
 #: A snapshot directory's name: the query instant, and a counter when two share a second.
@@ -376,6 +390,11 @@ RFC3339 = re.compile(r"\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|
 
 #: The reason a `left` entry records for an item the snapshot's copy reported `failed`.
 NOT_CAPTURED = "not captured: the snapshot's copy failed for this item: {error}"
+#: The reason a `left` entry records for an item a scoped copy answered `skipped`, read only
+#: as far as its status because it is at none of :data:`ANSWERED_CATEGORIES`.
+NOT_ANSWERED = (
+    "not at Proposal or Deferred: the snapshot's copy read only its status, no comment: {reason}"
+)
 
 
 class Unbounded(ValueError):
@@ -662,12 +681,25 @@ class Chosen(NamedTuple):
     body_sha256: str
 
 
+class LeftOutcome(StrEnum):
+    """What a `left` entry records: a comment left out, or an item read without its comments."""
+
+    #: One comment of a captured item, left out for its ``reason``.
+    COMMENT = "comment"
+    #: An item the snapshot's copy reported `failed`: the pass moves no watermark over it.
+    NOT_CAPTURED = "not-captured"
+    #: An item a scoped copy answered `skipped`, at none of :data:`ANSWERED_CATEGORIES`.
+    NOT_ANSWERED = "not-answered"
+
+
 class LeftOut(NamedTuple):
-    """One comment left out, or an item not captured (``comment`` `None`), and why."""
+    """One comment left out, or an item read without its comments (``comment`` `None`), and
+    why; ``outcome`` says which."""
 
     issue: QualifiedTaskId
     comment: CommentId | None
     reason: str
+    outcome: LeftOutcome
 
 
 class RunBoundary(NamedTuple):
@@ -705,8 +737,8 @@ class Snapshot:
 
     @property
     def captured_all(self) -> bool:
-        """Whether the copy captured every item its query or its ids named."""
-        return all(one.comment is not None for one in self.left)
+        """Whether the copy captured every item its query or its ids named that it answers."""
+        return all(one.outcome is not LeftOutcome.NOT_CAPTURED for one in self.left)
 
     def item(self, issue: QualifiedTaskId) -> SnapshotItem | None:
         """The record of ``issue``, if the snapshot holds it."""
@@ -807,10 +839,14 @@ _CHOSEN_FIELDS: dict[str, Callable[[object], bool]] = {
     "last_changed": _is_moment,
     "body_sha256": lambda value: isinstance(value, str) and DIGEST.fullmatch(value) is not None,
 }
-_LEFT_FIELDS: dict[str, Callable[[object], bool]] = {
+_LEFT_FIELDS_WITHOUT_OUTCOME: dict[str, Callable[[object], bool]] = {
     "issue": _is_qualified,
     "comment": lambda value: value is None or (isinstance(value, str) and bool(value)),
     "reason": _is_str,
+}
+_LEFT_FIELDS: dict[str, Callable[[object], bool]] = {
+    **_LEFT_FIELDS_WITHOUT_OUTCOME,
+    "outcome": lambda value: isinstance(value, str) and value in {one.value for one in LeftOutcome},
 }
 _BOUNDARY_FIELDS: dict[str, Callable[[object], bool]] = {
     "boundary": lambda value: value is None or _is_moment(value),
@@ -826,7 +862,7 @@ def _well_formed(held: object, directory: Path) -> bool:  # noqa: C901 - one che
     boards = held["boards"]
     if (
         type(held["schema"]) is not int
-        or held["schema"] != SNAPSHOT_SCHEMA
+        or held["schema"] not in (SNAPSHOT_SCHEMA, SNAPSHOT_SCHEMA_WITHOUT_OUTCOME)
         or not isinstance(held["board"], str)
         or not RECORD_COMPONENT.fullmatch(held["board"])
         or not isinstance(boards, list)
@@ -879,7 +915,15 @@ def _well_formed(held: object, directory: Path) -> bool:  # noqa: C901 - one che
             for run, chosen in selection.items()
         )
         and isinstance(left, list)
-        and all(_fields(one, _LEFT_FIELDS) for one in left)
+        and all(
+            _fields(
+                one,
+                _LEFT_FIELDS if held["schema"] == SNAPSHOT_SCHEMA else _LEFT_FIELDS_WITHOUT_OUTCOME,
+            )
+            # Only an item read without its comments names no comment.
+            and (one["comment"] is None) == (_held_outcome(one) is not LeftOutcome.COMMENT)
+            for one in left
+        )
     )
 
 
@@ -955,10 +999,19 @@ def read_snapshot(directory: Path) -> Snapshot:
                 QualifiedTaskId(cast(str, one["issue"])),
                 cast(CommentId | None, one["comment"]),
                 cast(str, one["reason"]),
+                _held_outcome(one),
             )
             for one in cast(list[dict[str, str | None]], held["left"])
         ),
     )
+
+
+def _held_outcome(entry: Mapping[str, str | None]) -> LeftOutcome:
+    """A `left` entry's outcome: as recorded, or, in a schema-1 record, which recorded no item
+    not answered, a comment left out when it names one and an item not captured when not."""
+    if (outcome := entry.get("outcome")) is not None:
+        return LeftOutcome(outcome)
+    return LeftOutcome.NOT_CAPTURED if entry["comment"] is None else LeftOutcome.COMMENT
 
 
 def snapshot_name(queried_at: datetime, attempt: int) -> str:
@@ -1039,16 +1092,22 @@ def _failure_message(answer: StoreAnswer) -> str:
 
 
 class Copied(NamedTuple):
-    """What one gathering copy put into the snapshot: each item's snapshot id, and each failure."""
+    """What one gathering copy put into the snapshot: each item's snapshot id, each failure,
+    and each item it skipped for its status, with the store's reason naming that status."""
 
     held: dict[str, str]
     failed: dict[str, str]
+    skipped: dict[str, str]
 
 
 def copy_into_snapshot(
     staged: Path, board: str, arguments: Sequence[str], settings: Sequence[str]
 ) -> Copied:
     """One `task copy --to snapshot --comments --no-link`, by query or by ids: what it copied.
+
+    The copy keeps only :data:`ANSWERED_CATEGORIES` (`--status`), so it reads the comments of
+    no item it would not answer: by query the store lists no other, and by ids it answers each
+    other `skipped`, read only as far as its status.
 
     :class:`OSError` when the store refused the copy whole, naming why.
     """
@@ -1057,6 +1116,7 @@ def copy_into_snapshot(
             "task",
             "copy",
             *arguments,
+            *[word for category in ANSWERED_CATEGORIES for word in ("--status", category)],
             "--to",
             SNAPSHOT_SOURCE,
             "--comments",
@@ -1071,6 +1131,7 @@ def copy_into_snapshot(
         )
     held: dict[str, str] = {}
     failed: dict[str, str] = {}
+    skipped: dict[str, str] = {}
     # By query, every source is an item of the board queried; by ids, one of the ids asked for.
     queried = arguments[1] if list(arguments[:1]) == ["--source"] else None
     for entry in entries:
@@ -1088,8 +1149,12 @@ def copy_into_snapshot(
                 f"the copy of {board!r} answered {source} copied to {destination!r}, which is "
                 f"no task of the snapshot source `{SNAPSHOT_SOURCE}`"
             )
-        if source in held or source in failed:
+        if source in held or source in failed or source in skipped:
             raise OSError(f"the copy of {board!r} answered {source} more than once")
+        if entry.get("action") == "skipped":
+            reason = entry.get("reason") or "the copy named no reason"
+            skipped[source] = " ".join(str(reason).split())
+            continue
         if entry.get("action") == "failed" or not isinstance(destination, str):
             error = entry.get("error")
             message = error.get("message") if isinstance(error, Mapping) else error
@@ -1100,9 +1165,9 @@ def copy_into_snapshot(
         raise OSError(f"the copy of {board!r} answered two items copied to one task")
     # By ids, an id the answer left out was captured no more than one it failed.
     for asked in arguments if queried is None else ():
-        if asked not in held and asked not in failed:
+        if asked not in held and asked not in failed and asked not in skipped:
             failed[asked] = "the copy answered nothing for it"
-    return Copied(held, failed)
+    return Copied(held, failed, skipped)
 
 
 def shown_details(ids: Sequence[str], settings: Sequence[str] = ()) -> list[Mapping[str, object]]:
@@ -1980,6 +2045,7 @@ def gather(  # noqa: PLR0913, PLR0915 - each is one flag of the command
         snapshot_settings_now = snapshot_settings(staged, board)
         held: dict[str, str] = {}
         failed: dict[str, str] = {}
+        skipped: dict[str, str] = {}
         if scope is None:
             for read, start in starts.items():
                 copied = copy_into_snapshot(
@@ -2015,7 +2081,7 @@ def gather(  # noqa: PLR0913, PLR0915 - each is one flag of the command
                 ids.append(str(binding.item))
             if ids:
                 copied = copy_into_snapshot(staged, board, ids, snapshot_settings_now)
-                held, failed = copied.held, copied.failed
+                held, failed, skipped = copied.held, copied.failed, copied.skipped
             for one in ids:
                 say(
                     f"read {one} and its comments directly, the item run {scope}'s ticket is "
@@ -2026,7 +2092,9 @@ def gather(  # noqa: PLR0913, PLR0915 - each is one flag of the command
             snapshot_issue(detail, source, destination, _plugin(settings, source.partition(":")[0]))
             for (source, destination), detail in zip(held.items(), details, strict=True)
         ]
-        if issue_run is not None:
+        # An item at a status no comment is answered at was read for its status alone, so its
+        # record is unread: the local binding that scoped the pass is all its ownership says.
+        if issue_run is not None and str(issue) not in skipped:
             problem = (
                 _unowned(issues[0], issue_run, host)
                 if issues
@@ -2087,11 +2155,12 @@ def gather(  # noqa: PLR0913, PLR0915 - each is one flag of the command
                     for run, chosen in launching.items()
                 },
                 left=tuple(
-                    [LeftOut(one.issue, one.id, one.reason) for one in selection.left]
-                    + [
-                        LeftOut(QualifiedTaskId(source), None, NOT_CAPTURED.format(error=error))
-                        for source, error in sorted(failed.items())
+                    [
+                        LeftOut(one.issue, one.id, one.reason, LeftOutcome.COMMENT)
+                        for one in selection.left
                     ]
+                    + [_failed_entry(source, error) for source, error in sorted(failed.items())]
+                    + [_skipped_entry(source, reason) for source, reason in sorted(skipped.items())]
                 ),
             ),
         )
@@ -2101,6 +2170,8 @@ def gather(  # noqa: PLR0913, PLR0915 - each is one flag of the command
     # A comment with no address of its own is addressed by its copy's file, which the rename
     # just moved: the report names it where it now is, as every later reader does.
     report_selection(snapshot, _moved(selection, staged, snapshot.directory), failed, say)
+    for source, reason in sorted(skipped.items()):
+        say(_unread_item_line(_skipped_entry(source, reason)))
     if dry_run:
         say(f"launch exactly this with: {from_command(snapshot.directory)}")
     return snapshot
@@ -2146,15 +2217,31 @@ def report_selection(
         if snapshot.scope in (None, owners.get(left.issue)):
             say(f"left out: {left.url} on {left.issue}: {left.reason}")
     for source, error in sorted(failed.items()):
-        say(_not_captured(LeftOut(QualifiedTaskId(source), None, NOT_CAPTURED.format(error=error))))
+        say(_unread_item_line(_failed_entry(source, error)))
     if not any(snapshot.selection.values()):
         say("nothing to answer: no comment was selected")
     say(f"snapshot: {snapshot.directory}")
     say(_store_line(snapshot))
 
 
-def _not_captured(left: LeftOut) -> str:
-    """The report's line for an item the snapshot's copy could not capture."""
+def _failed_entry(source: str, error: str) -> LeftOut:
+    """The `left` entry of an item the snapshot's copy reported `failed`."""
+    return LeftOut(
+        QualifiedTaskId(source), None, NOT_CAPTURED.format(error=error), LeftOutcome.NOT_CAPTURED
+    )
+
+
+def _skipped_entry(source: str, reason: str) -> LeftOut:
+    """The `left` entry of an item a scoped copy answered `skipped`."""
+    return LeftOut(
+        QualifiedTaskId(source), None, NOT_ANSWERED.format(reason=reason), LeftOutcome.NOT_ANSWERED
+    )
+
+
+def _unread_item_line(left: LeftOut) -> str:
+    """The report's line for an item the snapshot's copy could not capture, or did not read."""
+    if left.outcome is LeftOutcome.NOT_ANSWERED:
+        return f"not answered: {left.issue}: {left.reason}"
     return f"not captured: {left.issue}: {left.reason.removeprefix('not captured: ')}"
 
 
@@ -2347,7 +2434,7 @@ def claim(  # noqa: PLR0913 - each is one flag of the command
         composed.append((run, feedback, render(run, snapshot.board, selected, since, directory)))
     for left in snapshot.left:
         if left.comment is None:
-            say(_not_captured(left))
+            say(_unread_item_line(left))
     try:
         with (directory / SNAPSHOT_LAUNCHED).open("x", encoding="utf-8") as handle:
             json.dump(

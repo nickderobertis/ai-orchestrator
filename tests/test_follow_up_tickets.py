@@ -1650,6 +1650,23 @@ def _verified_ticket() -> str:
     return _section(_task(), "The verified ticket", "Ownership on the board")
 
 
+def test_the_contract_forbids_every_issue_write_but_board_status_and_copy() -> None:
+    """The one path nothing here can refuse as it is made — a raw issue write with the board
+    credential — is forbidden in the task the dispatch reads, beside `copy`'s own refusal of a
+    status `board-status` did not decide and the board check that catches a raw write after."""
+    contract = _flat(_verified_ticket())
+
+    assert "**No issue is created, closed or withdrawn any other way.**" in contract
+    for named in ("`gh issue create`", "`gh issue close`", "`gh api`", "the board credential"):
+        assert named in contract, named
+    for verb in ("task create", "task status set", "task update", "task copy"):
+        assert f"`{verb}`" in contract, verb
+    assert f"`{COPY}` exits {tickets.UNDECIDED} before it writes anything" in contract, contract
+    assert (
+        "whose own item is not at `Proposal`, or whose withdrawn ticket's item is not" in contract
+    )
+
+
 def test_the_contract_renders_the_ticket_with_every_key_heading_and_status_rule() -> None:
     contract = _verified_ticket()
 

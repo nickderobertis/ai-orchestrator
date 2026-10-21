@@ -15,6 +15,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import yaml
+
 from orchestrator.root import REPO_ROOT
 
 #: The environment that keeps a copy's installers off every package index: uv answers
@@ -45,6 +47,43 @@ def copy_working_tree(destination: Path) -> None:
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(REPO_ROOT / relative, target, follow_symlinks=False)
+
+
+def missing_plan_roots(checkout: Path) -> list[str]:
+    """Each `local-md` root ``checkout``'s own `onetaskgraph.yaml` configures that is absent.
+
+    Read from the document rather than from a list here, so a source added to it is held
+    too, and resolved as the store resolves a relative root: against the document's own
+    directory. Every one is gitignored, so `copy_working_tree` carries none, and the store
+    refuses every read while any one is missing; so a provisioned checkout leaving one out
+    is one whose plan-store budgets error.
+    """
+    document = yaml.safe_load((checkout / "onetaskgraph.yaml").read_text(encoding="utf-8"))
+    roots = [
+        str(source["config"]["root"])
+        for source in document["sources"].values()
+        if source.get("plugin") == "local-md"
+    ]
+    assert roots, "onetaskgraph.yaml configures no local-md source"
+    return [root for root in roots if not (checkout / root).is_dir()]
+
+
+def read_a_plan_graph(checkout: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    """The plan-store read a gate budget makes, by ``checkout``'s own locked store CLI.
+
+    `project graph` over a tracked example project, which is the read the
+    design-document graph's budgets make and the one a missing configured root fails for
+    the whole configuration, naming that root — where a listing answers regardless.
+    """
+    return subprocess.run(
+        [str(checkout / ".venv" / "bin" / "onetaskgraph"), "project", "graph"]
+        + ["examples:health-endpoint", "--format", "json"],
+        cwd=checkout,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
 
 
 def share_this_checkouts_install(copy: Path) -> dict[str, str]:

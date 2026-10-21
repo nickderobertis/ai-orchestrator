@@ -306,6 +306,26 @@ def test_registered_paths_are_read_once_each_and_only_when_absolute(
     assert gate_impact.registered_paths(tmp_path / "missing") == []
 
 
+def test_registrations_in_one_clock_tick_read_back_in_registration_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Registrations the filesystem's clock stamps alike still read back in the order they
+    were made: the entry's name, the registering pid and its monotonic clock, breaks the
+    tie that the directory's own listing order would otherwise settle arbitrarily."""
+    registry = tmp_path / "scratch"
+    registry.mkdir()
+    monkeypatch.setenv(gate_impact.SCRATCH_VARIABLE, str(registry))
+    paths = [tmp_path / f"made-{index:02}" for index in range(24)]
+    entries = [gate_impact.register_scratch(path) for path in paths]
+    tick = time.time_ns()
+    for entry in entries:
+        assert entry is not None
+        os.utime(entry, ns=(tick, tick))
+    assert {entry.stat().st_mtime_ns for entry in registry.iterdir()} == {tick}
+
+    assert gate_impact.registered_paths(registry, strict=True) == paths
+
+
 def test_the_count_once_the_gate_exits_reads_the_registry_strictly(tmp_path: Path) -> None:
     registry = tmp_path / "scratch"
     with pytest.raises(gate_impact.Unmeasured, match="could not be listed"):

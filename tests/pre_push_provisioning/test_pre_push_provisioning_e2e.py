@@ -4,8 +4,8 @@ A publication runs this repository's hook in a worktree `onevcs` cut for it, whi
 session start ever ran in, and `scripts/nx.sh` installs nothing. So the hook provisions
 the checkout through session setup's own provisioning before the gate. This journey runs
 the tracked hook in a copy that arrives with neither `.venv` nor `node_modules`. It shows
-the gate is reached over a toolchain that setup built, and that none of the session's
-host steps ran.
+the gate is reached over a toolchain that setup built, with every plan-store root its
+budgets read, and that none of the session's host steps ran.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from nx_workspace import copy_working_tree
+from nx_workspace import copy_working_tree, missing_plan_roots, read_a_plan_graph
 from offline_installs import NO_NETWORK
 
 #: Every way a caller points uv at an environment, or the hook at a comparison base,
@@ -79,6 +79,7 @@ def pushed(tmp_path_factory: pytest.TempPathFactory) -> Pushed:
     _git(root, "push", "-q", "--no-verify", "origin", "main")
     _git(root, "fetch", "-q", "origin")
     assert not (root / ".venv").exists() and not (root / "node_modules").exists()
+    assert missing_plan_roots(root), "the copy arrived holding every plan root"
 
     tools = base / "tools"
     tools.mkdir()
@@ -148,11 +149,25 @@ def test_the_hook_provisions_an_unprovisioned_worktree_before_its_gate(pushed: P
 
 def test_the_hooks_provisioning_runs_none_of_the_sessions_host_steps(pushed: Pushed) -> None:
     """A publication's hook provisions its checkout and starts no host sweep or sibling
-    bootstrap, and installs no plan root, as a session start would."""
+    bootstrap, as a session start would."""
     stderr = pushed.ran.stderr
 
     assert "host-sweep:" not in stderr
     assert "host sweep" not in stderr
     assert "sibling checkout" not in stderr
     assert "repos-bootstrap" not in stderr
-    assert not (pushed.root / ".plans").exists()
+
+
+def test_the_hooks_provisioning_leaves_every_plan_root_its_budgets_read(pushed: Pushed) -> None:
+    """Every `local-md` root `onetaskgraph.yaml` configures exists once the hook provisioned,
+    so a gate budget reading the plan store measures rather than errors.
+
+    The store refuses every read while any configured root is absent, which is how a
+    publication of this repository was once refused: its worktree held no
+    `.follow-ups/runs`, and `orchestrator:budgets` errored on the design-document graph's
+    budgets. The read here is the one those budgets make, by the copy's own store CLI.
+    """
+    missing = missing_plan_roots(pushed.root)
+    assert not missing, f"configured plan roots left missing: {missing}"
+    read = read_a_plan_graph(pushed.root, pushed.env)
+    assert read.returncode == 0, read.stdout + read.stderr

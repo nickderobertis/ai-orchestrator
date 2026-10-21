@@ -139,6 +139,7 @@ def seeded(
     visibility: Literal["public", "private"] = "private",
     workspaces: str | None = None,
     ignored: Sequence[str] = (),
+    reviewed: bool = False,
 ) -> Identity:
     """Seed a bare origin and two clones of it, and register them in a scratch registry.
 
@@ -160,8 +161,11 @@ def seeded(
     same recipe, in place of the tracked `config/onevcs.workspaces.yml` that recipe
     installs when nothing names one — :func:`pooling` writes the one-default shape a
     journey about the pool wants. ``ignored`` are the patterns the seed's `.gitignore`
-    carries, for a journey about what a returned slot keeps.
+    carries, for a journey about what a returned slot keeps. ``reviewed`` routes a hosted
+    identity `change-open` with approvals required — a change request opened as a draft and
+    kept for a person's review — in place of `local-direct`.
     """
+    assert not reviewed or origin is not None, "only a hosted identity opens a change request"
     bare = root / "origin.git"
     seed = root / "seed"
     git("init", "-q", "--bare", "-b", "main", str(bare))
@@ -194,6 +198,9 @@ def seeded(
         environment[GIT_SSH_COMMAND] = str(served)
         remote = f"git@{host}:{owner}/{name}.git"
         rules = rules_for_hosted(host, owner, visibility=visibility)
+        if reviewed:
+            rules = rules.replace("publication: local-direct", "publication: change-open")
+            rules = rules.replace("approvals: none", "approvals: required")
     identity = Identity(
         publication=root / publication,
         execution=root / execution,

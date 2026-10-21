@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import hashlib
 import json
 import math
 import os
@@ -68,6 +69,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import time
 from collections import Counter
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
@@ -215,6 +217,11 @@ class Status(StrEnum):
         acceptance — with the one exception `queued` is: the store's `delivers` relation
         returns a claimed ticket to `todo` when the work that claimed it does not happen,
         which restores the person's decision rather than undoing it.
+
+        The engine moves an item on to `done` whatever status it holds, accepted ones
+        included, and that is the one exception to a person moving an accepted item: when a
+        landing the engine performs or relays closes the ticket's issue, or a run it adopts
+        carries such a landing whose closure it had not yet written.
         """
         return self in (Status.ACCEPTED, Status.QUEUED, Status.UNDER_WAY, Status.FINISHED)
 
@@ -287,7 +294,14 @@ _PLACES = {
     Status.FINISHED: _Place(
         "Closed as completed at Status `Done`",
         "Done",
-        "a person, or a dispatch whose own task says to",
+        "a person, a dispatch whose own task says to, or the engine, when a landing it performs "
+        "or relays — a run's landing, or one of its own `publish-branch`, `repo-recover` and "
+        "`integrate` — closes the ticket's issue, or when a run it adopts carries a landing "
+        "whose closure it had not yet written, whatever status the card held, accepted ones "
+        "included; an `integrate` landing moves the card only when the integrated "
+        "repository's own tree carries the store configuration, and is otherwise in the "
+        'accepted lag the on-demand reconcile clears, until the follow-up "just integrate in '
+        "another repository's checkout closes no follow-up card\" is fixed",
     ),
     Status.WITHDRAWN: _Place(
         "Closed as not planned at Status `Cancelled`",
@@ -1112,7 +1126,8 @@ PROG = "follow-up-tickets"
 #: owner, which nothing asks the board about; and a ticket depending on an item the board
 #: does not hold as an accepted ticket of another root cause whose URL the ticket names.
 #: And one `board-status` and `copy` share: the board item the ticket corresponds to cannot
-#: be established as its binding, so nothing is copied.
+#: be established as its binding, so nothing is copied. And one of `copy`'s own: the ticket
+#: carries a status `board-status` does not decide from the board, so nothing is copied.
 SOUND = 0
 UNSOUND = 1
 UNRUNNABLE = 2
@@ -1121,6 +1136,7 @@ PROTECTED = 4
 OUTSIDE_OWNER = 5
 NOT_ACCEPTED = 6
 MISBOUND = 7
+UNDECIDED = 8
 
 #: The last line of the comment a run leaves on a withdrawn duplicate of its own item, naming
 #: the item the ticket is bound to instead. It is no run's comment under :func:`comment_owner`,
@@ -2664,6 +2680,26 @@ class ProtectedFromWithdrawal(ValueError):
         self.status = status
 
 
+class Undecided(ValueError):
+    """A ticket about to be copied carrying a status `board-status` does not decide for it.
+
+    The copy writes the ticket's status onto the board with its closure, so a status nobody
+    decided from the board would create an item outside `Proposal`, withdraw an item a person
+    accepted or deferred, close one as completed, or put back one the board has moved on.
+    """
+
+    def __init__(self, carried: Status, decided: Status, item: str | None) -> None:
+        held = "holds no item for it" if item is None else f"holds {item} at `{decided}`"
+        super().__init__(
+            f"the ticket carries the status `{carried}`, where the board {held} and "
+            f"`board-status` decides `{decided}` for it; copy nothing: run `board-status` on it "
+            "(adding `--withdraw` only for a ticket this run withdraws), write the word it prints "
+            "as the ticket's `status`, then copy it"
+        )
+        self.carried = carried
+        self.decided = decided
+
+
 class OutsideOwner(ValueError):
     """A ticket whose repository no board of the family files, so its issue is filed nowhere.
 
@@ -3251,6 +3287,7 @@ def copy_ticket(path: Path, board: str) -> Copied:
             f"`{BINDING_FIELD}` binding {routed}:{bound}, so the store's copy would go wherever "
             "its search finds this ticket's origin: run `board-status` on it, then copy it"
         )
+    decided_before_copy(ticket, routed, bound, taken_decision(path))
     run, root_cause = located_path(path.absolute())
     report = plan_store.sdk(
         plan_store.client().task_copy([qualified_id(run, root_cause)], to=board)
@@ -3259,6 +3296,124 @@ def copy_ticket(path: Path, board: str) -> Copied:
     if ticket.board_item is None:
         bind(path, routed, copied.item)
     return copied
+
+
+#: Where `board-status` leaves what it decided for each ticket, under a `drafts` root: the
+#: item and binding it read, the word it printed, the ticket as it left it but for its status
+#: line, and when. The ticket's next `copy` takes it up and removes it, so a copy straight
+#: after its own `board-status` decides from the read that command has just made rather than
+#: reading the item a second time. A person's move in the seconds between the two is the
+#: residual race the comment pass's writes already accept.
+DECISIONS_DIRECTORY = "decisions"
+#: Seconds a decision stands in for the live read: long enough for the agent to write the word
+#: `board-status` printed and run its `copy`, and no longer, so a decision outliving its pairing
+#: never answers for a board a person may have moved since.
+DECISION_FRESH_FOR = 300
+_STATUS_LINE = re.compile(r"^status: .*$", re.M)
+
+
+@dataclasses.dataclass(frozen=True)
+class Decision:
+    """What one `board-status` decided for a ticket, as it leaves it for the ticket's next copy.
+
+    ``item`` is the board item it read, qualified, or `None` for a ticket the copy creates;
+    ``status`` the word it printed; ``ticket_digest`` the digest of the ticket it left but for
+    its status line (:func:`_paired_digest`), which covers the binding; ``at`` when, in seconds.
+    """
+
+    item: QualifiedTaskId | None
+    status: Status
+    ticket_digest: str
+    at: float
+
+    @classmethod
+    def parsed(cls, text: str) -> Decision | None:
+        """The decision ``text`` holds, or `None` when it is not one `board-status` writes."""
+        try:
+            held = json.loads(text)
+        except ValueError:
+            return None
+        if not isinstance(held, dict):
+            return None
+        item, status, digest, at = (
+            held.get(key) for key in ("item", "status", "ticket_digest", "at")
+        )
+        if not (
+            (item is None or isinstance(item, str))
+            and status in tuple(Status)
+            and isinstance(digest, str)
+            and isinstance(at, float)
+        ):
+            return None
+        return cls(None if item is None else QualifiedTaskId(item), Status(status), digest, at)
+
+
+def decision_path(path: Path) -> Path:
+    """Where `board-status` leaves its decision for the ticket at ``path``."""
+    run, root_cause = located_path(path.absolute())
+    return path.absolute().parents[3] / DECISIONS_DIRECTORY / run / f"{root_cause}.json"
+
+
+def _paired_digest(path: Path) -> str:
+    """The ticket at ``path`` but for its status line, which the agent writes in between."""
+    text = _STATUS_LINE.sub("", path.read_text(encoding="utf-8"))
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def leave_decision(path: Path, item: QualifiedTaskId | None, status: Status) -> None:
+    """Record what `board-status` decided for the ticket at ``path``, for its next `copy`."""
+    held = decision_path(path)
+    held.parent.mkdir(parents=True, exist_ok=True)
+    decision = Decision(item, status, _paired_digest(path), time.time())
+    held.write_text(json.dumps(dataclasses.asdict(decision)) + "\n", encoding="utf-8")
+
+
+def taken_decision(path: Path) -> Decision | None:
+    """The decision `board-status` last left for the ticket at ``path``, removed as it is taken.
+
+    `None` when none is left, when it is older than :data:`DECISION_FRESH_FOR`, when the ticket
+    has changed since but for its status, or when what is there is not a decision
+    `board-status` writes: the copy then reads the item itself.
+    """
+    held = decision_path(path)
+    try:
+        decision = Decision.parsed(held.read_text(encoding="utf-8"))
+    except OSError:
+        return None
+    finally:
+        held.unlink(missing_ok=True)
+    if decision is None or not 0 <= time.time() - decision.at <= DECISION_FRESH_FOR:
+        return None
+    return decision if decision.ticket_digest == _paired_digest(path) else None
+
+
+def decided_before_copy(
+    ticket: Ticket,
+    board: str,
+    bound: BoardItemId | None,
+    decision: Decision | None = None,
+) -> None:
+    """Refuse a copy whose status `board-status` would not decide from the board, before it writes.
+
+    An unbound ticket's copy creates its item, so it carries what `board-status` decides for a
+    board holding none: a proposal, or a withdrawal. A bound ticket carries the status its item
+    is held at, or a withdrawal the item's status allows. ``decision`` is what the ticket's last
+    `board-status` left (:func:`taken_decision`): when it names the bound item and the status the
+    ticket carries, that command decided this status from its own read of the item, so nothing
+    is read again; otherwise the item is read once by id, its comments left unread.
+    :class:`Unplaced`, :class:`ProtectedFromWithdrawal` or :class:`Undecided` otherwise.
+    """
+    item = None if bound is None else QualifiedTaskId(f"{board}:{bound}")
+    held = None
+    if item is not None:
+        if decision is not None and (decision.item, decision.status) == (item, ticket.status):
+            return
+        status = plan_store.task_record(item, no_comments=True)["status"]
+        assert isinstance(status, Mapping)  # noqa: S101 - a task record's status is a record
+        held = str(status["category"])
+    decided = status_before_copy(held, withdraw=ticket.status is Status.WITHDRAWN)
+    if ticket.status is not decided:
+        raise Undecided(ticket.status, decided, item)
 
 
 def copied_to(report: CopyReport, board: str, bound: BoardItemId | None) -> Copied:
@@ -4346,6 +4501,52 @@ def filed_board_problems(
                 f"{carrier} holds the priority `{held}`, where the ticket this run copied onto it "
                 f"carries `{ticket.priority}`; copy the ticket again after `board-status`"
             )
+    found.extend(placed_status_problems(run, board, tickets, reads))
+    return found
+
+
+def placed_status_problems(
+    run: str, board: str, tickets: Mapping[str, Ticket | None], reads: BoardReads
+) -> list[str]:
+    """Each item of ``run``'s that is not at the status its tooling's paired write leaves.
+
+    A ticket this run withdrew has its item at `Cancelled`, closed as not planned with its
+    status written beside the closure. An item this run created is at `Proposal`, where its
+    first copy put it, or at the status a person — or the engine closing its issue — moved it
+    to, which `board-status` then wrote as the ticket's. Anything else is an issue created,
+    closed or withdrawn some other way than `board-status` and `copy`, such as a raw issue
+    write, and is named with the status the board holds it at.
+    """
+    found = []
+    for cause, ticket in sorted(tickets.items()):
+        if ticket is None or ticket.board_item is None:
+            continue
+        routed = ticket_board(board, ticket.repositories)
+        item = f"{routed}:{ticket.board_item}"
+        status = reads.item(item).get("status")
+        held = status if isinstance(status, Mapping) else {}
+        category, shown = held.get("category"), held.get("name")
+        if ticket.status is Status.WITHDRAWN:
+            if category != Status.WITHDRAWN.value:
+                found.append(
+                    f"{item}, the item of the ticket {cause} this run withdrew, is at `{shown}` "
+                    f"(category `{category}`), not `{board_option(Status.WITHDRAWN)}`: a "
+                    "withdrawal is `board-status --withdraw` then `copy`, which closes the issue "
+                    "as not planned with its status beside it"
+                )
+            continue
+        if _own_carrier(ticket, qualified_id(run, cause), routed, reads) is None:
+            continue
+        if category == Status.PROPOSED.value or (
+            category == ticket.status.value and ticket.status.protected_from_withdrawal
+        ):
+            continue
+        found.append(
+            f"{item}, which this run created for the ticket {cause}, is at `{shown}` (category "
+            f"`{category}`), not `{board_option(Status.PROPOSED)}`, and its ticket carries "
+            f"`{ticket.status}`: its issue was created, closed or withdrawn some other way than "
+            "`board-status` and `copy`"
+        )
     return found
 
 
@@ -6096,6 +6297,7 @@ def shape(run: str) -> dict[str, object]:
             "outside_owner": OUTSIDE_OWNER,
             "not_accepted": NOT_ACCEPTED,
             "misbound": MISBOUND,
+            "undecided": UNDECIDED,
         },
     }
 
@@ -7031,6 +7233,8 @@ def _placed(arguments: argparse.Namespace) -> int:
                 ),
             )
         estimate_before_copy(arguments.path, routed, placement, local, reads)
+        decided = None if placement.item is None else QualifiedTaskId(f"{routed}:{placement.item}")
+        leave_decision(arguments.path, decided, status)
     except OutsideOwner as refusal:
         print(f"{PROG}: {arguments.path}: {refusal}", file=sys.stderr)
         return OUTSIDE_OWNER
@@ -7083,6 +7287,15 @@ def _copied(arguments: argparse.Namespace) -> int:
     except Misbound as refusal:
         print(f"{PROG}: {arguments.path}: {refusal}", file=sys.stderr)
         return MISBOUND
+    except Unplaced as refusal:
+        print(f"{PROG}: {arguments.path}: {refusal}", file=sys.stderr)
+        return UNPLACED
+    except ProtectedFromWithdrawal as refusal:
+        print(f"{PROG}: {arguments.path}: {refusal}", file=sys.stderr)
+        return PROTECTED
+    except Undecided as refusal:
+        print(f"{PROG}: {arguments.path}: {refusal}", file=sys.stderr)
+        return UNDECIDED
     except (OSError, Refused) as exc:
         print(f"{PROG}: refused: {exc}", file=sys.stderr)
         return UNRUNNABLE

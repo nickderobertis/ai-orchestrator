@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from nx_workspace import copy_working_tree
+from nx_workspace import copy_working_tree, missing_plan_roots, read_a_plan_graph
 from offline_installs import NO_NETWORK
 from waits import until
 
@@ -79,6 +79,7 @@ def bootstrapped(tmp_path_factory: pytest.TempPathFactory) -> Bootstrapped:
     copy_working_tree(root)
     subprocess.run(["git", "init", "-q"], cwd=root, check=True, capture_output=True)
     assert not (root / ".venv").exists() and not (root / "node_modules").exists()
+    assert missing_plan_roots(root), "the copy arrived holding every plan root"
     listing = base / "checkouts"
     listing.write_text("", encoding="utf-8")
     for directory in ("oneagentgraph-state", "tmp"):
@@ -155,3 +156,12 @@ def test_bootstrap_provisions_a_locked_toolchain_in_a_fresh_checkout(
     reported = bootstrapped.run(str(root / "node_modules" / ".bin" / "nx"), "--version")
     assert reported.returncode == 0, reported.stderr
     assert f"Local: v{manifest['devDependencies']['nx']}" in reported.stdout, reported.stdout
+
+
+def test_bootstrap_leaves_every_plan_root_the_store_reads(bootstrapped: Bootstrapped) -> None:
+    """Full session setup leaves each `local-md` root `onetaskgraph.yaml` configures, so a
+    plan-store read — the one the design-document graph's budgets make — answers."""
+    missing = missing_plan_roots(bootstrapped.root)
+    assert not missing, f"configured plan roots left missing: {missing}"
+    read = read_a_plan_graph(bootstrapped.root, bootstrapped.env)
+    assert read.returncode == 0, read.stdout + read.stderr

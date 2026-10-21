@@ -437,9 +437,10 @@ def test_comments_on_items_no_run_here_answers_are_each_left_out_with_their_one_
 
     report, plan = _gathered(drafts_root, capsys)
 
-    status = plan_store.task_record(decided)["status"]
-    assert isinstance(status, dict)
-    assert _id_line(report, decided, on_decided).endswith(f": item at {status['name']}")
+    # At `Todo`, so the copy, keeping only the statuses whose comments are answered, never
+    # listed it: none of its comments was read.
+    assert decided not in report, report
+    assert on_decided not in report, report
     assert _id_line(report, deferred, on_deferred).endswith(f"goes to run {RUN}")
     assert _id_line(report, gone, on_gone).endswith(f": no records for owning run {THIRD_RUN} here")
     assert _id_line(report, dotted, on_dotted).endswith(
@@ -509,6 +510,36 @@ def test_a_run_scoped_gathering_names_only_that_runs_comments(
     assert plan is not None and plan.scope == RUN
     assert [run for run, _ in plan.runs] == [RUN]
     assert own in report and others not in report
+
+
+def test_a_scoped_gathering_leaves_an_item_outside_proposal_and_deferred_not_answered(
+    drafts_root: Path, board: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A `--run` pass copies each bound item by id narrowed to `Proposal` and `Deferred`: the
+    store answers the run's accepted item `skipped`, which the snapshot records not answered,
+    its comment unread, while the pass still captured everything it answers and launches."""
+    own = _filed(drafts_root, RUN, CAUSE)
+    accepted = _filed(drafts_root, RUN, SHARED_CAUSE)
+    _moved(accepted, "todo")
+    _next_second()
+    asked = _commented(own, "Ours.\n")
+    _commented(accepted, "On the accepted one.\n")
+
+    report, gathered = _gathered(drafts_root, capsys, "--run", RUN)
+
+    assert gathered is not None and [run for run, _ in gathered.runs] == [RUN]
+    snapshot = gathered.snapshot
+    assert [(one.issue, one.comment) for one in snapshot.selection[tickets.RunId(RUN)]] == [
+        (own, asked)
+    ]
+    (left,) = [one for one in snapshot.left if one.comment is None]
+    assert (left.issue, left.outcome) == (accepted, comments.LeftOutcome.NOT_ANSWERED), left
+    assert left.reason == comments.NOT_ANSWERED.format(
+        reason="status todo is not one of backlog, draft"
+    )
+    assert snapshot.captured_all, snapshot.left
+    assert f"not answered: {accepted}: {left.reason}" in report, report
+    assert "On the accepted one." not in report
 
 
 def test_a_run_scoped_gathering_reads_an_item_another_run_owns_and_names_none_of_its_comments(
@@ -1685,7 +1716,7 @@ def test_an_issue_no_run_of_this_host_owns_is_refused_naming_why_and_nothing_is_
     # Bound to an item the board no longer holds: refused by the store's own answer.
     _bound(drafts_root, RUN, "bound-to-a-deleted-item", "deleted/item")
     said = _refused(drafts_root, capsys, "--issue", f"{BOARD}:deleted/item")
-    assert f"no item with the id {BOARD}:deleted/item" in said, said
+    assert f"no task with the id {BOARD}:deleted/item" in said, said
 
     # Two runs' tickets bound to one item: no one run owns its comments.
     _bound(drafts_root, OTHER_RUN, "also-bound", _native_of(unrecorded))
@@ -1719,6 +1750,13 @@ def test_a_run_scoped_gathering_says_which_of_its_tickets_is_bound_to_no_item(
     assert report.splitlines()[-2].endswith(
         f"read 1 item(s) run {RUN}'s tickets are bound to, each directly, and listed none"
     ), report
+
+    # A bound item the board no longer holds: beside `--status`, the store refuses the copy of
+    # every bound id whole for it, naming it, and nothing is launched.
+    _bound(drafts_root, RUN, "bound-to-a-deleted-item", "deleted/item")
+    said = _refused(drafts_root, capsys, "--run", RUN)
+    assert f"no task with the id {BOARD}:deleted/item" in said, said
+    tickets.ticket_path(drafts_root, RUN, "bound-to-a-deleted-item").unlink()
 
     # A binding that is no native id is refused naming the ticket, before the board is read.
     for malformed in ('"two words"', "[a-list]"):
@@ -1886,11 +1924,28 @@ def test_the_snapshot_is_written_as_its_contract_states_and_read_back_as_itself(
     assert item["version"] is not None
     assert f"- Issue: {comments.issue_line(own, item['snapshot_id'], None)}\n" in written
     (selected,) = record["selection"][RUN]
+    left_entry = {
+        "issue": own,
+        "comment": None,
+        "reason": comments.NOT_CAPTURED.format(error="refused"),
+        "outcome": comments.LeftOutcome.NOT_CAPTURED.value,
+    }
+    # Each outcome an entry naming no comment can have reads back as itself.
+    for outcome in (comments.LeftOutcome.NOT_CAPTURED, comments.LeftOutcome.NOT_ANSWERED):
+        entry = left_entry | {"outcome": outcome.value}
+        (snapshot / comments.SNAPSHOT_RECORD).write_text(
+            json.dumps(record | {"left": [entry]}), encoding="utf-8"
+        )
+        (read,) = comments.read_snapshot(snapshot).left
+        assert read.outcome is outcome and read._asdict() == entry
+        assert comments.read_snapshot(snapshot).captured_all is (
+            outcome is comments.LeftOutcome.NOT_ANSWERED
+        )
     broken: object
     for broken in (
         [],
-        {"schema": 2},
-        record | {"schema": 2},
+        {"schema": 3},
+        record | {"schema": 3},
         record | {"items": [{"id": own}]},
         # A selection naming an item the snapshot did not capture, or a comment of no digest
         # or no instant, and a scope or a start that is no run id or no time.
@@ -1906,13 +1961,38 @@ def test_the_snapshot_is_written_as_its_contract_states_and_read_back_as_itself(
         record | {"issue": "not qualified"},
         record | {"left": [{"issue": "not qualified", "comment": None, "reason": "why"}]},
         record | {"left": [{"issue": own, "comment": "", "reason": "why"}]},
+        # An entry naming no outcome, one no outcome is, and an outcome its comment contradicts.
+        record | {"left": [{"issue": own, "comment": None, "reason": "why"}]},
+        record | {"left": [left_entry | {"outcome": "forgotten"}]},
+        record | {"left": [left_entry | {"outcome": ["not-captured"]}]},
+        record | {"left": [left_entry | {"outcome": comments.LeftOutcome.COMMENT.value}]},
+        record | {"left": [left_entry | {"comment": asked}]},
+        # Schema 1 named no outcome.
+        record | {"schema": comments.SNAPSHOT_SCHEMA_WITHOUT_OUTCOME, "left": [left_entry]},
         # One item recorded twice, or one comment selected twice.
         record | {"items": [item, item]},
         record | {"selection": {RUN: [selected, selected]}},
     ):
         (snapshot / comments.SNAPSHOT_RECORD).write_text(json.dumps(broken), encoding="utf-8")
-        with pytest.raises(OSError, match="is not a schema-1 snapshot"):
+        with pytest.raises(OSError, match="is not a schema-2 snapshot"):
             comments.read_snapshot(snapshot)
+
+    # A schema-1 record, which named no outcome, is still read: an entry naming no comment
+    # is an item not captured, one naming a comment that comment left out.
+    earlier = record | {
+        "schema": comments.SNAPSHOT_SCHEMA_WITHOUT_OUTCOME,
+        "left": [
+            {key: value for key, value in left_entry.items() if key != "outcome"},
+            {"issue": own, "comment": asked, "reason": "answered already"},
+        ],
+    }
+    (snapshot / comments.SNAPSHOT_RECORD).write_text(json.dumps(earlier), encoding="utf-8")
+    uncaptured, left_out = comments.read_snapshot(snapshot).left
+    assert (uncaptured.outcome, left_out.outcome) == (
+        comments.LeftOutcome.NOT_CAPTURED,
+        comments.LeftOutcome.COMMENT,
+    )
+    assert not comments.read_snapshot(snapshot).captured_all
 
 
 def test_check_gathering_holds_a_feedback_file_to_its_snapshot_and_its_source_by_name(
@@ -2703,3 +2783,26 @@ def test_writing_a_title_names_it_and_nothing_else(tmp_path: Path) -> None:
         "--title",
         "A title",
     ]
+
+
+def test_a_selection_leaves_out_every_comment_of_an_item_outside_proposal_and_deferred() -> None:
+    """The copy keeps only `Proposal` and `Deferred`; an item a snapshot still holds at another
+    status — `Todo` here — has its comments left out naming that status, never sent to its run."""
+    issue = comments.Issue(
+        QualifiedTaskId(f"{ROUTED}:ENG-2"),
+        "qh-api: an accepted ticket",
+        tickets.RunId(RUN),
+        None,
+        comments._web_url(LINEAR_ISSUE_URL),
+        (LINEAR_PERSON,),
+        category=tickets.Status.ACCEPTED.value,
+        status=tickets.board_option(tickets.Status.ACCEPTED),
+        host=HOST,
+        plugin=comments.LINEAR_PLUGIN,
+    )
+
+    selection = comments.select([issue], {}, HOST, {tickets.RunId(RUN)})
+
+    assert not selection.chosen
+    (left,) = selection.left
+    assert (left.id, left.reason) == ("c2", "item at Todo")

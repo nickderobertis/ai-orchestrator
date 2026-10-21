@@ -327,11 +327,43 @@ warm_schema_cache() {
 }
 
 create_plan_root() {
-  # The gitignored `local-md` root `onetaskgraph.yaml` configures. The source refuses a
+  # Every gitignored `local-md` root `onetaskgraph.yaml` configures. The source refuses a
   # root it cannot canonicalize, and it refuses it for the *whole* read: one absent
-  # directory makes `just plans project list` exit 4 across every source. A fresh
-  # checkout carries none, so it is created here rather than on first write. `.plans` is
-  # what `just plan` authors into.
+  # directory fails a project read across every source, and every budget in
+  # `orchestrator/budgets.yaml` that reads the plan store errors with it. A fresh checkout
+  # carries none, so each is created here rather than on first write — in a publication
+  # worktree too, whose pre-push gate measures those budgets. The roots are read from the
+  # document's own `sources:` block, with no interpreter, so this step needs nothing the
+  # provisioning before it may have failed to install; the pre-push and bootstrap journeys
+  # read the same document with a YAML parser and name any root this reading missed. A
+  # relative root resolves as the store resolves it, against the document's directory.
+  # `.plans` is what `just plan` authors into.
+  local document="$REPO_ROOT/onetaskgraph.yaml" root
+  if [ -f "$document" ]; then
+    while IFS= read -r root; do
+      [ -n "$root" ] || continue
+      case "$root" in
+        /*) ;;
+        *) root="$REPO_ROOT/$root" ;;
+      esac
+      mkdir -p "$root" || {
+        log "plan roots: $root, a local-md root onetaskgraph.yaml configures, could not be created"
+        return 1
+      }
+    done < <(awk '
+      function flush() { if (plugin == "local-md" && root != "") print root; plugin = ""; root = "" }
+      function value(line) {
+        sub(/^[^:]*:[ \t]*/, "", line); sub(/[ \t]+#.*$/, "", line); gsub(/^["\047]|["\047]$/, "", line)
+        return line
+      }
+      /^[^ #]/ { flush(); in_sources = ($0 ~ /^sources:[ \t]*$/); next }
+      !in_sources { next }
+      /^  [^ #][^:]*:[ \t]*$/ { flush(); next }
+      /^[ \t]+plugin:/ { plugin = value($0); next }
+      /^[ \t]+root:/ { root = value($0); next }
+      END { flush() }
+    ' "$document")
+  fi
   mkdir -p "$REPO_ROOT/.plans/tasks" "$REPO_ROOT/.plans/projects"
 }
 
@@ -442,7 +474,8 @@ fi
 # proven in onevcs's repository, and `tests/family_scans/test_upstream_workaround_rule.py` keeps
 # the retired lease from returning. A journey here would re-test a published CLI.
 # `--provision-only` is the checkout's own toolchain and nothing else: steps 0, 1-3, 5
-# and 6, verified, with no host sweep, sibling bootstrap, codex, llmlint or
+# and 6, verified, and the plan store's `local-md` roots its gate's budgets read, with no
+# host sweep, sibling bootstrap, codex, llmlint or
 # session environment. It is what `.githooks/pre-push` runs in a publication worktree,
 # which no session start ever provisioned; the follow-up "onevcs provisions a session or
 # publication worktree when it opens one" tracks moving that call into onevcs.
@@ -458,6 +491,7 @@ esac
 toolchain_failed=0
 ensure_just
 install_project_dependencies || toolchain_failed=1
+create_plan_root || toolchain_failed=1
 if [ "$provision_only" -eq 1 ]; then
   if install_bun; then
     install_workspace_dependencies || toolchain_failed=1
@@ -466,7 +500,6 @@ if [ "$provision_only" -eq 1 ]; then
   fi
   exit "$toolchain_failed"
 fi
-create_plan_root || toolchain_failed=1
 # The host sweep, detached (step 10 above): never waited on, and a report from it — the
 # last sweep having failed — never touches `toolchain_failed`.
 if [ -f "$REPO_ROOT/justfile" ] && command -v just >/dev/null 2>&1; then

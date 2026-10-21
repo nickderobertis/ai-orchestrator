@@ -1247,7 +1247,23 @@ of this repository lives). A copy onto a board lacking it is refused by name. A 
 reaches the board in `Proposal`; the user moving it to `Todo` is what accepts it, and a
 later copy keeps whatever status the board holds, so a re-dispatch never moves an item
 back. Withdrawal closes a proposal as not planned, and a run never withdraws a ticket the
-board shows as accepted — only a person moves an accepted item. A person may instead move a
+board shows as accepted — only a person moves an accepted item, with one exception, which is
+the user's decision: the engine moves a card to `Done`, accepted ones included, when a landing
+it performs or relays closes the card's issue — a run's landing, or one of `just
+publish-branch`, `just repo-recover` and `just integrate` — or when a run it adopts carries
+such a landing whose closure it had not yet written. The store finds the card on every source
+`onetaskgraph.yaml` declares, so nothing here names a source for it, and nothing here runs
+`task status reconcile` or reads the board for closures. A `just integrate` landing runs in the
+integrated repository's own checkout, so it moves the card only when that tree carries the
+store configuration — this repository's does — until the follow-up "just integrate in another
+repository's checkout closes no follow-up card", the engine's integrate not carrying the
+launching host's sources as `publish-branch` does, is fixed. **The accepted lag**: an issue
+closed outside the stack — by hand, by a change request merged after its run ended in a run
+nobody adopts again, by a landing made with raw `onevcs` outside the engine, or by an integrate
+landing in a repository whose tree carries no store configuration — reads as done or
+cancelled to every plan-store reader at once, while its card keeps its old option until
+someone runs `just plans task status reconcile --source followups`, on demand. Linear needs
+neither, because a Linear issue's workflow state is its closure. A person may instead move a
 ticket to `Deferred`: not accepted and picked up by no agent, it still takes a later run's
 evidence, and no run withdraws it either. **A dispatch briefed to pick up accepted follow-up
 tickets selects `Todo` items only.** `python -m orchestrator.follow_up_tickets statuses`
@@ -1275,8 +1291,15 @@ prints the vocabulary every agent reads, copied here:
   accepted and taken up. Who moves an item there: a person, or a dispatch whose own task
   says to. Not selected by an agent sent to pick up accepted tickets.
 - **Closed as completed at Status `Done`**, Linear state `Done`, written `done`: accepted
-  and finished. Who moves an item there: a person, or a dispatch whose own task says to.
-  Not selected by an agent sent to pick up accepted tickets.
+  and finished. Who moves an item there: a person, a dispatch whose own task says to, or
+  the engine, when a landing it performs or relays — a run's landing, or one of its own
+  `publish-branch`, `repo-recover` and `integrate` — closes the ticket's issue, or when a
+  run it adopts carries a landing whose closure it had not yet written, whatever status
+  the card held, accepted ones included; an `integrate` landing moves the card only when
+  the integrated repository's own tree carries the store configuration, and is otherwise
+  in the accepted lag the on-demand reconcile clears, until the follow-up "just integrate
+  in another repository's checkout closes no follow-up card" is fixed. Not selected by an
+  agent sent to pick up accepted tickets.
 - **Closed as not planned at Status `Cancelled`**, Linear state `Canceled`, written
   `cancelled`: withdrawn. Who moves an item there: a follow-up run withdrawing its own
   ticket that nobody accepted or deferred, or a person. Not selected by an agent sent to

@@ -39,8 +39,10 @@ that settles marks its plan's home item done. The engine 0.80.2 delivers a manag
 note by interrupting the addressed party's turn, adds the `turn-end` delivery and a note's
 `delivery_timeout_seconds`, and lets `withdraw-note` take back a live note no turn has taken
 as well as a carried one. It links oneagentgraph 0.7.0, onejudge 0.20.0, onemessagebus
-0.9.3 and the onetaskgraph 0.9.0 store crates, so those four CLI pins follow it. The read
-API 0.43.0 links that engine. The onevcs store schema is unchanged, so nothing migrates.
+0.9.3 and the onetaskgraph 0.9.0 store crates — the store that moves to `Done` the items, on
+every source `onetaskgraph.yaml` declares, whose issues a landing the engine performs or
+relays closes — so those four CLI pins follow it. The read API 0.43.0 links that engine. The
+onevcs store schema is unchanged, so nothing migrates.
 From onepipeline 0.75.0, onepipeline-ui 0.39.0,
 onevcs 0.52.0, oneagentgraph 0.5.13 and onetaskgraph 0.7.1: the engine 0.79.0 carries the
 review-feedback loop — a draft placed on the unlanded

@@ -790,7 +790,9 @@ def test_typed_listings_are_still_held_to_the_requested_source(
     monkeypatch.setattr(
         plan_store,
         "client",
-        lambda: SimpleNamespace(project_show=lambda _id: object(), task_show=lambda _id: object()),
+        lambda: SimpleNamespace(
+            project_show=lambda _id: object(), task_show=lambda _id, **_: object()
+        ),
     )
     monkeypatch.setattr(
         plan_store,

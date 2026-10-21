@@ -421,8 +421,8 @@ def project_record(project: str) -> Mapping[str, object]:
     return dict(answer.items[0].item.model_dump(mode="python"))
 
 
-def task_record(task: str) -> Mapping[str, object]:
-    answer = complete(sdk(client().task_show(task)))
+def task_record(task: str, *, no_comments: bool = False) -> Mapping[str, object]:
+    answer = complete(sdk(client().task_show(task, no_comments=no_comments)))
     if len(answer.items) != 1:
         raise OSError(f"task show for {task!r} returned {len(answer.items)} records")
     return dict(answer.items[0].item.model_dump(mode="python"))

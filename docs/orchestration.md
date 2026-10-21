@@ -2390,8 +2390,15 @@ carries, and this copy of it is held to that rendering:
   accepted and taken up. Who moves an item there: a person, or a dispatch whose own task
   says to. Not selected by an agent sent to pick up accepted tickets.
 - **Closed as completed at Status `Done`**, Linear state `Done`, written `done`: accepted
-  and finished. Who moves an item there: a person, or a dispatch whose own task says to.
-  Not selected by an agent sent to pick up accepted tickets.
+  and finished. Who moves an item there: a person, a dispatch whose own task says to, or
+  the engine, when a landing it performs or relays — a run's landing, or one of its own
+  `publish-branch`, `repo-recover` and `integrate` — closes the ticket's issue, or when a
+  run it adopts carries a landing whose closure it had not yet written, whatever status
+  the card held, accepted ones included; an `integrate` landing moves the card only when
+  the integrated repository's own tree carries the store configuration, and is otherwise
+  in the accepted lag the on-demand reconcile clears, until the follow-up "just integrate
+  in another repository's checkout closes no follow-up card" is fixed. Not selected by an
+  agent sent to pick up accepted tickets.
 - **Closed as not planned at Status `Cancelled`**, Linear state `Canceled`, written
   `cancelled`: withdrawn. Who moves an item there: a follow-up run withdrawing its own
   ticket that nobody accepted or deferred, or a person. Not selected by an agent sent to

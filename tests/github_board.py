@@ -13,7 +13,8 @@ import re
 import subprocess
 import threading
 import time
-from collections.abc import Callable, Iterator
+import urllib.request
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -550,6 +551,33 @@ class _Issue:
             ]
         )
 
+    def held_issue(self) -> dict[str, object]:
+        """This issue as the store's by-reference read selects it: its row's `Status` alone.
+
+        The read names the field by name rather than walking every value, so a membership
+        carries one `status` member — the option the row is at, with the field it belongs to.
+        """
+        return self.content() | {
+            "projectItems": {
+                "nodes": [
+                    {
+                        "id": self.item_id,
+                        "updatedAt": self.item_changed_at,
+                        "project": {"id": self.held_by.node_id, "number": self.held_by.number},
+                        "status": {
+                            "name": self.status,
+                            "field": {
+                                "id": _BoardField.STATUS,
+                                "name": "Status",
+                                "options": [option.rendered() for option in self.held_by.options],
+                            },
+                        },
+                    }
+                ],
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+            }
+        }
+
     def item(self) -> dict[str, object]:
         """This issue as a row of the board's own `items` connection."""
         content = self.content()
@@ -889,6 +917,42 @@ class _Board:
                     }
                 }
         return {"data": {"node": None}}
+
+    def issues_by_reference_response(self, variables: dict[str, object]) -> dict[str, object]:
+        """The issues one batch names by repository and number, each with its row's `Status`.
+
+        What the adopted store reads to complete the issues a landing closes: up to fifty
+        aliases `r<n>`, the slots it has no reference for repeating its last one. An issue this
+        board does not hold is answered as GitHub answers one it cannot resolve — a null
+        `issue` and a `NOT_FOUND` error at that alias — which the store reads as absent here.
+        """
+        data: dict[str, object] = {}
+        errors: list[dict[str, object]] = []
+        slot = 0
+        while f"owner{slot}" in variables:
+            alias = f"r{slot}"
+            wanted = _Repository(
+                owner=str(variables[f"owner{slot}"]), name=str(variables[f"name{slot}"])
+            )
+            number = variables[f"number{slot}"]
+            held = [
+                issue
+                for issue in self.issues
+                if issue.repository == wanted and issue.number == number
+            ]
+            if held:
+                data[alias] = {"issue": held[0].held_issue()}
+            else:
+                data[alias] = {"issue": None}
+                errors.append(
+                    {
+                        "type": "NOT_FOUND",
+                        "path": [alias, "issue"],
+                        "message": f"Could not resolve to an Issue with the number of {number}.",
+                    }
+                )
+            slot += 1
+        return {"data": data, **({"errors": errors} if errors else {})}
 
     def sub_issues_response(self, node_id: object) -> dict[str, object]:
         """One issue's sub-issues, which is how this board reports a project's tasks."""
@@ -1492,12 +1556,17 @@ class _Operation(StrEnum):
     UPDATE_ISSUE_WHOLE = "updateIssueWhole"
     UPDATE_FIELD_WHOLE = "updateFieldWhole"
     CLEAR_FIELD_WHOLE = "clearFieldWhole"
+    ISSUES_BY_REFERENCE = "issuesByReference"
 
 
 #: Each operation's marker in the document the source sends, in the order they are
 #: tried. The source ships its queries as constants, so the root field is a stable
 #: substring of each one and is what tells a board read from the writes that follow it.
 _OPERATIONS: dict[str, _Operation] = {
+    # Before every other marker: the store's read of the issues a landing closes, each by its
+    # repository and number, which carries `repository(owner:` and `projectItems(` beside its
+    # own fragment.
+    "fragment HeldIssue on Issue{": _Operation.ISSUES_BY_REFERENCE,
     # Before the board read's own marker and the search's, both of which this document
     # also contains: it narrows the board's items by a field filter and searches beside it.
     "originItems:repositoryOwner": _Operation.ORIGIN_LOOKUP,
@@ -1614,8 +1683,26 @@ class _Refusal:
     body: dict[str, object]
 
 
+@dataclass(frozen=True)
+class RestRequest:
+    """One REST request the loopback took, as its method, path, credential and JSON body.
+
+    Kept apart from the GraphQL log because nothing the plan store sends goes here: this is
+    the request a caller holding the board credential sends GitHub directly, such as `gh api
+    -X PATCH repos/<owner>/<name>/issues/<number> -f state=closed`, recorded so a journey can
+    show the write reached the wire rather than the fixture's own state.
+    """
+
+    method: str
+    path: str
+    authorization: str | None
+    body: dict[str, object]
+
+
 class _GitHubFixture(BaseHTTPRequestHandler):
     requests: ClassVar[list[_GraphQLRequest]]
+    #: Every REST write the loopback took, in order, beside the GraphQL log above.
+    rest_requests: ClassVar[list[RestRequest]] = []
     #: What every request is refused with, or `None` to answer the board normally.
     refusal: ClassVar[_Refusal | None] = None
     #: One operation answered with a GraphQL error while every other is served, or `None`:
@@ -1643,6 +1730,54 @@ class _GitHubFixture(BaseHTTPRequestHandler):
     #: upload answered with, after the numeric id of the issue's repository is read by REST.
     ATTACHMENTS = "/user-attachments/assets"
     REPOSITORIES = re.compile(r"^/repos/(?P<owner>[^/]+)/(?P<name>[^/?]+)$")
+    #: GitHub's REST issue endpoint, the one `PATCH` updating an issue's state is sent to.
+    ISSUE = re.compile(r"^/repos/(?P<owner>[^/]+)/(?P<name>[^/]+)/issues/(?P<number>[0-9]+)$")
+
+    def do_PATCH(self) -> None:  # noqa: N802 - stdlib callback name
+        """Update one issue as GitHub's REST endpoint does: its state and why it closed.
+
+        Only the issue changes — its board row's Status is a project field, which no issue
+        endpoint writes — so a close sent here leaves the card at the option it held.
+        """
+        named = self.ISSUE.match(self.path)
+        length = int(self.headers.get("Content-Length") or 0)
+        payload = json.loads(self.rfile.read(length) or b"{}")
+        if not isinstance(payload, dict):
+            self._send(422, {"message": "the body must be a JSON object"})
+            return
+        self.rest_requests.append(
+            RestRequest("PATCH", self.path, self.headers.get("Authorization"), payload)
+        )
+        if named is None:
+            self._send(404, {"message": f"no endpoint at {self.path}"})
+            return
+        if self.headers.get("Authorization") is None:
+            self._send(401, {"message": "Requires authentication"})
+            return
+        repository = _Repository(owner=named["owner"], name=named["name"])
+        held = [
+            issue
+            for issue in self.board.issues
+            if issue.repository == repository and issue.number == int(named["number"])
+        ]
+        if not held:
+            self._send(404, {"message": "Not Found"})
+            return
+        (issue,) = held
+        if isinstance(state := payload.get("state"), str):
+            issue.state = state.upper()
+            reason = payload.get("state_reason")
+            issue.state_reason = (
+                str(reason).upper() if issue.state == "CLOSED" and reason is not None else None
+            )
+        self._send(
+            200,
+            {
+                "number": issue.number,
+                "state": issue.state.lower(),
+                "state_reason": issue.state_reason.lower() if issue.state_reason else None,
+            },
+        )
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib callback name
         named = self.REPOSITORIES.match(self.path)
@@ -1742,6 +1877,8 @@ class _GitHubFixture(BaseHTTPRequestHandler):
                 return self.board.origin_lookup_response(request.variables)
             case _Operation.ISSUE:
                 return self.board.node_response(request.variables.get("id"))
+            case _Operation.ISSUES_BY_REFERENCE:
+                return self.board.issues_by_reference_response(request.variables)
             case _Operation.ISSUE_DETAIL:
                 return self.board.detail_response(
                     request.variables.get("id"), request.variables.get("after")
@@ -1878,6 +2015,7 @@ def _served(
     board.options = options
     board.number = number
     handler.requests = []
+    handler.rest_requests = []
     handler.board = board
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever)
@@ -1895,6 +2033,49 @@ def _served(
             "so a request handler is wedged and this journey's server outlives it"
         )
         server.server_close()
+
+
+class _FollowUpsFixture(_GitHubFixture):
+    """The second board, served beside the first so one journey can reach both.
+
+    A subclass rather than a second instance because the stdlib builds a handler per
+    request and takes the class: its own `board` and its own `requests` are what keep
+    `followups`'s items off `plans` and let each board's traffic be read apart from the
+    other's. One journey needs that — a launch claims its plan's items on one board and
+    the ticket a node delivers on the other — and a single board answering both sources
+    would file every item on whichever number it was configured with.
+    """
+
+    requests: ClassVar[list[_GraphQLRequest]] = []
+
+
+#: The board the `followups` source reaches when both are served, kept beside the `plans`
+#: one so a journey reads each board's own items rather than one shared list.
+FOLLOWUPS_BOARD = _Board()
+
+
+@contextmanager
+def _serving_both_boards() -> Iterator[dict[str, str]]:
+    """Serve `plans` and `followups` as two boards, yielding the environment for both.
+
+    Two servers rather than one, because the two sources are configured with different
+    project numbers and an issue's board membership is answered under the number of the
+    board holding it: one server would file every item under one number, and the source
+    configured with the other would find none of its own.
+    """
+    with (
+        _served(_GitHubFixture, BOARD, STATUS_OPTIONS, CONFIGURED_PROJECT_NUMBER) as plans,
+        _served(
+            _FollowUpsFixture, FOLLOWUPS_BOARD, FOLLOWUPS_OPTIONS, FOLLOWUPS_PROJECT_NUMBER
+        ) as followups,
+    ):
+        yield {
+            "GH_PROJECTS_TOKEN": "fixture-token",
+            "ONETASKGRAPH_SOURCES__PLANS__CONFIG__ENDPOINT": plans,
+            "ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__ENDPOINT": followups,
+            "ONETASKGRAPH_SOURCES__PLANS__CONFIG__PACING__MIN_MUTATION_INTERVAL_MS": "0",
+            "ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__PACING__MIN_MUTATION_INTERVAL_MS": "0",
+        }
 
 
 # llmlint: ignore-end[e2e_not_mocked]
@@ -2432,6 +2613,44 @@ def _bounded_step(
     assert _wide_pages(requests) == [], (label, "a search asked for a page wider than its answer")
     _GitHubFixture.requests.clear()
     return cost
+
+
+def closed_through_rest(issue: _Issue, environment: Mapping[str, str], reason: str) -> RestRequest:
+    """Close ``issue`` the way a person on github.com, or an agent holding the board
+    credential, does: one `PATCH` to GitHub's REST issue endpoint, which writes the issue
+    and no board field. ``environment`` names the `followups` endpoint and the credential;
+    the request the loopback logged for it is returned."""
+    endpoint = environment[f"{FOLLOWUPS_ENV_PREFIX}CONFIG__ENDPOINT"].removesuffix("/graphql")
+    path = f"/repos/{issue.repository.owner}/{issue.repository.name}/issues/{issue.number}"
+    sent = len(_GitHubFixture.rest_requests)
+    request = urllib.request.Request(  # noqa: S310 - the loopback's own http:// endpoint
+        f"{endpoint}{path}",
+        data=json.dumps({"state": "closed", "state_reason": reason}).encode(),
+        headers={
+            "Authorization": f"Bearer {environment['GH_PROJECTS_TOKEN']}",
+            "Content-Type": "application/json",
+        },
+        method="PATCH",
+    )
+    with urllib.request.urlopen(request, timeout=30) as answer:  # noqa: S310 - as above
+        assert answer.status == 200, answer.status
+    (logged,) = _GitHubFixture.rest_requests[sent:]
+    assert (logged.method, logged.path) == ("PATCH", path), logged
+    return logged
+
+
+def writes_naming(
+    issue: _Issue, requests: Sequence[_GraphQLRequest] | None = None
+) -> list[_GraphQLRequest]:
+    """Every write among ``requests`` — by default, all the board was sent since its log was
+    last cleared — that names ``issue``'s row or the issue itself: a Status write addresses
+    the row, a closure the content."""
+    names = (f'"{issue.item_id}"', f'"{issue.content_id}"')
+    return [
+        request
+        for request in (_GitHubFixture.requests if requests is None else requests)
+        if request.is_mutation and any(name in json.dumps(request.variables) for name in names)
+    ]
 
 
 def planted_comment(

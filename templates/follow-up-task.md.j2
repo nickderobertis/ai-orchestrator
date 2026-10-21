@@ -259,8 +259,15 @@ louder rather than duplicated.
   accepted and taken up. Who moves an item there: a person, or a dispatch whose own task
   says to. Not selected by an agent sent to pick up accepted tickets.
 - **Closed as completed at Status `Done`**, Linear state `Done`, written `done`: accepted
-  and finished. Who moves an item there: a person, or a dispatch whose own task says to.
-  Not selected by an agent sent to pick up accepted tickets.
+  and finished. Who moves an item there: a person, a dispatch whose own task says to, or
+  the engine, when a landing it performs or relays — a run's landing, or one of its own
+  `publish-branch`, `repo-recover` and `integrate` — closes the ticket's issue, or when a
+  run it adopts carries a landing whose closure it had not yet written, whatever status
+  the card held, accepted ones included; an `integrate` landing moves the card only when
+  the integrated repository's own tree carries the store configuration, and is otherwise
+  in the accepted lag the on-demand reconcile clears, until the follow-up "just integrate
+  in another repository's checkout closes no follow-up card" is fixed. Not selected by an
+  agent sent to pick up accepted tickets.
 - **Closed as not planned at Status `Cancelled`**, Linear state `Canceled`, written
   `cancelled`: withdrawn. Who moves an item there: a follow-up run withdrawing its own
   ticket that nobody accepted or deferred, or a person. Not selected by an agent sent to
@@ -479,7 +486,9 @@ root cause where it must, to one this run holds no ticket for, or to a ticket wh
 `drafts` does not name it. This dispatch is not finished while it refuses.
 The attached recipe runs the sole `check-dispositions --board` after settlement: it also
 refuses a filed carrier whose estimate or estimate line disagrees with its comment recount,
-or a copied item whose priority disagrees with its ticket. Correct local accounts here;
+a copied item whose priority disagrees with its ticket, an item this run created that is not
+at `Proposal` — or at the status a person moved it to, which its ticket carries — and a
+withdrawn ticket's item that is not at `Cancelled`. Correct local accounts here;
 board changes after the dispatch's last local check are still checked after settlement.
 
 ## The verified ticket
@@ -650,10 +659,27 @@ A ticket is a local Markdown task in the `{{ shape.drafts_source }}` source, wri
   binding, or when the ticket carries a link and no binding — run `{{ board_status }}` on it
   first — and after the copy when the store reports reaching any item but the binding, or
   reaching it by any rule but the link or that origin.
+- `{{ copy }}` exits {{ shape.exits.undecided }} before it writes anything when the ticket's `status` is not the
+  word `{{ board_status }}` decides from the board: `{{ shape.proposed }}`, or a withdrawal, for a ticket whose
+  item it creates; the status its bound item is held at, or a withdrawal that status allows,
+  for one already bound, which it takes from the decision `{{ board_status }}` left when the ticket
+  carries the word it printed for that item, and otherwise reads once by id. It exits {{ shape.exits.unplaced }} and {{ shape.exits.protected }} as `{{ board_status }}`
+  does. On any of these, run `{{ board_status }}` on the ticket again, write the word it prints, and
+  copy it then.
 - It reaches the board only as `{{ copy }} --board {{ board }} <path of the ticket>`, which copies
   `{{ shape.ticket_id }}` onto its bound item and prints the action and the item it reached; never as a
   bare `{{ plan_store }} task copy`, which follows whichever item the store finds first. That copy
   is the only way an issue is edited.
+- **No issue is created, closed or withdrawn any other way.** Never write an issue, its state
+  or its board item through the GitHub CLI (`gh issue create`, `gh issue close`, `gh issue edit`, `gh
+  api`), through GitHub's API with the board credential this dispatch holds, or through a
+  `{{ plan_store }}` write — `task create`, `task status set`, `task update`, `task copy` — on a
+  board item: each writes an issue's state without the decision `{{ board_status }}` makes and the
+  status its copy writes beside it, which leaves an item nobody can read, such as one closed
+  as not planned while its board still shows it as a proposal. A duplicate is withdrawn the
+  same way as any ticket: `{{ board_status }} --withdraw`, then `{{ copy }}`. The board check the
+  recipe runs after settlement refuses a run whose own item is not at `Proposal`, or whose
+  withdrawn ticket's item is not at `Cancelled`, naming the item and its status.
 
 The shape, with every placeholder to fill:
 
