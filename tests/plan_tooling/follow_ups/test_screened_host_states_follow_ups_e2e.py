@@ -175,8 +175,14 @@ def test_a_person_s_comment_is_gathered_and_answered(screened: Screened) -> None
     # A person comments after the run's last write, which is the boundary the gathering reads
     # past.
     _next_second()
+    # llmlint: ignore-block[tests_mirror_real_usage] What a person does on GitHub — a comment,
+    # and the issue it leaves changed — is the change under test, and a person does it on
+    # github.com rather than through this host's plan store; the loopback's row is where each
+    # such act leaves the board, as in the journeys beside this one. Every read and write the
+    # recipe makes, before and after, is the locked CLI unchanged.
     comment = _commented(bench, issue, ON_A, REVIEWER)
     _touched(issue)
+    # llmlint: ignore-end[tests_mirror_real_usage]
     log = Path(bench.environment["FAKE_CODEX_PROMPT_LOG"])
     _scripted(bench, {run: [_replying(bench, run, log, bench.tmp / "agent-reads.jsonl")]})
 
