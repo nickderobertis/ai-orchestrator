@@ -5,8 +5,10 @@ own configuration home — routes every `github.com/hiddenco/*` task from `plans
 organization's `hiddenco-plans` source, and the store decides where a plan's home goes from
 that alone: into `hiddenco-plans` when every task routes there, and otherwise onto `plans`,
 with the routed tasks in a member project of `hiddenco-plans`. The store's public boundary is
-off, as the tracked configuration lands it, and the example layer declares no `visibility`
-that would switch it on. These journeys drive both shapes through the real `just finish-plan`:
+on, as the tracked configuration switches it, and the example layer declares the
+organization's trackers private; the hiddenco repository is registered public here, so no task
+is private and the routes alone place the plan. These journeys drive both shapes through the
+real `just finish-plan`:
 
 * **shape 1**, an all-hiddenco plan, whose home, tasks and design document all land in
   `hiddenco-plans`;
@@ -157,7 +159,11 @@ def routed(tmp_path_factory: pytest.TempPathFactory) -> Routed:
             ),
         )
     }
-    layer = onetaskgraph_user_layer.with_stand_ins(stood_in)
+    # Without the host's own private boards: the store authenticates every source declared
+    # private before a copy, and theirs is the live GitHub API, which no check may reach.
+    layer = onetaskgraph_user_layer.without_private_stores(
+        onetaskgraph_user_layer.with_stand_ins(stood_in)
+    )
     home = onetaskgraph_user_layer.installed(tmp_path / "config-home", layer)
     shared = share_this_checkouts_install(checkout)
     shared[onetaskgraph_user_layer.XDG_CONFIG_HOME] = str(home)

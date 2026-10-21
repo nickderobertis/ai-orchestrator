@@ -520,11 +520,15 @@ def _environment(
     a name the recipe was told, and what is under test there is the name it resolves when
     it is told none.
     """
+    # This repository is public, and so are the two the plan's tasks name: the plan store's
+    # public boundary classifies a task by its repositories, through this registry.
     identity = seeded(
         tmp_path,
         publication=PUBLICATION_ALIAS,
         execution=EXECUTION_ALIAS,
         origin=PLANNING_FLOW_ORIGIN,
+        visibility="public",
+        public=sorted({stored.repository, stored.second_repository} - {PLANNING_FLOW_ORIGIN}),
     )
     environment = dict(os.environ)
     for name in INHERITED_ENVIRONMENT:
