@@ -291,11 +291,9 @@ def organization(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Wr
             monkeypatch.delenv(name, raising=False)
         else:
             monkeypatch.setenv(name, value)
-    # The organization's repository registered private, as the host's rules overlay declares
-    # it, so `onevcs boundary check` knows its terms wherever the content names it.
-    boundary_home.answering(
-        monkeypatch, public=boundary_home.FIXTURE_REPOSITORIES, private=(PRIVATE_REPOSITORY,)
-    )
+    # Every public repository the fixtures name registered public; whether the organization's
+    # is registered too is each journey's to say.
+    boundary_home.answering(monkeypatch)
     authoring, drafts = tmp_path / "authoring", tmp_path / "drafts"
     authoring.mkdir()
     drafts.mkdir()
@@ -305,6 +303,14 @@ def organization(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Wr
         for name, value in remote.items():
             monkeypatch.setenv(name, value)
         yield Written(authoring, drafts)
+
+
+def _register_private(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The organization's repository registered private, as the host's rules overlay declares
+    it, so `onevcs boundary check` knows its terms wherever the content names it."""
+    boundary_home.answering(
+        monkeypatch, public=boundary_home.FIXTURE_REPOSITORIES, private=(PRIVATE_REPOSITORY,)
+    )
 
 
 #: What `just plans` runs: the plan store this checkout locks, behind the wrapper that
@@ -447,15 +453,43 @@ def test_a_task_naming_the_organization_s_repository_is_written_to_its_tracker(
     assert _on_the_board() == [], "the organization's task reached the public board"
 
 
-@pytest.mark.parametrize("naming", [True, False], ids=["naming-the-private-repository", "neutral"])
+#: The artifacts that name a repository in a field the boundary classifies by identity — a
+#: task's recorded repositories — and those that name it only in their content: a bare name in
+#: prose, and the full origin in a plan's budget answers.
+STRUCTURED = frozenset({"task", "follow-up ticket"})
+UNSTRUCTURED = frozenset({"design document", "spike report", "budget answers"})
+
+
+@pytest.mark.parametrize(
+    ("naming", "registered"),
+    [(True, True), (True, False), (False, False)],
+    ids=[
+        "naming-a-registered-private-repository",
+        "naming-an-unregistered-private-repository",
+        "neutral",
+    ],
+)
 def test_each_artifact_is_written_where_it_may_go_and_refused_where_it_may_not(
-    organization: Written, tmp_path: Path, naming: bool
+    organization: Written,
+    tmp_path: Path,
+    naming: bool,
+    registered: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A task, a design document, a spike report, budget answers and a follow-up ticket.
 
-    Naming the private repository, each lands in `authoring` and is refused at the board and
-    at `drafts` with nothing written there; neutral, each lands at all three.
+    Naming a private repository the host registers, each lands in `authoring` and is refused
+    at the board and at `drafts` with nothing written there; neutral, each lands at all three.
+    Naming one the host never registered, an artifact recording it as a repository is refused
+    all the same, because an identity `onevcs boundary inspect` cannot answer reads `unknown`,
+    which is private. One naming it only in its content is not: `onevcs boundary check` derives
+    the terms it screens for from registered identities alone, so a bare name in prose has no
+    term to match — a limit of term screening — and neither, under the pinned `onevcs`, does
+    the identity's full origin in a plan's budget answers, which a follow-up asks it to
+    classify.
     """
+    if registered:
+        _register_private(monkeypatch)
     repository = PRIVATE_REPOSITORY if naming else PUBLIC_REPOSITORY
     mention = PRIVATE_TERM if naming else "listing"
     outcomes: dict[tuple[str, str], subprocess.CompletedProcess[str]] = {}
@@ -512,14 +546,20 @@ def test_each_artifact_is_written_where_it_may_go_and_refused_where_it_may_not(
             budgeted, destination, project, no_budgets([repository]), dict(os.environ)
         )
 
+    assert {artifact for artifact, _ in outcomes} == STRUCTURED | UNSTRUCTURED, outcomes
     for (artifact, destination), outcome in outcomes.items():
         said = f"{artifact} at {destination}: {outcome.stdout}{outcome.stderr}"
-        if naming and destination != AUTHORING_SOURCE:
+        screened = registered or artifact in STRUCTURED
+        if naming and destination != AUTHORING_SOURCE and screened:
             assert outcome.returncode != 0, said
             assert any(refusal in said for refusal in REFUSALS), said
         else:
             assert outcome.returncode == 0, said
-    if naming:
+    if naming and not registered:
+        titles = _on_the_board()
+        assert "feat: change the intake form" not in titles, titles
+        assert f"The {PRIVATE_TERM} reader skips a page" not in titles, titles
+    if naming and registered:
         written = [path.read_text(encoding="utf-8") for path in _files(organization.drafts)]
         assert not any(PRIVATE_TERM in text for text in written), written
         assert not any(PRIVATE_TERM in title for title in _on_the_board()), _on_the_board()

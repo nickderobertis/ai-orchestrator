@@ -113,7 +113,14 @@ board are refused there naming the organization's source and its missing credent
 nothing written; the journeys accept that refusal or a copy that lands. And a design document
 copied out of the private `authoring` keeps its tasks' local locations rather than their board
 addresses, because the pinned store finds a reference's counterpart only by the origin a copy
-out of a private source does not carry. `tests/plan_tooling/plan_copy/test_private_authoring_boundary_e2e.py` drives an
+out of a private source does not carry. Screening has a limit that registration decides. A repository named in a field the store
+classifies by identity — a task's recorded repositories — is private unless `onevcs` registers
+it public, so an unregistered one is refused. A repository named only in content is caught by
+the terms `onevcs boundary check` derives from **registered** identities, so a bare name in
+prose for a repository the host never registered has no term to match and passes, and under
+the pinned `onevcs` so does that repository's full origin in a plan's budget answers; a host's
+rules overlay registering each private repository is what screens its content.
+`tests/plan_tooling/plan_copy/test_private_authoring_boundary_e2e.py` drives an
 organization's plan, its budget answers and its design document into `authoring`, and
 `tests/e2e/board_copy_approval/test_board_copy_spike_evidence_e2e.py` a plan copied out of the
 private `authoring` whose spike reports resolve through the copy link the store records there.
