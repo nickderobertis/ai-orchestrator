@@ -278,8 +278,8 @@ graphs, and every other dispatch keeps its single simulated user,
 starts without the writable escape hatch**: onejudge refuses a panel of two or more judges
 holding one whose mode is writable (`refuse_writable_panels` in its `cli/config.rs`), and
 the reviewer is `read-only` for the reason the section above gives, so the graph sets no
-`allow_writable_judges`. The shape is stated in [onejudge v0.19.5's
-`judges.md`](https://github.com/nickderobertis/onejudge/blob/onejudge-v0.19.5/docs/judges.md)
+`allow_writable_judges`. The shape is stated in [onejudge v0.20.0's
+`judges.md`](https://github.com/nickderobertis/onejudge/blob/onejudge-v0.20.0/docs/judges.md)
 — the config, how a panel decides, and what each surface carries per judge — and, for a
 graph member, in [oneagentgraph v0.5.6's
 `contract.md`](https://github.com/nickderobertis/oneagentgraph/blob/v0.5.6/docs/contract.md).
@@ -1619,7 +1619,7 @@ gate before downstream consumer gates.
 ## Testing against a harness without a paid model
 
 onejudge's `command` provider speaks a small JSON-lines protocol
-([onejudge v0.19.5 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/onejudge-v0.19.5/docs/protocol.md)),
+([onejudge v0.20.0 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/onejudge-v0.20.0/docs/protocol.md)),
 so any command can stand in for the harness — which is how the engines that
 dispatch prove themselves in their own repositories. What this repository's own
 suite drives is the layer above: the real recipes, the real wrapper scripts, and

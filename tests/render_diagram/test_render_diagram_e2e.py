@@ -15,16 +15,20 @@ in this checkout is changed.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
 import struct
 import subprocess
+import sys
+import tempfile
 from pathlib import Path
 
 import pytest
 from waits import timeout as e2e_timeout
 
+from orchestrator import gate_impact
 from orchestrator.root import REPO_ROOT
 
 pytestmark = pytest.mark.xdist_group("render-diagram")
@@ -164,6 +168,69 @@ def test_a_source_renders_to_a_png_no_wider_than_the_page(rendered: bytes) -> No
     # The source is wider than the page, so it fills it less mermaid-cli's two 8-px margins.
     assert width == PAGE_WIDTH - 2 * BODY_MARGIN, width
     assert height > 0, height
+
+
+def test_a_render_inside_the_gate_s_root_beneath_the_longest_bounded_home_succeeds(
+    rendered: bytes, tmp_path: Path
+) -> None:
+    """Chromium binds its singleton socket under the gate's `TMPDIR`, and the gate root is
+    short enough for it under a `HOME` of `gate_impact.SOCKET_HOME_BOUND` bytes.
+
+    The render runs inside the real recorder, which makes its root under the host's cache,
+    named `XDG_CACHE_HOME` and exactly as long as such a `HOME` plus `/.cache`. This
+    suite's own temporary directory is deeper than that, so the name is a link under the
+    literal `/tmp` to a directory under `tmp_path`, where the suite holds every cache home a
+    recipe is handed: a socket address is measured as the string it is bound at. A root
+    that leaves Chromium too little room fails the render with `Socket path too long`, so
+    the bound is held by Chromium's own socket rather than by a restatement of its layout.
+    The recorder's own record holds the render to leaving nothing in the gate's root.
+    """
+    base = Path(tempfile.mkdtemp(prefix="aio-sock-", dir="/tmp"))
+    try:
+        cache = base / ("c" * (gate_impact.SOCKET_HOME_BOUND + len("/.cache") - len(f"{base}/")))
+        assert len(str(cache).encode()) == gate_impact.SOCKET_HOME_BOUND + len("/.cache")
+        (tmp_path / "cache").mkdir()
+        cache.symlink_to(tmp_path / "cache")
+        environment = dict(os.environ)
+        # Playwright finds its browser under the cache this test moves.
+        environment.setdefault(
+            "PLAYWRIGHT_BROWSERS_PATH",
+            str(Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "ms-playwright"),
+        )
+        environment["XDG_CACHE_HOME"] = str(cache)
+        # Inside an outer recorder, this one would make its root in that one's TMPDIR.
+        environment.pop(gate_impact.SCRATCH_VARIABLE, None)
+        output = tmp_path / "in-gate.png"
+        summary = tmp_path / "in-gate.json"
+        done = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "orchestrator.gate_impact",
+                "run",
+                "--summary",
+                str(summary),
+                "--",
+                "just",
+                "render-diagram",
+                str(_source(tmp_path)),
+                str(output),
+            ],
+            cwd=REPO_ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+            timeout=e2e_timeout(180),
+            check=False,
+        )
+        assert done.returncode == 0, (done.stdout, done.stderr)
+        assert output.read_bytes() == rendered
+        # Chromium's own temporary directories go with the render's, so the gate keeps none.
+        record = json.loads(summary.read_text())
+        assert (record["leftover_entries"], record["leftover_top"]) == (0, []), record
+        assert not any((tmp_path / "cache" / gate_impact.ROOT_PARENT_NAME).iterdir())
+    finally:
+        shutil.rmtree(base)
 
 
 def test_two_renders_of_one_source_are_the_same_bytes(rendered: bytes, tmp_path: Path) -> None:

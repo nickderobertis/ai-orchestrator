@@ -23,6 +23,8 @@
       "{workspaceRoot}/config/mermaid/**/*",
       "{workspaceRoot}/scripts/render-diagram.sh",
       "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/orchestrator/gate_impact.py",
+      "{workspaceRoot}/orchestrator/redaction.py",
       "{workspaceRoot}/tests/render_diagram/**/*"
     ]
   },

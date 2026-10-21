@@ -114,9 +114,14 @@ TEMP_VARIABLES = ("TMPDIR", "TMP", "TEMP")
 #: Scratch locations a dispatch hands its pushes, which writers here prefer over
 #: ``TMPDIR``; unset for the gate so they cannot write outside its root.
 UNSET_FOR_COMMAND = ("ONEPIPELINE_NODE_SCRATCH_DIR", "PYTEST_DEBUG_TEMPROOT")
-#: The prefix of every gate root, kept short: a Unix socket address under the root has
-#: 108 bytes in all.
-ROOT_PREFIX = "g-"
+#: The directory under the host's cache every gate root is made in, and the prefix of
+#: each root, both kept short: a root is ``<cache>/aio-gate/<8 random characters>``, so
+#: that a socket under its ``tmp`` fits the kernel's limit — see :func:`root_parent`.
+ROOT_PARENT_NAME = "aio-gate"
+ROOT_PREFIX = ""
+#: The longest ``HOME`` a root beneath ``$HOME/.cache`` is held to leaving room under for
+#: the deepest socket the gate creates, Chromium's singleton.
+SOCKET_HOME_BOUND = 25
 #: The file name the record is written under, beside ``scripts/lock-timeout.sh``'s.
 PUSH_FILE_NAME = "gate-host-impact-push.json"
 #: A push name as the hook mints it.
@@ -297,7 +302,14 @@ def root_parent(environ: dict[str, str] | None = None) -> Path:
 
     Inside another recorder's command — ``ORCHESTRATOR_GATE_SCRATCH`` set — inside that
     one's ``TMPDIR``, so the outer recorder counts it. Otherwise under the host's cache,
-    outside every registered checkout, and short enough for a socket address under it.
+    outside every registered checkout, and short enough for a socket address under it:
+    for a ``HOME`` of up to 25 bytes (:data:`SOCKET_HOME_BOUND`), the deepest socket the gate
+    creates under the root's ``tmp`` — Chromium's
+    ``rXXXXX/org.chromium.Chromium.XXXXXX/SingletonSocket``, which Mermaid's renderer and
+    the design-document graph budgets' measurement each start in a work directory of that
+    shape — fits the 107 bytes a Unix address holds.
+    ``tests/render_diagram`` holds that bound with Chromium's own socket, under a root
+    this recorder makes.
     """
     source = os.environ if environ is None else environ
     if source.get(SCRATCH_VARIABLE) and source.get("TMPDIR", "").startswith("/"):
@@ -308,7 +320,7 @@ def root_parent(environ: dict[str, str] | None = None) -> Path:
     # A relative one would put the gate's root under whatever directory the hook ran in.
     if not cache.startswith("/") or cache == "/.cache":
         raise ValueError("neither XDG_CACHE_HOME nor HOME is an absolute path")
-    return Path(cache) / "ai-orchestrator" / "gate-tmp"
+    return Path(cache) / ROOT_PARENT_NAME
 
 
 def register_scratch(path: str | os.PathLike[str]) -> Path | None:

@@ -873,6 +873,25 @@ DRAFT_HOLD_LANDINGS = (
     ),
 )
 
+#: The engine landing of the publication-repairs plan, carried by the adopted 0.80.1: it
+#: links the onevcs 0.56.3 whose publication keeps one holder record per publication,
+#: resumes an unchanged green change at its hosted checks, stops a push its publication
+#: cancels, answers an unanswered visibility lookup as unavailable rather than a
+#: disclosure, continues past clean base merges, and names a pool's ineligible idle slots —
+#: and reads two of those shapes itself, settling a publication held on
+#: `boundary::Unavailability::HostVisibility` as that unavailable check and naming
+#: `WorkspaceCapacity::ineligible` in a held node's `workspace-wait`. It also classes the
+#: linked onetaskgraph's `EngineError::CopyDestinationUncertain` as a refusal, so no
+#: write-back timer creates a second item after a malformed create.
+PUBLICATION_REPAIRS_LANDINGS = (
+    Landing(
+        node="op-relink",
+        change_request=1027,
+        commit="04aa5d290c8d9a4818a107a375debe5322b54bac",
+        did="link the onevcs and onetaskgraph releases carrying the publication repairs",
+    ),
+)
+
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
     Landing("op-host-view", 861, "61194ef", "bound the host view and publish its JSON reading"),
@@ -923,6 +942,7 @@ LANDINGS = (
     *IMAGE_ASSETS_LANDINGS,
     *FOLLOW_UP_FIXES_LANDINGS,
     *DRAFT_HOLD_LANDINGS,
+    *PUBLICATION_REPAIRS_LANDINGS,
 )
 
 

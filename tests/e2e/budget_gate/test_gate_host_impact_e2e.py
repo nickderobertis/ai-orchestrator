@@ -151,7 +151,7 @@ class Host:
     @property
     def roots(self) -> Path:
         """Where every recorder this journey starts makes its gate root."""
-        return self.cache / "ai-orchestrator" / "gate-tmp"
+        return self.cache / "aio-gate"
 
     @property
     def record(self) -> Path:
@@ -556,7 +556,7 @@ def test_a_dispatch_s_own_scratch_locations_are_not_handed_to_the_gate(host: Hos
     assert pushed.returncode == 0, pushed.stdout + pushed.stderr
     node, pytest_root, *temps = host.read("seen").split()
     assert (node, pytest_root) == ("unset", "unset")
-    assert len(set(temps)) == 1 and temps[0].startswith(f"{host.roots}/g-"), temps
+    assert len(set(temps)) == 1 and temps[0].startswith(f"{host.roots}/"), temps
     assert temps[0].endswith("/tmp"), temps
     host.assert_clean()
 
@@ -600,7 +600,7 @@ def test_a_recorder_inside_another_recorder_s_gate_roots_inside_its_tmpdir(host:
     pushed = _push(host, host.budgets(), gate)
 
     outer_tmp, inner_tmp = host.read("outer"), host.read("inner")
-    assert inner_tmp.startswith(f"{outer_tmp}/g-"), (outer_tmp, inner_tmp)
+    assert inner_tmp.startswith(f"{outer_tmp}/"), (outer_tmp, inner_tmp)
     assert Record.from_json(inner.read_text(encoding="utf-8")).leftover_entries == 1
     assert pushed.returncode == 0, pushed.stdout + pushed.stderr
     assert pushed.value("gate-leftovers") == 0, pushed.stdout
@@ -711,7 +711,7 @@ def test_two_recorders_at_once_each_count_and_stop_only_their_own(tmp_path: Path
     for each in (first, second):
         Host(tmp_path).assert_clean(each.root / f"scratch-{each.root.name}")
         assert not _alive(int(each.read("pid"))), "a stand-in process outlived the journey"
-    assert not any((shared / "ai-orchestrator" / "gate-tmp").iterdir())
+    assert not any((shared / "aio-gate").iterdir())
 
 
 def test_a_leaked_process_s_credentials_stay_out_of_the_record_and_the_result(

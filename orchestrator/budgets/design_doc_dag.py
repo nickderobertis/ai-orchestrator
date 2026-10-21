@@ -37,10 +37,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
 from typing import NamedTuple
 
@@ -230,10 +232,30 @@ def label_size(size: float, png_width: int, natural: float, column: int) -> floa
     return min(size, size * min(png_width, column) / natural)
 
 
+@contextmanager
+def scratch() -> Iterator[Path]:
+    """A work directory named as `scripts/render-diagram.sh` names its own, removed after.
+
+    Chromium is handed it as its ``TMPDIR``, so the URL-fetcher, socket and profile directories
+    it leaves go with it rather than staying in the gate's root as leftovers. The name is that
+    short because Chromium binds its singleton socket beneath it, a depth
+    `orchestrator/gate_impact.py`'s ``SOCKET_HOME_BOUND`` counts.
+    """
+    work = Path(
+        run(
+            ["mktemp", "-d", f"{tempfile.gettempdir()}/rXXXXX"],
+            "free space in the temporary directory or point TMPDIR at a writable one, then retry",
+        ).strip()
+    )
+    try:
+        yield work
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def measure(mode: str, shapes: Mapping[int, Shape], fixtures: Path) -> tuple[float, str]:
     """The figure ``mode`` names across the fixtures ``shapes`` names, and each's breakdown."""
-    with tempfile.TemporaryDirectory(prefix="budget-design-doc-dag-") as scratch:
-        work = Path(scratch)
+    with scratch() as work:
         store = work / "store"
         store.mkdir()
         env = {
@@ -266,7 +288,11 @@ def measure(mode: str, shapes: Mapping[int, Shape], fixtures: Path) -> tuple[flo
                 + ["--cssFile", str(REPO_ROOT / "config" / "mermaid" / "render.css")]
                 + ["--puppeteerConfigFile", str(puppeteer)],
                 provision,
-                {**os.environ, "FONTCONFIG_FILE": str(REPO_ROOT / "config/mermaid/fonts.conf")},
+                {
+                    **os.environ,
+                    "TMPDIR": str(work),
+                    "FONTCONFIG_FILE": str(REPO_ROOT / "config/mermaid/fonts.conf"),
+                },
             )
             natural, tall, size = svg_size(svg, f"plan-{tasks}")
             if mode == "natural-width":

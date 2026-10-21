@@ -706,9 +706,9 @@ class LinkedCore(NamedTuple):
 #: wheels: `config/oneharness.version` reads 0.22.0 and names the `oneharness-cli`
 #: wheel, whose own CycloneDX SBOM declares the `oneharness-core` it is compiled
 #: against as 0.25.0 (`tests/test_engine_history_vocabulary.py` re-reads that pairing
-#: off the wheel for `docs/telemetry.md`); on the adopted onepipeline 0.79.0 the
-#: engine wheel links 0.28.5 for every dependent — while the sibling `oneagentgraph-cli`
-#: and `onejudge-cli` wheels declare 0.28.1, which is the pairing
+#: off the wheel for `docs/telemetry.md`); on the adopted onepipeline 0.80.1 the
+#: engine wheel links 0.28.6 for every dependent — while the sibling `oneagentgraph-cli`
+#: and `onejudge-cli` wheels declare 0.28.4, which is the pairing
 #: `test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs`
 #: holds and a different artifact from the `oneharness-cli` this pin names. The pin's
 #: number and the crate's **differ on this adoption**, as they have on most adoptions
@@ -727,9 +727,9 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 #: third dependent appears — and it is the shape that survived the split collapsing,
 #: because it never counted the cores in the first place.
 LINKED_HARNESS_CORES = (
-    LinkedCore(dependent="oneagentgraph", dependent_version="0.5.14", core="0.28.5"),
-    LinkedCore(dependent="onejudge", dependent_version="0.19.5", core="0.28.5"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.79.0", core="0.28.5"),
+    LinkedCore(dependent="oneagentgraph", dependent_version="0.6.0", core="0.28.6"),
+    LinkedCore(dependent="onejudge", dependent_version="0.20.0", core="0.28.6"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.80.1", core="0.28.6"),
 )
 
 #: How a crate names itself in a compiled binary: cargo embeds the registry source
@@ -752,23 +752,10 @@ LINKED_IN_BINARY = re.compile(
 #: declared against. A divergence is permitted where the linked release is not
 #: installable from PyPI at all, or where this host's own verbs must run a later release
 #: than any engine links — never as a convenience, and never as "not yet looked at",
-#: because both read identically from here a release cycle later.
-#:
-#: `onevcs`: the adopted engine links 0.56.2 while the manager's verbs run 0.56.3, the
-#: release the review-feedback plan's onevcs nodes shipped in. A CLI past the linked copy
-#: is safe only while both read one registry schema, which
-#: `tests/test_engine_contracts.py` holds against each
-#: release's source. It goes with the engine adoption that links 0.56.3.
-DECLARED_DIVERGENCES: dict[str, Divergence] = {
-    "onevcs": Divergence(
-        linked="0.56.2",
-        pinned="0.56.3",
-        because=(
-            "onevcs 0.56.3 is the release the review-feedback plan's onevcs nodes shipped "
-            "in, and the manager's verbs run it; the engine 0.79.0 links 0.56.2"
-        ),
-    ),
-}
+#: because both read identically from here a release cycle later. Empty, and kept: the
+#: adopted engine 0.80.1 links the onevcs 0.56.3 the manager's verbs run, so the last
+#: declared pair closed with it.
+DECLARED_DIVERGENCES: dict[str, Divergence] = {}
 
 
 def _pinned_cli(version_file: str) -> str:
@@ -1246,7 +1233,7 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
     own `oneharness-core`. Those two numbers are free to differ, and have on every
     adoption recorded here but one — so a reader who measured the sibling's own wheel
     would be measuring an artifact no dispatch loads. On this adoption they differ
-    again: each sibling wheel resolved 0.28.1 while the engine links 0.28.5 for it. They
+    again: each sibling wheel resolved 0.28.4 while the engine links 0.28.6 for it. They
     coincided once, at 0.24.0, on an
     earlier adoption, and parted when the engine moved to 0.24.1 — a coincidence and not
     a contract: it is the reason the pairing below is written out rather than asserted
@@ -1267,8 +1254,8 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
     }
 
     assert measured == {
-        "oneagentgraph-cli": ("0.28.1", "0.28.5"),
-        "onejudge-cli": ("0.28.1", "0.28.5"),
+        "oneagentgraph-cli": ("0.28.4", "0.28.6"),
+        "onejudge-cli": ("0.28.4", "0.28.6"),
     }, (
         f"this host measures (sibling CLI wheel's own core, engine's core) as {measured}, "
         "not the pair this check was written against. Re-read what is installed now and "

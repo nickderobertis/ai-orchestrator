@@ -123,7 +123,7 @@ def _recorder(tmp_path: Path, *arguments: str, **extra: str) -> subprocess.Compl
 
 
 def _roots(tmp_path: Path) -> list[Path]:
-    parent = tmp_path / "cache" / "ai-orchestrator" / "gate-tmp"
+    parent = tmp_path / "cache" / "aio-gate"
     return list(parent.iterdir()) if parent.exists() else []
 
 
@@ -218,10 +218,10 @@ def test_the_push_file_follows_the_lock_timeout_state_rule(
         ({gate_impact.SCRATCH_VARIABLE: "/r/scratch", "TMPDIR": "/r/tmp", "HOME": "/h"}, "/r/tmp"),
         (
             {gate_impact.SCRATCH_VARIABLE: "/r/scratch", "HOME": "/h"},
-            "/h/.cache/ai-orchestrator/gate-tmp",
+            "/h/.cache/aio-gate",
         ),
-        ({"XDG_CACHE_HOME": "/c", "HOME": "/h"}, "/c/ai-orchestrator/gate-tmp"),
-        ({"XDG_CACHE_HOME": "c", "HOME": "/h"}, "/h/.cache/ai-orchestrator/gate-tmp"),
+        ({"XDG_CACHE_HOME": "/c", "HOME": "/h"}, "/c/aio-gate"),
+        ({"XDG_CACHE_HOME": "c", "HOME": "/h"}, "/h/.cache/aio-gate"),
     ],
 )
 def test_the_root_parent_is_the_host_cache_or_an_outer_recorder_s_tmpdir(
@@ -277,7 +277,7 @@ def test_the_defaults_read_this_process_s_environment(
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
     monkeypatch.delenv(gate_impact.SCRATCH_VARIABLE, raising=False)
     assert gate_impact.push_file() == tmp_path / "ai-orchestrator" / "gate-host-impact-push.json"
-    assert gate_impact.root_parent() == tmp_path / "ai-orchestrator" / "gate-tmp"
+    assert gate_impact.root_parent() == tmp_path / "aio-gate"
 
 
 def test_registering_does_nothing_without_a_recorder(monkeypatch: pytest.MonkeyPatch) -> None:

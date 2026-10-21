@@ -98,11 +98,15 @@ fi
 
 # llmlint: ignore-block[changed_behavior_has_e2e] As the block above: a temporary directory
 # that cannot be created, written or removed is a host failure no journey can cause safely.
-if ! work="$(mktemp -d)"; then
+if ! work="$(mktemp -d "${TMPDIR:-/tmp}/rXXXXX")"; then
     echo "render-diagram: no temporary directory could be created; free space in ${TMPDIR:-/tmp} or point TMPDIR at a writable directory, then retry" >&2
     exit 1
 fi
 # Cleanup is best-effort: a directory left behind is mktemp's own, under the temporary root.
+# Chromium is handed this directory as its TMPDIR, so the directories it makes there and
+# does not remove — its `org.chromium.Chromium.*` socket and URL-fetcher directories and
+# Puppeteer's profile — go with it. Its name is kept short because Chromium binds its
+# singleton socket under it: orchestrator/gate_impact.py's SOCKET_HOME_BOUND counts it.
 trap 'rm -rf -- "$work" || echo "render-diagram: could not remove $work; delete it by hand" >&2' EXIT
 if ! node -e 'process.stdout.write(JSON.stringify({executablePath: process.argv[1]}))' \
     "$browser" >"$work/puppeteer.json"; then
@@ -110,7 +114,7 @@ if ! node -e 'process.stdout.write(JSON.stringify({executablePath: process.argv[
     exit 1
 fi
 # llmlint: ignore-end[changed_behavior_has_e2e]
-if ! FONTCONFIG_FILE="$repo_root/config/mermaid/fonts.conf" "$mmdc" --quiet \
+if ! TMPDIR="$work" FONTCONFIG_FILE="$repo_root/config/mermaid/fonts.conf" "$mmdc" --quiet \
         --input "$source_file" --output "$work/diagram.png" \
         --width "$PAGE_WIDTH" --backgroundColor white \
         --configFile "$repo_root/config/mermaid/config.json" \

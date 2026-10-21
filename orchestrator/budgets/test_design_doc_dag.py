@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import re
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -115,6 +116,26 @@ def test_two_fixtures_measure_through_the_real_render_as_their_minimum_and_maxim
     assert labels["plan-9"] < labels["plan-4"] <= 16, about
     assert widths["plan-9"] > widths["plan-4"], shown
     assert "plan-4: " in shown and "3 units" in shown and "6 units" in shown, shown
+
+
+def _chromium_entries() -> set[str]:
+    """What Chromium and Puppeteer name at the top of the temporary directory."""
+    return {
+        entry.name
+        for entry in Path(tempfile.gettempdir()).iterdir()
+        if entry.name.startswith(("org.chromium.", "puppeteer_dev_chrome_profile"))
+    }
+
+
+def test_a_measurement_leaves_nothing_of_chromium_in_the_temporary_directory(
+    tmp_path: Path,
+) -> None:
+    """Inside the gate's root, a directory Chromium leaves there is a counted leftover."""
+    before = _chromium_entries()
+
+    design_doc_dag.measure("natural-width", {4: SMALL}, _fixtures(tmp_path / "fixtures"))
+
+    assert _chromium_entries() - before == set()
 
 
 def test_the_command_reports_its_figure_through_the_sdk(
