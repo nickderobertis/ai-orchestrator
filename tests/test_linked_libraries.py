@@ -706,7 +706,7 @@ class LinkedCore(NamedTuple):
 #: wheels: `config/oneharness.version` reads 0.22.0 and names the `oneharness-cli`
 #: wheel, whose own CycloneDX SBOM declares the `oneharness-core` it is compiled
 #: against as 0.25.0 (`tests/test_engine_history_vocabulary.py` re-reads that pairing
-#: off the wheel for `docs/telemetry.md`); on the adopted onepipeline 0.80.2 the
+#: off the wheel for `docs/telemetry.md`); on the adopted onepipeline 0.81.0 the
 #: engine wheel links 0.28.6 for every dependent — while the sibling `oneagentgraph-cli`
 #: and `onejudge-cli` wheels declare 0.28.4, which is the pairing
 #: `test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs`
@@ -729,7 +729,7 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 LINKED_HARNESS_CORES = (
     LinkedCore(dependent="oneagentgraph", dependent_version="0.7.0", core="0.28.6"),
     LinkedCore(dependent="onejudge", dependent_version="0.20.0", core="0.28.6"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.80.2", core="0.28.6"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.81.0", core="0.28.6"),
 )
 
 #: How a crate names itself in a compiled binary: cargo embeds the registry source
@@ -753,7 +753,7 @@ LINKED_IN_BINARY = re.compile(
 #: installable from PyPI at all, or where this host's own verbs must run a later release
 #: than any engine links — never as a convenience, and never as "not yet looked at",
 #: because both read identically from here a release cycle later. Empty, and kept: the
-#: adopted engine 0.80.2 links the onevcs 0.56.3 the manager's verbs run, so the last
+#: adopted engine 0.81.0 links the onevcs 0.56.3 the manager's verbs run, so the last
 #: declared pair closed with it.
 DECLARED_DIVERGENCES: dict[str, Divergence] = {}
 

@@ -653,6 +653,20 @@ BATCHED_CLEARS = (
 )
 
 
+#: How many slots the adopted store's batched copy documents carry: its `MUTATION_BATCH`
+#: writes, its `ORIGIN_BATCH` origins and its `COPY_DETAIL_BATCH` created items.
+COPY_WRITE_SLOTS = 11
+COPY_ORIGIN_SLOTS = 10
+COPY_READ_SLOTS = 21
+
+
+class _CopyBatch(NamedTuple):
+    """One of a copy's batched writes: each slot's alias prefix and the single write's root."""
+
+    prefix: str
+    root: str
+
+
 def batched_slot_drift(query: str) -> list[str]:
     """How the batched field document the store sent differs from the slots modelled above.
 
@@ -816,6 +830,38 @@ class _Board:
             }
         }
 
+    def closed_items_response(self, variables: dict[str, object]) -> dict[str, object]:
+        """The board's rows whose issue is closed, as the reconcile's `is:closed` read asks.
+
+        Only the filter the store sends is understood, and any other is refused rather than
+        answered with every row: the reconcile's whole claim is that it reads the closed
+        items and never the board, and a fixture answering the open rows too would hide a
+        store that had stopped narrowing. Paged as `search_response` pages.
+        """
+        if variables.get("filter") != "is:closed":
+            raise ValueError(f"the closed-items read sent another filter: {variables!r}")
+        closed = [issue for issue in self.issues if issue.state == "CLOSED"]
+        after, first = variables.get("after"), variables.get("first")
+        start = int(after) if isinstance(after, str) else 0
+        end = start + first if isinstance(first, int) else len(closed)
+        return {
+            "data": {
+                "closedItems": {
+                    "projectV2": {
+                        "id": self.node_id,
+                        "fields": self._fields(),
+                        "items": {
+                            "nodes": [issue.item() for issue in closed[start:end]],
+                            "pageInfo": {
+                                "hasNextPage": end < len(closed),
+                                "endCursor": str(end) if end < len(closed) else None,
+                            },
+                        },
+                    }
+                }
+            }
+        }
+
     def found(self, search: str) -> list[_Issue]:
         """Every issue of this board ``search`` matches, before any page is cut from it."""
         wanted = _FIELD_QUALIFIER.search(search)
@@ -869,28 +915,99 @@ class _Board:
         of the filter is that the board is not walked: a fixture that answered every row
         would hide a source that had stopped narrowing.
         """
-        filtered = _ORIGIN_FILTER.fullmatch(str(variables.get("filter")))
-        if filtered is None:
-            raise ValueError(f"the origin lookup sent no origin filter: {variables!r}")
-        origin = _unescaped(filtered.group("origin"))
         search = variables.get("search")
         if not isinstance(search, str):
             raise ValueError("the origin lookup sent no search")
         return {
             "data": {
-                "originItems": {
-                    "projectV2": {
-                        "items": {
-                            "nodes": [
-                                issue.item() for issue in self.issues if issue.origin == origin
-                            ],
-                            "pageInfo": {"hasNextPage": False, "endCursor": None},
-                        }
-                    }
-                },
+                "originItems": self._origin_rows(variables.get("filter")),
                 **self.search_response(search)["data"],
             }
         }
+
+    def _origin_rows(self, sent: object) -> dict[str, object]:
+        """The rows one origin filter names, under the board the filter narrowed."""
+        filtered = _ORIGIN_FILTER.fullmatch(str(sent))
+        if filtered is None:
+            raise ValueError(f"the origin lookup sent no origin filter: {sent!r}")
+        origin = _unescaped(filtered.group("origin"))
+        return {
+            "projectV2": {
+                "items": {
+                    "nodes": [issue.item() for issue in self.issues if issue.origin == origin],
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                }
+            }
+        }
+
+    def origin_lookups_response(self, variables: dict[str, object]) -> dict[str, object]:
+        """A copy's first page of every origin it asked about, beside the board's fields.
+
+        Each slot `<n>` the store sends (`$ask<n>`) is `origin_lookup_response`'s pair under
+        aliases of its own — the rows its `$filter<n>` names as `o<n>`, and the search for
+        `$search<n>` as `s<n>` — answered only for the slots asked, as GitHub answers an
+        `@include(if:)`. The repository half is the handler's, as a creation context's is.
+        """
+        fields = self.board_fields_response()["data"]
+        assert isinstance(fields, dict)
+        answer: dict[str, object] = dict(fields)
+        for slot in range(COPY_ORIGIN_SLOTS):
+            if variables.get(f"ask{slot}") is not True:
+                continue
+            search = variables.get(f"search{slot}")
+            if not isinstance(search, str):
+                raise ValueError(f"the origin lookups sent no search for slot {slot}")
+            answer[f"o{slot}"] = self._origin_rows(variables.get(f"filter{slot}"))
+            found = self.search_response(search)["data"]
+            assert isinstance(found, dict)
+            answer[f"s{slot}"] = found["search"]
+        return {"data": answer}
+
+    def created_board_items_response(self, variables: dict[str, object]) -> dict[str, object]:
+        """The board row, and its `Status`, of each issue a copy created, by slot.
+
+        Read after the creates because GitHub files an issue created with `projectV2Ids` on
+        the board only after answering the create, so its row's id comes from this read.
+        """
+        answer: dict[str, object] = {}
+        for slot in range(COPY_READ_SLOTS):
+            if variables.get(f"read{slot}") is not True:
+                continue
+            issue = self._issue(variables.get(f"id{slot}"))
+            answer[f"i{slot}"] = {
+                "id": issue.content_id,
+                "projectItems": {
+                    "nodes": [
+                        {
+                            "id": issue.item_id,
+                            "project": {"id": issue.held_by.node_id},
+                            "status": {"name": issue.status},
+                        }
+                    ]
+                },
+            }
+        return {"data": answer}
+
+    def copy_writes(self, operation: _Operation, variables: dict[str, object]) -> dict[str, object]:
+        """Apply each slot a copy's batched write sends, in slot order, as GitHub runs them.
+
+        Every slot is the single write beside it, applied by that write's own handler, and
+        answered under the slot's alias with what that write answers under its root field.
+        """
+        batch = COPY_BATCHES[operation]
+        apply = {
+            _Operation.CREATE_ISSUES: self.create_issue,
+            _Operation.WRITE_FIELD_VALUES: self.set_field,
+            _Operation.CLOSE_ISSUES: self.update_issue,
+            _Operation.ADD_BLOCKED_BYS: self.add_blocked_by,
+        }[operation]
+        answer: dict[str, object] = {}
+        for slot in range(COPY_WRITE_SLOTS):
+            if variables.get(f"send{slot}") is True:
+                single = apply({"input": variables.get(f"{batch.prefix}{slot}")})["data"]
+                assert isinstance(single, dict)
+                answer[f"{batch.prefix}{slot}"] = single[batch.root]
+        return {"data": answer}
 
     def node_response(self, node_id: object) -> dict[str, object]:
         """One issue by its own node id, or the null GitHub answers an unheld one with.
@@ -960,10 +1077,17 @@ class _Board:
             if issue.content_id != node_id:
                 continue
             children = [held for held in self.issues if held.parent_id == issue.content_id]
+            # The project itself rides along — its board fields and the issues blocking it —
+            # so reading a project and its tasks is the one request.
             return {
                 "data": {
-                    "node": {
+                    "node": issue.board_issue()
+                    | {
                         "__typename": "Issue",
+                        "blockedBy": {
+                            "nodes": [self._issue(held).content() for held in issue.blocked_by],
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        },
                         "subIssues": {
                             "pageInfo": {"hasNextPage": False, "endCursor": None},
                             "nodes": [child.board_issue() for child in children],
@@ -1034,6 +1158,13 @@ class _Board:
             repository=_repository_of(payload.get("repositoryId")),
         )
         created.board = self
+        # A create naming its parent files the issue as that parent's sub-issue in the same
+        # request, as GitHub's `parentIssueId` does: the adopted store files a plan's tasks and
+        # its documents under the plan's issue this way rather than by `addSubIssue`.
+        if (parent := payload.get("parentIssueId")) is not None:
+            held = self._issue(parent)
+            created.parent_id = held.content_id
+            held.sub_issues += 1
         self.created.append(created)
         self.issues.append(created)
         return {
@@ -1292,6 +1423,21 @@ class _Board:
                     "pageInfo": {"hasNextPage": False, "endCursor": None},
                 }
             answer[f"i{n}"] = detail
+        # The project's own sub-issues, read beside its tasks while `$children` holds, so a
+        # copy knows which tasks are already filed under it without a read of its own.
+        if variables.get("children") is True:
+            project = self._issue(variables.get("project"))
+            answer["children"] = {
+                "id": project.content_id,
+                "subIssues": {
+                    "nodes": [
+                        {"id": held.content_id, "title": held.title}
+                        for held in self.issues
+                        if held.parent_id == project.content_id
+                    ],
+                    "pageInfo": {"hasNextPage": False},
+                },
+            }
         return {"data": answer}
 
     def whole_answer(
@@ -1502,7 +1648,7 @@ class _GraphQLRequest:
     @property
     def repository(self) -> _Repository:
         """The repository this request looks up: alone, or beside the board's fields."""
-        if self.operation is _Operation.CREATION_CONTEXT:
+        if self.operation in (_Operation.CREATION_CONTEXT, _Operation.ORIGIN_LOOKUPS):
             return _Repository(
                 owner=self.string("repositoryOwner"), name=self.string("repositoryName")
             )
@@ -1511,7 +1657,11 @@ class _GraphQLRequest:
     @property
     def looks_up_repository(self) -> bool:
         """Whether this request resolves a repository's node id, which a create needs."""
-        return self.operation in (_Operation.REPOSITORY, _Operation.CREATION_CONTEXT)
+        return self.operation in (
+            _Operation.REPOSITORY,
+            _Operation.CREATION_CONTEXT,
+            _Operation.ORIGIN_LOOKUPS,
+        )
 
     def string(self, name: str) -> str:
         value = self.variables.get(name)
@@ -1557,6 +1707,13 @@ class _Operation(StrEnum):
     UPDATE_FIELD_WHOLE = "updateFieldWhole"
     CLEAR_FIELD_WHOLE = "clearFieldWhole"
     ISSUES_BY_REFERENCE = "issuesByReference"
+    CLOSED_ITEMS = "closedItems"
+    ORIGIN_LOOKUPS = "originLookups"
+    CREATE_ISSUES = "createIssues"
+    CREATED_BOARD_ITEMS = "createdBoardItems"
+    WRITE_FIELD_VALUES = "writeFieldValues"
+    CLOSE_ISSUES = "closeIssues"
+    ADD_BLOCKED_BYS = "addBlockedBys"
 
 
 #: Each operation's marker in the document the source sends, in the order they are
@@ -1567,6 +1724,20 @@ _OPERATIONS: dict[str, _Operation] = {
     # repository and number, which carries `repository(owner:` and `projectItems(` beside its
     # own fragment.
     "fragment HeldIssue on Issue{": _Operation.ISSUES_BY_REFERENCE,
+    # Before the board read's own marker, which this aliased root also contains: the
+    # on-demand reconcile's read of the board's closed items, narrowed by its `is:closed`
+    # filter rather than walking every row.
+    "closedItems:repositoryOwner": _Operation.CLOSED_ITEMS,
+    # A copy's batched documents, each before the marker of the single document whose root
+    # field every one of its aliased slots carries: the first page of every origin it looks
+    # for beside the creation context, the board items of the issues it created, and its
+    # aliased creates, field writes, closes and blocked-by edges.
+    "o0:repositoryOwner(login:$owner) @include(if:$ask0)": _Operation.ORIGIN_LOOKUPS,
+    "i0:node(id:$id0) @include(if:$read0)": _Operation.CREATED_BOARD_ITEMS,
+    "create0:createIssue(": _Operation.CREATE_ISSUES,
+    "field0:updateProjectV2ItemFieldValue(": _Operation.WRITE_FIELD_VALUES,
+    "close0:updateIssue(": _Operation.CLOSE_ISSUES,
+    "block0:addBlockedBy(": _Operation.ADD_BLOCKED_BYS,
     # Before the board read's own marker and the search's, both of which this document
     # also contains: it narrows the board's items by a field filter and searches beside it.
     "originItems:repositoryOwner": _Operation.ORIGIN_LOOKUP,
@@ -1579,16 +1750,17 @@ _OPERATIONS: dict[str, _Operation] = {
     "createProjectV2Field(": _Operation.CREATE_FIELD,
     "repositoryOwner": _Operation.BOARD,
     "search(query:": _Operation.SEARCH,
-    "subIssues(first:": _Operation.SUB_ISSUES,
-    # Before the dependency read's own marker, which this read of one item also carries: it
-    # answers the item's `blockedBy` beside the boards it sits on.
-    "boards:projectItems(": _Operation.ISSUE,
-    # Before the batched detail read's own marker, which this batch's aliases also carry: a
+    # Before the sub-issue read's marker, which its `children` alias carries, and before the
+    # batched detail read's own marker, which this batch's aliases also carry: a
     # copy's read of the tasks it carries, each with its comments unconditionally and its
     # `blockedBy`.
     "i0:node(id:$id0){__typename ...BoardIssue ... on Issue{comments(first:$first){nodes{": (
         _Operation.ISSUE_COPY_DETAILS
     ),
+    "subIssues(first:": _Operation.SUB_ISSUES,
+    # Before the dependency read's own marker, which this read of one item also carries: it
+    # answers the item's `blockedBy` beside the boards it sits on.
+    "boards:projectItems(": _Operation.ISSUE,
     # Both before the comment listing's own marker, which each also carries: the issue read
     # with its first page of comments, alone and in a fixed batch of aliased reads.
     "i0:node(id:$id0)": _Operation.ISSUE_DETAILS,
@@ -1608,6 +1780,65 @@ _OPERATIONS: dict[str, _Operation] = {
     "updateIssue(": _Operation.UPDATE_ISSUE,
     "deleteIssue(": _Operation.DELETE_ISSUE,
 }
+
+
+COPY_BATCHES: dict[_Operation, _CopyBatch] = {
+    _Operation.CREATE_ISSUES: _CopyBatch("create", "createIssue"),
+    _Operation.WRITE_FIELD_VALUES: _CopyBatch("field", "updateProjectV2ItemFieldValue"),
+    _Operation.CLOSE_ISSUES: _CopyBatch("close", "updateIssue"),
+    _Operation.ADD_BLOCKED_BYS: _CopyBatch("block", "addBlockedBy"),
+}
+
+
+class _CopyRead(NamedTuple):
+    """One of a copy's batched reads: how slot `<n>` is spelled, and how many slots it sends."""
+
+    alias: str
+    slots: int
+
+
+COPY_READS: dict[_Operation, _CopyRead] = {
+    _Operation.ORIGIN_LOOKUPS: _CopyRead(
+        "o{n}:repositoryOwner(login:$owner) @include(if:$ask{n})", COPY_ORIGIN_SLOTS
+    ),
+    _Operation.CREATED_BOARD_ITEMS: _CopyRead(
+        "i{n}:node(id:$id{n}) @include(if:$read{n})", COPY_READ_SLOTS
+    ),
+}
+
+
+def copy_read_drift(operation: _Operation, query: str) -> list[str]:
+    """How a batched copy read the store sent differs from the slots modelled above.
+
+    Read off the document on every such read, as `copy_batch_drift` reads a batched write,
+    so a release that resizes a batch fails the journey that met it rather than having the
+    slots past the modelled count go unanswered.
+    """
+    read = COPY_READS[operation]
+    alias, count = read.alias, read.slots
+    missing = [alias.format(n=n) for n in range(count) if alias.format(n=n) not in query]
+    drift = [f"the batched copy read lacks `{slot}`" for slot in missing]
+    if alias.format(n=count) in query:
+        drift.append(f"the batched copy read carries more than {count} slots")
+    return drift
+
+
+def copy_batch_drift(operation: _Operation, query: str) -> list[str]:
+    """How a batched copy write the store sent differs from the slots modelled above.
+
+    Read off the document on every such write, as `batched_slot_drift` reads the field
+    document, so a release that resizes or renames a batch fails the journey that met it.
+    """
+    batch = COPY_BATCHES[operation]
+    spelled = [
+        f"{batch.prefix}{slot}:{batch.root}(input:${batch.prefix}{slot}) @include(if:$send{slot})"
+        for slot in range(COPY_WRITE_SLOTS)
+    ]
+    drift = [f"the batched copy document lacks `{slot}`" for slot in spelled if slot not in query]
+    sent = query.count("@include(")
+    if sent != COPY_WRITE_SLOTS:
+        drift.append(f"the batched copy document carries {sent} slots, not {COPY_WRITE_SLOTS}")
+    return drift
 
 
 #: What the adopted store selects under a mutation that answers with the whole issue it left
@@ -1854,6 +2085,29 @@ class _GitHubFixture(BaseHTTPRequestHandler):
         match operation:
             case _Operation.BOARD:
                 return self.board.board_response()
+            case _Operation.CLOSED_ITEMS:
+                return self.board.closed_items_response(request.variables)
+            case _Operation.ORIGIN_LOOKUPS:
+                if drift := copy_read_drift(request.operation, request.query):
+                    return {"errors": [{"message": "; ".join(drift)}]}
+                answered = self._repository(request.repository)["data"]
+                assert isinstance(answered, dict)
+                looked = self.board.origin_lookups_response(request.variables)["data"]
+                assert isinstance(looked, dict)
+                return {"data": {**looked, **answered}}
+            case _Operation.CREATED_BOARD_ITEMS:
+                if drift := copy_read_drift(request.operation, request.query):
+                    return {"errors": [{"message": "; ".join(drift)}]}
+                return self.board.created_board_items_response(request.variables)
+            case (
+                _Operation.CREATE_ISSUES
+                | _Operation.WRITE_FIELD_VALUES
+                | _Operation.CLOSE_ISSUES
+                | _Operation.ADD_BLOCKED_BYS
+            ):
+                if drift := copy_batch_drift(request.operation, request.query):
+                    return {"errors": [{"message": "; ".join(drift)}]}
+                return self.board.copy_writes(request.operation, request.variables)
             case _Operation.BOARD_FIELDS:
                 return self.board.board_fields_response()
             case _Operation.CREATION_CONTEXT:
@@ -2298,11 +2552,15 @@ def _field_writes(requests: list[_GraphQLRequest]) -> list[dict[str, object]]:
     """The input of every field-value write among ``requests``, batched or standalone.
 
     The source writes one field with `updateProjectV2ItemFieldValue` alone, and several of
-    a copy's together as aliases of one request, each included by its `write…` flag; either
-    way, each write GitHub would apply is one input here, in the order the request lists it.
+    a copy's together as aliases of one request, each included by its `write…` flag — or,
+    for the items a copy created, by its `send<n>` flag; either way, each write GitHub would
+    apply is one input here, in the order the request lists it.
     """
     written: list[dict[str, object]] = []
     for request in requests:
+        if request.operation is _Operation.WRITE_FIELD_VALUES:
+            written.extend(copy_batch_inputs(request))
+            continue
         carried = {
             _Operation.UPDATE_FIELD: (SINGLE_WRITE,),
             _Operation.UPDATE_FIELDS: BATCHED_WRITES,
@@ -2327,6 +2585,33 @@ def _field_clears(requests: list[_GraphQLRequest]) -> list[dict[str, object]]:
             if clear.included(request.variables) and isinstance(payload, dict):
                 cleared.append(payload)
     return cleared
+
+
+def copy_batch_inputs(request: _GraphQLRequest) -> list[dict[str, object]]:
+    """The input of every slot one of a copy's batched writes sends, in slot order."""
+    batch = COPY_BATCHES[request.operation]
+    inputs: list[dict[str, object]] = []
+    for slot in range(COPY_WRITE_SLOTS):
+        payload = request.variables.get(f"{batch.prefix}{slot}")
+        if request.variables.get(f"send{slot}") is True and isinstance(payload, dict):
+            inputs.append(payload)
+    return inputs
+
+
+def created_issue_inputs(requests: list[_GraphQLRequest]) -> list[dict[str, object]]:
+    """The input of every `createIssue` among ``requests``, sent alone or in a copy's batch."""
+    created: list[dict[str, object]] = []
+    for request in requests:
+        match request.operation:
+            case _Operation.CREATE_ISSUE:
+                payload = request.variables.get("input")
+                if isinstance(payload, dict):
+                    created.append(payload)
+            case _Operation.CREATE_ISSUES:
+                created.extend(copy_batch_inputs(request))
+            case _:
+                pass
+    return created
 
 
 def _board_cost(requests: list[_GraphQLRequest]) -> tuple[list[str], list[str]]:
@@ -2432,6 +2717,13 @@ REQUEST_PRICES: dict[_Operation, DocumentPrice] = {
     _Operation.UPDATE_ISSUE_WHOLE: DocumentPrice("UPDATE_ISSUE_WHOLE", 1),
     _Operation.UPDATE_FIELD_WHOLE: DocumentPrice("UPDATE_FIELD_WHOLE", 1),
     _Operation.CLEAR_FIELD_WHOLE: DocumentPrice("CLEAR_FIELD_WHOLE", 1),
+    _Operation.CLOSED_ITEMS: DocumentPrice("CLOSED_ITEMS", 2),
+    _Operation.ORIGIN_LOOKUPS: DocumentPrice("ORIGIN_LOOKUPS", 2),
+    _Operation.CREATE_ISSUES: DocumentPrice("CREATE_ISSUES", 1),
+    _Operation.CREATED_BOARD_ITEMS: DocumentPrice("CREATED_BOARD_ITEMS", 1),
+    _Operation.WRITE_FIELD_VALUES: DocumentPrice("WRITE_FIELD_VALUES", 1),
+    _Operation.CLOSE_ISSUES: DocumentPrice("CLOSE_ISSUES", 1),
+    _Operation.ADD_BLOCKED_BYS: DocumentPrice("ADD_BLOCKED_BYS", 1),
 }
 
 

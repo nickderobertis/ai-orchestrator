@@ -3,15 +3,17 @@
 A host's onetaskgraph user layer — here the tracked example's, installed under this module's
 own configuration home — routes every `github.com/hiddenco/*` task from `plans` to the
 organization's `hiddenco-plans` source, and the store decides where a plan's home goes from
-that alone: into `hiddenco-plans` when every task routes there, and otherwise onto `plans`,
-with the routed tasks in a member project of `hiddenco-plans`. The store's public boundary is
-off, as the tracked configuration lands it, and the example layer declares no `visibility`
-that would switch it on. These journeys drive both shapes through the real `just finish-plan`:
+that alone: into `hiddenco-plans` when every task naming a repository routes there, and
+otherwise onto `plans`, with the routed tasks in a member project of `hiddenco-plans`. The
+store's public boundary is off, as the tracked configuration lands it, and the example layer
+declares no `visibility` that would switch it on. These journeys drive both shapes through
+the real `just finish-plan`:
 
 * **shape 1**, an all-hiddenco plan, whose home, tasks and design document all land in
   `hiddenco-plans`;
-* **shape 2**, a mixed plan, whose home, design document and non-hiddenco tasks land on the
-  loopback `plans` board and whose hiddenco task lands in a `hiddenco-plans` member project.
+* **shape 2**, a hiddenco task beside steps naming no repository, which lands whole in
+  `hiddenco-plans` too: only a task naming a repository votes where the home goes, and the
+  steps naming none go with their home.
 
 None launches the plan: the copy runs on this checkout's install, and a launch strips the
 `PYTHONPATH` that points the copy's `orchestrator` at its own configuration.
@@ -538,46 +540,30 @@ MIXED = (
 # llmlint: ignore-block[e2e_not_mocked] The same three doubled boundaries as the journey above.
 @COPIES_THE_TRACKED_TREE
 @pytest.mark.xdist_group("linear-routed")
-def test_a_mixed_plan_lands_as_one_board_home_and_its_linear_member(
+def test_a_plan_of_hiddenco_work_and_unplaced_steps_lands_whole_in_linear(
     routed: Routed, gated: tuple[Bench, Mapping[str, str]]
 ) -> None:
-    """A plan spanning both orgs is one home and one member.
+    """A hiddenco task beside steps naming no repository: the whole plan is Linear's.
 
-    The home lands on the `plans` board with the design document and the non-hiddenco tasks;
-    the hiddenco task lands in the home's `hiddenco-plans` member project.
+    Only a task naming a repository votes where the home goes, so the one hiddenco task places
+    the home in `hiddenco-plans`, and the steps naming none go with their home, wherever it
+    went — no member project, nothing on `plans`.
     """
     bench, _ = gated
     name = f"test-{os.getpid()}-mixed"
     home, reported = _finished(routed, bench, name, MIXED)
 
-    assert home.startswith(f"{BOARD}:"), f"the home landed at {home}, not on {BOARD}"
+    assert home.startswith(f"{LINEAR}:"), f"the home landed at {home}, not in {LINEAR}"
     stored = _items(routed, bench, home)
     placed = {node: str(held["id"]).partition(":")[0] for node, held in stored.items()}
-    assert placed == {"library": BOARD, "consumer": LINEAR, "rollout": BOARD}, placed
-    shown = _just(routed, bench, "plans", "project", "show", home, "--json", seconds=120)
-    assert shown.returncode == 0, shown.stdout + shown.stderr
-    members = json.loads(shown.stdout)["items"][0]["item"]["metadata"][plan_store.MEMBERS_KEY]
-    assert [str(member).partition(":")[0] for member in members] == [LINEAR], members
+    assert placed == {node.id: LINEAR for node in MIXED}, placed
     for said in (
-        f"plan-locations: {BOARD} holds the plan at https://github.com/",
-        f"plan-locations: {BOARD} holds its design document at https://github.com/",
-        f"plan-locations: its tasks routed to {LINEAR} are in {members[0]}",
+        f"plan-locations: {LINEAR} holds the plan at {routed.linear}",
+        f"plan-locations: {LINEAR} holds its design document at {routed.linear}",
         f"`just orchestrate {home}`",
     ):
         assert said in reported, f"the tail never said {said!r}:\n{reported}"
-    documents = _just(
-        routed, bench, "plans", "document", "list", "--project", home, "--json", seconds=120
-    )
-    assert documents.returncode == 0, documents.stdout + documents.stderr
-    # The home holds the plan's one document, the one it is read as; its budget answers are
-    # its own description, and its home project carries them.
-    templates = sorted(
-        (held["item"]["metadata"].get("onetaskgraph.template") or {}).get("template", "")
-        for held in json.loads(documents.stdout)["items"]
-    )
-    assert templates == ["onepipeline:design-doc"], documents.stdout
-    described = json.loads(shown.stdout)["items"][0]["item"]["metadata"]
-    assert "orchestrator.plan-budgets" in described, described
+    assert "its tasks routed to" not in reported, reported
     # llmlint: ignore-end[e2e_not_mocked]
     # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]  # noqa: E501
 

@@ -48,6 +48,7 @@ import short_state
 from fake_backend import PROMPT_LOG_ENV, RUN_ON_MARKER_ENV
 from github_board import (
     BOARD,
+    CANCELLED,
     CONFIGURED_REPOSITORY,
     DONE,
     FOLLOWUPS_BOARD,
@@ -707,3 +708,206 @@ def test_an_adoption_moves_the_card_a_late_merge_closed(
         )
         _assert_closed(bench, [bench.ticket], run)
         assert bench.task.status == "In Progress", "the plan task no landing closed moved"
+
+
+#: The `plans` board's issues the reconcile journey plants: two plan homes and a task, each
+#: numbered apart from the bench's own and from each other.
+NOT_PLANNED_HOME = 301
+COMPLETED_HOME = 302
+COMPLETED_TASK = 303
+
+
+def _home(board: _Board, number: int, status: str, state_reason: str) -> _Issue:
+    """A plan's home on ``board`` at ``status``, its issue closed for ``state_reason``.
+
+    A board issue is a project when it has sub-issues, so the home carries one, open, which
+    the reconcile has to leave as it is.
+    """
+    home = _planted(board, number, status, f"A plan homed at #{number}")
+    home.sub_issues = 1
+    home.state, home.state_reason = "CLOSED", state_reason
+    member = _planted(board, number + 100, "Todo", f"A task of the plan at #{number}")
+    member.parent_id = home.content_id
+    return home
+
+
+@pytest.mark.xdist_group("landing-closes-board-cards")
+def test_the_on_demand_reconcile_moves_home_cards_with_their_issues_closure(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """`just plans task status reconcile --source plans` reaches a plan's home card too.
+
+    A home whose issue a person closed is the lag no landing writes, and the reconcile a
+    person runs on demand is what catches it: a home closed as not planned reads
+    `Cancelled`, a home and a task closed as completed read `Done`, and only the cards move,
+    never an issue's state or reason. Nothing else on either board moves.
+    """
+    with _bench(tmp_path, oneharness_bin) as bench:
+        not_planned = _home(BOARD, NOT_PLANNED_HOME, "In Progress", "NOT_PLANNED")
+        completed = _home(BOARD, COMPLETED_HOME, "Todo", "COMPLETED")
+        task = _planted(BOARD, COMPLETED_TASK, "Todo", "A plan task closed by hand")
+        task.state, task.state_reason = "CLOSED", "COMPLETED"
+        before = _cards()
+
+        reconciled = _just(bench, "plans", "task", "status", "reconcile", "--source", "plans")
+
+        assert reconciled.returncode == 0, reconciled.stdout + reconciled.stderr
+        after = _cards()
+        expected = {
+            (BOARD.number, NOT_PLANNED_HOME): Card(CANCELLED.name, "CLOSED", "NOT_PLANNED"),
+            (BOARD.number, COMPLETED_HOME): Card(DONE.name, "CLOSED", "COMPLETED"),
+            (BOARD.number, COMPLETED_TASK): Card(DONE.name, "CLOSED", "COMPLETED"),
+        }
+        assert {key: after[key] for key in expected} == expected, reconciled.stdout
+        for issue in (not_planned, completed, task):
+            assert len(_status_writes(issue)) == 1, (
+                f"#{issue.number} took {len(_status_writes(issue))} Status writes, not one"
+            )
+        moved = {
+            key: (before[key], card)
+            for key, card in after.items()
+            if card != before[key] and key not in expected
+        }
+        assert moved == {}, f"items the reconcile had no closure for moved: {moved}"
+        walked = [
+            (request.operation, request.variables.get("filter"))
+            for request in _board_requests()
+            if ITEMS_READ.search(request.query)
+        ]
+        assert walked == [(_Operation.CLOSED_ITEMS, "is:closed")], (
+            f"the reconcile read a board's items other than through its closed filter: {walked}"
+        )
+
+
+class Homed(NamedTuple):
+    """A plan copied onto the `plans` board and approved there, its home moved to `In Progress`."""
+
+    project: str
+    run: str
+    home: _Issue
+    task: _Issue
+    #: How many board requests setting the plan up spent, so the run's own are those after.
+    asked: int
+
+
+def _homed(bench: Bench, name: str) -> Homed:
+    """Copy the one-node plan and its design document onto the `plans` board, as `just
+    finish-plan` does, approve it there, and move its home to `In Progress`.
+
+    The home is the project issue the copy created on the board, and the task its one
+    sub-issue. `In Progress` is where a person leaves a plan whose run is under way, and it
+    is set through the store's own project status verb, so a `Done` afterwards is the
+    engine's write and not the copy's.
+    """
+    local = _project(bench, name)
+    copied = _just(bench, "plans", "project", "copy", local, "--to", "plans", "--json")
+    assert copied.returncode == 0, copied.stdout + copied.stderr
+    entries = json.loads(copied.stdout)["items"]
+    project = next(str(entry["destination"]) for entry in entries if entry["source"] == local)
+    document = _just(
+        bench, "plans", "document", "copy", f"{local}-design", "--to", "plans", "--json"
+    )
+    assert document.returncode == 0, document.stdout + document.stderr
+    approved = _just(bench, "approve-design", project, seconds=300)
+    assert approved.returncode == 0, approved.stdout + approved.stderr
+    (home,) = [issue for issue in BOARD.issues_created_and_kept() if issue.origin == local]
+    (task,) = [
+        issue for issue in BOARD.issues_created_and_kept() if issue.origin == f"{local}/{NODE_ID}"
+    ]
+    assert task.parent_id == home.content_id, (home, task)
+    moved = _just(bench, "plans", "project", "status", "set", project, "in-progress")
+    assert moved.returncode == 0, moved.stdout + moved.stderr
+    assert home.status == "In Progress", home
+    return Homed(project, name, home, task, len(_board_requests()))
+
+
+def _home_records(bench: Bench, run: str) -> list[dict[str, object]]:
+    """The payloads of every `home-status` record the run journalled."""
+    return [
+        record["payload"] for record in _journal(bench, run) if record.get("kind") == "home-status"
+    ]
+
+
+@pytest.mark.xdist_group("landing-closes-board-cards")
+def test_a_run_settling_with_every_node_done_moves_its_plan_home_to_done(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """A plan's own card on the `plans` board reads `Done` once its run finishes.
+
+    The plan is launched from its board copy, so the run's home is that project's issue,
+    which a person had moved to `In Progress`. Its one node lands on a `local-direct`
+    identity with a commit closing nothing, so the only closure is the engine's own write to
+    the home, through the store, once every node is done: the home's card reads `Done` and
+    its issue is closed as completed. Nothing on this host names that write — no flag,
+    setting or variable reaches the launch — and nothing reads a board's items for it.
+    """
+    with _bench(tmp_path, oneharness_bin) as bench:
+        _commits(bench, "feat: land the plan's one change")
+        homed = _homed(bench, "home-closes")
+        before = _cards()
+
+        launched = _just(bench, "orchestrate", homed.project)
+
+        assert launched.returncode == 0, (
+            f"the run did not settle:\n{launched.stdout}{launched.stderr}"
+        )
+        home_key = (BOARD.number, homed.home.number)
+        _until(
+            "the plan's home at Done",
+            lambda: _cards()[home_key].status == DONE.name,
+            _explained(bench, homed.run),
+        )
+        after = _cards()
+        assert after[home_key] == Card(DONE.name, "CLOSED", "COMPLETED"), after[home_key]
+        task_key = (BOARD.number, homed.task.number)
+        assert after[task_key].status == DONE.name, (
+            f"the plan's task reads {after[task_key]}, not as its settlement wrote it"
+        )
+        moved = {
+            key: (before[key], card)
+            for key, card in after.items()
+            if card != before[key] and key not in {home_key, task_key}
+        }
+        assert moved == {}, f"items outside the plan moved: {moved}"
+        walked = [
+            request.operation
+            for request in _board_requests()[homed.asked :]
+            if ITEMS_READ.search(request.query)
+        ]
+        assert walked == [], f"the run read a board's items: {walked}"
+        (recorded,) = _home_records(bench, homed.run)
+        assert (recorded["project"], recorded["outcome"]) == (homed.project, "written"), recorded
+        keys = sorted(_keys(json.loads(_launch_record(bench, homed.run))))
+        assert not [key for key in keys if re.search(r"clos|home", key, re.IGNORECASE)], (
+            f"the run's launch record carries a closure or home setting: {keys}"
+        )
+
+
+@pytest.mark.xdist_group("landing-closes-board-cards")
+def test_a_run_whose_node_fails_leaves_its_plan_home_as_it_was(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    """The same plan whose node fails ends with its home's card and issue untouched.
+
+    The stand-in worker commits nothing, so the lifecycle node, asked for a change, settles
+    failed with its branch level with its base, and the run ends without reaching the
+    success ending: the engine owes the home nothing, and the card stays at `In Progress`
+    with its issue open.
+    """
+    with _bench(tmp_path, oneharness_bin) as bench:
+        homed = _homed(bench, "home-stays")
+        before = _cards()
+
+        launched = _just(bench, "orchestrate", homed.project)
+
+        settled = [
+            record["payload"]
+            for record in _journal(bench, homed.run)
+            if record.get("kind") == "node-settled"
+        ]
+        assert settled and all(payload.get("status") == "failed" for payload in settled), (
+            f"the node did not fail:\n{settled}\n{launched.stdout}{launched.stderr}"
+        )
+        home_key = (BOARD.number, homed.home.number)
+        assert _cards()[home_key] == before[home_key] == Card("In Progress", "OPEN", None)
+        assert _home_records(bench, homed.run) == [], "a failed run wrote its home"

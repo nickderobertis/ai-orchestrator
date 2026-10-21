@@ -348,7 +348,9 @@ def _path_without(linked: Path, path: str, program: str) -> str:
         if str(linked) not in kept:
             kept.append(str(linked))
         for tool in directory.iterdir():
-            if tool.name != program and not (linked / tool.name).exists():
+            # `lexists`, not `exists`: an earlier PATH entry may already have linked a name
+            # whose target is gone, and a dangling link still occupies the name.
+            if tool.name != program and not os.path.lexists(linked / tool.name):
                 (linked / tool.name).symlink_to(tool)
     return os.pathsep.join(kept)
 

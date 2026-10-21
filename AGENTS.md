@@ -599,19 +599,27 @@ host declares, never by choice** — in onetaskgraph's user layer, outside every
 so no tracked file names the organization or where its work goes (`docs/orchestration.md`,
 *Host-local sources and routes*). A follow-up ticket whose repositories all match such a
 route is filed there; read where one lands with `just plans sources route plans --repository
-<origin>`. While the store's public boundary is off, as this host lands it, a plan whose
-every task is routed lands whole in the routed tracker, and any other plan's home stays on
-`plans` beside a member project there; approve and launch the home id `just finish-plan`
-reports. **A host that switches the boundary on never splits a plan touching private work
-across a public board**: its tasks are private and so is the plan, which `plans` refuses
-whatever the routes say, so an all-organization plan is copied straight to its tracker
-(`just finish-plan <brief> --to <source>`) and a mixed one is authored as two
+<origin>`. While the store's public boundary is off, as this host lands it, a plan's home
+goes where its tasks naming a repository route: when every one routes to one tracker the
+plan lands whole there, a step naming no repository going with its home, and when they
+disagree the home stays on `plans` beside a member project in each other tracker; a home
+that already exists stays where it is. Approve and launch the home id `just finish-plan`
+reports. **A host that switches the boundary on homes a plan touching private work in a
+private source**: the home goes to the source declared private its private tasks route to,
+its public tasks stay on `plans` in a member there, and a plan whose private tasks reach
+no such source, or two of them before it has a home, is refused before anything is written
 (`docs/orchestration.md`, *The public write boundary*). On a routed Linear tracker a plan
 task reads Todo once copied, Queued once a run claims it, In Progress while its node works, Needs Attention when that node
 failed, parked or was skipped, and Done once it settled; Proposed, Backlog and Canceled are
 proposed, deferred and withdrawn. The member project reads Planned once copied,
 Accepted once claimed, In Progress while working, Blocked when attention is needed, and
 Completed once done; Proposal, Idea and Canceled mean proposed, deferred and withdrawn.
+A plan's own home card reads `Done`, its issue closed as completed, once its run settles with
+every node done, written by the engine through the store; a run that ended any other way, or
+was stopped, leaves the home as it was. A home whose issue is closed some other way follows
+that closure like a task card — moved by the landing that closes it, or, closed by hand, by
+`just plans task status reconcile --source plans` on demand — and a home on a routed Linear
+tracker reads its done project status, Completed, the same way.
 <!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 
 **A board field — a `Status` option, the `Priority` field a source's

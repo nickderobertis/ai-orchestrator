@@ -941,11 +941,11 @@ def _copied_home(name: str, tasks: list[PlanNode], tmp_path: Path) -> str:
     """Draft ``tasks`` as one plan and copy it to the routing source, answering its home.
 
     The copy is the real store's, in a directory whose own document declares the three
-    sources and no public boundary. With the boundary on, the store refuses a plan holding a
-    private task at a home not declared private before any route places a task
-    (`test_a_public_home_refuses_a_plan_holding_a_private_task_and_routes_a_task_copy`), so
-    a plan split across a home and a member is one the store routed before the boundary — a
-    record a reader still meets on a board — and the reads below are held to that record.
+    sources and no public boundary. With the boundary on, the store refuses a plan mixing a
+    public task with a private one at a home not declared private
+    (`test_a_public_home_homes_a_private_plan_in_the_private_source_and_routes_a_task_copy`),
+    so a plan split across a home and a member is one the store routed without the boundary —
+    a record a reader still meets on a board — and the reads below are held to that record.
     """
     write_plan_project(tmp_path / "draft", {"name": name, "tasks": tasks})
     unbounded = tmp_path / "unbounded"
@@ -1058,21 +1058,20 @@ def test_a_plan_every_task_of_which_routes_away_lands_whole_in_the_routed_source
     assert design_chain.plan_repository(home) == ROUTED_REPOSITORY
 
 
-def test_a_public_home_refuses_a_plan_holding_a_private_task_and_routes_a_task_copy(
+def test_a_public_home_homes_a_private_plan_in_the_private_source_and_routes_a_task_copy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Onto a public home a plan naming a private repository is refused whole, never split.
+    """Onto a public home a plan naming only private repositories is homed where they route.
 
-    The plan is a private item whether every task routes away or one does, and the store
-    refuses a private item at a source not declared private before its routes place any
-    task, so nothing reaches either source. A single task copy is routed, which is how a
+    The boundary is on, so a plan every task of which routes to the source declared private
+    lands there whole, home and tasks. A plan mixing a public task into it is refused before
+    anything is written: the plan is private, a task filed under it classifies private, and
+    the public home is not declared private. A single task copy is routed, which is how a
     follow-up ticket of the organization reaches its own tracker.
     """
     _routed_sources(monkeypatch, tmp_path, home="public")
-    for name, repositories in (
-        ("routed", [ROUTED_REPOSITORY, ROUTED_REPOSITORY]),
-        ("mixed", [HOME_REPOSITORY, ROUTED_REPOSITORY]),
-    ):
+
+    def drafted(name: str, repositories: list[str]) -> str:
         write_plan_project(
             tmp_path / "draft",
             {
@@ -1083,10 +1082,31 @@ def test_a_public_home_refuses_a_plan_holding_a_private_task_and_routes_a_task_c
                 ],
             },
         )
-        with pytest.raises(OSError, match="is private, and source home is not declared private"):
-            plan_store.sdk(plan_store.client().project_copy(f"draft:{name}", to="home"))
+        return f"draft:{name}"
+
+    report = plan_store.sdk(
+        plan_store.client().project_copy(
+            drafted("routed", [ROUTED_REPOSITORY, ROUTED_REPOSITORY]), to="home"
+        )
+    )
+    assert {
+        str(item.root.source.root): str(item.root.destination.root).partition(":")[0]
+        for item in report.items
+        if item.root.destination
+    } == {
+        "draft:routed": "member",
+        "draft:routed/task-0": "member",
+        "draft:routed/task-1": "member",
+    }
+
+    with pytest.raises(OSError, match="is private, and source home is not declared private"):
+        plan_store.sdk(
+            plan_store.client().project_copy(
+                drafted("mixed", [HOME_REPOSITORY, ROUTED_REPOSITORY]), to="home"
+            )
+        )
     assert not list((tmp_path / "home").rglob("*.md"))
-    assert not list((tmp_path / "member").rglob("*.md"))
+    assert not [path for path in (tmp_path / "member").rglob("*.md") if "mixed" in path.read_text()]
 
     report = plan_store.sdk(plan_store.client().task_copy(["draft:routed/task-0"], to="home"))
     assert [str(item.root.destination.root) for item in report.items if item.root.destination] == [

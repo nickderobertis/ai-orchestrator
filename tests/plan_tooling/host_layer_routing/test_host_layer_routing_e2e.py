@@ -288,8 +288,6 @@ def test_an_organization_s_ticket_reaches_its_own_tracker_by_the_layer_s_route(
 @pytest.mark.parametrize(
     ("name", "repositories"),
     [
-        ("organization", [ORGANIZATION, ORGANIZATION]),
-        ("mixed", [PUBLIC, ORGANIZATION]),
         ("personal", [PERSONAL]),
         ("personal-mixed", [PUBLIC, PERSONAL]),
     ],
@@ -297,11 +295,11 @@ def test_an_organization_s_ticket_reaches_its_own_tracker_by_the_layer_s_route(
 def test_a_plan_touching_private_work_is_refused_whole_at_the_board(
     layer: Layer, name: str, repositories: list[str]
 ) -> None:
-    """A copy onto `plans` refuses a plan naming a private repository, and splits none.
+    """A copy onto `plans` refuses a plan naming a private repository no route places.
 
-    The plan is a private item however its tasks would route, and the store refuses a
-    private item at a source not declared private before any route places a task: nothing
-    reaches the board, and nothing reaches the organization's tracker.
+    The plan is a private item, and with no source declared private for its private voters
+    to place at, the store refuses it at a source not declared private before anything is
+    written: nothing reaches the board, and nothing reaches the organization's tracker.
     """
     plan = _plan(layer, name, repositories)
 
@@ -311,6 +309,39 @@ def test_a_plan_touching_private_work_is_refused_whole_at_the_board(
     assert NOT_PRIVATE in copied.stderr, copied.stderr
     assert BOARD.created == [], [issue.title for issue in BOARD.created]
     assert _held(layer.folders[onetaskgraph_user_layer.ORGANIZATION_PLANS]) == []
+
+
+@pytest.mark.parametrize(
+    ("name", "repositories", "public_tasks"),
+    [
+        ("organization", [ORGANIZATION, ORGANIZATION], 0),
+        ("mixed", [PUBLIC, ORGANIZATION], 1),
+    ],
+)
+def test_a_plan_touching_an_organization_s_work_is_homed_in_its_private_tracker(
+    layer: Layer, name: str, repositories: list[str], public_tasks: int
+) -> None:
+    """A copy onto `plans` of a plan naming an organization's repository homes it privately.
+
+    With the public boundary on, the home goes to the source declared private that the
+    plan's private voters place at — the organization's tracker — with every private task
+    beside it, and the public tasks stay where their own repositories place them, on the
+    board. Nothing private reaches the board.
+    """
+    plan = _plan(layer, name, repositories)
+
+    copied = _run(layer, ["just", "plans", "project", "copy", plan, "--to", "plans"])
+
+    assert copied.returncode == 0, copied.stdout + copied.stderr
+    held = _held(layer.folders[onetaskgraph_user_layer.ORGANIZATION_PLANS])
+    private = [index for index, origin in enumerate(repositories) if origin == ORGANIZATION]
+    assert held == [
+        f"projects/{name}.md",
+        *(f"tasks/{name}/task-{index}.md" for index in private),
+    ], held
+    on_board = [issue.body for issue in BOARD.created]
+    assert len([body for body in on_board if f"{plan}/task-" in body]) == public_tasks, on_board
+    assert not [body for body in on_board if ORGANIZATION in body], on_board
 
 
 def test_an_organization_s_plan_is_copied_straight_to_its_own_tracker(layer: Layer) -> None:

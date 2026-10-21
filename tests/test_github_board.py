@@ -13,12 +13,17 @@ import pytest
 from github_board import (
     BATCHED_CLEARS,
     BATCHED_WRITES,
+    COPY_ORIGIN_SLOTS,
+    COPY_WRITE_SLOTS,
     RequestCost,
     _bounded_step,
     _GitHubFixture,
     _GraphQLRequest,
+    _Operation,
     _request_points,
     batched_slot_drift,
+    copy_batch_drift,
+    copy_read_drift,
 )
 
 
@@ -87,4 +92,57 @@ def test_a_batched_field_document_whose_slots_moved_is_named_rather_than_modelle
     added = document.replace("}}", "} extra:x @include(if:$writeExtra){id}}", 1)
     assert batched_slot_drift(added) == [
         "the batched field document carries 10 slots and the board models 9"
+    ]
+
+
+def test_a_batched_copy_write_whose_slots_moved_is_named_rather_than_modelled() -> None:
+    """A copy's aliased writes are held to the store's batch size and spelling, by name."""
+    document = (
+        "mutation{"
+        + "".join(
+            f" field{n}:updateProjectV2ItemFieldValue(input:$field{n}) @include(if:$send{n})"
+            "{projectV2Item{id}}"
+            for n in range(COPY_WRITE_SLOTS)
+        )
+        + "}"
+    )
+
+    assert copy_batch_drift(_Operation.WRITE_FIELD_VALUES, document) == []
+    last = COPY_WRITE_SLOTS - 1
+    shrunk = document.replace(
+        f" field{last}:updateProjectV2ItemFieldValue(input:$field{last}) @include(if:$send{last})"
+        "{projectV2Item{id}}",
+        "",
+    )
+    assert copy_batch_drift(_Operation.WRITE_FIELD_VALUES, shrunk) == [
+        "the batched copy document lacks "
+        f"`field{last}:updateProjectV2ItemFieldValue(input:$field{last}) @include(if:$send{last})`",
+        f"the batched copy document carries {last} slots, not {COPY_WRITE_SLOTS}",
+    ]
+
+
+def test_a_batched_copy_read_whose_slots_moved_is_named_rather_than_modelled() -> None:
+    """A copy's origin lookups are held to the store's batch size, so a slot past it is named."""
+    document = (
+        "query{"
+        + "".join(
+            f" o{n}:repositoryOwner(login:$owner) @include(if:$ask{n}){{id}}"
+            for n in range(COPY_ORIGIN_SLOTS)
+        )
+        + "}"
+    )
+
+    assert copy_read_drift(_Operation.ORIGIN_LOOKUPS, document) == []
+    grown = document.replace(
+        "}",
+        f"}} o{COPY_ORIGIN_SLOTS}:repositoryOwner(login:$owner) "
+        f"@include(if:$ask{COPY_ORIGIN_SLOTS}){{id}}",
+        1,
+    )
+    assert copy_read_drift(_Operation.ORIGIN_LOOKUPS, grown) == [
+        f"the batched copy read carries more than {COPY_ORIGIN_SLOTS} slots"
+    ]
+    shrunk = document.replace(" o0:repositoryOwner(login:$owner) @include(if:$ask0){id}", "")
+    assert copy_read_drift(_Operation.ORIGIN_LOOKUPS, shrunk) == [
+        "the batched copy read lacks `o0:repositoryOwner(login:$owner) @include(if:$ask0)`"
     ]

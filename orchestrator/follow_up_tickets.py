@@ -3269,7 +3269,8 @@ def copy_ticket(path: Path, board: str) -> Copied:
     is written for a ticket whose link and binding disagree, whose binding neither its link
     nor its origin names, or that carries a link and no binding — each is `board-status`'s to
     settle first. The item a first copy creates becomes the binding, beside the link the store
-    recorded to it.
+    recorded to it. A first copy straight after the `board-status` whose origin query found no
+    item is the store's `--create` (:func:`_created`), so the store does not ask again.
     """
     ticket = read_ticket(path, for_copy=True)
     if misfiled := filing_problems(ticket, board):
@@ -3287,15 +3288,31 @@ def copy_ticket(path: Path, board: str) -> Copied:
             f"`{BINDING_FIELD}` binding {routed}:{bound}, so the store's copy would go wherever "
             "its search finds this ticket's origin: run `board-status` on it, then copy it"
         )
-    decided_before_copy(ticket, routed, bound, taken_decision(path))
+    decision = taken_decision(path)
+    decided_before_copy(ticket, routed, bound, decision)
     run, root_cause = located_path(path.absolute())
     report = plan_store.sdk(
-        plan_store.client().task_copy([qualified_id(run, root_cause)], to=board)
+        plan_store.client().task_copy(
+            [qualified_id(run, root_cause)], to=board, create=_created(ticket, routed, decision)
+        )
     )
     copied = copied_to(report, routed, bound)
     if ticket.board_item is None:
         bind(path, routed, copied.item)
     return copied
+
+
+def _created(ticket: Ticket, board: str, decision: Decision | None) -> bool | None:
+    """Whether the copy creates the ticket's item without the store looking for one first.
+
+    So only when the ticket names no item of ``board`` and its `board-status` has just asked
+    the board's origin query and found none (:func:`taken_decision`): the store's own lookup
+    is that same index, so repeating it could find nothing that query did not.
+    """
+    unnamed = ticket.board_item is None and ticket.link(board) is None
+    origin_elsewhere = ticket.origin is None or not ticket.origin.startswith(f"{board}:")
+    fresh = decision is not None and decision.item is None
+    return True if unnamed and origin_elsewhere and fresh else None
 
 
 #: Where `board-status` leaves what it decided for each ticket, under a `drafts` root: the

@@ -243,6 +243,21 @@ def _operations(since: int) -> Counter[str]:
     return Counter(str(request.operation) for request in remote._GitHubFixture.requests[since:])
 
 
+def _reads(operations: Counter[str]) -> Counter[str]:
+    """``operations`` without the writes among them."""
+    return Counter(
+        {
+            name: count
+            for name, count in operations.items()
+            if not remote._Operation(name).name.startswith(WRITE_PREFIXES)
+        }
+    )
+
+
+#: The loopback operations that write, by the verb their names open with.
+WRITE_PREFIXES = ("UPDATE_", "CREATE_", "ADD_", "CLEAR_", "DELETE_", "CLOSE_", "WRITE_")
+
+
 def test_a_copy_following_its_own_board_status_reads_its_item_no_second_time(
     loopback: Loopback, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -260,11 +275,12 @@ def test_a_copy_following_its_own_board_status_reads_its_item_no_second_time(
     assert _copy(path, capsys)[0] == tickets.SOUND
     without_decision = _operations(unpaired)
 
-    assert without_decision - with_decision == Counter({"issue": 1}), (
-        with_decision,
-        without_decision,
-    )
-    assert not with_decision - without_decision, (with_decision, without_decision)
+    # Reads alone: the first copy carries the estimate `board-status` wrote into the record,
+    # which the adopted store writes, and the second finds the item already in line and writes
+    # nothing — a difference in what each had to write, not in what each read.
+    reads_with, reads_without = _reads(with_decision), _reads(without_decision)
+    assert reads_without - reads_with == Counter({"issue": 1}), (reads_with, reads_without)
+    assert not reads_with - reads_without, (reads_with, reads_without)
     assert _card(issue)[:2] == ("Proposal", "OPEN")
 
 
