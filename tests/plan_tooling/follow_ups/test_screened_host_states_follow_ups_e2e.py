@@ -2,7 +2,7 @@
 
 The tracked `onetaskgraph.yaml` switches the store's public boundary on, so every host drafts,
 verifies and answers follow-ups screened. A host meets that in one of three states
-(`github_board.HostState`): no user layer; a user layer of
+(`onetaskgraph_user_layer.HostState`): no user layer; a user layer of
 `config/onetaskgraph.user-layer.example.yaml`'s shape, over synthetic names, declaring its
 organization's sources and its own stores private; and that layer in a process holding no
 credential for the organization's sources. Each journey drives a recipe in all three, over
@@ -32,7 +32,7 @@ from typing import NamedTuple
 
 import boundary_home
 import pytest
-from github_board import LINEAR_KEY_ENV, HostState, host_state
+from onetaskgraph_user_layer import LINEAR_KEY_ENV, HostState, host_state
 from test_follow_ups_answer_comments_recipe_e2e import (
     OK,
     ON_A,
@@ -67,6 +67,12 @@ class Screened(NamedTuple):
     record: Path
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] `plan-tooling-follow-ups`
+# is already the Nx project edge this repository keeps for follow-up journeys that launch the
+# installed engine, keyed on `planToolingFollowUpsWorkspace`, which covers every file these
+# recipes read: these journeys drive `just follow-up`, `just follow-ups` and `just
+# follow-ups-answer-comments` over the bench of the journeys beside them, so a project of their
+# own would be keyed on the same files.
 @pytest.fixture(params=list(HostState), ids=[state.value for state in HostState])
 def screened(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[Screened]:
     """A follow-ups bench on one host state, the loopback board served as `followups`."""
@@ -185,3 +191,6 @@ def test_a_person_s_comment_is_gathered_and_answered(screened: Screened) -> None
         and owner.answers == comment
     ]
     assert len(replies) == 1, _comments(bench, issue)
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

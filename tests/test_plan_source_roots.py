@@ -519,8 +519,9 @@ def test_the_tracked_document_switches_the_public_boundary_on() -> None:
 
 
 @pytest.mark.reads_checkouts
-def test_the_tracked_document_declares_no_private_source_and_no_route() -> None:
-    """A private tracker and the route to it are a host's, so the tracked file holds neither.
+def test_the_tracked_document_declares_no_private_tracker_and_no_route() -> None:
+    """A private tracker and the route to it are a host's, so the tracked file holds neither;
+    the only sources it declares private are this machine's own two folders.
 
     Read off the installed CLI's resolution of this checkout's document alone — the suite
     keeps the host's user layer out of every process (`tests/plan_store_user_layer.py`) — so a

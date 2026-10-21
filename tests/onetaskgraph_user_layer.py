@@ -23,6 +23,7 @@ import json
 import os
 import subprocess
 from collections.abc import Collection, Mapping
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +45,12 @@ ORGANIZATION_REPOSITORIES = "github.com/hiddenco/*"
 #: The host's own private stores the example declares, which no route reaches.
 PRIVATE_PLANS = "private-plans"
 PRIVATE_FOLLOWUPS = "private-followups"
+#: The credential the example's Linear sources name (`config/onetaskgraph.user-layer.example.yaml`);
+#: the tracked document declares none.
+LINEAR_KEY_ENV = "HIDDENCO_LINEAR_API_KEY"
+#: Where a journey points the example's Linear sources: a loopback port nothing listens on, so a
+#: request to one is refused on this machine and never reaches a Linear workspace.
+UNSERVED_LINEAR = "http://127.0.0.1:9/graphql"
 
 
 def example() -> dict[str, Any]:
@@ -186,3 +193,47 @@ def with_stand_ins(
         sources[name] = dict(replacement)
     layer["sources"] = sources
     return layer
+
+
+class HostState(StrEnum):
+    """The three hosts every plan-store recipe is driven on, the store's boundary switched on.
+
+    `no-user-layer` is a host doing no organization's work, which declares nothing beneath the
+    tracked document. `organization-private` declares the organization's sources and its own
+    private stores private in its user layer, the example's shape over synthetic names, before
+    adopting the tracked document. `organization-uncredentialed` is that layer in a process
+    holding no credential for the organization's sources, as a dispatch whose harness masks it.
+    """
+
+    NO_USER_LAYER = "no-user-layer"
+    ORGANIZATION_PRIVATE = "organization-private"
+    ORGANIZATION_UNCREDENTIALED = "organization-uncredentialed"
+
+
+def host_state(state: HostState, scratch: Path) -> dict[str, str | None]:
+    """What places a process on ``state``: each variable to set, or to unset where `None`.
+
+    The layer is the example (:data:`EXAMPLE`), every source of
+    it declared private, installed under ``scratch``. The host's own two private boards are
+    stood in by folders in both organization states, because their GitHub endpoint is not the
+    loopback board and no check may reach the live one. The organization's two Linear trackers
+    are stood in by folders where they are credentialed, because no check may reach a Linear
+    workspace; uncredentialed, they stay Linear sources whose credential is unset and whose
+    endpoint is :data:`UNSERVED_LINEAR`, so even a request made past it stays on this machine.
+    """
+    if state is HostState.NO_USER_LAYER:
+        return {}
+    boards = (PRIVATE_PLANS, PRIVATE_FOLLOWUPS)
+    trackers = (
+        ORGANIZATION_PLANS,
+        ORGANIZATION_FOLLOWUPS,
+    )
+    stood_in = boards if state is HostState.ORGANIZATION_UNCREDENTIALED else (*boards, *trackers)
+    layer = with_stand_ins(
+        {name: stand_in(name, scratch / "stand-ins" / name, scratch) for name in stood_in}
+    )
+    if state is HostState.ORGANIZATION_UNCREDENTIALED:
+        for name in trackers:
+            layer["sources"][name]["config"]["endpoint"] = UNSERVED_LINEAR
+    home = installed(scratch / "config-home", layer)
+    return {XDG_CONFIG_HOME: str(home), LINEAR_KEY_ENV: None}

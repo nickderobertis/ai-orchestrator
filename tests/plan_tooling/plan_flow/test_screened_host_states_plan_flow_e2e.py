@@ -2,7 +2,7 @@
 
 The tracked `onetaskgraph.yaml` switches the store's public boundary on and declares
 `authoring` private, so a planning flow runs screened on every host. A host meets that in one
-of three states (`github_board.HostState`): no user layer; a user layer of
+of three states (`onetaskgraph_user_layer.HostState`): no user layer; a user layer of
 `config/onetaskgraph.user-layer.example.yaml`'s shape, over synthetic names, declaring its
 organization's sources and its own stores private; and that layer in a process holding no
 credential for the organization's sources. One whole flow runs in each, over a plan naming no
@@ -26,7 +26,7 @@ from pathlib import Path
 import plan_fixture_source
 import pytest
 from fake_backend import PROMPT_LOG_ENV
-from github_board import LINEAR_KEY_ENV, HostState, host_state
+from onetaskgraph_user_layer import LINEAR_KEY_ENV, HostState, host_state
 from test_plan_flow_e2e import (
     DESIGN_RUN_SUFFIX,
     DESTINATION,
@@ -47,6 +47,11 @@ COPY_REFUSAL = f"authentication for this source failed: set environment variable
 pytestmark = [pytest.mark.usefixtures("module_tmpdir")]
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] `plan-tooling-plan-flow` is
+# the leaf project keyed on `planToolingPlanFlowWorkspace`, the edge this rule asks for, and the
+# whole-flow journey this one reuses already runs behind it. That key names the recipes,
+# scripts, templates and package `just plan` drives, so narrowing it would memoize a verdict
+# over a tree never run.
 @pytest.mark.parametrize("state", list(HostState), ids=[state.value for state in HostState])
 def test_a_plan_is_drafted_reviewed_documented_and_copied(
     state: HostState, tmp_path: Path, oneharness_bin: str
@@ -113,3 +118,6 @@ def test_a_plan_is_drafted_reviewed_documented_and_copied(
         f"tasks/{unique}/decide-the-cursor.md",
         f"tasks/{unique}/read-the-cursor.md",
     ], f"the flow left {landed} on the destination"
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

@@ -43,13 +43,10 @@ AUTHORING_SOURCE = "authoring"
 AUTHORING_ROOT_ENV = f"ONETASKGRAPH_SOURCES__{AUTHORING_SOURCE.upper()}__CONFIG__ROOT"
 
 
-#: The credential the example user layer's Linear sources name
-#: (`config/onetaskgraph.user-layer.example.yaml`); the tracked document declares none.
-LINEAR_KEY_ENV = "HIDDENCO_LINEAR_API_KEY"
-#: Where a board journey whose user layer declares the example's Linear sources points them:
-#: a loopback port nothing listens on, so a request to one is refused on this machine and
-#: never reaches a Linear workspace.
-UNSERVED_LINEAR = "http://127.0.0.1:9/graphql"
+#: The credential the example user layer's Linear sources name, and the loopback port nothing
+#: listens on that a board journey points those sources at (`tests/onetaskgraph_user_layer.py`).
+LINEAR_KEY_ENV = onetaskgraph_user_layer.LINEAR_KEY_ENV
+UNSERVED_LINEAR = onetaskgraph_user_layer.UNSERVED_LINEAR
 #: Where the example's `hiddenco-plans` and `hiddenco-followups` sources' endpoints are named,
 #: which the store spells with each source name's hyphen as an underscore.
 LINEAR_PLANS_ENDPOINT_ENV = "ONETASKGRAPH_SOURCES__HIDDENCO_PLANS__CONFIG__ENDPOINT"
@@ -70,53 +67,6 @@ def unserved_linear(linear: bool) -> dict[str, str]:
         LINEAR_PLANS_ENDPOINT_ENV: UNSERVED_LINEAR,
         LINEAR_FOLLOWUPS_ENDPOINT_ENV: UNSERVED_LINEAR,
     }
-
-
-class HostState(StrEnum):
-    """The three hosts every plan-store recipe is driven on, the store's boundary switched on.
-
-    `no-user-layer` is a host doing no organization's work, which declares nothing beneath the
-    tracked document. `organization-private` declares the organization's sources and its own
-    private stores private in its user layer, the example's shape over synthetic names, before
-    adopting the tracked document. `organization-uncredentialed` is that layer in a process
-    holding no credential for the organization's sources, as a dispatch whose harness masks it.
-    """
-
-    NO_USER_LAYER = "no-user-layer"
-    ORGANIZATION_PRIVATE = "organization-private"
-    ORGANIZATION_UNCREDENTIALED = "organization-uncredentialed"
-
-
-def host_state(state: HostState, scratch: Path) -> dict[str, str | None]:
-    """What places a process on ``state``: each variable to set, or to unset where `None`.
-
-    The layer is the example (`config/onetaskgraph.user-layer.example.yaml`), every source of
-    it declared private, installed under ``scratch``. The host's own two private boards are
-    stood in by folders in both organization states, because their GitHub endpoint is not the
-    loopback board and no check may reach the live one. The organization's two Linear trackers
-    are stood in by folders where they are credentialed, because no check may reach a Linear
-    workspace; uncredentialed, they stay Linear sources whose credential is unset and whose
-    endpoint is :data:`UNSERVED_LINEAR`, so even a request made past it stays on this machine.
-    """
-    if state is HostState.NO_USER_LAYER:
-        return {}
-    boards = (onetaskgraph_user_layer.PRIVATE_PLANS, onetaskgraph_user_layer.PRIVATE_FOLLOWUPS)
-    trackers = (
-        onetaskgraph_user_layer.ORGANIZATION_PLANS,
-        onetaskgraph_user_layer.ORGANIZATION_FOLLOWUPS,
-    )
-    stood_in = boards if state is HostState.ORGANIZATION_UNCREDENTIALED else (*boards, *trackers)
-    layer = onetaskgraph_user_layer.with_stand_ins(
-        {
-            name: onetaskgraph_user_layer.stand_in(name, scratch / "stand-ins" / name, scratch)
-            for name in stood_in
-        }
-    )
-    if state is HostState.ORGANIZATION_UNCREDENTIALED:
-        for name in trackers:
-            layer["sources"][name]["config"]["endpoint"] = UNSERVED_LINEAR
-    home = onetaskgraph_user_layer.installed(scratch / "config-home", layer)
-    return {onetaskgraph_user_layer.XDG_CONFIG_HOME: str(home), LINEAR_KEY_ENV: None}
 
 
 @dataclass(frozen=True)

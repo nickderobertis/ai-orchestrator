@@ -213,7 +213,6 @@ def test_a_finalized_plan_copied_onto_the_board_resolves_and_checks_each_tasks_r
         f"`just check-plan` has to pass the board copy {board}, whose reports the board gave "
         f"ids of its own:\n{checked.stdout}{checked.stderr}"
     )
-    # The design document copied beside the reports is approved on the board copy.
     assert approved.returncode == 0, approved.stdout + approved.stderr
     assert "recorded the approval of" in approved.stdout, approved.stdout
     assert {task.node_id for task in tasks} == {one.node for one in LINKED}

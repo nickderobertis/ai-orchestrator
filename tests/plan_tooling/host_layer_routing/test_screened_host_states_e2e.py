@@ -2,7 +2,7 @@
 
 The tracked `onetaskgraph.yaml` switches the store's public boundary on and declares
 `authoring` private, so every host runs these recipes screened. A host meets that in one of
-three states (`github_board.HostState`): no user layer at all; a user layer of
+three states (`onetaskgraph_user_layer.HostState`): no user layer at all; a user layer of
 `config/onetaskgraph.user-layer.example.yaml`'s shape, over synthetic names, declaring its
 organization's sources and its own stores private; and that layer in a process holding no
 credential for the organization's sources. Each journey here drives a recipe a manager runs,
@@ -41,14 +41,8 @@ import boundary_home
 import github_board as served
 import onetaskgraph_user_layer
 import pytest
-from github_board import (
-    AUTHORING_ROOT_ENV,
-    AUTHORING_SOURCE,
-    LINEAR_KEY_ENV,
-    HostState,
-    _serving_board,
-    host_state,
-)
+from github_board import AUTHORING_ROOT_ENV, AUTHORING_SOURCE, LINEAR_KEY_ENV, _serving_board
+from onetaskgraph_user_layer import HostState, host_state
 from project_fixtures import budgeted, designed, no_budgets, project_from_plan, reviewed
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
@@ -75,9 +69,8 @@ PRIVATE_TERM = "qh-api"
 #: A public repository the suite's state root registers public, and the loopback board's own.
 PUBLIC_REPOSITORY = boundary_home.THIS_REPOSITORY
 
-#: The refusals the boundary answers: a private item at a source not declared private, and a
-#: write carrying a private repository's term there.
-#: write carrying a private repository's term there, and a private member under a public project.
+#: The refusals the boundary answers: a private item at a source not declared private, a write
+#: carrying a private repository's term there, and a private member under a public project.
 REFUSALS = (
     "is private",
     "carries a term of a private repository",
