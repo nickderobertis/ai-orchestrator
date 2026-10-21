@@ -7,8 +7,16 @@ Spike harness, read-only. Run it from the repository root:
 For every directory in each runs root (default: ``~/projects/ai-orchestrator/runs`` and
 ``~/ai-orchestrator/runs`` where it exists) it applies each grouping rule independently and
 prints the kind and plan project each rule gives, whether they agree, the run's ended or
-driven state and owning session, and the outcome: ``placed``, ``ambiguous`` (rules disagree,
-or one rule gives several answers) or ``unplaced``.
+driven state and owning session, and two outcomes, each ``placed``, ``ambiguous`` (rules
+disagree, or one rule gives several answers) or ``unplaced`` with its reasons:
+
+* ``original``: the consensus of the rules the spike's task lists, applied as it states them
+  (``ORIGINAL_RULES``);
+* ``backfill``: the consensus of the refined rules the report recommends a backfill apply,
+  in its order of precedence (``BACKFILL_RULES``).
+
+Each rule's answers are printed whichever set it votes in, so a run the two sets judge
+differently shows which rule split them.
 
 What it reads, and nothing else:
 
@@ -16,7 +24,9 @@ What it reads, and nothing else:
 * the plan store's local sources ``authoring`` and ``follow-up-runs``, through the locked
   ``onetaskgraph`` CLI's ``project list`` / ``task list`` with the checkout that owns the
   runs root as its working directory, so ``onetaskgraph.yaml``'s relative roots resolve
-  there; the ``plans`` board is never read;
+  there — with every ``ONETASKGRAPH_SOURCES__*`` variable removed from its environment, since
+  a dispatch exports source roots that would otherwise override that checkout's own
+  configuration; the ``plans`` board is never read;
 * the engine's ``onepipeline status <run> --json --no-providers`` and ``onepipeline runs
   --flat`` under ``ONEPIPELINE_RUNS_DIR=<root>`` for state and owner.
 
@@ -47,10 +57,21 @@ REPO = HERE.parents[2]
 BIN = REPO / ".venv" / "bin"
 LOCAL_SOURCES = ("authoring", "follow-up-runs")
 
-# The rules a backfill applies, in its order of precedence. Every rule is evaluated
-# independently; the order matters only to `precedence`, never to `outcome`, which is the
-# consensus of these rules alone.
-RULES = (
+# The rules the spike's task lists, applied as it states them: `project-name` and
+# `run-name` strip only its suffixes and `brief-` prefix, `brief-line` and `flow` take any
+# project a `Plan project:` line names, and `plan-kind` answers only from a stamp.
+ORIGINAL_RULES = (
+    "copy-link",
+    "brief-line/raw",
+    "flow/raw",
+    "follow-ups/raw",
+    "plan-kind/raw",
+    "project-name",
+    "run-name",
+)
+# The refined rules a backfill applies, in its order of precedence. The order matters only
+# to `precedence`, never to `outcome`, which is the consensus of these rules alone.
+BACKFILL_RULES = (
     "copy-link",
     "brief-line",
     "task-title",
@@ -60,11 +81,12 @@ RULES = (
     "project-name*",
     "run-name*",
 )
-# The brief's name rules as stated, and the observed-convention extension: printed and
-# checked against the consensus above, so a run they misplace is named, but not voted.
-RAW_RULES = ("project-name", "run-name", "run-name+")
-ALL_RULES = RULES + RAW_RULES
-# Not in the spike's brief; measured beside the rules it lists.
+RULE_SETS = {"original": ORIGINAL_RULES, "backfill": BACKFILL_RULES}
+# Printed beside both sets and voted in neither: the extended name rule without the
+# refinement, kept to show the refinement rather than the extension is what makes it safe.
+INFORMATIONAL_RULES = ("run-name+",)
+ALL_RULES = tuple(dict.fromkeys(BACKFILL_RULES + ORIGINAL_RULES + INFORMATIONAL_RULES))
+# Not in the spike's task; measured beside the rules it lists.
 EXTENSIONS = {"task-title", "project-name*", "run-name*", "run-name+"}
 
 # The suffixes and prefix the brief names. The follow-ups suffix wraps any other.
@@ -121,6 +143,7 @@ def sh(args: list[str], cwd: Path, env: dict[str, str] | None = None) -> str:
 def load_store(checkout: Path) -> Store:
     store = Store()
     otg = str(BIN / "onetaskgraph")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("ONETASKGRAPH_SOURCES__")}
     for source in LOCAL_SOURCES:
         for verb in ("project", "task"):
             page: str | None = None
@@ -128,7 +151,7 @@ def load_store(checkout: Path) -> Store:
                 args = [otg, verb, "list", "--source", source, "--json", "--limit", "10000"]
                 if page:
                     args += ["--page", page]
-                doc = json.loads(sh(args, checkout))
+                doc = json.loads(sh(args, checkout, env))
                 if doc.get("errors"):
                     raise RuntimeError(f"{source} {verb} list: {doc['errors']}")
                 for entry in doc["items"]:
@@ -300,8 +323,8 @@ def stamp_kind(stamp: Any) -> str | None:
     return str(kind) if kind else None
 
 
-def rule_plan_kind(run: Run, store: Store) -> list[Answer]:
-    """The launch project's stamp; an authoring project with none is read as a main plan."""
+def rule_plan_kind(run: Run, store: Store, *, infer_main: bool) -> list[Answer]:
+    """The launch project's stamp; with ``infer_main``, an unstamped plan is a main plan."""
     proj = launch_project(run) or ""
     item = store.projects.get(proj)
     if item is None:
@@ -309,7 +332,7 @@ def rule_plan_kind(run: Run, store: Store) -> list[Answer]:
     stamp = (item.get("metadata") or {}).get("orchestrator.plan-kind")
     kind = stamp_kind(stamp)
     if kind is None:
-        if is_planning_project(proj, store):
+        if not infer_main or is_planning_project(proj, store):
             return []
         return [Answer("main", None, f"{proj} carries no plan-kind stamp and plans nothing")]
     return [Answer(kind, None, f"{proj} stamped {json.dumps(stamp, separators=(',', ':'))}")]
@@ -325,11 +348,12 @@ def brief_lines(proj: str, store: Store) -> set[str]:
     return found
 
 
-def rule_brief_line(run: Run, store: Store) -> list[Answer]:
+def rule_brief_line(run: Run, store: Store, *, checked: bool) -> list[Answer]:
+    """``Plan project:`` lines; ``checked`` takes only a project some source holds."""
     proj = launch_project(run) or ""
     out = []
     for p in sorted(brief_lines(proj, store)):
-        if p in store.projects:
+        if not checked or p in store.projects:
             out.append(Answer(None, p, f"a task of {proj} says 'Plan project: {p}'"))
         else:
             # Kept visible, never voted: a brief naming a project nobody created places nothing.
@@ -367,7 +391,7 @@ def rule_copy_link(run: Run, store: Store) -> list[Answer]:
     return []
 
 
-def rule_flow(run: Run, store: Store, runs: dict[str, Run]) -> list[Answer]:
+def rule_flow(run: Run, store: Store, runs: dict[str, Run], *, checked: bool) -> list[Answer]:
     """A flow's runs share a group: the plan projects any member's brief names."""
     out = []
     for flow, members in run.flows.items():
@@ -378,7 +402,7 @@ def rule_flow(run: Run, store: Store, runs: dict[str, Run]) -> list[Answer]:
                 named |= {
                     p
                     for p in brief_lines(launch_project(other) or "", store)
-                    if p in store.projects
+                    if not checked or p in store.projects
                 }
         out += [
             Answer(None, p, f"member of flow {flow}, whose brief names {p}") for p in sorted(named)
@@ -389,10 +413,13 @@ def rule_flow(run: Run, store: Store, runs: dict[str, Run]) -> list[Answer]:
 def evaluate(run: Run, store: Store, runs: dict[str, Run]) -> None:
     run.answers = {
         "copy-link": rule_copy_link(run, store),
-        "brief-line": rule_brief_line(run, store),
+        "brief-line": rule_brief_line(run, store, checked=True),
+        "brief-line/raw": rule_brief_line(run, store, checked=False),
         "task-title": rule_task_title(run, store),
-        "flow": rule_flow(run, store, runs),
-        "plan-kind": rule_plan_kind(run, store),
+        "flow": rule_flow(run, store, runs, checked=True),
+        "flow/raw": rule_flow(run, store, runs, checked=False),
+        "plan-kind": rule_plan_kind(run, store, infer_main=True),
+        "plan-kind/raw": rule_plan_kind(run, store, infer_main=False),
         "project-name*": rule_project_name(run, store, refined=True),
         "run-name*": rule_run_name(run, store, extended=True, refined=True),
         "project-name": rule_project_name(run, store, refined=False),
@@ -404,40 +431,40 @@ def evaluate(run: Run, store: Store, runs: dict[str, Run]) -> None:
 def apply_follow_ups(runs: list[Run], by_id: dict[str, Run]) -> None:
     """The follow-ups rule: a follow-ups run takes the group of the run its id names.
 
-    Bases are judged first — shortest id first, so a follow-ups of a follow-ups run
-    inherits what its own base was already given.
+    Each rule set's follow-ups rule takes the base's placement under that same set:
+    ``follow-ups`` the backfill's, ``follow-ups/raw`` the original's. Bases are judged first
+    — shortest id first, so a follow-ups of a follow-ups run inherits what its own base was
+    already given.
     """
     for run in sorted(runs, key=lambda r: len(r.run_id)):
-        m = FOLLOW_UPS.match(run.run_id)
-        if not m:
-            run.answers["follow-ups"] = []
-            continue
-        base = by_id.get(m.group("base"))
-        if base is None:
-            run.answers["follow-ups"] = [
-                Answer(
-                    "follow-ups", None, f"follows run {m.group('base')!r}, not in this runs root"
-                )
-            ]
-            continue
-        verdict = judge(base)
-        if verdict["outcome"] == "placed":
-            run.answers["follow-ups"] = [
-                Answer(
-                    "follow-ups", verdict["projects"][0], f"follows run {base.run_id}, placed there"
-                )
-            ]
-        else:
-            run.answers["follow-ups"] = [
-                Answer(
-                    "follow-ups", None, f"follows run {base.run_id}, which is {verdict['outcome']}"
-                )
-            ]
+        for rule, rule_set in (("follow-ups", "backfill"), ("follow-ups/raw", "original")):
+            run.answers[rule] = follow_ups_answer(run, by_id, rule_set)
 
 
-def judge(run: Run) -> dict[str, Any]:
-    """Consensus over the backfill rules: one kind and one project, or why not."""
-    voted = {rule: run.answers.get(rule, []) for rule in RULES}
+def follow_ups_answer(run: Run, by_id: dict[str, Run], rule_set: str) -> list[Answer]:
+    m = FOLLOW_UPS.match(run.run_id)
+    if not m:
+        return []
+    base = by_id.get(m.group("base"))
+    if base is None:
+        return [
+            Answer("follow-ups", None, f"follows run {m.group('base')!r}, not in this runs root")
+        ]
+    verdict = judge(base, RULE_SETS[rule_set])
+    if verdict["outcome"] == "placed":
+        return [
+            Answer("follow-ups", verdict["projects"][0], f"follows run {base.run_id}, placed there")
+        ]
+    return [Answer("follow-ups", None, f"follows run {base.run_id}, which is {verdict['outcome']}")]
+
+
+def judge(run: Run, rules: tuple[str, ...]) -> dict[str, Any]:
+    """Consensus over one rule set: one kind and one project, or why not.
+
+    ``rules`` is in order of precedence, which decides only the first-precedence answers and
+    which rules (of every rule measured) disagree with them, never the outcome.
+    """
+    voted = {rule: run.answers.get(rule, []) for rule in rules}
     kinds = {a.kind for answers in voted.values() for a in answers if a.kind}
     projects = {a.project for answers in voted.values() for a in answers if a.project}
     multi = [
@@ -462,10 +489,10 @@ def judge(run: Run) -> dict[str, Any]:
     else:
         outcome = "placed"
     first_project = next(
-        ({"rule": r, "project": a.project} for r in RULES for a in voted[r] if a.project), None
+        ({"rule": r, "project": a.project} for r in rules for a in voted[r] if a.project), None
     )
     first_kind = next(
-        ({"rule": r, "kind": a.kind} for r in RULES for a in voted[r] if a.kind), None
+        ({"rule": r, "kind": a.kind} for r in rules for a in voted[r] if a.kind), None
     )
     contradicted = sorted(
         {
@@ -476,7 +503,7 @@ def judge(run: Run) -> dict[str, Any]:
             or (first_kind and a.kind and a.kind != first_kind["kind"])
         }
     )
-    supported_by = sorted({r for r in RULES for a in voted[r] if a.project and len(projects) == 1})
+    supported_by = sorted({r for r in rules for a in voted[r] if a.project and len(projects) == 1})
     return {
         "outcome": outcome,
         "supported_by": supported_by,
@@ -536,7 +563,6 @@ def main(argv: list[str]) -> int:
 
     rows = []
     for run in all_runs:
-        verdict = judge(run)
         rows.append(
             {
                 "root": str(run.root),
@@ -546,32 +572,39 @@ def main(argv: list[str]) -> int:
                 "rules": {
                     rule: [a.__dict__ for a in run.answers.get(rule, [])] for rule in ALL_RULES
                 },
-                **verdict,
+                **{name: judge(run, rules) for name, rules in RULE_SETS.items()},
             }
         )
 
-    summary: Counter[tuple[str, str]] = Counter()
+    # Both tables count runs by the backfill's first-precedence kind, so a row of one table
+    # and the same row of the other are the same runs.
+    summaries: dict[str, Counter[tuple[str, str]]] = {name: Counter() for name in RULE_SETS}
     for row in rows:
-        kind = (row["precedence_kind"] or {}).get("kind") or "none"
-        summary[(kind, row["outcome"])] += 1
+        kind = (row["backfill"]["precedence_kind"] or {}).get("kind") or "none"
+        for name in RULE_SETS:
+            summaries[name][(kind, row[name]["outcome"])] += 1
     misplaced: Counter[str] = Counter(
         rule
         for row in rows
-        if row["outcome"] == "placed"
-        for rule in row["disagrees_with_precedence"]
+        if row["backfill"]["outcome"] == "placed"
+        for rule in row["backfill"]["disagrees_with_precedence"]
     )
     if args.json:
         json.dump(
             {
                 "roots": [str(r) for r in roots],
-                "rules": list(RULES),
-                "raw_rules": list(RAW_RULES),
+                "rule_sets": {name: list(rules) for name, rules in RULE_SETS.items()},
+                "informational_rules": list(INFORMATIONAL_RULES),
                 "extensions": sorted(EXTENSIONS),
-                "contradicting_placed_runs": dict(sorted(misplaced.items())),
+                "contradicting_backfill_placed_runs": dict(sorted(misplaced.items())),
                 "runs": rows,
-                "summary": [
-                    {"kind": k, "outcome": o, "runs": n} for (k, o), n in sorted(summary.items())
-                ],
+                "summary": {
+                    name: [
+                        {"kind": k, "outcome": o, "runs": n}
+                        for (k, o), n in sorted(summary.items())
+                    ]
+                    for name, summary in summaries.items()
+                },
             },
             sys.stdout,
             indent=1,
@@ -581,40 +614,53 @@ def main(argv: list[str]) -> int:
 
     for row in rows:
         driven = "driven" if row["driven"] else ("ended" if row["ended"] else "not driven")
-        print(f"== {row['run_id']}  [{row['outcome'].upper()}]")
+        outcomes = " / ".join(f"{name} {row[name]['outcome']}" for name in RULE_SETS)
+        print(f"== {row['run_id']}  [{outcomes}]")
         print(f"   state: {row['word']} ({driven}); owner {row['owner_tag']} / {row['session']}")
         print(
             f"   launch project: {row['launch_project']}; flows: {', '.join(row['flows']) or '-'}"
         )
         for rule in ALL_RULES:
-            label = rule + ("" if rule in RULES else " (not voted)")
+            sets = [name[0].upper() for name, rules in RULE_SETS.items() if rule in rules]
+            label = f"{rule} [{''.join(sets) or '-'}]"
             answers = row["rules"][rule]
             if not answers:
-                print(f"   {label:26} -")
+                print(f"   {label:24} -")
             for a in answers:
                 print(
-                    f"   {label:26} kind={a['kind'] or '-'} project={a['project'] or '-'}"
+                    f"   {label:24} kind={a['kind'] or '-'} project={a['project'] or '-'}"
                     f"  ({a['why']})"
                 )
-        agree = (
-            f"the rules agree (project from {', '.join(row['supported_by'])})"
-            if row["outcome"] == "placed"
-            else "; ".join(row["reasons"])
-        )
-        print(f"   => kinds {row['kinds'] or '-'} projects {row['projects'] or '-'}: {agree}")
-        if row["disagrees_with_precedence"]:
+        for name in RULE_SETS:
+            verdict = row[name]
+            detail = (
+                f"the {name} rules agree (project from {', '.join(verdict['supported_by'])})"
+                if verdict["outcome"] == "placed"
+                else "; ".join(verdict["reasons"])
+            )
             print(
-                "   => disagrees with the first-precedence answer: "
-                + ", ".join(row["disagrees_with_precedence"])
+                f"   => {name} rules: {verdict['outcome'].upper()}: {detail}"
+                f" [kinds {verdict['kinds'] or '-'}, projects {verdict['projects'] or '-'}]"
+            )
+        if row["backfill"]["disagrees_with_precedence"]:
+            print(
+                "   => disagrees with the backfill's first-precedence answer: "
+                + ", ".join(row["backfill"]["disagrees_with_precedence"])
             )
     print()
-    print("summary (kind by first-precedence answer, outcome by consensus):")
-    for (kind, outcome), n in sorted(summary.items()):
-        print(f"   {kind:12} {outcome:10} {n}")
-    print(f"   total runs {len(rows)}")
-    print("rules contradicting the answer of a placed run:")
+    print("rule sets: [O] original, as the task states them; [B] backfill, refined")
+    for name, summary in summaries.items():
+        print(f"summary, {name} rules (kind by the backfill's first-precedence answer):")
+        for (kind, outcome), n in sorted(summary.items()):
+            print(f"   {kind:12} {outcome:10} {n}")
+        totals = Counter({o: 0 for o in ("placed", "ambiguous", "unplaced")})
+        for (_, outcome), n in summary.items():
+            totals[outcome] += n
+        print("   total " + ", ".join(f"{o} {n}" for o, n in totals.items()))
+    print(f"total runs {len(rows)}")
+    print("rules contradicting the answer of a run the backfill placed:")
     for rule, n in sorted(misplaced.items()):
-        print(f"   {rule:14} {n}")
+        print(f"   {rule:16} {n}")
     return 0
 
 
