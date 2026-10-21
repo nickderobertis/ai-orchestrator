@@ -416,9 +416,11 @@ AGENT_DELAY_ENV = "FAKE_BACKEND_AGENT_DELAY_SECONDS"
 #: prompt carries `AGENT_ACTIVITY_MARKER_ENV`'s text: this many tool calls, each reported
 #: through the real `oneharness` as the provider's own event line,
 #: `AGENT_ACTIVITY_INTERVAL_ENV` milliseconds apart. What it gives a journey is a turn that
-#: is visibly busy — its tool calls reaching the run as they happen — and not finished,
-#: which is the window a live note waits in: the stand-in takes a note only when its turn
-#: ends, as a harness that cannot be steered mid-turn does. The pacing is the shipped mock
+#: is visibly busy — its tool calls reaching the run as they happen — and not finished.
+#: That turn is the shipped mock's one-shot codex `exec`, which the pinned oneharness CLI
+#: opens no in-flight turn for under `--control` (an interrupt is answered
+#: `no_active_turn`), so it is the turn **that cannot be interrupted**: a note to it waits
+#: for its end. The pacing is the shipped mock
 #: provider's own `MOCK_STREAM_DELAY_MS`, so the lines cross the real oneharness stream one
 #: at a time rather than being written here on a clock. Keyed on a marker rather than on
 #: the turn's number because a later turn of the same conversation opens on its new
@@ -428,6 +430,32 @@ AGENT_ACTIVITY_INTERVAL_ENV = "FAKE_BACKEND_AGENT_ACTIVITY_INTERVAL_MS"
 AGENT_ACTIVITY_MARKER_ENV = "FAKE_BACKEND_AGENT_ACTIVITY_MARKER"
 AGENT_ACTIVITY_COMMAND = "the stand-in worker is still working"
 
+#: Optionally make that marked worker turn one **that can be interrupted**, by naming the
+#: file the shipped mock provider writes its controlled-turn log to. The turn is then
+#: delegated as claude-code's mocked provider in its `--input-format stream-json` control
+#: shape (`MOCK_TURN_LOG`), which the real oneharness drives over the child's stdin: the
+#: interrupt it serves for a `--control` socket is a `control_request` frame there, and the
+#: redirection it commits opens the replacement turn as the next `user` frame. The log is
+#: the double's own record — each frame it received, `INTERRUPTED` when a control frame
+#: ended a turn, and `TURN_ENDED` after each turn's result — so a journey reads off it that
+#: the held turn was aborted and what the replacement turn was handed.
+#:
+#: `AGENT_CONTROLLED_HOLD_ENV` set holds the turn until an interrupt ends it, so it never
+#: completes on its own; unset, the turn ends by itself `AGENT_CONTROLLED_DELAY_ENV`
+#: milliseconds after its prompt arrives, which is the window a note that does not
+#: interrupt waits in.
+AGENT_CONTROLLED_TURN_LOG_ENV = "FAKE_BACKEND_AGENT_CONTROLLED_TURN_LOG"
+AGENT_CONTROLLED_HOLD_ENV = "FAKE_BACKEND_AGENT_CONTROLLED_TURN_HOLD"
+AGENT_CONTROLLED_DELAY_ENV = "FAKE_BACKEND_AGENT_CONTROLLED_TURN_DELAY_MS"
+#: The identity that controlled turn is pinned to and mocked at, for `MOCK_HARNESS`'s
+#: reason: its control mechanism, `claude-control-request`, is the one the shipped mock
+#: serves a held, interruptible turn for.
+CONTROLLED_MOCK_HARNESS = "claude-code"
+#: The line the mock provider's controlled-turn log records an interrupted turn with.
+CONTROLLED_TURN_INTERRUPTED = "INTERRUPTED"
+#: The line it records after every turn's result document, aborted or not.
+CONTROLLED_TURN_ENDED = "TURN_ENDED"
+
 
 class BusyTurn(NamedTuple):
     """How much work a busy worker turn reports before it answers, and how slowly."""
@@ -436,6 +464,17 @@ class BusyTurn(NamedTuple):
     calls: int
     #: The milliseconds between one reported line and the next.
     interval_ms: int
+
+
+class ControlledTurn(NamedTuple):
+    """A worker turn the real oneharness can interrupt, and how it ends if nothing does."""
+
+    #: The mock provider's controlled-turn log.
+    log: str
+    #: Whether the turn waits for an interrupt rather than ending on its own.
+    hold: bool
+    #: When it does end on its own, the milliseconds after its prompt that it does.
+    delay_ms: int
 
 
 TURN_GATE_ENV = "FAKE_BACKEND_TURN_GATE"
@@ -677,13 +716,20 @@ def _run_on_marker(config: str | None, prompt: str, cwd: str | None) -> None:
 
 
 def _answer(
-    argv: list[str], text: str, *, lost: bool = False, activity: BusyTurn | None = None
+    argv: list[str],
+    text: str,
+    *,
+    lost: bool = False,
+    activity: BusyTurn | None = None,
+    controlled: ControlledTurn | None = None,
 ) -> int:
     """Run the real CLI for this turn, with `text` as the provider's answer.
 
     `lost` has the provider process fail instead, which is how a turn is lost. `activity`
     has the provider report that
     many tool calls before its answer, in codex's own event lines, streamed one at a time.
+    `controlled` has the provider serve the turn in claude-code's control shape instead,
+    which the real CLI can interrupt; the mock answers each of its turns itself.
     """
     real = os.environ.get(REAL_BINARY_ENV)
     if not real:
@@ -691,6 +737,17 @@ def _answer(
         return 2
     environment = dict(os.environ)
     environment[MOCK_STDOUT_ENV] = json.dumps({"result": text})
+    harness = MOCK_HARNESS
+    if controlled is not None:
+        harness = CONTROLLED_MOCK_HARNESS
+        # Nothing ahead of the turn's own frames: the mock writes this before the turn,
+        # and the result documents it ends each turn with are its own.
+        environment[MOCK_STDOUT_ENV] = ""
+        environment["MOCK_TURN_LOG"] = controlled.log
+        if controlled.hold:
+            environment["MOCK_TURN_HOLD"] = "1"
+        else:
+            environment["MOCK_TURN_RESULT_DELAY_MS"] = str(controlled.delay_ms)
     if activity is not None:
         lines: list[dict[str, object]] = [
             {"type": "thread.started", "thread_id": "stand-in-thread"}
@@ -729,7 +786,7 @@ def _answer(
     # `tests/e2e/launch_monitor_observer/test_quota_fallthrough_e2e.py` already fake at.
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     completed = subprocess.run(
-        [real, argv[0], "--harness", MOCK_HARNESS, "--mock-harness", MOCK_HARNESS, *argv[1:]],
+        [real, argv[0], "--harness", harness, "--mock-harness", harness, *argv[1:]],
         env=environment,
         stdin=subprocess.DEVNULL,
         check=False,
@@ -760,16 +817,33 @@ def _await_turn_gate(config: str | None) -> None:
         time.sleep(0.05)
 
 
+def _marked_worker_turn(config: str | None, prompt: str) -> bool:
+    """Whether this is a dispatched worker turn carrying `AGENT_ACTIVITY_MARKER_ENV`'s text."""
+    marker = os.environ.get(AGENT_ACTIVITY_MARKER_ENV)
+    member = MEMBER_OF_CONFIG.search(config or "")
+    if not marker or member is None or member.group(1) != DISPATCHED_MEMBER:
+        return False
+    return marker in prompt
+
+
 def _busy_turn(config: str | None, prompt: str) -> BusyTurn | None:
     """The tool calls `AGENT_ACTIVITY_ENV` asks this dispatched worker turn to report."""
     calls = os.environ.get(AGENT_ACTIVITY_ENV)
-    marker = os.environ.get(AGENT_ACTIVITY_MARKER_ENV)
-    member = MEMBER_OF_CONFIG.search(config or "")
-    if not calls or not marker or member is None or member.group(1) != DISPATCHED_MEMBER:
-        return None
-    if marker not in prompt:
+    if not calls or not _marked_worker_turn(config, prompt):
         return None
     return BusyTurn(int(calls), int(os.environ.get(AGENT_ACTIVITY_INTERVAL_ENV, "1000")))
+
+
+def _controlled_turn(config: str | None, prompt: str) -> ControlledTurn | None:
+    """The interruptible turn `AGENT_CONTROLLED_TURN_LOG_ENV` asks this worker turn to be."""
+    log = os.environ.get(AGENT_CONTROLLED_TURN_LOG_ENV)
+    if not log or not _marked_worker_turn(config, prompt):
+        return None
+    return ControlledTurn(
+        log=log,
+        hold=bool(os.environ.get(AGENT_CONTROLLED_HOLD_ENV)),
+        delay_ms=int(os.environ.get(AGENT_CONTROLLED_DELAY_ENV, "0")),
+    )
 
 
 def _passed_through(argv: list[str]) -> int:
@@ -884,7 +958,12 @@ def _turn(original: list[str], argv: list[str], prompt: str) -> int:
     _run_on_marker(config, prompt, _flag(argv, CWD_FLAG))
     if held := os.environ.get(AGENT_DELAY_ENV):
         time.sleep(float(held))
-    return _answer(argv, WORKER_REPLY, activity=_busy_turn(config, prompt))
+    return _answer(
+        argv,
+        WORKER_REPLY,
+        activity=_busy_turn(config, prompt),
+        controlled=_controlled_turn(config, prompt),
+    )
 
 
 if __name__ == "__main__":

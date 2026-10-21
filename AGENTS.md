@@ -858,20 +858,37 @@ the engine refuses on a waiting node. An
 accepted edit needs no carrying forward, because the graph of record is the live
 graph, projected from the run's own journal.
 
+<!-- llmlint: ignore-block[agents_md_durable_and_terse] ai-orchestrator#1904's adoption requires this paragraph itself to state when a note interrupts, when it waits, its `turn`, its deadline, `withdraw-note`, per-receiver holds, the status words and when `cancel`/`requeue` are reserved, because a manager acts on this file and fell back on destructive levers while it said a live note waits; each is one clause, the detail is docs/orchestration.md's, and the journeys named below hold each claim to the pinned engine. -->
 **Two levers, and what each binds.** A `note` binds the conversation it lands in: it
 reaches the running dispatch, to whichever party is speaking, and a `criterion` it
 carries enters the acceptance criteria that conversation's judge decides against. Its
-`addressee` is never guessed, `deliver` is `live` unless you say `next`, and `persist`
-is `true` unless you say otherwise, which carries an untaken note into the node's next
-dispatch, rendered under `## Planner context` above the engine's own sentence
+`addressee` is never guessed. Under `deliver: live`, the default, it **interrupts** the
+addressed party's live turn, worker or supervisor, and redirects it, the work already
+done standing (`turn: interrupted`); it waits for the turn's end (`turn: turn-end`) only
+where that turn cannot be interrupted, or under `deliver: "turn-end"`, for a note that
+does not affect the current work, while `next` waits for the node's next dispatch.
+`delivery_timeout_seconds` bounds an untaken note's wait, after which `persist` (`true`
+unless you say otherwise) decides between carrying it and refusing it. A carried note is
+rendered under `## Planner context` above the engine's own sentence
 *This reports observed state and adds no acceptance criteria.* — **a carried note is
 its text only**; its criterion is not carried, so read `carried` as "the judge has not
-seen this". `amend` binds the stored bar: it replaces the node's binding amendment for its
+seen this".
+`withdraw-note` takes back a live note no turn has taken or a carried one not yet
+composed into a dispatch; one already taken, answered or composed cannot be withdrawn.
+A note holds back only envelopes naming its own node, so other nodes' notes, commands and
+findings proceed, and `just status` says of an unanswered one whether it is delivering,
+held behind another note to its node, or left for the run's next driver.
+`tests/e2e/launch_monitor_observer/test_live_note_interrupts_a_controlled_turn_e2e.py`,
+`tests/e2e/launch_monitor_observer/test_live_note_leaves_the_run_journalling_e2e.py` and
+`tests/ask_seam/channel_reply/test_channel_reply_e2e.py` drive all of it.
+<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
+`amend` binds the stored bar: it replaces the node's binding amendment for its
 next and later dispatches without interrupting the running one. So amend whenever the
 correction has to hold however many times the node is dispatched again; send a note for
 a correction the judge should have no opinion about, or one that must reach the live
-turn; `cancel` or `retry` with an amended task when the running worker must be judged
-against the new bar. A ruling that reaches the worker alone leaves its judge reviewing
+turn now; `cancel` or `retry` with an amended task only when the running worker must be
+judged against the new bar — never to get a correction delivered sooner, which a live
+note already does. A ruling that reaches the worker alone leaves its judge reviewing
 against a task that never heard it. **An amendment is criteria** and is held to what
 criteria are held to — a property the finished tree must have, never the mechanism you
 prefer, since a judge cannot tell the two apart. Write only the clauses: the engine
@@ -898,8 +915,9 @@ question about your own task, and `amend` before the judge answers it.
 or escalate with evidence; never launch a duplicate parallel path — a manager-driven
 integrate or recovery beside a live node delivering it counts — without explicit
 operator approval. `cancel` idles a redundant or misdirected node — interrupting a
-publication it waits on, branch and change request left open, and preempting a live note
-to it the node has not answered, which is answered `refused` — and `requeue` resumes it.
+publication it waits on, branch and change request left open, and taking back a live note
+to it no turn has taken, which is answered `refused` — and `requeue` resumes it. Neither
+is how a correction reaches a running worker: a live note interrupts its turn already.
 
 **Ask the user in the chat unless you are truly blocked.** A harness's built-in
 question tool — Claude Code's is one — holds you until it is answered, so use it only
@@ -1463,9 +1481,9 @@ read with `just channel-next --flow <ID>` and answered with `just channel-reply 
   unfinished` and the Stop hook ask for.
 - **Steer a running dispatch with a `note`, never with `oneagentgraph interrupt` by
   hand.** A note is journalled against the node; a raw interrupt reaches the worker's
-  turn alone and leaves the run unable to explain why a worker changed direction. Ask
-  for `persist: false` when the correction cannot wait, because it is refused rather
-  than carried when no turn took it.
+  turn alone and leaves the run unable to explain why a worker changed direction. The
+  default `live` note already interrupts the addressed party's turn, so a correction
+  that cannot wait needs nothing more than the note.
 <!-- llmlint: ignore-block[agents_md_durable_and_terse] The 89/50/39 settlement count and the named journey are required content of the bullet below: they are the evidence a manager reads a hold against, and the adoption that paced the monitor holds this paragraph to carrying both. The block runs to the end of that bullet. -->
 - **A quiet monitor is a working monitor.** It reports through the `finding` op and
   nothing else; the observer's `check-in` supplies the regular update even without a

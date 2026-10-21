@@ -34,7 +34,7 @@ one plan at a time until 2026-08-29, and the local Markdown store this repositor
 to in the meantime is gone: the two defects that forced it were repaired upstream and
 adopted here as onetaskgraph 0.2.12 — a release this host has since moved past — and,
 in the engine that carries the write-back repair and every release since,
-onepipeline 0.80.1. The whole of that reasoning —
+onepipeline 0.80.2. The whole of that reasoning —
 the defects, the releases, what was measured against the real board, and why the retreat
 was undone by deleting a source rather than repointing this one — is recorded once, in
 [Where a plan of this repository
@@ -565,7 +565,7 @@ It never writes the project's title, description or labels, and on an item it na
 the fields a projection changed — the status word, the engine's own `onepipeline.*` keys,
 and, where the node's definition moved, its title, body, `delivers` and `depends_on` — so
 a body somebody authored on the board survives every settlement of every run launched from
-it, re-read on the adopted onepipeline 0.80.1, and a person's edit to any field stands
+it, re-read on the adopted onepipeline 0.80.2, and a person's edit to any field stands
 until the run next changes that same field. Below the 0.16.3 that fixed it, it did not:
 the shadow project a copy wrote over the board was built with the body hardcoded to an
 empty string and the copy is a total replacement by contract, so every destination
@@ -587,7 +587,7 @@ is written, and the destination is left exactly as it was. A read that could fal
 a default is a read that can delete, so this is the property that makes the preservation
 above worth anything. It is held in onepipeline's own suite rather than here: since
 https://github.com/nickderobertis/onepipeline/pull/542 the engine — the adopted onepipeline
-0.80.1 among them — reads and projects plans through the linked onetaskgraph crates and
+0.80.2 among them — reads and projects plans through the linked onetaskgraph crates and
 ignores `ONETASKGRAPH_BIN`, so no host seam can
 inject a refused read into the store in process any more, and
 `store::a_refusal_of_the_member_read_the_copy_or_the_project_read_stops_the_retry_timer`
@@ -600,7 +600,7 @@ prompt first retry to a one-minute ceiling instead of retrying about four times 
 resets that schedule once it recovers, and retries until the projection lands; stopping or
 settling stays prompt during a long backoff. Since
 https://github.com/nickderobertis/onepipeline/pull/285, in force on the adopted onepipeline
-0.80.1, that schedule answers only the failures a retry can change. A projection the store
+0.80.2, that schedule answers only the failures a retry can change. A projection the store
 **refuses**, by the `class` of its own failure document, is reported once and put on no
 timer: the driver's line and the finding the run raises each carry the store's `class` and
 `kind` and say the projection is attempted again when the run's graph next changes. A
@@ -945,7 +945,7 @@ The tracked-plan contract is the published `onepipeline` plan schema, and declar
 a `schema_version` is required: a plan that omits it, or declares a number this
 build does not read, is refused at launch naming the ones it does. **Write version
 3** — what every plan here declares, and the one the fields below describe. The
-adopted `onepipeline` 0.80.1 also still reads 2 and 1, so an older plan file an
+adopted `onepipeline` 0.80.2 also still reads 2 and 1, so an older plan file an
 operator kept a copy of launches rather than failing; that is a courtesy to old
 copies, not a version to write. There is no compatibility ladder to read a version
 number against any more — the node shapes this repository grew through its own
@@ -1127,7 +1127,7 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   not claim one. A member's own `task` **replaces** it, so a member that claims one
   must interpolate it back in to learn which run it is on. `onepipeline` does also
   export `ONEPIPELINE_RUN_ID`, set to the run id, to an observer member — measured
-  against onepipeline 0.80.1 by dumping both sides of a monitor member's whole
+  against onepipeline 0.80.2 by dumping both sides of a monitor member's whole
   environment on a real launch. `tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` re-takes
   that measurement on the judge side of a real observer member every gate run, and
   `tests/e2e/launch_monitor_observer/test_monitor_cursor_e2e.py` on a monitor member's agent side, so a
@@ -1536,7 +1536,7 @@ from the end of a harness transcript, and named its identity against
 The channel directory is the run's own, and the judge command composes it from
 `ONEPIPELINE_RUNS_DIR` and `ONEPIPELINE_RUN_ID`, which the engine exports to both sides
 of an observer member — `ONEPIPELINE_RUN_ID` set to the run id, measured against
-onepipeline 0.80.1 in the judge command's own environment on a real launch, and re-taken
+onepipeline 0.80.2 in the judge command's own environment on a real launch, and re-taken
 on every gate run by `tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py`.
 
 | Frame | What the binding does |
@@ -1708,7 +1708,7 @@ once](#a-planner-writes-a-reply-once).
 `ONEPIPELINE_RUN_ID` names the run to ask on, and an unset one is refused rather than
 guessed at. What sets it depends on the launch, measured per shape by
 `tests/ask_seam/launch/test_launch_ask_seam_e2e.py`: **every node dispatch of a run carries it
-as of onepipeline 0.80.1**, composed where the dispatch is made, so all three `just
+as of onepipeline 0.80.2**, composed where the dispatch is made, so all three `just
 orchestrate` shapes reach a worker that can ask. That names the release in force rather
 than the one it arrived in — `executor::dispatch_env` has composed the pair since
 https://github.com/nickderobertis/onepipeline/pull/76, and `AGENTS.md` carries that
@@ -1985,7 +1985,7 @@ events stay the record of what an edit became, and are where a `queued` one is r
 **A `queued` receipt resolves even across a driver's death.** A driver claims an
 envelope — moves the channel's command cursor past it — before it answers it, so one
 that died between the two used to take the claimed edits and notes with it. On the
-adopted onepipeline 0.80.1 every record an envelope's effects leave — `edit-committed`,
+adopted onepipeline 0.80.2 every record an envelope's effects leave — `edit-committed`,
 `command-accepted`, `edit-rejected` and `note-shown` — names that `envelope`, and `just
 orchestrate --adopt` replays each envelope the dead driver claimed and never answered
 exactly once: one the journal already shows applied is answered from that record rather
@@ -2542,8 +2542,8 @@ The accepted commands are:
 | `requeue` | `id`; optional `amend`: partial node overrides | Return a parked node to the desired frontier, optionally amending it (for example `max_turns`, or a `resume` pin onto the preserved branch). Refused while that node's dispatch is still in flight. |
 | `attest` | `ref` | Complete a currently ready, waiting human action. |
 | `complete` | `reason` | Journal the planner's completion request independently of graph mutation. |
-| `note` | `id`; `addressee`: `worker`, `supervisor` or `both`; `text`; optional `criterion`; optional `deliver`: `live`, `turn-end` or `next`; optional `persist`; optional `delivery_timeout_seconds` | The **one** manager-note op. Deliver one note into the node's dispatch, to whichever party of it is speaking, with the other party receiving it in that party's response — and, where no turn took it, carry it to the node's next dispatch. `deliver` decides whether live delivery is attempted and `persist` decides whether the note is composed into the node's next dispatch; they are two axes rather than one, and neither answers the other's question. A `criterion` it carries enters the acceptance criteria the judge of the conversation it reached decides against; it binds that conversation and not the node's stored bar, so `amend` is still the op for a ruling that has to survive a re-dispatch. `addressee` is required and never guessed — a judge handed an update to the *worker's* task must not take the worker's job on. Blank `text` is refused, an `id` naming a node the graph cannot reach is refused, and so is a note that would reach nobody, each naming which it is. See [Carried planner context](#carried-planner-context) for what each `deliver` value does, its combinations with `persist`, and the dispositions the op answers with. |
-| `withdraw-note` | `envelope`; `index`; `reason` | Take back a `note` before any turn reads it, named by the id of the envelope it was sent in and its 0-based position among that envelope's commands. The adopted engine withdraws only a note **carried** and not yet composed into a dispatch: it records `note-withdrawn`, composes the next dispatch without that note, and answers the note's own command `refused` with this `reason`. A note still waiting in its live conversation, one a turn already took, one already composed or withdrawn, a blank `reason`, and a position holding no note are each refused, naming why, and change nothing. Never held behind a note awaiting its answer. |
+| `note` | `id`; `addressee`: `worker`, `supervisor` or `both`; `text`; optional `criterion`; optional `deliver`: `live`, `turn-end` or `next`; optional `delivery_timeout_seconds`; optional `persist` | The **one** manager-note op. Deliver one note into the node's dispatch, to whichever party of it is speaking, with the other party receiving it in that party's response — and, where no turn took it, carry it to the node's next dispatch. Under `deliver: live`, the default, the note **interrupts** the addressed party's running turn and redirects it, keeping the work that turn already did; it waits for the turn's end only where that turn cannot be interrupted. `turn-end` never interrupts, `next` makes no live attempt, `delivery_timeout_seconds` bounds how long the note may wait untaken, and `persist` decides whether a note no turn took is composed into the node's next dispatch. A `criterion` it carries enters the acceptance criteria the judge of the conversation it reached decides against; it binds that conversation and not the node's stored bar, so `amend` is still the op for a ruling that has to survive a re-dispatch. `addressee` is required and never guessed — a judge handed an update to the *worker's* task must not take the worker's job on. Blank `text` is refused, an `id` naming a node the graph cannot reach is refused, and so is a note that would reach nobody, each naming which it is. See [Carried planner context](#carried-planner-context) for the deliveries, the `turn` a delivered note records and the dispositions the op answers with. |
+| `withdraw-note` | `envelope`; `index`; `reason` | Take back the note at command position `index` of envelope `envelope` before anything has taken it: a live note no turn has taken yet, or a carried note not yet composed into a dispatch. The withdrawn note's own command is answered `refused` carrying `reason`, and no turn is presented with it. A note a turn already took, one already answered or composed into a dispatch, and one already withdrawn are refused naming why, and so are a blank `reason` and an envelope or note that does not exist. Never held behind any note. |
 | `amend` | `id`; `text` | Replace the binding amendment that becomes part of the node's effective task for its next and later dispatches. Blank text and a node already settled `done` are refused. |
 | `settle` | `id`; `outcome`: `done` or `failed`; `evidence`; optional `landing`, `release` | Settle a node at what an operator can see it reached, from evidence this run never observed — the case being a change that merged while the node's own record read `failed`. It mutates no edge and moves no lineage: the node keeps its id and its dependents, and only its recorded state moves, which is the thing that was wrong. `evidence` is required and never blank, and is journalled as the reason the node is in the state it is. A settle that changes nothing is refused as a duplicate; a node that settled *something else* is exactly what it is for, and the earlier settlement stays in the journal beside it. `landing` names **where the work landed** — the commit its change reached its base at, or the change request a person reads it in, either being a spelling `onevcs` resolves. It is the authoritative landing for manager-facing results and release correlation, with the stated-commit or stated-change-request evidence tier instead of a re-read of the superseded branch. An envelope without `landing` keeps the prior settlement behavior, and a present but unusable landing is refused rather than recorded. `release` may accompany a landing with the release target and semantic version that carry it; the engine records that attribution against the stated landing, while an invalid version is refused. |
 | `rework` | `id`; `reason`; `instruction`; optional `comments` (each `id` and `url`), `title`, `replacement` | Rework a lifecycle node settled `done` as an unlanded review draft, on its own branch and change request: supersede it as a `retry` would, with its branch pinned to the one its settlement recorded and its task followed by a `## Rework` section, rewiring its direct dependents onto the replacement, which stay `done`. The replacement adopts the change request already open from that branch, so reviewers see the same draft move. `title` retitles that change request; blank `reason` or `instruction` is refused. |
@@ -3781,7 +3781,7 @@ the contract.
 
 **A landing a manager starts is owed the same way, from before it acts until it closes.**
 `just publish-branch`, `just repo-recover` and `just integrate` run the engine's own landing
-verbs, which on the adopted onepipeline 0.80.1 register each landing as supervised work of the
+verbs, which on the adopted onepipeline 0.80.2 register each landing as supervised work of the
 session that started it — in the live flow of that session the verb runs inside, or in a
 flow registered for that landing alone — before drafting, preparing or pushing anything,
 and print it:
@@ -4257,63 +4257,94 @@ engine collapsed `context` into it and removed `context` from the reply envelope
 outright, so an envelope still carrying that op is refused by name at the wire. The
 field set, each field's default, and the dispositions the op answers with are declared
 once, on `onepipeline::channel::Command::Note`; everything below derives from that
-declaration as it stands in onepipeline 0.80.1 rather than restating it independently.
+declaration as it stands in onepipeline 0.80.2 rather than restating it independently.
 
 A note carries `id`, a required `addressee` of `worker`, `supervisor` or `both`,
-`text`, and four optional fields: a `criterion`, a `deliver` of `live`, `turn-end` or
-`next` defaulting to `live`, a `persist` boolean defaulting to `true`, and a
-`delivery_timeout_seconds` with no default.
+`text`, and four optional fields: a `criterion`; a `deliver` of `live`, `turn-end` or
+`next`, defaulting to `live`; a `delivery_timeout_seconds`, with no default; and a
+`persist` boolean defaulting to `true`.
 
-**`deliver` says how the running turn is approached.** `live` **interrupts** the
-addressed party's running turn and opens its replacement on the note, or, where that
-turn cannot be interrupted, reaches it as it ends; `turn-end` reaches the running turn
-only as it ends and never interrupts it; `next` attempts no live delivery at all. In the
-table below `live` stands for `turn-end` too, since the two differ only in whether the
-running turn is interrupted.
+**A live note interrupts the turn it is addressed to.** Under `deliver: live`, the
+default, the party the note addresses — worker or supervisor — has its running turn
+interrupted and redirected: the work that turn already did stands, and its replacement
+opens on the note, so a correction reaches a turn that would otherwise run for hours as
+soon as it is sent. The note waits for the turn's end only where that turn **cannot be
+interrupted** — a turn opened without turn control, a harness whose control channel
+refuses the redirect, any turn on Windows. Each delivery records which happened, as the
+note's `turn`:
 
-**`deliver` and `persist` are two axes, not one.** `deliver` decides whether live
-delivery is attempted; `persist` decides whether the note is composed into the node's
-next dispatch. Neither answers the other's question, and saying so is load-bearing:
-`deliver: next` and `persist: true` both read as "on the next dispatch", and a reader
-who conflates them gets this contract wrong. `persist: true` composes the note into
-the node's next dispatch **if and only if the note did not reach a running turn** —
-read it as "do not lose this" rather than as "send it twice". Their four combinations:
+- `turn: interrupted` — the addressed party's live turn was interrupted and redirected
+  with the note.
+- `turn: turn-end` — the note reached the party when its turn ended.
+
+`turn` sits beside `reached` on the `note-delivered` operation of the note's
+`edit-committed` record, and on the note's result in the envelope's outcome on the
+channel's `command-outcomes` queue, exactly where the note reached the `worker` or the
+`supervisor`; a record written by an engine before 0.80.0 carries none.
+
+**When a note waits instead.** Three ways, each chosen by the sender or the turn:
+
+- `deliver: "turn-end"` never interrupts: the note reaches the party once its current
+  turn ends. It is for a note that does not affect the work in progress — context for
+  the next turn rather than a correction to this one.
+- `deliver: next` makes no live attempt at all: the note is composed into the node's
+  next dispatch.
+- a `live` note to a turn that cannot be interrupted waits for that turn's end, and
+  records `turn: turn-end`.
+
+**`delivery_timeout_seconds` bounds the wait.** Absent, a note waits for as long as the
+dispatch runs. Given, it is measured from the offer, and a note no turn took within it
+is withdrawn untaken; `persist` then decides what follows — `true` records it `carried`,
+with a reason naming the deadline, into the node's next dispatch, and `false` refuses it
+with an `edit-rejected` naming the deadline. That holds for a `turn-end` note, and for a
+`live` one whose turn could not be interrupted, alike. `0` is refused at the envelope,
+and so is a deadline beside `deliver: next`, which waits on nothing.
+
+**`deliver` and `persist` are two axes, not one.** `deliver` decides how live delivery
+is attempted; `persist` decides whether a note no turn took is composed into the node's
+next dispatch. Neither answers the other's question: `deliver: next` and `persist: true`
+both read as "on the next dispatch", and a reader who conflates them gets this contract
+wrong. `persist: true` composes the note into the node's next dispatch **if and only if
+the note did not reach a running turn** — read it as "do not lose this" rather than as
+"send it twice". Their combinations:
 
 | `deliver` | `persist` | what happens |
 | --- | --- | --- |
-| `live` | `true` (**the default**) | the running turn is attempted; where it took the note nothing is owed forward, and where it did not the note is composed into the node's next dispatch and is **not** a refusal |
-| `live` | `false` | the running turn is attempted; where it took the note that is the whole of the delivery, and where it did not the note is **refused** — the combination to ask for when that refusal is what you need |
-| `next` | `true` | the running turn is not interrupted, so the note never reaches one and is always composed into the node's next dispatch |
-| `next` | `false` | no live delivery is attempted and the note composes forward into nothing, so it reaches nobody whatever the run does, and is refused at the envelope before the run is reached |
-
-**`delivery_timeout_seconds` bounds the wait for a turn to take the note**, measured
-from the offer; absent, a note waits for as long as the node's dispatch runs. A note no
-turn took by then is withdrawn whole and `persist` decides what follows: `true` records
-it `carried` with a reason naming the deadline, and `false` refuses it, naming the
-deadline. It is refused at the envelope when it is `0` and beside `deliver: next`, which
-waits on no turn. `just status` shows a pending note's deadline beside its delivery.
+| `live` (**the default**) | `true` (**the default**) | the running turn is interrupted, or reached at its end where it cannot be; where a turn took the note nothing is owed forward, and where none did the note is composed into the node's next dispatch and is **not** a refusal |
+| `live` | `false` | as above, and where no turn took the note it is **refused** — the combination to ask for when that refusal is what you need |
+| `turn-end` | `true` or `false` | the running turn is never interrupted; the note reaches the party when its turn ends, and where no turn took it `persist` decides between carried and refused as above |
+| `next` | `true` | no live attempt, so the note never reaches a running turn and is always composed into the node's next dispatch |
+| `next` | `false` | no live attempt and nothing composed forward, so the note reaches nobody whatever the run does, and is refused at the envelope before the run is reached |
 
 The default is `deliver: live` with `persist: true` because it is the combination
-that attempts the running turn *and* cannot leave the note nowhere. It is exactly
-what the removed `context` op's `auto` delivery meant, and `auto` is gone with it:
-it named a combination of both axes rather than a point on the delivery one.
+that reaches the running turn soonest *and* cannot leave the note nowhere.
 
 **A note that would reach nobody is refused, naming what left it nowhere to go.**
 One rule, checked wherever it can be decided — at the envelope, where `deliver: next`
 with `persist: false` reaches nobody by construction; and at delivery, where only the
-run can decide it, which is `deliver: live` with `persist: false` and no turn that
-took it. A blank `text` and an `id` naming a node the graph cannot reach are refused
-too, each naming which it is.
+run can decide it, which is `persist: false` with no turn that took it, its deadline
+passed included. A blank `text` and an `id` naming a node the graph cannot reach are
+refused too, each naming which it is.
+
+**`withdraw-note` takes back a note nothing has taken.** `{"op": "withdraw-note",
+"envelope": <id>, "index": <position>, "reason": <text>}` names the note at command
+position `index` of envelope `envelope`, and is never held behind any note. It
+withdraws a **live note no turn has taken yet** — whether it is being offered to its
+conversation, queued behind an earlier note to the same node, or held unjudged behind
+another envelope — and a **carried note not yet composed into a dispatch**, which the next
+dispatch is then composed without, every other note carried beside it staying. The
+withdrawn note's own command is answered `refused`, carrying the withdrawal's reason,
+and no turn is presented with it; the run records the `note-withdrawn` operation on the
+withdrawal's `edit-committed`, `from: live` or `from: carried`. A note **already taken,
+answered, or composed into a dispatch cannot be withdrawn**: the withdrawal is refused
+naming the note's disposition, and so is one already withdrawn, a blank `reason`, and an
+envelope or note that does not exist.
 
 **What the op answers with is the disposition**, and under the default it is the only
 way to learn which of the two things happened. Five words the run records —
 
 - `worker` — the worker's live turn took it.
 - `supervisor` — the supervisor's live turn took it.
-
-  Each of those two also records the note's `turn`: `interrupted` where the turn was
-  interrupted and its replacement opened on the note, `turn-end` where the note reached
-  the turn as it ended.
 - `judged-with` — the supervisor's decision was re-taken with it in hand and
   completed, carrying that completion reason, so no further worker turn took it.
 - `queued` — no turn was live, so the next turn *of that conversation* to open takes
@@ -4326,8 +4357,8 @@ was accepted durably without the reconciler having answered within the reply tim
 That is the engine's `queued` receipt rather than a refusal, and **never** an
 instruction to send the note again. `just channel-reply`'s receipt says `applied` or
 `queued` and never which of the five a note reached, so the recorded word is read off
-the run: the `reached` of the note's operation in its `edit-committed`
-event, which `just monitor` renders.
+the run: the `reached` of the note's operation in its `edit-committed` event, which
+`just monitor` renders, beside its `turn`.
 
 The first four are the note reaching the running dispatch's conversation and `carried`
 is the note reaching no turn of it; under the default those two are the only ways one
@@ -4336,55 +4367,79 @@ same biconditional `persist` is defined by, and telling them apart is the whole 
 they are materially different to whoever sent the note.
 
 **A note goes to whichever party of the node's dispatch is speaking**, through the
-delivery seam `oneagentgraph` publishes rather than through a bare interrupt, so the
-party that is live takes it and the other party receives it with that party's
-response. A `criterion` it carries enters the acceptance criteria that conversation's
-judge decides against. That is what `context` could never do, and it is the incident
-this collapse was made from: a manager's approval sent as a `context` note rendered
-into the worker's task alone, the judge never saw it, and the node was failed for
-omitting what the manager had approved.
+delivery seam `oneagentgraph` publishes, so the party that is live takes it and the
+other party receives it with that party's response. A `criterion` it carries enters the
+acceptance criteria that conversation's judge decides against. That is what `context`
+could never do, and it is the incident this collapse was made from: a manager's
+approval sent as a `context` note rendered into the worker's task alone, the judge never
+saw it, and the node was failed for omitting what the manager had approved.
 
-**While a note waits on a busy turn, the run goes on recording.** A turn that cannot be
-interrupted — a `turn-end` note's, or a `live` note's on a harness that cannot be steered
-mid-turn — takes the note only as it ends, and the engine
-delivers it off the run's single writer: heartbeats and turn activity keep reaching the
-journal and `just status` keeps reporting the run live for as long as the turn runs, and
-once it ends the run records the delivery — the note's `edit-committed` — and then its
-`note-shown`. `tests/e2e/launch_monitor_observer/test_live_note_leaves_the_run_journalling_e2e.py` drives it
-through `just channel-reply`.
+**A note waits only behind its own receiver.** An envelope claimed behind one awaiting a
+live note's answer is held, in claim order, only when it names a node that envelope
+names — a command names the node its `id` names and those in its `deps` — so notes to
+several nodes, every other command, and findings proceed independently per node rather
+than waiting behind one busy receiver, and an envelope naming no node, a `complete` or
+a `finding` about no node among them, is never held. While a note is delivering, the run
+goes on recording: heartbeats and turn activity keep reaching the journal and `just
+status` keeps reporting the run live, and once a turn takes the note the run records
+its `edit-committed` and then its `note-shown`.
+`tests/e2e/launch_monitor_observer/test_live_note_leaves_the_run_journalling_e2e.py`
+drives a `live` note that waits on a turn that cannot be interrupted through `just
+channel-reply` and `just status`, and
+`tests/e2e/launch_monitor_observer/test_live_note_interrupts_a_controlled_turn_e2e.py`
+drives one that interrupts, and a `turn-end` one that waits;
+`tests/ask_seam/channel_reply/test_channel_reply_e2e.py` drives an envelope applied beside
+a note no turn takes, a deadline passed under each `persist`, `just status` reporting a
+note delivering until its deadline, and `withdraw-note` taking a note back live and
+carried.
 
-**A `cancel` does not wait behind a note its node never answers.** An envelope naming a
-node is held, in claim order, behind a live note to that node still awaiting its
-answer, so a worker wedged in one turn used to hold every later edit to its node —
-the `cancel` meant to stop it included. On the adopted onepipeline 0.80.1 a `cancel`
-its envelope would apply preempts that outstanding live note: each live note into the
-node not yet taken is answered `refused` with a reason naming the cancelling envelope,
-and journalled through `edit-rejected` like any refused envelope. Envelopes naming the node that were claimed
+**What `just status` says about a note it has not answered.** A claimed envelope whose
+note has no outcome yet is listed under `claimed with no outcome`, and on a run a live
+driver holds, each one says where it stands:
+
+- `delivering a live note to <node> since <time>` — the driver is offering the note to
+  that node's conversation now, `until its deadline <time>` when it carries a
+  `delivery_timeout_seconds`;
+- `held behind envelope <id>'s note to <node> since <time>` — the envelope waits behind
+  an earlier envelope's note to the same node, and is judged once that note is answered.
+
+On a run nothing drives, the same envelopes are reported as answered by **the run's
+next driver** before anything it claims itself: their submitters have been told nothing
+yet, and nothing is lost. `status --json` carries the same reading as each envelope's
+`delivery`.
+
+**A `cancel` does not wait behind a note its node never answers.** On the adopted
+onepipeline 0.80.2 a `cancel` its envelope would apply preempts each live note into the
+node not yet taken: the note is taken back so no turn is presented with it, answered
+`refused` with a reason naming the cancelling envelope, and journalled through
+`edit-rejected` like any refused envelope. Envelopes naming the node that were claimed
 before the cancel are reconciled ahead of it in claim order, a held live note to it
 refused the same way, and then the cancel interrupts the dispatch. A cancel its own
 envelope refuses preempts nothing, and onepipeline's `docs/contract-divergences.md`
-states the rule in full.
+states the rule in full. **That is not a way to deliver a correction**: a live note
+already interrupts the running turn, so `cancel` and `requeue` are for when the running
+worker must be judged against a changed bar, never for getting a correction to it
+sooner.
 
-**What it deliberately cannot do.** Reaching the running turn and being carried into
-the next dispatch are mutually exclusive under `persist`'s biconditional, so there is
-**no** way to do both. A correction that has to reach the live turn *and* still bind
-the node's next dispatch is a ruling that survives a re-dispatch, and `amend` is the
-op for that. The note is not given a second, weaker way to say what `amend` already
-says properly.
+**Reaching the live turn and binding the next dispatch are different levers.** Under
+`persist`'s biconditional a note that reached the running turn is not carried, so a
+correction that has to reach the live turn *and* still bind the node's next dispatch is
+a ruling that survives a re-dispatch: send the note for the live turn and `amend` the
+node for every dispatch after it. The note is not given a second, weaker way to say what
+`amend` already says properly.
 
-**A carried note lasts one dispatch, and is its `text` and nothing else.** It is added
-to the node's `context` on the running graph, rendered under the `## Planner context`
-section of the task that node dispatches, and consumed when that dispatch takes it.
-Every note carried to the node before that dispatch is composed there, in carry order, one
-paragraph each, and a `withdraw-note` removes exactly its own. Its `criterion` is **not**
-carried with it, because a criterion binds the conversation that read the note and a
-carried note reached none: what the next dispatch sees is prose under a heading
-declaring it adds no acceptance criteria. That is the removed op's behaviour exactly, so
-a `carried` disposition on a note that carried a criterion is the signal to `amend` the
-node instead. A note reports state observed while one
-attempt was running, so it is stale the moment the next attempt moves; a note that
-still matters is one somebody attaches again against what the run now shows. That is
-what stops a node accumulating instructions nobody re-read.
+**A carried note is its `text` and nothing else, and carried notes accumulate.** It is
+recorded on the node's `context` on the running graph and rendered under the `## Planner
+context` section of the task that node next dispatches; every note carried to the node
+before that dispatch is composed there in carry order, one paragraph each, and the
+dispatch that composes them consumes them. Its `criterion` is **not** carried with it,
+because a criterion binds the conversation that read the note and a carried note reached
+none: what the next dispatch sees is prose under a heading declaring it adds no
+acceptance criteria. So a `carried` disposition on a note that carried a criterion is
+the signal to `amend` the node instead. A note reports state observed while one attempt
+was running, so it is stale the moment the next attempt moves; a note that still matters
+is one somebody attaches again against what the run now shows, and one made obsolete
+before the next dispatch is taken back with `withdraw-note`.
 
 Two more things do not carry, for the same reason they never did. A carried note follows
 a **node id**, so a `retry` replacement — a new id — starts with none, and a note

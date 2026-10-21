@@ -1,7 +1,10 @@
-"""A live note waiting on a busy turn leaves the run recording everything else.
+"""A live note waiting on a turn that cannot be interrupted leaves the run recording.
 
-A note sent to a running dispatch waits for the conversation to take it, and a harness
-that cannot be steered mid-turn takes it only when its current turn ends. The engine used
+A `live` note — the default — interrupts the addressed party's running turn where that
+turn can be interrupted (`test_live_note_interrupts_a_controlled_turn_e2e.py` drives that),
+and waits for the turn to end where it cannot, which the run records as `turn: turn-end`.
+This is the second case: the worker's turn here is one the pinned oneharness opens no
+in-flight turn for, so the note waits through all of it. The engine used
 to wait on that answer on the run's single writer, so for as long as the turn ran the
 run's journal took nothing: no heartbeat, no turn activity, no checkpoint — and a healthy
 run read as an abandoned one, which invites exactly the wrong intervention
@@ -16,7 +19,8 @@ Everything between the recipes and the model is real — the engine, `oneagentgr
 onejudge conversation, the `oneharness` CLI and its stream. The paid model is
 `tests/e2e/fake_backend.py`, whose worker turn here reports a tool call every
 `ACTIVITY_INTERVAL_MS` for `ACTIVITY_CALLS` calls before answering, through the real
-oneharness stream, and takes a note only when that turn ends; `tests/e2e/fake_codex.py`
+oneharness stream, and cannot be interrupted, so it takes a note only when that turn ends;
+`tests/e2e/fake_codex.py`
 stands in at the provider binary for the members that reach one there.
 
 llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] One launch of the
@@ -51,6 +55,7 @@ from fake_backend import (
     AGENT_ACTIVITY_MARKER_ENV,
 )
 from harness_indirections import established_indirections
+from planner_channel import BUS_CONFIG
 from project_fixtures import helper, project_from_plan
 from waits import timeout as e2e_timeout
 
@@ -118,6 +123,8 @@ class Journey(NamedTuple):
     sent: subprocess.CompletedProcess[str]
     waiting: WhileWaiting
     journal: list[Event]
+    #: The engine's outcome for the note's envelope on the channel's `command-outcomes`.
+    outcome: dict[str, object]
 
 
 def _environment(root: Path, oneharness_bin: str) -> dict[str, str]:
@@ -198,6 +205,34 @@ def _note_recorded(journal: list[Event]) -> bool:
         == "note"
         for event in journal
     )
+
+
+def _outcome(root: Path, environment: dict[str, str], reply: int) -> dict[str, object]:
+    """The engine's outcome for envelope `reply`, read through the bus's own `subscribe`."""
+    streamed = subprocess.run(
+        [
+            "onemessagebus",
+            "subscribe",
+            "command-outcomes",
+            "--until",
+            json.dumps({"field": "id", "equals": reply}),
+            "--timeout",
+            "60",
+            "--config",
+            str(BUS_CONFIG),
+            "--transport-dir",
+            str(root / "runs" / RUN_NAME / "channel"),
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+    assert streamed.returncode == 0, streamed.stderr
+    # The bus wraps each streamed record with its position in the queue.
+    return cast(dict[str, object], json.loads(streamed.stdout.splitlines()[-1])["record"])
 
 
 def _until(what: str, condition: Callable[[], bool], seconds: float) -> None:
@@ -293,7 +328,12 @@ def journey(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> It
             lambda: any(event.get("kind") == "node-settled" for event in _journal(root)),
             300,
         )
-        yield Journey(sent=sent, waiting=waiting, journal=_journal(root))
+        yield Journey(
+            sent=sent,
+            waiting=waiting,
+            journal=_journal(root),
+            outcome=_outcome(root, environment, json.loads(sent.stdout)["reply"]),
+        )
     finally:
         just("stop", RUN_NAME)
 
@@ -332,6 +372,18 @@ def test_the_note_is_delivered_when_the_turn_ends_and_then_shown(journey: Journe
     assert operations[0]["kind"] == "note-delivered", payload
     assert operations[0]["text"] == NOTE, payload
     assert operations[0]["reached"] == "worker", payload
+    # A live note to a turn that cannot be interrupted is recorded as reaching its end,
+    # never as interrupting it, and the reply's own outcome on the channel says the same.
+    assert operations[0]["turn"] == "turn-end", payload
+    # The busy turn can outlast the reply's own wait, which then returns `queued`; either
+    # way the channel's outcome for the id the receipt names is the decision.
+    receipt = json.loads(journey.sent.stdout)
+    assert receipt["state"] in {"applied", "queued"}, receipt
+    assert journey.outcome["id"] == receipt["reply"], (journey.outcome, receipt)
+    results = cast(list[dict[str, object]], journey.outcome["results"])
+    assert [(result["op"], result["outcome"], result.get("turn")) for result in results] == [
+        ("note", "applied", "turn-end")
+    ], journey.outcome
 
     shown = next(
         (

@@ -11,14 +11,19 @@ import sys
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
-    from fake_backend import BusyTurn
+    from fake_backend import BusyTurn, ControlledTurn
 
 
 def answer(
-    argv: list[str], text: str, *, lost: bool = False, activity: BusyTurn | None = None
+    argv: list[str],
+    text: str,
+    *,
+    lost: bool = False,
+    activity: BusyTurn | None = None,
+    controlled: ControlledTurn | None = None,
 ) -> int:
     environment = {**os.environ, "FAKE_CODEX_ANSWERS": json.dumps([text])}
-    if lost or activity is not None:
+    if lost or activity is not None or controlled is not None:
         raise ValueError("this brief fixture scripts complete Codex turns only")
     failure = environment.get("FAKE_BRIEF_FAILURE_MARKER")
     if failure and failure in backend._prompt(argv)[1]:

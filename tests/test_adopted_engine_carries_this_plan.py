@@ -873,10 +873,10 @@ DRAFT_HOLD_LANDINGS = (
     ),
 )
 
-#: The engine landing of the publication-repairs plan, carried by the adopted 0.80.1: it
-#: links the onevcs 0.56.3 whose publication keeps one holder record per publication,
-#: resumes an unchanged green change at its hosted checks, stops a push its publication
-#: cancels, answers an unanswered visibility lookup as unavailable rather than a
+#: The engine landing of the publication-repairs plan, carried by every adopted engine
+#: since 0.80.1: it links the onevcs 0.56.3 whose publication keeps one holder record
+#: per publication, resumes an unchanged green change at its hosted checks, stops a push
+#: its publication cancels, answers an unanswered visibility lookup as unavailable rather than a
 #: disclosure, continues past clean base merges, and names a pool's ineligible idle slots —
 #: and reads two of those shapes itself, settling a publication held on
 #: `boundary::Unavailability::HostVisibility` as that unavailable check and naming
@@ -889,6 +889,34 @@ PUBLICATION_REPAIRS_LANDINGS = (
         change_request=1027,
         commit="04aa5d290c8d9a4818a107a375debe5322b54bac",
         did="link the onevcs and onetaskgraph releases carrying the publication repairs",
+    ),
+)
+
+#: The engine landings of the plan that makes manager notes reach live turns: a live note
+#: held per receiver, so findings and other nodes' commands never wait behind it; a `live`
+#: note interrupting the addressed party's turn, a `turn-end` delivery, a delivery deadline
+#: and the `turn` on a delivered note; and the withdrawal of a live note no turn has taken.
+#: `tests/ask_seam/channel_reply/test_channel_reply_e2e.py` and
+#: `tests/e2e/launch_monitor_observer/test_live_note_leaves_the_run_journalling_e2e.py`
+#: drive them through the recipes on this host.
+INTERRUPTING_NOTES_LANDINGS = (
+    Landing(
+        node="op-note-holds",
+        change_request=1026,
+        commit="c71ceec6b4cafbaf4ce9fde60f7a0ce418def1f0",
+        did="hold live notes per receiver and never hold findings behind them",
+    ),
+    Landing(
+        node="op-interrupting-notes",
+        change_request=1048,
+        commit="b426e011df65ef395a7ae510e2578cb74a5a6898",
+        did="interrupt live turns with manager notes and bound or withdraw their delivery",
+    ),
+    Landing(
+        node="op-live-withdraw",
+        change_request=1054,
+        commit="a50f7fb979d2946b2e8a32d89d5a65b86f797ac1",
+        did="withdraw a live manager note while its delivery is awaited",
     ),
 )
 
@@ -943,6 +971,7 @@ LANDINGS = (
     *FOLLOW_UP_FIXES_LANDINGS,
     *DRAFT_HOLD_LANDINGS,
     *PUBLICATION_REPAIRS_LANDINGS,
+    *INTERRUPTING_NOTES_LANDINGS,
 )
 
 

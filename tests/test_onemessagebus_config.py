@@ -76,6 +76,9 @@ REFUSED = {
     "amend": "what a node is judged against is a decomposition decision the planner owns",
     "note": "a note may bind a criterion the node's judge decides against, which is the "
     "planner's decision rather than an observation",
+    "withdraw-note": "taking back a note the planner sent overrules the planner's own "
+    "correction to a running dispatch, which is the planner's decision rather than an "
+    "observation",
     "settle": "settling a node from evidence declares an outcome this run never observed, "
     "which is the planner's decision rather than an observation",
     "rework": "starting work on a reviewer's feedback answers its reviewers with new "

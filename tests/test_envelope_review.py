@@ -441,6 +441,36 @@ def test_a_note_and_an_op_carrying_no_task_prose_are_passed_over() -> None:
     assert refusal(unjudged, ScriptedJudge()) is None
 
 
+def test_the_note_delivery_fields_and_a_withdrawal_carry_nothing_for_the_bar() -> None:
+    """A `turn-end` note, a delivery deadline and a `withdraw-note` state no criteria.
+
+    `deliver`, `delivery_timeout_seconds` and `persist` say how a note travels, and a
+    `withdraw-note` names an envelope position and the planner's reason for taking a note
+    back; none of them is task prose, so this bar passes them over and leaves their shape
+    to the engine. A note's `criterion` is still read whatever its delivery.
+    """
+    unjudged = _envelope(
+        {
+            "op": "note",
+            "id": "work",
+            "addressee": "worker",
+            "text": "run `just gate` first",
+            "deliver": "turn-end",
+            "delivery_timeout_seconds": 600,
+            "persist": False,
+        },
+        {"op": "withdraw-note", "envelope": "3", "index": 0, "reason": "run `just gate`"},
+    )
+
+    assert reviewables(unjudged) == []
+    assert refusal(unjudged, ScriptedJudge()) is None
+
+    bounded = {**_note("x", "The required checks pass."), "deliver": "turn-end"}
+    said = refusal(_envelope(bounded))
+    assert said is not None
+    assert said.startswith("the criterion of the note for node 'work':"), said
+
+
 def test_a_node_nothing_dispatches_from_is_passed_over() -> None:
     """A node declaring `expects_no_diff` settles without a worker, so no judge reads it.
 

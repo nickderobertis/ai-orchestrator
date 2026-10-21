@@ -26,7 +26,14 @@ whole output is the engine's receipt and exit status. The journeys:
   read from a file and one read from stdin are both taken;
 * an edit the driver has not reconciled within the reply's wait returns `queued` inside
   that bound, says it is not to be sent again, and stays on the run's command queue;
-* an undeclared author, and the monitor naming an op it is not granted, are refused;
+* an undeclared author, and the monitor naming an op it is not granted, are refused — a
+  `withdraw-note` with the reason `config/onemessagebus.yaml` declares for it;
+* a `deliver: "turn-end"` note carrying a `delivery_timeout_seconds` passes the bar and
+  is reported delivering by `just status` until a `withdraw-note`, which passes the bar
+  too, takes it back live and its envelope is answered refused for the withdrawal;
+* an envelope naming another node is applied beside a live note no turn takes, a note
+  passing its `delivery_timeout_seconds` untaken is carried or, under `persist: false`,
+  refused naming the deadline, and a carried note is taken back by a `withdraw-note`;
 * a novel whole task the judged review refuses is refused whole with that review's
   findings, after exactly one judged turn;
 * a novel whole task whose judged turn answers nothing is not applied, because an unjudged
@@ -337,23 +344,18 @@ def settled(tmp_path: Path, request: pytest.FixtureRequest) -> Iterator[Replying
         _just("stop", run, environment=launched.environment, seconds=60)
 
 
-@pytest.fixture(scope="module")
-def driven(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Iterator[Replying]:
-    """A run a live driver holds for as long as the journeys need it.
+def _held(tmp_path: Path, oneharness_bin: str, run: RunId) -> Iterator[Replying]:
+    """A run a live driver holds, its one node's worker turn waiting at the stand-in's gate.
 
-    Its one node is dispatched, and the worker's turn waits at the stand-in's gate until
-    the fixture releases it, so the driver stays alive reconciling the run's channel. One
-    run serves every journey that needs a driver, each reading what it changed against
-    what the run held before it sent anything.
+    The node is dispatched, and the worker's turn waits at the gate until this releases
+    it, so the driver stays alive reconciling the run's channel.
     """
     _require_just()
-    tmp_path = tmp_path_factory.mktemp("channel-reply-driven")
     environment = _environment(tmp_path)
     environment["REAL_ONEHARNESS_BIN"] = oneharness_bin
     gate = tmp_path / "turn-gate"
     gate.mkdir()
     environment[TURN_GATE_ENV] = str(gate)
-    run = RunId(f"channel-reply-{SUITE}-driven")
     try:
         launched = _launched(
             tmp_path,
@@ -372,6 +374,32 @@ def driven(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Ite
     finally:
         (gate / TURN_GATE_RELEASED).touch()
         _just("stop", run, environment=environment, seconds=120)
+
+
+@pytest.fixture(scope="module")
+def driven(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Iterator[Replying]:
+    """A run a live driver holds for as long as the journeys need it.
+
+    One run serves every journey that needs a driver, each reading what it changed against
+    what the run held before it sent anything.
+    """
+    yield from _held(
+        tmp_path_factory.mktemp("channel-reply-driven"),
+        oneharness_bin,
+        RunId(f"channel-reply-{SUITE}-driven"),
+    )
+
+
+@pytest.fixture
+def delivering(
+    tmp_path: Path, oneharness_bin: str, request: pytest.FixtureRequest
+) -> Iterator[Replying]:
+    """A held run of the journey's own, so no other journey's note is outstanding on it.
+
+    `driven` cannot serve here: the queued journey leaves a live note to the held node that
+    no turn ever takes, and an envelope naming that node waits behind it.
+    """
+    yield from _held(tmp_path, oneharness_bin, _named(request, "delivering"))
 
 
 def _bus(replying: Replying, *arguments: str, seconds: float = 60) -> str:
@@ -821,6 +849,21 @@ def test_a_valid_edit_to_a_run_nothing_drives_is_applied_by_the_reply_itself(
     assert _unfinished_and_undriven(replying), "the reply left something driving the run"
 
 
+def _monitor_refusal(op: str) -> str:
+    """The reason `config/onemessagebus.yaml` declares for refusing the monitor `op`.
+
+    Read off the committed file's one `authors.monitor.refusals` line for it, so the
+    journey holds the refusal to what the configuration says rather than to a copy.
+    """
+    line = re.search(
+        rf'^      {re.escape(op)}: "(?P<reason>[^"]+)"$',
+        BUS_CONFIG.read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+    assert line is not None, f"config/onemessagebus.yaml declares no monitor refusal of {op}"
+    return line["reason"]
+
+
 def test_an_author_the_configuration_does_not_declare_or_grant_is_refused(
     replying: Replying,
 ) -> None:
@@ -828,7 +871,8 @@ def test_an_author_the_configuration_does_not_declare_or_grant_is_refused(
 
     The pacemaker is declared nowhere in `config/onemessagebus.yaml`, so an envelope under
     its name is refused for the author. The monitor is declared and is not granted
-    `complete`, so an envelope of its asking for one is refused for the op. Neither appends
+    `complete` or `withdraw-note`, so an envelope of its asking for either is refused for
+    the op — the withdrawal with the reason the configuration declares for it. None appends
     anything or leaves a record in the run's journal.
     """
     assert _unfinished_and_undriven(replying), "the premise is a run nothing drives"
@@ -852,12 +896,173 @@ def test_an_author_the_configuration_does_not_declare_or_grant_is_refused(
         )
     )
 
+    withdrawing = _refused(
+        _send(
+            replying,
+            {
+                "version": 3,
+                "author": "monitor",
+                "commands": [
+                    {"op": "withdraw-note", "envelope": "0", "index": 0, "reason": "stale"}
+                ],
+            },
+        )
+    )
+
     assert "`pacemaker` is not declared" in undeclared, undeclared
     assert "'complete' is not an op the monitor may issue" in ungranted, ungranted
+    declared = _monitor_refusal("withdraw-note")
+    assert f"'withdraw-note' is not an op the monitor may issue: {declared}" in withdrawing, (
+        withdrawing
+    )
     assert _records(replying, "commands") == commands, "a refused envelope reached the queue"
     assert len(_recorded(replying, *WRITTEN_BY_A_REPLY)) == written, (
         "a refused envelope left a record in the run's journal"
     )
+
+
+def _operations(replying: Replying, kind: str) -> list[dict[str, Any]]:
+    """Every `edit-committed` operation of `kind` the run's journal holds, oldest first."""
+    return [
+        operation
+        for event in _recorded(replying, "edit-committed")
+        for operation in event.get("payload", {}).get("operations", [])
+        if operation.get("kind") == kind
+    ]
+
+
+def test_a_turn_end_note_with_a_deadline_is_delivering_until_a_withdrawal_takes_it_back(
+    delivering: Replying,
+) -> None:
+    """The note's new delivery fields and `withdraw-note`, sent the way a manager sends them.
+
+    Both envelopes carry commands, so each is held to this host's criteria bar before
+    anything is appended. The note — `deliver: "turn-end"` with a
+    `delivery_timeout_seconds` — is to the held worker, whose turn never ends, so the
+    driver accepts it and goes on delivering it: the reply returns `queued` once its wait
+    elapses, and `just status` reports the note delivering until its deadline. The
+    withdrawal names it by its envelope and position, is never held behind it, and is
+    applied: the run records the note taken back live, and the note's own envelope is
+    answered with its command refused for the withdrawal's reason.
+    """
+    environment = {
+        **delivering.environment,
+        "ONEPIPELINE_REPLY_TIMEOUT_SECONDS": str(SHORT_REPLY_TIMEOUT_SECONDS),
+    }
+    said = f"the fixture this node reads moved, {SUITE}"
+    note = {**_note(HELD_NODE, said), "deliver": "turn-end", "delivery_timeout_seconds": 600}
+
+    noted = _receipt(_send(delivering, {"version": 3, "commands": [note]}, environment=environment))
+    assert noted["state"] == "queued", noted
+
+    status = _just("status", delivering.run, environment=delivering.environment, seconds=60)
+    assert status.returncode == 0, status.stderr
+    assert f"envelope {noted['reply']}: delivering a live note to {HELD_NODE} since" in (
+        status.stdout
+    ), status.stdout
+    assert "until its deadline" in status.stdout, status.stdout
+
+    reason = "the fixture moved back"
+    withdrawal = {
+        "op": "withdraw-note",
+        "envelope": str(noted["reply"]),
+        "index": 0,
+        "reason": reason,
+    }
+    withdrew = _receipt(_send(delivering, {"version": 3, "commands": [withdrawal]}))
+
+    assert withdrew["state"] == "applied" and withdrew.get("commands") == "applied", withdrew
+    (withdrawn,) = _operations(delivering, "note-withdrawn")
+    assert withdrawn["from"] == "live", withdrawn
+    assert withdrawn["reason"] == reason and withdrawn["node"] == HELD_NODE, withdrawn
+    until = json.dumps({"field": "id", "equals": noted["reply"]})
+    streamed = _bus(
+        delivering, "subscribe", "command-outcomes", "--until", until, "--timeout", "60"
+    )
+    # The bus wraps each streamed record with its position in the queue.
+    outcome = json.loads(streamed.splitlines()[-1])["record"]
+    (result,) = outcome["results"]
+    assert (result["op"], result["outcome"]) == ("note", "refused"), outcome
+    assert reason in json.dumps(outcome), outcome
+    assert not _operations(delivering, "note-delivered"), "a turn was presented with the note"
+
+
+#: How long the deadline journey's notes may wait untaken: far inside the reply's own wait,
+#: so the run decides each before the recipe returns.
+NOTE_DEADLINE_SECONDS = 2
+
+
+def test_a_note_waits_only_behind_its_own_receiver_and_its_deadline_hands_it_to_persist(
+    delivering: Replying,
+) -> None:
+    """Holds per receiver, a passed deadline decided by `persist`, and a carried withdrawal.
+
+    A live note to the held worker is never taken, so it is outstanding for as long as it
+    is not withdrawn — and an envelope naming another node is applied beside it rather than
+    waiting behind it. Once it is withdrawn, a `turn-end` note given a short
+    `delivery_timeout_seconds` passes it untaken: under the default `persist: true` it is
+    carried, its reason naming the deadline, and under `persist: false` the reply is
+    refused naming it. The carried note, composed into no dispatch yet, is then taken back
+    by a `withdraw-note`, from the carried notes.
+    """
+    short = {
+        **delivering.environment,
+        "ONEPIPELINE_REPLY_TIMEOUT_SECONDS": str(SHORT_REPLY_TIMEOUT_SECONDS),
+    }
+    outstanding = _receipt(
+        _send(
+            delivering,
+            {"version": 3, "commands": [_note(HELD_NODE, f"outstanding, {SUITE}")]},
+            environment=short,
+        )
+    )
+    assert outstanding["state"] == "queued", outstanding
+
+    beside = _receipt(_send(delivering, _settling("beside")))
+    assert beside["state"] == "applied" and beside.get("commands") == "applied", (
+        "an envelope naming another node waited behind the held worker's note",
+        beside,
+    )
+
+    def withdraw(envelope: object, reason: str) -> None:
+        command = {"op": "withdraw-note", "envelope": str(envelope), "index": 0, "reason": reason}
+        withdrew = _receipt(_send(delivering, {"version": 3, "commands": [command]}))
+        assert withdrew["state"] == "applied", withdrew
+
+    withdraw(outstanding["reply"], "superseded by the bounded notes")
+
+    def bounded(text: str, **fields: object) -> dict[str, Any]:
+        return {
+            **_note(HELD_NODE, text),
+            "deliver": "turn-end",
+            "delivery_timeout_seconds": NOTE_DEADLINE_SECONDS,
+            **fields,
+        }
+
+    carried_text = f"carried past its deadline, {SUITE}"
+    carried = _receipt(_send(delivering, {"version": 3, "commands": [bounded(carried_text)]}))
+    assert carried["state"] == "applied", carried
+    (delivered,) = [
+        op for op in _operations(delivering, "note-delivered") if op["text"] == carried_text
+    ]
+    assert delivered["reached"] == "carried", delivered
+    assert "delivery_timeout_seconds" in str(delivered.get("reason")), delivered
+
+    refused_text = f"refused past its deadline, {SUITE}"
+    refused = _refused(
+        _send(delivering, {"version": 3, "commands": [bounded(refused_text, persist=False)]})
+    )
+    assert "delivery_timeout_seconds" in refused, refused
+    assert any(
+        refused_text in json.dumps(event.get("payload", {}))
+        for event in _recorded(delivering, "edit-rejected")
+    ), "the refused note left no `edit-rejected` record"
+
+    withdraw(carried["reply"], "the carried note is stale")
+    from_carried = [
+        op for op in _operations(delivering, "note-withdrawn") if op["from"] == "carried"
+    ]
+    assert [op["text"] for op in from_carried] == [carried_text], from_carried
 
 
 #: The reply wait the queued journey shortens to, and the margin it allows the recipe, the
