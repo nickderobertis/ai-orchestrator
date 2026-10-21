@@ -136,7 +136,13 @@ writing anything, whatever its tasks' routes say. So:
   tracker with `just finish-plan <brief> --to <its source>`, and launched, approved and
   settled there;
 - a plan mixing an organization's tasks with public ones is refused at `plans`, and is
-  authored as two plans instead, one per destination;
+  authored as two plans instead, one per destination. The engine's boundary guidance still
+  prescribes the one-plan export shape — a private `publish: "preserve"` producer, an export
+  edge, a public consumer — but under the pinned store every task of a private project is
+  private, so that consumer is never public and `just check-plan` refuses the plan; and an
+  export edge names nodes of its own plan, so the two-plan route carries no generalized work
+  from the private producer to the public consumer
+  (`tests/plan_tooling/plan_flow/test_check_plan_boundary_e2e.py`);
 - personal private work has no route onto a public board at all. Under the adopted store a
   source's classification routes are tried before its repository routes for a private item,
   and routes never chain, so a `{classification: private}` route on `plans` would send an
