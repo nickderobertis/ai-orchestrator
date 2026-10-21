@@ -129,10 +129,9 @@ TEMPLATE_NAME="follow-up-task"
 #: The source the project is written into, and what its native id and run id append.
 #: `follow-up-runs` rather than `authoring`: a follow-up run's task quotes the drafts and the
 #: board comments it answers, which may name a private repository, and the store's public
-#: boundary, once switched on, refuses such a write anywhere not declared private. This source
-#: is a folder of this machine under the drafts root that nothing copies to a board, so it is
-#: the one to declare private when the boundary is on (`onetaskgraph.yaml` says why it is not
-#: yet), at no cost in origin bindings.
+#: boundary, which `onetaskgraph.yaml` switches on, refuses such a write anywhere not declared
+#: private. This source is a folder of this machine under the drafts root that nothing copies
+#: to a board, so `onetaskgraph.yaml` declares it private, at no cost in origin bindings.
 PLAN_SOURCE="follow-up-runs"
 #: The store's environment-layer name for that source's root, rooted here under the drafts
 #: root this launch resolved, so the project this writes and the run that reads it agree.
