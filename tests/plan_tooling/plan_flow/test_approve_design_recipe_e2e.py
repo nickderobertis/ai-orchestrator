@@ -1606,8 +1606,8 @@ def _boundary_registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A registry of this journey's own declaring :data:`SERVICE` and :data:`CLIENT` public.
 
     With the store's public boundary switched on, as the tracked configuration switches it, a
-    plan naming a repository the registry cannot answer public for is private, and its document is refused at :data:`SOURCE`, which declares no
-    visibility; registering both keeps these journeys about approval either way. Every recipe
+    plan naming a repository the registry cannot answer public for is private, and its
+    document is refused at :data:`SOURCE`, which declares no visibility; registering both keeps these journeys about approval either way. Every recipe
     below inherits this registry. Answers its root.
     """
     home = boundary_home.registered_home(tmp_path / "boundary", public=[SERVICE, CLIENT])
