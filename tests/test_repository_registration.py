@@ -85,6 +85,12 @@ FALLTHROUGH = "\ndefault:\n"
 #: under: its change request merges itself once its merge path passes, with nobody
 #: else in the path.
 EXPECTED_POLICY = {"publication": "change-auto", "approvals": "none"}
+#: The one field a rule may carry beside its policy: how long a publication watches its
+#: required checks, sized per identity from `config/onevcs.checks-wait.yml` and held to
+#: those measurements by `tests/e2e/checks_wait/test_checks_wait_sizing_e2e.py`. It
+#: changes no routing, so the policy a rule states is its fields without it — and a field beyond
+#: both, such as a `gate:`, is still refused.
+SIZED_FIELDS = frozenset({"checks"})
 
 
 class Registration(NamedTuple):
@@ -129,6 +135,11 @@ def rules_of(rules: str) -> list[Rule]:
         )
         for found in RULE.finditer(rules)
     ]
+
+
+def policy_of(rule: Rule) -> dict[str, str]:
+    """The routing a rule states: every field but the sized ones."""
+    return {key: value for key, value in rule.fields.items() if key not in SIZED_FIELDS}
 
 
 def repository_of(entry: str) -> tuple[str | None, str]:
@@ -240,7 +251,7 @@ def rule_complaints(rules_text: str, rules: list[Rule]) -> list[str]:
     fallthrough = rules_text.index(FALLTHROUGH)
     found: list[str] = []
     for rule in matching:
-        if rule.fields != EXPECTED_POLICY:
+        if policy_of(rule) != EXPECTED_POLICY:
             found.append(
                 f"config/onevcs.rules.yml gives {IDENTITY} {rule.fields}, where the policy for "
                 f"a single-owner repository this host dispatches against is {EXPECTED_POLICY}"
@@ -351,7 +362,7 @@ def test_the_rule_states_this_hosts_policy_and_nothing_else() -> None:
     """The routing decision itself, read off the file `just repos-apply` installs."""
     rule = next(rule for rule in rules_of(tracked().rules) if rule.identity == IDENTITY)
 
-    assert rule.fields == EXPECTED_POLICY
+    assert policy_of(rule) == EXPECTED_POLICY
 
 
 def test_the_rule_stands_above_the_reviewed_default() -> None:
@@ -407,7 +418,7 @@ def test_onebudgetspec_is_listed_and_ruled_to_publish_like_its_siblings() -> Non
     matching = [rule for rule in rules_of(registration.rules) if rule.identity == ONEBUDGETSPEC]
     assert len(matching) == 1, matching
     (rule,) = matching
-    assert rule.fields == EXPECTED_POLICY
+    assert policy_of(rule) == EXPECTED_POLICY
     assert rule.at < registration.rules.index(FALLTHROUGH)
 
 
@@ -461,7 +472,7 @@ def sibling_complaints(registration: Registration, sibling: SingleOwnerSibling) 
     if len(matching) != 1:
         return [*found, f"config/onevcs.rules.yml states {len(matching)} rules for {identity}"]
     (rule,) = matching
-    if rule.fields != EXPECTED_POLICY:
+    if policy_of(rule) != EXPECTED_POLICY:
         found.append(f"config/onevcs.rules.yml gives {identity} {rule.fields}")
     if rule.at > registration.rules.index(FALLTHROUGH):
         found.append(f"config/onevcs.rules.yml states the rule for {identity} below `default:`")

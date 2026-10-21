@@ -1,0 +1,36 @@
+{
+  "name": "support-ruled-registry",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "tags": [
+    "type:test-support"
+  ],
+  "implicitDependencies": [
+    "support-registered-checkouts"
+  ],
+  "namedInputs": {
+    "testSupport": [
+      "{workspaceRoot}/tests/ruled_registry.py",
+      "{workspaceRoot}/config/onevcs.releases.yml",
+      "{workspaceRoot}/config/onevcs.rules.yml",
+      "{workspaceRoot}/config/onevcs.version",
+      "{workspaceRoot}/config/onevcs.workspaces.yml",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/orchestrator/host_installs.py",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/orchestrator/workspaces_overlay.py",
+      "{workspaceRoot}/scripts/apply-repo-registry.sh",
+      "{workspaceRoot}/scripts/registered-checkouts.sh",
+      "{workspaceRoot}/scripts/require-provisioned.sh",
+      "{projectRoot}/project.json"
+    ]
+  },
+  "targets": {
+    "test-support": {
+      "executor": "nx:noop",
+      "inputs": [
+        "testSupport"
+      ]
+    }
+  }
+}

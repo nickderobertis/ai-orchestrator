@@ -820,6 +820,18 @@ A `checks-unsettled` whose wait onevcs left armed is re-read toward landing unde
 engine's merge-path read budget: the host has its merge armed, so it is not a
 stranded draft.
 
+That bound is the identity's `checks: {wait_seconds}` in `config/onevcs.rules.yml`,
+onevcs's 3600 s when its rule names none. A remote identity whose required checks
+routinely outlast that default would end every publication `checks-unsettled`, so each
+one whose slowest run — creation to last required check, queue time included — across
+its ten most recent pull-request CI runs exceeds 3600 s once a 25% margin is added
+carries a wait sized from that figure, with the recorded maximum and margin beside it;
+every other identity stays on the default. The runs, the cutoff they were read at and
+each run's timing are `config/onevcs.checks-wait.yml`, and
+`tests/e2e/checks_wait/test_checks_wait_sizing_e2e.py` holds the rules to it through
+the installed `onevcs rules check`. A repository whose CI gets slower — or a newly ruled
+one — is re-sized by re-reading its runs into that record and its rule's wait together.
+
 `just integrate` runs no gate per candidate either — it has none to run. Each
 candidate fast-forwards the *local* base before the single optional push, and what
 judges that push is the same `pre-push` hook a publication meets. A candidate the
@@ -1182,7 +1194,7 @@ split at those seams rather than at convenient ones:
   few its own gates open by path.
 - **The journey projects under `tests/e2e/`** — `publish-and-landing`,
   `launch-monitor-observer`, `budget-gate`, `registry-and-recipes`, `workspace-copies`,
-  `suite-helpers`, `repos-apply-credentials` and `host-local-registration`, beside the narrower ones that predate them — each own one
+  `suite-helpers`, `repos-apply-credentials`, `host-local-registration` and `checks-wait`, beside the narrower ones that predate them — each own one
   directory of journeys, and `e2e-root` the few modules left directly under
   `tests/e2e/`, and each `test` target is keyed on what that family reads,
   child processes included, plus the units its modules import. So an edit to one

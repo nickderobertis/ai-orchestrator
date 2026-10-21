@@ -44,6 +44,15 @@ from typing import Literal, NamedTuple, NotRequired, TypedDict, cast
 
 import pytest
 from registered_checkouts import TRACKED_CHECKOUTS, RepoIdentity
+from ruled_registry import (
+    TRACKED_RULES,
+    apply_registry,
+    checkout,
+    onevcs,
+    reported,
+    ruled_identities,
+    ruled_registry,
+)
 from scratch_identity import seeded
 from sibling_facts import declaration, default_target_complaint, override_default_targets
 
@@ -53,10 +62,6 @@ from orchestrator.root import REPO_ROOT
 
 #: The registry this host ran on before `onevcs` owned one, verbatim.
 GOLDEN = REPO_ROOT / "tests" / "fixtures" / "pre-adoption-repos.json"
-#: The tracked rules file the recipe installs, which decides every listed checkout's
-#: publication path — and, since onevcs 0.11.0, nothing else. It names no verifier,
-#: because this host runs none.
-TRACKED_RULES = REPO_ROOT / "config" / "onevcs.rules.yml"
 
 #: The tracked release override the recipe installs beside the rules file, which
 #: decides the rung a node of each repository adopts a dependency's release on and
@@ -90,12 +95,6 @@ GLOBAL_RUNG = "fast"
 #: unmigrated host" are separate claims and only one of them is about this file.
 RULES_SCHEMA_VERSION = 3
 
-#: How every rule in the tracked file names the repository it matches. Reading them
-#: back out is what makes a rule added later fail here, rather than at that
-#: repository's first publication.
-RULE_MATCH = re.compile(
-    r"- match: \{host: (?P<host>[^,]+), owner: (?P<owner>[^,]+), name: (?P<name>[^}]+)\}"
-)
 #: The identities whose policy differs from every other rule in the tracked file, with
 #: the `(publication, approvals)` each one resolves. Unlike the historical golden below,
 #: this also covers identities registered after the onevcs adoption.
@@ -257,14 +256,6 @@ BY_URL = {identity.url: identity for identity in IDENTITIES}
 PRE_ADOPTION_HOME = os.path.commonpath([entry.path for entry in CHECKOUTS])
 
 
-def checkout(directory: Path, origin: str) -> Path:
-    """A real git checkout of `origin`, which is all registration reads of one."""
-    directory.mkdir(parents=True)
-    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=directory, check=True)
-    subprocess.run(["git", "remote", "add", "origin", origin], cwd=directory, check=True)
-    return directory
-
-
 def declaring_checkout(directory: Path, origin: str, targets: dict[str, str]) -> Path:
     """A checkout of `origin` whose base declares each ``name: id`` of ``targets``.
 
@@ -287,57 +278,11 @@ def declaring_checkout(directory: Path, origin: str, targets: dict[str, str]) ->
     return directory
 
 
-def apply_registry(
-    manifest: Path,
-    home: Path,
-    *arguments: str,
-    config_home: Path | None = None,
-    temporary: Path | None = None,
-) -> subprocess.CompletedProcess[str]:
-    """Run the real recipe against a scratch registry root.
-
-    ``config_home`` is the XDG configuration home the recipe resolves the host's
-    workspaces and rules overlays under; a scratch sibling of ``home`` holding nothing
-    when a journey names none, so the tracked files are installed alone whatever this
-    host has. ``temporary``, when named, is the recipe's ``TMPDIR``, for a journey that
-    reads what a run left there.
-    """
-    if config_home is None:
-        config_home = home.parent / f"{home.name}-config"
-    config_home.mkdir(parents=True, exist_ok=True)
-    scratch = {"TMPDIR": str(temporary)} if temporary is not None else {}
-    return subprocess.run(
-        ["just", "repos-apply", "--checkouts", str(manifest), *arguments],
-        cwd=REPO_ROOT,
-        env={
-            **os.environ,
-            "ONEVCS_HOME": str(home),
-            "XDG_CONFIG_HOME": str(config_home),
-            **scratch,
-        },
-        text=True,
-        capture_output=True,
-    )
-
-
 def host_config(config_home: Path, rules: str = HOST_RULES_OVERLAY_TEXT) -> Path:
     """An XDG configuration home holding a host rules overlay, and nothing else."""
     (config_home / HOST_RULES).parent.mkdir(parents=True, exist_ok=True)
     (config_home / HOST_RULES).write_text(rules, encoding="utf-8")
     return config_home
-
-
-def onevcs(
-    home: Path, *arguments: str, stdin: str | None = None
-) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["uv", "run", "--project", str(REPO_ROOT), "onevcs", *arguments],
-        cwd=REPO_ROOT,
-        env={**os.environ, "ONEVCS_HOME": str(home)},
-        text=True,
-        input=stdin,
-        capture_output=True,
-    )
 
 
 def visibility(home: Path, identity: RepoIdentity) -> str:
@@ -352,28 +297,6 @@ def visibility(home: Path, identity: RepoIdentity) -> str:
     )
     assert asked.returncode == 0, asked.stdout + asked.stderr
     return cast(str, json.loads(asked.stdout)["visibility"])
-
-
-def ruled_identities() -> tuple[RepoIdentity, ...]:
-    """Every identity `config/onevcs.rules.yml` names, in the order it names them."""
-    text = TRACKED_RULES.read_text(encoding="utf-8")
-    named = tuple(
-        f"{rule['host']}/{rule['owner']}/{rule['name']}" for rule in RULE_MATCH.finditer(text)
-    )
-    assert len(named) == text.count("- match:"), (
-        "config/onevcs.rules.yml no longer writes every rule's match as a one-line flow "
-        f"mapping, so only {len(named)} of {text.count('- match:')} rules were read back"
-    )
-    return named
-
-
-def reported(output: str, key: str) -> str:
-    """One field of `onevcs rules check`, without its `(from rule 1)` annotation."""
-    for line in output.splitlines():
-        name, separator, value = line.partition(": ")
-        if separator and name.strip() == key:
-            return value.split(" (from ")[0].strip()
-    raise AssertionError(f"no {key!r} in:\n{output}")
 
 
 def registered_paths(home: Path) -> set[str]:
@@ -458,17 +381,7 @@ def ruled(tmp_path_factory: pytest.TempPathFactory) -> Path:
     the gate assertions below cover the whole file rather than only the rules that
     predate the adoption.
     """
-    root = tmp_path_factory.mktemp("ruled-registry")
-    paths = [
-        checkout(root / "checkouts" / key.rpartition("/")[2], f"https://{key}")
-        for key in ruled_identities()
-    ]
-    manifest = root / "checkouts.list"
-    manifest.write_text("".join(f"{path}\n" for path in paths), encoding="utf-8")
-    home = root / "onevcs"
-    result = apply_registry(manifest, home)
-    assert result.returncode == 0, result.stdout + result.stderr
-    return home
+    return ruled_registry(tmp_path_factory.mktemp("ruled-registry"))
 
 
 def test_every_pre_adoption_identity_and_checkout_is_registered(applied: Applied) -> None:
@@ -1044,15 +957,14 @@ def test_the_overlay_leaves_a_local_and_a_sibling_tracked_rule_as_the_file_state
 
 
 # llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Keeps shared fixture ownership.
-def test_the_host_uses_the_shipped_base_merge_and_check_wait_defaults(
+def test_the_host_uses_the_shipped_base_merge_defaults(
     ruled: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The installed rules resolve defaults through the pinned CLI, without a host override."""
+    """The installed rules resolve base-merge defaults through the pinned CLI."""
     monkeypatch.delenv("ONEVCS_CHECKS_TIMEOUT_SECONDS", raising=False)
     observer = onevcs(ruled, "rules", "check", PRINTOBSERVER)
     assert observer.returncode == 0, observer.stderr
     assert reported(observer.stdout, "base merge") == "on-conflict"
-    assert reported(observer.stdout, "checks wait") == "3600 s"
     local = onevcs(ruled, "rules", "check", THIS_REPOSITORY)
     assert local.returncode == 0, local.stderr
     assert reported(local.stdout, "base merge") == "always"
@@ -1074,7 +986,12 @@ def test_the_optional_base_merge_and_wait_keys_are_accepted_and_validated(
     home = tmp_path / "onevcs"
     configured = tmp_path / "configured.yml"
     configured.write_text(
-        TRACKED_RULES.read_text(encoding="utf-8").replace(
+        re.sub(
+            r"^    checks: \{wait_seconds: \d+\}.*\n",
+            "",
+            TRACKED_RULES.read_text(encoding="utf-8"),
+            flags=re.MULTILINE,
+        ).replace(
             "    publication: change-auto",
             "    publication: change-auto\n"
             "    base_merge: always\n"

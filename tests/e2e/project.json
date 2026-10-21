@@ -10,6 +10,7 @@
   "implicitDependencies": [
     "support-conftest",
     "support-registered-checkouts",
+    "support-ruled-registry",
     "support-scratch-identity",
     "support-sibling-facts"
   ],

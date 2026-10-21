@@ -854,6 +854,7 @@ E2E_JOURNEYS: tuple[JourneyProject, ...] = (
         f"{E2E_ROOT}/host_local_registration",
         "hostLocalRegistrationWorkspace",
     ),
+    JourneyProject("checks-wait", f"{E2E_ROOT}/checks_wait", "checksWaitWorkspace"),
     # The journey modules left directly under `tests/e2e/`, which the families above leave
     # alone: today the registry installer's, kept at its path because the rules file
     # `config/onevcs.rules.yml` names it there, and a change to that file is one a sibling's

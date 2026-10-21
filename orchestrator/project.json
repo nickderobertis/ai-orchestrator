@@ -87,6 +87,7 @@
       "!{workspaceRoot}/tests/e2e/suite_helpers/test_*.py",
       "!{workspaceRoot}/tests/e2e/repos_apply_credentials/test_*.py",
       "!{workspaceRoot}/tests/e2e/host_local_registration/test_*.py",
+      "!{workspaceRoot}/tests/e2e/checks_wait/test_*.py",
       "!{workspaceRoot}/tests/e2e/spike_brief/test_*.py",
       "!{workspaceRoot}/tests/e2e/review_drafting/test_*.py",
       "!{workspaceRoot}/tests/e2e/workspace_copies/test_*.py",

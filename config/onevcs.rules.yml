@@ -46,9 +46,21 @@
 # a green one becomes follows from `publication` and `approvals`, as onevcs's
 # `docs/contract.md` states (`onevcs rules check <repo>` prints the resolved lines).
 #
-# A rule may also carry `base_merge` and `checks: {wait_seconds}`. This file names
-# neither because the defaults fit this host: change-request identities merge a
-# moved base on conflict, local-direct ones always, and checks wait 3600 seconds.
+# A rule may also carry `base_merge` and `checks: {wait_seconds}`. No rule names
+# `base_merge`, because its default fits this host: change-request identities merge
+# a moved base on conflict, local-direct ones always.
+#
+# `checks: {wait_seconds}` is how long a publication watches its change request's
+# required checks before ending `checks-unsettled`, and onevcs's default of 3600 s
+# does not fit every identity here: where required checks routinely take longer than
+# an hour, every publication ends with no verdict. So each change-request identity
+# whose slowest required-check completion across its ten most recent pull-request CI
+# runs, plus a 25% margin, exceeds 3600 s carries a `checks: {wait_seconds}` sized
+# from it, with the recorded maximum and margin beside it: the rules below that carry
+# one are exactly those identities, and every other identity stays on the default.
+# The measurements — which CI runs, read at which cutoff, and how long each took from
+# creation to its last required check — are `config/onevcs.checks-wait.yml`, which
+# is where to re-measure before re-sizing.
 # `onevcs rules check <repo>` prints the resolved lines, as it does for `drafts:`.
 #
 # The verifier that remains is the repository's own, and it is the one that could
@@ -105,10 +117,12 @@ rules:
   - match: {host: github.com, owner: nickderobertis, name: allowlister}
     publication: change-auto
     approvals: none
+    checks: {wait_seconds: 3900}  # recorded max 3011 s (run 38740769731) + 25% margin
 
   - match: {host: github.com, owner: nickderobertis, name: allowlister-remote}
     publication: change-auto
     approvals: none
+    checks: {wait_seconds: 3900}  # recorded max 3015 s (run 38754715610) + 25% margin
 
   - match: {host: github.com, owner: nickderobertis, name: allowlister-terminal-approval-plugin}
     publication: change-auto
@@ -117,6 +131,7 @@ rules:
   - match: {host: github.com, owner: nickderobertis, name: cargo-prune-superseded}
     publication: change-auto
     approvals: none
+    checks: {wait_seconds: 29700}  # recorded max 23722 s (run 38471962501) + 25% margin
 
   - match: {host: github.com, owner: nickderobertis, name: cloud-agent-dev-env}
     publication: change-auto
@@ -125,6 +140,7 @@ rules:
   - match: {host: github.com, owner: nickderobertis, name: crozier}
     publication: change-auto
     approvals: none
+    checks: {wait_seconds: 11100}  # recorded max 8751 s (run 39401431634) + 25% margin
 
   - match: {host: github.com, owner: nickderobertis, name: dero-skills}
     publication: change-auto
@@ -137,6 +153,7 @@ rules:
   - match: {host: github.com, owner: nickderobertis, name: github-secrets}
     publication: change-auto
     approvals: none
+    checks: {wait_seconds: 6600}  # recorded max 5100 s (run 38763641857) + 25% margin
 
   # Its base branch is `master`, which the audit names beside the checks it reports
   # for it: the required checks are the ones declared on the branch a change here
@@ -152,50 +169,62 @@ rules:
   - match: {host: github.com, owner: nickderobertis, name: notignored}
     publication: change-auto
     approvals: none
+    checks: {wait_seconds: 8100}  # recorded max 6321 s (run 39155169357) + 25% margin
 
   - match: {host: github.com, owner: nickderobertis, name: oneagentgraph}
     publication: change-auto
     approvals: none
+    checks: {wait_seconds: 6900}  # recorded max 5447 s (run 39352027435) + 25% margin
 
   - match: {host: github.com, owner: nickderobertis, name: onebudgetspec}
     publication: change-auto
     approvals: none
+    checks: {wait_seconds: 10500}  # recorded max 8342 s (run 38410505674) + 25% margin
 
   - match: {host: github.com, owner: nickderobertis, name: oneharness}
     publication: change-auto
     approvals: none
+    checks: {wait_seconds: 28200}  # recorded max 22542 s (run 39387864484) + 25% margin
 
   - match: {host: github.com, owner: nickderobertis, name: oneharness-ui}
     publication: change-auto
     approvals: none
+    checks: {wait_seconds: 14700}  # recorded max 11607 s (run 38455397883) + 25% margin
 
   - match: {host: github.com, owner: nickderobertis, name: onejudge}
     publication: change-auto
     approvals: none
+    checks: {wait_seconds: 5700}  # recorded max 4365 s (run 38699368150) + 25% margin
 
   - match: {host: github.com, owner: nickderobertis, name: onemessagebus}
     publication: change-auto
     approvals: none
+    checks: {wait_seconds: 6000}  # recorded max 4788 s (run 39142284001) + 25% margin
 
   - match: {host: github.com, owner: nickderobertis, name: onepipeline}
     publication: change-auto
     approvals: none
+    checks: {wait_seconds: 9600}  # recorded max 7482 s (run 39459848573) + 25% margin
 
   - match: {host: github.com, owner: nickderobertis, name: onepipeline-ui}
     publication: change-auto
     approvals: none
+    checks: {wait_seconds: 27300}  # recorded max 21761 s (run 39382834193) + 25% margin
 
   - match: {host: github.com, owner: nickderobertis, name: onetaskgraph}
     publication: change-auto
     approvals: none
+    checks: {wait_seconds: 6300}  # recorded max 4807 s (run 39466309432) + 25% margin
 
   - match: {host: github.com, owner: nickderobertis, name: onevcs}
     publication: change-auto
     approvals: none
+    checks: {wait_seconds: 8700}  # recorded max 6738 s (run 39445587713) + 25% margin
 
   - match: {host: github.com, owner: nickderobertis, name: printobserver}
     publication: change-auto
     approvals: none
+    checks: {wait_seconds: 6300}  # recorded max 4960 s (run 38912988989) + 25% margin
 
   - match: {host: github.com, owner: nickderobertis, name: screencomp}
     publication: change-auto
