@@ -72,7 +72,8 @@
       "{workspaceRoot}/config/budgets-migration.yaml",
       "{workspaceRoot}/tests/e2e/board_copy_approval/test_board_copy_spike_evidence_e2e.py",
       "{workspaceRoot}/tests/e2e/board_copy_approval/test_board_copy_store_reads_e2e.py",
-      "{workspaceRoot}/orchestrator/plan_locations.py"
+      "{workspaceRoot}/orchestrator/plan_locations.py",
+      "{workspaceRoot}/tests/e2e/board_copy_approval/test_board_copy_at_scale_e2e.py"
     ]
   },
   "targets": {

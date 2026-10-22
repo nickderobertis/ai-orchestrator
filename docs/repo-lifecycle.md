@@ -24,15 +24,20 @@ UI to the same engine. Read a version with the tool beside it: each pin
 governs a different artifact. Re-read the source before trusting a claim here against
 a later pin.
 
-**What the move to these pins brought.** From onepipeline 0.80.2, onepipeline-ui 0.43.0
-and onetaskgraph 0.9.0: the engine 0.81.0 links the onetaskgraph 0.9.2 store crates, which
-copy and list a plan without reading the whole board and write a copied item in fewer
-requests, so the plan-store CLI pin follows it, and the read API 0.44.0 links that engine.
-The run-settlement write that marks a plan's home `Done` — closing its issue as completed —
-and a home card following its issue's closure, by a landing or by the on-demand reconcile,
-are this store's and this engine's, and
-`tests/e2e/publish_and_landing/test_landing_closes_board_cards_e2e.py` drives both here.
-Earlier, from onepipeline 0.79.0, onepipeline-ui 0.41.0,
+**What the move to these pins brought.** From onepipeline 0.80.2, onepipeline-ui 0.43.0 and
+onetaskgraph 0.9.0: the engine 0.81.0 and the read API 0.44.0 that links it carry the
+onetaskgraph 0.9.2 store crates, which copy a plan and list it without reading the whole
+board — a copy's reads and writes are bounded by the plan rather than the board, its
+creates, field writes, closes and blocked-by edges sent as aliased batches and paced by
+GitHub's per-minute windows rather than a fixed spacing, and `project list --origin` lists
+the projects copied from one plan by a query narrowed to it — home a plan where its
+repository-naming tasks route,
+reuse its member project, and record the `body_digest` of what Linear stores. Nothing else
+they link moved, so no other pin follows, and the onevcs store schema is unchanged.
+The run-settlement write marks a plan's home `Done` by closing its issue as completed,
+and a home card follows its issue's closure by a landing or the on-demand reconcile;
+`tests/e2e/publish_and_landing/test_landing_closes_board_cards_e2e.py` drives both.
+From onepipeline 0.79.0, onepipeline-ui 0.41.0,
 onemessagebus 0.9.1, oneagentgraph 0.5.14, onejudge 0.19.5 and onetaskgraph 0.8.0: the
 engine 0.80.1 links onevcs 0.56.3 — the release the manager's CLI already ran — whose
 publication keeps one holder record per publication, resumes an unchanged green change at

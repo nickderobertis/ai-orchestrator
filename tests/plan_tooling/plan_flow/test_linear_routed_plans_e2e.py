@@ -3,17 +3,21 @@
 A host's onetaskgraph user layer — here the tracked example's, installed under this module's
 own configuration home — routes every `github.com/hiddenco/*` task from `plans` to the
 organization's `hiddenco-plans` source, and the store decides where a plan's home goes from
-that alone: into `hiddenco-plans` when every task naming a repository routes there, and
-otherwise onto `plans`, with the routed tasks in a member project of `hiddenco-plans`. The
-store's public boundary is off, as the tracked configuration lands it, and the example layer
-declares no `visibility` that would switch it on. These journeys drive both shapes through
-the real `just finish-plan`:
+that alone, by its voters — each task naming a repository, and the project's own
+`repositories`: into `hiddenco-plans` when they all route there, a task naming no repository
+following the home, and otherwise onto `plans`, with the routed tasks in a member project of
+`hiddenco-plans`. The store's public boundary is
+off, as the tracked configuration lands it, and the example layer declares no `visibility`
+that would switch it on. These journeys drive both shapes through the real `just finish-plan`:
 
 * **shape 1**, an all-hiddenco plan, whose home, tasks and design document all land in
   `hiddenco-plans`;
-* **shape 2**, a hiddenco task beside steps naming no repository, which lands whole in
-  `hiddenco-plans` too: only a task naming a repository votes where the home goes, and the
-  steps naming none go with their home.
+* **shape 2**, a mixed plan whose project names this repository, whose home, design document
+  and non-hiddenco tasks land on the loopback `plans` board and whose hiddenco task lands in a
+  `hiddenco-plans` member project.
+
+The same mixed plan with no repository of its own has one voter, its hiddenco task, and the
+store's own copy lands it whole in `hiddenco-plans`, its tasks naming no repository with it.
 
 None launches the plan: the copy runs on this checkout's install, and a launch strips the
 `PYTHONPATH` that points the copy's `orchestrator` at its own configuration.
@@ -48,6 +52,7 @@ from fake_backend import (
     PROMPT_LOG_ENV,
     RUN_ON_MARKER_ENV,
 )
+from github_board import BOARD as BOARD_FIXTURE
 from github_board import _serving_board
 from nx_workspace import (
     answering_this_checkouts_origin,
@@ -87,6 +92,8 @@ LINEAR = onetaskgraph_user_layer.ORGANIZATION_PLANS
 BOARD = "plans"
 AUTHORING = "authoring"
 
+#: This repository's own public identity, which a mixed plan's project names as its own.
+THIS_REPOSITORY = "github.com/nickderobertis/ai-orchestrator"
 #: The hiddenco repository every routed task names, registered as a scratch identity so its
 #: lifecycle node has somewhere to publish.
 HIDDENCO = "github.com/hiddenco/qh-api"
@@ -254,12 +261,15 @@ class Node(NamedTuple):
     hiddenco: bool
 
 
-def _draft(bench: Bench, name: str, nodes: tuple[Node, ...]) -> str:
+def _draft(
+    bench: Bench, name: str, nodes: tuple[Node, ...], repositories: tuple[str, ...] = ()
+) -> str:
     """Author ``nodes`` as one plan in the authoring source, answering its qualified id.
 
     A hiddenco node is a lifecycle node in the registered stand-in: the first one commits
     on its branch, so a worker turn happens, and any other declares `expects_no_diff`. A
-    node of no repository is a direct node, which stays on `plans`.
+    node of no repository is a direct node, which goes with the plan's home. The project
+    names ``repositories`` as its own, which vote on where that home goes.
     """
     committing = next(node.id for node in nodes if node.hiddenco)
     write_plan_project(
@@ -292,6 +302,18 @@ def _draft(bench: Bench, name: str, nodes: tuple[Node, ...]) -> str:
         },
         native_id=name,
     )
+    if repositories:
+        record = bench.authoring / "projects" / f"{name}.md"
+        written = record.read_text(encoding="utf-8")
+        # llmlint: ignore[tests_mirror_real_usage] A project's own `repositories` is a field of its record that no store verb sets, and `personas/planner.yaml` has a planner write `projects/<project>.md` by hand, so it is written into that record the way a planner writes it.  # noqa: E501
+        record.write_text(
+            written.replace(
+                "---\n",
+                "---\nrepositories:\n" + "".join(f'  - "{one}"\n' for one in repositories),
+                1,
+            ),
+            encoding="utf-8",
+        )
     # Every plan states its plan-level budget answers; this one's work needs no budget.
     budgeted(
         AUTHORING,
@@ -416,9 +438,15 @@ class Finished(NamedTuple):
     reported: str
 
 
-def _finished(routed: Routed, bench: Bench, name: str, nodes: tuple[Node, ...]) -> Finished:
+def _finished(
+    routed: Routed,
+    bench: Bench,
+    name: str,
+    nodes: tuple[Node, ...],
+    repositories: tuple[str, ...] = (),
+) -> Finished:
     """Draft, review, document and copy the plan through `just finish-plan`."""
-    project = _draft(bench, name, nodes)
+    project = _draft(bench, name, nodes, repositories)
     _scripted(bench, name, nodes)
     finished = _just(routed, bench, "finish-plan", str(_brief(bench, project)), "--name", name)
     _just(routed, bench, "stop", f"{name}-design", seconds=60)
@@ -540,30 +568,82 @@ MIXED = (
 # llmlint: ignore-block[e2e_not_mocked] The same three doubled boundaries as the journey above.
 @COPIES_THE_TRACKED_TREE
 @pytest.mark.xdist_group("linear-routed")
-def test_a_plan_of_hiddenco_work_and_unplaced_steps_lands_whole_in_linear(
+def test_a_mixed_plan_lands_as_one_board_home_and_its_linear_member(
     routed: Routed, gated: tuple[Bench, Mapping[str, str]]
 ) -> None:
-    """A hiddenco task beside steps naming no repository: the whole plan is Linear's.
+    """A plan spanning both orgs is one home and one member.
 
-    Only a task naming a repository votes where the home goes, so the one hiddenco task places
-    the home in `hiddenco-plans`, and the steps naming none go with their home, wherever it
-    went — no member project, nothing on `plans`.
+    The project names this repository, so its voters disagree: the home lands on the `plans`
+    board with the design document and the non-hiddenco tasks, which name no repository and
+    go with it; the hiddenco task lands in the home's `hiddenco-plans` member project.
     """
     bench, _ = gated
     name = f"test-{os.getpid()}-mixed"
-    home, reported = _finished(routed, bench, name, MIXED)
+    home, reported = _finished(routed, bench, name, MIXED, (THIS_REPOSITORY,))
 
-    assert home.startswith(f"{LINEAR}:"), f"the home landed at {home}, not in {LINEAR}"
+    assert home.startswith(f"{BOARD}:"), f"the home landed at {home}, not on {BOARD}"
     stored = _items(routed, bench, home)
     placed = {node: str(held["id"]).partition(":")[0] for node, held in stored.items()}
-    assert placed == {node.id: LINEAR for node in MIXED}, placed
+    assert placed == {"library": BOARD, "consumer": LINEAR, "rollout": BOARD}, placed
+    shown = _just(routed, bench, "plans", "project", "show", home, "--json", seconds=120)
+    assert shown.returncode == 0, shown.stdout + shown.stderr
+    members = json.loads(shown.stdout)["items"][0]["item"]["metadata"][plan_store.MEMBERS_KEY]
+    assert [str(member).partition(":")[0] for member in members] == [LINEAR], members
     for said in (
-        f"plan-locations: {LINEAR} holds the plan at {routed.linear}",
-        f"plan-locations: {LINEAR} holds its design document at {routed.linear}",
+        f"plan-locations: {BOARD} holds the plan at https://github.com/",
+        f"plan-locations: {BOARD} holds its design document at https://github.com/",
+        f"plan-locations: its tasks routed to {LINEAR} are in {members[0]}",
         f"`just orchestrate {home}`",
     ):
         assert said in reported, f"the tail never said {said!r}:\n{reported}"
-    assert "its tasks routed to" not in reported, reported
+    documents = _just(
+        routed, bench, "plans", "document", "list", "--project", home, "--json", seconds=120
+    )
+    assert documents.returncode == 0, documents.stdout + documents.stderr
+    # The home holds the plan's one document, the one it is read as; its budget answers are
+    # its own description, and its home project carries them.
+    templates = sorted(
+        (held["item"]["metadata"].get("onetaskgraph.template") or {}).get("template", "")
+        for held in json.loads(documents.stdout)["items"]
+    )
+    assert templates == ["onepipeline:design-doc"], documents.stdout
+    described = json.loads(shown.stdout)["items"][0]["item"]["metadata"]
+    assert "orchestrator.plan-budgets" in described, described
+    # llmlint: ignore-end[e2e_not_mocked]
+    # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]  # noqa: E501
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]  # noqa: E501
+# The same placement and reason as the journeys above.
+# llmlint: ignore-block[e2e_not_mocked] The same three doubled boundaries as the journeys above.
+@COPIES_THE_TRACKED_TREE
+@pytest.mark.xdist_group("linear-routed")
+def test_a_plan_whose_only_repository_naming_task_routes_lands_whole_in_linear(
+    routed: Routed, gated: tuple[Bench, Mapping[str, str]]
+) -> None:
+    """The mixed plan with no repository of its own has one voter, so all of it is Linear's.
+
+    Its hiddenco task is the only item naming a repository, so the store's own copy onto
+    `plans` puts the home where that task routes, and the two tasks naming no repository go
+    with the home: nothing lands on the board.
+    """
+    bench, _ = gated
+    name = f"test-{os.getpid()}-one-voter"
+    project = _draft(bench, name, MIXED)
+
+    copied = _just(routed, bench, "plans", "project", "copy", project, "--to", BOARD, "--json")
+
+    assert copied.returncode == 0, copied.stdout + copied.stderr
+    landed = {
+        str(entry["source"]): str(entry["destination"])
+        for entry in json.loads(copied.stdout)["items"]
+        if entry.get("destination")
+    }
+    assert landed[project] == f"{LINEAR}:{name}", landed
+    tasks = {source: to for source, to in landed.items() if source != project}
+    assert sorted(tasks) == sorted(f"{project}/{node.id}" for node in MIXED), landed
+    assert all(to.startswith(f"{LINEAR}:") for to in tasks.values()), landed
+    assert BOARD_FIXTURE.created == [], [issue.title for issue in BOARD_FIXTURE.created]
     # llmlint: ignore-end[e2e_not_mocked]
     # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]  # noqa: E501
 

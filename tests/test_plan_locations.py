@@ -90,7 +90,15 @@ def _linked(
         return records[project]
 
     monkeypatch.setattr(plan_store, "project_record", shown)
-    monkeypatch.setattr(plan_store, "read_projects", lambda source: list(held.get(source, [])))
+    monkeypatch.setattr(
+        plan_store,
+        "project_copies",
+        lambda source, origin: [
+            project
+            for project in held.get(source, [])
+            if project.metadata.get(plan_store.ORIGIN_KEY) == origin
+        ],
+    )
 
 
 def _holds(
@@ -323,10 +331,10 @@ def test_an_unqualified_plan_id_is_refused_before_the_destination_is_asked_anyth
     the argument they typed.
     """
 
-    def never(_argument: str) -> list[StoreProject]:
+    def never(*_arguments: str) -> list[StoreProject]:
         raise AssertionError("the destination was read for an unqualified plan id")
 
-    monkeypatch.setattr(plan_store, "read_projects", never)
+    monkeypatch.setattr(plan_store, "project_copies", never)
     monkeypatch.setattr(plan_store, "project_record", never)
 
     assert plan_locations.main(["cursor-shape", "--in", "board"]) == plan_locations.UNREADABLE

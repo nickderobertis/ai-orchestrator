@@ -86,8 +86,8 @@ from github_board import (
     _serving_followups,
     _StatusOption,
     _wide_pages,
+    _write_inputs,
     _written_ticket,
-    created_issue_inputs,
     planted_comment,
 )
 from onetaskgraph_sdk import CopyReport, QueryResponseOfQualifiedTask, TaskDetail
@@ -300,17 +300,34 @@ FORBIDDEN = _Refusal(
     status=403, body={"message": "Resource not accessible by personal access token"}
 )
 #: GitHub's published ceiling on content-generating requests, per minute (same page as
-#: :data:`SECONDARY_LIMIT`), and the shortest steady interval that cannot exceed it. Written
-#: as the division because the number is GitHub's rather than this repository's: a literal
-#: 0.75 would read as a figure somebody here chose.
+#: :data:`SECONDARY_LIMIT`), which the store keeps by that window rather than by spacing
+#: every mutation, and an interval that spaces mutations as evenly as that ceiling would:
+#: written as the division because the number is GitHub's rather than this repository's.
 # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The same boundary as
 # the directive above. What this repository can gate — that the installed CLI keeps a
-# copy's writes inside this bound, and spaces them by an interval only when one is
-# configured — the journey below asserts over the gaps its copy really left, so a release
-# that moved either behaviour fails against this number.
+# minute's content creations under this bound and spaces them by a configured interval —
+# the journey below asserts over the requests its copy really sent, so a release that
+# exceeded the bound, or stopped keeping the configured interval, fails against these
+# numbers.
 CONTENT_CREATION_PER_MINUTE = 80
-STEADY_MUTATION_INTERVAL = 60 / CONTENT_CREATION_PER_MINUTE
+EVEN_MUTATION_INTERVAL = 60 / CONTENT_CREATION_PER_MINUTE
 # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+
+
+def _creations(requests: list[_GraphQLRequest]) -> list[float]:
+    """When each content creation among ``requests`` arrived, one per mutation it carries.
+
+    The store counts each aliased mutation of a batch as a creation of its own, so a
+    batch is counted once for each slot it sent.
+    """
+    arrived: list[float] = []
+    for request in requests:
+        if not request.is_mutation:
+            continue
+        sent = [name for name, value in request.variables.items() if name[:4] == "send"]
+        slots = sum(1 for name in sent if request.variables[name] is True) if sent else 1
+        arrived += [request.received] * slots
+    return arrived
 
 
 def _mutation_gaps(requests: list[_GraphQLRequest]) -> list[float]:
@@ -444,6 +461,7 @@ def test_credentialed_plan_store_reads_local_and_remote_sources(tmp_path: Path) 
 # for the routed source the adopted configuration once added; it is a Python journey over the
 # real recipe like every board journey beside it, and re-homing them is enforcement
 # configuration this change may not move.
+# llmlint: ignore[e2e_not_mocked] Only GitHub's Projects API is doubled to avoid writing the shared live board; the pinned store, recipes and source configuration are real.  # noqa: E501
 def test_project_copy_files_its_issues_in_the_configured_repository(tmp_path: Path) -> None:
     """A copy of items naming no repository creates their issues in the one this checkout names.
 
@@ -477,14 +495,12 @@ def test_project_copy_files_its_issues_in_the_configured_repository(tmp_path: Pa
         "the copy has to resolve the repository this checkout configures, and it "
         f"looked up {lookups}"
     )
-    creations = created_issue_inputs(_GitHubFixture.requests)
-    assert {payload.get("repositoryId") for payload in creations} == {REPOSITORY_NODE_ID}, (
+    creations = _write_inputs(_Operation.CREATE_ISSUE)
+    assert {creation.get("repositoryId") for creation in creations} == {REPOSITORY_NODE_ID}, (
         "every created issue has to carry the configured repository's own node id"
     )
     assert {issue.title for issue in BOARD.created} == {LOCAL_PROJECT, LOCAL_TASK_TITLE}
-    # Read off the board rather than off one mechanism: the adopted store files a task under
-    # its project as it creates the task (`parentIssueId`), an older one with `addSubIssue`.
-    filed = {(issue.parent_id, issue.content_id) for issue in BOARD.created if issue.parent_id}
+    filed = _filed()
     project, task = BOARD.created[0], BOARD.created[1]
     assert filed == {(project.content_id, task.content_id)}, (
         f"a project's tasks are its issue's sub-issues, and this copy filed {filed}"
@@ -596,6 +612,22 @@ def _created_titled(title: str) -> _Issue:
     raise AssertionError(f"the copy created no issue titled {title!r}: {BOARD.created}")
 
 
+def _filed() -> set[tuple[object, object]]:
+    """Each (project, task) sub-issue filing the board took, by the issues' content ids.
+
+    A copy files a task under its project either with `addSubIssue` or in the `createIssue`
+    that makes it, through its `parentIssueId`, so the pairs are read off what the board
+    holds afterwards: every created issue it records a parent for.
+    """
+    linked = {
+        (payload.get("issueId"), payload.get("subIssueId"))
+        for payload in _write_inputs(_Operation.ADD_SUB_ISSUE)
+    }
+    return linked | {
+        (issue.parent_id, issue.content_id) for issue in BOARD.created if issue.parent_id
+    }
+
+
 def _looked_up() -> list[_Repository]:
     return [
         request.repository for request in _GitHubFixture.requests if request.looks_up_repository
@@ -612,6 +644,7 @@ def _looked_up() -> list[_Repository]:
 # them. They run in `launch-monitor-observer:test`, keyed `launchMonitorObserverWorkspace`,
 # which is the edge every
 # other CLI-spawning journey in this file already pays.
+# llmlint: ignore[e2e_not_mocked] Only GitHub's Projects API is doubled to avoid writing the shared live board; the pinned store, recipes and source configuration are real.  # noqa: E501
 def test_project_copy_files_each_task_issue_in_the_repository_its_own_record_names(
     tmp_path: Path,
 ) -> None:
@@ -642,8 +675,8 @@ def test_project_copy_files_each_task_issue_in_the_repository_its_own_record_nam
         f"was created in {project.repository}"
     )
     created_in = {
-        payload.get("title"): payload.get("repositoryId")
-        for payload in created_issue_inputs(_GitHubFixture.requests)
+        creation.get("title"): creation.get("repositoryId")
+        for creation in _write_inputs(_Operation.CREATE_ISSUE)
     }
     expected_in = {
         PLACED_TASK_TITLES[_hosted(CONFIGURED_REPOSITORY)]: CONFIGURED_REPOSITORY,
@@ -654,7 +687,7 @@ def test_project_copy_files_each_task_issue_in_the_repository_its_own_record_nam
         assert created_in[title] == REPOSITORY_NODE_IDS[repository], (
             f"{title!r} has to be created in {repository}, and this copy created {created_in}"
         )
-    filed = {(issue.parent_id, issue.content_id) for issue in BOARD.created if issue.parent_id}
+    filed = _filed()
     assert filed == {
         (project.content_id, _created_titled(title).content_id)
         for title in PLACED_TASK_TITLES.values()
@@ -851,43 +884,38 @@ def test_a_secondary_rate_limit_is_told_apart_from_a_credential_this_token_lacks
 # predates this change, which replaced its elapsed-time control with a copy configured at twice
 # the shipped interval, about twelve seconds more; re-homing the measuring journeys into a
 # project of their own is the drafted follow-up.
+# llmlint: ignore[e2e_not_mocked] Only GitHub's Projects API is doubled to avoid writing the shared live board; the pinned store, recipes and source configuration are real.  # noqa: E501
 def test_a_copy_paces_its_content_creating_mutations(tmp_path: Path) -> None:
     """How fast a copy writes, measured at the far end of the wire.
 
     A gap between two mutations is only observable where they land, so the fixture is
     what times them; the source's own scheduling is invisible from outside it. As shipped,
-    the adopted store paces by GitHub's own window — a copy's few writes go out as fast as
-    they are answered while the minute has room, never more than GitHub's published ceiling
-    on content-generating requests in any minute — and spaces them only when an interval is
-    configured through the pacing setting. Both are asserted: the shipped copy inside the
-    ceiling, and a copy configured for twice the steady spacing keeping it, each gap at least
-    the interval it was configured to keep.
+    the store keeps GitHub's own published ceiling on content-generating requests over its
+    minute rather than by spacing every mutation, so no minute carries more than the
+    ceiling; an interval configured through the pacing setting still spaces every mutation,
+    each gap asserted near that interval.
     """
     _write_local_project(tmp_path)
     with _serving_board() as remote:
         shipped = _copy_to_the_board(tmp_path, remote)
         as_shipped = _mutation_gaps(_GitHubFixture.requests)
-        sent = [request.received for request in _GitHubFixture.requests if request.is_mutation]
+        created = _creations(_GitHubFixture.requests)
 
     assert shipped.returncode == 0, shipped.stdout + shipped.stderr
     assert len(as_shipped) >= 2, (
         "a copy of one project and one task sends several content-creating mutations; "
         f"this sent {len(as_shipped) + 1}"
     )
-    busiest = max(sum(1 for later in sent if 0 <= later - at < 60) for at in sent)
+    busiest = max(sum(1 for later in created if 0 <= later - at < 60) for at in created)
     assert busiest <= CONTENT_CREATION_PER_MINUTE, (
-        f"a copy sent {busiest} content-creating mutations within one minute, past GitHub's "
-        f"{CONTENT_CREATION_PER_MINUTE}"
+        f"no minute may carry more than {CONTENT_CREATION_PER_MINUTE} content creations; "
+        f"one carried {busiest}"
     )
 
-    # The configured copy copies a project of its own onto its fresh board: the first copy
-    # recorded a link to the item it made on the first board, and a re-copy follows that
-    # link to a board that no longer holds it, which the store refuses rather than
-    # creating anew.
     configured_root = tmp_path / "configured"
     configured_root.mkdir()
     _write_local_project(configured_root)
-    longer = 2 * STEADY_MUTATION_INTERVAL
+    longer = 2 * EVEN_MUTATION_INTERVAL
     with _serving_board() as remote:
         configured = _copy_to_the_board(
             configured_root, remote, min_mutation_interval_ms=str(round(longer * 1000))
@@ -1750,7 +1778,7 @@ def test_a_deferred_followups_item_reads_back_as_draft_and_a_re_copy_keeps_it_de
     assert again.returncode == 0, again.stdout + again.stderr
     (recopy,) = json.loads(again.stdout)["items"]
     assert (recopy["action"], recopy["destination"]) == ("updated", entry["destination"])
-    assert not _sent(_Operation.CREATE_ISSUE, recopied), "the re-copy filed a second issue"
+    assert not _write_inputs(_Operation.CREATE_ISSUE, recopied), "the re-copy filed a second issue"
     written = _status_writes(recopied)
     assert all(value == {"singleSelectOptionId": DEFERRED.id} for value in written), (
         f"a re-copy of a deferred ticket has to keep the {DEFERRED.name!r} option; it wrote "
@@ -3434,15 +3462,6 @@ def test_a_realistic_follow_up_run_reads_and_writes_only_the_items_it_is_about( 
             _charged(spent, _RunPhase.SEARCHES, f"searching for {cause}")
             assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
             assert _validated_and_copied(environment, path)["action"] == "created"
-            lookups = [
-                request.operation
-                for request in _GitHubFixture.requests
-                if request.operation in (_Operation.ORIGIN_LOOKUP, _Operation.ORIGIN_LOOKUPS)
-            ]
-            assert lookups == [_Operation.ORIGIN_LOOKUP], (
-                f"filing {cause} has to send `board-status`'s one origin lookup and the copy "
-                f"none of its own, and it sent {lookups}"
-            )
             _charged(spent, _RunPhase.WRITES, f"filing {cause}")
             filed.append(_Filed(ticket.drafts[0], cause, "Copied onto its item."))
 
@@ -4107,6 +4126,9 @@ def test_a_terminal_write_onto_a_board_without_its_mapped_option_is_refused_by_n
 # llmlint: ignore-end[e2e_not_mocked]
 
 
+# llmlint: ignore-block[e2e_not_mocked] The one boundary doubled is GitHub's Projects API, for
+# the reason the block around `_Board` above gives; the installed `onetaskgraph` and the
+# committed `followups` source are real, and read off their output and what the board served.
 def test_a_follow_up_ticket_is_created_in_its_own_repository_and_added_to_the_board(
     tmp_path: Path,
 ) -> None:
@@ -4119,18 +4141,19 @@ def test_a_follow_up_ticket_is_created_in_its_own_repository_and_added_to_the_bo
     copied, ticket = _copy_proposed_ticket(tmp_path, FOLLOWUPS_OPTIONS)
 
     assert copied.returncode == 0, copied.stdout + copied.stderr
-    creations = created_issue_inputs(_GitHubFixture.requests)
-    assert [payload.get("repositoryId") for payload in creations] == [
+    creations = _write_inputs(_Operation.CREATE_ISSUE)
+    assert [creation.get("repositoryId") for creation in creations] == [
         REPOSITORY_NODE_IDS[SIBLING_REPOSITORY]
     ], "the ticket's issue has to be created in the repository its `repositories` names"
     (created,) = BOARD.created
     assert (created.title, created.repository) == (ticket.title, SIBLING_REPOSITORY)
-    # Filed on the board by the create itself (`projectV2Ids`), or by a separate add.
-    filed = [payload.get("projectV2Ids") for payload in creations] + [
-        [request.input_value("projectId")] for request in _sent(_Operation.ADD_TO_BOARD)
-    ]
-    assert [BOARD.node_id] in filed, (
-        f"the issue created in the sibling has to be added to the board as its item: {filed}"
+    # Filed on the board by the create itself, through its `projectV2Ids`, or added after it.
+    filed_by_create = [creation.get("projectV2Ids") for creation in creations]
+    added = [payload.get("contentId") for payload in _write_inputs(_Operation.ADD_TO_BOARD)]
+    assert filed_by_create == [[BOARD.node_id]] or added == [created.content_id], (
+        "the issue created in the sibling has to be added to the board as its item",
+        filed_by_create,
+        added,
     )
     assert created.origin == PROPOSED_ID, "the board row does not hold the origin the copy wrote"
 
@@ -4146,7 +4169,7 @@ def test_a_follow_up_ticket_naming_a_repository_the_token_cannot_see_is_refused_
 
     assert copied.returncode != 0, copied.stdout
     assert str(UNREACHABLE_REPOSITORY) in copied.stderr, copied.stderr
-    assert not _sent(_Operation.CREATE_ISSUE), "an issue was created for a refused ticket"
+    assert not _write_inputs(_Operation.CREATE_ISSUE), "an issue was created for a refused ticket"
     assert not _sent(_Operation.ADD_TO_BOARD), "a refused ticket was added to the board"
     assert not BOARD.created
 
@@ -4227,14 +4250,19 @@ def test_a_transferred_follow_up_issue_is_updated_in_place_by_a_re_copy_of_its_o
     assert again.returncode == 0, again.stdout + again.stderr
     (entry,) = json.loads(again.stdout)["items"]
     assert entry["action"] == "updated", entry
-    assert not _sent(_Operation.CREATE_ISSUE, recopied), "the re-copy created a replacement issue"
+    assert not _write_inputs(_Operation.CREATE_ISSUE, recopied), (
+        "the re-copy created a replacement issue"
+    )
     assert not _sent(_Operation.ADD_TO_BOARD, recopied), "the re-copy added a second board item"
-    updated = {request.input_value("id") for request in _sent(_Operation.UPDATE_ISSUE, recopied)}
+    updated = {payload.get("id") for payload in _write_inputs(_Operation.UPDATE_ISSUE, recopied)}
     assert updated == {node}, f"the re-copy has to update the transferred issue, not {updated}"
     rows = [issue for issue in BOARD.issues if issue.origin == PROPOSED_ID]
     assert [(one.item_id, one.content_id, one.repository) for one in rows] == [
         (row, node, SIBLING_REPOSITORY)
     ], "the board has to hold exactly the one transferred row for the ticket"
+
+
+# llmlint: ignore-end[e2e_not_mocked]
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

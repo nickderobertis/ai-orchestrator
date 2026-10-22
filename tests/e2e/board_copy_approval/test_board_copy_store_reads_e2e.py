@@ -9,9 +9,10 @@ with the plan's copy filed beside other projects, and read which store calls eac
 made through the store-call audit: the plan's own record is read once by id, the board's
 project listing is never walked to find it, and what each recipe answers is unchanged.
 
-The one board listing left is the plan-location step's check for a second copy, which
-the store this host adopts can answer no narrower way; it is held here to one listing per
-source it looks in.
+The plan-location step's check for a second copy lists only the projects copied from the
+plan, with `project list --origin` once per source it looks in, which the board answers by a
+query narrowed to that origin; it runs on a board at the `plans` board's scale and is held
+to that listing, and to reading no whole-board page, by the double's own request log.
 """
 
 from __future__ import annotations
@@ -27,11 +28,16 @@ from github_board import (
     AUTHORING_ROOT_ENV,
     AUTHORING_SOURCE,
     BOARD,
+    PLANS_BOARD_SCALE,
     _audit_follow_up_calls,
+    _board_cost,
     _BoardItemId,
+    _GitHubFixture,
+    _GraphQLRequest,
     _Issue,
     _IssueNodeId,
     _serving_board,
+    populate,
 )
 from project_fixtures import designed, graph_image, reviewed
 from test_board_copy_design_approval_e2e import (
@@ -208,6 +214,8 @@ class _Audited(NamedTuple):
     ran: subprocess.CompletedProcess[str]
     #: Each store invocation the recipe's Python made, as its argv after the binary.
     calls: list[list[str]]
+    #: Every request the board double received while the recipe ran.
+    requests: list[_GraphQLRequest]
 
 
 def _audited(tmp_path: Path, environment: Mapping[str, str], *command: str) -> _Audited:
@@ -216,6 +224,7 @@ def _audited(tmp_path: Path, environment: Mapping[str, str], *command: str) -> _
     audit.mkdir()
     audited = dict(environment)
     trace = _audit_follow_up_calls(audit, audited)
+    _GitHubFixture.requests.clear()
     ran = subprocess.run(
         list(command),
         cwd=REPO_ROOT,
@@ -225,13 +234,14 @@ def _audited(tmp_path: Path, environment: Mapping[str, str], *command: str) -> _
         timeout=e2e_timeout(600),
         check=False,
     )
+    requests = list(_GitHubFixture.requests)
     lines = trace.read_text(encoding="utf-8").splitlines() if trace.exists() else []
     calls = [
         list(entry["argv"][1:])
         for entry in (json.loads(line) for line in lines)
         if entry["kind"] == "store"
     ]
-    return _Audited(ran, calls)
+    return _Audited(ran, calls, requests)
 
 
 def _verb(call: list[str]) -> tuple[str, ...]:
@@ -247,6 +257,22 @@ def _sources(call: list[str]) -> list[str]:
 def _listings(calls: list[list[str]]) -> list[list[str]]:
     """The `project list` calls among ``calls``."""
     return [call for call in calls if _verb(call) == ("project", "list")]
+
+
+def _origins(call: list[str]) -> list[str]:
+    """Every origin ``call`` names with `--origin`."""
+    return [value for flag, value in zip(call, call[1:], strict=False) if flag == "--origin"]
+
+
+def _narrowed_to_the_plan(located: _Audited) -> None:
+    """Every project listing ``located`` made names the plan's origin, and no request paged.
+
+    A listing without `--origin` is one the board answers by paging every project it holds,
+    and a board walk or an unnarrowed search is a whole-board page whatever asked for it.
+    """
+    for call in _listings(located.calls):
+        assert _origins(call) == [QUALIFIED], located.calls
+    assert _board_cost(located.requests) == ([], []), _board_cost(located.requests)
 
 
 def _shown(calls: list[list[str]], project: str) -> int:
@@ -282,6 +308,7 @@ def test_approving_a_board_copy_reads_its_one_record_and_lists_no_board_project(
     with _serving_board() as remote:
         on_the_board = {**environment, **remote}
         _beside_other_projects()
+        populate(BOARD, PLANS_BOARD_SCALE)
         board_project = _copied_onto_the_board(on_the_board)
 
         approved = _audited(tmp_path, on_the_board, "just", "approve-design", board_project)
@@ -308,6 +335,7 @@ def test_the_launch_gate_reads_the_plans_one_record_and_still_refuses_a_changed_
     with _serving_board() as remote:
         on_the_board = {**environment, **remote}
         _beside_other_projects()
+        populate(BOARD, PLANS_BOARD_SCALE)
         board_project = _copied_onto_the_board(on_the_board)
         approved = _recipe(on_the_board, "approve-design", board_project)
         assert approved.returncode == 0, approved.stdout + approved.stderr
@@ -363,6 +391,7 @@ def test_copying_the_plan_reads_each_local_record_once_and_copies_it_as_before(
     with _serving_board() as remote:
         on_the_board = {**environment, **remote}
         _beside_other_projects()
+        populate(BOARD, PLANS_BOARD_SCALE)
         copied = _audited(
             tmp_path, on_the_board, "just", "copy-plan", QUALIFIED, "--to", BOARD_SOURCE
         )
@@ -406,14 +435,16 @@ def test_the_plan_location_step_finds_the_copy_by_its_link_and_lists_only_for_a_
 ) -> None:
     """After a real copy, the step names the board copy as the home, read by the store's link.
 
-    The plan's own record is read for the link, the copy's record is read by id, and the
-    only project listings are the two-copy check's, one for the board and one for the
-    source its route names.
+    On a board at the `plans` board's scale, the plan's own record is read for the link, the
+    copy's record is read by id, and the only project listings are the two-copy check's,
+    one for the board and one for the source its route names, each narrowed to the plan's
+    origin, so no request pages the board.
     """
     environment = _drafted(tmp_path, monkeypatch)
     with _serving_board() as remote:
         on_the_board = {**environment, **remote}
         _beside_other_projects()
+        populate(BOARD, PLANS_BOARD_SCALE)
         board_project = _copied_onto_the_board(on_the_board)
         located = _located(tmp_path, on_the_board)
 
@@ -429,6 +460,7 @@ def test_the_plan_location_step_finds_the_copy_by_its_link_and_lists_only_for_a_
     listed = sorted(source for call in _listings(located.calls) for source in _sources(call))
     assert listed == sorted([BOARD_SOURCE, ROUTED_STAND_IN]), located.calls
     assert all(len(_sources(call)) == 1 for call in _listings(located.calls)), located.calls
+    _narrowed_to_the_plan(located)
 
 
 def test_the_plan_location_step_refuses_a_plan_it_cannot_point_a_reviewer_at(
@@ -443,6 +475,7 @@ def test_the_plan_location_step_refuses_a_plan_it_cannot_point_a_reviewer_at(
     with _serving_board() as remote:
         on_the_board = {**environment, **remote}
         _beside_other_projects()
+        populate(BOARD, PLANS_BOARD_SCALE)
         uncopied = _located(tmp_path, on_the_board)
 
         board_project = _copied_onto_the_board(on_the_board)
@@ -494,6 +527,7 @@ def test_the_plan_location_step_refuses_a_plan_it_cannot_point_a_reviewer_at(
 
     for refused in (uncopied, unstamped, dangling, elsewhere, malformed, twice):
         assert refused.ran.returncode == 2, refused.ran.stdout + refused.ran.stderr
+        _narrowed_to_the_plan(refused)
         assert QUALIFIED in refused.ran.stderr, refused.ran.stderr
         assert "holds the plan at" not in refused.ran.stdout, refused.ran.stdout
     assert "holds no project the store records as copied from" in uncopied.ran.stderr, (

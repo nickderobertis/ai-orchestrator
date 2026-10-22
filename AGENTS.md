@@ -599,16 +599,10 @@ host declares, never by choice** — in onetaskgraph's user layer, outside every
 so no tracked file names the organization or where its work goes (`docs/orchestration.md`,
 *Host-local sources and routes*). A follow-up ticket whose repositories all match such a
 route is filed there; read where one lands with `just plans sources route plans --repository
-<origin>`. While the store's public boundary is off, as this host lands it, a plan's home
-goes where its tasks naming a repository route: when every one routes to one tracker the
-plan lands whole there, a step naming no repository going with its home, and when they
-disagree the home stays on `plans` beside a member project in each other tracker; a home
-that already exists stays where it is. Approve and launch the home id `just finish-plan`
-reports. **A host that switches the boundary on homes a plan touching private work in a
-private source**: the home goes to the source declared private its private tasks route to,
-its public tasks stay on `plans` in a member there, and a plan whose private tasks reach
-no such source, or two of them before it has a home, is refused before anything is written
-(`docs/orchestration.md`, *The public write boundary*). On a routed Linear tracker a plan
+<origin>`. Where a plan's home lands is the store's to decide from the repositories its
+tasks and its project name (`docs/orchestration.md`, *The public write boundary*), never yours:
+approve and launch the home id `just finish-plan` reports, wherever it landed, and a plan meant
+to keep its home on `plans` names a public repository. On a routed Linear tracker a plan
 task reads Todo once copied, Queued once a run claims it, In Progress while its node works, Needs Attention when that node
 failed, parked or was skipped, and Done once it settled; Proposed, Backlog and Canceled are
 proposed, deferred and withdrawn. The member project reads Planned once copied,
@@ -1256,22 +1250,12 @@ reaches the board in `Proposal`; the user moving it to `Todo` is what accepts it
 later copy keeps whatever status the board holds, so a re-dispatch never moves an item
 back. Withdrawal closes a proposal as not planned, and a run never withdraws a ticket the
 board shows as accepted — only a person moves an accepted item, with one exception, which is
-the user's decision: the engine moves a card to `Done`, accepted ones included, when a landing
-it performs or relays closes the card's issue — a run's landing, or one of `just
-publish-branch`, `just repo-recover` and `just integrate` — or when a run it adopts carries
-such a landing whose closure it had not yet written. The store finds the card on every source
-`onetaskgraph.yaml` declares, so nothing here names a source for it, and nothing here runs
-`task status reconcile` or reads the board for closures. A `just integrate` landing runs in the
-integrated repository's own checkout, so it moves the card only when that tree carries the
-store configuration — this repository's does — until the follow-up "just integrate in another
-repository's checkout closes no follow-up card", the engine's integrate not carrying the
-launching host's sources as `publish-branch` does, is fixed. **The accepted lag**: an issue
-closed outside the stack — by hand, by a change request merged after its run ended in a run
-nobody adopts again, by a landing made with raw `onevcs` outside the engine, or by an integrate
-landing in a repository whose tree carries no store configuration — reads as done or
-cancelled to every plan-store reader at once, while its card keeps its old option until
-someone runs `just plans task status reconcile --source followups`, on demand. Linear needs
-neither, because a Linear issue's workflow state is its closure. A person may instead move a
+the user's decision: the engine moves a card to `Done`, accepted ones included, when a
+landing it performs, relays or adopts closes the card's issue. An `integrate` landing
+moves the card only when the integrated repository carries the store configuration.
+**The accepted lag**: a closure not projected to the card reads as done or cancelled at
+once; run `just plans task status reconcile --source followups` on demand to update its
+old option. Linear's workflow state is already its closure. A person may instead move a
 ticket to `Deferred`: not accepted and picked up by no agent, it still takes a later run's
 evidence, and no run withdraws it either. **A dispatch briefed to pick up accepted follow-up
 tickets selects `Todo` items only.** `python -m orchestrator.follow_up_tickets statuses`

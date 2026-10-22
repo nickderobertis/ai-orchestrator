@@ -333,3 +333,43 @@ def test_a_flag_after_a_pipe_is_read_against_the_program_the_pipe_starts() -> No
     assert [drift.named for drift in _drift_in(unpiped, "here", {})] == [
         "the flag `--template-loader`"
     ]
+
+
+class StoreCall(NamedTuple):
+    """One plan-store verb and flag this repository's code calls through the store's SDK."""
+
+    #: The `onetaskgraph` command path the SDK method runs.
+    path: tuple[str, ...]
+    #: The long flag the call relies on.
+    flag: str
+    #: The SDK keyword that sends it, as the calling module spells it.
+    keyword: str
+    #: The module that makes the call, relative to the repository root.
+    caller: str
+
+
+#: The plan-store calls whose flag is a contract this repository relies on rather than a
+#: convenience: `plan_locations`'s two-copy check is one `project list --origin` per source,
+#: which a board answers without listing every project it holds, so a pinned store that
+#: dropped or renamed the flag would turn that check back into a whole-board listing or a
+#: refusal on every finish-plan.
+STORE_CALLS = (
+    StoreCall(("project", "list"), "--origin", "origin=origin", "orchestrator/plan_store.py"),
+)
+
+
+def test_every_store_flag_this_code_relies_on_is_one_the_pinned_store_accepts() -> None:
+    """The pinned `onetaskgraph` takes each flag :data:`STORE_CALLS` names, on that verb.
+
+    Read from the binary's own `--help` like the prose gate above, and held to the calling
+    module too, so the row cannot outlive the call it describes.
+    """
+    surface = surface_of("onetaskgraph")
+    for call in STORE_CALLS:
+        assert call.path in surface.paths, f"the pinned onetaskgraph has no `{' '.join(call.path)}`"
+        assert surface.accepts(call.path, call.flag), (
+            f"the pinned onetaskgraph's `{' '.join(call.path)}` does not accept `{call.flag}`, "
+            f"which {call.caller} sends"
+        )
+        caller = (REPO_ROOT / call.caller).read_text(encoding="utf-8")
+        assert call.keyword in caller, f"{call.caller} no longer sends {call.keyword}"

@@ -920,6 +920,20 @@ INTERRUPTING_NOTES_LANDINGS = (
     ),
 )
 
+#: The engine landing of the plan that makes copying a plan onto the board fast: it links
+#: the onetaskgraph 0.9.2 store crates, whose copy reads and writes are bounded by the plan
+#: rather than by the board and which list a plan's copies with `project list --origin`.
+#: `tests/e2e/board_copy_approval/test_board_copy_store_reads_e2e.py` drives the copy, the
+#: approval and the plan-location step through the recipes on this host.
+COPY_SPEED_LANDINGS = (
+    Landing(
+        node="op-relink-copy-speed",
+        change_request=1070,
+        commit="4dc67713f1a4371aa2017424dfae9a837e9e2603",
+        did="link the plan store that copies without walking the board",
+    ),
+)
+
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
     Landing("op-host-view", 861, "61194ef", "bound the host view and publish its JSON reading"),
@@ -972,6 +986,7 @@ LANDINGS = (
     *DRAFT_HOLD_LANDINGS,
     *PUBLICATION_REPAIRS_LANDINGS,
     *INTERRUPTING_NOTES_LANDINGS,
+    *COPY_SPEED_LANDINGS,
 )
 
 

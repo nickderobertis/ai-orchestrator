@@ -515,6 +515,23 @@ def read_document_assets(document: str) -> list[StoreAsset]:
 
 
 def read_projects(source: str) -> list[StoreProject]:
+    return _listed_projects(f"the projects of {source!r}", source)
+
+
+def project_copies(source: str, origin: str) -> list[StoreProject]:
+    """Every project of ``source`` the store records as copied from ``origin``.
+
+    The store's `project list --origin`, which a board answers with a query narrowed to that
+    origin rather than by paging every project it holds, so the read is bounded by the
+    copies it finds and never by the board's size. Zero, one or several may match.
+    """
+    return _listed_projects(
+        f"the projects of {source!r} copied from {origin}", source, origin=origin
+    )
+
+
+def _listed_projects(what: str, source: str, **query: object) -> list[StoreProject]:
+    """Every project of ``source`` the store's `project list` answers for ``query``."""
     projects = [
         StoreProject(
             QualifiedProjectId(x.id.model_dump()),
@@ -522,9 +539,7 @@ def read_projects(source: str) -> list[StoreProject]:
             x.item.metadata,
             x.item.location.model_dump(mode="python") if x.item.location else None,
         )
-        for page in every_page(
-            f"the projects of {source!r}", client().project_list, source=[source]
-        )
+        for page in every_page(what, client().project_list, source=[source], **query)
         for x in page.items
     ]
     if any(not str(project.qualified_id).startswith(f"{source}:") for project in projects):

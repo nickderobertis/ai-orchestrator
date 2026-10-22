@@ -16,11 +16,11 @@ and the pinned `onevcs`, answering from a registry this module writes through `o
   rather than a layer that loaded and was never asked;
 * **the routes**, through `just plans`, the recipe over the store's own copy: an
   organization's follow-up ticket reaches its own tracker through the layer's `followups`
-  route; an organization's plan is copied straight to its tracker, and
-  a copy of it onto `plans` is refused whole rather than routed; a plan mixing it with public
-  work is refused and never split; personal private work — alone or beside a public
-  repository — is refused at the board; and a public-only plan copies onto `plans` exactly as
-  before.
+  route; an organization's plan is copied straight to its tracker, and a copy of it onto
+  `plans` homes it there whole; a plan mixing it with public work homes with its private work
+  in that tracker, its public task alone reaching the board and nothing private with it;
+  personal private work — alone or beside a public repository — is refused at the board; and
+  a public-only plan copies onto `plans` exactly as before.
 
 GitHub's Projects API is the loopback board `tests/github_board.py` serves, and the
 organization's two Linear trackers are folders of Markdown declared private, as the real ones
@@ -292,14 +292,14 @@ def test_an_organization_s_ticket_reaches_its_own_tracker_by_the_layer_s_route(
         ("personal-mixed", [PUBLIC, PERSONAL]),
     ],
 )
-def test_a_plan_touching_private_work_is_refused_whole_at_the_board(
+def test_a_plan_touching_personal_private_work_is_refused_whole_at_the_board(
     layer: Layer, name: str, repositories: list[str]
 ) -> None:
     """A copy onto `plans` refuses a plan naming a private repository no route places.
 
-    The plan is a private item, and with no source declared private for its private voters
-    to place at, the store refuses it at a source not declared private before anything is
-    written: nothing reaches the board, and nothing reaches the organization's tracker.
+    The plan is a private item, and with no private source its private voters place at it has
+    nowhere private to go: the store refuses it before any route places a task, so nothing
+    reaches the board and nothing reaches the organization's tracker.
     """
     plan = _plan(layer, name, repositories)
 
@@ -311,37 +311,56 @@ def test_a_plan_touching_private_work_is_refused_whole_at_the_board(
     assert _held(layer.folders[onetaskgraph_user_layer.ORGANIZATION_PLANS]) == []
 
 
+#: What names an organization's work, and so may never reach the public board: its
+#: repository's owner and name, as `onevcs boundary check` would find them.
+ORGANIZATION_TERMS = ("hiddenco", "qh-api")
+
+
+def _board_text() -> str:
+    """Everything the public board holds: each created issue's title, body and origin."""
+    return "\n".join(
+        f"{issue.title}\n{issue.body}\n{issue.origin or ''}" for issue in BOARD.created
+    )
+
+
 @pytest.mark.parametrize(
-    ("name", "repositories", "public_tasks"),
+    ("name", "repositories", "on_the_board"),
     [
-        ("organization", [ORGANIZATION, ORGANIZATION], 0),
-        ("mixed", [PUBLIC, ORGANIZATION], 1),
+        ("organization", [ORGANIZATION, ORGANIZATION], []),
+        ("mixed", [PUBLIC, ORGANIZATION], ["mixed", "Task 0"]),
     ],
 )
-def test_a_plan_touching_an_organization_s_work_is_homed_in_its_private_tracker(
-    layer: Layer, name: str, repositories: list[str], public_tasks: int
+def test_a_plan_touching_an_organizations_work_homes_in_its_tracker_and_keeps_it_private(
+    layer: Layer, name: str, repositories: list[str], on_the_board: list[str]
 ) -> None:
-    """A copy onto `plans` of a plan naming an organization's repository homes it privately.
+    """A copy onto `plans` homes a plan holding an organization's work in that tracker.
 
-    With the public boundary on, the home goes to the source declared private that the
-    plan's private voters place at — the organization's tracker — with every private task
-    beside it, and the public tasks stay where their own repositories place them, on the
-    board. Nothing private reaches the board.
+    The plan is private, so its home goes to the source declared private that its private
+    tasks route to, with every private task and the project's record. A public task of a
+    mixed plan stays where its own repository places it, under a member project of the home
+    on the board, written through the screened boundary — and nothing the board holds names
+    the private home, the private task, or the organization's repository.
     """
     plan = _plan(layer, name, repositories)
+    folder = layer.folders[onetaskgraph_user_layer.ORGANIZATION_PLANS]
 
     copied = _run(layer, ["just", "plans", "project", "copy", plan, "--to", "plans"])
 
     assert copied.returncode == 0, copied.stdout + copied.stderr
-    held = _held(layer.folders[onetaskgraph_user_layer.ORGANIZATION_PLANS])
-    private = [index for index, origin in enumerate(repositories) if origin == ORGANIZATION]
-    assert held == [
-        f"projects/{name}.md",
-        *(f"tasks/{name}/task-{index}.md" for index in private),
-    ], held
-    on_board = [issue.body for issue in BOARD.created]
-    assert len([body for body in on_board if f"{plan}/task-" in body]) == public_tasks, on_board
-    assert not [body for body in on_board if ORGANIZATION in body], on_board
+    home = f"{onetaskgraph_user_layer.ORGANIZATION_PLANS}:{name}"
+    assert home in copied.stdout, copied.stdout
+    private = [
+        f"tasks/{name}/task-{index}.md"
+        for index, repository in enumerate(repositories)
+        if repository == ORGANIZATION
+    ]
+    assert _held(folder) == sorted([f"projects/{name}.md", *private]), _held(folder)
+    assert [issue.title for issue in BOARD.created] == on_the_board
+    held = _board_text()
+    for private_term in (home, *private, *(path[len("tasks/") : -3] for path in private)):
+        assert private_term not in held, (private_term, held)
+    for term in ORGANIZATION_TERMS:
+        assert term not in held.lower(), (term, held)
 
 
 def test_an_organization_s_plan_is_copied_straight_to_its_own_tracker(layer: Layer) -> None:

@@ -106,6 +106,34 @@ drives a private source receiving an organization's plan and the public board re
 `tests/e2e/board_copy_approval/test_board_copy_spike_evidence_e2e.py` a plan copied out of a
 private `authoring` whose spike reports resolve through the copy link the store records there.
 
+**Where a plan's home goes is the store's rule, and this host states it rather than holding
+its own.** A plan's home is placed by its **voters**: every task naming a repository, and the
+plan project's own `repositories` when it names any. A task naming no repository, and the design
+document, never vote; they go with the home.
+
+- **When every voter routes to one source, the whole plan lands there**: its project, its
+  tasks, those naming no repository, and its design document. So a plan whose one
+  repository-naming task is an organization's lands wholly in that organization's tracker, and
+  a plan that should keep its home on `plans` names a public repository, on a task or on its
+  project.
+- **While the boundary is off, voters that disagree leave the home on `plans`**, with each
+  routed task in a member project of its routed source.
+- **Once a host switches the boundary on, a plan touching an organization's work homes in that
+  organization's tracker.** An organization's repositories then answer private, so the plan is
+  private, and its home goes to the source declared private that its private tasks route to,
+  with every private task and its design document. A public task stays where its own
+  repository places it, under the home's member project, and its write is screened like any
+  other, so nothing it carries onto a public board names the private plan. What the screen
+  refuses — a public task that inherits the private plan's classification at a destination
+  that applies it — is refused before anything is written, and that plan is authored as two.
+  Approve and launch it by the home id `just finish-plan` reports, as for any other plan.
+- **Personal private work has no route onto a public board at all.** A source's
+  classification routes are tried before its repository routes for a private item, and routes
+  never chain, so a `{classification: private}` route on `plans` would send an organization's
+  work to the personal store too; a user layer declares none, a plan or task naming a private
+  repository no route matches is refused at `plans`, and a person writes it to a private store
+  by naming that store.
+
 ### Where a plan's tasks land: the board, or a routed organization's tracker
 
 **A task's destination follows its repository, through the store's routes, and nobody
@@ -115,32 +143,14 @@ task whose `repositories` all match it to the routed source — an organization'
 <origin>` answers where one would land. A follow-up ticket is copied as a task, so an
 organization's root cause reaches its tracker by that route.
 
-**While the boundary is off, a plan's home goes where its repository-naming tasks route.**
-Only a task naming a repository votes; a step naming none, and every document, goes with its
-home wherever the home went. When every voter routes to one tracker the plan lands whole
-there: its project, its tasks and its design document. When the voters disagree, the home
-stays on `plans` with its design document and its unrouted tasks, and the routed tasks go
-into one member project in the routed source, tied to the home by `onetaskgraph.members` on
-the home and `onetaskgraph.member_of` on the member. A home that already exists stays where it
-is. `just finish-plan` reports the home's qualified id; `just approve-design <home>` records
-the approval on the design document wherever it is, and `just orchestrate <home>` runs the
-home with its members as one run, writing each settlement to the task's own item.
-
-**Once a host switches the boundary on, a plan touching private work is homed in a private
-source.** An organization's repositories then answer private, so its tasks are private and
-the project holding any of them is private too. So:
-
-- a plan copied onto `plans` that names an organization's repository is homed in the source
-  declared private that its private tasks route to — that organization's tracker — with its
-  private tasks and its design document, and its public tasks stay on `plans` in the home's
-  member project there; one whose private tasks route to two private sources is refused
-  before anything is written, naming each;
-- personal private work has no route onto a public board at all. Under the adopted store a
-  source's classification routes are tried before its repository routes for a private item,
-  and routes never chain, so a `{classification: private}` route on `plans` would send an
-  organization's work to the personal store too; a user layer declares none, a plan or task
-  naming a private repository no route matches is refused at `plans`, and a person writes it
-  to a private store by naming that store.
+**A plan's home goes where its repository-naming work routes**, by the rule stated once at
+the end of [the public write boundary](#the-public-write-boundary). Where that leaves a plan
+split, its home keeps its design document and the tasks that went with it, and each routed
+task goes into one member project in its routed source, tied to the home by
+`onetaskgraph.members` on the home and `onetaskgraph.member_of` on the member. `just
+finish-plan` reports the home's qualified id wherever it landed; `just approve-design <home>`
+records the approval on the design document wherever it is, and `just orchestrate <home>` runs
+the home with its members as one run, writing each settlement to the task's own item.
 
 A public-only plan copies onto `plans` exactly as before.
 `tests/plan_tooling/host_layer_routing/test_host_layer_routing_e2e.py` and

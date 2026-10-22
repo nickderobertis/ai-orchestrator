@@ -169,15 +169,16 @@ def copied(project: str, destination: str) -> plan_store.StoreProject:
 def stamped_copies(project: str, sources: Sequence[str]) -> list[plan_store.StoreProject]:
     """Every project of ``sources`` the store records as copied from ``project``.
 
-    The two-copy check's one read, and the one listing left in this command: the store
-    this host adopts has no narrower way to find a second copy no link names than listing
-    each source and reading every project's origin stamp. When the adopted onetaskgraph
-    answers `project list --origin <SOURCE:ID>`, this becomes that one call per source.
+    The two-copy check's one read: the store's `project list --origin <SOURCE:ID>` once per
+    source, which a board answers by a query narrowed to that origin, so a second copy no
+    link names is found without listing every project a source holds. Each answer is still
+    held to the stamp it was asked for, so a store answering more than it was asked cannot
+    make one copy read as two.
     """
     return [
         held
         for source in sources
-        for held in plan_store.read_projects(source)
+        for held in plan_store.project_copies(source, project)
         if held.metadata.get(plan_store.ORIGIN_KEY) == project
     ]
 
