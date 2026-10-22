@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -45,6 +46,7 @@ import short_state
 from harness_indirections import established_indirections
 from project_fixtures import helper, project_from_plan
 from waits import timeout as e2e_timeout
+from waits import until
 
 from orchestrator.plan_store import WRITABLE_PLUGIN
 from orchestrator.root import REPO_ROOT
@@ -423,10 +425,15 @@ def _run_end_hook_logs(run_root: Path) -> list[Path]:
     ]
 
 
-def test_a_follow_up_run_names_only_its_budget_closeout_and_launches_no_follow_up_run(
+def test_a_follow_up_run_names_only_its_closeout_and_launches_no_follow_up_run(
     succeeded: Succeeded,
 ) -> None:
-    """A follow-up run's one run-end hook is its own budget closeout, never `run-ended.sh`."""
+    """A follow-up run's one run-end hook is its own closeout, never `run-ended.sh`.
+
+    The stand-in agent answers nothing, so the closeout refuses the one draft it was given
+    and keeps itself and its snapshot for a re-run: the success the engine settled is not
+    reported as verification.
+    """
     bench, follow_up = succeeded.ended.bench, succeeded.follow_up
 
     assert succeeded.watched.returncode == 0, succeeded.watched.stdout + succeeded.watched.stderr
@@ -437,11 +444,22 @@ def test_a_follow_up_run_names_only_its_budget_closeout_and_launches_no_follow_u
     assert launched.get("failure_hook") == closeout, launched
     assert closeout != hooked.get("success_hook"), (launched, hooked)
     assert "run-ended" not in closeout, launched
-    # A passing closeout retires the per-launch executable it ran as.
-    assert not Path(closeout).exists(), closeout
+    # The hook fires once the driver has let go, which a settled watch may read first.
+    until(
+        "the follow-up run's closeout to end",
+        lambda: "exit: 1;" in _just(bench, "results", follow_up, seconds=60).stdout,
+        seconds=e2e_timeout(60),
+        state=lambda: _just(bench, "results", follow_up, seconds=60).stdout,
+    )
     logs = _run_end_hook_logs(bench.runs / follow_up)
     assert [log.name for log in logs] == ["success.log"], logs
-    assert "run-ended:" not in logs[0].read_text("utf-8"), logs[0].read_text("utf-8")
+    said = logs[0].read_text("utf-8")
+    assert "run-ended:" not in said, said
+    assert "closeout refused: `check-dispositions` refused what is named above" in said, said
+    assert Path(closeout).exists(), closeout
+    command = shlex.split(Path(closeout).read_text("utf-8").split("exec ", 1)[1])
+    snapshot = Path(command[command.index("--measured") + 1])
+    assert snapshot.exists(), command
     assert not list(bench.runs.glob(f"{follow_up}{FOLLOW_UPS_SUFFIX}*"))
 
 

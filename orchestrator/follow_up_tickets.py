@@ -71,7 +71,7 @@ import sys
 import tempfile
 import time
 from collections import Counter
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -6740,11 +6740,15 @@ def _parser() -> _Parser:
     )
     budgets_reported.add_argument("run", type=_budget_run, metavar="RUN-ID")
     for name, help in (
-        ("write-budget-closeout", "write a per-launch executable budget closeout hook"),
+        ("write-closeout", "write a per-launch executable closeout hook"),
         (
-            "budget-closeout",
-            "validate and report a launch's budget account, then retire its snapshot",
+            "closeout",
+            "validate a launch's tickets, dispositions and budget account, report the budget "
+            "account, then retire its snapshot",
         ),
+        # The name hooks written before the closeout checked tickets and dispositions
+        # carry: a run launched then still fires it, so it runs the whole closeout too.
+        ("budget-closeout", "the closeout, under the name earlier launches' hooks carry"),
     ):
         closeout = commands.add_parser(name, help=help)
         closeout.add_argument("--root", type=Path, required=True, help=root_help)
@@ -6969,7 +6973,7 @@ def _budgets_reported(arguments: argparse.Namespace, *, count: bool = False) -> 
     return SOUND
 
 
-def _budget_closeout_written(arguments: argparse.Namespace) -> int:
+def _closeout_written(arguments: argparse.Namespace) -> int:
     """Write only the invocation of the module's closeout, safely quoted for the shell."""
     try:
         snapshot = _artifact(arguments.measured)
@@ -6983,7 +6987,7 @@ def _budget_closeout_written(arguments: argparse.Namespace) -> int:
             sys.executable,
             "-m",
             "orchestrator.follow_up_tickets",
-            "budget-closeout",
+            "closeout",
             "--root",
             str(arguments.root.resolve()),
             "--board",
@@ -7005,17 +7009,37 @@ def _budget_closeout_written(arguments: argparse.Namespace) -> int:
     return SOUND
 
 
-def _budget_closed_out(arguments: argparse.Namespace) -> int:
-    """The engine's run-end hook: validate against this launch's snapshot and report it."""
-    checked = _budgets_checked(arguments)
-    reported = _budgets_reported(arguments)
-    if status := checked or reported:
+def _closed_out(arguments: argparse.Namespace) -> int:
+    """An initial-mode launch's closeout: every check its verification rests on, then report.
+
+    The engine runs it as a detached launch's run-end hook and an attached launch runs it
+    once its run returns, so neither path reports verification the checks did not make:
+    every ticket the run holds against the ticket shape, the disposition account against
+    the drafts it was given and the board, and the budget account against this launch's
+    snapshot. Each refusal is named on the closing lines, which are the ones `results`
+    keeps of a hook's output, beside the re-dispatch that recovers it.
+    """
+    tickets = sorted((arguments.root / TASKS_DIRECTORY / arguments.run / TICKETS).glob("*.md"))
+    checks: tuple[tuple[str, Callable[[], int]], ...] = (
+        ("check-run", lambda: _validated(tickets)),
+        ("check-dispositions", lambda: _accounted(arguments)),
+        ("check-budgets", lambda: _budgets_checked(arguments)),
+        ("budget-results", lambda: _budgets_reported(arguments)),
+    )
+    refused = [(name, status) for name, check in checks if (status := check())]
+    if refused:
+        for name, _ in refused:
+            print(
+                f"{PROG}: closeout refused: `{name}` refused what is named above", file=sys.stderr
+            )
         print(
-            f"{PROG}: closeout refused; snapshot {arguments.measured} and hook {arguments.hook} "
-            "were kept; correct the account, then run that hook again",
+            f"{PROG}: closeout refused, so run {arguments.run}'s follow-ups are not verified; "
+            f"snapshot {arguments.measured} and hook {arguments.hook} were kept; correct what is "
+            "named above and run that hook again, or re-dispatch with "
+            f"'just follow-ups {arguments.run} --feedback FILE'",
             file=sys.stderr,
         )
-        return status
+        return refused[0][1]
     try:
         arguments.hook.unlink()
         arguments.measured.unlink()
@@ -7370,10 +7394,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return SOUND
         case "check-budgets":
             return _budgets_checked(arguments)
-        case "write-budget-closeout":
-            return _budget_closeout_written(arguments)
-        case "budget-closeout":
-            return _budget_closed_out(arguments)
+        case "write-closeout":
+            return _closeout_written(arguments)
+        case "closeout" | "budget-closeout":
+            return _closed_out(arguments)
         case "budget-results":
             return _budgets_reported(arguments)
         case "budget-overruns":

@@ -31,6 +31,7 @@ from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 import follow_up_boundary
 import follow_up_variables
@@ -56,14 +57,19 @@ from follow_up_ticket_shape import (
 )
 from follow_up_ticket_shape import ROOT_CAUSE as PLAIN_ROOT_CAUSE
 from follow_up_ticket_shape import SCHEMA_10_ROOT_CAUSE as SHARED_ROOT_CAUSE
-from onetaskgraph_sdk import CopyReport, QueryResponseOfQualifiedTask
+from onetaskgraph_sdk import (
+    CopyReport,
+    QueryResponseOfQualifiedTask,
+)
 from published_tools import ONETASKGRAPH_BIN
 
 from orchestrator import follow_up_comments as comments
 from orchestrator import follow_up_drafts as drafts
 from orchestrator import follow_up_tickets as tickets
 from orchestrator import plan_store
+from orchestrator.plan_budgets import Direction
 from orchestrator.plan_store import WRITABLE_PLUGIN
+from orchestrator.project_store import frontmatter
 from orchestrator.root import REPO_ROOT
 
 RUN = "listing-run"
@@ -372,7 +378,9 @@ SOUND_TICKET = tickets.Ticket(
 
 
 def _ticket(**departures: object) -> tickets.Ticket:
-    return dataclasses.replace(SOUND_TICKET, **departures)
+    # Negative fixtures deliberately put malformed values into dataclass fields so the
+    # public validator, rather than the helper, decides which records it refuses.
+    return dataclasses.replace(SOUND_TICKET, **cast(Any, departures))
 
 
 def _item(ticket: tickets.Ticket | None = None) -> dict[str, object]:
@@ -902,10 +910,12 @@ def test_an_evidence_comment_is_owned_by_the_run_its_last_line_names() -> None:
     assert comment.splitlines()[0] == f"Additional evidence from follow-up run `{RUN}`."
     assert comment.rstrip("\n").splitlines()[-1] == EVIDENCE_MARKER
     owner = tickets.comment_owner(comment)
-    assert owner == tickets.CommentOwner(RUN, CAUSE)
+    assert owner == tickets.CommentOwner(tickets.RunId(RUN), tickets.RootCause(CAUSE))
     assert owner == (RUN, CAUSE, tickets.CommentKind.EVIDENCE, None, None)
     # The store keeps a body with trailing blank lines; the marker is still the last line.
-    assert tickets.comment_owner(comment + "\n\n") == tickets.CommentOwner(RUN, CAUSE)
+    assert tickets.comment_owner(comment + "\n\n") == tickets.CommentOwner(
+        tickets.RunId(RUN), tickets.RootCause(CAUSE)
+    )
 
 
 def test_an_evidence_comment_already_on_the_board_still_reads_as_its_runs_evidence() -> None:
@@ -1016,6 +1026,7 @@ def test_a_comment_whose_last_line_is_no_marker_belongs_to_no_run(body: str) -> 
 
 
 def test_a_run_changes_only_its_own_issues_and_comments_and_adds_evidence_only_on_others() -> None:
+    unowned: dict[str, object]
     own, other, unowned = _item(), _item(_ticket(created_by_run=OTHER_RUN)), {"metadata": {}}
     reply = tickets.CommentKind.REPLY
 
@@ -1113,7 +1124,9 @@ def _answers(
     """One dispatch's answers, as `python -m orchestrator.follow_up_tickets answers` states them."""
     account = INITIAL_ACCOUNT if mode is tickets.Mode.INITIAL else FEEDBACK_ACCOUNT
     given: dict[str, object] = {**COMMON, **account, **overrides}
-    return tickets.answers(mode=mode, feedback=feedback, redispatch=redispatch, **given)
+    # This assembled CLI-shaped mapping includes deliberately invalid arguments; answers
+    # validates them, and its heterogeneous keyword signature cannot express that mapping.
+    return tickets.answers(mode=mode, feedback=feedback, redispatch=redispatch, **cast(Any, given))
 
 
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] No marker tiers these: every
@@ -1841,7 +1854,8 @@ def test_a_value_the_tasks_instructions_could_not_run_as_written_is_refused(
 ) -> None:
     """Each value the task embeds in an instruction is one the dispatch can run as written."""
     with pytest.raises(tickets.Refused, match=re.escape(refusal)):
-        _answers(**overrides)
+        # These parameterized overrides are invalid inputs whose refusal is under test.
+        _answers(**cast(Any, overrides))
 
 
 #: The store's own fields a ticket's contract names beside the ticket's record: its item's
@@ -2167,9 +2181,14 @@ def _on_board(ticket: Path) -> str:
     copied = plan_store.sdk(
         plan_store.client().task_copy([tickets.qualified_id(run, cause)], to=BOARD)
     )
-    destination = copied.items[0].root.destination
+    outcome = copied.items[0].root
+    assert outcome.action != "failed"
+    assert outcome.action != "skipped"
+    destination = outcome.destination
     assert destination is not None, copied
-    return destination.model_dump()
+    # The SDK destination is a RootModel[str]; model_dump is typed Any even though this
+    # scalar model serializes to the qualified id string the public API returns.
+    return cast(str, destination.model_dump())
 
 
 def _bound(ticket: tickets.Ticket, destination: str, *, linked: bool = True) -> tickets.Ticket:
@@ -2353,7 +2372,9 @@ def test_a_binding_is_written_only_once_set_and_reads_back_with_the_stores_own_k
     assert metadata[tickets.COPIES_KEY] == {BOARD: destination}
     assert tickets.ORIGIN_KEY not in metadata
 
-    earlier = dataclasses.replace(_bound(_ticket(), destination, linked=False), origin=destination)
+    earlier = dataclasses.replace(
+        _bound(_ticket(), destination, linked=False), origin=plan_store.QualifiedTaskId(destination)
+    )
     _write(drafts_root, earlier)
 
     assert tickets.read_ticket(path) == earlier
@@ -2559,13 +2580,18 @@ def test_a_re_copy_past_a_withdrawn_duplicate_rebinds_to_the_open_item_and_notes
     title = "some-service: the cursor skips its last page"
     staged = _ticket(title=title)
     if steered_by == "origin":
-        staged = dataclasses.replace(_bound(staged, duplicate, linked=False), origin=duplicate)
+        staged = dataclasses.replace(
+            _bound(staged, duplicate, linked=False), origin=plan_store.QualifiedTaskId(duplicate)
+        )
     ticket = _write(drafts_root, staged)
     planned = plan_store.sdk(
         plan_store.client().task_copy([tickets.qualified_id(RUN, CAUSE)], to=BOARD, dry_run=True)
     )
-    assert planned.items[0].root.destination is not None
-    assert planned.items[0].root.destination.model_dump() == duplicate, "the premise"
+    outcome = planned.items[0].root
+    assert outcome.action != "failed"
+    assert outcome.action != "skipped"
+    assert outcome.destination is not None
+    assert outcome.destination.model_dump() == duplicate, "the premise"
 
     assert _decided(ticket, capsys) == (tickets.SOUND, "backlog\n", "")
     rebound = tickets.read_ticket(ticket)
@@ -2806,7 +2832,8 @@ def test_board_status_over_a_deferred_item_prints_draft_and_refuses_to_withdraw_
     ticket = _write(drafts_root, _ticket())
     destination = _on_board(ticket)
     _moved(destination, "draft")
-    assert _board_category(destination) == tickets.Status.DEFERRED == "draft"
+    assert _board_category(destination) == tickets.Status.DEFERRED
+    assert tickets.Status.DEFERRED.value == "draft"
 
     assert _decided(ticket, capsys) == (tickets.SOUND, "draft\n", "")
     status, printed, reported = _decided(ticket, capsys, "--withdraw")
@@ -2832,7 +2859,8 @@ def test_board_status_over_a_queued_item_prints_queued_and_refuses_to_withdraw_i
     ticket = _write(drafts_root, _ticket())
     destination = _on_board(ticket)
     _moved(destination, "queued")
-    assert _board_category(destination) == tickets.Status.QUEUED == "queued"
+    assert _board_category(destination) == tickets.Status.QUEUED
+    assert tickets.Status.QUEUED.value == "queued"
 
     kept = subprocess.run(  # noqa: S603 - this checkout's own module, as an agent runs it
         [
@@ -3532,7 +3560,7 @@ def _accepted_item(
     if root_cause is not None:
         fields["metadata"] = {tickets.KEY: tickets.record(_ticket(root_cause=root_cause))}
     path.write_text(
-        tickets.frontmatter(fields, f"## {tickets.SUGGESTED_FIX}\n\nThe accepted fix.\n"),
+        frontmatter(fields, f"## {tickets.SUGGESTED_FIX}\n\nThe accepted fix.\n"),
         encoding="utf-8",
     )
 
@@ -4589,11 +4617,13 @@ def _gathering(root: Path, quoted: list[tuple[str, str]]) -> Path:
         }
         chosen = []
         for issue, identifier in quoted:
-            held = {comment.id: comment for comment in read[issue].comments}.get(identifier)
+            held = {comment.id: comment for comment in read[issue].comments}.get(
+                tickets.CommentId(identifier)
+            )
             chosen.append(
                 comments.Chosen(
-                    issue,
-                    identifier,
+                    plan_store.QualifiedTaskId(issue),
+                    tickets.CommentId(identifier),
                     # A comment the board does not hold is recorded at a stand-in instant
                     # and text, which are of the record's shape and match nothing.
                     comments.instant(held.last_changed) if held else "2026-01-01T00:00:00Z",
@@ -4616,7 +4646,7 @@ def _gathering(root: Path, quoted: list[tuple[str, str]]) -> Path:
                 items=tuple(
                     comments.SnapshotItem(
                         one.id,
-                        str(one.snapshot_id),
+                        plan_store.QualifiedTaskId(str(one.snapshot_id)),
                         one.version,
                         one.title,
                         one.owner,
@@ -4626,7 +4656,7 @@ def _gathering(root: Path, quoted: list[tuple[str, str]]) -> Path:
                     for one in read.values()
                 ),
                 boundaries={},
-                selection={RUN: tuple(chosen)},
+                selection={tickets.RunId(RUN): tuple(chosen)},
                 left=(),
             ),
         )
@@ -5013,7 +5043,7 @@ def test_an_anchor_inside_a_quoted_body_is_no_comment_of_the_gathering() -> None
 
     read = tickets.quoted_comments(f"{outside}\n\n````text\n{inside}\n```\nstill inside\n````\n")
 
-    assert read == [tickets.Quoted("b:one", tickets.CommentId("c-1"))]
+    assert read == [tickets.Quoted(plan_store.QualifiedTaskId("b:one"), tickets.CommentId("c-1"))]
 
 
 def test_the_feedback_mode_task_carries_the_gathering_and_none_of_the_ticket_sequence() -> None:
@@ -5384,7 +5414,15 @@ def test_answers_without_the_modes_own_account_are_refused(
 ) -> None:
     """A task whose criteria name a document at the word `None` is no bar at all."""
     with pytest.raises(tickets.Refused, match=refusal):
-        tickets.answers(mode=mode, **COMMON, **given, feedback="Feedback.\n", redispatch=False)
+        # The per-mode mapping intentionally omits required arguments or supplies blank
+        # values; preserve those invalid inputs for the public validator to reject.
+        tickets.answers(
+            mode=mode,
+            **cast(Any, COMMON),
+            **cast(Any, given),
+            feedback="Feedback.\n",
+            redispatch=False,
+        )
 
 
 def test_the_recipe_renders_the_registered_template_and_each_mode_names_its_validator() -> None:
@@ -6056,6 +6094,7 @@ def test_a_missing_binding_uses_origin_recovery_without_creating_another_item(
     ticket = _write(drafts_root, _bound(_ticket(), missing, linked=False))
     status, printed, reported = _decided(ticket, capsys)
     if has_survivor:
+        assert live is not None
         assert (status, printed) == (tickets.SOUND, "backlog\n"), reported
         assert tickets.read_ticket(ticket).board_item == live.removeprefix(f"{BOARD}:")
     else:
@@ -7464,8 +7503,10 @@ def test_each_statuss_linear_state_is_the_one_the_linear_source_writes_it_as(
 CYCLE_DOCUMENT = REPO_ROOT / "tests/fixtures/cycle-time/adopted-engine.json"
 
 
-def _cycle_document() -> dict:
-    return json.loads(CYCLE_DOCUMENT.read_text())
+def _cycle_document() -> dict[str, Any]:
+    # This checked-in telemetry document is a JSON object; nested test mutations remain
+    # unconstrained so malformed measurements can reach the public reader.
+    return cast(dict[str, Any], json.loads(CYCLE_DOCUMENT.read_text()))
 
 
 def _budget_cli(root: Path, run: str = RUN, *extra: str) -> subprocess.CompletedProcess[str]:
@@ -7489,14 +7530,14 @@ def _budget_cli(root: Path, run: str = RUN, *extra: str) -> subprocess.Completed
     return done
 
 
-def _budget_account(root: Path, *entries: dict, run: str = RUN) -> Path:
+def _budget_account(root: Path, *entries: Mapping[str, object], run: str = RUN) -> Path:
     path = tickets.budgets_path(root, run)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"schema": tickets.BUDGETS_SCHEMA, "run": run, "entries": entries}))
     return path
 
 
-def _cycle_entry(result: str = "over") -> dict:
+def _cycle_entry(result: str = "over") -> dict[str, Any]:
     change = next(c for c in _cycle_document()["changes"] if c["cycle_seconds"] is not None)
     budget = json.loads(
         subprocess.check_output(
@@ -7513,7 +7554,11 @@ def _cycle_entry(result: str = "over") -> dict:
             text=True,
         )
     )["budgets"][0]
-    entry = tickets._entry(change, tickets.BudgetResult(result), "recorded telemetry")
+    # Keep the JSON fixture mutable beyond the valid BudgetEntry TypedDict: callers
+    # deliberately replace fields with malformed values to exercise boundary refusals.
+    entry = cast(
+        dict[str, Any], tickets._entry(change, tickets.BudgetResult(result), "recorded telemetry")
+    )
     entry.update(
         budget={key: budget[key] for key in tickets.ENTRY_BUDGET_KEYS},
         actual=change["cycle_seconds"],
@@ -7525,7 +7570,7 @@ def _cycle_entry(result: str = "over") -> dict:
     return entry
 
 
-def _budget_disposed(item: str | None = None, word: str = "filed") -> dict:
+def _budget_disposed(item: str | None = None, word: str = "filed") -> dict[str, object]:
     return {
         "disposition": word,
         "root_cause": CAUSE,
@@ -7595,7 +7640,9 @@ def _register_budget_repo(root: Path, repository: str = REPOSITORY) -> None:
     assert done.returncode == 0, done.stderr
 
 
-def _standing_budget(root: Path, entry: dict, *, changed: bool = False) -> None:
+def _standing_budget(root: Path, entry: dict[str, Any], *, changed: bool = False) -> None:
+    # Entries are mutable JSON fixtures: nested budget keys hold strings, numbers and
+    # malformed test values, rather than one valid BudgetEntry record.
     import yaml
 
     budget = dict(entry["budget"])
@@ -7967,7 +8014,7 @@ def test_cycle_script_through_installed_budgetspec_reports_verdicts_and_failure_
 
 def test_budget_record_schema_twelve_matches_the_checked_in_golden() -> None:
     budget = tickets.OverrunBudget(
-        tickets.Origin(REPOSITORY), "budgets.yaml", "cycle-time", 123, "max"
+        tickets.Origin(REPOSITORY), "budgets.yaml", "cycle-time", 123, Direction.MAX
     )
     golden = json.loads((CYCLE_DOCUMENT.parent / "ticket-v12.json").read_text())
     assert tickets.record(_ticket(budget=budget)) == golden
@@ -7985,7 +8032,7 @@ def test_budget_record_schema_twelve_matches_the_checked_in_golden() -> None:
 )
 def test_budget_ticket_validator_refuses_bad_budget_fields(
     drafts_root: Path,
-    departure: dict,
+    departure: dict[str, object],
     reason: str,
 ) -> None:
     budget = tickets._standing(_cycle_entry()).record() | departure
@@ -8024,7 +8071,7 @@ def test_budget_ticket_validator_refuses_a_non_budget_record(
     ],
 )
 def test_budget_cli_refuses_a_malformed_entry(
-    drafts_root: Path, departure: dict, reason: str
+    drafts_root: Path, departure: dict[str, object], reason: str
 ) -> None:
     entry = _cycle_entry() | departure
     _budget_account(drafts_root, entry)
@@ -8378,7 +8425,10 @@ def test_budget_account_contract_matches_its_checked_in_golden() -> None:
     ],
 )
 def test_budget_account_refuses_malformed_telemetry_before_recording_it(
-    budget_launch: tuple[Path, Path, Path], drafts_root: Path, departure: dict, reason: str
+    budget_launch: tuple[Path, Path, Path],
+    drafts_root: Path,
+    departure: dict[str, object],
+    reason: str,
 ) -> None:
     launch, _, runs = budget_launch
     document = _cycle_document()
@@ -8407,7 +8457,7 @@ def test_budget_account_refuses_malformed_telemetry_before_recording_it(
     ],
 )
 def test_budget_report_refuses_unrenderable_library_values(
-    budget_launch: tuple[Path, Path, Path], departure: dict, reason: str
+    budget_launch: tuple[Path, Path, Path], departure: dict[str, object], reason: str
 ) -> None:
     launch, checkout, runs = budget_launch
     entry = _cycle_entry()
@@ -8431,7 +8481,7 @@ def test_budget_report_refuses_unrenderable_library_values(
     "departure", [{"actual": None}, {"host": None}, {"host": {}}, {"segments": []}]
 )
 def test_budget_read_commands_refuse_invalid_retained_measurements(
-    drafts_root: Path, command: str, departure: dict
+    drafts_root: Path, command: str, departure: dict[str, object]
 ) -> None:
     entry = _cycle_entry("within") | departure
     _budget_account(drafts_root, entry)
@@ -8596,7 +8646,9 @@ def test_budget_ticket_cli_refuses_a_budget_outside_its_repository(
     ticket = _ticket(budget=tickets._standing(_cycle_entry()))
     written = tickets.render(ticket)
     record = tickets.record(ticket)
-    record["budget"]["file"] = file
+    budget = record["budget"]
+    assert isinstance(budget, dict)
+    budget["file"] = file
     path = _write(
         drafts_root, ticket, written.replace(json.dumps(tickets.record(ticket)), json.dumps(record))
     )
@@ -8622,7 +8674,7 @@ def test_budget_question_refuses_malformed_registered_budget_values(
     drafts_root: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    departure: dict,
+    departure: dict[str, object],
 ) -> None:
     entry = _cycle_entry()
     entry["budget"]["threshold"] = 1
@@ -8644,13 +8696,13 @@ def test_budget_question_refuses_malformed_registered_budget_values(
         (bin / tool).symlink_to(REPO_ROOT / ".venv/bin" / tool)
     reported = {key: entry["budget"][key] for key in ("id", "threshold", "direction")} | departure
     _executable(bin / "onebudgetspec", f"print({json.dumps({'budgets': [reported]})!r})\n")
-    monkeypatch.setattr(tickets.sys, "executable", str(bin / "python"))
+    monkeypatch.setattr(sys, "executable", str(bin / "python"))
     done = tickets.main(["check-budgets", "--root", str(drafts_root), RUN])
     assert done == tickets.UNSOUND
 
 
 def _closeout_arguments(
-    root: Path, snapshot: Path, hook: Path, command: str = "budget-closeout"
+    root: Path, snapshot: Path, hook: Path, command: str = "closeout"
 ) -> list[str]:
     return [
         command,
@@ -8672,12 +8724,13 @@ def test_budget_closeout_executes_quoted_hook_and_deletes_its_own_snapshot(
     tmp_path: Path,
 ) -> None:
     entry = _cycle_entry("within")
+    tickets.open_dispositions(drafts_root, RUN)
     account = _budget_account(drafts_root, entry)
     snapshot = tmp_path / "measurement ' with spaces.json"
     snapshot.write_bytes(account.read_bytes())
     hook = tmp_path / "hook ' with spaces.sh"
     hook.touch()
-    write = _closeout_arguments(drafts_root, snapshot, hook, "write-budget-closeout")
+    write = _closeout_arguments(drafts_root, snapshot, hook, "write-closeout")
     assert tickets.main(write) == tickets.SOUND
     assert hook.stat().st_mode & 0o777 == 0o700
     done = subprocess.run([str(hook)], text=True, capture_output=True, check=False)
@@ -8697,12 +8750,13 @@ def test_budget_closeout_preserves_a_refused_snapshot_and_recovers_after_repair(
     tmp_path: Path,
 ) -> None:
     entry = _cycle_entry("within")
+    tickets.open_dispositions(drafts_root, RUN)
     account = _budget_account(drafts_root, entry)
     snapshot = tmp_path / "measured.json"
     snapshot.write_bytes(account.read_bytes())
     hook = tmp_path / "closeout.sh"
     assert (
-        tickets.main(_closeout_arguments(drafts_root, snapshot, hook, "write-budget-closeout"))
+        tickets.main(_closeout_arguments(drafts_root, snapshot, hook, "write-closeout"))
         == tickets.SOUND
     )
     _budget_account(drafts_root, entry | {"actual": 0})
@@ -8722,7 +8776,7 @@ def test_budget_closeout_writer_refuses_foreign_broken_or_reused_inputs(
     account = _budget_account(drafts_root, _cycle_entry("within"))
     snapshot = tmp_path / "measured.json"
     hook = tmp_path / "closeout.sh"
-    args = _closeout_arguments(drafts_root, snapshot, hook, "write-budget-closeout")
+    args = _closeout_arguments(drafts_root, snapshot, hook, "write-closeout")
     assert tickets.main(args) == tickets.UNRUNNABLE
     snapshot.write_text("invalid JSON")
     assert tickets.main(args) == tickets.UNRUNNABLE
@@ -8734,7 +8788,7 @@ def test_budget_closeout_writer_refuses_foreign_broken_or_reused_inputs(
     assert hook.read_text() == "already owns another launch"
     missing = tmp_path / "absent" / "closeout.sh"
     assert (
-        tickets.main(_closeout_arguments(drafts_root, snapshot, missing, "write-budget-closeout"))
+        tickets.main(_closeout_arguments(drafts_root, snapshot, missing, "write-closeout"))
         == tickets.UNRUNNABLE
     )
 
@@ -8747,6 +8801,7 @@ def test_budget_closeout_reports_missing_evidence_and_a_cleanup_failure(
     snapshot = tmp_path / "measured.json"
     hook = tmp_path / "closeout.sh"
     hook.write_text("owned hook")
+    tickets.open_dispositions(drafts_root, RUN)
     assert tickets.main(_closeout_arguments(drafts_root, snapshot, hook)) == tickets.UNSOUND
     assert hook.exists()
     account = _budget_account(drafts_root, _cycle_entry("within"))
@@ -8757,11 +8812,83 @@ def test_budget_closeout_reports_missing_evidence_and_a_cleanup_failure(
     assert snapshot.exists()
 
 
+@pytest.mark.parametrize("command", ["closeout", "budget-closeout"])
+def test_closeout_refuses_an_unanswered_draft_naming_check_dispositions_and_the_recovery(
+    drafts_root: Path,
+    board: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    command: str,
+) -> None:
+    """A draft the account leaves out refuses the closeout, under either hook's command.
+
+    `budget-closeout` is what a hook written before the closeout checked dispositions
+    names, so a run launched then is refused the same way.
+    """
+    (left_out,) = _drafted(drafts_root, RUN, "a-cursor-draft")
+    tickets.open_dispositions(drafts_root, RUN)
+    account = _budget_account(drafts_root, _cycle_entry("within"))
+    snapshot = tmp_path / "measured.json"
+    snapshot.write_bytes(account.read_bytes())
+    hook = tmp_path / "closeout.sh"
+    assert tickets.main(_closeout_arguments(drafts_root, snapshot, hook, "write-closeout")) == 0
+    capsys.readouterr()
+
+    args = _closeout_arguments(drafts_root, snapshot, hook, command)
+    assert tickets.main(args) == tickets.UNSOUND
+
+    err = capsys.readouterr().err
+    assert f"the draft {left_out} is absent from this account" in err
+    assert "closeout refused: `check-dispositions` refused what is named above" in err
+    assert "`check-run`" not in err and "`check-budgets`" not in err
+    assert f"re-dispatch with 'just follow-ups {RUN} --feedback FILE'" in err.splitlines()[-1]
+    assert snapshot.exists() and hook.exists()
+    dispositions = tickets.dispositions_path(drafts_root, RUN)
+    dispositions.write_text(
+        json.dumps(
+            _account(
+                _disposed(left_out, tickets.Disposition.NOT_REPRODUCIBLE.value, causes=[]),
+                drafts=[left_out],
+            )
+        ),
+        encoding="utf-8",
+    )
+    assert tickets.main(args) == tickets.SOUND
+    assert not snapshot.exists() and not hook.exists()
+
+
+def test_closeout_refuses_an_unsound_ticket_naming_check_run(
+    drafts_root: Path,
+    board: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A complete account still refuses the closeout while a ticket fails the shape."""
+    tickets.open_dispositions(drafts_root, RUN)
+    path = tickets.ticket_path(drafts_root, RUN, CAUSE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("not a ticket\n", encoding="utf-8")
+    account = _budget_account(drafts_root, _cycle_entry("within"))
+    snapshot = tmp_path / "measured.json"
+    snapshot.write_bytes(account.read_bytes())
+    hook = tmp_path / "closeout.sh"
+    assert tickets.main(_closeout_arguments(drafts_root, snapshot, hook, "write-closeout")) == 0
+    capsys.readouterr()
+
+    assert tickets.main(_closeout_arguments(drafts_root, snapshot, hook)) != tickets.SOUND
+
+    err = capsys.readouterr().err
+    assert f"{path} is not a sound ticket" in err
+    assert "closeout refused: `check-run` refused what is named above" in err
+    assert "`check-dispositions`" not in err and "`check-budgets`" not in err
+    assert snapshot.exists() and hook.exists()
+
+
 @pytest.mark.parametrize("departure", [{"schema": 2}, {"run": "foreign"}])
 def test_budget_cli_refuses_a_foreign_snapshot_even_with_identical_entries(
     drafts_root: Path,
     tmp_path: Path,
-    departure: dict,
+    departure: dict[str, object],
 ) -> None:
     account = _budget_account(drafts_root, _cycle_entry("within"))
     original = json.loads(account.read_text()) | departure
@@ -9139,7 +9266,7 @@ def test_qualifying_relation_fixtures_format_without_irrelevant_candidates(
 def test_schema_11_record_golden_stays_readable_with_its_historical_body() -> None:
     golden = json.loads((CYCLE_DOCUMENT.parent / "ticket-v11.json").read_text())
     budget = tickets.OverrunBudget(
-        tickets.Origin(REPOSITORY), "budgets.yaml", "cycle-time", 123, "max"
+        tickets.Origin(REPOSITORY), "budgets.yaml", "cycle-time", 123, Direction.MAX
     )
     item = _item(_ticket(budget=budget, body=before_schema_12(BODY)))
     item["metadata"] = {tickets.KEY: golden}
@@ -9257,7 +9384,7 @@ def test_an_answered_issue_another_run_owns_holds_no_ticket_of_this_run_to_its_s
     feedback = _gathering(drafts_root, [(issue, asked)])
     answered = [
         tickets.Response(
-            tickets.Quoted(issue, tickets.CommentId(asked)),
+            tickets.Quoted(plan_store.QualifiedTaskId(issue), tickets.CommentId(asked)),
             "Answered it.",
             tickets.CommentId("a-reply"),
             tickets.Verdict.DOES_NOT_CONFIRM,

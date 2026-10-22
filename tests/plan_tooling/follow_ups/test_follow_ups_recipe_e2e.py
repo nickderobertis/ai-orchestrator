@@ -56,7 +56,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple, cast
 
 import budget_telemetry
 import delegation_checkout
@@ -76,7 +76,8 @@ from waits import until
 
 from orchestrator import follow_up_tickets as tickets
 from orchestrator import plan_check
-from orchestrator.plan_store import WRITABLE_PLUGIN, NodeId
+from orchestrator.plan_budgets import Direction
+from orchestrator.plan_store import WRITABLE_PLUGIN, NodeId, QualifiedTaskId
 from orchestrator.project_store import frontmatter, write_plan_project
 from orchestrator.root import REPO_ROOT
 from orchestrator.run_reading import RunId
@@ -837,6 +838,7 @@ def _estimate_line(item: dict[str, object]) -> str:
     content = item["content"]
     assert isinstance(content, str), item
     (line,) = re.findall(r"^- Priority estimate:[^\n]*$", content, flags=re.MULTILINE)
+    assert isinstance(line, str)
     return line
 
 
@@ -1302,14 +1304,14 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                 candidate.url,
                 f"Relation probe: {candidate.title}. {candidate.explanation}",
             )
-        for at, candidate in enumerate(UNRELATED_CANDIDATES):
+        for at, unrelated in enumerate(UNRELATED_CANDIDATES):
             _board_item(
                 bench,
                 other,
                 f"irrelevant-probe-{at}",
                 tickets.Status.PROPOSED.value,
-                candidate.url,
-                f"Relation probe: {candidate.title}. An independent billing question.",
+                unrelated.url,
+                f"Relation probe: {unrelated.title}. An independent billing question.",
             )
         # Two withdrawn items about the sweep trailer the store lists ahead of the open one.
         for at, cause in enumerate(WITHDRAWN_CAUSES):
@@ -1657,7 +1659,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
         misbound = dataclasses.replace(
             edited,
             board_item=tickets.BoardItemId(duplicate_issue.removeprefix(f"{BOARD}:")),
-            origin=duplicate_issue,
+            origin=QualifiedTaskId(duplicate_issue),
         )
         edited_comment = tickets.render_comment(
             main, SHARED_CAUSE, "This run hit it at `scripts/sweep.sh:12` and `:40`."
@@ -3019,7 +3021,9 @@ def test_another_runs_open_issue_gets_one_marked_comment_and_is_otherwise_untouc
     (comment,) = followed.comments_after_first
     body = str(comment["body"])
     assert body.splitlines()[0] == f"Additional evidence from follow-up run `{followed.main}`."
-    assert tickets.comment_owner(body) == tickets.CommentOwner(followed.main, SHARED_CAUSE)
+    assert tickets.comment_owner(body) == tickets.CommentOwner(
+        tickets.RunId(followed.main), tickets.RootCause(SHARED_CAUSE)
+    )
 
 
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This recipe journey
@@ -3374,8 +3378,13 @@ def endings(tmp_path_factory: pytest.TempPathFactory) -> Endings:  # noqa: PLR09
     bench.environment["FAKE_CODEX_RUN_ON_MARKER_LOG"] = str(tmp / "commands-ran.jsonl")
     _script(bench, "nothing-matches-this-marker", [])
     pid = os.getpid()
-    gate = {"id": GATE, "kind": "human", "task": _plan_task("Approve.")}
-    work = {"id": WORK, "persona": "engineer", "deps": [GATE], "task": _plan_task("Report.")}
+    gate: dict[str, object] = {"id": GATE, "kind": "human", "task": _plan_task("Approve.")}
+    work: dict[str, object] = {
+        "id": WORK,
+        "persona": "engineer",
+        "deps": [GATE],
+        "task": _plan_task("Report."),
+    }
     runs = {
         name: RunId(f"fu-{name}-{pid}")
         for name in (
@@ -3644,7 +3653,9 @@ def test_the_duplicate_search_finds_the_open_item_past_the_stores_first_page(
     bench = followed.bench
     other_issue = f"{BOARD}:{followed.other}/tickets/{SHARED_CAUSE}"
     first_page = _store(bench, "task", "list", "--source", BOARD, "--search", SEARCHED_TEXT)
-    on_first_page = [str(one["id"]) for one in first_page["items"] if isinstance(one, dict)]
+    first_items = first_page["items"]
+    assert isinstance(first_items, list)
+    on_first_page = [str(one["id"]) for one in first_items if isinstance(one, dict)]
     assert first_page.get("next"), "the store's own search answered no cursor: one page held it"
     assert other_issue not in on_first_page, "the open item sits on the first page"
     assert on_first_page == [
@@ -3986,11 +3997,23 @@ def test_a_run_whose_account_leaves_a_draft_out_fails_the_recipe_naming_that_dra
     assert omitted.returncode == UNSOUND, omitted.stdout + omitted.stderr + _ran(bench)
     left_out = _draft_id(followed.omitted_run, followed.omitted_draft)
     assert f"the draft {left_out} is absent from this account" in omitted.stderr
-    assert f"follow-ups: the account at {followed.omitted_account} was refused above" in (
-        omitted.stderr
+    # The same closeout a detached launch's run-end hook runs, run once by the recipe.
+    assert "closeout refused: `check-dispositions` refused what is named above" in (omitted.stderr)
+    assert (
+        f"re-dispatch with 'just follow-ups {followed.omitted_run} --feedback FILE'"
+        in omitted.stderr
     )
     assert "is not a sound ticket" not in omitted.stderr, (
         "something other than the account refused this run"
+    )
+    kept = re.search(r"snapshot (\S+) and hook (\S+) were kept", omitted.stderr)
+    assert kept is not None, omitted.stderr
+    assert Path(kept[1]).is_file() and Path(kept[2]).is_file(), kept.groups()
+    launch = json.loads(
+        (bench.runs / f"{followed.omitted_run}{SUFFIX}" / "launch.json").read_text("utf-8")
+    )
+    assert not launch.get("success_hook") and not launch.get("failure_hook"), (
+        "an attached launch names a run-end hook, so its closeout runs twice"
     )
     results = _run(["just", "results", f"{followed.omitted_run}{SUFFIX}"], bench)
     assert re.search(rf"^\s+{NODE}\s+done$", results.stdout, re.MULTILINE), results.stdout
@@ -4815,10 +4838,13 @@ def _launch_follow_up_validation(
     )
     assert validators and all("--board" not in command for command in validators), validators
     calls = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
+    # The dispatch's own board-less check, then the closeout the attached recipe runs once
+    # the run returns, which makes the disposition check's one board read.
     checks = [
         call["argv"]
         for call in calls
-        if call["kind"] == "module" and "check-dispositions" in call["argv"]
+        if call["kind"] == "module"
+        and ("check-dispositions" in call["argv"] or "closeout" in call["argv"])
     ]
     assert len(checks) == 2 and sum("--board" in argv for argv in checks) == (
         host_board.LAUNCH_VALIDATION_BOARD_CHECKS
@@ -5028,7 +5054,8 @@ def test_follow_ups_measures_each_repository_before_dispatch_and_refuses_an_unac
         case True:
             assert done.returncode == tickets.UNSOUND, done.stdout + done.stderr
             assert "carries 0 dispositions" in done.stderr
-            assert "budget account" in done.stderr
+            assert "closeout refused: `check-budgets` refused what is named above" in done.stderr
+            assert "re-dispatch with 'just follow-ups run-1 --feedback FILE'" in done.stderr
             assert tickets.dispositions_path(root, "run-1").is_file()
             assert [e["result"] for e in account["entries"]] == ["over", "within", "no-budget"]
             assert _one_task_record(checkout)
@@ -5049,8 +5076,12 @@ def test_follow_ups_measures_each_repository_before_dispatch_and_refuses_an_unac
     assert all(row["path"].split(os.pathsep)[0] == str(bins) for row in measured)
 
 
-def _recorded_delivery_run(bench: Bench, run: str, repository: str) -> dict:
-    """Recorded intervals feed the adopted renderer; no duration is guessed by this test."""
+def _recorded_delivery_run(bench: Bench, run: str, repository: str) -> dict[str, Any]:
+    """Recorded intervals feed the adopted renderer; no duration is guessed by this test.
+
+    The return value is mutable telemetry JSON. Its nested measurements intentionally take
+    malformed values in the tampering journey, so a valid telemetry record type is too narrow.
+    """
     from probe_run_root import run_root
 
     root = run_root(bench.runs, run)
@@ -5071,9 +5102,11 @@ def _recorded_delivery_run(bench: Bench, run: str, repository: str) -> dict:
         ],
     }
     (root / "plan.json").write_text(json.dumps(plan))
-    journal = []
+    journal: list[dict[str, object]] = []
 
-    def event(node: str | None, seconds: int, source: str, kind: str, payload: dict) -> None:
+    def event(
+        node: str | None, seconds: int, source: str, kind: str, payload: dict[str, object]
+    ) -> None:
         from datetime import UTC, datetime, timedelta
 
         stamp = (
@@ -5114,7 +5147,9 @@ def _recorded_delivery_run(bench: Bench, run: str, repository: str) -> dict:
     (root / "events.jsonl").write_text("".join(json.dumps(event) + "\n" for event in journal))
     result = _run([str(ENGINE), "telemetry", run, "--changes", "--json"], bench)
     assert result.returncode == 0, result.stderr
-    document = json.loads(result.stdout)
+    # The real telemetry CLI returns a JSON object whose nested measurements this
+    # journey both inspects and deliberately tampers with below.
+    document = cast(dict[str, Any], json.loads(result.stdout))
     assert len(document["changes"]) == 4
     assert [change["cycle_seconds"] for change in document["changes"]] == [20, 20, 20, 5]
     return document
@@ -5165,14 +5200,14 @@ def test_real_follow_ups_disposes_of_open_cancelled_and_changed_budget_causes(
     (publication / "budgets.yaml").write_text(yaml.safe_dump(spec))
     telemetry = _recorded_delivery_run(bench, main, REPOSITORY)
     standing = tickets.OverrunBudget(
-        tickets.Origin(REPOSITORY), "budgets.yaml", "delivery", 10, "max"
+        tickets.Origin(REPOSITORY), "budgets.yaml", "delivery", 10, Direction.MAX
     )
     causes = [
         "service-delivery-over-open",
         "service-delivery-over-cancelled",
         "service-delivery-over-changed",
     ]
-    items = []
+    items: list[str] = []
     for cause, changed in zip(causes, (False, False, True), strict=True):
         ticket = dataclasses.replace(
             _ticket(
@@ -5334,7 +5369,9 @@ def test_real_follow_ups_disposes_of_open_cancelled_and_changed_budget_causes(
     assert after - before == {f"{BOARD}:{main}/tickets/{causes[2]}"}
     assert len(_comments(bench, items[0])) == 1
     assert len(_comments(bench, items[1])) == 1
-    assert "Should the budget change?" in _comments(bench, items[1])[0]["body"]
+    question_body = _comments(bench, items[1])[0]["body"]
+    assert isinstance(question_body, str)
+    assert "Should the budget change?" in question_body
     account = json.loads(tickets.budgets_path(bench.drafts_root, main).read_text())
     by_node = {change["node"]: change for change in telemetry["changes"]}
     for entry in account["entries"]:
@@ -5356,6 +5393,7 @@ def test_real_follow_ups_disposes_of_open_cancelled_and_changed_budget_causes(
     )
 
     if detached and tamper:
+        assert hook_snapshot is not None
         captured = json.loads(hook_snapshot.read_text())
         account["entries"][0]["actual"] = captured["entries"][0]["actual"]
         tickets.budgets_path(bench.drafts_root, main).write_text(json.dumps(account))
@@ -5489,6 +5527,178 @@ def test_failed_detached_follow_up_closes_its_budget_account_without_launching_a
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, e2e_not_mocked, tests_mirror_real_usage]  # noqa: E501 - directive rule lists occupy one line
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] These recipe journeys run in
+# the `plan-tooling-follow-ups` Nx project, the dedicated tier for journeys that drive the
+# installed engine; its planToolingFollowUpsWorkspace input covers the recipe, the task module
+# and the store configuration they run, and their turns are the provider's stand-in.
+
+
+#: The closeout's exit once the engine has run it as a detached run's success hook, as
+#: `just results` prints it, for each account a journey below leaves.
+CLOSEOUT_ENDS = {"omits-a-draft": UNSOUND, "unsound-ticket": UNSOUND, "complete": OK}
+
+
+def _closed_out(bench: Bench, run: str, status: int) -> str:
+    """Wait for a detached follow-up run to settle and its closeout to end; its results."""
+    watched = _run(
+        [str(ENGINE), "watch", run, "--until", "settled", "--timeout", str(int(e2e_timeout(60)))],
+        bench,
+    )
+    assert watched.returncode == 0, watched.stdout + watched.stderr
+    ended = f"exit: {status};"
+    until(
+        f"run {run}'s closeout to end with {ended}",
+        lambda: ended in _run(["just", "results", run], bench).stdout,
+        seconds=e2e_timeout(60),
+        state=lambda: _run(["just", "results", run], bench).stdout,
+    )
+    return _run(["just", "results", run], bench).stdout
+
+
+def _legacy_hook(hook: Path, command: list[str]) -> Path:
+    """The hook a launch made before the closeout checked dispositions would have written.
+
+    Its whole form, which was the module's `budget-closeout` command with the same four
+    arguments; a run launched then still names it as its run-end hook.
+    """
+    legacy = [*command[:3], "budget-closeout", *command[4:]]
+    hook.write_text("#!/usr/bin/env bash\nexec " + shlex.join(legacy) + "\n", encoding="utf-8")
+    hook.chmod(0o700)
+    return hook
+
+
+@pytest.mark.parametrize("account", list(CLOSEOUT_ENDS))
+def test_a_detached_follow_up_runs_closeout_refuses_an_account_its_checks_refuse(
+    tmp_path: Path, account: str
+) -> None:
+    """The closeout a detached launch hands the engine runs every check, not just budgets.
+
+    A detached launch is what every run's success hook starts, and its worker attests its
+    own account: here it leaves one of its two drafts unanswered, or answers every draft
+    but leaves a ticket the store cannot read, or does both right. The engine settles the
+    node `done` each time, and what tells them apart is the closeout the engine runs as the
+    run's hook: it refuses the first two naming the check that refused and the feedback
+    re-dispatch that recovers it, keeping itself and its snapshot for a re-run, and closes
+    the third out with its budget checks and report and removes both. A hook written in
+    the form a launch made before this change wrote it runs the same closeout.
+    """
+    bench = _bench(tmp_path)
+    bench.environment["FAKE_CODEX_RUN_ON_MARKER"] = str(tmp_path / "commands.json")
+    bench.environment["FAKE_CODEX_RUN_ON_MARKER_LOG"] = str(tmp_path / "commands-ran.jsonl")
+    python = str(REPO_ROOT / ".venv" / "bin" / "python3")
+    main = f"fu-closeout-{account}-{os.getpid()}"
+    named = _draft(bench, main, "A draft the account names")
+    left_out = (
+        _draft(bench, main, "A draft the account leaves out")
+        if account == "omits-a-draft"
+        else None
+    )
+    commands = []
+    if account == "unsound-ticket":
+        ticket = tickets.ticket_path(bench.drafts_root, main, "left-unreadable")
+        body = tickets.render(_ticket(main, "left-unreadable", (), "a title", "Unreadable"))
+        commands += [
+            ["mkdir", "-p", str(ticket.parent)],
+            # The ticket's body with its front matter, and so its record, never written.
+            ["cp", str(_staged(bench, "unreadable.md", body.split("---\n", 2)[2])), str(ticket)],
+        ]
+    commands.append(
+        _accounting(
+            bench,
+            python,
+            main,
+            [
+                _disposed(
+                    named,
+                    main,
+                    tickets.Disposition.NOT_REPRODUCIBLE,
+                    (),
+                    "Nothing in the tree at the basis bears the claim out.",
+                )
+            ],
+        )
+    )
+    _script(bench, main, commands)
+
+    followed = _pass(bench, "closeout", main, "--detach")
+
+    assert followed.result.returncode == OK, followed.result.stdout + followed.result.stderr
+    assert followed.result.stdout.splitlines() == [
+        f"follow-up run: {followed.run}",
+        f"watch it with: just watch {followed.run}",
+    ]
+    launched = json.loads((bench.runs / followed.run / "launch.json").read_text("utf-8"))
+    hook = Path(launched["success_hook"])
+    assert launched["failure_hook"] == str(hook), launched
+    command = shlex.split(hook.read_text(encoding="utf-8").split("exec ", 1)[1])
+    assert command[1:4] == ["-m", "orchestrator.follow_up_tickets", "closeout"], command
+    snapshot = Path(command[command.index("--measured") + 1])
+    results = _closed_out(bench, followed.run, CLOSEOUT_ENDS[account])
+    assert re.search(rf"^\s+{NODE}\s+done$", results, re.MULTILINE), results
+    said = (bench.runs / followed.run / "hooks/success.log").read_text(encoding="utf-8")
+    recovery = f"re-dispatch with 'just follow-ups {main} --feedback FILE'"
+
+    if account == "complete":
+        assert "accounts for every draft this dispatch was given" in said, said
+        assert "disposes of every overrun this run's landed changes measured" in said, said
+        assert "closeout refused" not in said, said
+        assert not hook.exists() and not snapshot.exists()
+        return
+    refused = "check-dispositions" if account == "omits-a-draft" else "check-run"
+    spared = "check-run" if account == "omits-a-draft" else "check-dispositions"
+    for shown in (said, results):
+        assert f"closeout refused: `{refused}` refused what is named above" in shown, shown
+        assert f"`{spared}`" not in shown, shown
+        assert recovery in shown, shown
+    if left_out is not None:
+        assert f"the draft {_draft_id(main, left_out)} is absent from this account" in said
+    else:
+        unreadable = tickets.ticket_path(bench.drafts_root, main, "left-unreadable")
+        assert f"{unreadable} is not a sound ticket" in said, said
+    assert hook.exists() and snapshot.exists(), (hook, snapshot)
+    if left_out is None:
+        return
+
+    # The form a run launched before this change named runs the whole closeout: it refuses
+    # the same incomplete account, then passes it once the omitted draft is answered.
+    legacy = _legacy_hook(tmp_path / "legacy-closeout.sh", command)
+    old = _run([str(legacy)], bench)
+    assert old.returncode == UNSOUND, old.stdout + old.stderr
+    assert "closeout refused: `check-dispositions` refused what is named above" in old.stderr
+    assert recovery in old.stderr
+    assert legacy.exists() and snapshot.exists()
+    answered = _run(
+        _accounting(
+            bench,
+            python,
+            main,
+            [
+                _disposed(
+                    draft,
+                    main,
+                    tickets.Disposition.NOT_REPRODUCIBLE,
+                    (),
+                    "Nothing in the tree at the basis bears the claim out.",
+                )
+                for draft in (named, left_out)
+            ],
+            name="answered-account.py",
+        ),
+        bench,
+    )
+    assert answered.returncode == OK, answered.stdout + answered.stderr
+    repaired = _run([str(legacy)], bench)
+    assert repaired.returncode == OK, repaired.stdout + repaired.stderr
+    assert "disposes of every overrun this run's landed changes measured" in repaired.stdout
+    # Its own `--hook` names the hook the engine was given, which the pass retired with
+    # the snapshot; the legacy copy written beside it is this journey's own.
+    assert not hook.exists() and not snapshot.exists()
+    legacy.unlink()
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This assertion reads
 # the existing module-scoped followed fixture and starts no independent launch. The task
 # requires these slow journeys to remain in plan-tooling-follow-ups with its existing
@@ -5507,10 +5717,10 @@ def test_only_qualifying_related_links_survive_a_search_of_25_unrelated_candidat
         ) in body
     dependency_body = str(followed.new_after_first["content"])
     assert f"]({NARROWING_URL}) — dependency:" in dependency_body
-    for candidate in UNRELATED_CANDIDATES:
-        assert any(candidate.title in str(item) and candidate.url in str(item) for item in found)
-        assert candidate.title not in body and candidate.url not in body
-        assert candidate.title not in dependency_body and candidate.url not in dependency_body
+    for unrelated in UNRELATED_CANDIDATES:
+        assert any(unrelated.title in str(item) and unrelated.url in str(item) for item in found)
+        assert unrelated.title not in body and unrelated.url not in body
+        assert unrelated.title not in dependency_body and unrelated.url not in dependency_body
     for published in (body, dependency_body):
         assert "Duplicate search" not in published
         assert "Queries:" not in published and "Relation probe:" not in published

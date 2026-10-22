@@ -2474,9 +2474,18 @@ landed some other way — fires its success hook for the complete ending that se
 carried it to; either way follow-up verification launches on recovery. A settle that
 changes why a run failed without changing that it did ends it under the same hook and
 fires nothing new. A driver that dies fires nothing.
-`just plan` and `just finish-plan` name no hook, and `just follow-ups` names only
-its per-launch budget closeout, which validates and reports the budget account and
-launches nothing, so a planning run and a follow-up run never launch a follow-up run, and nothing else in this repository runs `just follow-ups` — the
+`just plan` and `just finish-plan` name no hook. An initial detached `just follow-ups`
+launch names a per-launch closeout on both endings; an attached launch runs that same
+closeout once after settlement. It validates tickets (`check-run`), the disposition
+account against the board (`check-dispositions`), and the measured budget account,
+then reports the budget results. A refusal exits non-zero, names the failed validation
+and `just follow-ups <run-id> --feedback FILE` recovery, and keeps the hook and measured
+snapshot for a corrected re-run. Engine settlement alone does not mean the follow-ups
+were verified: read the hook result in `just results <follow-up-run-id>`. Hooks from
+older launches naming `budget-closeout` run these same checks. Feedback (`--comments`)
+mode registers no hook. Closeout launches nothing, so a planning run and a follow-up
+run never launch a follow-up run, and nothing else in this repository runs
+`just follow-ups` — the
 success hook and a manager typing it are the only two ways. **Hooks arrive with an
 engine adopted between runs**: a launch record written before `config/onepipeline.version`
 named a release carrying them names no hook, and that run fires none, whichever engine

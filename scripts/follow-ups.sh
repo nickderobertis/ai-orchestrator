@@ -86,17 +86,26 @@
 #
 # **Attached by default, and then the mode's own account is checked.** With no judge, what
 # holds the agent's output to its shape is this check and the manager's reading, so once an
-# attached run settles the validator that matches the mode is run and its refusal is what
-# this recipe exits non-zero with. In initial mode that is every ticket left under
-# `tasks/<run-id>/tickets/` validated and each one that fails named, then the disposition
-# artifact checked for a disposition per input draft; in feedback mode it is the response
-# artifact alone, because a run answering comments touches only the tickets its quoted
-# comments name, and reading the rest would refuse it for somebody else's unfinished work. The task's own steps name
-# the same validator, which is what binds the detached path the success hook launches.
+# attached run settles the check that matches the mode is run and its refusal is what this
+# recipe exits non-zero with. In initial mode that is the **closeout**,
+# `orchestrator/follow_up_tickets.py`'s `closeout` written as a per-launch executable: every
+# ticket left under `tasks/<run-id>/tickets/` validated (`check-run`), the disposition
+# artifact checked for a disposition per input draft and against the board
+# (`check-dispositions --board`), and the budget account checked and reported against a
+# snapshot taken before the dispatch. A refusal names each check that refused and the
+# `just follow-ups <run-id> --feedback FILE` re-dispatch that recovers it, and keeps the hook
+# and its snapshot so the hook can be run again once the account is corrected; a pass
+# removes both. In feedback mode it is the response artifact alone, because a run answering
+# comments touches only the tickets its quoted comments name, and reading the rest would
+# refuse it for somebody else's unfinished work, so that mode names no closeout.
 #
 # **`--detach` returns once the launch record exists**, printing
 # exactly `follow-up run: <id>` and `watch it with: just watch <id>` on stdout, because the
 # engine's success hook calls it that way under a deadline an attached run would outlive.
+# The detached run names the same closeout as both its run-end hooks, so the engine runs it
+# when the run ends and `just results <follow-up-run-id>` shows its refusal: a detached
+# launch is verified by the same checks as an attached one, never by the agent's own
+# account of itself. The attached launch names no hook and runs the closeout itself, once.
 # The launch goes through `scripts/onepipeline.sh`, which keeps an exported launcher
 # identity, so the follow-up run is owned by whichever session launched this. Nothing in
 # this repository calls this recipe after another launch returns; that is the hook's.
@@ -412,18 +421,16 @@ repository_layer=$PWD
 
 scratch=$(mktemp) || fail "a scratch file for the task's answers could not be created" "free disk space and retry"
 trap 'rm -f "$scratch" || echo "follow-ups: the scratch file $scratch could not be removed; delete it by hand" >&2' EXIT
-# The budget account as measured, kept out of the dispatch's reach, so the check after
-# settlement holds every value but the dispositions to what the library and the engine said.
-measured=$(mktemp) || fail "a scratch file for the measured budget account could not be created" "free disk space and retry"
 hook_snapshot=''
-budget_hook=''
+closeout_hook=''
+closeout_hooks=()
 hook_handed_off=0
 # shellcheck disable=SC2329 # Invoked by the EXIT trap, not by a direct shell command.
 cleanup_launch() {
-    local -a files=("$scratch" "$measured")
+    local -a files=("$scratch")
     if [ "$hook_handed_off" -eq 0 ]; then
         [ -z "$hook_snapshot" ] || files+=("$hook_snapshot")
-        [ -z "$budget_hook" ] || files+=("$budget_hook")
+        [ -z "$closeout_hook" ] || files+=("$closeout_hook")
     fi
     rm -f -- "${files[@]}" || echo "follow-ups: launch scratch could not be removed; delete the named files by hand" >&2
 }
@@ -472,24 +479,19 @@ else
     account=$("${tickets_module[@]}" open-dispositions --root "$drafts_root" "$run") ||
         fail "the drafts of run '$run' could not be recorded as this dispatch's input set under $drafts_root" \
             "repair the account or draft file the refusal above names, keeping every answer it records, then retry 'just follow-ups $run'"
-    # The dispatch corrects its local account; this sole board check runs after settlement
-    # so a final board edit or comment cannot escape validation.
-    validator=("${tickets_module[@]}" check-dispositions --root "$drafts_root" --board "$board" "$run")
-    cp -- "$budget_account" "$measured" ||
-        fail "the budget account at $budget_account could not be kept as measured" "free disk space and retry"
-    budget_validator=("${tickets_module[@]}" check-budgets --root "$drafts_root" --board "$board" \
-        --measured "$measured" "$run")
-fi
-budget_hooks=()
-if [ "$comments" -ne 1 ]; then
+    # The one closeout, run after settlement so a final board edit or comment cannot escape
+    # it: every ticket against the ticket shape, the account against the board — the
+    # dispatch corrects its own with the board-less validator — and the budget account
+    # against a snapshot taken now, out of the dispatch's reach, so every value but the
+    # dispositions is held to what the library and the engine measured.
     hook_snapshot=$(mktemp) || fail "a per-launch budget snapshot could not be created" "free disk space and retry"
-    budget_hook=$(mktemp) || fail "a per-launch budget closeout hook could not be created" "free disk space and retry"
+    closeout_hook=$(mktemp) || fail "a per-launch closeout hook could not be created" "free disk space and retry"
     cp -- "$budget_account" "$hook_snapshot" ||
-        fail "the budget account could not be captured for detached closeout" "free disk space and retry"
-    "${tickets_module[@]}" write-budget-closeout --root "$drafts_root" --board "$board" \
-        --measured "$hook_snapshot" --hook "$budget_hook" "$run" >/dev/null ||
-        fail "the budget closeout hook could not be written" "repair the refusal above and retry"
-    budget_hooks=(--success-hook "$budget_hook" --failure-hook "$budget_hook")
+        fail "the budget account could not be captured for the closeout" "free disk space and retry"
+    "${tickets_module[@]}" write-closeout --root "$drafts_root" --board "$board" \
+        --measured "$hook_snapshot" --hook "$closeout_hook" "$run" >/dev/null ||
+        fail "the closeout hook could not be written" "repair the refusal above and retry"
+    closeout_hooks=(--success-hook "$closeout_hook" --failure-hook "$closeout_hook")
 fi
 
 # The engine that states the template and checks the task created from it: this checkout's
@@ -581,7 +583,8 @@ if [ "$detached" -eq 1 ]; then
     # The engine's own launch record goes to standard error, so standard output is the two
     # lines below and nothing else.
     # llmlint: ignore[tool_output_is_signal] The engine's launch record is kept for an operator reading standard error, and standard output carries only the two lines the success hook relays.
-    "$script_dir/onepipeline.sh" start "$project" --dag-graph off --detach "${budget_hooks[@]}" >&2 || launched=$?
+    "$script_dir/onepipeline.sh" start "$project" --dag-graph off --detach \
+        "${closeout_hooks[@]}" >&2 || launched=$?
     [ ! -f "$runs_root/$follow_up_run/launch.json" ] || hook_handed_off=1
     if [ "$launched" -ne 0 ]; then
         echo "follow-ups: the detached launch of run $follow_up_run over run $run failed; the diagnostic above names why" >&2
@@ -601,47 +604,29 @@ else
     echo "follow-ups: launching run $follow_up_run to verify run $run's drafts onto '$board'; watch it with: just watch $follow_up_run" >&2
 fi
 status=0
+# The attached launch names no run-end hook: it runs the same closeout itself once the run
+# returns, below, so the checks run once and their answer is this recipe's exit status.
 # llmlint: ignore[tool_output_is_signal] This is an attached launch, so streaming the run as it goes is what the operator stays attached for.
-"$script_dir/onepipeline.sh" start "$project" --dag-graph off "${budget_hooks[@]}" || status=$?
-[ ! -f "$runs_root/$follow_up_run/launch.json" ] || hook_handed_off=1
+"$script_dir/onepipeline.sh" start "$project" --dag-graph off || status=$?
 
-# With no judge, this is what holds the output to its shape. Initial mode validates every
-# ticket the run left through the store, then reads the disposition account; feedback mode
-# reads the response account and nothing else, because that dispatch is not the one that
-# writes tickets and a ticket another dispatch left unfinished is not its refusal to carry.
-again="just follow-ups $run --feedback FILE"
+# With no judge, this is what holds the output to its shape. Initial mode runs the closeout
+# a detached launch's run-end hook runs, which names each refusal and keeps itself and its
+# snapshot for a re-run; feedback mode reads the response account and nothing else, because
+# that dispatch is not the one that writes tickets and a ticket another dispatch left
+# unfinished is not its refusal to carry.
 checked=0
-if [ "$comments" -ne 1 ]; then
-    "${tickets_module[@]}" check-run --root "$drafts_root" "$run" || checked=$?
+if [ "$comments" -eq 1 ]; then
+    "${validator[@]}" >/dev/null || checked=$?
     if [ "$checked" -ne 0 ]; then
-        echo "follow-ups: the ticket(s) named above under $drafts_root/tasks/$run/tickets fail the ticket shape; correct them, or re-dispatch with '$again'" >&2
-    fi
-fi
-accounted=0
-"${validator[@]}" >/dev/null || accounted=$?
-if [ "$accounted" -ne 0 ]; then
-    if [ "$comments" -eq 1 ]; then
         printf -v check_command '%q ' "${validator[@]}"
         echo "follow-ups: the account at $account was refused above; correct it and run '${check_command% }', reusing any reply already posted under this run's marker" >&2
-    else
-        echo "follow-ups: the account at $account was refused above; correct it, or re-dispatch with '$again'" >&2
     fi
-    [ "$checked" -ne 0 ] || checked=$accounted
-fi
-if [ "$comments" -ne 1 ]; then
-    reported=0
+else
+    # A refused closeout keeps its hook and snapshot for the re-run it names; a passing one
+    # removes both itself.
+    hook_handed_off=1
     # llmlint: ignore[tool_output_is_signal] Each landed result is mandatory report output.
-    "${tickets_module[@]}" budget-results --root "$drafts_root" --measured "$measured" "$run" || reported=$?
-    if [ "$reported" -ne 0 ]; then
-        echo "follow-ups: results at $budget_account could not be reported; repair the refusal above and retry with '$again'" >&2
-        [ "$checked" -ne 0 ] || checked=$reported
-    fi
-    budgeted=0
-    "${budget_validator[@]}" >/dev/null || budgeted=$?
-    if [ "$budgeted" -ne 0 ]; then
-        echo "follow-ups: the budget account at $budget_account was refused above; correct its dispositions, or re-dispatch with '$again'" >&2
-        [ "$checked" -ne 0 ] || checked=$budgeted
-    fi
+    "$closeout_hook" || checked=$?
 fi
 if [ "$status" -ne 0 ]; then
     echo "follow-ups: run $follow_up_run did not settle successfully; read it with 'just results $follow_up_run'" >&2
