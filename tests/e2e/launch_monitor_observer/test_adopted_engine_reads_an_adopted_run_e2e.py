@@ -42,7 +42,7 @@ from pathlib import Path
 from typing import IO, NamedTuple
 
 import pytest
-from fake_backend import AGENT_DELAY_ENV
+from fake_backend import AGENT_DELAY_ENV, TURN_GATE_ENV, TURN_GATE_REACHED, TURN_GATE_RELEASED
 from project_fixtures import project_from_plan
 from served_recipe import attached, exit_code, serve, stop_launch
 from test_orchestrate_launch_e2e import CandidatePlan, _node
@@ -220,15 +220,27 @@ def adopted_run(tmp_path: Path, oneharness_bin: str) -> Generator[AdoptedRun]:
 
     The stop is aimed at a dispatch that is really running — waited for through the
     dispatch record `just monitor` renders — because a stop over a run that never
-    dispatched is not the state a manager recovers from. The adoption is held in a
-    subprocess for the same reason an attached launch is elsewhere: it stays attached to
-    the run it took over, and the views below are read while it is.
+    dispatched is not the state a manager recovers from. And it waits on until the
+    dispatch's worker is in its turn, held at the stand-in's turn gate, because a
+    dispatch that is still starting its worker can start it under a stop: the engine's
+    stop signals the tree it read, and a worker spawned between that read and the signal
+    is left running though the stop answers that it signalled the run. That worker is
+    the first driver's, and a journey reading for what outlives the adoption would read
+    it as the adopted engine's. The gate is released once the stop is recorded, so the
+    adopting driver's turn is held by the stand-in's delay as before.
+
+    The adoption is held in a subprocess for the same reason an attached launch is
+    elsewhere: it stays attached to the run it took over, and the views below are read
+    while it is.
 
     However the journey holding it ends, the run is stopped and the adoption's whole
     process group reaped, so the adopted engine never outlives the journey.
     """
     environment = _launched_environment(tmp_path, oneharness_bin, session=LAUNCHING_SESSION)
     environment[AGENT_DELAY_ENV] = str(WORKING_SECONDS)
+    gate = tmp_path / "turn-gate"
+    gate.mkdir()
+    environment[TURN_GATE_ENV] = str(gate)
     plan = tmp_path / "adopted-run.plan.json"
     plan.write_text(json.dumps(_ONE_NODE), encoding="utf-8")
     project = project_from_plan(plan)
@@ -244,10 +256,12 @@ def adopted_run(tmp_path: Path, oneharness_bin: str) -> Generator[AdoptedRun]:
         )
         assert launched.returncode == 0, f"the launch failed:\n{launched.stdout}{launched.stderr}"
         _until("the first dispatch", lambda: recorded("node-dispatched") >= 1)
+        _until("the first dispatch's worker to be in its turn", (gate / TURN_GATE_REACHED).exists)
 
         stopped = _just("stop", run, environment=environment, seconds=120)
         assert stopped.returncode == 0, f"the stop failed:\n{stopped.stdout}{stopped.stderr}"
         _until("the stop to be recorded", lambda: recorded("run-stopped") >= 1)
+        (gate / TURN_GATE_RELEASED).touch()
 
         streamed = tmp_path / "adopting.log"
         with streamed.open("w", encoding="utf-8") as sink:

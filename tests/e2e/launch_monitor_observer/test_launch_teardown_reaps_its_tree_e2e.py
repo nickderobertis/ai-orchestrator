@@ -41,6 +41,7 @@ so the process table is the one place the claim can be read, and it is only read
 
 from __future__ import annotations
 
+import functools
 import importlib.util
 import json
 import os
@@ -101,9 +102,81 @@ class Left(NamedTuple):
 
     pid: int
     session: int
+    #: When it started, in clock ticks since boot: what tells a process the adoption
+    #: started from one the fixture's earlier launch left, whatever their pids.
+    started: int
     command: str
     #: Whether its environment or command line names the journey's temporary root.
     carries_root: bool
+
+
+class Stat(NamedTuple):
+    """The fields of one `/proc/<pid>/stat` record this journey reads."""
+
+    state: str
+    ppid: int
+    session: int
+    #: Clock ticks since boot at which the process started.
+    starttime: int
+
+
+#: The 1-based number `proc(5)` gives each `Stat` field: the kernel's documented layout,
+#: and the one place these positions are written down. `_reconciled` holds the counting
+#: to `ps`'s own reading of a live process.
+PROC_STAT_FIELDS = {"state": 3, "ppid": 4, "session": 6, "starttime": 22}
+#: The fields `proc(5)` numbers before the ones counted after the command name: the pid
+#: and the parenthesised command name itself.
+_BEFORE_STATE = 2
+
+
+def _stat(stat: str) -> Stat:
+    """One `/proc/<pid>/stat` record's `Stat`.
+
+    The command name is parenthesised and may itself hold spaces or parentheses, so the
+    fields are counted from the last closing one.
+    """
+    after = stat[stat.rindex(")") + 2 :].split()
+    field = {name: after[number - _BEFORE_STATE - 1] for name, number in PROC_STAT_FIELDS.items()}
+    return Stat(
+        state=field["state"],
+        ppid=int(field["ppid"]),
+        session=int(field["session"]),
+        starttime=int(field["starttime"]),
+    )
+
+
+@functools.cache
+def _reconciled() -> None:
+    """Fail unless `_stat` reads a live process as `ps` reads it, field for field.
+
+    The process is a sleeping child of this one, so every field is still while both read
+    it: its state, its parent, its session, and — through the boot clock — its start.
+    """
+    child = subprocess.Popen(["sleep", "60"])
+    try:
+        record = Path(f"/proc/{child.pid}/stat")
+        until(
+            "the reconciling child to sleep",
+            lambda: _stat(record.read_text(encoding="utf-8")).state == "S",
+            seconds=10,
+            state=lambda: record.read_text(encoding="utf-8"),
+        )
+        read = _stat(record.read_text(encoding="utf-8"))
+        uptime = float(Path("/proc/uptime").read_text(encoding="utf-8").split()[0])
+        reported = subprocess.run(
+            ["ps", "-o", "stat=,ppid=,sid=,etimes=", "-p", str(child.pid)],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split()
+    finally:
+        child.kill()
+        child.wait()
+    elapsed = uptime - read.starttime / os.sysconf("SC_CLK_TCK")
+    assert read.state == reported[0][0], (read, reported)
+    assert read.ppid == int(reported[1]) == os.getpid(), (read, reported)
+    assert read.session == int(reported[2]) == os.getsid(0), (read, reported)
+    assert abs(elapsed - int(reported[3])) <= 2, (read, elapsed, reported)
 
 
 def _processes(root: Path) -> list[Left]:
@@ -113,6 +186,7 @@ def _processes(root: Path) -> list[Left]:
     reap. A process that vanishes or is unreadable while the table is read is skipped,
     since it is either gone or another user's.
     """
+    _reconciled()
     named = str(root)
     found: list[Left] = []
     for entry in Path("/proc").iterdir():
@@ -124,16 +198,15 @@ def _processes(root: Path) -> list[Left]:
             environ = (entry / "environ").read_bytes().split(b"\0")
         except OSError:
             continue
-        # The command name in `stat` is parenthesised and may itself hold spaces or
-        # parentheses, so the fields are counted from the last closing one.
-        fields = stat[stat.rindex(")") + 2 :].split()
-        if fields[0] == "Z":
+        fields = _stat(stat)
+        if fields.state == "Z":
             continue
         values = [value.decode(errors="replace") for value in (*argv, *environ)]
         found.append(
             Left(
                 pid=int(entry.name),
-                session=int(fields[3]),
+                session=fields.session,
+                started=fields.starttime,
                 command=" ".join(part.decode(errors="replace") for part in argv).strip(),
                 carries_root=any(value.endswith(named) or f"{named}/" in value for value in values),
             )
@@ -300,7 +373,9 @@ def test_an_adoption_whose_journey_raises_leaves_no_process_of_the_adopted_engin
     The run is adopted and its adopting driver is dispatching again when the journey fails,
     and the teardown's stop is refused, so nothing but the group stop ends it: the escaped
     process this reads for is the adopted engine itself, which the old teardown — the
-    `just` launcher killed alone — left running.
+    `just` launcher killed alone — left running. What the earlier launch left is read
+    before the failure, as a precondition, so it fails as what it is rather than as the
+    adopted engine outliving the teardown.
     """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
@@ -308,6 +383,23 @@ def test_an_adoption_whose_journey_raises_leaves_no_process_of_the_adopted_engin
     adopted = next(adopting)
     session = adopted.adopting.pid
     assert adopted.adopting.poll() is None, "the adoption was not attached when the journey failed"
+
+    # The precondition: everything of this journey still running is the adoption's. A
+    # process carrying the root that started before the adopting launcher is the earlier
+    # launch's, left by the fixture's own stop, and reading it after the teardown would
+    # blame the adopted engine for a process it never started.
+    adopted_from = next(
+        left.started for left in _processes(tmp_path) if left.pid == adopted.adopting.pid
+    )
+    earlier = [
+        f"  {left.pid} (session {left.session}): {left.command}"
+        for left in _processes(tmp_path)
+        if left.carries_root and left.started < adopted_from
+    ]
+    assert not earlier, (
+        "the fixture's stop before the adoption left the earlier launch running:\n"
+        + "\n".join(earlier)
+    )
 
     stops = _recorded(adopted.run, adopted.environment, "run-stopped")
     _stopped_by_another_manager(adopted.environment)
