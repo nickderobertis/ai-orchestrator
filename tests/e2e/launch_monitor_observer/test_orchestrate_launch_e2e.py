@@ -23,11 +23,10 @@ import json
 import os
 import re
 import shutil
-import signal
 import subprocess
 import textwrap
 import time
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from pathlib import Path
 from typing import Literal, NamedTuple, NewType, Required, TypedDict, cast
 
@@ -53,6 +52,7 @@ from observer_environment import ENVIRONMENT_PATH_ENV
 from planner_channel import BUS_CONFIG, RUNS_OWN_PROJECTION_COMPLAINT
 from project_fixtures import helper, project_from_plan, read_project_plan, resolving
 from published_surface import surface_of
+from served_recipe import attached, exit_code, serve, stop_launch
 from shared_dispatch_bar import (
     shared_agent_preamble,
     shared_completion_bar,
@@ -406,6 +406,10 @@ class RefusedOnTheGraph(NamedTuple):
     refusal: str
 
 
+#: Where `oneagentgraph` keeps each member's scratch, which `_environment` names inside
+#: the journey's own temporary root.
+GRAPH_STATE_ENV = "ONEAGENTGRAPH_STATE_DIR"
+
 #: Who the helpers attribute their diagnostics to when one of them refuses.
 INDIRECTION_CALLER = "tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py"
 
@@ -473,10 +477,16 @@ def _environment(
     # Keeps this run's graph scratch, its history, and its sibling state out of the
     # host's, so a journey never reads or reclaims a live dispatch's.
     environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
+    # `oneagentgraph` keeps each member's scratch under its own state directory, which it
+    # does not derive from `XDG_STATE_HOME`: left unnamed, every launch here added a run
+    # under the host's `~/.local/state/oneagentgraph/runs` that nothing removed.
+    environment[GRAPH_STATE_ENV] = str(tmp_path / "graph-state")
     return environment
 
 
-def _just(*args: str, environment: dict, seconds: float = 300) -> subprocess.CompletedProcess[str]:
+def _just(
+    *args: str, environment: dict[str, str], seconds: float = 300
+) -> subprocess.CompletedProcess[str]:
     """Run one real recipe from this checkout."""
     return subprocess.run(
         ["just", *args],
@@ -507,30 +517,35 @@ def launched(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> I
         # so at the default it would never come due and every claim about what it does
         # with its turn would be vacuous. `--heartbeat-interval` is the published way to
         # say when it comes due, so the journey says it rather than editing the graph.
-        launch = _just(
-            "orchestrate",
-            SHIPPED_PROJECT,
-            "--heartbeat-interval",
-            str(PACEMAKER_INTERVAL_SECONDS),
-            environment=environment,
-        )
-        # The newer graph/pipeline pair can have its already-running orchestrator begin
-        # one final reconciliation round just after the attached launcher observes the
-        # first complete boundary. Hand tests a quiescent run, as this fixture promises.
-        settling = deadline(10)
-        while True:
-            status = _just("status", SHIPPED_RUN, environment=environment, seconds=60)
-            if status.returncode == 0 and "SETTLED" in status.stdout:
-                break
-            if time.monotonic() >= settling:
-                pytest.fail(f"the launched run did not quiesce:\n{status.stdout}\n{status.stderr}")
-            time.sleep(0.05)
         try:
+            launch = attached(
+                [
+                    "just",
+                    "orchestrate",
+                    SHIPPED_PROJECT,
+                    "--heartbeat-interval",
+                    str(PACEMAKER_INTERVAL_SECONDS),
+                ],
+                environment,
+            )
+            # The newer graph/pipeline pair can have its already-running orchestrator begin
+            # one final reconciliation round just after the attached launcher observes the
+            # first complete boundary. Hand tests a quiescent run, as this fixture promises.
+            settling = deadline(10)
+            while True:
+                status = _just("status", SHIPPED_RUN, environment=environment, seconds=60)
+                if status.returncode == 0 and "SETTLED" in status.stdout:
+                    break
+                if time.monotonic() >= settling:
+                    pytest.fail(
+                        f"the launched run did not quiesce:\n{status.stdout}\n{status.stderr}"
+                    )
+                time.sleep(0.05)
             yield Launched(environment, launch, prompt_log, examples)
         finally:
             # A journey that failed mid-run leaves a driver behind; the supported way to
             # end one is the recipe, and it is the owner here.
-            _just("stop", SHIPPED_RUN, environment=environment, seconds=60)
+            stop_launch(SHIPPED_RUN, environment)
 
 
 @pytest.fixture(scope="module")
@@ -579,19 +594,22 @@ def routed_persona_run(
         ),
         encoding="utf-8",
     )
-    launch = _just(
-        "orchestrate",
-        project_from_plan(plan),
-        "--node-set",
-        f"members.worker.agent.oneharness_config={worker_config}",
-        "--node-set",
-        f"members.worker.judge.oneharness_config={judge_config}",
-        environment=environment,
-    )
     try:
+        launch = attached(
+            [
+                "just",
+                "orchestrate",
+                project_from_plan(plan),
+                "--node-set",
+                f"members.worker.agent.oneharness_config={worker_config}",
+                "--node-set",
+                f"members.worker.judge.oneharness_config={judge_config}",
+            ],
+            environment,
+        )
         yield RoutedPersonaRun(environment, launch, worker_config, judge_config, prompt_log)
     finally:
-        _just("stop", "routed-persona-e2e", environment=environment, seconds=60)
+        stop_launch("routed-persona-e2e", environment)
 
 
 def _graph_history(run: str, environment: dict[str, str]) -> GraphHistory:
@@ -833,6 +851,13 @@ def _recorded_turns(prompt_log: Path) -> list[RecordedTurn]:
     ]
 
 
+def _system(turn: RecordedTurn) -> str:
+    """The launch journeys require a composed system prompt on each inspected turn."""
+    system = turn["system"]
+    assert system is not None, f"the launched turn was given no system prompt: {turn}"
+    return system
+
+
 def _turns_of(turns: list[RecordedTurn], member: str) -> list[RecordedTurn]:
     """The turns `oneagentgraph` pinned to one named dag-scope member."""
     found = []
@@ -928,7 +953,7 @@ def test_the_monitor_watches_the_run_it_no_longer_drives(launched: Launched) -> 
     turns = _recorded_turns(launched.prompt_log)
     # The monitor's agent side may take several turns of one session; every one of them
     # is that member and no other turn of the run may be.
-    watching = [turn for turn in turns if WATCH_ROLE in turn["system"]]
+    watching = [turn for turn in turns if WATCH_ROLE in _system(turn)]
     assert watching, "nothing in this run was told to watch it"
     # And the member carrying it is the one the graph declares, read the same way the
     # pacemaker's turns are: a renamed member with the persona still attached would
@@ -952,7 +977,7 @@ def test_the_monitor_watches_the_run_it_no_longer_drives(launched: Launched) -> 
         # The whole point of the role: it reads the unfiltered stream, not the planner's
         # summary. A monitor told to watch through the default profile would see none of
         # the worker activity it exists to judge.
-        assert DETAILED_STREAM_COMMAND in " ".join(turn["system"].split()), (
+        assert DETAILED_STREAM_COMMAND in " ".join(_system(turn).split()), (
             f"the monitor is no longer told to read the detailed activity stream:\n{turn['system']}"
         )
 
@@ -1060,7 +1085,7 @@ def test_the_shared_preamble_reaches_a_dispatched_worker_itself(launched: Launch
     ]
     assert working, "no dispatched worker took an agent-side turn in this run"
     for turn in working:
-        assert preamble in turn["system"], (
+        assert preamble in _system(turn), (
             "a dispatched worker was given a system prompt that does not carry the shared "
             f"preamble in config/onejudge.base.yaml verbatim:\n{turn['system']}"
         )
@@ -1100,7 +1125,7 @@ def test_a_dispatched_worker_is_told_its_supervisor_is_not_its_manager(
     assert working, "no dispatched worker took an agent-side turn in this run"
 
     for turn in working:
-        delivered = " ".join((turn["system"] or "").split())
+        delivered = " ".join(_system(turn).split())
         for named, phrase in (
             (
                 "that the party reviewing it is not its manager",
@@ -1166,13 +1191,16 @@ def test_a_launch_reports_a_missing_dag_scope_graph(tmp_path: Path, oneharness_b
     # example whose approval the design-doc chain has left stale before the engine is asked,
     # and what this journey reads is the engine's refusal of the graph.
     with isolated_examples(tmp_path) as examples:
-        refused = _just(
-            "orchestrate",
-            SHIPPED_PROJECT,
-            "--detach",
-            "--dag-graph",
-            str(tmp_path / "absent" / "dag-scope.yaml"),
-            environment={**environment, **examples.environment},
+        refused = attached(
+            [
+                "just",
+                "orchestrate",
+                SHIPPED_PROJECT,
+                "--detach",
+                "--dag-graph",
+                str(tmp_path / "absent" / "dag-scope.yaml"),
+            ],
+            {**environment, **examples.environment},
             seconds=120,
         )
     assert refused.returncode != 0
@@ -1383,7 +1411,9 @@ def test_a_drafting_answer_that_does_not_validate_is_re_prompted(
     answered = report["results"][-1]
     assert answered["schema_valid"] is True, answered
     assert answered["structured"] == {"body": body}
-    assert answered["schema_attempts"] > 1, (
+    attempts = answered["schema_attempts"]
+    assert attempts is not None, answered
+    assert attempts > 1, (
         f"the drafter settled in {answered['schema_attempts']} attempt(s), so the "
         "refused answers above were not re-prompted and the schema is not the review"
     )
@@ -1488,13 +1518,16 @@ def _refused_plan(
     written.write_text(json.dumps(plan), encoding="utf-8")
     # The plan is loaded and validated before the agent graph is, so a refusal here is
     # the plan's own and no paid work is reachable even if one were somehow accepted.
-    return _just(
-        "orchestrate",
-        project_from_plan(written),
-        "--detach",
-        "--dag-graph",
-        str(tmp_path / "absent" / "dag-scope.yaml"),
-        environment=environment,
+    return attached(
+        [
+            "just",
+            "orchestrate",
+            project_from_plan(written),
+            "--detach",
+            "--dag-graph",
+            str(tmp_path / "absent" / "dag-scope.yaml"),
+        ],
+        environment,
         seconds=120,
     )
 
@@ -1685,7 +1718,12 @@ OPS_THE_MONITOR_MAY_NOT_ISSUE: tuple[EditCommand, ...] = (
     {"op": "reparent", "id": "research", "deps": []},
     {"op": "attest", "ref": "research"},
     {"op": "complete", "reason": "verified"},
-    {"op": "note", "id": "research", "addressee": "worker", "text": "the fixture moved"},
+    # The partial fixture model omits note-only fields. This payload reaches the real
+    # engine below, where the journey proves the monitor is forbidden to send a note.
+    cast(
+        EditCommand,
+        {"op": "note", "id": "research", "addressee": "worker", "text": "the fixture moved"},
+    ),
 )
 
 
@@ -1988,7 +2026,7 @@ def _driven(
     plan.write_text(json.dumps(driven), encoding="utf-8")
     # Streamed to a file rather than a pipe nobody drains, which would stop the driver.
     with (tmp_path / "launch.log").open("w", encoding="utf-8") as streaming:
-        launch = subprocess.Popen(  # noqa: S603 - the real recipe, as an operator runs it
+        launch = serve(
             [
                 "just",
                 "orchestrate",
@@ -1998,9 +2036,7 @@ def _driven(
                 "--success-hook=",
                 "--failure-hook=",
             ],
-            cwd=REPO_ROOT,
-            env=environment,
-            text=True,
+            environment,
             stdout=streaming,
             stderr=subprocess.STDOUT,
         )
@@ -2008,9 +2044,7 @@ def _driven(
         _dispatched(LiveRun(environment, run, launch))
         yield LiveRun(environment, run, launch)
     finally:
-        launch.kill()
-        launch.wait(timeout=e2e_timeout(60))
-        _just("stop", run, environment=environment, seconds=60)
+        stop_launch(run, environment, launch)
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
@@ -2434,7 +2468,7 @@ def test_the_monitor_is_told_to_ground_a_violation_before_it_alleges_one(
     watching member is actually given it.
     """
     # llmlint: ignore[tests_mirror_real_usage] No planner-facing view carries the system prompt.
-    told = [turn["system"] for turn in _monitor_agent_turns(launched.prompt_log)]
+    told = [_system(turn) for turn in _monitor_agent_turns(launched.prompt_log)]
     assert told, "the monitor took no agent-side turn in this run, so nothing here is proven"
     assert any(GROUNDING_DEMANDED in system and GROUNDING_FALLBACK in system for system in told), (
         "the monitor was never told to ground a rule violation in a quoted file and line, "
@@ -2751,6 +2785,11 @@ class ObservedLaunch(NamedTuple):
 def observed_launch(
     tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str
 ) -> Iterator[ObservedLaunch]:
+    """Share one observed launch across the observer measurements."""
+    yield from _observed_launch(tmp_path_factory.mktemp("observer-environment"), oneharness_bin)
+
+
+def _observed_launch(tmp_path: Path, oneharness_bin: str) -> Generator[ObservedLaunch]:
     """A real launch, watched across the death of the observer graph attached to it.
 
     An observer graph is attached by path and nothing else about it is this
@@ -2786,7 +2825,6 @@ def observed_launch(
     """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
-    tmp_path = tmp_path_factory.mktemp("observer-environment")
     environment = _environment(tmp_path, oneharness_bin)
     recorded = tmp_path / "observer-environment.json"
     environment[ENVIRONMENT_PATH_ENV] = str(recorded)
@@ -2851,29 +2889,19 @@ def observed_launch(
 
     stream = tmp_path / "launch.log"
     with stream.open("w", encoding="utf-8") as sink:
-        launcher = subprocess.Popen(  # noqa: S603 - the real recipe, as an operator runs it
-            [
-                "just",
-                "orchestrate",
-                project_from_plan(plan),
-                "--dag-graph",
-                str(graph),
-            ],
-            cwd=REPO_ROOT,
-            env=environment,
-            text=True,
+        # Its own process group, so this fixture can end the whole launch tree it
+        # started without ever deriving a process to signal from `ps` — which is what
+        # the manager doctrine forbids and what would reach another workstream's run.
+        launcher = serve(
+            ["just", "orchestrate", project_from_plan(plan), "--dag-graph", str(graph)],
+            environment,
             stdout=sink,
             stderr=subprocess.STDOUT,
-            # Its own process group, so this fixture can end the whole launch tree it
-            # started without ever deriving a process to signal from `ps` — which is
-            # what the manager doctrine forbids and what would reach another
-            # workstream's run.
-            start_new_session=True,
         )
     try:
         yield _observe(launcher, recorded, stream, environment)
     finally:
-        _end(launcher, environment)
+        stop_launch(OBSERVED_RUN, environment, launcher)
 
 
 def _observe(
@@ -2885,7 +2913,7 @@ def _observe(
     """Take both measurements off one live launch, and prove each precondition first."""
     watching = deadline(300)
     while not recorded.is_file():
-        if launcher.poll() is not None:
+        if exit_code(launcher) is not None:
             pytest.fail(
                 "the launch ended before the observer member's judge side ran, so this "
                 f"measured nothing:\n{stream.read_text(encoding='utf-8')}"
@@ -2916,31 +2944,16 @@ def _observe(
     # Bounds whether the launcher comes back at all, not how promptly. See
     # `HANDBACK_SECONDS`.
     handing_back = deadline(HANDBACK_SECONDS)
-    while launcher.poll() is None and time.monotonic() < handing_back:
+    while exit_code(launcher) is None and time.monotonic() < handing_back:
         time.sleep(0.5)
     status = _just("status", OBSERVED_RUN, environment=environment, seconds=60)
     return ObservedLaunch(
         observed,
         announced in watched,
-        launcher.poll() is not None,
+        exit_code(launcher) is not None,
         f"{status.stdout}\n{watched}",
         environment["ONEHARNESS_HISTORY_DIR"],
     )
-
-
-def _end(launcher: subprocess.Popen[str], environment: dict[str, str]) -> None:
-    """Stop the run through the supported verb, then reap the launcher it left behind."""
-    _just("stop", OBSERVED_RUN, environment=environment, seconds=60)
-    if launcher.poll() is not None:
-        return
-    # `just stop` ends the run; the wedged launcher attached to it is a separate
-    # process and is this fixture's own to reap, in the group it was started in.
-    os.killpg(os.getpgid(launcher.pid), signal.SIGTERM)
-    try:
-        launcher.wait(timeout=e2e_timeout(30))
-    except subprocess.TimeoutExpired:
-        os.killpg(os.getpgid(launcher.pid), signal.SIGKILL)
-        launcher.wait(timeout=e2e_timeout(30))
 
 
 @pytest.mark.xdist_group("observer-environment")
@@ -3332,11 +3345,10 @@ def test_a_nodes_turn_budget_reaches_the_dispatch_it_was_written_for(
     environment = _environment(tmp_path, oneharness_bin)
     prompt_log = tmp_path / "prompts.jsonl"
     environment[PROMPT_LOG_ENV] = str(prompt_log)
-    # `oneagentgraph` writes each member's effective config into its own scratch, and
-    # names that directory here rather than under the host's state, so this reads the
-    # run's own and never a concurrent dispatch's.
-    scratch = tmp_path / "graph-state"
-    environment["ONEAGENTGRAPH_STATE_DIR"] = str(scratch)
+    # `oneagentgraph` writes each member's effective config into its own scratch, which
+    # `_environment` names inside this journey's temporary root rather than under the
+    # host's state, so this reads the run's own and never a concurrent dispatch's.
+    scratch = Path(environment[GRAPH_STATE_ENV])
     plan = tmp_path / "budget.plan.json"
     plan.write_text(
         json.dumps(
@@ -3348,8 +3360,8 @@ def test_a_nodes_turn_budget_reaches_the_dispatch_it_was_written_for(
         ),
         encoding="utf-8",
     )
-    launch = _just("orchestrate", project_from_plan(plan), environment=environment)
     try:
+        launch = attached(["just", "orchestrate", project_from_plan(plan)], environment)
         assert launch.returncode == 0, launch.stdout + launch.stderr
         # No planner-facing view reports a node's turn budget — `results`, `status`,
         # `transcript`, and `goals` were each checked — and the conversation cannot show
@@ -3381,7 +3393,7 @@ def test_a_nodes_turn_budget_reaches_the_dispatch_it_was_written_for(
                 "follow-ups are drafted with $ORCHESTRATOR_FOLLOW_UP_DRAFT instead"
             )
     finally:
-        _just("stop", "turn-budget-e2e", environment=environment, seconds=60)
+        stop_launch("turn-budget-e2e", environment)
 
 
 #: The scripts the dispatch-env hook is made of: the hook itself, the one definition of
@@ -3487,19 +3499,27 @@ def _hook_launch(
     plan.write_text(
         json.dumps({"schema_version": 2, "name": run, "tasks": [_node()]}), encoding="utf-8"
     )
-    launch = _just(
-        "orchestrate",
-        project_from_plan(plan),
-        "--dag-graph",
-        "off",
-        "--success-hook=",
-        "--failure-hook=",
-        "--dispatch-env-hook",
-        str(hook),
-        "--node-set",
-        f"members.worker.agent.oneharness_config={worker_config}",
-        environment=environment,
-    )
+    try:
+        launch = attached(
+            [
+                "just",
+                "orchestrate",
+                project_from_plan(plan),
+                "--dag-graph",
+                "off",
+                "--success-hook=",
+                "--failure-hook=",
+                "--dispatch-env-hook",
+                str(hook),
+                "--node-set",
+                f"members.worker.agent.oneharness_config={worker_config}",
+            ],
+            environment,
+        )
+    except BaseException:
+        # The caller's teardown is never reached when the launch itself fails.
+        stop_launch(run, environment)
+        raise
     return environment, launch
 
 
@@ -3545,7 +3565,7 @@ def test_the_dispatch_env_hook_hands_a_dispatch_an_indirection_the_driver_never_
         log = Path(environment["ONEPIPELINE_RUNS_DIR"]) / run / "hooks" / "dispatch-env.log"
         assert log.is_file(), f"the run kept no hook log at {log}"
     finally:
-        _just("stop", run, environment=environment, seconds=60)
+        stop_launch(run, environment)
 
 
 # llmlint: ignore[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker] See the directive on the journey above: the same launch path, placed here by the task.  # noqa: E501
@@ -3590,7 +3610,7 @@ def test_a_dispatch_whose_hook_leaves_an_indirection_missing_is_refused_naming_i
         ]
         assert not carrying, f"the run recorded a value the hook printed: {carrying}"
     finally:
-        _just("stop", run, environment=environment, seconds=60)
+        stop_launch(run, environment)
 
 
 #: The launching shell's Python environment, which a launch used to hand every dispatch
@@ -3738,14 +3758,17 @@ def test_a_launch_builds_its_dispatches_environment_rather_than_inheriting_one(
         json.dumps({"schema_version": 2, "name": run, "tasks": [_node()]}), encoding="utf-8"
     )
     try:
-        launch = _just(
-            "orchestrate",
-            project_from_plan(plan),
-            "--dag-graph",
-            "off",
-            "--success-hook=",
-            "--failure-hook=",
-            environment=environment,
+        launch = attached(
+            [
+                "just",
+                "orchestrate",
+                project_from_plan(plan),
+                "--dag-graph",
+                "off",
+                "--success-hook=",
+                "--failure-hook=",
+            ],
+            environment,
         )
         assert launch.returncode == 0, launch.stdout + launch.stderr
         # llmlint: ignore[tests_mirror_real_usage] What a dispatch is *given* reaches no operator-facing view: it is inherited through three tools that report nothing of what they passed on, so the stand-in's record of its own environment is the only place to read it.  # noqa: E501
@@ -3805,7 +3828,7 @@ def test_a_launch_builds_its_dispatches_environment_rather_than_inheriting_one(
                 "waits on a terminal nobody is at"
             )
     finally:
-        _just("stop", run, environment=environment, seconds=60)
+        stop_launch(run, environment)
 
 
 def _plans_in_the_repository(root: Path) -> list[str]:
@@ -3852,13 +3875,9 @@ def test_every_plan_this_repository_ships_is_one_the_published_crate_accepts(
             # llmlint: ignore-block[shell_test_tiers_stay_split] Same site: this is a pytest
             # journey over the real recipe, not a shell suite, and the stand-in is registered
             # through the `onevcs` `config/onevcs.version` pins, touching no host state.
-            refused = _just(
-                "orchestrate",
-                project,
-                "--detach",
-                "--dag-graph",
-                absent_graph,
-                environment=resolving(project, environment),
+            refused = attached(
+                ["just", "orchestrate", project, "--detach", "--dag-graph", absent_graph],
+                resolving(project, environment),
                 seconds=120,
             )
             # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
@@ -3997,20 +4016,13 @@ def live_run(tmp_path: Path, oneharness_bin: str) -> Iterator[LiveRun]:
     plan = tmp_path / "live.plan.json"
     live: CandidatePlan = {"schema_version": 2, "name": run, "tasks": [_node(id="held")]}
     plan.write_text(json.dumps(live), encoding="utf-8")
-    launch = subprocess.Popen(  # noqa: S603 - the real recipe, as an operator runs it
-        ["just", "orchestrate", project_from_plan(plan), "--dag-graph", "off"],
-        cwd=REPO_ROOT,
-        env=environment,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+    launch = serve(
+        ["just", "orchestrate", project_from_plan(plan), "--dag-graph", "off"], environment
     )
     try:
         yield LiveRun(environment, run, launch)
     finally:
-        launch.kill()
-        launch.wait(timeout=e2e_timeout(60))
-        _just("stop", run, environment=environment, seconds=60)
+        stop_launch(run, environment, launch)
 
 
 def _dispatched(live: LiveRun) -> str:
@@ -4177,7 +4189,7 @@ def supervised_channel(tmp_path: Path, oneharness_bin: str) -> Iterator[Supervis
         "tasks": [_node(id="held")],
     }
     plan.write_text(json.dumps(supervised), encoding="utf-8")
-    launch = subprocess.Popen(  # noqa: S603 - the real recipe, as an operator runs it
+    launch = serve(
         [
             "just",
             "orchestrate",
@@ -4186,18 +4198,14 @@ def supervised_channel(tmp_path: Path, oneharness_bin: str) -> Iterator[Supervis
             "--success-hook=",
             "--failure-hook=",
         ],
-        cwd=REPO_ROOT,
-        env=environment,
-        text=True,
+        environment,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
     try:
         yield SupervisedChannel(environment, run)
     finally:
-        launch.kill()
-        launch.wait(timeout=e2e_timeout(60))
-        _just("stop", run, environment=environment, seconds=60)
+        stop_launch(run, environment, launch)
 
 
 # One run name serves all three parametrizations, and the fixture stops it by that name
@@ -4296,20 +4304,13 @@ def _cancellable(
     plan = tmp_path / f"{run}.plan.json"
     cancellable: CandidatePlan = {"schema_version": 2, "name": run, "tasks": [_node(id="held")]}
     plan.write_text(json.dumps(cancellable), encoding="utf-8")
-    launch = subprocess.Popen(  # noqa: S603 - the real recipe, as an operator runs it
-        ["just", "orchestrate", project_from_plan(plan), "--dag-graph", "off"],
-        cwd=REPO_ROOT,
-        env=environment,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+    launch = serve(
+        ["just", "orchestrate", project_from_plan(plan), "--dag-graph", "off"], environment
     )
     try:
         yield LiveRun(environment, run, launch)
     finally:
-        launch.kill()
-        launch.wait(timeout=e2e_timeout(60))
-        _just("stop", run, environment=environment, seconds=60)
+        stop_launch(run, environment, launch)
 
 
 @pytest.fixture

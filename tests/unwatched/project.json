@@ -20,6 +20,7 @@
     "support-project-fixtures",
     "support-run-snapshot",
     "support-scratch-identity",
+    "support-served-recipe",
     "support-short-state",
     "support-waits"
   ],

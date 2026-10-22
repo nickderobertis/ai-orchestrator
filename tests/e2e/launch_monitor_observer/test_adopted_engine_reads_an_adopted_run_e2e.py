@@ -37,13 +37,14 @@ import json
 import shutil
 import subprocess
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterator
 from pathlib import Path
 from typing import IO, NamedTuple
 
 import pytest
 from fake_backend import AGENT_DELAY_ENV
 from project_fixtures import project_from_plan
+from served_recipe import attached, exit_code, serve, stop_launch
 from test_orchestrate_launch_e2e import CandidatePlan, _node
 from test_orchestrate_launch_e2e import _environment as _launched_environment
 from test_watch_recipe_e2e import heartbeats, returned, unread_count, watch
@@ -108,6 +109,8 @@ class AdoptedRun(NamedTuple):
 
     environment: dict[str, str]
     run: str
+    #: The `just orchestrate --adopt` still attached to the run, led by its own session.
+    adopting: subprocess.Popen[str]
 
 
 def _just(
@@ -168,36 +171,51 @@ def _adopting(run: str, environment: dict[str, str], sink: IO[str]) -> subproces
     driver, so only that refusal is retried — told apart by its own status. An adoption
     that took is told by the run's own `driver-adopted` record, never by how long the
     process has gone on running.
+
+    Each attempt runs in a session of its own, so whatever one leaves in its group goes
+    with it. Every unsuccessful attempt stops the run through its recipe before group
+    cleanup, including an attempt that never recorded its adoption: the adopted engine
+    it exec'd may be what escaped.
     """
     limit = deadline(PATIENCE_SECONDS)
     refusal = ""
     while time.monotonic() < limit:
-        adopting = subprocess.Popen(  # noqa: S603 - the real recipe, as an operator runs it
+        adopting = serve(
             ["just", "orchestrate", "--adopt", run],
-            cwd=REPO_ROOT,
-            env=environment,
-            text=True,
+            environment,
             stdin=subprocess.DEVNULL,
             stdout=sink,
             stderr=subprocess.STDOUT,
         )
-        while adopting.poll() is None and time.monotonic() < limit:
-            if _recorded(run, environment, "driver-adopted") >= 1:
+        handed_off = False
+        try:
+            while exit_code(adopting) is None and time.monotonic() < limit:
+                if _recorded(run, environment, "driver-adopted") >= 1:
+                    handed_off = True
+                    return adopting
+                time.sleep(1.0)
+            if exit_code(adopting) is None:
+                raise AssertionError(f"run {run} was never recorded adopted while --adopt ran")
+            if exit_code(adopting) != REFUSED:
+                handed_off = True
                 return adopting
-            time.sleep(1.0)
-        if adopting.poll() is None:
-            adopting.kill()
-            adopting.wait(timeout=e2e_timeout(120))
-            raise AssertionError(f"run {run} was never recorded adopted while --adopt ran")
-        if adopting.returncode != REFUSED:
-            return adopting
-        refusal = f"exit {adopting.returncode}"
+            refusal = f"exit {exit_code(adopting)}"
+        finally:
+            if not handed_off:
+                stop_launch(run, environment, adopting)
         time.sleep(2)
     raise AssertionError(f"run {run} could never be adopted: {refusal}")
 
 
 @pytest.fixture
 def adopted(tmp_path: Path, oneharness_bin: str) -> Iterator[AdoptedRun]:
+    """Launch detached, stop the run on a live dispatch, adopt it, and hold the adoption."""
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    yield from adopted_run(tmp_path, oneharness_bin)
+
+
+def adopted_run(tmp_path: Path, oneharness_bin: str) -> Generator[AdoptedRun]:
     """Launch detached, stop the run on a live dispatch, adopt it, and hold the adoption.
 
     The stop is aimed at a dispatch that is really running — waited for through the
@@ -205,9 +223,10 @@ def adopted(tmp_path: Path, oneharness_bin: str) -> Iterator[AdoptedRun]:
     dispatched is not the state a manager recovers from. The adoption is held in a
     subprocess for the same reason an attached launch is elsewhere: it stays attached to
     the run it took over, and the views below are read while it is.
+
+    However the journey holding it ends, the run is stopped and the adoption's whole
+    process group reaped, so the adopted engine never outlives the journey.
     """
-    if shutil.which("just") is None:
-        pytest.skip("just is not installed")
     environment = _launched_environment(tmp_path, oneharness_bin, session=LAUNCHING_SESSION)
     environment[AGENT_DELAY_ENV] = str(WORKING_SECONDS)
     plan = tmp_path / "adopted-run.plan.json"
@@ -218,9 +237,10 @@ def adopted(tmp_path: Path, oneharness_bin: str) -> Iterator[AdoptedRun]:
     def recorded(kind: str) -> int:
         return _recorded(run, environment, kind)
 
+    adopting: subprocess.Popen[str] | None = None
     try:
-        launched = _just(
-            "orchestrate", project, "--detach", "--dag-graph", "off", environment=environment
+        launched = attached(
+            ["just", "orchestrate", project, "--detach", "--dag-graph", "off"], environment
         )
         assert launched.returncode == 0, f"the launch failed:\n{launched.stdout}{launched.stderr}"
         _until("the first dispatch", lambda: recorded("node-dispatched") >= 1)
@@ -232,17 +252,13 @@ def adopted(tmp_path: Path, oneharness_bin: str) -> Iterator[AdoptedRun]:
         streamed = tmp_path / "adopting.log"
         with streamed.open("w", encoding="utf-8") as sink:
             adopting = _adopting(run, environment, sink)
-            try:
-                _until("the adoption to be recorded", lambda: recorded("driver-adopted") >= 1)
-                # And the adopting driver's own dispatch, which is what makes it a driver
-                # doing something rather than one about to hand the run back.
-                _until("the adopting driver's dispatch", lambda: recorded("node-dispatched") >= 2)
-                yield AdoptedRun(environment, run)
-            finally:
-                adopting.kill()
-                adopting.wait(timeout=e2e_timeout(120))
+            _until("the adoption to be recorded", lambda: recorded("driver-adopted") >= 1)
+            # And the adopting driver's own dispatch, which is what makes it a driver
+            # doing something rather than one about to hand the run back.
+            _until("the adopting driver's dispatch", lambda: recorded("node-dispatched") >= 2)
+            yield AdoptedRun(environment, run, adopting)
     finally:
-        _just("stop", run, environment=environment, seconds=120)
+        stop_launch(run, environment, *([] if adopting is None else [adopting]))
 
 
 def test_a_stopped_then_adopted_run_reads_as_driven_by_its_adopting_driver(

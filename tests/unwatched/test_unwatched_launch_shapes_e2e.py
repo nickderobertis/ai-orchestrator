@@ -32,11 +32,9 @@ and the verb are all real, and the record read is the engine's own.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import os
 import shutil
-import signal
 import subprocess
 import time
 from collections.abc import Iterator
@@ -48,6 +46,8 @@ import short_state
 from fake_backend import AGENT_DELAY_ENV
 from harness_indirections import established_indirections
 from project_fixtures import helper, project_from_plan
+from served_recipe import attached as run_attached
+from served_recipe import exit_code, serve, stop_launch
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
@@ -147,6 +147,7 @@ def _environment(tmp_path: Path, oneharness_bin: str) -> dict[str, str]:
         environment.pop(name, None)
     environment["CLAUDE_CODE_SESSION_ID"] = LAUNCHING_SESSION
     environment["ONEPIPELINE_RUNS_DIR"] = str(tmp_path / "runs")
+    environment["ONEAGENTGRAPH_STATE_DIR"] = str(tmp_path / "graph-state")
     # The real CLI the stand-in delegates every turn to. Required rather than optional:
     # without it the stand-in cannot answer at all and the node fails `provider-failed`,
     # which settles the run and would stop this journey measuring the live-launch shape.
@@ -187,7 +188,7 @@ def _work(node_id: NodeId, deps: list[NodeId] | None = None) -> PlanNode:
         "one of its nodes is still working.\n\n## Acceptance criteria\n- Reported.",
     }
     if deps is not None:
-        node["deps"] = deps
+        node["deps"] = list(deps)
     return node
 
 
@@ -314,38 +315,7 @@ def _launched(tmp_path: Path, oneharness_bin: str, run: RunId) -> Iterator[Launc
     try:
         yield launch
     finally:
-        _just("stop", run, environment=environment, seconds=120)
-        _end_what_the_stop_left(Path(environment["ONEPIPELINE_RUNS_DIR"]))
-
-
-def _end_what_the_stop_left(runs: Path) -> None:
-    """End every process this launch started that its run's stop left running.
-
-    Under a loaded suite the engine's `stop` does not always reach a dispatch's turn in
-    flight, so a stand-in worker in its `WORKING_SECONDS` turn outlived the journey and the
-    session, which the pre-push gate's recorder counts as a leaked process; that is the
-    engine's to fix, and this contains it to the journey. They are found by the runs root
-    every dispatch of this launch is handed, a directory under this journey's own
-    temporary path, so nothing but this launch's own processes can carry it.
-    """
-    marker = f"ONEPIPELINE_RUNS_DIR={runs}".encode()
-    left: list[int] = []
-    for entry in Path("/proc").iterdir():
-        if not entry.name.isdigit() or int(entry.name) == os.getpid():
-            continue
-        try:
-            environ = (entry / "environ").read_bytes()
-        except OSError:
-            continue
-        if marker in environ.split(b"\0"):
-            left.append(int(entry.name))
-    for number in (signal.SIGTERM, signal.SIGKILL):
-        for pid in left:
-            with contextlib.suppress(ProcessLookupError):
-                os.kill(pid, number)
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline and any(Path(f"/proc/{pid}").exists() for pid in left):
-            time.sleep(0.1)
+        stop_launch(run, environment)
 
 
 @pytest.fixture(name="attached")
@@ -364,11 +334,9 @@ def _attached(tmp_path: Path, oneharness_bin: str) -> Iterator[Launch]:
         with streamed.open("w", encoding="utf-8") as sink:
             # A file rather than a pipe: an attached launch streams the run's whole merged
             # feed, and a pipe nobody drains fills and wedges the launch it is measuring.
-            running = subprocess.Popen(  # noqa: S603 - the real recipe, as an operator runs it
+            running = serve(
                 ["just", "orchestrate", project, *WITHOUT_OBSERVER],
-                cwd=REPO_ROOT,
-                env=launch.environment,
-                text=True,
+                environment=launch.environment,
                 stdin=subprocess.DEVNULL,
                 stdout=sink,
                 stderr=subprocess.STDOUT,
@@ -376,8 +344,7 @@ def _attached(tmp_path: Path, oneharness_bin: str) -> Iterator[Launch]:
             try:
                 yield launch
             finally:
-                running.kill()
-                running.wait(timeout=e2e_timeout(120))
+                stop_launch(launch.run, launch.environment, running)
 
 
 @pytest.fixture(name="detached")
@@ -391,8 +358,8 @@ def _detached(tmp_path: Path, oneharness_bin: str) -> Iterator[Launch]:
     _requirements()
     for launch in _launched(tmp_path, oneharness_bin, RunId("unwatched-orchestrate-detached")):
         project = _project(tmp_path, launch.run, [_work(NodeId("only"))])
-        started = _just(
-            "orchestrate", project, "--detach", *WITHOUT_OBSERVER, environment=launch.environment
+        started = run_attached(
+            ["just", "orchestrate", project, "--detach", *WITHOUT_OBSERVER], launch.environment
         )
         assert started.returncode == 0, f"the launch failed:\n{started.stdout}{started.stderr}"
         yield launch
@@ -424,8 +391,8 @@ def _adopted(tmp_path: Path, oneharness_bin: str) -> Iterator[Launch]:
             launch.run,
             [_gate(NodeId("approve")), _work(NodeId("work"), deps=[NodeId("approve")])],
         )
-        started = _just(
-            "orchestrate", project, "--detach", *WITHOUT_OBSERVER, environment=launch.environment
+        started = run_attached(
+            ["just", "orchestrate", project, "--detach", *WITHOUT_OBSERVER], launch.environment
         )
         assert started.returncode == 0, f"the launch failed:\n{started.stdout}{started.stderr}"
         _until_the_driver_lets_go(launch)
@@ -437,8 +404,7 @@ def _adopted(tmp_path: Path, oneharness_bin: str) -> Iterator[Launch]:
             try:
                 yield launch
             finally:
-                adopting.kill()
-                adopting.wait(timeout=e2e_timeout(120))
+                stop_launch(launch.run, launch.environment, adopting)
 
 
 def _until_the_driver_lets_go(launch: Launch, *, seconds: float = 300) -> None:
@@ -489,11 +455,9 @@ def _adopting(launch: Launch, sink: IO[str], *, seconds: float = 300) -> subproc
     limit = time.monotonic() + e2e_timeout(seconds)
     refusal = ""
     while time.monotonic() < limit:
-        adopting = subprocess.Popen(  # noqa: S603 - the real recipe, as an operator runs it
+        adopting = serve(
             ["just", "orchestrate", "--adopt", launch.run],
-            cwd=REPO_ROOT,
-            env=launch.environment,
-            text=True,
+            environment=launch.environment,
             stdin=subprocess.DEVNULL,
             stdout=sink,
             stderr=subprocess.STDOUT,
@@ -503,23 +467,28 @@ def _adopting(launch: Launch, sink: IO[str], *, seconds: float = 300) -> subproc
         # handed back because the run settled is not a refusal, and re-adopting it would
         # be this journey driving the run in circles rather than reading it. One still
         # running is an adoption once the run records it, never for having run a while.
-        while adopting.poll() is None and time.monotonic() < limit:
-            if _adoption_recorded(launch):
+        handed_off = False
+        try:
+            while exit_code(adopting) is None and time.monotonic() < limit:
+                if _adoption_recorded(launch):
+                    handed_off = True
+                    return adopting
+                time.sleep(1)
+            if exit_code(adopting) is None:
+                raise AssertionError(
+                    f"run {launch.run} was never recorded adopted while --adopt ran"
+                )
+            if exit_code(adopting) != REFUSED:
+                assert _adoption_recorded(launch), (
+                    f"`--adopt` exited {exit_code(adopting)} without the run {launch.run} "
+                    "recording an adoption"
+                )
+                handed_off = True
                 return adopting
-            time.sleep(1)
-        if adopting.poll() is None:
-            adopting.kill()
-            adopting.wait(timeout=e2e_timeout(120))
-            raise AssertionError(f"run {launch.run} was never recorded adopted while --adopt ran")
-        if adopting.returncode != REFUSED:
-            # One that ended unrefused took the run only if the run recorded it: an adopt
-            # that exits without adopting leaves a run that reads owned all the same.
-            assert _adoption_recorded(launch), (
-                f"`--adopt` exited {adopting.returncode} without the run {launch.run} "
-                "recording an adoption"
-            )
-            return adopting
-        refusal = f"exit {adopting.returncode}"
+            refusal = f"exit {exit_code(adopting)}"
+        finally:
+            if not handed_off:
+                stop_launch(launch.run, launch.environment, adopting)
         time.sleep(2)
     raise AssertionError(f"run {launch.run} could never be adopted: {refusal}")
 
