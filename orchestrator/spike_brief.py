@@ -133,8 +133,15 @@ def validate(value: object) -> Receipt:
     if not project.startswith("authoring:"):
         raise ValueError("plan_project must belong to authoring")
     board = value["board_project"]
-    if board is not None and not matched(board, "board_project", QUALIFIED).startswith("plans:"):
-        raise ValueError("board_project must belong to plans")
+    if board is not None:
+        board_source = matched(board, "board_project", QUALIFIED).split(":", 1)[0]
+        if board_source != "plans":
+            from orchestrator import plan_store
+
+            if board_source == "authoring" or board_source not in plan_store.routed_sources(
+                "plans"
+            ):
+                raise ValueError("board_project must belong to plans or one of its routed sources")
     for field in ("parent_run", "spikes_run", "writer_run"):
         matched(value[field], field, RUN_ID)
     text(value["manager_session"], "manager_session")
@@ -184,7 +191,11 @@ def read(path: Path) -> Receipt | None:
 
             recorded = plan_store.project_record(receipt["plan_project"]).get("metadata")
             copies = recorded.get(plan_store.COPIES_KEY) if isinstance(recorded, dict) else None
-            board_project = copies.get("plans") if isinstance(copies, dict) else None
+            board_project = (
+                copies.get(receipt["board_project"].split(":", 1)[0])
+                if isinstance(copies, dict)
+                else None
+            )
         if receipt["brief"]:
             from orchestrator import plan_store
 

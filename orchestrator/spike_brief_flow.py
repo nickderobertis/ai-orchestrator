@@ -19,12 +19,11 @@ from orchestrator.root import REPO_ROOT
 NODE = "spike-brief"
 
 
-def recorded_project(
+def arrived_projects(
     payload: CopyReport | QueryResponseOfQualifiedProject,
     source: plan_store.QualifiedProjectId,
-    expected: object,
-) -> plan_store.QualifiedProjectId:
-    """One recorded plans identity must be what the SDK returned, on either copy or read."""
+) -> list[object]:
+    """The home project destinations the SDK returned for this authoring project."""
     arrived: list[object] = []
     if isinstance(payload, CopyReport):
         for item in payload.items:
@@ -38,11 +37,25 @@ def recorded_project(
                 arrived.append(outcome.destination.model_dump())
     else:
         arrived = [item.id.model_dump() for item in payload.items]
+    return arrived
+
+
+def recorded_project(
+    payload: CopyReport | QueryResponseOfQualifiedProject,
+    source: plan_store.QualifiedProjectId,
+    expected: object,
+) -> plan_store.QualifiedProjectId:
+    """One recorded plans or routed identity must be what the SDK returned."""
+    arrived = arrived_projects(payload, source)
     candidate = arrived[0] if len(arrived) == 1 else None
     if (
         not isinstance(candidate, str)
         or not spike_brief.QUALIFIED.fullmatch(candidate)
-        or not candidate.startswith("plans:")
+        or candidate.startswith("authoring:")
+        or (
+            not candidate.startswith("plans:")
+            and candidate.split(":", 1)[0] not in plan_store.routed_sources("plans")
+        )
         or candidate != expected
     ):
         raise ValueError(
@@ -58,7 +71,13 @@ def copied_project(
     report = CopyReport.model_validate({"items": rows})
     recorded = plan_store.project_record(project).get("metadata")
     links = recorded.get(plan_store.COPIES_KEY) if isinstance(recorded, dict) else None
-    expected = links.get("plans") if isinstance(links, dict) else None
+    arrived = arrived_projects(report, project)
+    home = arrived[0] if len(arrived) == 1 else None
+    expected = (
+        links.get(home.split(":", 1)[0])
+        if isinstance(links, dict) and isinstance(home, str)
+        else None
+    )
     return recorded_project(report, project, expected)
 
 

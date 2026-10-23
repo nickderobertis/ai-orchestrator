@@ -15,7 +15,17 @@ FIXTURES = Path(__file__).parent / "fixtures/spike-brief-sdk"
 
 @pytest.mark.parametrize("kind", ["copy-report", "project-show"])
 @pytest.mark.parametrize(
-    "fault", ["none", "missing", "ambiguous", "outside", "mismatch", "unrecorded"]
+    "fault",
+    [
+        "none",
+        "missing",
+        "ambiguous",
+        "outside",
+        "authoring",
+        "authoring-agrees",
+        "mismatch",
+        "unrecorded",
+    ],
 )
 def test_sdk_payload_must_return_one_recorded_plans_project(kind: str, fault: str) -> None:
     raw = json.loads((FIXTURES / (kind + ".json")).read_text())
@@ -28,6 +38,10 @@ def test_sdk_payload_must_return_one_recorded_plans_project(kind: str, fault: st
             raw["items"] *= 2
         case "outside":
             raw["items"][0][key] = "elsewhere:board"
+        case "authoring" | "authoring-agrees":
+            raw["items"][0][key] = "authoring:board"
+            if fault == "authoring-agrees":
+                expected = "authoring:board"
         case "mismatch":
             raw["items"][0][key] = "plans:unrelated"
         case "unrecorded":

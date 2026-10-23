@@ -395,6 +395,9 @@ WHOLE_WORKSPACE = "wholeWorkspace"
 #: `tree-scans` is the one project whose every module copies this checkout or scans every
 #: tracked document or Python module, so its one target is keyed on the whole workspace.
 DRIFT_GATE_PROJECTS: tuple[SubjectProject, ...] = (
+    SubjectProject(
+        "linear-board-checks", "tests/linear_board_checks", "linearBoardWorkspace", docs_tier=False
+    ),
     SubjectProject("dispatch-bar", "tests/dispatch_bar", "dispatchBarWorkspace", docs_tier=False),
     SubjectProject("family-scans", "tests/family_scans", "familyScansWorkspace", docs_tier=False),
     SubjectProject(

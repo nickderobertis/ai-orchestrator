@@ -1,0 +1,39 @@
+{
+  "name": "linear-board-checks",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/linear_board_checks",
+  "tags": [
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-linear-board",
+    "support-onetaskgraph-user-layer",
+    "support-plan-root-variable",
+    "support-published-tools"
+  ],
+  "namedInputs": {
+    "linearBoardWorkspace": [
+      "{projectRoot}/**/*",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/config/onetaskgraph.version"
+    ]
+  },
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/linear_board_checks -n 4 --dist loadgroup --no-cov",
+      "inputs": [
+        "linearBoardWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ],
+      "options": {
+        "cwd": "."
+      }
+    }
+  }
+}

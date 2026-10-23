@@ -12,7 +12,9 @@
     "support-github-board",
     "support-scratch-identity",
     "support-fake-backend",
-    "support-plan-root-variable"
+    "support-plan-root-variable",
+    "support-linear-board",
+    "support-onetaskgraph-user-layer"
   ],
   "namedInputs": {
     "spikeBriefWorkspace": [

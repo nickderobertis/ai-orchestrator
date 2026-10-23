@@ -1,0 +1,30 @@
+{
+  "name": "support-linear-board",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "tags": [
+    "type:test-support"
+  ],
+  "implicitDependencies": [],
+  "namedInputs": {
+    "testSupport": [
+      "{workspaceRoot}/tests/linear_board.py",
+      "{workspaceRoot}/orchestrator/plan_store.py",
+      "{workspaceRoot}/orchestrator/project_store.py",
+      "{workspaceRoot}/orchestrator/plan_units.py",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/onetaskgraph.yaml",
+      "{workspaceRoot}/config/onetaskgraph.version",
+      "{workspaceRoot}/config/onetaskgraph.user-layer.example.yaml",
+      "{projectRoot}/project.json"
+    ]
+  },
+  "targets": {
+    "test-support": {
+      "executor": "nx:noop",
+      "inputs": [
+        "testSupport"
+      ]
+    }
+  }
+}
