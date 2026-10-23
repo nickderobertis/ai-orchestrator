@@ -6,9 +6,10 @@ organization's `hiddenco-plans` source, and the store decides where a plan's hom
 that alone, by its voters — each task naming a repository, and the project's own
 `repositories`: into `hiddenco-plans` when they all route there, a task naming no repository
 following the home, and otherwise onto `plans`, with the routed tasks in a member project of
-`hiddenco-plans`. The store's public boundary is
-off, as the tracked configuration lands it, and the example layer declares no `visibility`
-that would switch it on. These journeys drive both shapes through the real `just finish-plan`:
+`hiddenco-plans`. The store's public boundary is on, as the tracked configuration switches
+it, and the example layer declares the organization's trackers private; the hiddenco
+repository is registered public here, so no task is private and the routes alone place the
+plan. These journeys drive both shapes through the real `just finish-plan`:
 
 * **shape 1**, an all-hiddenco plan, whose home, tasks and design document all land in
   `hiddenco-plans`;
@@ -166,7 +167,11 @@ def routed(tmp_path_factory: pytest.TempPathFactory) -> Routed:
             ),
         )
     }
-    layer = onetaskgraph_user_layer.with_stand_ins(stood_in)
+    # Without the host's own private boards: the store authenticates every source declared
+    # private before a copy, and theirs is the live GitHub API, which no check may reach.
+    layer = onetaskgraph_user_layer.without_private_stores(
+        onetaskgraph_user_layer.with_stand_ins(stood_in)
+    )
     home = onetaskgraph_user_layer.installed(tmp_path / "config-home", layer)
     shared = share_this_checkouts_install(checkout)
     shared[onetaskgraph_user_layer.XDG_CONFIG_HOME] = str(home)
@@ -175,8 +180,16 @@ def routed(tmp_path_factory: pytest.TempPathFactory) -> Routed:
 
 def seeded(root: Path, *, execution: str, origin: str) -> Identity:
     """The stand-in's scratch identity, declared public: this journey routes public
-    repository content into the team source."""
-    return seeded_identity(root, execution=execution, origin=origin, visibility="public")
+    repository content into the team source. This repository, which the mixed plan's
+    project names, is registered public beside it, since the boundary reads an unregistered
+    repository as private."""
+    return seeded_identity(
+        root,
+        execution=execution,
+        origin=origin,
+        visibility="public",
+        public=[THIS_REPOSITORY],
+    )
 
 
 class Bench(NamedTuple):

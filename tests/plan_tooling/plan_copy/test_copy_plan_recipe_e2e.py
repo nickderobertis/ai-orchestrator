@@ -494,6 +494,7 @@ def test_naming_no_destination_reaches_the_board_this_repository_launches_from(
 
 def test_an_argument_this_recipe_has_no_opinion_about_reaches_the_store_s_copy_verb(
     destination: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A pass-through is only proven by an argument that changes what the store does.
 
@@ -503,6 +504,9 @@ def test_an_argument_this_recipe_has_no_opinion_about_reaches_the_store_s_copy_v
     argument on the way and the store creates a **second** project beside the first rather
     than updating it — so the record count is what says the flag arrived.
     """
+    # This journey deliberately loses destination origin records. A private source
+    # omits those records and retains copy links instead, so use a public fixture here.
+    monkeypatch.setenv("ONETASKGRAPH_SOURCES__TEST_FIXTURES__VISIBILITY", "public")
     project = _project("copy-passthrough")
     _, _, native = project.partition(":")
     # `reviewed` reaches this record the way an operator does — the real `just

@@ -411,6 +411,7 @@ def test_session_setup_keeps_the_locked_plan_store_and_plan_root_in_force(
         assert f"ready (onetaskgraph: {adopted} at {located})" in first.stderr
         assert (plans / "tasks").is_dir()
         assert (plans / "projects").is_dir()
+        assert (setup_root / ".follow-ups" / "runs").is_dir()
 
         # The install landed where the journey said, by uv's own account of where that is.
         tool_dir, tool_bin = (Path(tools[name]) for name in ("UV_TOOL_DIR", "UV_TOOL_BIN_DIR"))

@@ -4,9 +4,16 @@
 # config.yaml`, outside every checkout and read beneath this document.
 # `config/onetaskgraph.user-layer.example.yaml` is that layer's shape, over synthetic names.
 #
-# The plan store's public write boundary is deliberately left switched off: no `write_policy`
-# and no `visibility` is declared here. `docs/orchestration.md` (The public write boundary)
-# says why and what switching it on takes.
+# The plan store's public write boundary is switched on: every write to a source not declared
+# private is screened through the pinned `onevcs`, whose `boundary inspect` answers each
+# repository an item names as public or private and whose `boundary check` refuses a write
+# carrying a private repository's terms. Plans are drafted in the private `authoring` source and
+# copied onto the public boards. A host doing an organization's work declares that
+# organization's sources `visibility: private` in its own user layer before adopting this;
+# `docs/orchestration.md` (The public write boundary) says why.
+write_policy:
+  visibility_command: [onevcs, boundary, inspect, --input, "-"]
+  check_command: [onevcs, boundary, check, --destination, public, --input, "-"]
 default_sources: [authoring, examples, plans, test-fixtures]
 sources:
   examples:
@@ -14,6 +21,9 @@ sources:
     config:
       root: examples
   authoring:
+    # Plans, design documents, spike reports and budget answers are drafted here, and an
+    # organization's name a private repository, so nothing written here is screened.
+    visibility: private
     plugin: local-md
     config:
       root: .plans
@@ -22,13 +32,16 @@ sources:
     config:
       root: .follow-ups
   # Follow-up launch tasks quote drafts and board comments that may name private work.
-  # They stay on this machine and are never copied to a board, so this source is declared
-  # private once the boundary is switched on.
+  # They stay on this machine and are never copied to a board, so this source is private.
   follow-up-runs:
+    visibility: private
     plugin: local-md
     config:
       root: .follow-ups/runs
   test-fixtures:
+    # Deliberately private fixture projects stay local; copies to public boards are screened
+    # again at their destination.
+    visibility: private
     plugin: local-md
     config:
       # This suite's own launchable projects. Rooted relatively and gitignored, beside
@@ -36,6 +49,7 @@ sources:
       # this one (`tests/plan_fixture_source.py`); nothing writes here.
       root: .test-fixtures
   plans:
+    visibility: public
     plugin: github-projects
     config:
       owner: nickderobertis
@@ -68,6 +82,7 @@ sources:
     cache:
       enabled: true
   followups:
+    visibility: public
     plugin: github-projects
     config:
       owner: nickderobertis

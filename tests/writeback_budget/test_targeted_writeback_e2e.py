@@ -387,3 +387,70 @@ def test_a_settlement_is_one_targeted_update_and_a_failure_carries_only_what_had
 
     # A local Markdown destination meters nothing, so every attempt's `spent` is null.
     assert all(attempt.spent is None for attempt in projections(driven)), projections(driven)
+
+
+def test_a_settled_added_node_is_refused_at_a_screened_board_without_writing(
+    tmp_path: Path, request: pytest.FixtureRequest, oneharness_bin: str
+) -> None:
+    """The pinned producer cannot classify its temporary dependency during a public copy."""
+    # llmlint: ignore-block[e2e_not_mocked] Only the paid model provider and its review
+    # answer are scripted, at the same sanctioned provider boundary as `driven` above.
+    # The recipe, engine, linked store, public boundary and destination files are real.
+    with launched(
+        tmp_path,
+        request,
+        oneharness_bin,
+        caller=__name__,
+        session=LAUNCHING_SESSION,
+        prefix="screened-writeback",
+        goal="read an added node's refused projection at a public board stand-in",
+        held_node=HELD_NODE,
+        waiting_nodes=(),
+        # This local Markdown destination stands in for a public board. Unlike the
+        # default private fixture source, every write here crosses the public boundary.
+        extra_environment={"ONETASKGRAPH_SOURCES__TEST_FIXTURES__VISIBILITY": "public"},
+    ) as run:
+        run.environment["FAKE_CODEX_ANSWERS"] = PASSING_REVIEW
+        # llmlint: ignore-end[e2e_not_mocked]
+        quiet_projections(run)
+        before = {node: item.record.read_bytes() for node, item in _by_node(run).items()}
+        seen = len(projections(run))
+        apply(
+            run,
+            {
+                "op": "add",
+                "node": {
+                    "id": ADDED_NODE,
+                    "task": "## What\nRecord the follow-up.\n\n## Why\nKeep its evidence.\n\n"
+                    "## Acceptance criteria\n- The follow-up is recorded.",
+                    "expects_no_diff": True,
+                    "deps": [HELD_NODE],
+                },
+            },
+        )
+        waited_for(
+            "the added node's projection",
+            lambda: [a for a in projections(run)[seen:] if ADDED_NODE in a.items] or None,
+            PATIENCE_SECONDS,
+        )
+        seen = len(projections(run))
+        _settle(run, ADDED_NODE, "settled so the public board receives another projection")
+        attempts = waited_for(
+            "the settled added node's projection",
+            lambda: [a for a in projections(run)[seen:] if ADDED_NODE in a.items] or None,
+            PATIENCE_SECONDS,
+        )
+        assert all(
+            (a.outcome, a.failure_class, a.kind) == ("failed", "refused", "reference-unclassified")
+            for a in attempts
+        ), attempts
+        assert all(
+            a.reason is not None
+            and "onepipeline-writeback:" in a.reason
+            and "whose classification could not be established" in a.reason
+            for a in attempts
+        ), attempts
+        assert all(a.actions is None and a.updated_fields == {} for a in attempts), attempts
+        assert ADDED_NODE not in _by_node(run), _by_node(run)
+        assert ADDED_NODE not in landed(run), landed(run)
+        assert {node: item.record.read_bytes() for node, item in _by_node(run).items()} == before

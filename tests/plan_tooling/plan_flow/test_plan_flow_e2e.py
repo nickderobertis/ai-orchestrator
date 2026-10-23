@@ -209,9 +209,6 @@ ENGINE_BIN = REPO_ROOT / ".venv" / "bin" / "onepipeline"
 PROVENANCE_KEY = "onetaskgraph.template"
 DESIGN_REFERENCE = "onepipeline:design-doc"
 
-#: The key `onetaskgraph` stamps on a record it created by copying, naming what it copied.
-ORIGIN_KEY = "onetaskgraph.origin"
-
 RunId = NewType("RunId", str)
 
 
@@ -520,11 +517,15 @@ def _environment(
     a name the recipe was told, and what is under test there is the name it resolves when
     it is told none.
     """
+    # This repository is public, and so are the two the plan's tasks name: the plan store's
+    # public boundary classifies a task by its repositories, through this registry.
     identity = seeded(
         tmp_path,
         publication=PUBLICATION_ALIAS,
         execution=EXECUTION_ALIAS,
         origin=PLANNING_FLOW_ORIGIN,
+        visibility="public",
+        public=sorted({stored.repository, stored.second_repository} - {PLANNING_FLOW_ORIGIN}),
     )
     environment = dict(os.environ)
     for name in INHERITED_ENVIRONMENT:
@@ -595,6 +596,28 @@ def _just(
 #: supervisor holding only this launch's output reach either channel.
 RUN = RunId("plan-flow-e2e")
 DESIGN_RUN = RunId(f"{RUN}{DESIGN_RUN_SUFFIX}")
+
+
+def _copy_link(
+    project: str, destination: str, environment: dict[str, str], checkout: Path = REPO_ROOT
+) -> str:
+    """Read the private source's record of the destination, whose copy omits its origin."""
+    shown = _just(
+        "plans",
+        "project",
+        "show",
+        project,
+        "--json",
+        environment=environment,
+        checkout=checkout,
+        seconds=120,
+    )
+    assert shown.returncode == 0, shown.stdout + shown.stderr
+    linked = json.loads(shown.stdout)["items"][0]["item"]["metadata"][plan_store.COPIES_KEY][
+        destination
+    ]
+    assert isinstance(linked, str), linked
+    return linked
 
 
 @pytest.fixture(scope="module")
@@ -989,11 +1012,8 @@ def test_the_flow_reports_where_the_destination_holds_the_project_and_the_docume
     # llmlint: ignore[suppressions_justified] onetaskgraph owns this open JSON schema; the
     # fields read below are narrowed at each subscript.
     projects = cast(dict[str, Any], json.loads(listed.stdout))["items"]
-    landed = [
-        one
-        for one in projects
-        if one["item"]["metadata"].get(ORIGIN_KEY) == planned.stored.qualified
-    ]
+    copied = _copy_link(planned.stored.qualified, DESTINATION, planned.environment)
+    landed = [one for one in projects if one["id"] == copied]
     assert landed, (
         f"the destination holds no project the store records as copied from "
         f"{planned.stored.qualified}; it holds {[one['id'] for one in projects]}"
@@ -1267,11 +1287,13 @@ def test_a_flow_that_names_no_destination_reports_where_that_board_holds_both(
     # llmlint: ignore[suppressions_justified] onetaskgraph owns this open JSON schema; the
     # fields read below are narrowed at each subscript.
     projects = cast(dict[str, Any], json.loads(listed.stdout))["items"]
-    landed = [
-        one
-        for one in projects
-        if one["item"]["metadata"].get(ORIGIN_KEY) == default_board.stored.qualified
-    ]
+    copied = _copy_link(
+        default_board.stored.qualified,
+        DEFAULT_BOARD,
+        default_board.environment,
+        default_board.checkout,
+    )
+    landed = [one for one in projects if one["id"] == copied]
     assert landed, (
         f"the board holds no project the store records as copied from "
         f"{default_board.stored.qualified}; it holds {[one['id'] for one in projects]}"

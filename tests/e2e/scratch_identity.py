@@ -139,6 +139,7 @@ def seeded(
     visibility: Literal["public", "private"] = "private",
     workspaces: str | None = None,
     ignored: Sequence[str] = (),
+    public: Sequence[str] = (),
     reviewed: bool = False,
 ) -> Identity:
     """Seed a bare origin and two clones of it, and register them in a scratch registry.
@@ -164,6 +165,14 @@ def seeded(
     carries, for a journey about what a returned slot keeps. ``reviewed`` routes a hosted
     identity `change-open` with approvals required — a change request opened as a draft and
     kept for a person's review — in place of `local-direct`.
+
+    ``public`` are other `host/owner/name` identities the journey's plans name, each
+    registered in the same registry through a stub checkout and declared public by a rule
+    of its own, because the plan store's public boundary classifies a repository by what
+    `onevcs boundary inspect` answers and that answers only for a registered identity: one
+    left unregistered reads `unknown`, which is private. A stub's remote is the identity's
+    ssh form, reached through a fake `ssh` that refuses every path but the seeded origin's,
+    so nothing that walks the registry can leave this machine.
     """
     assert not reviewed or origin is not None, "only a hosted identity opens a change request"
     bare = root / "origin.git"
@@ -218,8 +227,44 @@ def seeded(
         )
         assert cloned.returncode == 0, f"cloning {remote} failed:\n{cloned.stderr}"
     identity.home.mkdir(exist_ok=True)
-    _register(root, identity, rules, workspaces)
+    stubs: list[Path] = []
+    if public:
+        if GIT_SSH_COMMAND not in environment:
+            refusing = root / "fake-ssh"
+            refusing.write_text(
+                FAKE_SSH.format(expected=shlex.quote(""), origin=shlex.quote(remote)),
+                encoding="utf-8",
+            )
+            refusing.chmod(0o755)
+            # llmlint: ignore[e2e_not_mocked] only the transport to GitHub is substituted
+            environment[GIT_SSH_COMMAND] = str(refusing)
+        rules = _declaring_public(rules, public)
+        stubs = [_stub(root, other) for other in public]
+    _register(root, identity, rules, workspaces, stubs)
     return identity
+
+
+def _declaring_public(rules: str, identities: Sequence[str]) -> str:
+    """``rules`` with one rule ahead of the rest declaring each of ``identities`` public."""
+    declared = "".join(
+        f"  - match: {{host: {host}, owner: {owner}, name: {name}}}\n"
+        "    publication: local-direct\n"
+        "    approvals: none\n"
+        "    visibility: public\n"
+        for host, owner, name in map(_hosted, identities)
+    )
+    return rules.replace("version: 3", "version: 4").replace("rules:\n", f"rules:\n{declared}", 1)
+
+
+def _stub(root: Path, identity: str) -> Path:
+    """A checkout of no content whose `origin` is ``identity``'s ssh remote, to register."""
+    host, owner, name = _hosted(identity)
+    stub = root / "public-stubs" / f"{host}__{owner}__{name}"
+    stub.mkdir(parents=True)
+    git("init", "-q", "-b", "main", str(stub))
+    git(*GIT_IDENTITY, "commit", "-q", "--allow-empty", "-m", "chore: stub", cwd=stub)
+    git("remote", "add", "origin", f"git@{host}:{owner}/{name}.git", cwd=stub)
+    return stub
 
 
 def _hosted(origin: str) -> tuple[str, str, str]:
@@ -250,12 +295,16 @@ def rules_for_hosted(
 
 
 def _register(
-    root: Path, identity: Identity, rules_text: str = RULES, workspaces: str | None = None
+    root: Path,
+    identity: Identity,
+    rules_text: str = RULES,
+    workspaces: str | None = None,
+    stubs: Sequence[Path] = (),
 ) -> None:
     """Bring the scratch registry up to a scratch configuration, through the real recipe."""
     manifest = root / "onevcs.checkouts"
     manifest.write_text(
-        "".join(f"{path}\n" for path in (identity.publication, identity.execution)),
+        "".join(f"{path}\n" for path in (identity.publication, identity.execution, *stubs)),
         encoding="utf-8",
     )
     rules = root / "onevcs.rules.yml"

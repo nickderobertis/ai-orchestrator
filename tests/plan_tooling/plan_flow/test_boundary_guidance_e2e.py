@@ -47,6 +47,7 @@ from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import NamedTuple
 
+import boundary_home
 import pytest
 import short_state
 from fake_backend import PROMPT_LOG_ENV
@@ -447,13 +448,27 @@ class Rendered(NamedTuple):
     scratch: Path
 
 
-def _template_environment(root: Path) -> dict[str, str]:
-    environment = {
-        key: value for key, value in os.environ.items() if not key.startswith("ONETASKGRAPH_")
-    }
+def _template_environment(root: Path, *, private: bool = False) -> dict[str, str]:
+    """The store a generated plan is rendered into, its repositories' visibility answered.
+
+    The tracked document switches the store's public boundary on, so a task is classified by
+    the repositories it names, through a state root registering each synthetic one with its
+    visibility; a plan of private ones is written, as one must be, to a source declared
+    private.
+    """
+    environment = boundary_home.environment(
+        {key: value for key, value in os.environ.items() if not key.startswith("ONETASKGRAPH_")},
+        boundary_home.registered_home(
+            root.with_name(f"{root.name}-registry"),
+            public=PUBLIC_REPOSITORIES,
+            private=PRIVATE_REPOSITORIES,
+        ),
+    )
     environment["ONEPIPELINE_TEMPLATE_ROOT"] = str(REPO_ROOT / "templates")
     environment["ONETASKGRAPH_SOURCES__BOUNDARYGOLDEN__PLUGIN"] = "local-md"
     environment["ONETASKGRAPH_SOURCES__BOUNDARYGOLDEN__CONFIG__ROOT"] = str(root)
+    if private:
+        environment["ONETASKGRAPH_SOURCES__BOUNDARYGOLDEN__VISIBILITY"] = "private"
     return environment
 
 
@@ -466,7 +481,8 @@ def _generated(tmp_path: Path, repositories: Sequence[str]) -> Rendered:
     """
     root = tmp_path / "store"
     root.mkdir()
-    environment = _template_environment(root)
+    private = set(repositories) <= set(PRIVATE_REPOSITORIES)
+    environment = _template_environment(root, private=private)
     loader = tmp_path / "loader.json"
     resolved = _run(
         str(ENGINE), "template", "resolve", "plan-task", "--json", environment=environment
@@ -482,6 +498,7 @@ def _generated(tmp_path: Path, repositories: Sequence[str]) -> Rendered:
         "generated",
         "--title",
         "generated",
+        *(["--classification", "private"] if private else []),
         environment=environment,
     )
     assert created.returncode == 0, created.stderr

@@ -58,6 +58,11 @@ def missing_plan_roots(checkout: Path) -> list[str]:
     refuses every read while any one is missing; so a provisioned checkout leaving one out
     is one whose plan-store budgets error.
     """
+    return [root for root in _local_plan_roots(checkout) if not (checkout / root).is_dir()]
+
+
+def _local_plan_roots(checkout: Path) -> list[str]:
+    """Read local source roots from the checkout's own store configuration."""
     document = yaml.safe_load((checkout / "onetaskgraph.yaml").read_text(encoding="utf-8"))
     roots = [
         str(source["config"]["root"])
@@ -65,7 +70,7 @@ def missing_plan_roots(checkout: Path) -> list[str]:
         if source.get("plugin") == "local-md"
     ]
     assert roots, "onetaskgraph.yaml configures no local-md source"
-    return [root for root in roots if not (checkout / root).is_dir()]
+    return roots
 
 
 def read_a_plan_graph(checkout: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -96,6 +101,11 @@ def share_this_checkouts_install(copy: Path) -> dict[str, str]:
     writes this checkout's environment. The interpreter reports the copy's `.venv` as
     `sys.prefix`, so the copy passes `scripts/require-provisioned.sh` on its own.
 
+    The copy also holds the plan-store folders the tracked `onetaskgraph.yaml` declares
+    private, which session setup creates in every checkout it provisions
+    (`scripts/session-setup.sh`'s `create_plan_root`): the store walks each private source
+    on every dependency read, and an absent root fails that read.
+
     The returned variables go into every command run in the copy: `PYTHONPATH=<copy>`
     precedes the editable install's `.pth`, which names this checkout, so `orchestrator`
     — and the `REPO_ROOT` it resolves — is the copy's; `UV_NO_SYNC=1` keeps a `uv run`
@@ -110,6 +120,10 @@ def share_this_checkouts_install(copy: Path) -> dict[str, str]:
             (overlay / name).symlink_to(source / name)
     for entry in (source / "bin").iterdir():
         (overlay / "bin" / entry.name).symlink_to(entry)
+    if (copy / "onetaskgraph.yaml").is_file():
+        for root in _local_plan_roots(copy):
+            for records in ("tasks", "projects"):
+                (copy / root / records).mkdir(parents=True, exist_ok=True)
     return {"PYTHONPATH": str(copy), "UV_NO_SYNC": "1"}
 
 

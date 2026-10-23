@@ -8,9 +8,9 @@ names, and `tests/plan_store_user_layer.py` keeps the host's real layer out of e
 suite starts. So a journey about a host layer installs its own: the example as it is, or the
 example with a Linear source replaced by a folder of Markdown — no check may reach a Linear
 workspace — whose status mapping reads the state names the example's Linear mapping writes,
-resolved through the store itself. The tracked configuration lands the store's public boundary
-off and any declared `visibility` switches it on, so the example declares none, and a journey
-about the boundary installs `screened()`, which declares what a host switching it on declares.
+resolved through the store itself. The tracked configuration switches the store's public
+boundary on, so the example declares every source it defines private, as a host doing an
+organization's work declares them before adopting it, and a stand-in keeps that declaration.
 
 `installed()` writes the layer under a configuration home of the journey's own that mirrors
 the one this process was handed entry by entry, so every other tool reads what it read
@@ -23,10 +23,10 @@ import json
 import os
 import subprocess
 from collections.abc import Collection, Mapping
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-import boundary_home
 import yaml
 from published_tools import ONETASKGRAPH_BIN
 
@@ -45,6 +45,12 @@ ORGANIZATION_REPOSITORIES = "github.com/hiddenco/*"
 #: The host's own private stores the example declares, which no route reaches.
 PRIVATE_PLANS = "private-plans"
 PRIVATE_FOLLOWUPS = "private-followups"
+#: The credential the example's Linear sources name (`config/onetaskgraph.user-layer.example.yaml`);
+#: the tracked document declares none.
+LINEAR_KEY_ENV = "HIDDENCO_LINEAR_API_KEY"
+#: Where a journey points the example's Linear sources: a loopback port nothing listens on, so a
+#: request to one is refused on this machine and never reaches a Linear workspace.
+UNSERVED_LINEAR = "http://127.0.0.1:9/graphql"
 
 
 def example() -> dict[str, Any]:
@@ -131,8 +137,7 @@ def stand_in(
 ) -> dict[str, Any]:
     """A `local-md` source at ``root`` reading the state names ``source`` writes.
 
-    Declaring no visibility, as the example's own sources declare none; `screened()` declares
-    it private with the rest of the layer.
+    Declared `visibility: private`, as the example declares the source it stands in for.
 
     ``copied`` names each status a journey copies onto the stand-in carrying that category's
     own word as its name. Linear writes a copy's status by category, through its mapping; a
@@ -153,16 +158,20 @@ def stand_in(
     # example's Linear source, because no check may reach a Linear workspace; the example's
     # Linear configuration is held to the plugin's own schema by
     # `tests/test_plan_source_roots.py` instead.
-    return {"plugin": "local-md", "config": {"root": str(root), "status_mapping": mapping}}
+    return {
+        "visibility": "private",
+        "plugin": "local-md",
+        "config": {"root": str(root), "status_mapping": mapping},
+    }
     # llmlint: ignore-end[e2e_not_mocked]
 
 
 def without_private_stores(document: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """``document`` (the example unless named) without the host's own private stores.
 
-    Under a switched-on boundary the store reads every source declared private on each
-    dependency read, and a journey about an organization's routing holds no credential for
-    the host's own boards, which no route reaches anyway.
+    The store reads every source declared private on each dependency read, and a journey
+    about an organization's routing holds no credential for the host's own boards, which no
+    route reaches anyway.
     """
     layer = dict(example() if document is None else document)
     layer["sources"] = {
@@ -170,27 +179,6 @@ def without_private_stores(document: Mapping[str, Any] | None = None) -> dict[st
         for name, source in layer["sources"].items()
         if name not in (PRIVATE_PLANS, PRIVATE_FOLLOWUPS)
     }
-    return layer
-
-
-def screened(document: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """``document`` (the example unless named) switching the store's public boundary on.
-
-    The tracked configuration lands the boundary off; a journey about the boundary declares
-    what a host switching it on declares: the write policy and the two boards public
-    (`boundary_home.WRITE_POLICY`), each board's own keys kept, and every source the layer
-    defines private.
-    """
-    layer = dict(example() if document is None else document)
-    policy = yaml.safe_load(boundary_home.WRITE_POLICY)
-    layer["write_policy"] = policy["write_policy"]
-    sources = {
-        name: {**dict(source), "visibility": "private"} if "plugin" in source else dict(source)
-        for name, source in layer["sources"].items()
-    }
-    for name, declared in policy["sources"].items():
-        sources[name] = {**dict(sources.get(name) or {}), **declared}
-    layer["sources"] = sources
     return layer
 
 
@@ -205,3 +193,47 @@ def with_stand_ins(
         sources[name] = dict(replacement)
     layer["sources"] = sources
     return layer
+
+
+class HostState(StrEnum):
+    """The three hosts every plan-store recipe is driven on, the store's boundary switched on.
+
+    `no-user-layer` is a host doing no organization's work, which declares nothing beneath the
+    tracked document. `organization-private` declares the organization's sources and its own
+    private stores private in its user layer, the example's shape over synthetic names, before
+    adopting the tracked document. `organization-uncredentialed` is that layer in a process
+    holding no credential for the organization's sources, as a dispatch whose harness masks it.
+    """
+
+    NO_USER_LAYER = "no-user-layer"
+    ORGANIZATION_PRIVATE = "organization-private"
+    ORGANIZATION_UNCREDENTIALED = "organization-uncredentialed"
+
+
+def host_state(state: HostState, scratch: Path) -> dict[str, str | None]:
+    """What places a process on ``state``: each variable to set, or to unset where `None`.
+
+    The layer is the example (:data:`EXAMPLE`), every source of
+    it declared private, installed under ``scratch``. The host's own two private boards are
+    stood in by folders in both organization states, because their GitHub endpoint is not the
+    loopback board and no check may reach the live one. The organization's two Linear trackers
+    are stood in by folders where they are credentialed, because no check may reach a Linear
+    workspace; uncredentialed, they stay Linear sources whose credential is unset and whose
+    endpoint is :data:`UNSERVED_LINEAR`, so even a request made past it stays on this machine.
+    """
+    if state is HostState.NO_USER_LAYER:
+        return {}
+    boards = (PRIVATE_PLANS, PRIVATE_FOLLOWUPS)
+    trackers = (
+        ORGANIZATION_PLANS,
+        ORGANIZATION_FOLLOWUPS,
+    )
+    stood_in = boards if state is HostState.ORGANIZATION_UNCREDENTIALED else (*boards, *trackers)
+    layer = with_stand_ins(
+        {name: stand_in(name, scratch / "stand-ins" / name, scratch) for name in stood_in}
+    )
+    if state is HostState.ORGANIZATION_UNCREDENTIALED:
+        for name in trackers:
+            layer["sources"][name]["config"]["endpoint"] = UNSERVED_LINEAR
+    home = installed(scratch / "config-home", layer)
+    return {XDG_CONFIG_HOME: str(home), LINEAR_KEY_ENV: None}

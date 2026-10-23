@@ -178,7 +178,10 @@ def _chromium() -> str:
 
 def _target(root: Path, sentinels: Path) -> Identity:
     """Register the disposable target: its views, capture command, hook and test command."""
-    identity = seeded(root, publication=PUBLICATION, execution=EXECUTION, origin=TARGET)
+    # The target is a public repository, as the plan store's public boundary reads it.
+    identity = seeded(
+        root, publication=PUBLICATION, execution=EXECUTION, origin=TARGET, visibility="public"
+    )
     tree = identity.publication
     (tree / "shots").mkdir()
     (tree / "shots" / "view.html").write_text(VIEW_PAGE, encoding="utf-8")

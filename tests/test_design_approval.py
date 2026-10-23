@@ -1425,6 +1425,64 @@ def test_a_document_whose_stored_answers_the_template_no_longer_takes_is_sent_to
     assert "document render" not in said, said
 
 
+#: :data:`CURRENT` with one decision whose prose fences code, which the content check refuses.
+FENCED: Mapping[str, object] = {
+    **CURRENT,
+    "units": [
+        {
+            "name": "Route",
+            "repository": "service",
+            "part": "",
+            "summary": "The route pages.",
+            "reversible": [],
+            "decisions": [
+                {
+                    "name": "Page size",
+                    "justification": "One screen.",
+                    "content": [{"type": "prose", "text": "```\nlimit = 50\n```"}],
+                }
+            ],
+        }
+    ],
+}
+
+
+def test_a_copy_the_private_drafting_side_links_is_read_at_its_draft_never_its_own_answers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A copy out of a private source carries no origin, so the drafted side's link tells it.
+
+    The document's stored answers are ones the content check refuses, so reading them is
+    what a refusal here says. A copy the drafting side's link names is left to its draft; one
+    no link names, and a document belonging to no project, are read for their own answers.
+    """
+    project = _designed(tmp_path / "store", monkeypatch, FENCED)
+    document = design_approval.design_document(project)
+    assert plan_store.ORIGIN_KEY not in document.metadata, document.metadata
+    copy = str(document.qualified_id)
+    linked: dict[str, dict[str, str]] = {project: {copy: "authoring:demo-design"}}
+    asked: list[str] = []
+
+    def drafted_ids(where: str) -> dict[str, str]:
+        asked.append(where)
+        return linked.get(where, {})
+
+    monkeypatch.setattr(design_approval.spike_plan, "drafted_ids", drafted_ids)
+
+    CONTENT_READER(document)
+    assert asked == [project]
+
+    linked.clear()
+    with pytest.raises(design_approval.Unrendered, match="fenced-code block"):
+        CONTENT_READER(document)
+
+    linked[project] = {copy: "authoring:demo-design"}
+    asked.clear()
+    with pytest.raises(design_approval.Unrendered, match="fenced-code block"):
+        CONTENT_READER(dataclasses.replace(document, project=None))
+    assert asked == []
+
+
 #: The template's Planned tasks header and separator, and the header alone: what a chain
 #: rendering a table with no separator row writes in their place.
 SEPARATED_HEADER = (

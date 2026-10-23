@@ -67,7 +67,7 @@ def just(environment: dict[str, str], *args: str) -> subprocess.CompletedProcess
 def prepare(
     tmp_path: Path, name: str, remote: dict[str, str], *, early: bool, workspace: Path
 ) -> tuple[dict[str, str], Path, Path, Path, str]:
-    identity = seeded(tmp_path / "identity", origin=PLANNING_FLOW_ORIGIN)
+    identity = seeded(tmp_path / "identity", origin=PLANNING_FLOW_ORIGIN, visibility="public")
     authoring = tmp_path / "authoring"
     authoring.mkdir()
     scratch = tmp_path / "actions"
@@ -160,10 +160,13 @@ def prove_whole_project_publication(environment: dict[str, str], project: str) -
             "source=plan_store.QualifiedProjectId(sys.argv[1]); "
             "board=plan_store.project_record(source)['metadata'][plan_store.COPIES_KEY]['plans']; "
             "tasks=plan_store.read_tasks(board); docs=plan_store.read_documents(board); "
+            "drafted=plan_store.read_documents(source); "
             "print(json.dumps({'board':board,'tasks':[str(t.qualified_id) for t in tasks],"
-            "'documents':[{'origin':d.metadata.get(plan_store.ORIGIN_KEY),'content':d.content,"
+            "'documents':[{'id':str(d.qualified_id),'origin':d.metadata.get(plan_store.ORIGIN_KEY),"
+            "'content':d.content,"
             "'template':d.metadata.get('onetaskgraph.template',{}).get('template')} "
-            "for d in docs]}))",
+            "for d in docs],"
+            "'links':[d.metadata.get(plan_store.COPIES_KEY,{}).get('plans') for d in drafted]}))",
             "authoring:" + project,
         ],
         cwd=environment["BRIEF_CHECKOUT"],
@@ -177,7 +180,10 @@ def prove_whole_project_publication(environment: dict[str, str], project: str) -
     held = json.loads(inspected.stdout)
     assert len(held["tasks"]) == 20 and len(set(held["tasks"])) == 20
     documents = held["documents"]
-    assert len(documents) == 8 and len({doc["origin"] for doc in documents}) == 8
+    # A copy out of the private authoring source carries no origin: the store keeps the
+    # correspondence on the authoring side, each drafted document linking the copy it reached.
+    assert len(documents) == 8 and {doc["origin"] for doc in documents} == {None}
+    assert sorted(held["links"]) == sorted(doc["id"] for doc in documents)
     briefs = [doc for doc in documents if doc["template"] == spike_brief.TEMPLATE_REFERENCE]
     assert len(briefs) == 1 and len(briefs[0]["content"].split()) > 250
     assert len([line for line in briefs[0]["content"].splitlines() if line.startswith("## ")]) == 6
@@ -854,25 +860,70 @@ def brief_resume(environment: dict[str, str], name: str) -> subprocess.Completed
     )
 
 
+#: A source of the decoy plan's own, declared nowhere private, so a copy out of it records the
+#: decoy's origin on the board item it reaches.
+DECOY_SOURCE = "decoy"
+
+
+def rebind(environment: dict[str, str], tmp_path: Path, plan: str, *, decoy: bool = False) -> str:
+    """Copy onto the board with the store's `--match-by title`, answering the project reached.
+
+    With ``decoy``, a plan of :data:`DECOY_SOURCE` titled as ``plan`` is created and copied, so
+    it takes over ``plan``'s board project and stamps its own origin there; otherwise ``plan``
+    itself is copied, taking that project back.
+    """
+    store = str(Path(environment["BRIEF_CHECKOUT"]) / ".venv/bin/onetaskgraph")
+    root = tmp_path / DECOY_SOURCE
+    root.mkdir(exist_ok=True)
+    scoped = {
+        **environment,
+        f"ONETASKGRAPH_SOURCES__{DECOY_SOURCE.upper()}__PLUGIN": "local-md",
+        f"ONETASKGRAPH_SOURCES__{DECOY_SOURCE.upper()}__CONFIG__ROOT": str(root),
+    }
+
+    def run(*arguments: str) -> str:
+        done = subprocess.run(
+            [store, "--json", *arguments],
+            cwd=environment["BRIEF_CHECKOUT"],
+            env=scoped,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=e2e_timeout(120),
+            check=False,
+        )
+        assert done.returncode == 0, done.stdout + done.stderr
+        return done.stdout
+
+    copied = plan
+    if decoy:
+        title = json.loads(run("project", "show", plan))["items"][0]["item"]["title"]
+        run("project", "create", DECOY_SOURCE, "--id", "another-plan", "--title", title)
+        copied = f"{DECOY_SOURCE}:another-plan"
+    report = json.loads(run("project", "copy", copied, "--to", "plans", "--match-by", "title"))
+    (reached,) = [str(item["destination"]) for item in report["items"] if item["source"] == copied]
+    return reached
+
+
 @pytest.mark.parametrize(
     "fault", ["initialize", "launch", "writer", "spike", "channel", "origin", "url"]
 )
 def test_real_detached_planning_keeps_brief_failures_advisory(tmp_path: Path, fault: str) -> None:
     name = "brief-fault-" + fault
     broken_board = Event()
-    if fault in ["origin", "url"]:
+    if fault == "url":
         broken_board.set()
     receipt_path: Path | None = None
 
     class CloseoutBoard(_GitHubFixture):
         def _answer(self, request: _GraphQLRequest) -> dict[str, object]:
+            recorded = (
+                None
+                if receipt_path is None or not receipt_path.exists()
+                else json.loads(receipt_path.read_text())["board_project"]
+            )
             answered = super()._answer(request)
-            if (
-                not broken_board.is_set()
-                or receipt_path is None
-                or not receipt_path.exists()
-                or json.loads(receipt_path.read_text())["board_project"] is None
-            ):
+            if not broken_board.is_set() or recorded is None:
                 return answered
 
             def corrupt(value: object, key: str = "") -> object:
@@ -882,8 +933,6 @@ def test_real_detached_planning_keeps_brief_failures_advisory(tmp_path: Path, fa
                     case list():
                         return [corrupt(child) for child in value]
                     case str():
-                        if fault == "origin":
-                            return value.replace("authoring:" + project, "authoring:unrelated")
                         if key == "url":
                             return "http://github.com/unreadable"
                         return value
@@ -967,7 +1016,9 @@ def test_real_detached_planning_keeps_brief_failures_advisory(tmp_path: Path, fa
                 if fault == "launch":
                     assert json.loads(history_path.read_text())["eligible"] == saved_eligible
             wait_record(scratch / "writer-reached")
-            if fault == "channel":
+            if fault in ["channel", "origin"]:
+                # The success hook records the board copy and then fails to surface it, so
+                # the brief is left undelivered with its board project named.
                 channel = receipt_path.parent / "channel"
                 for path in [*channel.iterdir(), channel]:
                     channel_modes[path] = path.stat().st_mode & 0o777
@@ -975,7 +1026,7 @@ def test_real_detached_planning_keeps_brief_failures_advisory(tmp_path: Path, fa
             (scratch / "writer-release").touch()
             wait_ended(environment, name + "-spike-brief")
             if fault in ["writer", "channel", "origin", "url"]:
-                if fault == "channel":
+                if fault in ["channel", "origin"]:
                     hook = (
                         receipt_path.parent.parent / (name + "-spike-brief") / "hooks/success.log"
                     )
@@ -984,13 +1035,27 @@ def test_real_detached_planning_keeps_brief_failures_advisory(tmp_path: Path, fa
                     for path, mode in channel_modes.items():
                         path.chmod(mode)
                     channel_modes.clear()
-                if fault in ["origin", "url"]:
+                if fault == "origin":
+                    named = json.loads(receipt_path.read_text())["board_project"]
+                    assert named is not None
+                    # Another plan's copy, from a source that records its origin, takes over
+                    # the recorded board project by title: it now belongs to that plan.
+                    taken = rebind(environment, tmp_path, "authoring:" + project, decoy=True)
+                    assert taken == named, (taken, named)
+                    mismatched = brief_resume(environment, name)
+                    assert mismatched.returncode == 0
+                    assert "advisory:" in mismatched.stderr, mismatched.stderr
+                    assert "another source project" in mismatched.stderr, mismatched.stderr
+                    assert json.loads(receipt_path.read_text())["board_project"] == named
+                    assert json.loads(receipt_path.read_text())["brief"] is None
+                    # The plan's own copy, matched by title, takes the board project back.
+                    assert rebind(environment, tmp_path, "authoring:" + project) == named
+                if fault == "url":
                     hook = (
                         receipt_path.parent.parent / (name + "-spike-brief") / "hooks/success.log"
                     )
                     wait_content(hook, "advisory")
-                    expected = "another source project" if fault == "origin" else "HTTPS"
-                    assert expected in hook.read_text(), hook.read_text()
+                    assert "HTTPS" in hook.read_text(), hook.read_text()
                     assert json.loads(receipt_path.read_text())["board_project"] is not None
                     assert json.loads(receipt_path.read_text())["brief"] is None
                     broken_board.clear()

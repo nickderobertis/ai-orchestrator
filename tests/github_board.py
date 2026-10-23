@@ -24,8 +24,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import ClassVar, Literal, NamedTuple, NewType
 
-import follow_up_boundary
 import follow_up_variables
+import onetaskgraph_user_layer
 from follow_up_ticket_shape import FIX, current_section, impact_prose
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
@@ -45,13 +45,10 @@ AUTHORING_SOURCE = "authoring"
 AUTHORING_ROOT_ENV = f"ONETASKGRAPH_SOURCES__{AUTHORING_SOURCE.upper()}__CONFIG__ROOT"
 
 
-#: The credential the example user layer's Linear sources name
-#: (`config/onetaskgraph.user-layer.example.yaml`); the tracked document declares none.
-LINEAR_KEY_ENV = "HIDDENCO_LINEAR_API_KEY"
-#: Where a board journey whose user layer declares the example's Linear sources points them:
-#: a loopback port nothing listens on, so a request to one is refused on this machine and
-#: never reaches a Linear workspace.
-UNSERVED_LINEAR = "http://127.0.0.1:9/graphql"
+#: The credential the example user layer's Linear sources name, and the loopback port nothing
+#: listens on that a board journey points those sources at (`tests/onetaskgraph_user_layer.py`).
+LINEAR_KEY_ENV = onetaskgraph_user_layer.LINEAR_KEY_ENV
+UNSERVED_LINEAR = onetaskgraph_user_layer.UNSERVED_LINEAR
 #: Where the example's `hiddenco-plans` and `hiddenco-followups` sources' endpoints are named,
 #: which the store spells with each source name's hyphen as an underscore.
 LINEAR_PLANS_ENDPOINT_ENV = "ONETASKGRAPH_SOURCES__HIDDENCO_PLANS__CONFIG__ENDPOINT"
@@ -2491,10 +2488,6 @@ def _followups_environment(tmp_path: Path) -> tuple[dict[str, str], Path]:
     environment[follow_up_variables.root_name()] = str(drafts_root)
     environment[follow_up_variables.plugin_name()] = plan_store.WRITABLE_PLUGIN
     environment["PATH"] = f"{ONETASKGRAPH_BIN.parent}{os.pathsep}{environment['PATH']}"
-    # The follow-up journeys cover the store's public boundary, which the tracked
-    # configuration lands switched off, so it is switched on in a configuration home of
-    # this process's own.
-    environment[follow_up_boundary.CONFIG_HOME_ENV] = str(follow_up_boundary.config_home())
     return environment, drafts_root
 
 

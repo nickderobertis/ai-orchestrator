@@ -323,3 +323,21 @@ def test_a_shown_board_project_must_be_the_copy_of_its_source(origin: str) -> No
     else:
         with pytest.raises(ValueError, match="belongs to another source project"):
             spike_brief_flow.held_project(shown, source, named)
+
+
+@pytest.mark.parametrize("linked", ["plans:board", "plans:another-board", None])
+def test_an_unstamped_board_project_is_its_source_s_copy_only_where_its_link_names_it(
+    linked: str | None,
+) -> None:
+    """A copy out of the private `authoring` source carries no origin, so the link decides."""
+    raw = json.loads((FIXTURES / "project-show.json").read_text())
+    raw["items"][0]["item"]["metadata"].pop(plan_store.ORIGIN_KEY, None)
+    shown = QueryResponseOfQualifiedProject.model_validate(raw)
+    source = plan_store.QualifiedProjectId("authoring:preview")
+    named = plan_store.QualifiedProjectId("plans:board")
+    if linked == named:
+        held = spike_brief_flow.held_project(shown, source, named, linked)
+        assert (held.qualified_id, held.title) == (named, "Preview")
+    else:
+        with pytest.raises(ValueError, match="belongs to another source project"):
+            spike_brief_flow.held_project(shown, source, named, linked)

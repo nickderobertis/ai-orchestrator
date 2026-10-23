@@ -77,34 +77,67 @@ carry it, each read beneath or in place of a tracked one:
 
 ### The public write boundary
 
-**The plan store's public write boundary is landed switched off, so no write is screened.**
-Switched on, a write to any source not declared private is screened and one naming a private
-repository is refused: a `write_policy` names two commands of the pinned `onevcs`, `boundary
-inspect`, which answers each repository an item names as public or private, a rule's
-declaration first and the host otherwise, and `boundary check`, which refuses a write carrying a
-private repository's terms, with the store's own refusal naming the source and nothing written.
-The store turns it on as soon as its configuration names a `write_policy` or any source declares
-a `visibility` — in the tracked document or in a host's user layer — so the tracked
-`onetaskgraph.yaml` does neither, and a host's user layer that declares one switches the
-boundary on for that host.
+**The plan store's public write boundary is switched on, and every write to a source not
+declared private is screened.** The tracked `onetaskgraph.yaml` names a `write_policy` of two
+commands of the pinned `onevcs`: `boundary inspect`, which answers each repository an item names
+as public or private, a rule's declaration first and the host otherwise, and `boundary check`,
+which refuses a write carrying a private repository's terms. A write naming a private repository
+to a source not declared private is refused, with the store's own refusal naming the source and
+nothing written. The tracked document declares the two boards, `plans` and `followups`, public,
+and local folders of this machine private: `authoring`, where every plan, design document, spike
+report and budget answer is drafted, so an organization's plan is drafted there like any other,
+and `follow-up-runs`, where a follow-up launch writes its project, because its task quotes drafts
+and board comments that may name private work. `drafts` declares no visibility, so a follow-up
+draft naming a private repository is refused there; `examples` declares none either.
+`test-fixtures` is private because local journeys include deliberately private projects. Writes
+there are accepted as private; a copy to a public board is screened at that destination.
+Session setup creates every private folder, because the store walks every private source on each
+dependency read and an absent root fails that read whatever source the task is in.
 
-It stays off because the pinned store walks every source declared private on each dependency
-read of a task in any other source, and fails the read when one cannot be authenticated. An
-organization's Linear sources in a host's user layer would have to be declared private for its
-plan to be routed to them while the boundary is on, and a dispatch that does not hold the Linear
-credential could then walk no dependency at all; with them left undeclared, the boundary would
-refuse every private repository's task routed there. Turning it on waits for the store to answer
-such a read with what the reader can see. Meanwhile a follow-up launch writes its project into
-`follow-up-runs`, a folder under the drafts root that is declared private once the boundary is
-on, rather than into `authoring`, because its task quotes drafts and board comments that may
-name private work, and `just follow-ups` creates that folder before any store command.
+**A host doing an organization's work declares that organization's sources `visibility:
+private` in its own user layer before it adopts this**, as `config/onetaskgraph.user-layer.example.yaml`
+shows over synthetic names, and declares each of its own private stores private beside them. An
+undeclared source is screened, so an organization's tracker left undeclared refuses every task
+routed to it, and the order is the point: the layer first, then this configuration. A host that
+does not hold an organization's credential reads its sources as unavailable and goes on: the
+adopted store answers a dependency read and a review with what the reader can see.
 
-The boundary's tests switch it on in a configuration home of their own
-(`tests/boundary_home.py`'s `screening`), whose plan-store user layer names the policy, and read
-none of this host's sources: `tests/plan_tooling/plan_copy/test_private_authoring_boundary_e2e.py`
-drives a private source receiving an organization's plan and the public board refusing it, and
-`tests/e2e/board_copy_approval/test_board_copy_spike_evidence_e2e.py` a plan copied out of a
+`tests/plan_tooling/host_layer_routing/test_screened_host_states_e2e.py`, its
+`follow_ups/` and `plan_flow/` siblings `test_screened_host_states_follow_ups_e2e.py` and
+`test_screened_host_states_plan_flow_e2e.py` drive the plan-store recipes in each host state —
+no user layer, the example's shape with its organization's sources declared private, and that
+layer with no credential for them — and the first drives content naming a synthetic private
+repository to the private sources it may reach and away from the public ones it may not. One
+gap of the pinned store stands in the third state: its copy authenticates every private
+source, so a plan's copy onto a public destination and a follow-up ticket's copy onto the
+board are refused there naming the organization's source and its missing credential, with
+nothing written; the journeys accept that refusal or a copy that lands. Design documents
+copied out of private `authoring` name their tasks' board addresses while omitting private
+origin records. Screening has a limit that registration decides. A repository named in a field the store
+classifies by identity — a task's recorded repositories — is private unless `onevcs` registers
+it public, so an unregistered one is refused. A repository named only in content is caught by
+the terms `onevcs boundary check` derives from **registered** identities, so a bare name in
+prose for a repository the host never registered has no term to match and passes, and under
+the pinned `onevcs` so does that repository's full origin in a plan's budget answers; a host's
+rules overlay registering each private repository is what screens its content.
+`tests/plan_tooling/plan_copy/test_private_authoring_boundary_e2e.py` drives an
+organization's plan, its budget answers and its design document into `authoring`, and
+`tests/e2e/board_copy_approval/test_board_copy_spike_evidence_e2e.py` a plan copied out of the
 private `authoring` whose spike reports resolve through the copy link the store records there.
+
+The pinned engine also refuses a live run's added-node projection onto a screened destination
+as `reference-unclassified`: its temporary `onepipeline-writeback` source cannot classify a
+dependency on an existing node. The destination receives nothing for that node.
+`tests/writeback_budget/test_targeted_writeback_e2e.py` drives that refusal after settling the
+added node against an explicitly public board stand-in, beside the private-fixture journeys
+that still prove successful targeted updates. The producer fix is a follow-up.
+
+The mixed export plan in `tests/ask_seam/boundary_reply/test_boundary_reply_e2e.py` cannot be
+stored with screening on: a private project makes its public consumer private too. That one
+journey keeps its original private producer, export edge and reply assertions in an isolated
+checkout with store screening off, including while authoring its fixtures. It proves the
+engine's note, reply and amendment boundary; moving it onto screened storage belongs to the
+separate export plan. The tracked configuration remains screened.
 
 **Where a plan's home goes is the store's rule, and this host states it rather than holding
 its own.** A plan's home is placed by its **voters**: every task naming a repository, and the
@@ -116,9 +149,10 @@ document, never vote; they go with the home.
   repository-naming task is an organization's lands wholly in that organization's tracker, and
   a plan that should keep its home on `plans` names a public repository, on a task or on its
   project.
-- **While the boundary is off, voters that disagree leave the home on `plans`**, with each
-  routed task in a member project of its routed source.
-- **Once a host switches the boundary on, a plan touching an organization's work homes in that
+- **Where the boundary is off — in a configuration of its own, never this host's tracked one —
+  voters that disagree leave the home on `plans`**, with each routed task in a member project
+  of its routed source, a record a reader still meets on a board.
+- **With the boundary on, as it is here, a plan touching an organization's work homes in that
   organization's tracker.** An organization's repositories then answer private, so the plan is
   private, and its home goes to the source declared private that its private tasks route to,
   with every private task and its design document. A public task stays where its own

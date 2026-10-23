@@ -2,14 +2,15 @@
 
 The finalize planner links each task to its spikes' reports, by the document ids they were
 written under where the plan was drafted. The board mints every copied record an id of its
-own, so on the board copy no document carries those ids — but the plan store stamps each copy
-with `onetaskgraph.origin`, the record it was copied from, and that is how a report is found
-there: the `spike-report` document of the plan's project whose origin names the id the task
-links — or, drafted where `authoring` is declared private, whose id the drafting source's own
-`onetaskgraph.copies` link names, since such a copy carries no origin. So `just check-plan`
-passes the board copy, each task's report resolves inside the board copy's own project, and
-the report and branch rules stand as they did where the plan was drafted — the branch of a
-spike its engine retried among them.
+own, so on the board copy no document carries those ids. Plans are drafted in `authoring`,
+which the tracked document declares private, and a copy out of a private source carries no
+origin: the store records the correspondence on the private side as its `onetaskgraph.copies`
+link, and a report is the `spike-report` document of the board copy's project whose id the
+drafting source's link names. A copy out of a source not declared private is stamped with
+`onetaskgraph.origin`, the record it was copied from, and its report is the one whose origin
+names the id the task links. So `just check-plan` passes the board copy, each task's report
+resolves inside the board copy's own project, and the report and branch rules stand as they did
+where the plan was drafted — the branch of a spike its engine retried among them.
 
 Everything is real but GitHub's Projects API, which the loopback board `tests/github_board.py`
 serves, and the paid model `reviewed` scripts: `just copy-plan` and `just check-plan`, the
@@ -29,7 +30,7 @@ from typing import NamedTuple
 import boundary_home
 import pytest
 from github_board import AUTHORING_ROOT_ENV, AUTHORING_SOURCE, _plan_environment, _serving_board
-from project_fixtures import budgeted, no_budgets, reviewed
+from project_fixtures import budgeted, designed, no_budgets, reviewed
 from test_board_copy_design_approval_e2e import _copied, _on_the_board, _recipe
 
 from orchestrator import design_approval, plan_store, spike_plan
@@ -41,8 +42,10 @@ PROJECT = "spiked-board"
 QUALIFIED = f"{AUTHORING_SOURCE}:{PROJECT}"
 REPOSITORY = "github.com/nickderobertis/ai-orchestrator"
 
-#: The store's environment-layer name for the drafting source's declared visibility.
-PRIVATE_AUTHORING_ENV = f"ONETASKGRAPH_SOURCES__{AUTHORING_SOURCE.upper()}__VISIBILITY"
+#: The store's environment-layer name for the drafting source's declared visibility. The
+#: tracked document declares `authoring` private; a journey about the origin a copy out of a
+#: source not declared private carries states it public.
+AUTHORING_VISIBILITY_ENV = f"ONETASKGRAPH_SOURCES__{AUTHORING_SOURCE.upper()}__VISIBILITY"
 
 CLOSING = (
     "Every claim the dispatch makes about the finished work is true of the tree as it "
@@ -167,31 +170,30 @@ def _finalized(root: Path, environment: Mapping[str, str]) -> None:
 
 # llmlint: ignore-block[e2e_not_mocked] GitHub's Projects API is the one boundary doubled, for the reason `tests/github_board.py` gives — driving it writes to the live board this repository plans on — and the paid model `reviewed` scripts is the other; the recipes, the pinned engine and plan store, and the records they write are all real.  # noqa: E501
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] `board-copy-approval` is this directory's own leaf project, keyed on `boardCopyApprovalWorkspace`, which names the recipes, scripts and package this journey drives.  # noqa: E501
-@pytest.mark.parametrize(
-    "private", [False, True], ids=["authoring-undeclared", "authoring-private"]
-)
+@pytest.mark.parametrize("private", [False, True], ids=["authoring-public", "authoring-private"])
 def test_a_finalized_plan_copied_onto_the_board_resolves_and_checks_each_tasks_report(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, private: bool
 ) -> None:
     """Each report resolves on the board copy, by its origin or by the drafting source's link.
 
-    Drafted where `authoring` is declared private, the copy carries no `onetaskgraph.origin`:
-    the store records the correspondence on the private side, as `onetaskgraph.copies`, and
-    the report resolves through that link (`spike_plan.drafted_ids`) instead.
+    The plan's design document is copied beside them and approved on the board copy.
+    Drafted where the tracked document declares it, in the private `authoring`, the copy
+    carries no `onetaskgraph.origin`: the store records the correspondence on the private
+    side, as `onetaskgraph.copies`, and the report resolves through that link
+    (`spike_plan.drafted_ids`) instead. Drafted in a source not declared private, the copy
+    carries its origin, and the report resolves by that.
     """
     root = tmp_path / "authoring"
     root.mkdir()
     monkeypatch.setenv(AUTHORING_ROOT_ENV, str(root))
-    if private:
-        # Declared private with the store's public boundary switched on, in a configuration
-        # home of this test's own: the tracked configuration lands it switched off.
-        boundary_home.screening(monkeypatch, tmp_path)
-        monkeypatch.setenv(PRIVATE_AUTHORING_ENV, "private")
+    if not private:
+        monkeypatch.setenv(AUTHORING_VISIBILITY_ENV, "public")
     # The store's public boundary reads the plan's repository as public through a state root
     # registering it, so the plan may reach the public board.
     boundary_home.answering(monkeypatch, public=(REPOSITORY,))
     environment = _environment(root)
     _finalized(root, environment)
+    designed(AUTHORING_SOURCE, PROJECT, [], environment)
     drafted = _recipe(environment, "check-plan", QUALIFIED)
     assert drafted.returncode == 0, drafted.stdout + drafted.stderr
 
@@ -201,6 +203,7 @@ def test_a_finalized_plan_copied_onto_the_board_resolves_and_checks_each_tasks_r
         assert copied.returncode == 0, copied.stdout + copied.stderr
         board = QualifiedProjectId(_copied(copied.stdout)[QUALIFIED])
         checked = _recipe(on_the_board, "check-plan", board)
+        approved = _recipe(on_the_board, "approve-design", board)
         _on_the_board(monkeypatch, remote)
         tasks = plan_store.read_tasks(board)
         documents = plan_store.read_documents(board)
@@ -210,6 +213,8 @@ def test_a_finalized_plan_copied_onto_the_board_resolves_and_checks_each_tasks_r
         f"`just check-plan` has to pass the board copy {board}, whose reports the board gave "
         f"ids of its own:\n{checked.stdout}{checked.stderr}"
     )
+    assert approved.returncode == 0, approved.stdout + approved.stderr
+    assert "recorded the approval of" in approved.stdout, approved.stdout
     assert {task.node_id for task in tasks} == {one.node for one in LINKED}
     for task in tasks:
         expected = next(one for one in LINKED if one.node == task.node_id)
@@ -281,8 +286,6 @@ def test_a_visual_report_copied_out_of_a_private_source_resolves_and_an_unreadab
     root = tmp_path / "authoring"
     root.mkdir()
     monkeypatch.setenv(AUTHORING_ROOT_ENV, str(root))
-    boundary_home.screening(monkeypatch, tmp_path)
-    monkeypatch.setenv(PRIVATE_AUTHORING_ENV, "private")
     boundary_home.answering(monkeypatch, public=(REPOSITORY,))
     environment = _environment(root)
     _finalized(root, environment)
@@ -348,15 +351,17 @@ def test_a_copys_reports_resolve_by_their_origin_with_the_authoring_source_unrea
 ) -> None:
     """The board copy's own id names no plan, so each report's origin names it instead.
 
-    Copied where `authoring` is undeclared, each report carries the `onetaskgraph.origin` it was
-    copied from. With the authoring source then unreadable, nothing links the copy to its drafted
-    plan, so the plan's id is read off those origins: the evidence check passes each task's
-    qualified report, and the visual fallback takes the qualified visual report over a stale one
-    left under the old `spike-visual-report`.
+    Copied where `authoring` is declared public, rather than private as the tracked document
+    declares it, each report carries the `onetaskgraph.origin` it was copied from. With the
+    authoring source then unreadable, nothing links the copy to its drafted plan, so the plan's
+    id is read off those origins: the evidence check passes each task's qualified report, and the
+    visual fallback takes the qualified visual report over a stale one left under the old
+    `spike-visual-report`.
     """
     root = tmp_path / "authoring"
     root.mkdir()
     monkeypatch.setenv(AUTHORING_ROOT_ENV, str(root))
+    monkeypatch.setenv(AUTHORING_VISIBILITY_ENV, "public")
     boundary_home.answering(monkeypatch, public=(REPOSITORY,))
     environment = _environment(root)
     _finalized(root, environment)

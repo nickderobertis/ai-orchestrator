@@ -6,7 +6,6 @@
     "type:test-support"
   ],
   "implicitDependencies": [
-    "support-boundary-home",
     "support-published-tools"
   ],
   "namedInputs": {

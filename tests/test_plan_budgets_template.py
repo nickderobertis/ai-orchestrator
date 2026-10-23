@@ -361,9 +361,17 @@ def test_the_budget_level_guidance_reaches_a_planner_rendering_a_task_through_th
         ),
         encoding="utf-8",
     )
+    # The store's public boundary classifies a task by the project it is filed under, and
+    # refuses one whose project its source does not hold, so the project exists first.
+    project = f"budget-level-{tmp_path.name}"
+    made = _run(
+        [str(ONETASKGRAPH_BIN), "project", "create", plan_fixture_source.SOURCE, "--id", project]
+        + ["--title", project, "--no-interactive"]
+    )
+    assert made.returncode == 0, made.stderr
     created = _run(
         [str(ONETASKGRAPH_BIN), "task", "create", plan_fixture_source.SOURCE]
-        + ["--project", f"budget-level-{tmp_path.name}", "--template-loader", "-"]
+        + ["--project", project, "--template-loader", "-"]
         + ["--title", f"sync every issue {tmp_path.name}", "--answers", str(answers)]
         + ["--no-interactive"],
         loader,

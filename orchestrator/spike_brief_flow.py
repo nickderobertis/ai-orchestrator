@@ -64,20 +64,21 @@ def recorded_project(
     return plan_store.QualifiedProjectId(candidate)
 
 
+def copy_link(project: plan_store.QualifiedProjectId, source: str = "plans") -> object:
+    """The ``source`` copy the store's own link on ``project`` names, or ``None`` for none."""
+    recorded = plan_store.project_record(project).get("metadata")
+    links = recorded.get(plan_store.COPIES_KEY) if isinstance(recorded, dict) else None
+    return links.get(source) if isinstance(links, dict) else None
+
+
 def copied_project(
     report_text: str, project: plan_store.QualifiedProjectId
 ) -> plan_store.QualifiedProjectId:
     rows = [json.loads(line) for line in report_text.splitlines() if line.startswith("{")]
     report = CopyReport.model_validate({"items": rows})
-    recorded = plan_store.project_record(project).get("metadata")
-    links = recorded.get(plan_store.COPIES_KEY) if isinstance(recorded, dict) else None
     arrived = arrived_projects(report, project)
     home = arrived[0] if len(arrived) == 1 else None
-    expected = (
-        links.get(home.split(":", 1)[0])
-        if isinstance(links, dict) and isinstance(home, str)
-        else None
-    )
+    expected = copy_link(project, home.split(":", 1)[0]) if isinstance(home, str) else None
     return recorded_project(report, project, expected)
 
 
@@ -85,11 +86,18 @@ def held_project(
     shown: QueryResponseOfQualifiedProject,
     source: plan_store.QualifiedProjectId,
     named: plan_store.QualifiedProjectId,
+    linked: object = None,
 ) -> plan_store.StoreProject:
-    """The board project the store shows as ``named``, held to the copy of ``source`` it is."""
+    """The board project the store shows as ``named``, held to the copy of ``source`` it is.
+
+    A copy carries the `onetaskgraph.origin` naming ``source``, or — copied out of the private
+    `authoring` source, which stamps none — no origin at all, ``source``'s own copy link
+    (``linked``) then naming it instead.
+    """
     recorded_project(shown, source, named)
     held = shown.items[0].item
-    if held.metadata.get(plan_store.ORIGIN_KEY) != source:
+    origin = held.metadata.get(plan_store.ORIGIN_KEY)
+    if origin != source and (origin is not None or linked != named):
         raise ValueError("recorded board project belongs to another source project")
     return plan_store.StoreProject(
         named,
@@ -103,7 +111,9 @@ def board_project(
     source: plan_store.QualifiedProjectId, named: plan_store.QualifiedProjectId
 ) -> plan_store.StoreProject:
     shown = plan_store.complete(plan_store.sdk(plan_store.client().project_show(named)))
-    return held_project(shown, source, named)
+    unstamped = any(plan_store.ORIGIN_KEY not in item.item.metadata for item in shown.items)
+    linked = copy_link(source, named.split(":", 1)[0]) if unstamped else None
+    return held_project(shown, source, named, linked)
 
 
 def command(argv: list[str], *, input: str | None = None) -> str:

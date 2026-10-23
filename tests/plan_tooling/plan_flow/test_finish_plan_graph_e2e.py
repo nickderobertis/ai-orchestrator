@@ -49,7 +49,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, NamedTuple, TypedDict
 
-import plan_fixture_source
+import plan_root_variable
 import pytest
 from nx_workspace import (
     answering_this_checkouts_origin,
@@ -58,6 +58,7 @@ from nx_workspace import (
 )
 from project_fixtures import budgeted, no_budgets
 from test_finish_plan_recipe_e2e import (
+    AUTHORING_SOURCE,
     COPIES_THE_ROWS,
     DESIGN_TASK_MARKER,
     DESTINATION,
@@ -186,10 +187,10 @@ SAME_TITLE = (
 
 
 def _plan(tasks: Sequence[Task]) -> QualifiedProjectId:
-    """Write ``tasks`` as one plan into this process's fixture source, and answer its id."""
+    """Draft ``tasks`` in this process's private authoring source and answer the plan id."""
     native = f"graph-{os.getpid()}-{next(_SEQUENCE)}"
     write_plan_project(
-        plan_fixture_source.root(),
+        Path(os.environ[plan_root_variable.name()]),
         {
             "schema_version": 3,
             "goal": {"text": "Show the plan's graph in its design document"},
@@ -208,8 +209,8 @@ def _plan(tasks: Sequence[Task]) -> QualifiedProjectId:
         },
         native_id=native,
     )
-    budgeted(plan_fixture_source.SOURCE, native, no_budgets([]))
-    return QualifiedProjectId(f"{plan_fixture_source.SOURCE}:{native}")
+    budgeted(AUTHORING_SOURCE, native, no_budgets([]))
+    return QualifiedProjectId(f"{AUTHORING_SOURCE}:{native}")
 
 
 #: The staged answers every writer here starts from: the rows, units and image are copied

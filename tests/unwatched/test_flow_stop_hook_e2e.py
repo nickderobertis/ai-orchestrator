@@ -278,7 +278,7 @@ def _flow(copy: Copy, tmp_path: Path) -> Flow:
     """The environment one `just plan` flow runs in, with its review and spikes held."""
     run = RunId(f"flow-stop-hook-{os.getpid()}")
     plan = f"{plan_fixture_source.SOURCE}:test-{os.getpid()}-flow-stop-hook-plan"
-    identity = seeded(tmp_path / "identity", origin=PLANNING_FLOW_ORIGIN)
+    identity = seeded(tmp_path / "identity", origin=PLANNING_FLOW_ORIGIN, visibility="public")
     environment = {
         name: value for name, value in os.environ.items() if name not in INHERITED_ENVIRONMENT
     }

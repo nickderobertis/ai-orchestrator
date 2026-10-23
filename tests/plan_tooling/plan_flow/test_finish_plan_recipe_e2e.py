@@ -146,8 +146,6 @@ PROVENANCE_KEY = "onetaskgraph.template"
 WRITER_TASK_TEMPLATE = "onepipeline:plan-task"
 DOCUMENT_TEMPLATE = "onepipeline:design-doc"
 
-#: The key `onetaskgraph` stamps on a record it created by copying, naming what it copied.
-ORIGIN_KEY = "onetaskgraph.origin"
 
 #: What a design-doc dispatch drafting into the fixture store names its document, and what
 #: one drafting into the authoring store has to name it: the id the tail fixes in its task,
@@ -760,11 +758,8 @@ def test_the_tail_reports_the_two_locations_the_destination_itself_answers(
     # llmlint: ignore[suppressions_justified] onetaskgraph owns this open JSON schema; the
     # fields read below are narrowed at each subscript.
     projects = cast(dict[str, Any], json.loads(listed.stdout))["items"]
-    landed = [
-        one
-        for one in projects
-        if one["item"]["metadata"].get(ORIGIN_KEY) == finished.drafted.qualified
-    ]
+    copied = _landed(finished.bench, finished.drafted)
+    landed = [one for one in projects if one["id"] == copied]
     assert landed, (
         f"the destination holds no project copied from {finished.drafted.qualified}; it "
         f"holds {[one['id'] for one in projects]}"
@@ -1001,11 +996,18 @@ def _landed(bench: Bench, drafted: Drafted) -> str:
     assert listed.returncode == 0, listed.stderr
     # llmlint: ignore[suppressions_justified] onetaskgraph owns this open JSON schema.
     projects = cast(dict[str, Any], json.loads(listed.stdout))["items"]
-    (landed,) = [
-        one["id"]
-        for one in projects
-        if one["item"]["metadata"].get(ORIGIN_KEY) == drafted.qualified
-    ]
+    shown = _just(
+        "plans",
+        "project",
+        "show",
+        drafted.qualified,
+        "--json",
+        environment=bench.environment,
+        seconds=120,
+    )
+    assert shown.returncode == 0, shown.stdout + shown.stderr
+    copies = json.loads(shown.stdout)["items"][0]["item"]["metadata"][plan_store.COPIES_KEY]
+    (landed,) = [one["id"] for one in projects if one["id"] == copies[DESTINATION]]
     return str(landed)
 
 
@@ -1081,7 +1083,11 @@ def test_a_document_whose_answers_no_longer_fit_is_repaired_by_the_tail_it_is_se
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
     bench = _bench(tmp_path, oneharness_bin, PASSES)
-    drafted = _draft("finish-plan-retired")
+    drafted = _draft(
+        "finish-plan-retired",
+        root=Path(os.environ[plan_root_variable.name()]),
+        source=AUTHORING_SOURCE,
+    )
     retired_root = tmp_path / "retired-templates"
     shutil.copytree(REPO_ROOT / "templates", retired_root)
     (retired_root / "design-doc.md.j2").write_text(RETIRED_TEMPLATE, encoding="utf-8")

@@ -1,16 +1,15 @@
 """No plan-store user layer of the invoking user's reaches a fixture of this suite.
 
-`tests/plan_store_user_layer.py` is the rule, and the incident behind it; `tests/conftest.py`
-arms it. The first journey runs a real fixture of this
-tier — the copy `test_plan_copy_destination_ids_e2e.py` makes through `just plans` — as a
-pytest session of its own loading this suite's conftest, under a configuration home holding
-the very declaration that refused it. The second holds the sandbox to linking every other
-entry of that home, and to leaving the home itself as it found it; the third holds back
-ai-orchestrator's own host checkout list and rules overlay while linking that directory's
-other entries. The next holds the
-helper's reading of where a configuration home is to the store's own, and the last three
-hold real Bun to the cache the user's `.npmrc` names once the home moves, to a cache the
-environment already states, and to stating none when `bun pm cache` cannot answer.
+`tests/plan_store_user_layer.py` is the rule, and the incident behind it; `tests/conftest.py` arms
+it. The first journey runs a real fixture of this tier — the copy
+`test_plan_copy_destination_ids_e2e.py` makes through `just plans` — as a pytest session of its own
+loading this suite's conftest, under a configuration home holding a declaration that refuses it: a
+private store of the host's whose root cannot be read. The second holds the sandbox to linking every
+other entry of that home, and to leaving the home itself as it found it; the third holds back
+ai-orchestrator's own host checkout list and rules overlay while linking that directory's other
+entries. The next holds the helper's reading of where a configuration home is to the store's own,
+and the last three hold real Bun to the cache the user's `.npmrc` names once the home moves, to a
+cache the environment already states, and to stating none when `bun pm cache` cannot answer.
 """
 
 from __future__ import annotations
@@ -27,8 +26,18 @@ from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
 
-#: The host declaration that refused every fixture's copy, verbatim.
-PRIVATE_AUTHORING = "sources:\n  authoring:\n    visibility: private\n"
+#: A host declaration that refuses every fixture's copy: a private store this host keeps
+#: whose root it cannot read, which the store walks before every copy now that the tracked
+#: document switches its public boundary on. The incident's own declaration, `authoring`
+#: private, is the tracked document's now, so a layer stating it reads nothing of its own.
+HOSTILE_LAYER = (
+    "sources:\n"
+    "  hostprivate:\n"
+    "    plugin: local-md\n"
+    "    visibility: private\n"
+    "    config:\n"
+    "      root: /nonexistent/host-private-store\n"
+)
 #: The fixture it refused, run whole.
 FIXTURE = Path(__file__).with_name("test_plan_copy_destination_ids_e2e.py")
 #: The installed plan store this checkout locks.
@@ -84,7 +93,7 @@ def test_a_fixtures_copy_is_untouched_by_a_user_layer_that_would_refuse_it(
 ) -> None:
     """A fixture copying a plan passes under the user layer that refused it on the host."""
     config_home = tmp_path / "config"
-    layer = _user_layer(config_home, PRIVATE_AUTHORING)
+    layer = _user_layer(config_home, HOSTILE_LAYER)
     environment = _invoking_user(config_home)
     shown = subprocess.run(
         [str(ONETASKGRAPH), "config", "show", "--json"],
@@ -100,8 +109,8 @@ def test_a_fixtures_copy_is_untouched_by_a_user_layer_that_would_refuse_it(
         for setting in json.loads(shown.stdout)["settings"]
         if setting["origin"].get("path") == str(layer)
     ]
-    assert [(setting["key"], setting["value"]) for setting in read] == [
-        ("sources.authoring.visibility", "private")
+    assert ("sources.hostprivate.visibility", "private") in [
+        (setting["key"], setting["value"]) for setting in read
     ], f"the store did not read the layer at {layer}, so this proves nothing: {shown.stdout}"
 
     ran = subprocess.run(
@@ -127,7 +136,7 @@ def test_a_fixtures_copy_is_untouched_by_a_user_layer_that_would_refuse_it(
         f"a plan-store user layer at the invoking user's {layer} reached a fixture of this "
         f"suite:\n{ran.stdout[-6000:]}\n{ran.stderr[-2000:]}"
     )
-    assert layer.read_text(encoding="utf-8") == PRIVATE_AUTHORING
+    assert layer.read_text(encoding="utf-8") == HOSTILE_LAYER
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
@@ -138,7 +147,7 @@ def test_the_sandbox_links_every_other_entry_and_leaves_the_users_home_unchanged
 ) -> None:
     """Every entry but the store's is the user's own; the store's is empty; nothing moved."""
     config_home = tmp_path / "config"
-    layer = _user_layer(config_home, PRIVATE_AUTHORING)
+    layer = _user_layer(config_home, HOSTILE_LAYER)
     secrets = layer.with_name("secrets.env")
     secrets.write_text("GH_PROJECTS_TOKEN=from-the-users-store\n", encoding="utf-8")
     hosts = config_home / "gh" / "hosts.yml"

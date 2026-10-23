@@ -277,10 +277,13 @@ def test_a_source_no_plan_could_be_stored_in_is_refused_naming_its_plugin(
     """
     checkout, binaries = _a_checkout_of_its_own(tmp_path)
     document = checkout / "onetaskgraph.yaml"
+    held = document.read_text(encoding="utf-8")
+    served = "    plugin: local-md\n    config:\n      root: .plans\n"
+    assert served in held, "the tracked `authoring` source is no longer the folder this rewrites"
     document.write_text(
-        document.read_text(encoding="utf-8").replace(
-            "  authoring:\n    plugin: local-md\n    config:\n      root: .plans\n",
-            "  authoring:\n    plugin: github-projects\n    config:\n"
+        held.replace(
+            served,
+            "    plugin: github-projects\n    config:\n"
             "      owner: nickderobertis\n      project_number: 2\n"
             "      repository: nickderobertis/ai-orchestrator\n"
             "      token_env: GH_PROJECTS_TOKEN\n",

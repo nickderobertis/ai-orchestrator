@@ -29,10 +29,11 @@ plan's main run succeeds:
   where the plan holds no report under the qualified id. On a copy of the plan, whose
   destination mints the document an id of its own, the report is the ``spike-report``
   document whose ``onetaskgraph.origin`` — the plan store's own record of what a copy was
-  copied from — names that id, or, for a copy out of ``authoring`` declared private, on
-  which the store records no origin, the document that source's ``onetaskgraph.copies`` link
-  names. The store has no document lookup by origin, so the check reads the plan project's
-  own documents, one project-scoped read, and for such a copy the drafted project's too;
+  copied from — names that id, or, for a copy out of ``authoring`` or another default source
+  declared private (:func:`drafting_sources`), on which the store records no origin, the
+  document that source's ``onetaskgraph.copies`` link names. The store has no document lookup
+  by origin, so the check reads the plan project's own documents, one project-scoped read, and
+  for such a copy the drafted project's too;
 * a spike may depend on other spikes — a shared harness spike the area spikes build on —
   and the engine starts it from the branch its base dependency kept, so same-repository
   spike dependencies lie on one stacking chain; the engine's ``plan check`` refuses a fan-in
@@ -150,24 +151,15 @@ def visual_report_id(plan: str) -> ReportId:
 
 
 def plan_native(project: str) -> str:
-    """The native id of the plan ``project`` was drafted as: its ``authoring`` project's.
+    """The native id of the plan ``project`` was drafted as: its drafted project's.
 
     A copy's own native id is minted by its destination, so the drafted project whose
     `onetaskgraph.copies` link names ``project`` answers instead; a project no drafted one
     links, or a source that cannot be read, answers with its own native id.
     """
-    source, _, native = project.partition(":")
-    if source == AUTHORING:
-        return native
-    try:
-        drafted_projects = plan_store.read_projects(AUTHORING)
-    except OSError:
-        return native
-    for drafted in drafted_projects:
-        copies = drafted.metadata.get(plan_store.COPIES_KEY)
-        if isinstance(copies, Mapping) and project in copies.values():
-            return str(drafted.qualified_id).partition(":")[2]
-    return native
+    native = project.partition(":")[2]
+    drafted = drafted_project(project)
+    return native if drafted is None else str(drafted.qualified_id).partition(":")[2]
 
 
 def held_report_id(
@@ -416,39 +408,78 @@ def _spikes_of(
 #: carry no `onetaskgraph.origin`: the store keeps that correspondence on this side instead.
 AUTHORING = "authoring"
 
+
+def drafting_sources() -> tuple[str, ...]:
+    """Where a plan copied without an origin may have been drafted, :data:`AUTHORING` first.
+
+    Every default source declared private copies as :data:`AUTHORING` does, keeping the link
+    on its own side — this checkout's `test-fixtures` among them — so each is a source a copy's
+    drafted project may be in. A source read only by name is not one a plan is drafted in.
+    """
+    settings = plan_store.configured_settings()
+    defaults = settings.get("default_sources")
+    named = defaults if isinstance(defaults, list) else []
+    private = (
+        source
+        for source in named
+        if source != AUTHORING and settings.get(f"sources.{source}.visibility") == "private"
+    )
+    return (AUTHORING, *private)
+
+
+def drafted_project(project: str) -> plan_store.StoreProject | None:
+    """The project of a :func:`drafting_sources` source whose copy link names ``project``.
+
+    ``None`` for a project of such a source itself, for one no drafted project links, and where
+    the sources cannot be read — a reader then goes by the origin a copy carries alone. An id
+    that is not qualified is linked by nothing, and is left for its caller to refuse.
+    """
+    # llmlint: ignore-block[changed_behavior_has_e2e] No plan-flow journey can reach this: a
+    # store whose configuration does not resolve refuses every plan-store recipe before a
+    # spike report is looked up. `tests/test_spike_plan.py` drives it through the real store
+    # under a user layer that is not valid YAML, with nothing substituted.
+    try:
+        sources = drafting_sources()
+    except OSError:
+        return None
+    # llmlint: ignore-end[changed_behavior_has_e2e]
+    if project.partition(":")[0] in sources:
+        return None
+    for source in sources:
+        try:
+            drafted_projects = plan_store.read_projects(source)
+        except OSError:
+            continue
+        for drafted in drafted_projects:
+            copies = drafted.metadata.get(plan_store.COPIES_KEY)
+            if isinstance(copies, Mapping) and project in copies.values():
+                return drafted
+    return None
+
+
 #: A copy's document, by its qualified id, mapped to the qualified id it was copied from.
 type Drafted = Mapping[str, str]
 
 
 def drafted_ids(project: str) -> dict[str, str]:
-    """Each document of ``project``, a copy of a plan drafted in :data:`AUTHORING`, by its source.
+    """Each document of ``project``, a copy of a privately drafted plan, by its source.
 
     A copy out of a source declared private records no `onetaskgraph.origin` on the items it
     creates, and keeps the correspondence on the private side as the store's own
     `onetaskgraph.copies` link instead. So the drafted project whose link names ``project`` is
-    found, and each of its documents' links names the copy it reached: the answer maps that
-    copy's id to the drafted document's. Empty for a project of :data:`AUTHORING` itself, for
-    one no drafted project links, and where that source cannot be read — a reader without it
-    then finds a report by the origin a copy carries alone, as before.
+    found (:func:`drafted_project`), and each of its documents' links names the copy it
+    reached: the answer maps that copy's id to the drafted document's. Empty where no drafted
+    project is found or its documents cannot be read — a reader without them then finds a
+    report by the origin a copy carries alone, as before.
     """
-    if plan_store.qualified(project)[0] == AUTHORING:
+    drafted = drafted_project(project)
+    if drafted is None:
         return {}
     try:
-        drafted_projects = plan_store.read_projects(AUTHORING)
+        documents = plan_store.read_documents(str(drafted.qualified_id))
     except OSError:
         return {}
-    for drafted in drafted_projects:
-        copies = drafted.metadata.get(plan_store.COPIES_KEY)
-        if not isinstance(copies, Mapping) or project not in copies.values():
-            continue
-        try:
-            documents = plan_store.read_documents(str(drafted.qualified_id))
-        except OSError:
-            return {}
-        return {
-            link: str(document.qualified_id) for document in documents for link in _links(document)
-        }
-    return {}
+    return {link: str(document.qualified_id) for document in documents for link in _links(document)}
 
 
 def _links(document: plan_store.StoreDocument) -> list[str]:

@@ -1,13 +1,12 @@
 """An `onevcs` state root that answers the plan store's public-boundary questions for a test.
 
-The tracked `onetaskgraph.yaml` lands the store's public boundary switched off, and a test of
-the boundary switches it on in a configuration home of its own (`screening()`), whose user
-layer names :data:`WRITE_POLICY`. That policy asks `onevcs boundary inspect` for the
-visibility of every repository an item names, and `onevcs boundary check` before every write
-to a destination not verified private. Inspect answers only for a repository the state root
-has **registered**, so under the root `tests/onevcs_state_snapshot.py` exports — which
-registers none, on purpose — every repository reads `unknown`, which is private, and every
-item naming one is refused at a public board. That is the boundary working, and a test of
+The tracked `onetaskgraph.yaml` switches the store's public boundary on: its `write_policy` asks
+`onevcs boundary inspect` for the visibility of every repository an item names, and `onevcs
+boundary check` before every write to a destination not verified private. Inspect answers
+only for a repository the state root has **registered**, so under the root
+`tests/onevcs_state_snapshot.py` exports — which registers none, on purpose — every
+repository reads `unknown`, which is private, and every item naming one is refused at a
+public board. That is the boundary working, and a test of
 anything else needs the repositories its fixtures name to have a recorded visibility.
 
 `registered_home()` builds such a root: the tracked rules composed through the real
@@ -43,21 +42,6 @@ ONEVCS = REPO_ROOT / ".venv" / "bin" / "onevcs"
 
 #: The tracked base rules every composed root starts from.
 TRACKED_RULES = REPO_ROOT / "config" / "onevcs.rules.yml"
-
-#: The plan-store user layer a boundary test switches the boundary on with: the write policy —
-#: `onevcs boundary inspect` answers each repository's visibility and `onevcs boundary check`
-#: screens every write to a source not declared private, both reached through `PATH` — and the
-#: two boards declared public, as switching it on for this host declares them.
-WRITE_POLICY = (
-    "write_policy:\n"
-    '  visibility_command: [onevcs, boundary, inspect, --input, "-"]\n'
-    '  check_command: [onevcs, boundary, check, --destination, public, --input, "-"]\n'
-    "sources:\n"
-    "  plans:\n"
-    "    visibility: public\n"
-    "  followups:\n"
-    "    visibility: public\n"
-)
 
 #: This repository's identity, which most fixtures file their work against.
 THIS_REPOSITORY = "github.com/nickderobertis/ai-orchestrator"
@@ -215,29 +199,4 @@ def declared_home(
         [str(ONEVCS), "rules", "apply", "--base", str(TRACKED_RULES), "--overlay", str(overlay)],
         environment(None, home, transports=False),
     )
-    return home
-
-
-def screened_config_home(root: Path) -> Path:
-    """A configuration home under ``root`` whose plan-store user layer switches the boundary on.
-
-    Every other entry of the configuration home this process exported is linked into it, so
-    each other tool reads what it read before; the plan store's own directory holds only
-    :data:`WRITE_POLICY`, so no layer of the host's reaches the test. Answers the home.
-    """
-    home = root / "config-home"
-    home.mkdir(parents=True)
-    exported = Path(os.environ["XDG_CONFIG_HOME"])
-    for entry in exported.iterdir():
-        if entry.name != "onetaskgraph":
-            (home / entry.name).symlink_to(entry)
-    (home / "onetaskgraph").mkdir()
-    (home / "onetaskgraph" / "config.yaml").write_text(WRITE_POLICY, encoding="utf-8")
-    return home
-
-
-def screening(monkeypatch: pytest.MonkeyPatch, root: Path) -> Path:
-    """Switch the store's public boundary on for this test's process and every one it starts."""
-    home = screened_config_home(root)
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(home))
     return home

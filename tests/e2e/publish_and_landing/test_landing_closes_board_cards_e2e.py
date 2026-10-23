@@ -11,7 +11,8 @@ when it is adopted.
 Everything is real — the recipes, the engine, its linked `onevcs` and plan store, git, and
 this repository's own `onetaskgraph.yaml` — with its `plans` and `followups` sources pointed
 at the loopback board (`tests/github_board.py`) and the example user layer's Linear sources
-at a loopback that answers nothing, and only the paid model doubled. The identity is a
+at a loopback answering only the screening read, as a tracker holding nothing, and only the
+paid model doubled. The identity is a
 scratch one filed under this repository's own origin, so a closing line names an issue the
 loopback holds; a change request opened for it is answered by `tests/e2e/fake_gh.py`.
 """
@@ -122,8 +123,9 @@ PATIENCE_SECONDS = 240
 
 
 # llmlint: ignore-block[e2e_not_mocked] Linear's API is a boundary no test may reach: this
-# answers every request with a refusal and records it, so the journeys can say the closure
-# write asked nothing of the organization's tracker.
+# records every request, answers the store's screening read with an empty tracker and refuses
+# everything else, so the journeys can say the closure write asked nothing else of the
+# organization's tracker.
 class _LinearFixture(BaseHTTPRequestHandler):
     """Every request a Linear source sends, recorded and refused."""
 
@@ -131,15 +133,53 @@ class _LinearFixture(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib callback name
         length = int(self.headers.get("Content-Length") or 0)
-        _LinearFixture.requests.append(self.rfile.read(length).decode("utf-8", "replace"))
-        body = json.dumps({"errors": [{"message": "the Linear loopback answers nothing"}]})
-        self.send_response(500)
+        request = self.rfile.read(length).decode("utf-8", "replace")
+        _LinearFixture.requests.append(request)
+        if _screening_search(request):
+            # The organization's tracker holds no copy of any board item.
+            empty = {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}}
+            body = json.dumps({"data": {"issues": empty}})
+            self.send_response(200)
+        else:
+            body = json.dumps({"errors": [{"message": "the Linear loopback answers nothing"}]})
+            self.send_response(500)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
         self.wfile.write(body.encode())
 
     def log_message(self, format: str, *args: object) -> None:
         return
+
+
+#: What a screened write to a public board asks each private source: the items whose copy
+#: link names the board item written, by a description search for its qualified id.
+SCREENED_ITEM = re.compile(r'"plans:[A-Za-z0-9_]+"')
+
+
+def _screening_search(request: str) -> bool:
+    """Whether ``request`` is the store's screening read, and nothing else.
+
+    With the public write boundary on, every write to a board item first asks each source
+    declared private whether it holds a copy of that item. That read is the only one this
+    loopback answers, and it asks nothing about a card: its one condition beyond the team
+    and project scope is the description naming the board item.
+    """
+    sent = json.loads(request)
+    query = sent.get("query", "")
+    if not query.lstrip().startswith("query") or "mutation" in query:
+        return False
+    conditions = sent.get("variables", {}).get("filter", {}).get("and", [])
+    searched = [
+        condition["description"]["contains"]
+        for condition in conditions
+        if isinstance(condition, dict) and "description" in condition
+    ]
+    scoped = all(
+        set(condition) <= {"team", "project", "description"}
+        for condition in conditions
+        if isinstance(condition, dict)
+    )
+    return scoped and len(searched) == 1 and SCREENED_ITEM.fullmatch(searched[0]) is not None
 
 
 @contextmanager
@@ -283,9 +323,9 @@ def _bench(root: Path, oneharness_bin: str, *, reviewed: bool = False) -> Iterat
         # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
         environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
         yield Bench(root, identity, environment, ticket, task, untouched, _cards())
-        assert _LinearFixture.requests == [], (
-            f"the closure write reached the Linear loopback: {_LinearFixture.requests}"
-        )
+        # The store's screening of each board write is the one read it may send there.
+        unscreened = [one for one in _LinearFixture.requests if not _screening_search(one)]
+        assert unscreened == [], f"the closure write reached the Linear loopback: {unscreened}"
 
 
 def _just(bench: Bench, *arguments: str, seconds: float = 600) -> subprocess.CompletedProcess[str]:
@@ -802,23 +842,35 @@ def _homed(bench: Bench, name: str) -> Homed:
     local = _project(bench, name)
     copied = _just(bench, "plans", "project", "copy", local, "--to", "plans", "--json")
     assert copied.returncode == 0, copied.stdout + copied.stderr
-    entries = json.loads(copied.stdout)["items"]
-    project = next(str(entry["destination"]) for entry in entries if entry["source"] == local)
+    # The fixture source is private, so its copies carry no origin: the copy's own report
+    # names where each of its items landed.
+    landed = {
+        str(entry["source"]): str(entry["destination"])
+        for entry in json.loads(copied.stdout)["items"]
+    }
+    project = landed[local]
     document = _just(
         bench, "plans", "document", "copy", f"{local}-design", "--to", "plans", "--json"
     )
     assert document.returncode == 0, document.stdout + document.stderr
     approved = _just(bench, "approve-design", project, seconds=300)
     assert approved.returncode == 0, approved.stdout + approved.stderr
-    (home,) = [issue for issue in BOARD.issues_created_and_kept() if issue.origin == local]
+    (home,) = [issue for issue in BOARD.issues_created_and_kept() if _is(issue, project)]
     (task,) = [
-        issue for issue in BOARD.issues_created_and_kept() if issue.origin == f"{local}/{NODE_ID}"
+        issue
+        for issue in BOARD.issues_created_and_kept()
+        if _is(issue, landed[f"{local}/{NODE_ID}"])
     ]
     assert task.parent_id == home.content_id, (home, task)
     moved = _just(bench, "plans", "project", "status", "set", project, "in-progress")
     assert moved.returncode == 0, moved.stdout + moved.stderr
     assert home.status == "In Progress", home
     return Homed(project, name, home, task, len(_board_requests()))
+
+
+def _is(issue: _Issue, qualified: str) -> bool:
+    """Whether ``issue`` is the board item the store names ``qualified``."""
+    return f"plans:{issue.content_id}" == qualified
 
 
 def _home_records(bench: Bench, run: str) -> list[dict[str, object]]:

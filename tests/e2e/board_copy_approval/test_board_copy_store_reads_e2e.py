@@ -43,6 +43,7 @@ from project_fixtures import designed, graph_image, reviewed
 from test_board_copy_design_approval_e2e import (
     CLOSING,
     _copied,
+    _drafted_in_a_public_source,
     _location,
     _on_the_board,
     _recipe,
@@ -447,7 +448,16 @@ def test_the_plan_location_step_finds_the_copy_by_its_link_and_lists_only_for_a_
         populate(BOARD, PLANS_BOARD_SCALE)
         board_project = _copied_onto_the_board(on_the_board)
         located = _located(tmp_path, on_the_board)
+        copy = next(issue for issue in BOARD.issues if board_project == f"plans:{issue.content_id}")
+        assert copy.origin is None, "a private source's copy unexpectedly carried an origin"
+        # llmlint: ignore[tests_mirror_real_usage] The origin is a board field a person can edit in GitHub; changing the double's field exercises that external edit through the real plan-location command and store read, as the refusal journey below does.  # noqa: E501
+        copy.origin = "authoring:somebody-elses-plan"
+        conflicting = _located(tmp_path, on_the_board)
 
+    assert conflicting.ran.returncode == 2, conflicting.ran.stdout + conflicting.ran.stderr
+    assert f"copy link names {board_project}" in conflicting.ran.stderr, conflicting.ran.stderr
+    assert "does not record as copied from" in conflicting.ran.stderr, conflicting.ran.stderr
+    assert "holds the plan at" not in conflicting.ran.stdout, conflicting.ran.stdout
     assert located.ran.returncode == 0, located.ran.stdout + located.ran.stderr
     reported = located.ran.stdout
     assert f"plan-locations: {BOARD_SOURCE} holds the plan at https://github.com/" in reported, (
@@ -469,8 +479,12 @@ def test_the_plan_location_step_refuses_a_plan_it_cannot_point_a_reviewer_at(
     """No copy, a link to no copy of this plan on the board, and two copies: each refused.
 
     Each refusal names the plan, and none reports a location a reviewer would be sent to.
-    The dangling link is the one a copy since deleted from the board leaves behind.
+    The dangling link is the one a copy since deleted from the board leaves behind. The
+    plan is drafted in a source not declared private, because what tells a link left naming
+    somebody else's project, and a second copy, is the origin a copy out of such a source
+    carries.
     """
+    _drafted_in_a_public_source(monkeypatch)
     environment = _drafted(tmp_path, monkeypatch)
     with _serving_board() as remote:
         on_the_board = {**environment, **remote}

@@ -12,6 +12,7 @@
     "support-fake-backend",
     "support-fake-codex",
     "support-no-paid-provider",
+    "support-nx-workspace",
     "support-planner-channel",
     "support-project-fixtures",
     "support-short-state",
@@ -74,7 +75,14 @@
       "{workspaceRoot}/oneharness.judge.toml",
       "{workspaceRoot}/orchestrator/unfinished.py",
       "{workspaceRoot}/scripts/unfinished.sh",
-      "{workspaceRoot}/config/manager-allowlist.toml"
+      "{workspaceRoot}/config/manager-allowlist.toml",
+      "{workspaceRoot}/scripts/lock-timeout.sh",
+      "{workspaceRoot}/scripts/follow-up-draft.sh",
+      "{workspaceRoot}/scripts/dispatch-env-hook.sh",
+      "{workspaceRoot}/config/onepipeline.maintenance.yaml",
+      "{workspaceRoot}/scripts/require-provisioned.sh",
+      "{workspaceRoot}/templates/plan-description.md.j2",
+      "{workspaceRoot}/config/onepipeline.version"
     ]
   },
   "targets": {

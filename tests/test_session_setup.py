@@ -664,6 +664,24 @@ def test_provision_only_installs_the_checkouts_toolchain_and_nothing_about_the_h
     assert not (repo / "not-a-plan-root").exists()
 
 
+def test_setup_creates_the_tracked_private_local_roots_in_a_fresh_checkout(tmp_path: Path) -> None:
+    """The actual tracked document provisions both private drafting roots before any read."""
+    _write_bun(tmp_path / ".local" / "node" / "bin" / "bun")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "onetaskgraph.yaml").write_text(
+        (REPO_ROOT / "onetaskgraph.yaml").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    assert not (repo / ".plans").exists()
+    assert not (repo / ".follow-ups" / "runs").exists()
+
+    proc = _run_full_setup_without_bun(tmp_path, args=("--provision-only",))
+
+    assert proc.returncode == 0, proc.stderr
+    assert (repo / ".plans").is_dir()
+    assert (repo / ".follow-ups" / "runs").is_dir()
+
+
 def test_setup_fails_naming_a_configured_plan_root_it_cannot_create(tmp_path: Path) -> None:
     """A root the store will refuse every read for is a provisioning failure, said by name."""
     _write_bun(tmp_path / ".local" / "node" / "bin" / "bun")

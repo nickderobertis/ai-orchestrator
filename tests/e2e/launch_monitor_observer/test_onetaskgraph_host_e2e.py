@@ -902,8 +902,8 @@ def test_a_copy_paces_its_content_creating_mutations(tmp_path: Path) -> None:
         created = _creations(_GitHubFixture.requests)
 
     assert shipped.returncode == 0, shipped.stdout + shipped.stderr
-    assert len(as_shipped) >= 2, (
-        "a copy of one project and one task sends several content-creating mutations; "
+    assert len(as_shipped) >= 1, (
+        "a copy from private authoring creates an issue and attaches it to the board; "
         f"this sent {len(as_shipped) + 1}"
     )
     busiest = max(sum(1 for later in created if 0 <= later - at < 60) for at in created)
@@ -1039,7 +1039,15 @@ def test_a_member_copy_writes_the_named_member_and_leaves_the_rest_untouched(
     named_record = next((examples / "tasks").rglob(f"{NAMED_MEMBER}.md"))
     unnamed_before = unnamed_record.read_bytes()
 
-    _write_members_project(authoring, "second revision")
+    # Update through the store so the private source keeps the copy links it owns.
+    # Replacing its complete records would discard those links along with the old body.
+    for changed in (NAMED_MEMBER, UNNAMED_MEMBER):
+        body = tmp_path / f"{changed}-body.md"
+        body.write_text(f"## What\nThe {changed} member, second revision.\n", encoding="utf-8")
+        updated = _plans_json(
+            environment, "task", "update", f"{project}/{changed}", "--body-file", str(body)
+        )
+        assert updated.returncode == 0, updated.stdout + updated.stderr
     member = _plans_json(
         environment,
         *("project", "copy", project, "--to", EXAMPLES_SOURCE),
@@ -1330,6 +1338,9 @@ def test_metadata_and_origin_queries_and_copy_links_spare_the_board(tmp_path: Pa
     authoring.mkdir()
     examples.mkdir()
     environment = _plan_environment(authoring)
+    # Origin lookup is deliberately exercised from a public source: private copies
+    # omit origin records and are found through their source-side copy links instead.
+    environment["ONETASKGRAPH_SOURCES__AUTHORING__VISIBILITY"] = "public"
     environment[EXAMPLES_ROOT_ENV] = str(examples)
     write_plan_project(
         authoring,

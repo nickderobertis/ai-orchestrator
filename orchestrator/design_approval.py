@@ -1362,9 +1362,17 @@ def validate_content(answers: object) -> None:
 
 
 def validate_document_content(document: StoreDocument) -> None:
-    """Read answers at their origin; copies without stored answers keep their provenance path."""
+    """Read answers at their origin; copies without stored answers keep their provenance path.
+
+    A copy is told by the `onetaskgraph.origin` it carries, or — copied out of the private
+    source plans are drafted in, which stamps none — by that source's own link naming it.
+    """
     origin = document.metadata.get(plan_store.ORIGIN_KEY)
     if isinstance(origin, str) and QUALIFIED.fullmatch(origin):
         return
+    if document.project is not None:
+        source = str(document.qualified_id).partition(":")[0]
+        if str(document.qualified_id) in spike_plan.drafted_ids(f"{source}:{document.project}"):
+            return
     answers = plan_store.sdk(plan_store.client().document_answers(str(document.qualified_id)))
     validate_content(answers.model_dump())

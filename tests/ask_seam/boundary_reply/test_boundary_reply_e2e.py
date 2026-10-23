@@ -18,6 +18,13 @@ joined by an export edge, behind a human gate nobody attests, so nothing is disp
 reply is the run's single writer. Only the paid model is stood in, at the provider boundary,
 exactly as `tests/ask_seam/channel_reply/test_channel_reply_e2e.py` stands it in.
 
+This one journey uses a checkout-local plan-store configuration with write screening off.
+The screened store currently classifies every member of a private project as private, so
+its public export consumer cannot launch. The engine's reply boundary derives its terms
+from private nodes in the plan; a public-only plan cannot exercise these refusals. Moving
+this mixed journey onto the screened configuration belongs to the separate export plan.
+No tracked configuration is changed by this fixture.
+
 llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] This *is* the edge: the
 journey spends a real launch and is behind its own Nx project, keyed on `askSeamBoundaryReply`
 and selected by directory, as `tests/ask_seam/AGENTS.md` states for every journey here.
@@ -30,6 +37,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -37,12 +45,16 @@ from typing import Any, NamedTuple, cast
 
 import pytest
 import short_state
+import yaml
+from nx_workspace import share_this_checkouts_install
 from planner_channel import BUS_CONFIG
-from project_fixtures import helper, project_from_plan, register_stand_in
+from project_fixtures import helper, register_stand_in
 from waits import deadline
 from waits import timeout as e2e_timeout
 
-from orchestrator.root import REPO_ROOT
+from orchestrator.root import REPO_ROOT as TRACKED_ROOT
+
+REPO_ROOT = TRACKED_ROOT
 
 FAKE_BACKEND = helper("fake_backend.py")
 FAKE_CODEX = helper("fake_codex.py")
@@ -95,8 +107,9 @@ CONSUMER = "page-by-cursor"
 #: What `just channel-reply` exits with for every refusal.
 REPLY_REFUSED = 2
 
+
 #: The run ids this suite's worker owns.
-SUITE = hashlib.sha256(f"{REPO_ROOT}\0{os.getpid()}".encode()).hexdigest()[:8]
+SUITE = hashlib.sha256(f"{TRACKED_ROOT}\0{os.getpid()}".encode()).hexdigest()[:8]
 
 #: The note and the amendment, each sent once carrying the private term and once without.
 NOTE = "Follow the plain cursor layout{term} when you page the listing."
@@ -178,7 +191,48 @@ def mixed(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Mixed]:
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
     tmp_path = tmp_path_factory.mktemp("boundary-reply")
-    environment = _environment(tmp_path)
+    # The manager keeps this reply-seam journey on its original mixed plan until the
+    # separate export plan makes that shape representable in a screened store.
+    global REPO_ROOT  # noqa: PLW0603 - this module's recipe checkout, owned by its fixture
+    REPO_ROOT = tmp_path / "checkout"
+    REPO_ROOT.mkdir()
+    # Copy only this journey's declared runtime inputs, including the package modules
+    # its support units carry. This is a sparse checkout, not a whole-tree copy.
+    pending = [TRACKED_ROOT / "tests/ask_seam/boundary_reply/project.json"]
+    visited: set[Path] = set()
+    while pending:
+        declaration = pending.pop()
+        if declaration in visited:
+            continue
+        visited.add(declaration)
+        project = json.loads(declaration.read_text(encoding="utf-8"))
+        for dependency in project.get("implicitDependencies", []):
+            pending.append(
+                TRACKED_ROOT
+                / "tests/support"
+                / dependency.removeprefix("support-").replace("-", "_")
+                / "project.json"
+            )
+        for inputs in project["namedInputs"].values():
+            for named in inputs:
+                relative = named.replace("{workspaceRoot}/", "").replace(
+                    "{projectRoot}/", str(declaration.parent.relative_to(TRACKED_ROOT)) + "/"
+                )
+                if relative.startswith("tests/"):
+                    continue
+                original = TRACKED_ROOT / relative
+                if original.is_file():
+                    target = REPO_ROOT / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(original, target)
+    install = share_this_checkouts_install(REPO_ROOT)
+    document = REPO_ROOT / "onetaskgraph.yaml"
+    configuration = yaml.safe_load(document.read_text(encoding="utf-8"))
+    del configuration["write_policy"]
+    for source in configuration["sources"].values():
+        source.pop("visibility", None)
+    document.write_text(yaml.safe_dump(configuration), encoding="utf-8")
+    environment = {**_environment(tmp_path), **install}
     run = f"boundary-reply-{SUITE}"
     plan = tmp_path / f"{run}.plan.json"
     plan.write_text(
@@ -219,9 +273,31 @@ def mixed(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Mixed]:
         ),
         encoding="utf-8",
     )
+    # Author through the same unscreened store too: private-source writes persist
+    # classification on the project, which would otherwise survive this local config.
+    environment["PYTHONPATH"] = os.pathsep.join(
+        [str(REPO_ROOT), str(TRACKED_ROOT / "tests"), str(TRACKED_ROOT / "tests/e2e")]
+    )
+    authored = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from project_fixtures import project_from_plan; import pathlib, sys; "
+            "print(project_from_plan(pathlib.Path(sys.argv[1])))",
+            str(plan),
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+    assert authored.returncode == 0, authored.stdout + authored.stderr
+    qualified = authored.stdout.strip()
     launch = _just(
         "orchestrate",
-        project_from_plan(plan),
+        qualified,
         "--dag-graph",
         "off",
         "--success-hook=",

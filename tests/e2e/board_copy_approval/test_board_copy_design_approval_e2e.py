@@ -278,6 +278,18 @@ def _launch_gate(environment: Mapping[str, str], project: str) -> subprocess.Com
     )
 
 
+#: The store's environment-layer name for the drafting source's declared visibility. The
+#: tracked document declares `authoring` private, and a copy out of a private source carries no
+#: `onetaskgraph.origin`; a journey about a copy that does — out of a source not declared
+#: private, or made by an earlier store — states it public, in this process and every one it
+#: starts.
+AUTHORING_VISIBILITY_ENV = f"ONETASKGRAPH_SOURCES__{AUTHORING_SOURCE.upper()}__VISIBILITY"
+
+
+def _drafted_in_a_public_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(AUTHORING_VISIBILITY_ENV, "public")
+
+
 def _issue_titled(title: str) -> _Issue:
     (issue,) = [one for one in BOARD.issues_created_and_kept() if one.title == title]
     return issue
@@ -297,15 +309,19 @@ def _on_the_board(monkeypatch: pytest.MonkeyPatch, remote: Mapping[str, str]) ->
 # for the reason the block around `_Board` gives — driving it writes to the live board this
 # repository plans on — and the paid model `reviewed` scripts is the other; the recipes, the
 # pinned engine and plan store, and the records they write are all real.
+@pytest.mark.parametrize("private", [True, False], ids=["authoring-private", "authoring-public"])
 def test_a_design_document_copied_onto_the_board_is_approved_there_and_launchable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, private: bool
 ) -> None:
     """`just copy-plan` then `just approve-design` on the board copy, and the gate accepts it.
 
-    The copy's content names the task's board issue URL where the authoring copy named its
-    location, so the board copy is not the bytes the writer rendered — and the adopted store
-    records the digest of what it wrote, which is what lets the approval be recorded there.
+    The copy names the task's board issue URL where the authoring copy named its location,
+    and the adopted store records the digest of what it wrote so approval can be recorded
+    there. A private source's copy omits the origin; the drafting source's own link still
+    identifies it for approval and the launch gate.
     """
+    if not private:
+        _drafted_in_a_public_source(monkeypatch)
     environment, located, _ = _drafted_for_the_board(tmp_path, monkeypatch)
     with _serving_board() as remote:
         on_the_board = {**environment, **remote}
@@ -322,6 +338,8 @@ def test_a_design_document_copied_onto_the_board_is_approved_there_and_launchabl
         recorded = design_approval.recorded(design_approval.design_document(board_project))
 
     assert str(document.qualified_id) == destinations[DESIGN], (document, destinations)
+    if private:
+        assert plan_store.ORIGIN_KEY not in document.metadata, document.metadata
     assert issue_url in document.content, (
         f"the board copy has to name the first task's board issue {issue_url} where the "
         f"authoring copy named its location:\n{document.content}"
@@ -361,8 +379,10 @@ def test_a_board_copy_carrying_an_earlier_stores_stale_digest_is_refused_naming_
     What an earlier plan store left on the board: references rewritten, digest naming the
     authoring rendering. `just approve-design` exits non-zero naming that cause and the
     `just copy-plan` that re-records it beside the regenerate for a hand edit, and nothing
-    is recorded on the copy.
+    is recorded on the copy. Every such store stamped its copies' origin, so the plan is
+    drafted in a source not declared private, as every source was then.
     """
+    _drafted_in_a_public_source(monkeypatch)
     environment, _, _ = _drafted_for_the_board(tmp_path, monkeypatch)
     authored = plan_store.read_documents(RENDERED_QUALIFIED)[0]
     stale = authored.metadata[PROVENANCE]

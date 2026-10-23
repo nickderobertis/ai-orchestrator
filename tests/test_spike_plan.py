@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Mapping
+from pathlib import Path
 
 import pytest
 
@@ -668,3 +669,25 @@ def test_selection_returns_the_actual_held_copy_and_refuses_ambiguity(
         spike_plan.current_visual_report(
             PROJECT, [dataclasses.replace(report, metadata={plan_store.ORIGIN_KEY: selected})]
         )
+
+
+def test_a_copys_plan_may_have_been_drafted_in_every_default_source_declared_private() -> None:
+    """The tracked configuration's private default sources, `authoring` first, and no other."""
+    assert spike_plan.drafting_sources() == (spike_plan.AUTHORING, "test-fixtures")
+
+
+def test_a_drafting_side_the_store_cannot_resolve_links_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A store whose configuration cannot be read answers no drafted project, never a refusal.
+
+    The real store, under a user layer of this test's own that is not valid YAML.
+    """
+    layer = tmp_path / "onetaskgraph" / "config.yaml"
+    layer.parent.mkdir()
+    layer.write_text("sources: [unclosed\n", encoding="utf-8")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    with pytest.raises(OSError, match="not valid YAML"):
+        plan_store.configured_settings()
+    assert spike_plan.drafted_project("plans:I_created_0") is None
+    assert spike_plan.plan_native("plans:I_created_0") == "I_created_0"

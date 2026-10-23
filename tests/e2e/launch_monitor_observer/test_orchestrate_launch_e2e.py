@@ -455,7 +455,9 @@ def _environment(
     environment.pop(command_name, None)
     environment[root_name] = str(tmp_path / "follow-ups")
     environment[plugin_name] = WRITABLE_PLUGIN
-    environment[plan_root_variable.name()] = str(tmp_path / "plans")
+    authoring = tmp_path / "plans"
+    authoring.mkdir(parents=True, exist_ok=True)
+    environment[plan_root_variable.name()] = str(authoring)
     # The identity `scripts/onepipeline.sh` derives, stated as the ambient harness
     # variable a real planner session would carry rather than as the derived value:
     # the derivation is what this journey holds.

@@ -599,10 +599,15 @@ host declares, never by choice** — in onetaskgraph's user layer, outside every
 so no tracked file names the organization or where its work goes (`docs/orchestration.md`,
 *Host-local sources and routes*). A follow-up ticket whose repositories all match such a
 route is filed there; read where one lands with `just plans sources route plans --repository
-<origin>`. Where a plan's home lands is the store's to decide from the repositories its
-tasks and its project name (`docs/orchestration.md`, *The public write boundary*), never yours:
-approve and launch the home id `just finish-plan` reports, wherever it landed, and a plan meant
-to keep its home on `plans` names a public repository. On a routed Linear tracker a plan
+<origin>`. **The store's public boundary is on**: every write to a source not declared private
+is screened, plans are drafted in the private `authoring` source, and **a host doing an
+organization's work declares that organization's sources `visibility: private` in its user
+layer before it adopts this change**, since an undeclared tracker refuses every task routed
+to it. Where a plan's home lands is the store's to decide from the repositories its tasks and
+its project name (`docs/orchestration.md`, *The public write boundary*), never yours — a plan
+touching an organization's work homes in that organization's tracker: approve and launch the
+home id `just finish-plan` reports, wherever it landed, and a plan meant to keep its home on
+`plans` names a public repository. On a routed Linear tracker a plan
 task reads Todo once copied, Queued once a run claims it, In Progress while its node works, Needs Attention when that node
 failed, parked or was skipped, and Done once it settled; Proposed, Backlog and Canceled are
 proposed, deferred and withdrawn. The member project reads Planned once copied,
