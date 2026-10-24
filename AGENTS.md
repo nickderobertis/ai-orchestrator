@@ -370,11 +370,12 @@ What each tool is *for here*. How to use it is the tool's own to say — in
   read API it reads on one origin, so nothing here serves or proxies a bundle (`just
   telemetry-server` is the same command without the view). A live and historical view
   of orchestrated DAG execution that
-  also **supervises** it — stopping, adopting, replying to and shutting down runs, each
-  behind the engine's own authority and the acting session the server runs as — by
-  wrapping every post-launch verb as a route, and carrying its own copy of the engine. An adopt from the browser retains that binary as the driver, so
-  **this pin can govern a dispatch**, and the two pins are held to linking one engine by
-  `tests/test_linked_libraries.py` rather than by anyone remembering to read `/healthz`.
+  also **supervises** it — stopping, replying to and attesting on runs and shutting down
+  the host, each behind the engine's own authority and the acting session the server runs
+  as — by wrapping those post-launch verbs as routes, and carrying its own copy of the
+  engine. It watches and adopts no run, so **this pin governs no dispatch**, and the two
+  pins are still held to linking one engine by `tests/test_linked_libraries.py` rather than
+  by anyone remembering to read `/healthz`.
   Governed by
   `config/onepipeline-ui.version`. Its CLI is
   `onepipeline-api`: `onepipeline-api --help`;
@@ -446,10 +447,9 @@ the order holds as long as `config/onepipeline.version` is not moved first onto 
 engine over an older CLI pin. `config/onetaskgraph.version` is reconciled as a family:
 the engine links the `onetaskgraph-*` crates one workspace version releases beside the
 CLI, so the pin must name the one release they resolve. The read API
-(`config/onepipeline-ui.version`) statically links its own engine, and governs no
-dispatch **except one adopted from the browser**, which its own binary then drives — so
-`tests/test_linked_libraries.py` holds the two pins to one engine rather than letting
-this one sit either side. And
+(`config/onepipeline-ui.version`) statically links its own engine and governs no
+dispatch, since the browser adopts no run — `tests/test_linked_libraries.py` still holds
+the two pins to one engine, so the reader reads the records the dispatching engine wrote. And
 a fix that lands as CI configuration, scripts, or a dev-only crate is in force by
 merging, in that repository's build graph, with no pin here to move: `git tag
 --contains` says the release carries the commit while the archive carries nothing of
@@ -882,9 +882,10 @@ its text only**; its criterion is not carried, so read `carried` as "the judge h
 seen this".
 `withdraw-note` takes back a live note no turn has taken or a carried one not yet
 composed into a dispatch; one already taken, answered or composed cannot be withdrawn.
-A note holds back only envelopes naming its own node, so other nodes' notes, commands and
-findings proceed, and `just status` says of an unanswered one whether it is delivering,
-held behind another note to its node, or left for the run's next driver.
+A reply is answered as soon as its notes are queued in their receivers' inboxes — each
+note `queued`, an answer what a turn later makes of it never rewrites — and only a later
+note to the same receiver waits behind one; `just status` names each note still in an
+inbox, and an envelope left with no outcome is the run's next driver's to answer.
 `tests/e2e/launch_monitor_observer/test_live_note_interrupts_a_controlled_turn_e2e.py`,
 `tests/e2e/launch_monitor_observer/test_live_note_leaves_the_run_journalling_e2e.py` and
 `tests/ask_seam/channel_reply/test_channel_reply_e2e.py` drive all of it.
@@ -1574,11 +1575,11 @@ through its typed SDK. Discovery: `onejudge --help`, `oneharness --help`, and
 **A role file may name a parent, and every reader here resolves it.** `extends =
 "<path>"` resolves against the directory the declaring file sits in: the CLI pin reads it
 in the four configs it loads, the engine pin links the core that resolves a dispatched
-member's config, and the read API's own copy of that engine does the same for a run
-adopted from the browser. A parent that cannot be read settles the node
+member's config, and the read API, which adopts no run, dispatches none. A parent that
+cannot be read settles the node
 `infrastructure-failure` naming both files, before anything is dispatched.
-`tests/e2e/launch_monitor_observer/test_extends_chain_dispatch_e2e.py` drives a chain down both dispatch roads
-and the CLI's own, and holds that refusal down each dispatch road.
+`tests/e2e/launch_monitor_observer/test_extends_chain_dispatch_e2e.py` drives a chain down the dispatch road
+and the CLI's own, holds that refusal down the dispatch road, and holds that the read API adopts nothing.
 
 **So the identities are stated once and a role file is short.** Two shared parents at
 the root carry them and nothing runs against either: `oneharness.identities.toml` holds

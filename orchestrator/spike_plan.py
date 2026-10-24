@@ -584,6 +584,10 @@ def current_visual_report(
     drafted = _drafted_for(project, documents)
     metadata = (plan_store.project_record(project) if record is None else record).get("metadata")
     if not isinstance(metadata, Mapping) or VISUAL_REPORT_KEY not in metadata:
+        # A project holding no spike report has no visual one under any name, so the drafted
+        # plan's native id — a listing of the authoring source — is not worth asking for.
+        if not any(design_approval.is_spike_report(held) for held in documents):
+            return None
         return visual_report(plan_native(project), documents, drafted)
     selected = metadata[VISUAL_REPORT_KEY]
     reason: str | None

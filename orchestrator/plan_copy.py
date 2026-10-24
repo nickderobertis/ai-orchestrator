@@ -374,9 +374,16 @@ class CopyOptions(TypedDict, total=False):
 #: check's term scope, which no copy this host makes has a reason to narrow; `comments`, because
 #: a plan's tasks are authored in the `authoring` source, which holds no comments to carry; and
 #: `no_link`, because the link a copy records is what lets a re-copy update the same issue and
-#: board item rather than file a second. Named rather than left out of the reconciliation, so a
-#: parameter the SDK adds later still fails it by name.
-UNEXPOSED: frozenset[str] = frozenset({"comments", "no_link", "term_scope"})
+#: board item rather than file a second; and `members_only`, because this recipe copies a
+#: whole plan, project record included, and a copy of named members into a project already on
+#: the destination is the engine's write-back to make, not a manager's; and `status_policy`,
+#: because a plan's re-copy carries the status it was authored at, the store's default, and
+#: the status a run moves a board item to is the engine's settlement projection, not a copy's.
+#: Named rather than left out of the reconciliation, so a parameter the SDK adds later still
+#: fails it by name.
+UNEXPOSED: frozenset[str] = frozenset(
+    {"comments", "members_only", "no_link", "status_policy", "term_scope"}
+)
 
 
 def _copy_options(arguments: Sequence[str]) -> CopyOptions:

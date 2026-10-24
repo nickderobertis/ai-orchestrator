@@ -9,6 +9,7 @@
   ],
   "implicitDependencies": [
     "support-boundary-home",
+    "support-budget-telemetry",
     "support-conftest",
     "support-fake-codex",
     "support-follow-up-variables",
@@ -78,7 +79,23 @@
   },
   "targets": {
     "test": {
-      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/e2e/board_copy_approval --no-cov -n 4 --dist loadgroup",
+      "command": "rm -rf .telemetry/board-copy-approval/test && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/board-copy-approval/test NO_COLOR=1 uv run pytest tests/e2e/board_copy_approval --deselect tests/e2e/board_copy_approval/test_board_copy_at_scale_e2e.py::test_approving_a_plan_at_the_plans_boards_scale_records_the_time_a_person_waits --no-cov -n 4 --dist loadgroup",
+      "options": {
+        "cwd": "."
+      },
+      "outputs": [
+        "{workspaceRoot}/.telemetry/board-copy-approval/test"
+      ],
+      "inputs": [
+        "boardCopyApprovalWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ]
+    },
+    "test-host": {
+      "command": "rm -rf .telemetry/board-copy-approval/test-host && env -u FORCE_COLOR BUDGET_TELEMETRY_DIR=.telemetry/board-copy-approval/test-host NO_COLOR=1 uv run pytest tests/e2e/board_copy_approval/test_board_copy_at_scale_e2e.py::test_approving_a_plan_at_the_plans_boards_scale_records_the_time_a_person_waits --no-cov -n 4 --dist loadgroup",
       "options": {
         "cwd": "."
       },
@@ -88,7 +105,48 @@
           "input": "testSupport",
           "dependencies": true
         }
+      ],
+      "cache": false,
+      "outputs": [
+        "{workspaceRoot}/.telemetry/board-copy-approval/test-host"
       ]
+    },
+    "budgets": {
+      "dependsOn": [
+        "test"
+      ],
+      "options": {
+        "cwd": ".",
+        "env": {
+          "BUDGET_TELEMETRY_SOURCES": ".telemetry/board-copy-approval/test"
+        }
+      },
+      "inputs": [
+        "{projectRoot}/budgets.yaml",
+        "{workspaceRoot}/config/onebudgetspec.version",
+        "{workspaceRoot}/scripts/budgets.sh",
+        {
+          "input": "testSupport",
+          "projects": [
+            "support-budget-telemetry"
+          ]
+        },
+        {
+          "dependentTasksOutputFiles": "**/*.json"
+        }
+      ]
+    },
+    "budgets-host": {
+      "//": "llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The task labels plan-approval-seconds host and forbids a cache-restored wall clock, and just check runs every host budget whatever the diff, so the fresh measurement this edge pulls in (the test-host approval journey at the plans board's scale, about a minute) runs on every check. A drafted follow-up decides whether host budgets join the diff selection, which would put this journey behind the project's own edge and delete this directive.",
+      "dependsOn": [
+        "test-host"
+      ],
+      "options": {
+        "cwd": ".",
+        "env": {
+          "BUDGET_TELEMETRY_SOURCES": ".telemetry/board-copy-approval/test-host"
+        }
+      }
     }
   }
 }

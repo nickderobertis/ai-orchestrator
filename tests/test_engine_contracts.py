@@ -3239,6 +3239,7 @@ _SETTLEMENT_KEY_SOURCES = (
     ("taskgraph.rs", "LANDING_COMMIT_KEY"),
     ("taskgraph.rs", "CHANGE_URL_KEY"),
     ("taskgraph.rs", "LANDING_EVIDENCE_KEY"),
+    ("taskgraph.rs", "PROJECTED_STATUS_KEY"),
 )
 
 

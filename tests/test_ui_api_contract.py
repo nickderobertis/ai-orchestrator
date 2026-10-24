@@ -1,8 +1,9 @@
 """What `docs/dag-ui.md` says the DAG Observatory can do, against the reader's own contract.
 
 `docs/dag-ui.md` lists the browser's supervising surface — the channel and its reply
-composer, `attest`, `stop`, `adopt`, a held `watch`, the unwatched badge, the rendered
-reads, the project list and the agents panel — and the refusal a stranger's stop meets.
+composer, `attest`, `stop`, the host's shutdown, the Host page's unwatched report, the
+rendered reads, the project list and the agents panel — and the refusal a stranger's
+stop meets.
 Every one of those is `onepipeline-ui`'s: this repository builds none of the view and
 none of the API, and the list is a copy of a contract somebody else versions. A copy of
 a route list is exactly what goes stale in silence, because a route the reader dropped
@@ -56,9 +57,7 @@ CAPABILITIES = (
     Capability("reply composer", "/channel/reply"),
     Capability("`attest`", "/api/v2/runs/{run}/attest"),
     Capability("`stop`", "/api/v2/runs/{run}/stop"),
-    Capability("`adopt`", "/api/v2/runs/{run}/adopt"),
-    Capability("`watch`", "/api/v2/runs/{run}/watch"),
-    Capability("the unwatched badge", "/api/v2/unwatched"),
+    Capability("the unwatched route", "/api/v2/unwatched"),
     Capability("`status`", "/api/v2/runs/{run}/status"),
     Capability("`results`", "/api/v2/runs/{run}/results"),
     Capability("`goals`", "/api/v2/goals"),
@@ -68,8 +67,6 @@ CAPABILITIES = (
     Capability("landing project list", "/api/v2/projects"),
     Capability("per-project", "/api/v2/projects/{project}"),
     Capability("**Agents**", "/api/v2/runs/{run}/agents"),
-    Capability("**Shut down this run**", "/api/v2/runs/{run}/shutdown"),
-    Capability("**Shut down all my runs**", " /api/v2/shutdown "),
     Capability("**Shut down the entire host**", " /api/v2/shutdown "),
 )
 
@@ -159,28 +156,39 @@ def test_the_refusal_the_page_describes_is_the_one_the_contract_promises() -> No
 
 
 def test_the_shutdown_the_page_describes_is_the_one_the_contract_promises() -> None:
-    """The scopes, the grace and force defaults, and the report, as the release words them.
+    """The host scope alone, the grace and force defaults, and the report, as the release
+    words them.
 
     `docs/dag-ui.md` tells an operator what a shutdown from the browser will act on and
     with what defaults, and every one of those is the reader's to change: a release that
-    moved the default grace, made force the default, or answered an incomplete shutdown
-    as an error would leave the page promising a dialog the view no longer shows.
+    restored a narrower scope, made force the default, or answered an incomplete shutdown
+    as an error would leave the page promising a control the view no longer offers.
     """
     document = " ".join(_source(UI_API, CONTRACT).split())
+    # The view's own page, which states what its dialog defaults to and names.
+    view = " ".join(_source(UI_API, "dag-ui.md").split())
     page = _page()
 
-    for promise, why in (
-        ('`{scope: "mine"|"host", grace?: seconds, force?: false}`', "the two listing scopes"),
-        ("(600, ten minutes)", "the engine's ten-minute default grace"),
-        ("`force` does not lift it", "that force never lifts the ownership refusal"),
-        ("`host` proceeds over ownership and names each run's owner", "the host scope"),
-        ("answers `200` with that report", "an incomplete shutdown still answering its report"),
-        ("**`session_key`**", "the key the confirm dialog tells this session's runs apart by"),
+    for promise, why, source in (
+        ('`{scope: "host", grace?: seconds, force?: false}`', "the host scope alone", document),
+        ("`400 removed_shutdown_scope`", "the refusal of every other scope", document),
+        ("Host scope proceeds over ownership", "the host scope acting over owners", document),
+        ("still answers `200` with its report", "an incomplete shutdown's report", document),
+        ("optional `session_key`", "the key the Host page reads", document),
+        ("The grace defaults to ten minutes", "the dialog's default grace", view),
+        ("Force defaults off", "force never the default", view),
+        ("reading the listing to its end", "the dialog naming every run it acts on", view),
     ):
-        assert promise in document, (
+        assert promise in source, (
             f"{UI_API.crate} {UI_API.ref} no longer states {promise!r} — {why} — and "
             "docs/dag-ui.md describes the browser's shutdown on it"
         )
-    for claim in ("ten minutes", "never the default", "other sessions own", "`session_key`"):
+    for claim in (
+        "ten minutes",
+        "never the default",
+        "other sessions own",
+        "`session_key`",
+        "`400 removed_shutdown_scope`",
+    ):
         assert claim in page, f"docs/dag-ui.md no longer says {claim!r} about the shutdown"
     assert "**Shutdown incomplete**" in page, "docs/dag-ui.md no longer names the incomplete report"

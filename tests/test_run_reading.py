@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import io
 import json
-from typing import NamedTuple
+from typing import Any, NamedTuple, cast
 
 import jsonschema
 import pytest
@@ -23,8 +23,11 @@ RUN = RunId("run-1")
 
 #: A reading of `RUN` the engine would print for a run that ended `failed`.
 ENDED = {
-    "schema_version": 1,
+    "labels": {"onepipeline.project": "plans:1"},
+    "group": "plans:1",
+    "schema_version": 2,
     "run_id": RUN,
+    "public_id": "run-0123456789ab",
     "word": "ENDED failed",
     "liveness": "DRIVER DEAD",
     "driven": False,
@@ -77,10 +80,26 @@ def _read(reading: object) -> run_reading.Decided:
                         "delivery": {"state": "delivering", "node": "a", "since": "x"},
                     },
                     {"envelope": "9", "delivery": None},
-                ]
+                ],
+                "inbox": [
+                    {
+                        "envelope": "10",
+                        "delivery": {"state": "queued", "node": "a", "since": "x"},
+                    },
+                    {
+                        "envelope": "11",
+                        "delivery": {
+                            "state": "queued",
+                            "node": "a",
+                            "since": "x",
+                            "deadline": None,
+                        },
+                    },
+                ],
             },
             "driven ACTIVE",
         ),
+        (CRASHED | {"group": None, "labels": {}}, "crashed DRIVER DEAD"),
     ],
     ids=[
         "failed",
@@ -90,7 +109,8 @@ def _read(reading: object) -> run_reading.Decided:
         "paused",
         "surface-only",
         "crashed",
-        "driven-with-unanswered-envelopes",
+        "driven-with-unanswered-envelopes-and-an-inbox",
+        "ungrouped",
     ],
 )
 def test_each_reading_the_engine_gives_is_decided(reading: object, line: str) -> None:
@@ -103,7 +123,79 @@ def test_each_reading_the_engine_gives_is_decided(reading: object, line: str) ->
         ("", "the answer is not one JSON document"),
         ("[]", "the reading does not carry exactly"),
         (json.dumps(ENDED | {"extra": 1}), "the reading does not carry exactly"),
-        (json.dumps(ENDED | {"schema_version": 2}), "it is schema 2, not 1"),
+        (json.dumps(ENDED | {"schema_version": 1}), "it is schema 1, not 2"),
+        (json.dumps(ENDED | {"labels": {"a": 1}}), "its labels are not an object of strings"),
+        (json.dumps(ENDED | {"labels": []}), "its labels are not an object of strings"),
+        (json.dumps(ENDED | {"group": 3}), "its group is neither a string nor null"),
+        (json.dumps(ENDED | {"public_id": None}), "its public id is not a string"),
+        (json.dumps(DRIVEN | {"inbox": {}}), "its inbox is not a list"),
+        (
+            json.dumps(DRIVEN | {"inbox": [{"envelope": "7"}]}),
+            "a note in its inbox does not carry exactly delivery, envelope",
+        ),
+        (
+            json.dumps(
+                DRIVEN
+                | {
+                    "inbox": [
+                        {"envelope": 7, "delivery": {"state": "queued", "node": "a", "since": "x"}}
+                    ]
+                }
+            ),
+            "a note in its inbox has an envelope id that is not a string",
+        ),
+        (
+            json.dumps(DRIVEN | {"inbox": [{"envelope": "7", "delivery": "queued"}]}),
+            "a note in its inbox's delivery does not carry exactly node, since, state",
+        ),
+        (
+            json.dumps(DRIVEN | {"inbox": [{"envelope": "7", "delivery": {}}]}),
+            "a note in its inbox's delivery does not carry exactly node, since, state",
+        ),
+        (
+            json.dumps(
+                DRIVEN
+                | {
+                    "inbox": [
+                        {
+                            "envelope": "7",
+                            "delivery": {"state": "delivering", "node": "a", "since": "x"},
+                        }
+                    ]
+                }
+            ),
+            'a note in its inbox is "delivering", not queued',
+        ),
+        (
+            json.dumps(
+                DRIVEN
+                | {
+                    "inbox": [
+                        {"envelope": "7", "delivery": {"state": "queued", "node": 1, "since": "x"}}
+                    ]
+                }
+            ),
+            "a note in its inbox names its node or its time as no string",
+        ),
+        (
+            json.dumps(
+                DRIVEN
+                | {
+                    "inbox": [
+                        {
+                            "envelope": "7",
+                            "delivery": {
+                                "state": "queued",
+                                "node": "a",
+                                "since": "x",
+                                "deadline": 5,
+                            },
+                        }
+                    ]
+                }
+            ),
+            "a note in its inbox has a deadline that is not a string",
+        ),
         (json.dumps(DRIVEN | {"unanswered": {}}), "its unanswered envelopes are not a list"),
         (
             json.dumps(DRIVEN | {"unanswered": [{"delivery": None}]}),
@@ -117,7 +209,7 @@ def test_each_reading_the_engine_gives_is_decided(reading: object, line: str) ->
             json.dumps(DRIVEN | {"unanswered": [{"envelope": "7", "delivery": "held"}]}),
             "an unanswered envelope's delivery is not an object",
         ),
-        (json.dumps(ENDED | {"schema_version": True}), "it is schema true, not 1"),
+        (json.dumps(ENDED | {"schema_version": True}), "it is schema true, not 2"),
         (json.dumps(ENDED | {"run_id": "run-2"}), 'it reads run "run-2", not run-1'),
         (json.dumps(ENDED | {"word": ["SETTLED"]}), 'its word is ["SETTLED"], which'),
         (json.dumps(ENDED | {"liveness": "GONE"}), 'its liveness is "GONE", which'),
@@ -285,6 +377,8 @@ def _types(field: dict[str, object]) -> frozenset[str]:
         case {"type": "array", "items": dict(items)}:
             (item,) = _types(items)
             return frozenset({f"array[{item}]"})
+        case {"type": "object", "additionalProperties": {"type": "string"}}:
+            return frozenset({"object"})
         case {"type": str(declared)}:
             return frozenset({declared})
         case {"type": list(declared)}:
@@ -305,6 +399,26 @@ def test_the_field_types_the_reader_checks_are_the_published_schemas() -> None:
         assert isinstance(properties, dict)
         published = {field: _types(declared) for field, declared in properties.items()}
         assert published == fields, name
+
+
+@pytest.mark.reads_checkouts
+def test_the_inbox_delivery_the_reader_checks_is_the_published_schemas() -> None:
+    """A note in an inbox has the one state, the fields and the optional deadline published.
+
+    `InboxDelivery` is a `oneOf` of exactly one variant, so the reader's restatement of it —
+    its state, its required fields and its one optional field — is held to that variant.
+    """
+    (variant,) = cast(list[dict[str, Any]], _definition(_schema(), "InboxDelivery")["oneOf"])
+    properties = cast(dict[str, Any], variant["properties"])
+
+    assert properties["state"]["const"] == run_reading.INBOX_STATE
+    assert frozenset(variant["required"]) == run_reading.INBOX_DELIVERY_FIELDS
+    assert frozenset(properties) - frozenset(variant["required"]) == (
+        run_reading.INBOX_DELIVERY_OPTIONAL
+    )
+    for field in ("node", "since"):
+        assert properties[field]["type"] == "string", field
+    assert frozenset(properties["deadline"]["type"]) == {"string", "null"}
 
 
 @pytest.mark.reads_checkouts

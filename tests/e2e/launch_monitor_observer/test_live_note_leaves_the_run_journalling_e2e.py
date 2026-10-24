@@ -373,16 +373,18 @@ def test_the_note_is_delivered_when_the_turn_ends_and_then_shown(journey: Journe
     assert operations[0]["text"] == NOTE, payload
     assert operations[0]["reached"] == "worker", payload
     # A live note to a turn that cannot be interrupted is recorded as reaching its end,
-    # never as interrupting it, and the reply's own outcome on the channel says the same.
+    # never as interrupting it.
     assert operations[0]["turn"] == "turn-end", payload
-    # The busy turn can outlast the reply's own wait, which then returns `queued`; either
-    # way the channel's outcome for the id the receipt names is the decision.
+    # The reply is answered as soon as the note is queued in the worker's inbox, however
+    # long the busy turn runs on, and that answer is never rewritten by what the turn makes
+    # of the note: the channel's outcome for the id the receipt names says `queued`.
     receipt = json.loads(journey.sent.stdout)
-    assert receipt["state"] in {"applied", "queued"}, receipt
+    assert receipt["state"] == "applied", receipt
+    assert receipt.get("notes") == {NODE_ID: "queued"}, receipt
     assert journey.outcome["id"] == receipt["reply"], (journey.outcome, receipt)
     results = cast(list[dict[str, object]], journey.outcome["results"])
     assert [(result["op"], result["outcome"], result.get("turn")) for result in results] == [
-        ("note", "applied", "turn-end")
+        ("note", "queued", None)
     ], journey.outcome
 
     shown = next(

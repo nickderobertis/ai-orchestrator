@@ -1,0 +1,41 @@
+# The board-copy-approval project's budgets: what approving a plan's board copy costs, through
+# the real `just approve-design` recipe against the loopback board double holding 2,000 items.
+# `plan-approval-points` is checked by the cached `budgets` target, reading what the `test`
+# target recorded. It is labelled `accepted-overrun`, so over it warns rather than fails
+# (`scripts/budgets.sh`), for the reason the comment beside its label gives.
+# `plan-approval-seconds` is labelled `host`, so the uncached `budgets-host` target checks it on every check, reading what its uncached
+# `test-host` target measured in the same run: a wall clock a cache replayed would be
+# another moment's. It is also labelled `host-variable`, so over it warns rather than fails:
+# this repository has no CI, and a time target is a gate only where measurement is
+# consistent (`scripts/budgets-host.sh`). The command is the one analysis every budget runs
+# (`tests/budget_telemetry.py`).
+schema_version: 1
+budgets:
+  - id: plan-approval-points
+    description: >-
+      Modelled GitHub GraphQL points one `just approve-design` spends approving the board
+      copy of a 10-item plan on a board holding 2,000 items, priced on the loopback board
+      double, each store call's points and requests in the breakdown. It protects the board
+      token's hourly allowance, which every session on this host shares.
+    # Labelled accepted-overrun: over it warns because onetaskgraph's public write boundary
+    # re-reads the approved item's project before the approval's metadata write. The
+    # onetaskgraph follow-up "An approval-record metadata write under the public write
+    # boundary re-reads the item's whole project" fixing that lets the label come off.
+    labels: [accepted-overrun]
+    measure: reported
+    command: ["uv", "run", "--directory", "../../..", "python", "-m", "tests.budget_telemetry"]
+    unit: points
+    direction: max
+    threshold: 5
+  - id: plan-approval-seconds
+    description: >-
+      Seconds a person waits for one `just approve-design` of that plan's board copy: the
+      recipe's real elapsed time against the loopback board double, plus, for each request
+      the double logged, the GitHub latency the copy-speed spike measured for its kind, each
+      store call's requests and latency and that per-kind table in the breakdown.
+    labels: [host, host-variable]
+    measure: reported
+    command: ["uv", "run", "--directory", "../../..", "python", "-m", "tests.budget_telemetry"]
+    unit: seconds
+    direction: max
+    threshold: 7

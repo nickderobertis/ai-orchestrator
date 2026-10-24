@@ -178,10 +178,10 @@ TURN_USAGE_FIGURES = (
 #: here rather than read from the response, because reading it from the response is what
 #: an assertion about a schema version cannot do: the paragraph and the reader have to be
 #: moved together, and a bump that moved neither would pass.
-TIMELINE_SCHEMA_VERSION = 12
+TIMELINE_SCHEMA_VERSION = 13
 #: The envelope's telemetry schema, restated for the same reason and moved with the same
 #: paragraph.
-TELEMETRY_SCHEMA_VERSION = 21
+TELEMETRY_SCHEMA_VERSION = 24
 
 #: The variable `scripts/launcher-session.sh` resolves the acting session into, and
 #: `scripts/telemetry-server.sh` renders as the server's `--session`.
@@ -721,8 +721,16 @@ def test_the_monitors_dispatch_is_labelled_by_its_own_member_name(served_recorde
     }
     assert dispatch["parent_id"] == run_span["id"]
 
-    # The monitor's own turn is what carries the label, so the span has to hold it.
-    assert [event["kind"] for event in dispatch["events"]] == ["turn-completed"]
+    # The monitor's own turn is what carries the label, so the span has to hold it — between
+    # the records its graph and member opened and settled with, which timeline schema 13
+    # bounds a session lane by.
+    assert [event["kind"] for event in dispatch["events"]] == [
+        "graph-started",
+        "member-started",
+        "turn-completed",
+        "member-settled",
+        "graph-settled",
+    ]
 
 
 def test_a_dispatchs_report_turns_carry_their_own_text_tools_and_usage(
@@ -990,65 +998,82 @@ def test_the_recipe_hands_the_api_the_acting_session_so_an_owner_is_recognised(
     )
 
 
-#: The two routes the view's shutdown controls send to, which is the half of that
-#: feature this repository can ask the reader about: `just dag-ui` answers them or it
-#: does not. What the *bundle* labels those controls and whether the dialog renders is
-#: `onepipeline-ui`'s, asserted in its own `e2e/dag-ui-shutdown.spec.ts` against a real
-#: browser; the promises `docs/dag-ui.md` makes about that dialog are reconciled against
-#: that repository's published `docs/contract.md` in `tests/test_ui_api_contract.py`.
-RUN_SHUTDOWN_ROUTE = "/api/v2/runs/{run}/shutdown"
+#: The route the view's host shutdown sends to, and the per-run route onepipeline-ui 0.45.0
+#: removed, which is the half of that feature this repository can ask the reader about:
+#: `just dag-ui` answers them as the contract says or it does not. What the *bundle* labels
+#: the control and whether the dialog renders is `onepipeline-ui`'s, asserted in its own
+#: browser tier; the promises `docs/dag-ui.md` makes about that dialog are reconciled
+#: against that repository's published docs in `tests/test_ui_api_contract.py`.
 SCOPED_SHUTDOWN_ROUTE = "/api/v2/shutdown"
+REMOVED_RUN_SHUTDOWN_ROUTE = "/api/v2/runs/{run}/shutdown"
 
 
-def test_the_shutdown_routes_answer_on_the_served_origin_and_refuse_a_stranger(
+def test_the_shutdown_routes_answer_removed_scopes_and_routes_and_serve_a_strangers_key(
     served_grouped: Grouped,
 ) -> None:
-    """The reader `just dag-ui` runs answers both shutdown routes, as the engine.
+    """The reader `just dag-ui` runs takes the host scope alone, and dropped the run route.
 
-    Asked only what it refuses before anything is signalled — a run another session owns,
-    a scoped shutdown naming no scope, a run that is not there — so nothing is shut down
-    and no branch is pushed. Each is told apart from the answer an older reader gives,
-    `no_such_route`, which is what a view whose control is not served would meet.
+    Asked only what it refuses before anything is signalled — a shutdown naming no scope,
+    one naming the acting session's own runs, and a single run's — so nothing is shut down
+    and no branch is pushed. The run route is told apart from one the reader never served
+    by its `removed_route` code, and the acting session's key, which the Host page reads,
+    is a stranger's rather than the recorded run's.
     """
     served = served_grouped.served
-    run_route = RUN_SHUTDOWN_ROUTE.replace("{run}", SETTLED_RUN)
-
-    status, body, _ = served.post(run_route, {})
-    assert status == 409, (status, body)
-    refusal = json.loads(body)["error"]
-    assert refusal["code"] == "not_owner", refusal
-    owner = json.loads(served.get(f"/api/v2/runs/{SETTLED_RUN}")[1])["launch"]["launcher"]
-    assert owner in refusal["message"], (
-        f"a stranger's shutdown of {SETTLED_RUN} was refused as {refusal['message']!r}, "
-        f"which does not name its owner {owner!r}"
-    )
-
-    # What the confirm dialog tells this session's runs apart by: the acting session's
-    # key, which for a stranger is not the recorded run's.
-    recorded_key = json.loads(served.get(f"/api/v2/runs/{SETTLED_RUN}")[1])["launch"]["session_key"]
-    acting_key = json.loads(served.get("/api/v2/unwatched")[1]).get("session_key")
-    assert acting_key not in (None, recorded_key), (
-        f"acting as a stranger the reader serves session key {acting_key!r}; the shutdown "
-        f"dialog would name {SETTLED_RUN} (key {recorded_key!r}) as this session's own"
-    )
 
     status, body, _ = served.post(SCOPED_SHUTDOWN_ROUTE, {})
     assert status == 422, (status, body)
     assert json.loads(body)["error"]["code"] == "invalid_request", body
 
-    status, body, _ = served.post(RUN_SHUTDOWN_ROUTE.replace("{run}", "no-such-run"), {})
+    status, body, _ = served.post(SCOPED_SHUTDOWN_ROUTE, {"scope": "mine"})
+    assert status == 400, (status, body)
+    refusal = json.loads(body)["error"]
+    assert refusal["code"] == "removed_shutdown_scope", refusal
+    assert "mine" in refusal["message"], refusal
+
+    status, body, _ = served.post(REMOVED_RUN_SHUTDOWN_ROUTE.replace("{run}", SETTLED_RUN), {})
     assert status == 404, (status, body)
-    assert json.loads(body)["error"]["code"] == "run_not_found", (
-        f"the run shutdown route answered {body!r}: the reader does not serve it at all"
+    assert json.loads(body)["error"]["code"] == "removed_route", body
+
+    recorded_key = json.loads(served.get(f"/api/v2/runs/{SETTLED_RUN}")[1])["launch"]["session_key"]
+    acting_key = json.loads(served.get("/api/v2/unwatched")[1]).get("session_key")
+    assert acting_key not in (None, recorded_key), (
+        f"acting as a stranger the reader serves session key {acting_key!r}, which would "
+        f"name {SETTLED_RUN} (key {recorded_key!r}) as this session's own"
     )
+
+
+#: The route a held Watch toggle read through onepipeline-ui 0.44.0, which 0.45.0 removed:
+#: a run is watched with `just watch`, a manager's own CLI verb, never from a tab.
+REMOVED_WATCH_ROUTE = "/api/v2/runs/{run}/watch"
+
+
+def test_the_removed_watch_route_answers_removed_on_the_served_origin(
+    served_grouped: Grouped,
+) -> None:
+    """The reader `just dag-ui` runs answers the watch route as removed, for a run it serves.
+
+    Asked of a run the reader does serve, so the answer is the route's removal rather than
+    the run being unknown, and told apart from a route the reader never had by its code.
+    """
+    served = served_grouped.served
+    status, _, _ = served.get(f"/api/v2/runs/{SETTLED_RUN}")
+    assert status == 200, f"the reader does not serve {SETTLED_RUN}, so this asks nothing"
+
+    status, body, _ = served.get(REMOVED_WATCH_ROUTE.replace("{run}", SETTLED_RUN))
+
+    assert status == 404, (status, body)
+    refusal = json.loads(body)["error"]
+    assert refusal["code"] == "removed_route", refusal
+    assert "/watch" in refusal["message"], refusal
 
 
 def test_the_dialog_names_this_sessions_own_run_as_its_own(served_as_owner: Served) -> None:
     """`GET /api/v2/unwatched` serves the acting session's key, and its own run matches it.
 
-    This is what the confirm dialog names owners by before anything is sent, so a wrong
-    answer here names the operator's own run as a colleague's. The other half — that a
-    stranger's key is not the run's — is asserted beside the stranger's refusal above.
+    This is what the Host page tells this session's runs apart by, so a wrong answer here
+    names the operator's own run as a colleague's. The other half — that a stranger's key
+    is not the run's — is asserted beside the shutdown refusals above.
     """
     recorded = json.loads(served_as_owner.get(f"/api/v2/runs/{SETTLED_RUN}")[1])["launch"]
 

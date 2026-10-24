@@ -200,6 +200,7 @@ NODE_FIELDS = frozenset(
         "pool",
         "overflow",
         "task_record",
+        "assets_from",
     }
 )
 

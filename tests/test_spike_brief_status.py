@@ -13,8 +13,11 @@ from orchestrator import run_reading, spike_brief
 @pytest.mark.parametrize("kind", sorted(run_reading.ENDING_KINDS))
 def test_every_authoritative_ending_retires_the_advisory(kind: str) -> None:
     reading = {
+        "labels": {},
+        "group": None,
         "schema_version": run_reading.SCHEMA_VERSION,
         "run_id": "spikes",
+        "public_id": "run-0123456789ab",
         "word": "SETTLED" if kind == "complete" else "ENDED " + kind,
         "liveness": "UNDRIVEN",
         "driven": False,
@@ -31,8 +34,11 @@ def test_every_authoritative_ending_retires_the_advisory(kind: str) -> None:
 )
 def test_nonterminal_readings_retain_the_advisory(liveness: str, paused: bool) -> None:
     reading = {
+        "labels": {},
+        "group": None,
         "schema_version": run_reading.SCHEMA_VERSION,
         "run_id": "spikes",
+        "public_id": "run-0123456789ab",
         "word": "PAUSED" if paused else liveness,
         "liveness": liveness,
         "driven": liveness in ["ACTIVE", "PARKED"],

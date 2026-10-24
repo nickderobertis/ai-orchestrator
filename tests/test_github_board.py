@@ -15,7 +15,10 @@ from github_board import (
     BATCHED_WRITES,
     COPY_ORIGIN_SLOTS,
     COPY_WRITE_SLOTS,
+    REQUEST_KINDS,
+    REQUEST_LATENCY_MS,
     RequestCost,
+    RequestKind,
     _bounded_step,
     _GitHubFixture,
     _GraphQLRequest,
@@ -24,6 +27,7 @@ from github_board import (
     batched_slot_drift,
     copy_batch_drift,
     copy_read_drift,
+    request_latency_ms,
 )
 
 
@@ -146,3 +150,39 @@ def test_a_batched_copy_read_whose_slots_moved_is_named_rather_than_modelled() -
     assert copy_read_drift(_Operation.ORIGIN_LOOKUPS, shrunk) == [
         "the batched copy read lacks `o0:repositoryOwner(login:$owner) @include(if:$ask0)`"
     ]
+
+
+def test_a_project_member_listing_is_charged_as_one_items_read_and_a_batched_read_is_not() -> None:
+    """One issue's single page of sub-issues costs an item read; reads of several items do not.
+
+    The adopted store lists a project's members as `subIssues` of the one project issue it
+    names by `$id`, a page of up to 23 at a time, so the request reads one item — and the
+    approved `plan-approval-seconds` evidence charges the approval's two listings that way.
+    A request aliasing several issues' reads is a different request, still charged as the
+    spike's 100-item page.
+    """
+    listing = _GraphQLRequest(
+        "query($id:ID!,$memberFirst:Int!,$after:String){node(id:$id){__typename "
+        "... on Issue{subIssues(first:$memberFirst,after:$after){pageInfo{hasNextPage "
+        "endCursor} nodes{__typename}}}}}",
+        {"id": "I_kwDOAAAAAAAAAAAA", "memberFirst": 23, "after": None},
+        0.0,
+    )
+    batched = _GraphQLRequest(
+        "query($id0:ID!,$id1:ID!){i0:node(id:$id0){__typename} i1:node(id:$id1){__typename}}",
+        {"id0": "I_kwDOAAAAAAAAAAAA", "id1": "I_kwDOAAAAAAAAAAAB"},
+        0.0,
+    )
+
+    assert listing.operation is _Operation.SUB_ISSUES
+    assert request_latency_ms(listing) == REQUEST_LATENCY_MS[RequestKind.ITEM_READ]
+    assert batched.operation is _Operation.ISSUE_DETAILS
+    assert request_latency_ms(batched) == REQUEST_LATENCY_MS[RequestKind.BATCHED_READ]
+    assert {
+        operation for operation, kind in REQUEST_KINDS.items() if kind is RequestKind.BATCHED_READ
+    } == {
+        _Operation.ISSUE_DETAILS,
+        _Operation.ISSUE_COPY_DETAILS,
+        _Operation.ORIGIN_LOOKUPS,
+        _Operation.CREATED_BOARD_ITEMS,
+    }

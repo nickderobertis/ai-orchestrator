@@ -42,6 +42,7 @@ import re
 from collections.abc import Iterator
 from pathlib import Path
 
+import follow_up_variables
 import pytest
 from driven_run import (
     PATIENCE_SECONDS,
@@ -71,6 +72,9 @@ REMOVED_NODE = NodeId("later-3")
 WAITING = (SETTLED_NODE, EDITED_NODE, REMOVED_NODE)
 #: The node a live edit adds, which the run has no item for until a copy creates one.
 ADDED_NODE = NodeId("follow-up")
+UNCLASSIFIED_NODE = NodeId("close-ticket")
+#: A ticket in a configured source that holds no item, so no screened copy can classify it.
+MISSING_TICKET = "drafts:no-such-ticket"
 #: What the parked node's requeue restates as its task, which its one item has to come to
 #: carry.
 REQUEUED_WHAT = "Requeued: the item's body is updated in place."
@@ -83,9 +87,10 @@ SETTLED_OUTCOME = "failed"
 STATED_LANDING = "https://github.com/octo-org/example/pull/17"
 
 #: The keys a settlement writes onto an item, each engine-owned — the settlement key
-#: `src/taskgraph.rs` names and the four landing keys `src/writeback.rs` declares beside
-#: it; a targeted update of a settlement may set these and nothing else in the item's
-#: metadata. `tests/test_engine_contracts.py`'s
+#: `src/taskgraph.rs` names, the four landing keys declared beside it, and the board word it
+#: projected beside the settlement, which onepipeline 0.86.0 records; a targeted update of
+#: a settlement may set these and nothing else in the item's metadata.
+#: `tests/test_engine_contracts.py`'s
 #: `test_the_settlement_keys_a_targeted_update_may_set_are_exactly_the_engines` holds this
 #: set equal to the pinned engine's, so a key added or removed on either side fails there.
 SETTLEMENT_KEYS = frozenset(
@@ -95,6 +100,7 @@ SETTLEMENT_KEYS = frozenset(
         "onepipeline.landing_commit",
         "onepipeline.landing_evidence",
         "onepipeline.change_url",
+        "onepipeline.projected_status",
     }
 )
 
@@ -389,13 +395,22 @@ def test_a_settlement_is_one_targeted_update_and_a_failure_carries_only_what_had
     assert all(attempt.spent is None for attempt in projections(driven)), projections(driven)
 
 
-def test_a_settled_added_node_is_refused_at_a_screened_board_without_writing(
+def test_a_screened_board_takes_an_added_node_and_refuses_an_unclassifiable_reference(
     tmp_path: Path, request: pytest.FixtureRequest, oneharness_bin: str
 ) -> None:
-    """The pinned producer cannot classify its temporary dependency during a public copy."""
+    """The pinned engine classifies an added node's dependency during a public copy.
+
+    onepipeline 0.86.0 writes an added node's shadow task, with its dependencies, before
+    copying it (onepipeline #1106), so the screened copy can classify its dependency on an
+    existing node and the destination takes it. The boundary still runs: an added node
+    delivering a ticket its source does not hold is refused, and the destination receives
+    nothing for it.
+    """
     # llmlint: ignore-block[e2e_not_mocked] Only the paid model provider and its review
     # answer are scripted, at the same sanctioned provider boundary as `driven` above.
     # The recipe, engine, linked store, public boundary and destination files are real.
+    tickets = tmp_path / "tickets"
+    tickets.mkdir()
     with launched(
         tmp_path,
         request,
@@ -403,12 +418,17 @@ def test_a_settled_added_node_is_refused_at_a_screened_board_without_writing(
         caller=__name__,
         session=LAUNCHING_SESSION,
         prefix="screened-writeback",
-        goal="read an added node's refused projection at a public board stand-in",
+        goal="project an added node onto a public board stand-in",
         held_node=HELD_NODE,
         waiting_nodes=(),
         # This local Markdown destination stands in for a public board. Unlike the
         # default private fixture source, every write here crosses the public boundary.
-        extra_environment={"ONETASKGRAPH_SOURCES__TEST_FIXTURES__VISIBILITY": "public"},
+        # The `drafts` source is rooted in an empty directory, so a ticket named in it
+        # exists nowhere and its classification cannot be established.
+        extra_environment={
+            "ONETASKGRAPH_SOURCES__TEST_FIXTURES__VISIBILITY": "public",
+            follow_up_variables.root_name(): str(tickets),
+        },
     ) as run:
         run.environment["FAKE_CODEX_ANSWERS"] = PASSING_REVIEW
         # llmlint: ignore-end[e2e_not_mocked]
@@ -428,11 +448,14 @@ def test_a_settled_added_node_is_refused_at_a_screened_board_without_writing(
                 },
             },
         )
-        waited_for(
+        created = waited_for(
             "the added node's projection",
             lambda: [a for a in projections(run)[seen:] if ADDED_NODE in a.items] or None,
             PATIENCE_SECONDS,
         )
+        assert [(a.items, a.outcome) for a in created] == [((ADDED_NODE,), "projected")], created
+        assert created[0].actions is not None and created[0].actions["created"] == 1, created
+        assert ADDED_NODE in _by_node(run), _by_node(run)
         seen = len(projections(run))
         _settle(run, ADDED_NODE, "settled so the public board receives another projection")
         attempts = waited_for(
@@ -440,17 +463,47 @@ def test_a_settled_added_node_is_refused_at_a_screened_board_without_writing(
             lambda: [a for a in projections(run)[seen:] if ADDED_NODE in a.items] or None,
             PATIENCE_SECONDS,
         )
+        _targeted_only(attempts)
+        assert [(a.items, a.outcome, a.calls) for a in attempts] == [
+            ((ADDED_NODE,), "projected", {"task-update": 1})
+        ], attempts
+        assert attempts[0].updated_fields == {"status": 1, "metadata": 1}, attempts
+        assert landed(run)[ADDED_NODE].destination == _by_node(run)[ADDED_NODE].identifier
+        now = _by_node(run)
+        assert {node: now[node].record.read_bytes() for node in before} == before
+
+        before = {node: item.record.read_bytes() for node, item in now.items()}
+        seen = len(projections(run))
+        apply(
+            run,
+            {
+                "op": "add",
+                "node": {
+                    "id": UNCLASSIFIED_NODE,
+                    "task": "## What\nClose the ticket.\n\n## Why\nKeep its evidence.\n\n"
+                    "## Acceptance criteria\n- The ticket is closed.",
+                    "expects_no_diff": True,
+                    "deps": [HELD_NODE],
+                    "delivers": [MISSING_TICKET],
+                },
+            },
+        )
+        refused = waited_for(
+            "the unclassifiable node's projection",
+            lambda: [a for a in projections(run)[seen:] if UNCLASSIFIED_NODE in a.items] or None,
+            PATIENCE_SECONDS,
+        )
         assert all(
             (a.outcome, a.failure_class, a.kind) == ("failed", "refused", "reference-unclassified")
-            for a in attempts
-        ), attempts
+            for a in refused
+        ), refused
         assert all(
             a.reason is not None
-            and "onepipeline-writeback:" in a.reason
+            and MISSING_TICKET in a.reason
             and "whose classification could not be established" in a.reason
-            for a in attempts
-        ), attempts
-        assert all(a.actions is None and a.updated_fields == {} for a in attempts), attempts
-        assert ADDED_NODE not in _by_node(run), _by_node(run)
-        assert ADDED_NODE not in landed(run), landed(run)
+            for a in refused
+        ), refused
+        assert all(a.actions is None and a.updated_fields == {} for a in refused), refused
+        assert UNCLASSIFIED_NODE not in _by_node(run), _by_node(run)
+        assert UNCLASSIFIED_NODE not in landed(run), landed(run)
         assert {node: item.record.read_bytes() for node, item in _by_node(run).items()} == before

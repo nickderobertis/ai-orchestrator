@@ -2781,11 +2781,13 @@ TICKET_LIFECYCLE_BUDGET = "ticket-lifecycle-points"
 
 
 #: The source's PRICES entries used by the fixture's operations, each priced upstream at
-#: :data:`LARGEST_PAGE`. A search is priced per page from its entry by :func:`_search_points`.
+#: :data:`LARGEST_PAGE` but for a project's member listing, priced at the store's own
+#: `MEMBER_PAGE_SIZE` of 23 rows. A search is priced per page from its entry by
+#: :func:`_search_points`.
 REQUEST_PRICES: dict[_Operation, DocumentPrice] = {
     _Operation.SEARCH: DocumentPrice("SEARCH_ISSUES", 5),
     _Operation.ISSUE: DocumentPrice("ISSUE", 1),
-    _Operation.SUB_ISSUES: DocumentPrice("SUB_ISSUES", 6),
+    _Operation.SUB_ISSUES: DocumentPrice("SUB_ISSUES", 1),
     _Operation.BOARD: DocumentPrice("BOARD", 2),
     _Operation.ORIGIN_LOOKUP: DocumentPrice("ORIGIN_LOOKUP", 1),
     _Operation.BOARD_FIELDS: DocumentPrice("BOARD_FIELDS", 1),
@@ -2840,8 +2842,11 @@ class RequestKind(StrEnum):
 #: against GitHub (report `board-copy-speed-2026-10-18-spike-copy-timing-report`, its latency
 #: table): a board or search page as timed on the `plans` board's 1,986 items, and a read
 #: batching several items, which the spike did not time, charged as its measured test-board
-#: page of 100 items. A journey that may not spend the real board's token adds these to its
-#: real elapsed time for each request the double logged, rather than waiting them out.
+#: page of 100 items. A project's member listing is one issue's `subIssues`, a single page of
+#: up to 23 members, so it is one item's read and charged as one, which is how the approved
+#: `plan-approval-seconds` evidence charges the approval's two listings. A journey that may
+#: not spend the real board's token adds these to its real elapsed time for each request the
+#: double logged, rather than waiting them out.
 REQUEST_LATENCY_MS: dict[RequestKind, int] = {
     RequestKind.ITEM_READ: 554,
     RequestKind.BOARD_PAGE: 6_948,
@@ -2862,13 +2867,13 @@ REQUEST_KINDS: dict[_Operation, RequestKind] = {
     _Operation.BOARD: RequestKind.BOARD_PAGE,
     _Operation.FIELD_SNAPSHOT: RequestKind.BOARD_PAGE,
     _Operation.SEARCH: RequestKind.SEARCH_PAGE,
-    _Operation.SUB_ISSUES: RequestKind.BATCHED_READ,
     _Operation.ISSUE_DETAILS: RequestKind.BATCHED_READ,
     _Operation.ISSUE_COPY_DETAILS: RequestKind.BATCHED_READ,
     _Operation.ORIGIN_LOOKUPS: RequestKind.BATCHED_READ,
     _Operation.CREATED_BOARD_ITEMS: RequestKind.BATCHED_READ,
     _Operation.ORIGIN_LOOKUP: RequestKind.ITEM_READ,
     _Operation.ISSUE: RequestKind.ITEM_READ,
+    _Operation.SUB_ISSUES: RequestKind.ITEM_READ,
     _Operation.ISSUE_DETAIL: RequestKind.ITEM_READ,
     _Operation.COMMENTS: RequestKind.ITEM_READ,
     _Operation.DEPENDENCIES: RequestKind.ITEM_READ,

@@ -7,9 +7,10 @@ and its replacement opens on the note, which the run records as `turn: interrupt
 and is recorded `turn: turn-end`. `config/onepipeline.version` is what puts both in force
 here (onepipeline#1048), so this drives them the way a manager meets them: a run launched
 by the real `just orchestrate`, the note sent by the real `just channel-reply`, the run read
-by the real `just status`, and each disposition read back off the run's own journal and the
-receipt the reply recipe prints. The third delivery — a `live` note to a turn that cannot be
-interrupted, which waits for its end — is
+by the real `just status`, and each disposition read back off the run's own journal. The
+receipt the reply recipe prints answers before either turn takes the note — `queued` in the
+worker's inbox, from onepipeline 0.86.0 — so it records no disposition. The third
+delivery — a `live` note to a turn that cannot be interrupted, which waits for its end — is
 `tests/e2e/launch_monitor_observer/test_live_note_leaves_the_run_journalling_e2e.py`'s.
 
 Everything between the recipes and the model is real — the engine, `oneagentgraph`, the
@@ -335,23 +336,25 @@ def _delivered(journey: Journey) -> tuple[int, dict[str, object]]:
     raise AssertionError([event.get("kind") for event in journey.journal])
 
 
-def _outcome_turn(journey: Journey) -> object:
-    """The `turn` the channel's outcome for the reply records on the note's command.
+def _answered_as_queued(journey: Journey) -> None:
+    """The reply was answered as soon as its note was queued in the worker's inbox.
 
-    The receipt `just channel-reply` prints says the envelope was applied and names the id
-    it went in under; the per-command result, `turn` among it, is the engine's outcome for
-    that id on the run's `command-outcomes` queue, read through the bus's own `subscribe`.
+    The receipt `just channel-reply` prints says the envelope was applied with its note
+    `queued` for the node, and names the id it went in under; the per-command result is
+    the engine's outcome for that id on the run's `command-outcomes` queue, read through
+    the bus's own `subscribe`, and it is `queued` with no turn: how the turn took the note
+    is the note's own `note-delivered` record, which never rewrites that answer.
     """
     printed = journey.sent.stdout.splitlines()
     assert len(printed) == 1, journey.sent.stdout
     receipt = json.loads(printed[0])
     assert (receipt["state"], receipt["commands"]) == ("applied", "applied"), receipt
+    assert receipt.get("notes") == {NODE_ID: "queued"}, receipt
     assert journey.outcome["id"] == receipt["reply"], (journey.outcome, receipt)
     results = cast(list[dict[str, object]], journey.outcome["results"])
-    assert [(result["op"], result["outcome"]) for result in results] == [("note", "applied")], (
-        journey.outcome
-    )
-    return results[0].get("turn")
+    assert [(result["op"], result["outcome"], result.get("turn")) for result in results] == [
+        ("note", "queued", None)
+    ], journey.outcome
 
 
 def _frames(journey: Journey) -> list[str]:
@@ -361,12 +364,12 @@ def _frames(journey: Journey) -> list[str]:
 
 @pytest.mark.xdist_group(INTERRUPTING.run)
 def test_a_live_note_is_recorded_as_interrupting_the_turn(interrupting: Journey) -> None:
-    """The journal and the reply's receipt both say the note interrupted the worker's turn."""
+    """The journal says the note interrupted the worker's turn, after its reply was answered."""
     _, delivered = _delivered(interrupting)
     assert delivered["text"] == NOTE, delivered
     assert delivered["reached"] == "worker", delivered
     assert delivered["turn"] == INTERRUPTING.turn, delivered
-    assert _outcome_turn(interrupting) == INTERRUPTING.turn, interrupting.sent.stdout
+    _answered_as_queued(interrupting)
 
 
 @pytest.mark.xdist_group(INTERRUPTING.run)
@@ -406,12 +409,12 @@ def test_the_status_view_reports_the_run_live_while_the_turn_is_held(
 
 @pytest.mark.xdist_group(AT_TURN_END.run)
 def test_a_turn_end_note_is_recorded_as_reaching_the_turns_end(at_turn_end: Journey) -> None:
-    """The journal and the reply's receipt both say `turn-end`, never `interrupted`."""
+    """The journal says `turn-end`, never `interrupted`, after its reply was answered."""
     _, delivered = _delivered(at_turn_end)
     assert delivered["text"] == NOTE, delivered
     assert delivered["reached"] == "worker", delivered
     assert delivered["turn"] == AT_TURN_END.turn, delivered
-    assert _outcome_turn(at_turn_end) == AT_TURN_END.turn, at_turn_end.sent.stdout
+    _answered_as_queued(at_turn_end)
 
 
 @pytest.mark.xdist_group(AT_TURN_END.run)

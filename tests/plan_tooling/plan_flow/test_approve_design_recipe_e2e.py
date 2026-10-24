@@ -1426,6 +1426,12 @@ def test_two_plans_in_one_store_each_keep_their_own_approval(store: Store, runs:
 #: Every other field is read from that payload under its own name.
 ADDRESSED_AS = {"qualified_id": "id"}
 
+#: The fields of :class:`StoreDocument` the store leaves off the wire where its source
+#: reports none, as its document schema states: `version`, the change token, which a
+#: `local-md` source keeps none of. Read as `None` when absent, so both local stores here
+#: compare equal on it rather than refusing a payload the store answered by its own rule.
+OMITTED_WHEN_ABSENT = ("version",)
+
 #: What the destination mints for itself rather than taking from the source. Each is
 #: asserted below to *differ* across a real copy: a destination that left one alone would
 #: make the launch at the end of that journey pass whether or not the approval key
@@ -1494,7 +1500,7 @@ def _held(one: Mapping[str, Any]) -> dict[str, Any]:
     answer under that name would otherwise read as absent from both sides of the copy and
     compare equal, which is the silence deriving these names exists to end.
     """
-    payload = one["item"]
+    payload = {name: None for name in OMITTED_WHEN_ABSENT} | one["item"]
     missing = sorted(name for name in COMPARED if name not in ADDRESSED_AS and name not in payload)
     assert not missing, (
         f"the store answered document {one['id']} without {missing}, which "

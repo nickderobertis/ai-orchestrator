@@ -114,6 +114,12 @@ ApprovalKey = NewType("ApprovalKey", str)
 #: the plan is copied to and stays visible to anybody reading it.
 RECORD_KEY = "orchestrator.design-approval"
 
+#: What the store's refusal of a metadata write says when the document is no longer at the
+#: version the write expects — onetaskgraph's `version-moved` failure, whose kind its
+#: standard error does not carry apart from these words. The approval-refusal journey in
+#: `tests/e2e/board_copy_approval` holds them to the adopted store.
+VERSION_MOVED = "this write expects"
+
 #: The name this host registers the design document's template under, in
 #: `templates/templates.yaml`, and the reference a rendering of it records. The document is
 #: this host's concept: onepipeline knows only the name registered here.
@@ -923,11 +929,25 @@ def approve(project: str) -> Approved:
     if recorded(document) == key:
         return Approved(document.qualified_id, located(document), held=True)
     value = {"key": key, "approved_at": datetime.now(UTC).isoformat()}
-    written = plan_store.sdk(
-        plan_store.client().document_metadata_set(
-            str(document.qualified_id), RECORD_KEY, json.dumps(value)
+    try:
+        # Guarded on the change token the listing above read the document at, so an edit
+        # made since — the content this key was not computed over — is never approved.
+        written = plan_store.sdk(
+            plan_store.client().document_metadata_set(
+                str(document.qualified_id),
+                RECORD_KEY,
+                json.dumps(value),
+                expect=document.version,
+            )
         )
-    )
+    except OSError as exc:
+        if VERSION_MOVED not in str(exc):
+            raise
+        raise OSError(
+            f"{project}'s design document {document.qualified_id} changed after this "
+            f"approval read it, so nothing was recorded and the change stands. Read it again "
+            f"and re-run `{RECIPE} {project}` to approve what it says now\n{exc}"
+        ) from exc
     location = plan_store.located(
         written.location.model_dump(mode="python") if written.location else None,
         written.id.model_dump(),
@@ -1035,12 +1055,17 @@ def ungraphed(project: str, document: StoreDocument) -> None:
     opening = next((line for line in section.splitlines() if line.strip()), "")
     image = ASSET_IMAGE.fullmatch(opening.strip())
     target = image.group(1) if image else None
-    held = {
-        f"{ASSET_PREFIX}{asset.name}"
-        for asset in plan_store.read_document_assets(str(document.qualified_id))
-    } | served_urls(document)
-    if target is not None and target in held:
+    # A URL a serving store recorded is answered from the document's own metadata, so only a
+    # `./<name>` reference asks the store which assets it holds.
+    if target is not None and target in served_urls(document):
         return
+    if target is not None and target.startswith(ASSET_PREFIX):
+        held = {
+            f"{ASSET_PREFIX}{asset.name}"
+            for asset in plan_store.read_document_assets(str(document.qualified_id))
+        }
+        if target in held:
+            return
     raise OSError(
         f"{project}'s design document {document.qualified_id} lists {len(rows)} planned tasks "
         f"with a dependency between them, and its `## Planned tasks` section does not open with "

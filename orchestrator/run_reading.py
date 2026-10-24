@@ -46,21 +46,25 @@ __all__ = [
 RunId = NewType("RunId", str)
 
 #: The version of the document this reader reads.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 #: The JSON type of every field of each object the document carries, keyed by the name
 #: the schema gives the object (`RunReading` for the document itself). A type is a JSON
 #: type name, another object's name, or `array[<item type>]`. Every field is present
 #: unless :data:`OPTIONAL_FIELDS` names it, which the engine omits when it is empty.
 FIELD_TYPES: dict[str, dict[str, frozenset[str]]] = {
     "RunReading": {
+        "labels": frozenset({"object"}),
+        "group": frozenset({"string", "null"}),
         "schema_version": frozenset({"integer"}),
         "run_id": frozenset({"string"}),
+        "public_id": frozenset({"string"}),
         "word": frozenset({"string"}),
         "liveness": frozenset({"string"}),
         "driven": frozenset({"boolean"}),
         "ending": frozenset({"Ending", "null"}),
         "paused": frozenset({"Paused", "null"}),
         "unanswered": frozenset({"array[UnansweredEnvelope]"}),
+        "inbox": frozenset({"array[InboxNote]"}),
     },
     "Ending": {"kind": frozenset({"EndingKind"}), "nodes": frozenset({"array[EndedNode]"})},
     "EndedNode": {
@@ -76,11 +80,16 @@ FIELD_TYPES: dict[str, dict[str, frozenset[str]]] = {
         "envelope": frozenset({"string"}),
         "delivery": frozenset({"Delivery", "null"}),
     },
+    "InboxNote": {
+        "envelope": frozenset({"string"}),
+        "delivery": frozenset({"InboxDelivery"}),
+    },
 }
 #: The fields of each object the schema leaves out of its `required`.
 OPTIONAL_FIELDS: dict[str, frozenset[str]] = {
-    "RunReading": frozenset({"unanswered"}),
+    "RunReading": frozenset({"unanswered", "inbox"}),
     "UnansweredEnvelope": frozenset({"delivery"}),
+    "InboxNote": frozenset(),
 }
 #: Every field the document always carries.
 READING_FIELDS = frozenset(FIELD_TYPES["RunReading"]) - OPTIONAL_FIELDS["RunReading"]
@@ -126,6 +135,13 @@ PAUSE_FIELDS = frozenset(FIELD_TYPES["Paused"])
 UNANSWERED_FIELDS = (
     frozenset(FIELD_TYPES["UnansweredEnvelope"]) - OPTIONAL_FIELDS["UnansweredEnvelope"]
 )
+#: The fields every live note a receiver's inbox holds carries.
+INBOX_FIELDS = frozenset(FIELD_TYPES["InboxNote"])
+#: The one state a note in an inbox has, and the fields its delivery carries: the receiving
+#: node and since when, always, and a deadline where the note carries one.
+INBOX_STATE = "queued"
+INBOX_DELIVERY_FIELDS = frozenset({"state", "node", "since"})
+INBOX_DELIVERY_OPTIONAL = frozenset({"deadline"})
 
 
 class Unreadable(ValueError):
@@ -216,6 +232,41 @@ def _unanswered(value: object) -> None:
             raise Unreadable("an unanswered envelope's delivery is not an object")
 
 
+def _inbox(value: object) -> None:
+    """Check the live notes waiting in receivers' inboxes, which decide nothing."""
+    if not isinstance(value, list):
+        raise Unreadable("its inbox is not a list")
+    for listed in value:
+        note = _object(listed, INBOX_FIELDS, "a note in its inbox")
+        if not _is(note["envelope"], FIELD_TYPES["InboxNote"]["envelope"]):
+            raise Unreadable("a note in its inbox has an envelope id that is not a string")
+        delivery = _object(
+            note["delivery"],
+            INBOX_DELIVERY_FIELDS,
+            "a note in its inbox's delivery",
+            INBOX_DELIVERY_OPTIONAL,
+        )
+        if delivery["state"] != INBOX_STATE:
+            raise Unreadable(
+                f"a note in its inbox is {json.dumps(delivery['state'])}, not {INBOX_STATE}"
+            )
+        if not all(isinstance(delivery[field], str) for field in ("node", "since")):
+            raise Unreadable("a note in its inbox names its node or its time as no string")
+        if not _is(delivery.get("deadline"), frozenset({"string", "null"})):
+            raise Unreadable("a note in its inbox has a deadline that is not a string")
+
+
+def _labelled(reading: dict[str, object]) -> None:
+    """Check the run's labels, its group and its public id, which decide nothing."""
+    labels = reading["labels"]
+    if not isinstance(labels, dict) or not all(isinstance(each, str) for each in labels.values()):
+        raise Unreadable("its labels are not an object of strings")
+    if not _is(reading["group"], FIELD_TYPES["RunReading"]["group"]):
+        raise Unreadable("its group is neither a string nor null")
+    if not _is(reading["public_id"], FIELD_TYPES["RunReading"]["public_id"]):
+        raise Unreadable("its public id is not a string")
+
+
 def _waiting(value: object) -> str:
     """What a pause names as waiting, as the recipe's message says it."""
     paused = _object(value, PAUSE_FIELDS, "its pause")
@@ -250,8 +301,11 @@ def decide(answer: str, run: RunId) -> Decided:
     driven = reading["driven"]
     if not _is(driven, FIELD_TYPES["RunReading"]["driven"]):
         raise Unreadable("its driven field is not true or false")
+    _labelled(reading)
     if "unanswered" in reading:
         _unanswered(reading["unanswered"])
+    if "inbox" in reading:
+        _inbox(reading["inbox"])
     ending, paused = reading["ending"], reading["paused"]
     if ending is not None:
         _ending(ending)

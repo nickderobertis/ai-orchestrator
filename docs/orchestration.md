@@ -34,7 +34,7 @@ one plan at a time until 2026-08-29, and the local Markdown store this repositor
 to in the meantime is gone: the two defects that forced it were repaired upstream and
 adopted here as onetaskgraph 0.2.12 — a release this host has since moved past — and,
 in the engine that carries the write-back repair and every release since,
-onepipeline 0.81.0. The whole of that reasoning —
+onepipeline 0.86.0. The whole of that reasoning —
 the defects, the releases, what was measured against the real board, and why the retreat
 was undone by deleting a source rather than repointing this one — is recorded once, in
 [Where a plan of this repository
@@ -125,12 +125,13 @@ organization's plan, its budget answers and its design document into `authoring`
 `tests/e2e/board_copy_approval/test_board_copy_spike_evidence_e2e.py` a plan copied out of the
 private `authoring` whose spike reports resolve through the copy link the store records there.
 
-The pinned engine also refuses a live run's added-node projection onto a screened destination
-as `reference-unclassified`: its temporary `onepipeline-writeback` source cannot classify a
-dependency on an existing node. The destination receives nothing for that node.
-`tests/writeback_budget/test_targeted_writeback_e2e.py` drives that refusal after settling the
-added node against an explicitly public board stand-in, beside the private-fixture journeys
-that still prove successful targeted updates. The producer fix is a follow-up.
+A live run's added node reaches a screened destination: the pinned engine writes the node's
+shadow task, dependencies included, before copying it, so the copy classifies its dependency
+on an existing node. A reference the copy cannot classify is still refused as
+`reference-unclassified`, and the destination receives nothing for that node.
+`tests/writeback_budget/test_targeted_writeback_e2e.py` drives both against an explicitly
+public board stand-in: an added node created and then settled by one targeted update, and an
+added node delivering a ticket its source does not hold.
 
 The mixed export plan in `tests/ask_seam/boundary_reply/test_boundary_reply_e2e.py` cannot be
 stored with screening on: a private project makes its public consumer private too. That one
@@ -609,7 +610,7 @@ It never writes the project's title, description or labels, and on an item it na
 the fields a projection changed — the status word, the engine's own `onepipeline.*` keys,
 and, where the node's definition moved, its title, body, `delivers` and `depends_on` — so
 a body somebody authored on the board survives every settlement of every run launched from
-it, re-read on the adopted onepipeline 0.81.0, and a person's edit to any field stands
+it, re-read on the adopted onepipeline 0.86.0, and a person's edit to any field stands
 until the run next changes that same field. Below the 0.16.3 that fixed it, it did not:
 the shadow project a copy wrote over the board was built with the body hardcoded to an
 empty string and the copy is a total replacement by contract, so every destination
@@ -631,7 +632,7 @@ is written, and the destination is left exactly as it was. A read that could fal
 a default is a read that can delete, so this is the property that makes the preservation
 above worth anything. It is held in onepipeline's own suite rather than here: since
 https://github.com/nickderobertis/onepipeline/pull/542 the engine — the adopted onepipeline
-0.81.0 among them — reads and projects plans through the linked onetaskgraph crates and
+0.86.0 among them — reads and projects plans through the linked onetaskgraph crates and
 ignores `ONETASKGRAPH_BIN`, so no host seam can
 inject a refused read into the store in process any more, and
 `store::a_refusal_of_the_member_read_the_copy_or_the_project_read_stops_the_retry_timer`
@@ -644,7 +645,7 @@ prompt first retry to a one-minute ceiling instead of retrying about four times 
 resets that schedule once it recovers, and retries until the projection lands; stopping or
 settling stays prompt during a long backoff. Since
 https://github.com/nickderobertis/onepipeline/pull/285, in force on the adopted onepipeline
-0.81.0, that schedule answers only the failures a retry can change. A projection the store
+0.86.0, that schedule answers only the failures a retry can change. A projection the store
 **refuses**, by the `class` of its own failure document, is reported once and put on no
 timer: the driver's line and the finding the run raises each carry the store's `class` and
 `kind` and say the projection is attempted again when the run's graph next changes. A
@@ -989,7 +990,7 @@ The tracked-plan contract is the published `onepipeline` plan schema, and declar
 a `schema_version` is required: a plan that omits it, or declares a number this
 build does not read, is refused at launch naming the ones it does. **Write version
 3** — what every plan here declares, and the one the fields below describe. The
-adopted `onepipeline` 0.81.0 also still reads 2 and 1, so an older plan file an
+adopted `onepipeline` 0.86.0 also still reads 2 and 1, so an older plan file an
 operator kept a copy of launches rather than failing; that is a courtesy to old
 copies, not a version to write. There is no compatibility ladder to read a version
 number against any more — the node shapes this repository grew through its own
@@ -1171,7 +1172,7 @@ sibling, `oneagentgraph validate graphs/dag-scope.yaml`.
   not claim one. A member's own `task` **replaces** it, so a member that claims one
   must interpolate it back in to learn which run it is on. `onepipeline` does also
   export `ONEPIPELINE_RUN_ID`, set to the run id, to an observer member — measured
-  against onepipeline 0.81.0 by dumping both sides of a monitor member's whole
+  against onepipeline 0.86.0 by dumping both sides of a monitor member's whole
   environment on a real launch. `tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py` re-takes
   that measurement on the judge side of a real observer member every gate run, and
   `tests/e2e/launch_monitor_observer/test_monitor_cursor_e2e.py` on a monitor member's agent side, so a
@@ -1580,7 +1581,7 @@ from the end of a harness transcript, and named its identity against
 The channel directory is the run's own, and the judge command composes it from
 `ONEPIPELINE_RUNS_DIR` and `ONEPIPELINE_RUN_ID`, which the engine exports to both sides
 of an observer member — `ONEPIPELINE_RUN_ID` set to the run id, measured against
-onepipeline 0.81.0 in the judge command's own environment on a real launch, and re-taken
+onepipeline 0.86.0 in the judge command's own environment on a real launch, and re-taken
 on every gate run by `tests/e2e/launch_monitor_observer/test_orchestrate_launch_e2e.py`.
 
 | Frame | What the binding does |
@@ -1752,7 +1753,7 @@ once](#a-planner-writes-a-reply-once).
 `ONEPIPELINE_RUN_ID` names the run to ask on, and an unset one is refused rather than
 guessed at. What sets it depends on the launch, measured per shape by
 `tests/ask_seam/launch/test_launch_ask_seam_e2e.py`: **every node dispatch of a run carries it
-as of onepipeline 0.81.0**, composed where the dispatch is made, so all three `just
+as of onepipeline 0.86.0**, composed where the dispatch is made, so all three `just
 orchestrate` shapes reach a worker that can ask. That names the release in force rather
 than the one it arrived in — `executor::dispatch_env` has composed the pair since
 https://github.com/nickderobertis/onepipeline/pull/76, and `AGENTS.md` carries that
@@ -2029,7 +2030,7 @@ events stay the record of what an edit became, and are where a `queued` one is r
 **A `queued` receipt resolves even across a driver's death.** A driver claims an
 envelope — moves the channel's command cursor past it — before it answers it, so one
 that died between the two used to take the claimed edits and notes with it. On the
-adopted onepipeline 0.81.0 every record an envelope's effects leave — `edit-committed`,
+adopted onepipeline 0.86.0 every record an envelope's effects leave — `edit-committed`,
 `command-accepted`, `edit-rejected` and `note-shown` — names that `envelope`, and `just
 orchestrate --adopt` replays each envelope the dead driver claimed and never answered
 exactly once: one the journal already shows applied is answered from that record rather
@@ -3841,7 +3842,7 @@ the contract.
 
 **A landing a manager starts is owed the same way, from before it acts until it closes.**
 `just publish-branch`, `just repo-recover` and `just integrate` run the engine's own landing
-verbs, which on the adopted onepipeline 0.81.0 register each landing as supervised work of the
+verbs, which on the adopted onepipeline 0.86.0 register each landing as supervised work of the
 session that started it — in the live flow of that session the verb runs inside, or in a
 flow registered for that landing alone — before drafting, preparing or pushing anything,
 and print it:
@@ -4317,7 +4318,7 @@ engine collapsed `context` into it and removed `context` from the reply envelope
 outright, so an envelope still carrying that op is refused by name at the wire. The
 field set, each field's default, and the dispositions the op answers with are declared
 once, on `onepipeline::channel::Command::Note`; everything below derives from that
-declaration as it stands in onepipeline 0.81.0 rather than restating it independently.
+declaration as it stands in onepipeline 0.86.0 rather than restating it independently.
 
 A note carries `id`, a required `addressee` of `worker`, `supervisor` or `both`,
 `text`, and four optional fields: a `criterion`; a `deliver` of `live`, `turn-end` or
@@ -4389,12 +4390,13 @@ refused too, each naming which it is.
 **`withdraw-note` takes back a note nothing has taken.** `{"op": "withdraw-note",
 "envelope": <id>, "index": <position>, "reason": <text>}` names the note at command
 position `index` of envelope `envelope`, and is never held behind any note. It
-withdraws a **live note no turn has taken yet** — whether it is being offered to its
-conversation, queued behind an earlier note to the same node, or held unjudged behind
-another envelope — and a **carried note not yet composed into a dispatch**, which the next
-dispatch is then composed without, every other note carried beside it staying. The
-withdrawn note's own command is answered `refused`, carrying the withdrawal's reason,
-and no turn is presented with it; the run records the `note-withdrawn` operation on the
+withdraws a **live note no turn has taken yet** — whether it waits in its receiver's
+inbox or behind an earlier note to the same receiver — and a **carried note not yet
+composed into a dispatch**, which the next dispatch is then composed without, every other
+note carried beside it staying. The withdrawn note's envelope is answered again, after the
+`queued` answer it was given as the note was handed off, with that note `refused` carrying
+the withdrawal's reason — a withdrawal is a later command rather than the receiver's
+answer — and no turn is presented with it; the run records the `note-withdrawn` operation on the
 withdrawal's `edit-committed`, `from: live` or `from: carried`. A note **already taken,
 answered, or composed into a dispatch cannot be withdrawn**: the withdrawal is refused
 naming the note's disposition, and so is one already withdrawn, a blank `reason`, and an
@@ -4412,13 +4414,16 @@ way to learn which of the two things happened. Five words the run records —
 - `carried` — no turn of the node's dispatch took it, so it went to that node's next
   dispatch instead.
 
-— plus one more a caller reads back from the verb rather than from the run: the reply
-was accepted durably without the reconciler having answered within the reply timeout.
-That is the engine's `queued` receipt rather than a refusal, and **never** an
-instruction to send the note again. `just channel-reply`'s receipt says `applied` or
-`queued` and never which of the five a note reached, so the recorded word is read off
-the run: the `reached` of the note's operation in its `edit-committed` event, which
-`just monitor` renders, beside its `turn`.
+— and none of them is the envelope's answer. On the adopted engine a live driver
+answers an envelope as soon as its notes are handed to their receivers' inboxes: the
+note's per-command result is `queued`, the receipt `just channel-reply` prints is
+`applied` with a `notes` map naming each receiving node `queued`, and what the receiver's
+turn later makes of the note never rewrites that answer. So the recorded word is read off
+the run: the `reached` of the note's operation in its `edit-committed` event, which `just
+monitor` renders, beside its `turn`. A receipt whose `state` is itself `queued` is the
+other thing: the reply was accepted durably without the reconciler having answered within
+the reply timeout, which is not a refusal and **never** an instruction to send the note
+again.
 
 The first four are the note reaching the running dispatch's conversation and `carried`
 is the note reaching no turn of it; under the default those two are the only ways one
@@ -4434,12 +4439,13 @@ could never do, and it is the incident this collapse was made from: a manager's
 approval sent as a `context` note rendered into the worker's task alone, the judge never
 saw it, and the node was failed for omitting what the manager had approved.
 
-**A note waits only behind its own receiver.** An envelope claimed behind one awaiting a
-live note's answer is held, in claim order, only when it names a node that envelope
-names — a command names the node its `id` names and those in its `deps` — so notes to
-several nodes, every other command, and findings proceed independently per node rather
-than waiting behind one busy receiver, and an envelope naming no node, a `complete` or
-a `finding` about no node among them, is never held. While a note is delivering, the run
+**Only a later note to the same receiver waits behind a note.** Each envelope is judged
+and answered on the pass that claims it; a later note to a receiver whose earlier note is
+still outstanding is `queued` too, and waits in the driver, unoffered, until that earlier
+note is answered, so a receiver takes its notes in the order they were sent. Every other
+command naming that node — and every note to another node, every finding and every
+`complete` — commits at once, so nothing waits behind one busy receiver. While a note
+waits in an inbox, the run
 goes on recording: heartbeats and turn activity keep reaching the journal and `just
 status` keeps reporting the run live, and once a turn takes the note the run records
 its `edit-committed` and then its `note-shown`.
@@ -4450,33 +4456,31 @@ channel-reply` and `just status`, and
 drives one that interrupts, and a `turn-end` one that waits;
 `tests/ask_seam/channel_reply/test_channel_reply_e2e.py` drives an envelope applied beside
 a note no turn takes, a deadline passed under each `persist`, `just status` reporting a
-note delivering until its deadline, and `withdraw-note` taking a note back live and
-carried.
+note waiting in its inbox until its deadline, and `withdraw-note` taking a note back live
+and carried.
 
-**What `just status` says about a note it has not answered.** A claimed envelope whose
-note has no outcome yet is listed under `claimed with no outcome`, and on a run a live
-driver holds, each one says where it stands:
+**What `just status` says about a note no turn has taken.** On a run a live driver holds,
+each note answered `queued` and still waiting prints one line —
 
-- `delivering a live note to <node> since <time>` — the driver is offering the note to
-  that node's conversation now, `until its deadline <time>` when it carries a
-  `delivery_timeout_seconds`;
-- `held behind envelope <id>'s note to <node> since <time>` — the envelope waits behind
-  an earlier envelope's note to the same node, and is judged once that note is answered.
+- `inbox: <node> holds envelope <id>'s note, queued since <time>` — the envelope is
+  answered, and that node's turn takes the note when it takes notes, `until its deadline
+  <time>` when the note carries a `delivery_timeout_seconds` —
 
-On a run nothing drives, the same envelopes are reported as answered by **the run's
-next driver** before anything it claims itself: their submitters have been told nothing
-yet, and nothing is lost. `status --json` carries the same reading as each envelope's
-`delivery`.
+and a `note:` line says what became of each of the latest notes that have left their
+inbox. `status --json` carries the same reading as its `inbox` array. A driver that dies
+with notes queued leaves them to the run's next driver, which journals a refusal of each
+no turn took; a claimed envelope with no outcome at all — listed under `claimed with no
+outcome` — is answered by that next driver before anything it claims itself, so nothing is
+lost.
 
 **A `cancel` does not wait behind a note its node never answers.** On the adopted
-onepipeline 0.81.0 a `cancel` its envelope would apply preempts each live note into the
-node not yet taken: the note is taken back so no turn is presented with it, answered
-`refused` with a reason naming the cancelling envelope, and journalled through
-`edit-rejected` like any refused envelope. Envelopes naming the node that were claimed
-before the cancel are reconciled ahead of it in claim order, a held live note to it
-refused the same way, and then the cancel interrupts the dispatch. A cancel its own
-envelope refuses preempts nothing, and onepipeline's `docs/contract-divergences.md`
-states the rule in full. **That is not a way to deliver a correction**: a live note
+onepipeline 0.86.0 a `cancel` its envelope would apply refuses, in its node's
+conversation's place, each note to that node still outstanding — offered or waiting
+behind another — with a reason naming the cancelling envelope, so no turn is presented
+with it; each such refusal is the note's own `edit-rejected` record, and the notes'
+envelopes keep the answers they were given. Then the cancel interrupts the dispatch. A
+cancel its own envelope refuses preempts nothing, and onepipeline's
+`docs/contract-divergences.md` states the rule in full. **That is not a way to deliver a correction**: a live note
 already interrupts the running turn, so `cancel` and `requeue` are for when the running
 worker must be judged against a changed bar, never for getting a correction to it
 sooner.

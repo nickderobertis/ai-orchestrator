@@ -37,8 +37,23 @@ for the file's shape. This page restates none of it beyond the keys a plan's bud
   root budget still refuse the push — `gate-leftovers`, `gate-peak-temp-disk` and
   `gate-leaked-processes` among them, the three figures that same gate run records about
   its effect on the host, whose measurement `orchestrator/gate_impact.py`'s docstring
-  states. The label is read only by the hook's check of the
-  root file; a project's own `budgets` Nx target (`nx.json`) checks every budget strictly.
+  states. **A time target is enforced only in CI, where measurement is consistent**, and
+  this repository has no CI, so on this host a seconds budget is labelled `host-variable`:
+  still measured on every check and reported with its actual, budget, headroom and host
+  conditions, and over it warns rather than refuses. `plan-approval-seconds` and `gate-time`
+  carry it; `own-sessions-read-seconds` predates the rule and is strict until it is
+  relabelled. The hook reads the label on the
+  root file; a project's uncached `budgets-host` target (`scripts/budgets-host.sh`) reads it
+  on the project's `host` budgets, where an errored measurement still fails, and a
+  `host-variable` budget is always labelled `host` too, so the cached `budgets` target never
+  selects it. A budget labelled `accepted-overrun` is over its bar by a cost the user
+  accepted while an upstream fix lands, and its registration names that fix's follow-up
+  and says why it is over. The cached `budgets` target (`scripts/budgets.sh`) measures and
+  reports it on every check, but over it warns rather than fails until the label comes
+  off. `plan-approval-points` carries it, over because onetaskgraph's public write
+  boundary re-reads the approved item's project before the approval's metadata write.
+  Every other budget, a points or a count budget among them, is checked strictly by both
+  targets.
 - **Host conditions are recorded for the manager's judgement.** Each result carries the
   conditions it was taken under, such as load, memory and other work running, so the
   manager can tell an extreme or unlikely circumstance from a regression.

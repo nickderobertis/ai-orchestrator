@@ -4109,8 +4109,11 @@ def _template_lines(checkout: Path, project: str) -> tuple[str, ...]:
 #: A reading of `run-1` in every respect the engine's document is, ended `failed`, which the
 #: unreadable answers below each depart from in one way.
 WELL_FORMED = {
-    "schema_version": 1,
+    "labels": {"onepipeline.project": "plans:1"},
+    "group": "plans:1",
+    "schema_version": 2,
     "run_id": "run-1",
+    "public_id": "run-0123456789ab",
     "word": "ENDED failed",
     "liveness": "DRIVER DEAD",
     "driven": False,
@@ -4124,6 +4127,8 @@ def _malformed(**changed: object) -> str:
     return json.dumps(WELL_FORMED | changed)
 
 
+#: A live note's delivery as the engine prints one, for the inbox shapes below.
+QUEUED = {"state": "queued", "node": "a", "since": "2026-01-01T00:00:00Z"}
 #: An ending as the engine prints one, for the shapes below that depart from it within.
 FAILED_ENDING = {"kind": "failed", "nodes": [{"id": "a", "status": "failed", "outcome": None}]}
 
@@ -4133,7 +4138,7 @@ FAILED_ENDING = {"kind": "failed", "nodes": [{"id": "a", "status": "failed", "ou
     [
         ("", 0, "the answer is not one JSON document"),
         ("ENDED failed", 0, "the answer is not one JSON document"),
-        (_malformed(schema_version=2), 0, "it is schema 2, not 1"),
+        (_malformed(schema_version=1), 0, "it is schema 1, not 2"),
         (_malformed(run_id="run-2"), 0, 'it reads run "run-2", not run-1'),
         (_malformed(word="FINISHED"), 0, 'its word is "FINISHED", which is not one the engine'),
         (_malformed(word=["SETTLED"]), 0, 'its word is ["SETTLED"], which is not one the engine'),
@@ -4175,7 +4180,7 @@ FAILED_ENDING = {"kind": "failed", "nodes": [{"id": "a", "status": "failed", "ou
         ),
         (_malformed(driven=True, liveness="ACTIVE"), 0, "it reads driven and yet ended or paused"),
         (_malformed(extra=1), 0, "the reading does not carry exactly"),
-        (_malformed(schema_version=True), 0, "it is schema true, not 1"),
+        (_malformed(schema_version=True), 0, "it is schema true, not 2"),
         (
             _malformed(
                 ending={**FAILED_ENDING, "nodes": [{"id": 1, "status": "failed", "outcome": None}]}
@@ -4225,6 +4230,41 @@ FAILED_ENDING = {"kind": "failed", "nodes": [{"id": "a", "status": "failed", "ou
             0,
             "an unanswered envelope's delivery is not an object",
         ),
+        (_malformed(labels={"a": 1}), 0, "its labels are not an object of strings"),
+        (_malformed(labels=[]), 0, "its labels are not an object of strings"),
+        (_malformed(group=3), 0, "its group is neither a string nor null"),
+        (_malformed(public_id=None), 0, "its public id is not a string"),
+        (_malformed(inbox={}), 0, "its inbox is not a list"),
+        (
+            _malformed(inbox=[{"envelope": "e-1"}]),
+            0,
+            "a note in its inbox does not carry exactly delivery, envelope",
+        ),
+        (
+            _malformed(inbox=[{"envelope": 7, "delivery": QUEUED}]),
+            0,
+            "a note in its inbox has an envelope id that is not a string",
+        ),
+        (
+            _malformed(inbox=[{"envelope": "e-1", "delivery": {}}]),
+            0,
+            "a note in its inbox's delivery does not carry exactly node, since, state",
+        ),
+        (
+            _malformed(inbox=[{"envelope": "e-1", "delivery": QUEUED | {"state": "delivering"}}]),
+            0,
+            'a note in its inbox is "delivering", not queued',
+        ),
+        (
+            _malformed(inbox=[{"envelope": "e-1", "delivery": QUEUED | {"node": 1}}]),
+            0,
+            "a note in its inbox names its node or its time as no string",
+        ),
+        (
+            _malformed(inbox=[{"envelope": "e-1", "delivery": QUEUED | {"deadline": 5}}]),
+            0,
+            "a note in its inbox has a deadline that is not a string",
+        ),
         ("", 3, "'onepipeline status --json' exited 3, with the engine's diagnostic above"),
     ],
     ids=[
@@ -4256,6 +4296,17 @@ FAILED_ENDING = {"kind": "failed", "nodes": [{"id": "a", "status": "failed", "ou
         "unanswered-fields",
         "unanswered-id",
         "unanswered-delivery",
+        "labels-not-strings",
+        "labels-not-an-object",
+        "group",
+        "public-id",
+        "inbox-not-a-list",
+        "inbox-fields",
+        "inbox-id",
+        "inbox-delivery-fields",
+        "inbox-state",
+        "inbox-node",
+        "inbox-deadline",
         "exit",
     ],
 )
@@ -4329,6 +4380,44 @@ def test_an_ended_reading_carrying_unanswered_envelopes_is_read_and_followed_up(
     traced = trace.read_text(encoding="utf-8").splitlines()
     assert "uv run onepipeline status run-1 --json" in traced, traced
     # The landed changes' telemetry is read only past an `ended` decision.
+    assert any(line.endswith("onepipeline telemetry run-1 --changes --json") for line in traced)
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        {"inbox": []},
+        {"inbox": [{"envelope": "e-1", "delivery": QUEUED}]},
+        {"inbox": [{"envelope": "e-1", "delivery": QUEUED | {"deadline": "2026-01-02T00:00:00Z"}}]},
+        {"labels": {}, "group": None},
+    ],
+    ids=["empty-inbox", "inbox", "inbox-deadline", "ungrouped"],
+)
+def test_an_ended_reading_carrying_an_inbox_or_no_group_is_read_and_followed_up(
+    tmp_path: Path, changed: dict[str, object]
+) -> None:
+    """Inbox notes, a run's labels and its group decide nothing, so the ending is read.
+
+    The engine carries live notes still queued for their receivers, and every run's labels,
+    group and public id; a reading carrying any of them in the published shape is read as
+    ended and the recipe goes on toward the launch.
+    """
+    checkout, trace = delegation_checkout.delegation_checkout(tmp_path)
+    (checkout / "runs" / "run-1").mkdir(parents=True)
+    drafts = checkout / ".follow-ups" / "tasks" / "run-1" / "drafts"
+    drafts.mkdir(parents=True)
+    (drafts / "20260101T000000Z-noticed.md").write_text("a draft\n", encoding="utf-8")
+
+    followed = delegation_checkout.run_recipe(
+        checkout,
+        trace,
+        "follow-ups",
+        "run-1",
+        env={delegation_checkout.STATUS_ANSWER_ENV: _malformed(**changed)},
+    )
+
+    assert "could not be read" not in followed.stderr, followed.stdout + followed.stderr
+    traced = trace.read_text(encoding="utf-8").splitlines()
     assert any(line.endswith("onepipeline telemetry run-1 --changes --json") for line in traced)
 
 

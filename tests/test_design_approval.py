@@ -101,6 +101,7 @@ OTHERWISE: Mapping[str, object] = {
     "repositories": ["nickderobertis/ai-orchestrator"],
     "metadata": {"the destination's own bookkeeping": "authoring:demo-design"},
     "location": {"url": "https://github.invalid/users/x/projects/2?pane=issue&itemId=7"},
+    "version": plan_store.DocumentVersion("2026-10-23T00:00:01Z"),
 }
 
 
@@ -1534,6 +1535,72 @@ def test_a_rendered_table_with_no_separator_row_is_refused_by_approve_and_record
         design_approval.approve(project)
     held = design_approval.design_document(project)
     assert design_approval.RECORD_KEY not in held.metadata, held.metadata
+
+
+#: The store's real document listing, read back after a test has replaced the approval's.
+READ_DOCUMENTS = plan_store.read_documents
+
+
+def _listed_as(
+    monkeypatch: pytest.MonkeyPatch, project: str, **fields: str
+) -> plan_store.StoreDocument:
+    """Have the approval's listing answer ``project``'s real document with ``fields`` changed."""
+    (held,) = READ_DOCUMENTS(project)
+    listed = dataclasses.replace(held, **fields)
+    monkeypatch.setattr(plan_store, "read_documents", lambda _project: [listed])
+    return held
+
+
+def test_an_approval_whose_listed_version_has_moved_is_refused_naming_the_re_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The write expects the version the listing read, so a moved document records nothing.
+
+    The listing answers a change token the real store's document is no longer at, as one
+    read before a person's edit does; the store refuses the guarded write as `version-moved`,
+    and the approval says to read the document again and re-run it.
+    """
+    project = _designed(tmp_path / "store", monkeypatch, CURRENT)
+    held = _listed_as(
+        monkeypatch, project, version=plan_store.DocumentVersion("a version read before an edit")
+    )
+
+    with pytest.raises(OSError) as refused:
+        design_approval.approve(project)
+
+    said = str(refused.value)
+    assert f"{project}'s design document {held.qualified_id} changed after this" in said, said
+    assert f"re-run `{design_approval.RECIPE} {project}`" in said, said
+    assert design_approval.VERSION_MOVED in said, said
+    (after,) = READ_DOCUMENTS(project)
+    assert design_approval.RECORD_KEY not in after.metadata, after.metadata
+
+
+def test_an_approval_write_the_store_refuses_otherwise_is_reported_as_the_store_said(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only a moved version is reworded: any other refusal of the write is the store's own.
+
+    The store's own document directory is made read-only after the listing, so the guarded
+    write is refused by the store for a reason that is not the document having moved.
+    """
+    project = _designed(tmp_path / "store", monkeypatch, CURRENT)
+    documents = tmp_path / "store" / "documents"
+    assert documents.is_dir(), list((tmp_path / "store").iterdir())
+    for held in (documents, *documents.iterdir()):
+        held.chmod(held.stat().st_mode & ~0o222)
+    try:
+        with pytest.raises(OSError) as refused:
+            design_approval.approve(project)
+    finally:
+        for held in (documents, *documents.iterdir()):
+            held.chmod(held.stat().st_mode | 0o200)
+
+    said = str(refused.value)
+    assert said.startswith("onetaskgraph:"), said
+    assert "changed after this approval read it" not in said, said
+    (after,) = READ_DOCUMENTS(project)
+    assert design_approval.RECORD_KEY not in after.metadata, after.metadata
 
 
 # llmlint: ignore-end[shell_test_tiers_stay_split]

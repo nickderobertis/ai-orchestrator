@@ -8,7 +8,9 @@ recorded `body_digest` describing the pre-copy rendering, so `just approve-desig
 every board copy as edited after it was rendered. These journeys hold both halves of the
 adoption: a copy made the way `just finish-plan` makes it is approved on the board and
 accepted by the launch gate, and a copy carrying the stale digest an earlier store left is
-refused naming the re-copy that repairs it rather than an edit nobody made.
+refused naming the re-copy that repairs it rather than an edit nobody made. And because an
+approval writes guarded on the change token its listing read the document at, a person's
+edit on the board between that read and the write is refused rather than approved unread.
 
 Everything is real but GitHub's Projects API, which is the loopback double
 `tests/github_board.py` serves, and the paid model `reviewed` scripts: the recipes, the
@@ -21,6 +23,7 @@ import hashlib
 import json
 import os
 import subprocess
+import urllib.request
 from collections.abc import Mapping
 from pathlib import Path
 from typing import NamedTuple
@@ -30,7 +33,9 @@ from github_board import (
     AUTHORING_ROOT_ENV,
     AUTHORING_SOURCE,
     BOARD,
+    _GitHubFixture,
     _Issue,
+    _Operation,
     _plan_environment,
     _serving_board,
 )
@@ -471,5 +476,80 @@ def test_an_approval_recorded_on_the_board_copy_survives_a_re_copy_of_the_unchan
         f"the launch gate has to accept {board_project} after a re-copy of the unchanged "
         f"plan, and answered {gated.stdout}{gated.stderr}"
     )
+    # llmlint: ignore-end[e2e_not_mocked]
+    # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+#: What the person edits the board copy's design document to say while it is being approved.
+EDITED = "the paginated listing, as edited on the board"
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] `board-copy-approval` is
+# this directory's own leaf project, keyed on `boardCopyApprovalWorkspace`, the edge this rule
+# asks for; that key names the recipes, scripts and package these journeys drive, so narrowing
+# it would memoize a verdict over a tree never run.
+# llmlint: ignore-block[e2e_not_mocked] The same one doubled boundary as the journeys above.
+def test_an_approval_whose_document_was_edited_after_its_listing_is_refused_recording_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A design document edited on the board after the approval listed it is not approved.
+
+    The person's edit lands as the approval reads its project's record, after it listed the
+    plan's documents and computed its key over what they said. The adopted store refuses the
+    metadata write expecting the listed version, so `just approve-design` exits non-zero
+    naming the plan and the re-run, nothing is recorded, the edit stands, and the launch gate
+    still refuses the plan.
+    """
+    environment, _, _ = _drafted_for_the_board(tmp_path, monkeypatch, approve=False)
+    with _serving_board() as remote:
+        on_the_board = {**environment, **remote}
+        copied = _recipe(on_the_board, "copy-plan", RENDERED_QUALIFIED, "--to", "plans")
+        assert copied.returncode == 0, copied.stdout + copied.stderr
+        board_project = _copied(copied.stdout)[RENDERED_QUALIFIED]
+        (design,) = [
+            one for one in BOARD.issues_created_and_kept() if one.title.startswith("DESIGN: ")
+        ]
+        assert "the paginated listing" in design.body, design.body[:400]
+
+        def edited_on_the_board() -> None:
+            # A person's edit on GitHub is one `updateIssue` of the issue's body, sent to the
+            # board's own GraphQL endpoint as its web view sends it.
+            body = design.body.replace("the paginated listing", EDITED, 1)
+            mutation = {
+                "query": (
+                    "mutation($input:UpdateIssueInput!){updateIssue(input:$input){issue{id}}}"
+                ),
+                "variables": {"input": {"id": design.content_id, "body": body}},
+            }
+            request = urllib.request.Request(  # noqa: S310 - the loopback's own endpoint
+                remote["ONETASKGRAPH_SOURCES__PLANS__CONFIG__ENDPOINT"],
+                data=json.dumps(mutation).encode(),
+                headers={
+                    "Authorization": f"Bearer {remote['GH_PROJECTS_TOKEN']}",
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=30) as answer:  # noqa: S310
+                assert answer.status == 200, answer.status
+
+        _GitHubFixture.before_operation[_Operation.ISSUE] = edited_on_the_board
+        refused = _recipe(on_the_board, "approve-design", board_project)
+        _GitHubFixture.before_operation.pop(_Operation.ISSUE, None)
+        _on_the_board(monkeypatch, remote)
+        after = design_approval.design_document(board_project)
+        gated = _launch_gate(on_the_board, board_project)
+
+    assert refused.returncode != 0, refused.stdout + refused.stderr
+    said = " ".join(refused.stderr.split())
+    assert f"{board_project}'s design document" in said, said
+    assert "changed after this approval read it, so nothing was recorded" in said, said
+    assert f"re-run `just approve-design {board_project}`" in said, said
+    assert design_approval.VERSION_MOVED in said, (
+        f"the adopted store's version-moved refusal has to be what the approval read: {said}"
+    )
+    assert EDITED in after.content, "the person's edit has to stand"
+    assert design_approval.recorded(after) is None, after.metadata
+    assert gated.returncode == 1, gated.stdout + gated.stderr
     # llmlint: ignore-end[e2e_not_mocked]
     # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

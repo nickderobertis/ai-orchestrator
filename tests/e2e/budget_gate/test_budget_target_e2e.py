@@ -8,7 +8,11 @@ the project's tree, its dependencies' production inputs and the onebudgetspec pi
 check` runs it among the targets its diff selection picks, so a project's deterministic
 budgets run only when a change touches that project. `budgets-host` runs exactly the `host`
 ones, uncached, among the targets the recipe runs whatever the diff, beside
-`workspace:validate-budgets`, which validates every budgets file in the tree.
+`workspace:validate-budgets`, which validates every budgets file in the tree. A `host`
+budget also labelled `host-variable` is measured and reported there like any other, but its
+over result warns rather than fails, because this repository has no CI and a wall clock on a
+shared host is no consistent measurement (`scripts/budgets-host.sh`); one whose measurement
+errors still fails.
 
 These journeys build a scratch Nx workspace — this checkout's `nx.json`, root
 `project.json`, `scripts/` and locked installs, and two projects of their own, each
@@ -73,7 +77,9 @@ ORIGIN = "https://example.invalid/budget-target.git"
 
 
 def _budgets(project: str, marker: Path) -> dict:
-    """A project's own file: one budget measured from `value`, one `host`, one `onepipeline`."""
+    """A project's own file: one budget measured from `value`, one `host`, one `onepipeline`,
+    one `host-variable` measured from `variable`, and one `accepted-overrun` measured from
+    `accepted`."""
     return {
         "schema_version": 1,
         "budgets": [
@@ -96,6 +102,32 @@ def _budgets(project: str, marker: Path) -> dict:
                 "measure": "elapsed",
                 "command": ["sh", "-c", f'echo {project}-wall >>"{marker}"'],
                 "unit": "seconds",
+                "direction": "max",
+                "threshold": THRESHOLD,
+            },
+            {
+                "id": f"{project}-variable",
+                "labels": ["host", "host-variable"],
+                "measure": "reported",
+                "command": [
+                    "sh",
+                    "-c",
+                    'printf \'{"value": %s}\' "$(cat variable)" >"$ONEBUDGETSPEC_RESULT"',
+                ],
+                "unit": "seconds",
+                "direction": "max",
+                "threshold": THRESHOLD,
+            },
+            {
+                "id": f"{project}-accepted",
+                "labels": ["accepted-overrun"],
+                "measure": "reported",
+                "command": [
+                    "sh",
+                    "-c",
+                    'printf \'{"value": %s}\' "$(cat accepted)" >"$ONEBUDGETSPEC_RESULT"',
+                ],
+                "unit": "points",
                 "direction": "max",
                 "threshold": THRESHOLD,
             },
@@ -223,6 +255,8 @@ def workspace(tmp_path: Path) -> Workspace:
             yaml.safe_dump(_budgets(project, marker)), encoding="utf-8"
         )
         (root / project / "value").write_text("5\n", encoding="utf-8")
+        (root / project / "variable").write_text("5\n", encoding="utf-8")
+        (root / project / "accepted").write_text("5\n", encoding="utf-8")
     for args in (
         ("init", "-q"),
         ("config", "user.name", "test"),
@@ -363,3 +397,95 @@ def test_real_check_measures_host_budgets_when_no_project_is_touched(
     assert ran.count("alpha-wall") == 2, ran
     assert ran.count("beta-wall") == 2, ran
     assert not [entry for entry in ran if not entry.endswith("-wall")], ran
+
+
+def test_a_host_variable_budget_over_its_threshold_warns_and_fails_nothing(
+    workspace: Workspace,
+) -> None:
+    """Measured and reported over on the unconditional phase, which still passes, and says why."""
+    workspace.write("alpha/variable", f"{THRESHOLD + 5}\n")
+
+    always = workspace.unconditional()
+
+    said = always.stdout + always.stderr
+    assert always.returncode == 0, said
+    assert f"budget alpha-variable: actual {THRESHOLD + 5} seconds" in said, said
+    assert "— over" in said, said
+    assert "warning: budget alpha-variable is over" in said, said
+    assert "labelled host-variable" in said, said
+    assert "budget beta-variable: actual 5 seconds" in said, said
+
+
+def test_a_host_variable_budget_whose_measurement_errors_fails_the_check(
+    workspace: Workspace,
+) -> None:
+    """A measurement that could not be taken is never read as within, however it is labelled."""
+    workspace.write("alpha/variable", "not a number\n")
+
+    always = workspace.unconditional()
+
+    said = always.stdout + always.stderr
+    assert always.returncode != 0, said
+    assert "host-variable budgets errored" in said, said
+
+
+def test_a_strict_host_budget_over_its_threshold_still_fails_the_check(
+    workspace: Workspace,
+) -> None:
+    """Only the `host-variable` label warns: a `host` budget without it fails when over."""
+    budgets = yaml.safe_load((workspace.root / "alpha" / "budgets.yaml").read_text("utf-8"))
+    (wall,) = [budget for budget in budgets["budgets"] if budget["id"] == "alpha-wall"]
+    wall["threshold"] = 0
+    workspace.write("alpha/budgets.yaml", yaml.safe_dump(budgets))
+
+    always = workspace.unconditional()
+
+    said = always.stdout + always.stderr
+    assert always.returncode != 0, said
+    assert "budget alpha-wall:" in said and "— over" in said, said
+    assert "warning: budget alpha-wall" not in said, said
+    assert "optimize what it measures until it is within" in said, said
+
+
+def test_an_accepted_overrun_budget_over_its_threshold_warns_and_fails_nothing(
+    workspace: Workspace,
+) -> None:
+    """Over on the touched project's cached target, which still passes, and says why."""
+    workspace.write("alpha/accepted", f"{THRESHOLD + 5}\n")
+
+    checked = workspace.check()
+
+    said = checked.stdout + checked.stderr
+    assert checked.returncode == 0, said
+    assert f"budget alpha-accepted: actual {THRESHOLD + 5} points" in said, said
+    assert "— over" in said, said
+    assert "warning: budget alpha-accepted is over" in said, said
+    assert "labelled accepted-overrun" in said, said
+
+
+def test_an_accepted_overrun_budget_beside_a_strict_one_over_still_fails_the_check(
+    workspace: Workspace,
+) -> None:
+    """The label exempts only its own budget: a strict one over in the same file fails."""
+    workspace.write("alpha/accepted", f"{THRESHOLD + 5}\n")
+    workspace.measure("alpha", THRESHOLD + 5)
+
+    checked = workspace.check()
+
+    said = checked.stdout + checked.stderr
+    assert checked.returncode != 0, said
+    assert "budget alpha-size:" in said and "budget alpha-accepted:" in said, said
+    assert "this check fails" in said, said
+
+
+def test_an_accepted_overrun_budget_whose_measurement_errors_fails_the_check(
+    workspace: Workspace,
+) -> None:
+    """A figure that could not be taken is never read as within, labelled or not."""
+    workspace.write("alpha/accepted", "not-a-number\n")
+
+    checked = workspace.check()
+
+    said = checked.stdout + checked.stderr
+    assert checked.returncode != 0, said
+    assert "accepted-overrun budgets errored" in said, said

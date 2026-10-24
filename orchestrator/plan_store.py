@@ -53,6 +53,9 @@ QualifiedTaskId = NewType("QualifiedTaskId", str)
 QualifiedDocumentId = NewType("QualifiedDocumentId", str)
 QualifiedProjectId = NewType("QualifiedProjectId", str)
 NodeId = NewType("NodeId", str)
+#: A document's change token, as a listing of it reports it: opaque, spelled by its source
+#: alone, and what a write guarded on the document as read expects to find it at.
+DocumentVersion = NewType("DocumentVersion", str)
 
 
 def sdk[T](awaitable: Coroutine[object, object, T]) -> T:
@@ -237,6 +240,9 @@ class StoreDocument:
     repositories: list[str]
     metadata: Mapping[str, object]
     location: Mapping[str, object] | None
+    #: The change token the listing that read this document reported, or `None` where its
+    #: source reports none: what a write guarded on the document as read expects.
+    version: DocumentVersion | None = None
 
 
 @dataclass(frozen=True)
@@ -495,6 +501,7 @@ def read_documents(project: str) -> list[StoreDocument]:
                 [x.model_dump() for x in item.repositories],
                 item.metadata,
                 location,
+                DocumentVersion(item.version) if item.version is not None else None,
             )
         )
     return result

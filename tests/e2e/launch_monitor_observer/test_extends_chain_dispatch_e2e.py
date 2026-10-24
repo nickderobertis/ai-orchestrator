@@ -13,18 +13,18 @@ once per road a run's driver reaches it by:
   parent could have produced. It is read off the run's journal rather than off any config
   file, which is the distinction that matters: a config on disk says what this repository
   wrote down, and the journal says what the provider was handed.
-* the same plan, stopped, then adopted through `POST /api/v2/runs/{run}/adopt` on the
-  read API `just telemetry-server` serves. That route retains the API's **own** binary as
-  the driver, so `config/onepipeline-ui.version` governs the dispatch it then makes, and
-  a reader linking an engine that cannot resolve a chain would re-dispatch the node under
-  a config with no identities in it.
+* the same plan, stopped, then offered to the read API `just telemetry-server` serves for
+  adoption through `POST /api/v2/runs/{run}/adopt`. Through onepipeline-ui 0.44.0 that route
+  retained the API's **own** binary as the driver, a second road down which the chain had to
+  resolve; from 0.45.0 it answers `404 removed_route`, and the journey holds that the run
+  stays undriven, so `config/onepipeline-ui.version` governs no dispatch.
 
 * the `oneharness` CLI this host runs itself, which reads four of the ten role files
   on its own account rather than through the engine, so its own pin has to resolve a
   chain too. That road is read off the effective configuration the CLI reports, values
   and attributions together.
 
-And the refusal down each of the two dispatch roads, because "the parent is resolved"
+And the refusal down the dispatch road, because "the parent is resolved"
 and "the parent is ignored" are only told apart by a chain that cannot resolve: a child
 naming a parent that is not there settles its node rather than dispatching it, and the
 settlement names the config.
@@ -114,14 +114,12 @@ AGENT_CONFIG_OVERRIDE = "members.worker.agent.oneharness_config"
 SETTLING_SECONDS = 300
 
 #: How long the stand-in holds the adopt journey's agent turn before answering. Long
-#: enough that the stop lands on a dispatch that has not answered yet — which is what
-#: makes the answer the adopted driver's rather than the stopped driver's — and short
-#: enough that the re-dispatch answers inside the wait below.
+#: enough that the stop lands on a dispatch that has not answered yet, so a turn answering
+#: out of the parent afterwards could only be one a driver the adoption started made.
 HELD_SECONDS = 20
 
-#: The engine's refusal of an adoption of a run another session owns, which is why the
-#: server below is started under the same session the run was launched from.
-NOT_OWNER = 409
+#: What the read API answers a route it has removed with, the adopt route among them.
+REMOVED = 404
 
 #: What the engine settles a node as when its dispatch could not be prepared at all —
 #: the word `AGENTS.md` gives a host that could not launch, and the one a config chain
@@ -347,10 +345,8 @@ def _post(url: str) -> tuple[int, bytes]:
 def read_api(stopped: Launch) -> Iterator[str]:
     """`just telemetry-server` over one run's root, as the session that launched it.
 
-    Started under the launching run's own session because the adopt route is held to
-    ownership: a server that could not name itself as the owner would be refused
-    `409 not_owner`, and this journey would be measuring that refusal rather than what
-    the adopted reader drives.
+    Started under the launching run's own session, so the answer an adoption gets is the
+    route's own rather than a `409 not_owner` refusal of a stranger.
     """
     port = _free_port()
     serving = {**stopped.environment, "ONEPIPELINE_RUNS_DIR": str(stopped.runs_root)}
@@ -430,75 +426,25 @@ def stopped(tmp_path: Path, oneharness_bin: str) -> Iterator[Launch]:
         _just("stop", launch.run, environment=launch.environment, seconds=120)
 
 
-def test_a_run_adopted_from_the_read_api_dispatches_under_the_parents_value(
+def test_the_read_api_adopts_nothing_so_no_dispatch_runs_under_its_engine(
     stopped: Launch, read_api: str
 ) -> None:
-    """The adopt route retains the API's own binary, so its engine is what dispatches.
+    """The read API's adopt route is gone, so its own linked engine dispatches nothing here.
 
-    That is what makes `config/onepipeline-ui.version` a pin that governs a dispatch on
-    this host, and it is why `tests/test_linked_libraries.py` holds it level with
-    `config/onepipeline.version`. Here the level pair is spent: a reader whose engine
-    could not resolve a chain would re-dispatch this node under a config stating no
-    identities, and no turn of the adopted run would answer out of the parent.
+    Through onepipeline-ui 0.44.0 the route retained the API's own binary as the run's
+    driver, which made `config/onepipeline-ui.version` a pin that governed a dispatch and
+    gave a config chain a second road to be resolved down. From 0.45.0 the route answers
+    `404 removed_route`, so the run stopped above stays undriven and no turn of it answers
+    out of the parent config: the dispatch roads are the engine CLI's alone.
     """
     status, body = _post(f"{read_api}/api/v2/runs/{stopped.run}/adopt")
 
-    assert status != NOT_OWNER, (
-        f"the read API was refused the adoption as another session's run: {body!r}; it "
-        "is started under the session the run was launched from"
-    )
-    assert status < 300, f"the adoption was refused: {status} {body!r}"
-
-    until(
-        "the adopted run to answer out of the parent config",
-        lambda: bool(stopped.answers()),
-        seconds=SETTLING_SECONDS,
-        state=stopped.results,
-        interval=1.0,
-    )
-
-
-def test_an_adopted_run_whose_parent_went_away_settles_rather_than_dispatching(
-    stopped: Launch, read_api: str, tmp_path: Path
-) -> None:
-    """The refusal down the adopt road, which is a different build's copy of the engine.
-
-    The refusal above is `onepipeline-cli`'s; this one is the read API's own statically
-    linked engine, a separate wheel under a separate pin, so a reader that accepted
-    `extends` and dropped the parent would pass the journey above — answering out of a
-    parent it never read — and fail only here.
-
-    Removing the parent between the stop and the adopt is the only way this road reaches
-    an unresolvable chain: the refusal happens in the dispatch-environment preflight, so
-    a run launched with one settles before there is an in-flight dispatch to stop and
-    adopt. What it asks of the adopted driver is that it resolve the chain at the
-    dispatch it makes, against the files as they stand then.
-    """
-    (tmp_path / "chain" / "parent.toml").unlink()
-
-    status, body = _post(f"{read_api}/api/v2/runs/{stopped.run}/adopt")
-    assert status != NOT_OWNER, (
-        f"the read API was refused the adoption as another session's run: {body!r}"
-    )
-    assert status < 300, f"the adoption was refused: {status} {body!r}"
-
-    until(
-        "the adopted run to settle the node whose chain it could not read",
-        lambda: f"failed ({REFUSED_BEFORE_DISPATCH})" in stopped.results(),
-        seconds=SETTLING_SECONDS,
-        state=stopped.results,
-        interval=1.0,
-    )
-    assert not stopped.answers(), (
-        "the adopted driver answered out of a parent that is no longer there, so what "
-        "it dispatched under came from something other than the file the child names"
-    )
-    reported = stopped.results()
-    assert "child.toml" in reported and "parent.toml" in reported, (
-        "the settlement named neither the config that declared the parent nor the "
-        f"parent it could not read, so it says nothing an operator could act on:\n"
-        f"{reported}"
-    )
+    assert status == REMOVED, f"the read API answered an adoption with {status} {body!r}"
+    assert json.loads(body)["error"]["code"] == "removed_route", body
+    reading = _just("status", stopped.run, "--json", environment=stopped.environment)
+    assert reading.returncode == 0, reading.stderr
+    assert json.loads(reading.stdout)["driven"] is False, reading.stdout
+    assert not stopped.answers(), "a run the read API was asked to adopt dispatched a turn"
 
 
 def test_the_adopted_cli_resolves_a_chain_and_attributes_it_to_the_parent(

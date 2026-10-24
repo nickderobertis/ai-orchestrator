@@ -139,6 +139,7 @@
       "inputs": [
         "{projectRoot}/budgets.yaml",
         "{workspaceRoot}/config/onebudgetspec.version",
+        "{workspaceRoot}/scripts/budgets.sh",
         {
           "input": "testSupport",
           "projects": [

@@ -76,7 +76,8 @@
     "budgets": {
       "inputs": [
         "{projectRoot}/budgets.yaml",
-        "{workspaceRoot}/config/onebudgetspec.version"
+        "{workspaceRoot}/config/onebudgetspec.version",
+        "{workspaceRoot}/scripts/budgets.sh"
       ]
     },
     "budgets-host": {

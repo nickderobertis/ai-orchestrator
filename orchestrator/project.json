@@ -253,6 +253,7 @@
       "inputs": [
         "default",
         "{workspaceRoot}/config/onebudgetspec.version",
+        "{workspaceRoot}/scripts/budgets.sh",
         "{workspaceRoot}/templates/design-doc.md.j2",
         "{workspaceRoot}/scripts/render-diagram.sh",
         "{workspaceRoot}/config/mermaid/config.json",

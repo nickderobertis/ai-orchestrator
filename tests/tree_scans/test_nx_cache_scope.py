@@ -56,6 +56,7 @@ from nx_inputs import (
     ASK_SEAM_JOURNEYS,
     ASK_SEAM_ROOT,
     ASK_SEAM_SCOPED,
+    BOARD_COPY_APPROVAL_HOST_SCOPED,
     BOARD_COPY_APPROVAL_ROOT,
     BOARD_COPY_APPROVAL_SCOPED,
     CHECKOUT_SCOPED,
@@ -839,6 +840,7 @@ SUITE_TIERS = (
     # the tiers it describes; the board-copy-approval entry sits beside the others' because
     # the catalog is the domain.
     (f"{BOARD_COPY_APPROVAL_ROOT}/project.json", BOARD_COPY_APPROVAL_SCOPED),
+    (f"{BOARD_COPY_APPROVAL_ROOT}/project.json", BOARD_COPY_APPROVAL_HOST_SCOPED),
     # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
     # catalog of test projects, where every project has its entry, and

@@ -10,11 +10,16 @@ lands the plan whole, the approval is recorded on the copy and admits its launch
 double's own request log neither recipe reads a whole-board page and each sends exactly the
 same requests, operation by operation, at either size.
 
-What the approval at the `plans` board's scale costs is printed, one line per store call
-it makes: the points the double's price table charges and the GitHub latency the copy-speed
-spike measured for each request it logged (`REQUEST_LATENCY_MS`), beside the recipe's real
-elapsed time. No budget is held to those figures: they rest on the adopted store's
-project-scoped listings and its metadata write, which this repository does not decide.
+The approval makes exactly four store calls to the board — the project's record by id, its
+tasks and its documents each listed by project, and one metadata write guarded on the change
+token the document listing returned — and reads no document on its own; its other calls read
+the store's configuration and the local `authoring` source, and send the board nothing. What
+it costs at the `plans` board's scale is two budgets. `plan-approval-points` is the points the
+double's price table charges, recorded per store call during the `test` target's run.
+`plan-approval-seconds` is the recipe's real elapsed time plus the GitHub latency the
+copy-speed spike measured for each request the double logged (`REQUEST_LATENCY_MS`), recorded
+per store call by the journey the uncached `test-host` target runs alone, because a wall clock
+a cache replayed would be another moment's.
 """
 
 from __future__ import annotations
@@ -31,6 +36,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import NamedTuple
 
+import budget_telemetry
 import pytest
 from github_board import (
     AUTHORING_ROOT_ENV,
@@ -60,7 +66,7 @@ from test_board_copy_design_approval_e2e import (
 )
 from waits import timeout as e2e_timeout
 
-from orchestrator import design_approval
+from orchestrator import design_approval, plan_store
 from orchestrator.root import REPO_ROOT
 
 #: The plan these journeys copy: one project, eight tasks rendered from this host's
@@ -305,6 +311,8 @@ class _Scaled(NamedTuple):
     attachments: dict[str, bytes]
     #: The generated PNG the authored document references, before copying it.
     expected_image: bytes
+    #: The change token a listing of the copied plan's documents returned before the approval.
+    listed_version: plan_store.DocumentVersion | None
 
 
 def _local_bodies(environment: Mapping[str, str]) -> dict[str, str]:
@@ -350,9 +358,12 @@ def _copied_and_approved(
         assert copy.ran.returncode == 0, copy.ran.stdout + copy.ran.stderr
         destinations = _copied(copy.ran.stdout)
         board_project = destinations[QUALIFIED]
+        _on_the_board(monkeypatch, remote)
+        (listed,) = design_approval.design_documents(
+            board_project, plan_store.read_documents(board_project)
+        )
         approval = _run(root, on_the_board, "just", "approve-design", board_project)
         gate = _launch_gate(on_the_board, board_project)
-        _on_the_board(monkeypatch, remote)
         document = design_approval.design_document(board_project)
         scaled = _Scaled(
             copy=copy,
@@ -365,6 +376,7 @@ def _copied_and_approved(
             landed={issue.title: issue for issue in BOARD.issues_created_and_kept()},
             attachments=dict(BOARD.attachments),
             expected_image=(root / "graph" / "plan-dag.png").read_bytes(),
+            listed_version=listed.version,
         )
     return scaled, bodies
 
@@ -395,6 +407,107 @@ def _the_approval_admits_the_copy(scaled: _Scaled) -> None:
     assert "recorded the approval of" in ran.stdout, ran.stdout
     assert scaled.recorded == scaled.expected, (scaled.recorded, scaled.expected)
     assert scaled.gate.returncode == 0, scaled.gate.stdout + scaled.gate.stderr
+
+
+#: The store calls an approval makes to the `plans` board, by verb: its project's record read
+#: by id, its tasks and its documents each listed by project, and the one guarded write of its
+#: approval record.
+APPROVAL_CALLS = (
+    ("document", "list"),
+    ("project", "show"),
+    ("task", "list"),
+    ("document", "metadata", "set"),
+)
+
+#: The store calls the approval may make beside those, none of which reaches GitHub: the
+#: store's own resolved configuration, and the local `authoring` source's projects and
+#: documents, read to recognise a copy drafted privately (`spike_plan.drafted_ids`).
+LOCAL_CALLS = {
+    (None, ("config", "show")),
+    (AUTHORING_SOURCE, ("project", "list")),
+    (AUTHORING_SOURCE, ("document", "list")),
+}
+
+
+def _flag(argv: list[str], flag: str) -> str | None:
+    """The value ``argv`` passes ``flag``, or `None` when it passes none."""
+    return argv[argv.index(flag) + 1] if flag in argv else None
+
+
+def _source(argv: list[str]) -> str | None:
+    """The source a store call addresses: its `--source`, else its first qualified id's."""
+    named = _flag(argv, "--source")
+    if named is not None:
+        return named
+    qualified = next((word for word in argv if ":" in word and not word.startswith("{")), None)
+    return qualified.partition(":")[0] if qualified else None
+
+
+def _the_approval_makes_only_its_four_calls(scaled: _Scaled) -> None:
+    """The approval asks the board four things, guarded on the listing; the rest stays local.
+
+    Each call is told by the source it addresses, so a further call to the `plans` source —
+    a document read alone among them — fails here, while the local reads of the `authoring`
+    source a privately drafted copy is recognised by are held to send the board nothing.
+    """
+    calls = scaled.approval.calls
+    on_the_board = [call.argv for call in calls if _source(call.argv) == BOARD_SOURCE]
+    verbs = [
+        tuple(argv[: len(verb)]) for argv, verb in zip(on_the_board, APPROVAL_CALLS, strict=False)
+    ]
+    assert len(on_the_board) == len(APPROVAL_CALLS), on_the_board
+    assert verbs == list(APPROVAL_CALLS), on_the_board
+    local = [call.argv for call in calls if _source(call.argv) != BOARD_SOURCE]
+    assert all((_source(argv), tuple(argv[:2])) in LOCAL_CALLS for argv in local), local
+    assert all(
+        call.requests == []
+        for call, launch in zip(_store_calls(scaled.approval), calls, strict=True)
+        if _source(launch.argv) != BOARD_SOURCE
+    ), [(call.label, len(call.requests)) for call in _store_calls(scaled.approval)]
+    listings = [argv for argv in on_the_board if argv[1] == "list"]
+    assert all(_flag(argv, "--project") for argv in listings), listings
+    (write,) = [argv for argv in on_the_board if argv[:3] == ["document", "metadata", "set"]]
+    assert scaled.listed_version, "the board's document listing has to carry a change token"
+    assert _flag(write, "--expect") == scaled.listed_version, (write, scaled.listed_version)
+
+
+def _recorded_points(approval: _Run) -> None:
+    """Record `plan-approval-points`: each store call's points, with its requests beside them."""
+    for call in _store_calls(approval):
+        budget_telemetry.record(
+            "plan-approval-points",
+            call.label,
+            sum(_request_points(request) for request in call.requests),
+            unit="points",
+            requests=len(call.requests),
+        )
+
+
+def _recorded_seconds(approval: _Run) -> None:
+    """Record `plan-approval-seconds`: the real elapsed time, each call's latency, and the table.
+
+    The latency table is recorded beside the figure without counting toward it, so the
+    breakdown says what each request kind was charged.
+    """
+    budget_telemetry.record(
+        "plan-approval-seconds", "real elapsed", approval.seconds, unit="seconds"
+    )
+    for call in _store_calls(approval):
+        budget_telemetry.record(
+            "plan-approval-seconds",
+            f"added latency of {call.label}",
+            sum(request_latency_ms(request) for request in call.requests) / 1000,
+            unit="seconds",
+            requests=len(call.requests),
+        )
+    for kind, charged in REQUEST_LATENCY_MS.items():
+        budget_telemetry.record(
+            "plan-approval-seconds",
+            f"latency table: {kind}",
+            charged,
+            unit="ms per request",
+            counted=False,
+        )
 
 
 def _printed_cost(approval: _Run) -> None:
@@ -430,14 +543,16 @@ def test_copying_and_approving_a_plan_costs_the_same_requests_on_any_size_of_boa
     """The copy and the approval send the same requests at 2,000 items as at 200, and no page.
 
     At both sizes the copy lands the plan whole and the approval is recorded on the copied
-    document and admits the launch. What the approval at the `plans` board's scale cost is
-    printed per store call.
+    document and admits the launch, through exactly its four store calls to the board. What
+    the approval at the `plans` board's scale cost in points is recorded per store call as
+    `plan-approval-points`, and printed with its latency.
     """
     scaled: dict[int, _Scaled] = {}
     for size in SIZES:
         scaled[size], bodies = _copied_and_approved(tmp_path / str(size), monkeypatch, size)
         _the_plan_landed_whole(scaled[size], bodies)
         _the_approval_admits_the_copy(scaled[size])
+        _the_approval_makes_only_its_four_calls(scaled[size])
         for recipe in (scaled[size].copy, scaled[size].approval):
             assert recipe.requests, recipe.ran.args
             assert _whole_board(recipe.requests) == [], (size, recipe.ran.args)
@@ -452,6 +567,40 @@ def test_copying_and_approving_a_plan_costs_the_same_requests_on_any_size_of_boa
         _by_operation(small.approval.requests),
     )
 
+    _recorded_points(large.approval)
     _printed_cost(large.approval)
+    # llmlint: ignore-end[e2e_not_mocked]
+    # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The uncached `test-host`
+# target runs this journey alone and the `test` target deselects it, because the wall clock it
+# records for `plan-approval-seconds` has to be this run's rather than a cache's.
+# llmlint: ignore-block[e2e_not_mocked] The same one doubled boundary as the journey above.
+# llmlint: ignore-block[budgets_reuse_gate_telemetry] The task registering these budgets
+# requires `plan-approval-points` to be recorded by the cached `test` target and
+# `plan-approval-seconds` by the uncached `test-host` target, which runs only this journey
+# while `test` deselects it, so the wall clock is this run's and never a cache's. The
+# journey above cannot be that target's: it also copies and approves at 200 items, and a
+# cached replay of it is what the points budget reads. So this repeats the 2,000-item copy
+# only as setup for the one approval it times, and records nothing the journey above does.
+def test_approving_a_plan_at_the_plans_boards_scale_records_the_time_a_person_waits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`just approve-design` at 2,000 items, timed for real, plus each request's GitHub latency.
+
+    Nothing sleeps for the added latency: the double answers at once, so the recipe's real
+    elapsed time is its process starts, its own steps and any wait the store really sleeps,
+    and each request the double logged is charged the spike's latency for its kind.
+    """
+    scaled, _ = _copied_and_approved(
+        tmp_path / str(PLANS_BOARD_SCALE), monkeypatch, PLANS_BOARD_SCALE
+    )
+    _the_approval_admits_the_copy(scaled)
+    _the_approval_makes_only_its_four_calls(scaled)
+
+    _recorded_seconds(scaled.approval)
+    _printed_cost(scaled.approval)
+    # llmlint: ignore-end[budgets_reuse_gate_telemetry]
     # llmlint: ignore-end[e2e_not_mocked]
     # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

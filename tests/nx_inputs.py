@@ -735,8 +735,12 @@ UNFINISHED_ROOT = "tests/unfinished"
 #: own for the reason `unwatched` is: a real recipe chain per assertion is a cost `nx
 #: affected` can only keep off an unrelated edit where it is a separate project.
 BOARD_COPY_APPROVAL_PROJECT = "board-copy-approval"
-#: That project's one test target: nothing here reads this repository's prose.
+#: That project's code-keyed test target: nothing here reads this repository's prose.
 BOARD_COPY_APPROVAL_SCOPED = "test"
+#: Its uncached target timing the approval at the `plans` board's scale, the one journey
+#: its `test` deselects: the figure budget `plan-approval-seconds` reports, which a memo
+#: would replay from another moment.
+BOARD_COPY_APPROVAL_HOST_SCOPED = "test-host"
 #: The directory it owns, which every other project's tiers ignore.
 BOARD_COPY_APPROVAL_ROOT = "tests/e2e/board_copy_approval"
 # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]

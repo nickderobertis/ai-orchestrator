@@ -22,7 +22,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.81.0 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.86.0 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -321,11 +321,11 @@ turns onejudge 0.19.0 ran through
 Claude Code: each record's `usage` block is the same five keys and nothing else.
 It moved again to 0.19.5 with the engine 0.75.0 and to 0.20.0 with the engine 0.80.2, and
 both files are unchanged between `onejudge-v0.19.0` and `onejudge-v0.20.0` too, and the
-engine wheel links `oneharness-core` 0.28.6 for itself, onejudge 0.20.0 and oneagentgraph 0.7.0, read off its
+engine wheel links `oneharness-core` 0.28.8 for itself, onejudge 0.20.0 and oneagentgraph 0.7.1, read off its
 own SBOM. Between `oneharness-core-v0.24.2` and `oneharness-core-v0.28.2`, `domain/usage.rs`
 gains the reset-credit report above and a millisecond RFC 3339 reader
 ([oneharness#1464](https://github.com/nickderobertis/oneharness/pull/1464)), touching
-no per-turn token usage, and it is unchanged from there to `oneharness-core-v0.28.6`; this
+no per-turn token usage, and it is unchanged from there to `oneharness-core-v0.28.8`; this
 was read off the tags and was not re-taken on judge turns.
 `dispatches`,
 `settled_done`, `no_diff`, `surfaces_queued`, and `surfaces_read` are the run's own
@@ -456,12 +456,14 @@ served them.
    `just telemetry-server` — or by `just dag-ui`, which is the same published server
    with the browser view built into it answering on the same origin) is the structured
    view. Measured against real runs on
-   **`onepipeline-api` 0.44.0**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.48.1**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
-   what re-opens this paragraph: `telemetry_schema_version` 21 on the envelope, where
-   0.13.0 served 20 and
-   0.11.0 served 19, 0.9.0 served 17, 0.7.3 served 16 and 0.7.2 served 15; `timeline_schema_version` 12,
-   where 0.41.0 served 11 and 0.21.1 served 10 — 11 carries each change request's `review` record from
+   what re-opens this paragraph: `telemetry_schema_version` 24 on the envelope, where
+   0.44.0 served 21, 0.13.0 served 20 and
+   0.11.0 served 19, 0.9.0 served 17, 0.7.3 served 16 and 0.7.2 served 15; `timeline_schema_version` 13,
+   where 0.44.0 served 12, 0.41.0 served 11 and 0.21.1 served 10 — 13 counts a journal record
+   relayed again under one `(stream, seq)` once, and bounds each session lane by its own first
+   and last record, and 11 carries each change request's `review` record from
    onevcs 0.36.0's draft lifecycle (`change-drafted`, `change-check`,
    `checks-settled`, `draft-lifted`, `draft-lifted-early`, `draft-kept-for-review`),
    and a `publication` left open now closes where the watch of it ended — and 0.7.3

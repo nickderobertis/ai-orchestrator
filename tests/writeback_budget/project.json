@@ -11,6 +11,7 @@
     "support-conftest",
     "support-fake-backend",
     "support-fake-codex",
+    "support-follow-up-variables",
     "support-harness-indirections",
     "support-no-paid-provider",
     "support-plan-fixture-source",

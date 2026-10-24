@@ -1,8 +1,8 @@
 # DAG Observatory
 
 The live and historical view of orchestrated DAG execution — which also
-**supervises** it, stopping, adopting, replying to and shutting down runs, each
-behind the engine's own authority and the acting session the server runs as — is
+**supervises** it, stopping, replying to and attesting on runs and shutting down the
+host, each behind the engine's own authority and the acting session the server runs as — is
 [`onepipeline-ui`](https://github.com/nickderobertis/onepipeline-ui). It is not
 built in this repository, and since `onepipeline-api serve --ui` it is not even
 composed here: the design record, the component choices, the schema validation, and
@@ -12,11 +12,11 @@ operational half — how that binary is started here, and what each of the two r
 around it does.
 
 It is not a read-only view, and that changes what starting it means rather than
-only what it shows: the API wraps every post-launch verb, the browser performs each
-one as **one acting session**, and an adoption made from it is driven by the engine
-the reader links. [Supervising from the
-browser](#supervising-from-the-browser) is that half; start there before acting from
-a tab, because two of those three sentences are about *whose* run and *which* engine.
+only what it shows: the API wraps the post-launch verbs a person acts through, and the
+browser performs each one as **one acting session**. It never drives a run: from
+onepipeline-ui 0.45.0 the browser neither watches nor adopts one. [Supervising from the
+browser](#supervising-from-the-browser) is that half; start there before acting from a
+tab, because it is about *whose* run each action is taken on.
 
 ## The one published binary
 
@@ -81,13 +81,19 @@ address.
 
 ## Supervising from the browser
 
-**Every post-launch verb is a route now, and the view offers all of them.** The
-run page carries the channel and its reply composer, `attest`, `stop`, `adopt`,
-`shutdown` ([below](#shutting-runs-down-from-the-browser)), a held `watch`, the
-unwatched badge, and the rendered reads (`status`, `results`, `goals`,
-`transcript`, `telemetry`, `host`); a landing project list and per-project page
-replace the flat list of run ids as the view's front door; and an **Agents**
-panel lists every oneharness session each of a run's dispatches opened. What the
+**The post-launch verbs a person acts through are routes, and the view offers them.**
+The run page carries the channel and its reply composer, `attest` and `stop`; the
+host's shutdown ([below](#shutting-the-host-down-from-the-browser)) is a control of its
+own, and **Host** reads the acting session's report from the unwatched route; the
+rendered reads (`status`, `results`, `goals`, `transcript`, `telemetry`, `host`) are
+routes whose information the view shows across **Run details**, **Overall**, **Task**,
+**Remote** and **Host** rather than in a panel of its own; a landing project list in
+the sidebar and a per-project page are the view's front door; and an **Agents** panel
+lists every oneharness session each of a run's dispatches opened. **Watching, adopting
+and shutting down one run or one session's runs are not the browser's**: onepipeline-ui
+0.45.0 removed them, because a person at a tab cannot tell how they would affect
+another manager already watching or driving the run, and each removed route answers
+`404 removed_route`. What the
 browser never does is launch: a plan is authored and launched from a terminal, and
 everything here is *post*-launch. Which is also why **a planning run's channel is
 answerable from the browser like any other** — `just plan`'s two launches are
@@ -109,10 +115,8 @@ consequences to hold:
   reports no run — which reads from a tab as a quiet host rather than as a server
   that cannot say who it is. The recipe passes a session whenever one resolves and
   omits it rather than inventing one when none does.
-* **A tab is not a watch.** The Watch toggle holds `GET .../watch` for as long as
-  it is on, and the server is the run's registered watcher only while it is held — so
-  it dies with the tab, and a launch still owes an armed `just watch` that outlives the
-  turn that started it.
+* **A tab is not a watch.** The browser holds no watch on any run, so a launch owes
+  an armed `just watch` that outlives the turn that started it whatever tab is open.
 
 `tests/dag_ui/test_dag_ui_serving_e2e.py` drives the grouping and both halves of
 the identity rule on the served origin — the stranger's refusal naming the owner, and
@@ -121,44 +125,40 @@ launcher — because the refusal on its own is equally satisfied by a server wit
 session at all. Each of those is a `POST` to the same origin the view was served from,
 which is the arrangement an operator acts through.
 
-**An adopt from the browser is the one that changes which engine runs a dispatch.**
-`POST .../adopt` retains **this API binary** at its own driver verb, so the adopted
-run is driven by the engine `onepipeline-ui` links — not by the CLI
-`config/onepipeline.version` installs. The driver runs in a process group of its
-own, survives the server being stopped or restarted, and is read back off the run
-record like any other. Since 0.22.1 the binary retained on Linux is the server's own
-running image — a verified hard link to, or a copy of, `/proc/self/exe` — so an
-upgrade that replaces the installed executable under a live server does not change
-the engine an adopt hands the run to, and an image that cannot be retained refuses
-the adopt naming why rather than returning a receipt. So on this host `config/onepipeline-ui.version` is a pin that
-**can** govern a dispatch, which is why the suite holds the two pins to linking one
-engine — see [Which release is answering](#which-release-is-answering) for the gate and
-for the one question it leaves to `/healthz`.
+**The browser adopts nothing, so no dispatch runs under the engine the reader links.**
+Through onepipeline-ui 0.44.0 the adopt route retained this API binary at its own driver
+verb, so a run adopted from a tab was driven by the engine `onepipeline-ui` links rather
+than by the CLI `config/onepipeline.version` installs, and that pin could govern a
+dispatch. From 0.45.0 the route answers `404 removed_route` and the binary drives no
+run, hidden CLI verbs included; `tests/e2e/launch_monitor_observer/test_extends_chain_dispatch_e2e.py`
+holds that a run offered to it for adoption stays undriven. The suite still holds the two
+pins to linking one engine — see [Which release is answering](#which-release-is-answering)
+for the gate and for the one question it leaves to `/healthz`.
 
-### Shutting runs down from the browser
+### Shutting the host down from the browser
 
-The view can shut down the work it shows, through **the same verb `just shutdown`
-runs and with the same authority**: the API calls the engine's own shutdown seam as
-the acting session above, and nothing about the interrupt, the wait, the kill or the
-push exists in the view or in this repository.
+The view can shut down the host it serves, through **the same verb `just shutdown
+--host` runs and with the same authority**: the API calls the engine's own shutdown
+seam as the acting session above, and nothing about the interrupt, the wait, the kill or
+the push exists in the view or in this repository.
 <!-- llmlint: ignore[no_redundant_instruction_pointers] The task that added this section requires pointing a reader at the supervision guidance for what a soft shutdown does rather than restating it here, and this page is not auto-loaded: a reader who opened it for the browser control has not read that guidance. -->
 What a soft shutdown does to a run —
 and why it is not a stop — is `AGENTS.md`'s supervision guidance under `just
 shutdown`; `just shutdown` is the terminal form of the same three scopes.
 
-* **Shut down this run** is a control on a run's view, beside its stop and adopt,
-  and is `POST /api/v2/runs/{run}/shutdown`.
-* **Shut down all my runs** and **Shut down the entire host** are controls on the
-  runs listing, and are `POST /api/v2/shutdown` with `scope` `mine` or `host`.
+**Shut down the entire host** is a control at the top of the run listing, and is
+`POST /api/v2/shutdown` with `scope` `host`; every other scope — the run and the
+acting session's own, which onepipeline-ui 0.45.0 removed — is refused
+`400 removed_shutdown_scope`, naming it. A single run is stopped from its own page
+instead, with the stop above, so `just shutdown <run>` and `just shutdown --mine` are
+the terminal's alone.
 
-Each opens a **confirm dialog, and nothing is sent until it is confirmed**. Before
-anything is sent the dialog names exactly which runs it will act on, by run id, and
-who owns each — this session's runs told apart from every other by the acting
-session's key, which `GET /api/v2/unwatched` serves as `session_key`. *All my runs*
-acts on this session's runs and no other's. *The entire host* says plainly that it
-acts on runs **other sessions own**, over their owners, and lists them apart from
-this session's. A run another session owns is refused under the run scope as a stop
-is, `409 not_owner`, before anything is signalled.
+It opens a **confirm dialog, and nothing is sent until it is confirmed**. Before
+anything is sent the dialog names every listed run and its recorded launcher, reading
+the listing to its end before it enables confirmation, and it says plainly that the
+shutdown acts on runs **other sessions own**, over their owners. **Host** still reads
+the acting session's own report from `GET /api/v2/unwatched`, its `session_key`
+among it.
 
 The dialog offers the **grace**, defaulting to the engine's ten minutes, and a
 **force** option that is never the default and says what it gives up: it skips the
@@ -172,8 +172,8 @@ One the engine says was not complete answers `200` with that report and reads
 **Shutdown incomplete**, never as a success; a request that lost its answer reads as
 lost, since the engine may still be carrying it out.
 `tests/dag_ui/test_dag_ui_serving_e2e.py` holds that the reader the two recipes serve
-answers both shutdown routes and refuses what it should, without shutting anything
-down. That the *view* carries these controls and draws this dialog is
+refuses every scope but the host's and answers the removed per-run route as removed,
+without shutting anything down. That the *view* carries these controls and draws this dialog is
 `onepipeline-ui`'s own tier, which renders them in a browser this repository does not
 provision; what every promise above is held to here is that repository's published
 `docs/contract.md`, reconciled at the pinned tag by `tests/test_ui_api_contract.py`.
@@ -192,7 +192,7 @@ own liveness *and* the `onepipeline` release it links:
 
 ```sh
 curl -s http://127.0.0.1:8765/healthz
-{"status":"ok","onepipeline_version":"0.45.0"}
+{"status":"ok","onepipeline_version":"0.86.0"}
 ```
 
 That release is the reader's own, and it is a **different adoption** from
@@ -200,17 +200,18 @@ That release is the reader's own, and it is a **different adoption** from
 separately, and the reader links whatever its release was built against. What the
 field is for is being able to say which engine is answering rather than assuming it.
 
-**The two are kept level now, and the reason is an adopt.** They used to be free to
-differ in either direction, because a reader that only read runs constrained nothing
-about what a dispatch ran. An adoption made from the browser is not a read: `POST
-/api/v2/runs/{run}/adopt` retains the API binary at its own driver verb, so the run it
-revives is driven by the engine **this reader** links, and `config/onepipeline-ui.version`
-is from then on a pin that can govern a dispatch on this host. So the two are held
-level, and **not by an operator remembering to check**:
+**The two are kept level, and the reason was an adopt.** They used to be free to differ
+in either direction, because a reader that only read runs constrained nothing about what
+a dispatch ran. Through onepipeline-ui 0.44.0 an adoption made from the browser was not a
+read: its route retained the API binary at its own driver verb, so the run it revived was
+driven by the engine **this reader** links, and `config/onepipeline-ui.version` was a pin
+that could govern a dispatch on this host. From 0.45.0 the reader drives no run again, and
+the two are still held level — a reader linking the engine a dispatch runs reads that
+engine's records as they were written — and **not by an operator remembering to check**:
 `tests/test_linked_libraries.py::test_the_ui_api_links_the_pinned_engine`
 reads the engine out of the adopted read-API wheel's own bill of materials and fails
 when it is not the release `config/onepipeline.version` names, so a bump that moves one
-alone fails on this host rather than at whatever a browser adoption then drives.
+alone fails on this host rather than in what the browser then reads.
 
 There is no record that holds a pair apart: until a read-API release linking the
 engine a bump wants exists, the engine pin waits for it. What `/healthz` is for from
@@ -226,7 +227,8 @@ while the CLI a dispatch ran was nine minor releases ahead. It was the reverse f
 adoptions — the engine pin was held at 0.18.4 for a settlement write-back defect that had
 nothing to do with reading runs, and the Observatory was adopted anyway because the
 reader carries its own engine. None of those readers could drive a run from a browser;
-this one can, which is what ended the freedom rather than any of them.
+the 0.22.1 to 0.44.0 readers could, which is what ended the freedom, and 0.45.0 took that
+back without anything here loosening the gate.
 
 `tests/dag_ui/test_dag_ui_serving_e2e.py` holds a freshly started server to the
 adopted release from that same served surface: the view handed back is byte-for-byte
@@ -236,12 +238,12 @@ serves another fails there instead of being noticed by a person.
 
 ### What the adopted view renders, and what it has nothing to render
 
-**`onepipeline-ui` 0.44.0**, the release `config/onepipeline-ui.version` pins, carries
-what made this a supervising surface: the project list and per-project page are the
+**`onepipeline-ui` 0.48.1**, the release `config/onepipeline-ui.version` pins, carries
+what makes this a supervising surface: the project sidebar and per-project page are the
 landing view, the run page carries the channel with its byte-for-byte reply composer,
-`attest`, `stop` with the owner-naming refusal, `adopt`, a held `watch` with its
-unwatched badge, and the rendered reads, and an **Agents** panel lists every oneharness
-session a run's dispatches opened, per run, per node and per project. The whole of that
+`attest` and `stop` with the owner-naming refusal, the host's shutdown is its own
+control, and an **Agents** panel lists every oneharness session a run's dispatches
+opened, per run, per node and per project. The whole of that
 is [Supervising from the browser](#supervising-from-the-browser) above; what belongs
 here is what the view has to *render* and may find nothing behind.
 
@@ -304,7 +306,7 @@ answer *with*, and that is a third pin: a run's turn transcripts are written by 
 the version in force is whatever that release's own build resolved — and the
 installed wheel says which that is, without a network or a clone. `onepipeline-cli`
 ships a CycloneDX SBOM under its `dist-info/sboms/`, declaring one version per
-linked crate; on the adopted release that is **oneagentgraph 0.7.0**.
+linked crate; on the adopted release that is **oneagentgraph 0.7.1**.
 
 The session-conversation producer landed in oneagentgraph 0.3.3, so what put it in
 force here was moving **`config/onepipeline.version`**, and installing a new
