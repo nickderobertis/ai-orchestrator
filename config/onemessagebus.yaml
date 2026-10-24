@@ -29,7 +29,7 @@ profile: planner-channel
 # layout the engine publishes (onepipeline's docs/contract.md, "The planner-channel
 # layout is published as a document"), at the release tag config/onepipeline.version
 # adopts, so this host's bus reads and writes the channel directory the dispatching
-# engine does; `@1` admits the `1.0.0` that bundle declares. The second is onejudge's
+# engine does; `@2` admits the `2.0.0` that bundle declares. The second is onejudge's
 # command-provider frames the codec below serves, published at the release tag
 # config/onejudge.version adopts — spelled `onejudge-v<release>` since 0.18.0 — and
 # pinned to the protocol version that release speaks — `@8` admits every bundle

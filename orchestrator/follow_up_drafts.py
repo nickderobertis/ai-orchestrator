@@ -44,6 +44,15 @@ none. When nothing matches, the draft says `unresolved` and is still written.
 - a manager draft points at nothing, because a manager's own session is not a record the
   run keeps.
 
+**A run's drafts are keyed by its public id**, the `public_id` `onepipeline status <run>
+--json` names it by wherever a destination is not private (:func:`follow_up_key`): the run id
+itself unless that names a private repository, so such a run's records are byte for byte what
+they were. Where the two differ, a draft and its run's project also carry the engine's own id
+under :data:`ENGINE_RUN_KEY`, because the transcript pointer is a command the engine answers
+only by that id, and because comment routing reaches a run from the public id a board holds
+(:func:`engine_run`). A draft and a draft project are never copied onto a board, so that id
+reaches none. The id is the engine's to decide: this reads it and never derives one.
+
 **The root's environment name is not spelled here.** `scripts/follow-up-env.sh` composes
 it, and a second composition is refused by `tests/test_follow_up_draft_composition.py`, so
 :func:`main` is handed the name by the script that sources that helper.
@@ -68,6 +77,7 @@ from typing import Literal, NoReturn, TypeGuard, get_args
 
 from orchestrator.plan_store import RECORD_COMPONENT
 from orchestrator.project_store import frontmatter, hosted_origin
+from orchestrator.run_reading import RunId, Unreadable, public_id
 
 #: The plan-store source a draft is stored in, as `onetaskgraph.yaml` names it.
 SOURCE = "drafts"
@@ -79,6 +89,10 @@ SCHEMA = 1
 #: The metadata key a draft's record sits under, and the one its run's project carries.
 DRAFT_KEY = "orchestrator.follow-up-draft"
 PROJECT_KEY = "orchestrator.follow-up-drafts"
+
+#: The key a draft record and its run's project carry the engine's own run id under, present
+#: only where the run's public id, which keys both, is not that id.
+ENGINE_RUN_KEY = "run_id"
 
 #: The status every draft and every draft project is written with. A draft is not work
 #: anybody has started; verifying it is the follow-up agent's.
@@ -210,6 +224,7 @@ class Draft:
     """One drafted follow-up, every field validated."""
 
     title: str
+    #: The run's public id, which keys the draft and names its project.
     run: str
     author: Author
     dispatch: DispatchStamp
@@ -217,11 +232,13 @@ class Draft:
     paths: tuple[str, ...]
     drafted_at: str
     body: str
+    #: The engine's own id for the run, where it is not :attr:`run`; `None` where it is.
+    engine_run: str | None = None
 
     @property
     def transcript(self) -> str | None:
         """The command that reads this draft's turns, derived rather than stored twice."""
-        return transcript_for(self.run, self.author)
+        return transcript_for(self.engine_run or self.run, self.author)
 
     @property
     def stem(self) -> str:
@@ -239,6 +256,110 @@ def checked_run(run: str) -> str:
             "letters, digits and `_.@+-`; pass the id of the run this follow-up came from"
         )
     return run
+
+
+def _engine() -> str:
+    """The `onepipeline` installed beside this interpreter, else the one on `PATH`."""
+    beside = Path(sys.executable).parent / ENGINE
+    return str(beside) if beside.is_file() else ENGINE
+
+
+def follow_up_key(run: str, *, runs: Path | None = None) -> str:
+    """The public id every follow-up record of ``run`` is keyed by, as the engine names it.
+
+    A run the runs root holds no record of is one the engine names nothing, so its records
+    are keyed by its id as given; otherwise `onepipeline status <run> --json` is asked, and
+    its `public_id` is the answer. Nothing here derives one.
+    """
+    run = checked_run(run)
+    root = runs if runs is not None else runs_root()
+    if root is None or not (root / run).exists():
+        return run
+    try:
+        answered = subprocess.run(  # noqa: S603 - the pinned engine, reading one run
+            [_engine(), "status", run, "--json"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=120,
+            env=os.environ | {RUNS_ROOT_ENV: str(root)},
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise Refused(
+            f"the engine could not be asked for run {run!r}'s public id ({exc}); provision "
+            "this checkout with `just bootstrap`, then retry"
+        ) from None
+    if answered.returncode != 0:
+        said = answered.stderr.strip() or "it said nothing"
+        raise Refused(
+            f"`onepipeline status {run} --json` exited {answered.returncode} ({said}), so the "
+            "public id this run's follow-ups are keyed by cannot be read; read the run with "
+            f"`just status {run}`, then retry"
+        )
+    try:
+        return checked_run(public_id(answered.stdout, RunId(run)))
+    except Unreadable as unreadable:
+        raise Refused(
+            f"`onepipeline status {run} --json` answered no reading this can name the run "
+            f"from ({unreadable}); restore the pinned toolchain with `just bootstrap`, then retry"
+        ) from None
+
+
+def engine_run(root: Path, key: str) -> str | None:
+    """The engine's own id for the run whose follow-ups are keyed ``key`` under ``root``.
+
+    Read off the run's draft project, which carries it only where it is not ``key``; `None`
+    where no project is there or it carries none, which is a key that is the run id itself,
+    and where its record is of a schema other than :data:`SCHEMA`, which this does not read.
+    """
+    if not RECORD_COMPONENT.fullmatch(key):
+        return None
+    try:
+        text = (root / "projects" / f"{key}.md").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in text.split("\n"):
+        matched = METADATA_ENTRY.fullmatch(line)
+        if matched is None:
+            continue
+        try:
+            held = json.loads(matched["value"])
+            named = json.loads(matched["key"])
+        except json.JSONDecodeError:
+            continue
+        if (
+            named == PROJECT_KEY
+            and isinstance(held, dict)
+            and type(held.get("schema")) is int
+            and held["schema"] == SCHEMA
+            and held.get("run") == key
+        ):
+            stated = held.get(ENGINE_RUN_KEY)
+            if isinstance(stated, str) and RECORD_COMPONENT.fullmatch(stated):
+                return stated
+    return None
+
+
+def record_engine_run(root: Path, key: str, run: str) -> None:
+    """Make the draft project of the run keyed ``key`` under ``root`` carry its id ``run``.
+
+    Nothing where ``key`` is ``run``, so such a run's records stay as they were. Otherwise the
+    project is written whole — its task directory first, because a `local-md` source refuses a
+    project whose task directory is not there — and replaced atomically.
+    """
+    if key == run:
+        return
+    (root / "tasks" / checked_run(key)).mkdir(parents=True, exist_ok=True)
+    projects = root / "projects"
+    projects.mkdir(parents=True, exist_ok=True)
+    rendered = render_project(key, checked_run(run))
+    target = projects / f"{key}.md"
+    if target.is_file() and target.read_text(encoding="utf-8") == rendered:
+        return
+    handle, temporary = tempfile.mkstemp(dir=projects, prefix=".", suffix=".tmp")
+    with os.fdopen(handle, "w", encoding="utf-8") as opened:
+        opened.write(rendered)
+    os.replace(temporary, target)
 
 
 def checked_title(title: str) -> str:
@@ -389,8 +510,11 @@ def transcript_for(run: str, author: Author) -> str | None:
 
 
 def record(draft: Draft) -> dict[str, object]:
-    """The metadata a draft is stored under, every key present."""
-    return {
+    """The metadata a draft is stored under, every key present.
+
+    :data:`ENGINE_RUN_KEY` follows :data:`RECORD_KEYS`, and only where the draft names one.
+    """
+    held: dict[str, object] = {
         "schema": SCHEMA,
         "run": draft.run,
         "author": {
@@ -410,6 +534,9 @@ def record(draft: Draft) -> dict[str, object]:
         "paths": list(draft.paths),
         "drafted_at": draft.drafted_at,
     }
+    if draft.engine_run is not None:
+        held[ENGINE_RUN_KEY] = draft.engine_run
+    return held
 
 
 def render(draft: Draft) -> str:
@@ -425,13 +552,19 @@ def render(draft: Draft) -> str:
     )
 
 
-def render_project(run: str) -> str:
-    """The project every draft of ``run`` belongs to."""
+def render_project(run: str, engine_run: str | None = None) -> str:
+    """The project every draft of the run keyed ``run`` belongs to.
+
+    ``engine_run`` is the engine's own id for that run, carried only where it is not ``run``.
+    """
+    held: dict[str, object] = {"schema": SCHEMA, "run": run}
+    if engine_run is not None and engine_run != run:
+        held[ENGINE_RUN_KEY] = engine_run
     return frontmatter(
         {
             "title": f"Follow-ups drafted in run {run}",
             "status": STATUS,
-            "metadata": {PROJECT_KEY: {"schema": SCHEMA, "run": run}},
+            "metadata": {PROJECT_KEY: held},
         },
         f"Unverified follow-ups drafted during run {run}.",
     )
@@ -495,9 +628,11 @@ def from_store_item(item: Mapping[str, object]) -> Draft:
     )
 
 
-def _mapping(value: object, keys: Sequence[str], what: str) -> Mapping[str, object]:
-    """``value`` when it is a mapping holding exactly ``keys``."""
-    if not isinstance(value, Mapping) or set(value) != set(keys):
+def _mapping(
+    value: object, keys: Sequence[str], what: str, optional: Sequence[str] = ()
+) -> Mapping[str, object]:
+    """``value`` when it is a mapping holding exactly ``keys``, and at most ``optional``."""
+    if not isinstance(value, Mapping) or not set(keys) <= set(value) <= {*keys, *optional}:
         raise Refused(f"the draft record's {what} is not a mapping of {', '.join(keys)}; {SHAPE}")
     return value
 
@@ -535,7 +670,9 @@ def _validated(
         raise Refused(f"the draft record has no string title and body; {SHAPE}")
     if status != STATUS:
         raise Refused(f"the draft record's status is {status!r} rather than {STATUS!r}; {SHAPE}")
-    held = _mapping(metadata.get(DRAFT_KEY), RECORD_KEYS, f"`{DRAFT_KEY}` metadata")
+    held = _mapping(
+        metadata.get(DRAFT_KEY), RECORD_KEYS, f"`{DRAFT_KEY}` metadata", (ENGINE_RUN_KEY,)
+    )
     if type(held["schema"]) is not int or held["schema"] != SCHEMA:
         raise Refused(
             f"the draft record is schema {held['schema']!r}, and this reads schema {SCHEMA}; "
@@ -544,6 +681,12 @@ def _validated(
     run = held["run"]
     if not isinstance(run, str) or run != project:
         raise Refused(f"the draft record's run {run!r} is not its project {project!r}; {SHAPE}")
+    engine = held.get(ENGINE_RUN_KEY)
+    if engine is not None and (not isinstance(engine, str) or engine == run):
+        raise Refused(
+            f"the draft record's {ENGINE_RUN_KEY} {engine!r} is not a run id other than its "
+            f"run; {SHAPE}"
+        )
     stated_author = _mapping(held["author"], AUTHOR_KEYS, "author")
     kind = stated_author["kind"]
     if not isinstance(kind, str):
@@ -586,6 +729,7 @@ def _validated(
         paths=checked_paths(paths),
         drafted_at=drafted_at,
         body=checked_body(body),
+        engine_run=None if engine is None else checked_run(engine),
     )
     if held["transcript"] != draft.transcript:
         raise Refused(
@@ -780,7 +924,7 @@ def write(root: Path, draft: Draft) -> tuple[str, Path]:
     name = next(name for name in _names(draft.stem) if _publish(directory, f"{name}.md", rendered))
     projects = root / "projects"
     projects.mkdir(exist_ok=True)
-    _publish(projects, f"{draft.run}.md", render_project(draft.run))
+    _publish(projects, f"{draft.run}.md", render_project(draft.run, draft.engine_run))
     return f"{SOURCE}:{draft.run}/{DRAFTS}/{name}", directory / f"{name}.md"
 
 
@@ -850,7 +994,8 @@ this order, each with content:
 You supply the title, the repository, the paths and the body. This command stamps the
 rest from where it runs:
 
-  run                 --run, or {RUN_ID_ENV}
+  run                 the public id `onepipeline status` names the run by — --run, or
+                      {RUN_ID_ENV}, as given where the runs root holds no record of it
   author.kind         --as (default: node)
   author.node         for --as node, the dispatch this process descends from, read off the
                       run's dispatch registry under {RUNS_ROOT_ENV}; `{UNRESOLVED}` when none
@@ -942,9 +1087,11 @@ def prepare(arguments: argparse.Namespace, root_env: str) -> tuple[Draft, Path]:
         ) from None
     root = ensure_draft_root(root_env)
     node = resolve_node(run, runs_root=runs_root(), pid=os.getpid()) if kind == "node" else None
+    key = follow_up_key(run)
     draft = Draft(
         title=title,
-        run=run,
+        run=key,
+        engine_run=None if key == run else run,
         author=checked_author(kind, node, member),
         dispatch=stamp_dispatch(cwd),
         repository=repository,

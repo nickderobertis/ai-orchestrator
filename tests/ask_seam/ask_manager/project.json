@@ -20,6 +20,7 @@
     "askSeamAskManager": [
       "{projectRoot}/project.json",
       "{workspaceRoot}/.gitignore",
+      "{workspaceRoot}/orchestrator/run_reading.py",
       "{workspaceRoot}/templates/design-doc.md.j2",
       "{workspaceRoot}/config/oneharness.version",
       "{workspaceRoot}/config/onejudge.base.yaml",

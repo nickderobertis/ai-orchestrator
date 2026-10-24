@@ -352,6 +352,12 @@ PLAN_TOOLING_PROJECTS: tuple[SubjectProject, ...] = (
         docs_tier=True,
     ),
     SubjectProject(
+        "plan-tooling-comment-version",
+        f"{PLAN_TOOLING_ROOT}/comment_version",
+        "planToolingCommentVersionWorkspace",
+        docs_tier=False,
+    ),
+    SubjectProject(
         "plan-tooling-follow-ups",
         f"{PLAN_TOOLING_ROOT}/follow_ups",
         "planToolingFollowUpsWorkspace",

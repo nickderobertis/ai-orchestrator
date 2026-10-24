@@ -59,6 +59,8 @@ from nx_inputs import (
     BOARD_COPY_APPROVAL_HOST_SCOPED,
     BOARD_COPY_APPROVAL_ROOT,
     BOARD_COPY_APPROVAL_SCOPED,
+    BUDGET_HOST_SCOPED,
+    BUDGET_SCOPED,
     CHECKOUT_SCOPED,
     CODE_SCOPED,
     CODE_WORKSPACE,
@@ -416,7 +418,7 @@ def test_the_marker_that_routes_a_test_to_its_tier_means_the_same_thing_everywhe
     # collects its whole directory under its one key.
     for subject in SUBJECT_PROJECTS:
         host_tools = project_declarations()[subject.root]["targets"]
-        for target in host_tools:
+        for target in _test_tiers(subject.root):
             assert f"pytest {subject.root} " in host_tools[target]["command"], (
                 subject.project,
                 target,
@@ -461,6 +463,20 @@ def _collects_under(command: str, root: str) -> bool:
     )
 
 
+def _test_tiers(root: str) -> list[str]:
+    """The targets of the subject project at ``root`` that run pytest.
+
+    A subject project holding a `budgets.yaml` declares the two budget targets beside its
+    tiers; they run onebudgetspec over what a tier recorded, collect no test, and are held
+    with their file by `tests/test_budgets_files.py`.
+    """
+    return [
+        target
+        for target in project_declarations()[root]["targets"]
+        if target not in (BUDGET_SCOPED, BUDGET_HOST_SCOPED)
+    ]
+
+
 #: Every place the parallel worker contract is independently written down. It is a
 #: contract because the number was chosen by measurement against this host — see
 #: `docs/repo-lifecycle.md` — and a recipe that quietly drifted to a different one
@@ -469,7 +485,7 @@ PARALLEL_SITES = (
     *(
         (f"{subject.root}/project.json", target)
         for subject in SUBJECT_PROJECTS
-        for target in sorted(project_declarations()[subject.root]["targets"])
+        for target in sorted(_test_tiers(subject.root))
     ),
     (f"{SESSION_SETUP_PYPI_ROOT}/project.json", SESSION_SETUP_PYPI_SCOPED),
     ("orchestrator/project.json", CODE_SCOPED),
@@ -787,7 +803,7 @@ SUITE_TIERS = (
     *(
         (f"{subject.root}/project.json", target)
         for subject in SUBJECT_PROJECTS
-        for target in sorted(project_declarations()[subject.root]["targets"])
+        for target in sorted(_test_tiers(subject.root))
     ),
     (f"{SESSION_SETUP_ROOT}/project.json", SESSION_SETUP_SCOPED),
     # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
@@ -1210,10 +1226,7 @@ def test_every_repository_path_the_suite_reads_is_part_of_a_test_key() -> None:
         if subject is None:
             read |= named
             continue
-        own = [
-            _effective_inputs(subject.root, target)
-            for target in project_declarations()[subject.root]["targets"]
-        ]
+        own = [_effective_inputs(subject.root, target) for target in _test_tiers(subject.root)]
         missing = sorted(path for path in named if not any(covers(key, path) for key in own))
         if missing:
             unkeyed[relative] = missing

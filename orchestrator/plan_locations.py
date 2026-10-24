@@ -153,10 +153,7 @@ def copied(project: str, destination: str) -> plan_store.StoreProject:
             f"so there is nothing there to point a reviewer at"
         ) from exc
     origin = landed.metadata.get(plan_store.ORIGIN_KEY)
-    unstamped_private = origin is None and plan_store.declared_private(
-        plan_store.qualified(project)[0]
-    )
-    if origin != project and not unstamped_private:
+    if origin != project and not (origin is None and _origin_withheld(project, source)):
         raise OSError(
             f"{project}'s copy link names {linked}, which the store does not record as "
             f"copied from {project}, so it is not this plan's copy and there is nothing "
@@ -171,6 +168,23 @@ def copied(project: str, destination: str) -> plan_store.StoreProject:
             f"reviewer should open is not this command's to guess"
         )
     return landed
+
+
+def _origin_withheld(project: str, source: str) -> bool:
+    """Whether the store withholds ``project``'s origin stamp from its copy into ``source``.
+
+    Under the store's public boundary a copy out of a source declared private into one that
+    is not records no `onetaskgraph.origin` naming it, and keeps the correspondence on the
+    private side instead — the copy link this read started from, on the plan's own record.
+    So a copy stamped with no origin at all is this plan's copy there, held by that link
+    alone; one stamped with another plan's origin never is.
+    """
+    settings = plan_store.configured_settings()
+
+    def declared(name: str) -> object:
+        return settings.get(f"sources.{name}.visibility")
+
+    return declared(project.partition(":")[0]) == "private" and declared(source) != "private"
 
 
 def stamped_copies(project: str, sources: Sequence[str]) -> list[plan_store.StoreProject]:

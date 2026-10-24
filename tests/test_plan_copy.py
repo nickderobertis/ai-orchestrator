@@ -193,6 +193,59 @@ def test_document_read_failure_is_a_destination_refusal(
     assert "lost the source" in capsys.readouterr().err
 
 
+def _failed(source: str) -> dict[str, object]:
+    """One report entry the store answers for an item it refused, in its own shape."""
+    return {
+        "action": "failed",
+        "source": source,
+        "error": {
+            "class": "refused",
+            "kind": "stored-content-diverged",
+            "message": f"{source} was written, but stored other than it was sent",
+            "retry_after_seconds": None,
+            "source": "linear",
+        },
+    }
+
+
+@pytest.mark.parametrize("failing", ["project", "document"])
+def test_an_item_the_store_reports_failed_is_the_destinations_refusal(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], failing: str
+) -> None:
+    """The store's CLI exits non-zero when any entry failed; the SDK returns the report.
+
+    So a failed entry of either copy is answered as the destination refusing it, after
+    every entry is printed, and a failed project copy carries no document over. The journey
+    is `tests/plan_tooling/plan_flow/test_linear_routed_plans_e2e.py`'s copy into a Linear
+    that stores a document other than it was sent.
+    """
+    copied: list[str] = []
+
+    def project_copy(project: str, **_options: object) -> CopyReport:
+        copied.append(project)
+        entries = [_failed(f"{project}/route")] if failing == "project" else []
+        return CopyReport.model_validate({"items": entries})
+
+    def document_copy(ids: list[str], **_options: object) -> CopyReport:
+        copied.extend(ids)
+        return CopyReport.model_validate({"items": [_failed(one) for one in ids]})
+
+    client = SimpleNamespace(project_copy=project_copy, document_copy=document_copy)
+    monkeypatch.setattr(plan_store, "client", lambda: client)
+    monkeypatch.setattr(plan_store, "sdk", lambda answered: answered)
+    # The argument translation is held to the SDK's real signature by the tests above.
+    monkeypatch.setattr(plan_copy, "_copy_options", lambda _passthrough: {})
+    _holds(monkeypatch, _document("demo-design"))
+
+    assert plan_copy.copy("authoring:demo", "linear", []) == plan_copy.COPY_REFUSED
+    printed = capsys.readouterr()
+    refused = "authoring:demo/route" if failing == "project" else "authoring:demo-design"
+    assert '"kind":"stored-content-diverged"' in printed.out, printed.out
+    assert f"'linear' refused {refused} of authoring:demo" in printed.err, printed.err
+    expected = ["authoring:demo"] + (["authoring:demo-design"] if failing == "document" else [])
+    assert copied == expected
+
+
 def test_a_task_nothing_has_reviewed_refuses_the_copy_before_the_store_is_asked(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

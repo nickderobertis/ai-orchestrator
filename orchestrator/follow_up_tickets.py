@@ -66,6 +66,7 @@ import math
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -79,12 +80,17 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Literal, NamedTuple, NewType, NoReturn, TypedDict, cast
 
-from onetaskgraph_sdk import CopyReport
+from onetaskgraph_sdk import CommentWritten, CopyReport
 
 # The SDK's `__all__` exports the `QueryResponseOf…` schema roots but not their item models,
 # so `QualifiedTask` has no public name; the follow-up "Export the SDK's query item models
 # (QualifiedTask et al.) beside the QueryResponseOf… schema roots" retires this import.
 from onetaskgraph_sdk._generated.query_response_of_qualified_task import QualifiedTask
+
+# `task_show`'s item and comment models, unexported for the same reason as `QualifiedTask`
+# above, and retired by the same follow-up.
+from onetaskgraph_sdk._generated.task_detail import Comment as ShownComment
+from onetaskgraph_sdk._generated.task_detail import Task as ShownTask
 
 from orchestrator import follow_up_drafts as drafts
 from orchestrator import plan_store
@@ -988,8 +994,16 @@ def parse_estimate_line(line: str, *, prior: bool = False) -> EstimateFacts | No
 #: The `## Impact` heading and the lines a body's estimate line is placed among.
 _IMPACT_HEADING = re.compile(rf"^## {re.escape(IMPACT)}[ \t]*$", re.MULTILINE)
 _NEXT_HEADING = re.compile(r"^## ", re.MULTILINE)
-_ESTIMATE_AT = re.compile(rf"^- {re.escape(ESTIMATE_LINE)}:[^\n]*$", re.MULTILINE)
-_MITIGATED_AT = re.compile(rf"^- {re.escape(MITIGATED_LINE)}:(?P<value>[^\n]*)$", re.MULTILINE)
+#: A board may store a list item's `- ` as `* ` — Linear does (`tests/linear_board.py`'s
+#: `bullet` rewrite) — so a line is found by either marker, and read as :data:`BULLET` writes it.
+_ESTIMATE_AT = re.compile(rf"^[-*] {re.escape(ESTIMATE_LINE)}:[^\n]*$", re.MULTILINE)
+_MITIGATED_AT = re.compile(rf"^[-*] {re.escape(MITIGATED_LINE)}:(?P<value>[^\n]*)$", re.MULTILINE)
+BULLET = "- "
+
+
+def as_written(line: str) -> str:
+    """``line`` with the list marker a board stored it under read as the one it was written."""
+    return BULLET + line[2:] if line.startswith("* ") else line
 
 
 def _impact_span(body: str) -> tuple[int, int] | None:
@@ -2437,7 +2451,7 @@ def problems(  # noqa: PLR0913 - each reading of an item is its own keyword
     plain = isinstance(held, Mapping) and _plain_shape(held)
     found.extend(
         _body_problems(
-            item.get("content"),
+            item_content(item) if isinstance(item.get("content"), str) else item.get("content"),
             host,
             checked,
             structured=structured,
@@ -2526,7 +2540,7 @@ def from_store_item(  # noqa: PLR0913 - each reading of an item is its own keywo
         ),
         verified_at=Timestamp(str(held["verified_at"])),
         host=Host(str(held[HOST_FIELD])),
-        body=str(item["content"]).strip(),
+        body=item_content(item).strip(),
         depends_on=tuple(sorted(QualifiedBoardId(edge.to) for edge in edges)),
         board_item=BoardItemId(str(held[BINDING_FIELD])) if BINDING_FIELD in held else None,
         priority_estimate=(Priority(str(held[ESTIMATE_FIELD])) if ESTIMATE_FIELD in held else None),
@@ -2600,6 +2614,50 @@ class Stored(NamedTuple):
 
     item: Mapping[str, object]
     edges: list[Edge]
+
+
+#: A fence line opening or closing a fenced code block, and an inline code span: CommonMark
+#: interprets neither's text, so :func:`item_content` leaves both as they are.
+_FENCE_LINE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+_CODE_SPAN = re.compile(r"(`+)[^`]*?\1")
+#: A list item's bullet marker, which CommonMark reads alike whichever of the three it is.
+_BULLET = re.compile(r"^(\s*)[*+](?= )")
+#: A backslash escape of ASCII punctuation, which CommonMark reads as the character itself.
+_ESCAPE = re.compile(r"\\([!-/:-@\[-`{-~])")
+
+
+def item_content(item: Mapping[str, object]) -> str:
+    """A board item's body as the Markdown it means, in the form this module writes.
+
+    A tracker may store a body in a different but Markdown-equivalent spelling of what was
+    written: another bullet marker, or punctuation it escapes. A ticket is read for what its
+    body means, so every list item is read with the `-` marker and every backslash escape of
+    ASCII punctuation as the character, CommonMark's own reading of both, outside code, which
+    CommonMark does not interpret. A body this module wrote reads back unchanged.
+    """
+    content = item.get("content")
+    if not isinstance(content, str):
+        return ""
+    lines: list[str] = []
+    fenced = False
+    for line in content.split("\n"):
+        if _FENCE_LINE.match(line):
+            fenced = not fenced
+            lines.append(line)
+            continue
+        if fenced:
+            lines.append(line)
+            continue
+        line = _BULLET.sub(r"\1-", line)
+        parts = _CODE_SPAN.split(line)
+        spans = [match.group(0) for match in _CODE_SPAN.finditer(line)]
+        texts = parts[::2]
+        line = "".join(
+            _ESCAPE.sub(r"\1", text) + (spans[index] if index < len(spans) else "")
+            for index, text in enumerate(texts)
+        )
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def stored_ticket(path: Path) -> Stored:
@@ -2890,8 +2948,7 @@ def dependency_problems(
     the far end of a mis-shaped edge is nothing this asks a board about. ``edges`` is the
     walk a caller already took for the ticket, which is then not taken again.
     """
-    body = item.get("content")
-    text = body if isinstance(body, str) else ""
+    text = item_content(item)
     # From :data:`INVARIANT_AT` a dependency's URL is named on a `dependency` bullet of the
     # ticket's `## Related tickets`; an older ticket names it anywhere in its body.
     listed = related_urls(text, Relation.DEPENDENCY) if _invariant(_held_record(item)) else None
@@ -3613,8 +3670,7 @@ def re_estimate(board: str, issue: str) -> ReEstimated:
     # following, or the priority already at the new estimate, which a retry leaves as it is.
     if decided.priority is not held_priority(item):
         plan_store.sdk(client.task_priority_set(issue, decided.priority.value))
-    content = item.get("content")
-    if decided.content != (content if isinstance(content, str) else ""):
+    if decided.content != item_content(item):
         with tempfile.TemporaryDirectory(prefix="re-estimate-") as scratch:
             written = Path(scratch) / "content.md"
             written.write_text(decided.content, encoding="utf-8")
@@ -3686,8 +3742,7 @@ def re_estimate_decision(issue: str, item: Mapping[str, object], reads: BoardRea
                 + ("it carries no `" + ORIGIN_KEY + "`" if origin is None else unsound[0])
             ]
         )
-    content = item.get("content")
-    text = content if isinstance(content, str) else ""
+    text = item_content(item)
     with_workaround = stated_with_workaround(text)
     span = _impact_span(text)
     if with_workaround is None or span is None:
@@ -4285,7 +4340,7 @@ def gathering_on_snapshot(gathering: Gathering, feedback: Path, run: str) -> lis
         selected = versions.get((one.issue, one.comment))
         if selected is not None and (
             selected.body_sha256 != comments.body_sha256(comment.body)
-            or selected.last_changed != comments.instant(comment.last_changed)
+            or selected.last_changed != comments.comment_version(comment.last_changed)
         ):
             found.append(
                 f"its snapshot's source holds comment {one.comment} on {one.issue} other than its "
@@ -4303,7 +4358,7 @@ def gathering_on_snapshot(gathering: Gathering, feedback: Path, run: str) -> lis
                 f"it quotes comment {one.comment} on {one.issue} with URL {fields.url!r} rather "
                 f"than the snapshot's {url!r}"
             )
-        changed = comments.instant(comment.last_changed)
+        changed = comments.comment_version(comment.last_changed)
         if fields.last_changed != changed:
             found.append(
                 f"it quotes comment {one.comment} on {one.issue} as last changed "
@@ -5120,8 +5175,13 @@ def measured_entries(run: str, runs_root: Path, installs: Installs) -> list[Budg
     return entries
 
 
-def open_budgets(root: Path, run: str, runs_root: Path, installs: Installs) -> Path:
+def open_budgets(
+    root: Path, run: str, runs_root: Path, installs: Installs, *, engine_run: str | None = None
+) -> Path:
     """Measure every change ``run`` landed against its budgets, once, and return the account.
+
+    ``run`` is the public id the account is keyed by; ``engine_run`` is the engine's own id
+    for the run, which its telemetry is read by, where the two differ.
 
     An account already there is a re-dispatch's: it is read as this run's and kept exactly
     as it stands, dispositions and all, since every budget measures once and a second
@@ -5133,7 +5193,7 @@ def open_budgets(root: Path, run: str, runs_root: Path, installs: Installs) -> P
         if found := _measurement_problems(document, run):
             raise Refused([f"{path} is not this run's budget account: {one}" for one in found])
         return path
-    entries = measured_entries(run, runs_root, installs)
+    entries = measured_entries(engine_run or run, runs_root, installs)
     path.parent.mkdir(parents=True, exist_ok=True)
     written = {"schema": BUDGETS_SCHEMA, "run": run, "entries": entries}
     path.write_text(json.dumps(written, indent=2) + "\n", encoding="utf-8")
@@ -5855,8 +5915,7 @@ def board_estimate_problems(issue: str, reads: BoardReads | None = None) -> list
     reads = BoardReads() if reads is None else reads
     item = reads.item(issue)
     held = _held_record(item)
-    content = item.get("content")
-    text = content if isinstance(content, str) else ""
+    text = item_content(item)
     with_workaround = stated_with_workaround(text)
     creator = held.get("created_by_run")
     schema = held.get("schema")
@@ -5886,7 +5945,7 @@ def board_estimate_problems(issue: str, reads: BoardReads | None = None) -> list
             f"{_occurrence_words(count)} recount to `{estimated}`; run `re-estimate` on it"
         )
     span = _impact_span(text)
-    written = [line[0] for line in _ESTIMATE_AT.finditer(text, *span)] if span else []
+    written = [as_written(line[0]) for line in _ESTIMATE_AT.finditer(text, *span)] if span else []
     line = estimate_line(with_workaround, frequency, count)
     if written != [line]:
         found.append(
@@ -6545,6 +6604,503 @@ def inventory(root: Path, run: str) -> tuple[int, int]:
     )
 
 
+#: **Realiasing a run's follow-ups onto its public id.** A run whose follow-up records were
+#: written under its own id while the engine names it by another public id
+#: (:func:`orchestrator.follow_up_drafts.follow_up_key`) holds that id in its drafts, its
+#: tickets, its accounts, its board items and its comments' markers — the run id of a run
+#: naming a private repository, on a board that may be public. `realias <run-id>` rewrites them
+#: all in place: it finds its set from the store when it runs, never from a list — the run's
+#: records under the drafts root, every board item of the run's destination family
+#: (:func:`boards`) the store's metadata query finds `created_by_run` naming the run, and every
+#: comment whose last-line marker names the run on those items and on each item the run's
+#: accounts name; replaces the run id wherever it appears there — as the prefix of its later
+#: follow-up runs' ids `<run id>-follow-ups-N` too, which write under the original id — moves
+#: the records under the public id, re-copies each of the run's tickets onto the same item, and
+#: edits each such comment in place. It changes only what the run owns — an issue whose
+#: `created_by_run` (:func:`may_change_issue`) and a comment whose marker
+#: (:func:`may_change_comment`) names it — and writes :data:`REALIAS_DIRECTORY`'s inventory of
+#: every item and comment it rewrote, which a second invocation, rewriting nothing, leaves as
+#: it was.
+#:
+#: **Why a copy re-points the item by the store's match rule.** A board item records the
+#: source task it was copied from as its `onetaskgraph.origin`, the store's own key no other
+#: verb writes, and a copy following the ticket's link or origin to its item keeps it naming
+#: the old source id. The store's `--match-by` is its one rule that re-establishes a
+#: correspondence a renamed source lost, recording the new id as the item's origin; so the copy
+#: matches by :data:`REALIAS_MATCH` and is sent only after a dry run of it has answered the
+#: ticket's own bound item, found by that rule, and refused otherwise — a match that would
+#: reach any other item, or create one, writes nothing.
+REALIAS_DIRECTORY = "realias"
+REALIAS_SCHEMA = 1
+REALIAS_KEYS = ("schema", "run", "entries")
+#: The store's match rule a realiasing copy re-points its item by.
+REALIAS_MATCH = "title"
+#: The suffix the engine's later follow-up runs of a run carry after its id: `-follow-ups`,
+#: then `-follow-ups-<N>` for each one after the first.
+FOLLOW_UP_RUN = "-follow-ups"
+#: The directories under a drafts root each holding one file per run, named by its id.
+_RUN_FILES = (DISPOSITIONS_DIRECTORY, BUDGETS_DIRECTORY)
+#: A character a run id may carry, and the end of one: a sentence's full stop is no part of it.
+_ID_CHARACTER = r"[\w.@+-]"
+_ID_END = r"(?![\w@+-])(?!\.[\w@+-])"
+
+
+class RealiasEntry(TypedDict):
+    """One item or comment the verb rewrote: its destination, its id, and where to open it."""
+
+    kind: Literal["item", "comment"]
+    destination: str
+    id: str
+    url: str | None
+
+
+def _realias_entry(entry: object, path: Path) -> RealiasEntry:
+    """One entry of the inventory at ``path``, every field held to its shape; :class:`Refused`
+    for one the verb did not write."""
+    if not isinstance(entry, Mapping) or set(entry) != set(RealiasEntry.__annotations__):
+        raise Refused([f"{path} holds an entry that is not one realiasing wrote: {entry!r}"])
+    kind, destination, identifier, url = (
+        entry["kind"],
+        entry["destination"],
+        entry["id"],
+        entry["url"],
+    )
+    if (
+        kind not in ("item", "comment")
+        or not isinstance(destination, str)
+        or not RECORD_COMPONENT.fullmatch(destination)
+        or not isinstance(identifier, str)
+        or not identifier
+        or not (url is None or isinstance(url, str))
+    ):
+        raise Refused([f"{path} holds an entry that is not one realiasing wrote: {entry!r}"])
+    return RealiasEntry(
+        kind="item" if kind == "item" else "comment",
+        destination=destination,
+        id=identifier,
+        url=url,
+    )
+
+
+def run_alias(run: str, public: str) -> Callable[[str], str]:
+    """Replace ``run`` by ``public`` wherever it appears whole in a text.
+
+    Whole, as an id: not inside a longer id, and as the prefix of a follow-up run's id,
+    `<run>-follow-ups` or `<run>-follow-ups-<N>`, which becomes `<public>-follow-ups…`.
+    """
+    pattern = run_pattern(run)
+    return lambda text: pattern.sub(public, text)
+
+
+def run_pattern(run: str) -> re.Pattern[str]:
+    """Where ``run`` appears whole in a text, as :func:`run_alias` replaces it."""
+    return re.compile(
+        rf"(?<!{_ID_CHARACTER}){re.escape(run)}"
+        rf"(?={re.escape(FOLLOW_UP_RUN)}(?:-\d+)?{_ID_END}|{_ID_END})"
+    )
+
+
+def realias_path(root: Path, public: str) -> Path:
+    """Where the inventory of the run named ``public`` is kept under a `drafts` root."""
+    return root / REALIAS_DIRECTORY / f"{public}.json"
+
+
+def _moved(source: Path, target: Path, text: str) -> None:
+    """Write ``text`` at ``target`` and remove ``source``; :class:`Refused` over other content."""
+    if target.exists() and target.read_text(encoding="utf-8") != text:
+        raise Refused(
+            [
+                f"{source} and {target} both hold a record of the run, and they differ: "
+                "reconcile them by hand, then realias again"
+            ]
+        )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
+    source.unlink()
+
+
+def _aliased_draft(text: str, run: str, public: str) -> str:
+    """A draft of ``run`` keyed by ``public``, carrying ``run`` only as its engine id."""
+    alias = run_alias(run, public)
+    held = drafts.parse(text)
+    stamp = held.dispatch
+    return drafts.render(
+        dataclasses.replace(
+            held,
+            run=public,
+            engine_run=run,
+            title=alias(held.title),
+            body=alias(held.body),
+            paths=tuple(alias(one) for one in held.paths),
+            dispatch=dataclasses.replace(
+                stamp,
+                scratch=None if stamp.scratch is None else alias(stamp.scratch),
+                session=None if stamp.session is None else alias(stamp.session),
+                cwd=alias(stamp.cwd),
+                branch=None if stamp.branch is None else alias(stamp.branch),
+            ),
+        )
+    )
+
+
+def _aliased_ticket(ticket: Ticket, run: str, public: str) -> Ticket:
+    """``ticket`` naming ``public`` wherever it named ``run``, its binding and links kept."""
+    alias = run_alias(run, public)
+    return dataclasses.replace(
+        ticket,
+        title=alias(ticket.title),
+        body=alias(ticket.body),
+        created_by_run=RunId(alias(ticket.created_by_run)),
+        owning_runs=tuple(dict.fromkeys(RunId(alias(one)) for one in ticket.owning_runs)),
+        drafts=tuple(QualifiedDraftId(alias(one)) for one in ticket.drafts),
+    )
+
+
+def _realias_records(root: Path, run: str, public: str) -> list[str]:
+    """Move every record of ``run`` under ``root`` to ``public``; the accounts' texts.
+
+    The texts are what the run's accounts say, which name the items carrying its evidence.
+    """
+    # Imported here, because that module imports this one.
+    from orchestrator.follow_up_comments import (  # noqa: PLC0415
+        FEEDBACK_DIRECTORY,
+        snapshots_directory,
+    )
+
+    alias = run_alias(run, public)
+    held = root / TASKS_DIRECTORY / run
+    for path in sorted(held.glob(f"{drafts.DRAFTS}/*{TICKET_SUFFIX}")):
+        target = root / TASKS_DIRECTORY / public / drafts.DRAFTS / path.name
+        try:
+            text = _aliased_draft(path.read_text(encoding="utf-8"), run, public)
+        except drafts.Refused as refusal:
+            raise Refused([f"{path} is no draft this can move: {refusal}"]) from None
+        _moved(path, target, text)
+    for path in sorted(held.glob(f"{TICKETS}/*{TICKET_SUFFIX}")):
+        target = ticket_path(root, public, path.stem)
+        _moved(path, target, render(_aliased_ticket(read_ticket(path), run, public)))
+    for path in sorted(held.rglob("*")) if held.is_dir() else []:
+        if path.is_file():
+            target = root / TASKS_DIRECTORY / public / path.relative_to(held)
+            _moved(path, target, alias(path.read_text(encoding="utf-8")))
+    for path in sorted(held.rglob("*"), reverse=True) if held.is_dir() else []:
+        path.rmdir()
+    if held.is_dir():
+        held.rmdir()
+    texts = []
+    accounts = [(root / one / f"{run}.json", root / one / f"{public}.json") for one in _RUN_FILES]
+    feedback = root / FEEDBACK_DIRECTORY / run
+    if feedback.is_dir():
+        for path in sorted(one for one in feedback.rglob("*") if one.is_file()):
+            accounts.append((path, root / FEEDBACK_DIRECTORY / public / path.relative_to(feedback)))
+    for source, target in accounts:
+        if source.is_file():
+            _moved(source, target, alias(source.read_text(encoding="utf-8")))
+        if target.is_file():
+            texts.append(target.read_text(encoding="utf-8"))
+    if feedback.is_dir():
+        shutil.rmtree(feedback)
+    # A gathering's snapshot is what its feedback and response account are checked against, so
+    # its selection and its copies of the run's items name the public id as the board now does.
+    snapshots = snapshots_directory(root)
+    for path in sorted(snapshots.rglob("*")) if snapshots.is_dir() else []:
+        if path.is_file():
+            text = path.read_text(encoding="utf-8")
+            if (aliased := alias(text)) != text:
+                path.write_text(aliased, encoding="utf-8")
+    decisions = root / DECISIONS_DIRECTORY / run
+    if decisions.is_dir():
+        # A decision stands in for a read only for minutes, and names the ticket's old path.
+        shutil.rmtree(decisions)
+    old_project = root / "projects" / f"{run}.md"
+    drafts.record_engine_run(root, public, run)
+    if old_project.is_file():
+        old_project.unlink()
+    return texts
+
+
+def _matched(report: CopyReport, board: str, item: BoardItemId) -> CopyAction:
+    """The action of a realiasing copy reaching ``item`` by its match; :class:`Misbound` else."""
+    entries = report.items
+    outcome = entries[0].root if len(entries) == 1 else None
+    destination = getattr(outcome, "destination", None)
+    via = str(getattr(outcome, "via", ""))
+    action = str(getattr(outcome, "action", ""))
+    reached = None if destination is None else destination.root
+    if reached != f"{board}:{item}" or via != "match" or action not in ("updated", "unchanged"):
+        raise Misbound(
+            f"a copy matching by {REALIAS_MATCH} would reach {reached} by its {via or 'no'} rule "
+            f"({action or 'no action'}), where the ticket is bound to {board}:{item}: nothing "
+            "was copied; re-point the item by hand and report it"
+        )
+    return "updated" if action == "updated" else "unchanged"
+
+
+def _recopied(path: Path, board: str, item: BoardItemId, held: Mapping[str, object]) -> None:
+    """Copy the ticket at ``path`` onto ``item`` of ``board``, re-pointing the item's origin.
+
+    The copy carries the status and priority the board holds the item at, so it changes
+    neither, and nothing is written until a dry run of the match has reached ``item``.
+    """
+    original = path.read_text(encoding="utf-8")
+    ticket = read_ticket(path)
+    staged = dataclasses.replace(
+        ticket,
+        status=status_before_copy(str(_category(held.get("status"))), withdraw=False),
+        priority=held_priority(held),
+        board_item=item,
+        links=tuple(link for link in ticket.links if link.source != board),
+        origin=None,
+    )
+    path.write_text(render(staged), encoding="utf-8")
+    run, cause = located_path(path.absolute())
+    copy = plan_store.client().task_copy
+    # A copy refused or misdirected, dry or written, leaves the ticket as it stood, so the
+    # next invocation stages it again from the record the run holds.
+    try:
+        for dry_run in (True, False):
+            _matched(
+                plan_store.sdk(
+                    copy(
+                        [qualified_id(run, cause)],
+                        to=board,
+                        match_by=REALIAS_MATCH,
+                        dry_run=dry_run or None,
+                    )
+                ),
+                board,
+                item,
+            )
+    except (OSError, Misbound):
+        path.write_text(original, encoding="utf-8")
+        raise
+    bind(path, board, item)
+
+
+def _names_run(pattern: re.Pattern[str], item: Mapping[str, object]) -> bool:
+    """Whether ``item``'s title, content or metadata names the run, its binding aside."""
+    metadata = item.get("metadata")
+    metadata = dict(metadata) if isinstance(metadata, Mapping) else {}
+    record = dict(_held_record(item))
+    record.pop(BINDING_FIELD, None)
+    metadata[KEY] = record
+    text = json.dumps([item.get("title"), item.get("content"), metadata])
+    return pattern.search(text) is not None
+
+
+@dataclass(frozen=True)
+class _Shown:
+    """One item as the store shows it by id: the item, its version and its comments."""
+
+    item: ShownTask
+    comments: list[ShownComment]
+
+    @property
+    def version(self) -> str | None:
+        """The version a write expecting this item's state names."""
+        return self.item.version
+
+    @property
+    def fields(self) -> Mapping[str, object]:
+        """The item's fields, as the helpers reading a store item's metadata take them."""
+        return self.item.model_dump(mode="python")
+
+
+@dataclass
+class _Realiasing:
+    """What one realiasing has read and rewritten."""
+
+    root: Path
+    run: str
+    public: str
+    board: str
+    entries: dict[tuple[str, str, str], RealiasEntry] = dataclasses.field(default_factory=dict)
+
+    def note(self, entry: RealiasEntry) -> None:
+        """Record one rewrite in the inventory."""
+        self.entries[(entry["kind"], entry["destination"], entry["id"])] = entry
+
+    def item(self, issue: str) -> _Shown:
+        """``issue`` as the store shows it by id: its item, its version and its comments."""
+        answer = plan_store.complete(plan_store.sdk(plan_store.client().task_show(issue)))
+        # One id is one item, or the store's own refusal.
+        (one,) = answer.items
+        return _Shown(item=one.item, comments=list(answer.comments or []))
+
+    def own_items(self) -> list[str]:
+        """Every item of the run: by the store's metadata query, and as its tickets bind them.
+
+        The query asks `created_by_run` alone. The store's metadata query matches a string at
+        a path and no member of a list, so `owning_runs` is no question it answers; and every
+        ticket's `owning_runs` holds its `created_by_run`, while an item another run created
+        is that run's, whatever its `owning_runs` lists, and not this one's to rewrite.
+        """
+        found = [
+            held.id.root
+            for destination in boards(self.board)
+            for held in board_items(destination, metadata=[f"{KEY}/created_by_run={self.run}"])
+        ]
+        for path in sorted((self.root / TASKS_DIRECTORY / self.public / TICKETS).glob("*.md")):
+            ticket = read_ticket(path)
+            if ticket.board_item is not None:
+                found.append(f"{ticket_board(self.board, ticket.repositories)}:{ticket.board_item}")
+        return list(dict.fromkeys(found))
+
+    def realias_item(self, issue: str) -> bool:
+        """Rewrite the run's item ``issue`` in place; whether it is the run's to rewrite."""
+        held = self.item(issue).fields
+        if issue_owner(held) not in (self.run, self.public):
+            return False
+        destination, _, native = issue.partition(":")
+        cause = str(_held_record(held).get("root_cause"))
+        if not SLUG.fullmatch(cause):
+            raise Refused([f"{issue} names no root cause, so no ticket of the run is its source"])
+        origin = qualified_id(self.public, cause)
+        metadata = held.get("metadata")
+        carried = metadata.get(ORIGIN_KEY) if isinstance(metadata, Mapping) else None
+        if carried == origin and not _names_run(run_pattern(self.run), held):
+            return True
+        path = ticket_path(self.root, self.public, cause)
+        if not path.is_file():
+            # An item the drafts root holds no ticket for is brought back as its ticket, so
+            # the copy that re-points it has a source.
+            board_ticket = from_store_item(held, edges=ticket_edges(issue))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                render(
+                    dataclasses.replace(
+                        _aliased_ticket(board_ticket, self.run, self.public),
+                        board_item=BoardItemId(native),
+                        links=(),
+                        origin=None,
+                    )
+                ),
+                encoding="utf-8",
+            )
+        _recopied(path, destination, BoardItemId(native), held)
+        url = held.get("url")
+        self.note(
+            RealiasEntry(
+                kind="item",
+                destination=destination,
+                id=issue,
+                url=url if isinstance(url, str) else None,
+            )
+        )
+        return True
+
+    def realias_comments(self, issue: str) -> None:
+        """Edit each comment of the run on ``issue`` to name its public id, at its version."""
+        pattern = run_pattern(self.run)
+        alias = run_alias(self.run, self.public)
+        shown = self.item(issue)
+        version = shown.version
+        destination = issue.partition(":")[0]
+        cached = plan_store.configured_settings().get(f"sources.{destination}.cache.enabled")
+        for comment in shown.comments:
+            identifier, body = comment.id.root, comment.body
+            owned = may_change_comment(self.run, body) or may_change_comment(self.public, body)
+            if not owned or pattern.search(body) is None:
+                continue
+            written = plan_store.sdk(
+                plan_store.client().task_comment_edit(
+                    issue,
+                    identifier,
+                    body=alias(body),
+                    expect=version if cached is True else None,
+                )
+            )
+            version = edited_version(written, alias(body), version)
+            self.note(
+                RealiasEntry(
+                    kind="comment", destination=destination, id=identifier, url=written.url
+                )
+            )
+
+
+def edited_version(written: CommentWritten, sent: str, version: str | None) -> str | None:
+    """The item's version after the comment edit ``written`` answered, held to having landed.
+
+    :class:`OSError` for an answer showing another body than ``sent``, or a part of an
+    expected write that did not land; the version it reports, else ``version`` as it was.
+    """
+    parts = [] if written.result is None else [one.root.outcome for one in written.result.parts]
+    if written.body != sent or any(one != "landed" for one in parts):
+        raise OSError(
+            f"the edit of comment {written.id.root} answered a body or parts other than it sent "
+            f"({parts}); read the comment on the board before realiasing again"
+        )
+    return written.result.version if written.result and written.result.version else version
+
+
+def _carriers_named(texts: Sequence[str], board: str) -> list[str]:
+    """Every item of ``board``'s family the run's accounts name, in the order named."""
+    family = "|".join(re.escape(one) for one in boards(board))
+    named = re.compile(rf"(?<![\w:-])(?:{family}):[^\s`<>\"',\]]+")
+    return list(
+        dict.fromkeys(match[0].rstrip(".,;)") for text in texts for match in named.finditer(text))
+    )
+
+
+def realias(root: Path, run: str, board: str) -> Path | None:
+    """Rewrite every follow-up record of ``run`` to name its public id; the inventory's path.
+
+    `None`, writing nothing, when the engine names the run by its own id. The public id is
+    the engine's (:func:`orchestrator.follow_up_drafts.follow_up_key`), never derived here.
+    """
+    try:
+        public = drafts.follow_up_key(run)
+    except drafts.Refused as refusal:
+        raise Refused([str(refusal)]) from None
+    if public == run:
+        return None
+    texts = _realias_records(root, run, public)
+    state = _Realiasing(root, run, public, board)
+    # The inventory is written however the rewriting ends, so a write the board refuses
+    # partway leaves every item and comment rewritten before it listed, which the next
+    # invocation, finding them already naming the public id, would otherwise not see.
+    try:
+        owned = [issue for issue in state.own_items() if state.realias_item(issue)]
+        for issue in dict.fromkeys([*owned, *_carriers_named(texts, board)]):
+            state.realias_comments(issue)
+    finally:
+        path = _realias_inventory(root, public, state.entries)
+    return path
+
+
+def _realias_inventory(
+    root: Path, public: str, rewritten: Mapping[tuple[str, str, str], RealiasEntry]
+) -> Path:
+    """Write the inventory of ``public``: what this invocation rewrote, beside what an earlier
+    one listed; its path."""
+    path = realias_path(root, public)
+    entries = dict(rewritten)
+    if path.is_file():
+        held = _artifact(path)
+        listed = held.get("entries")
+        schema = held.get("schema")
+        if (
+            type(schema) is not int
+            or schema != REALIAS_SCHEMA
+            or held.get("run") != public
+            or not isinstance(listed, list)
+        ):
+            raise Refused([f"{path} is not run {public}'s realias inventory"])
+        for entry in listed:
+            held_entry = _realias_entry(entry, path)
+            entries.setdefault(
+                (held_entry["kind"], held_entry["destination"], held_entry["id"]), held_entry
+            )
+    written = {
+        "schema": REALIAS_SCHEMA,
+        "run": public,
+        "entries": [entries[key] for key in sorted(entries)],
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(written, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
 def _gathering_file(value: str) -> Path:
     """A `--feedback` path, refused when it names no file for an account to sit beside."""
     path = Path(value)
@@ -6582,6 +7138,35 @@ def _parser() -> _Parser:
     check = commands.add_parser("check-run", help="validate every ticket a run holds")
     check.add_argument("--root", type=Path, required=True, help=root_help)
     check.add_argument("run", metavar="RUN-ID")
+    engine = commands.add_parser(
+        "engine-run",
+        help=(
+            "print the engine's own id for the run whose follow-ups a public id keys, or "
+            "nothing where none is recorded"
+        ),
+    )
+    engine.add_argument("--root", type=Path, required=True, help=root_help)
+    engine.add_argument("run", metavar="PUBLIC-ID")
+    recorded = commands.add_parser(
+        "record-engine-run",
+        help="record beside a run's follow-ups, keyed by its public id, the engine's own id",
+    )
+    recorded.add_argument("--root", type=Path, required=True, help=root_help)
+    recorded.add_argument("run", metavar="PUBLIC-ID")
+    recorded.add_argument("engine", metavar="RUN-ID")
+    realiased = commands.add_parser(
+        "realias",
+        help=(
+            "rewrite every follow-up record, board item and comment of a run still keyed by its "
+            "run id to name the public id the engine names it by, in place, and write their "
+            "inventory"
+        ),
+    )
+    realiased.add_argument("--root", type=Path, required=True, help=root_help)
+    realiased.add_argument(
+        "--board", default=BOARD, metavar="SOURCE", help="the root of the run's boards"
+    )
+    realiased.add_argument("run", metavar="RUN-ID")
     placed = commands.add_parser(
         # The follow-up task has this command persist the binding and note withdrawn
         # duplicates before it answers; `board-status` is the name the template, the
@@ -6709,6 +7294,12 @@ def _parser() -> _Parser:
         type=Path,
         required=True,
         help="the launching checkout, whose locked installs read the run and its budgets",
+    )
+    budgets_opened.add_argument(
+        "--engine-run",
+        type=_budget_run,
+        metavar="RUN-ID",
+        help="the engine's own id for the run, where its public id keys the account",
     )
     budgets_opened.add_argument("run", type=_budget_run, metavar="RUN-ID")
     budgets_location = commands.add_parser(
@@ -6861,6 +7452,20 @@ def _refused(named: str, problems: Sequence[str]) -> int:
     return UNSOUND
 
 
+def _realiased(arguments: argparse.Namespace) -> int:
+    """Realias a run's follow-ups onto its public id, for the `realias` command."""
+    try:
+        path = realias(arguments.root, arguments.run, arguments.board)
+    except (OSError, Refused, Misbound, Unplaced) as exc:
+        print(f"{PROG}: refused: {exc}", file=sys.stderr)
+        return UNRUNNABLE
+    if path is None:
+        print(f"{PROG}: the engine names run {arguments.run} by its own id; nothing to realias")
+        return SOUND
+    print(f"{PROG}: run {arguments.run}'s follow-ups name its public id; inventory at {path}")
+    return SOUND
+
+
 def _accounted(arguments: argparse.Namespace) -> int:
     """Validate a run's disposition artifact, for the `check-dispositions` command."""
     path = dispositions_path(arguments.root, arguments.run)
@@ -6917,7 +7522,15 @@ def _budgets_opened(arguments: argparse.Namespace) -> int:
     """Record a run's budget account, for the `open-budgets` command."""
     installs = Installs(arguments.checkout.resolve() / ".venv" / "bin")
     try:
-        print(open_budgets(arguments.root, arguments.run, arguments.runs_root.resolve(), installs))
+        print(
+            open_budgets(
+                arguments.root,
+                arguments.run,
+                arguments.runs_root.resolve(),
+                installs,
+                engine_run=arguments.engine_run,
+            )
+        )
     except (OSError, Refused) as exc:
         print(f"{PROG}: refused: {exc}", file=sys.stderr)
         return UNRUNNABLE
@@ -7371,6 +7984,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             return UNRUNNABLE
         case "check-gathering":
             return _gathered(arguments)
+        case "engine-run":
+            print(drafts.engine_run(arguments.root, arguments.run) or "")
+            return SOUND
+        case "realias":
+            return _realiased(arguments)
+        case "record-engine-run":
+            try:
+                drafts.record_engine_run(arguments.root, arguments.run, arguments.engine)
+            except (OSError, drafts.Refused) as exc:
+                print(f"{PROG}: refused: {exc}", file=sys.stderr)
+                return UNRUNNABLE
+            return SOUND
         case "inventory":
             held_drafts, held_tickets = inventory(arguments.root, arguments.run)
             print(f"{held_drafts} {held_tickets}")

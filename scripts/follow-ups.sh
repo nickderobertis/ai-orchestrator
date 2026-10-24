@@ -275,6 +275,22 @@ if [ -e "$runs_root" ] && { [ ! -d "$runs_root" ] || [ ! -r "$runs_root" ] || [ 
         "fix its permissions, or point $PLAN_RUNS_ROOT_ENV at a directory this launch can read, then retry"
 fi
 
+# Every follow-up record of a run is keyed by its public id, the `public_id` the engine's
+# reading names it by, which is the run id itself unless that names a private repository.
+# A board holds only that id, so a comment's routing hands this recipe a public id: where no
+# run root carries the name, the run's draft project says which run it keys, if any.
+key=$run
+if [ ! -e "$runs_root/$run" ]; then
+    # shellcheck source=scripts/follow-up-env.sh
+    load follow-up-env.sh
+    export_follow_up_drafts follow-ups || exit "$?"
+    drafts_root=${!FOLLOW_UP_DRAFTS_ROOT_ENV}
+    aliased=$("$python" -m orchestrator.follow_up_tickets engine-run --root "$drafts_root" "$run") ||
+        fail "whether '$run' is the public id of a run could not be read under $drafts_root" \
+            "repair what the refusal above names, then retry"
+    [ -z "$aliased" ] || run=$aliased
+fi
+
 # A run with no run root is a run nothing drives. One that has one is asked, once, for the
 # engine's reading of it, and only a run that ended is followed up.
 if [ -e "$runs_root/$run" ]; then
@@ -310,12 +326,23 @@ if [ -e "$runs_root/$run" ]; then
                 "read the run with 'just status $run', then retry"
             ;;
     esac
+    public=$(printf '%s' "$answered" | "$python" -m orchestrator.run_reading --public-id "$run") ||
+        fail "the public id of run '$run' could not be read from the engine's reading" \
+            "read the run with 'just status $run --json', then retry"
+    [ "$key" = "$run" ] || [ "$key" = "$public" ] ||
+        fail "'$key' keys the follow-ups of run '$run', which the engine names '$public'" \
+            "follow it up as 'just follow-ups $run', then retry"
+    key=$public
 fi
 
 # shellcheck source=scripts/follow-up-env.sh
 load follow-up-env.sh
 export_follow_up_drafts follow-ups || exit "$?"
 drafts_root=${!FOLLOW_UP_DRAFTS_ROOT_ENV}
+[ "$key" = "$run" ] ||
+    "$python" -m orchestrator.follow_up_tickets record-engine-run --root "$drafts_root" "$key" "$run" ||
+    fail "the id of run '$run' could not be recorded beside its follow-ups, keyed '$key', under $drafts_root" \
+        "check that the drafts root is writable, then retry"
 # The source the launch writes its project into, rooted under that drafts root and exported
 # before any store command, and made now: once it is declared private the store builds it on
 # every dependency walk, and a `local-md` root that does not exist fails that walk.
@@ -325,7 +352,7 @@ mkdir -p -- "${!PLAN_SOURCE_ROOT_ENV}" ||
         "check that the drafts root $drafts_root is writable, then retry"
 
 if [ "$comments" -ne 1 ]; then
-    counts=$("$python" -m orchestrator.follow_up_tickets inventory --root "$drafts_root" "$run") ||
+    counts=$("$python" -m orchestrator.follow_up_tickets inventory --root "$drafts_root" "$key") ||
         fail "the drafts and tickets of run '$run' could not be counted under $drafts_root" \
             "restore the pinned toolchain with 'just bootstrap', then retry"
     read -r held_drafts held_tickets <<<"$counts"
@@ -340,10 +367,10 @@ if [ "$comments" -ne 1 ]; then
     # which the dispatch only disposes of. A re-dispatch keeps the account it finds, since a
     # budget measures once. `docs/budgets.md` states what each budget's command is handed.
     budget_account=$("$python" -m orchestrator.follow_up_tickets open-budgets --root "$drafts_root" \
-        --runs-root "$runs_root" --checkout "$script_dir/.." "$run") ||
+        --runs-root "$runs_root" --checkout "$script_dir/.." --engine-run "$run" "$key") ||
         fail "the landed changes of run '$run' could not be measured against their budgets under $drafts_root" \
             "repair what the refusal above names, then retry 'just follow-ups $run'"
-    overruns=$("$python" -m orchestrator.follow_up_tickets budget-overruns --root "$drafts_root" "$run") ||
+    overruns=$("$python" -m orchestrator.follow_up_tickets budget-overruns --root "$drafts_root" "$key") ||
         fail "the budget account at $budget_account could not be read" \
             "repair what the refusal above names, then retry 'just follow-ups $run'"
     # llmlint: ignore[robust_shell] A `[[ =~ ]]` right-hand side must stay unquoted; quoting makes bash match the pattern literally, so nothing would ever match.
@@ -354,16 +381,16 @@ fi
 if [ "$comments" -ne 1 ] && [ "$held_drafts" -eq 0 ] && [ "$held_tickets" -eq 0 ] && [ "$overruns" -eq 0 ]; then
     # A previous pass can consume every draft and still leave an incomplete account.
     # Read that account before calling the run empty; no artifact means no pass began.
-    prior=$("$python" -m orchestrator.follow_up_tickets dispositions-path --root "$drafts_root" "$run") ||
+    prior=$("$python" -m orchestrator.follow_up_tickets dispositions-path --root "$drafts_root" "$key") ||
         fail "the disposition account path for run '$run' could not be read" "repair the diagnostic above, then retry"
     if [ -f "$prior" ]; then
-        "$python" -m orchestrator.follow_up_tickets check-dispositions --root "$drafts_root" "$run" >/dev/null ||
+        "$python" -m orchestrator.follow_up_tickets check-dispositions --root "$drafts_root" "$key" >/dev/null ||
             fail "the account at $prior was refused above" "correct it before treating this run as complete"
     fi
     # Every landed change's result line, on standard error so the one line below stays the
     # whole of standard output, which the success hook relays alone.
     # llmlint: ignore[tool_output_is_signal] Each landed result is mandatory report output.
-    "$python" -m orchestrator.follow_up_tickets budget-results --root "$drafts_root" "$run" >&2 ||
+    "$python" -m orchestrator.follow_up_tickets budget-results --root "$drafts_root" "$key" >&2 ||
         fail "the budget account at $budget_account could not be read" "repair the refusal above, then retry"
     echo "follow-ups: run $run holds no follow-up drafts, no tickets and no budget overrun under $drafts_root, so there is nothing to verify and no follow-up run was launched"
     exit 0
@@ -461,7 +488,7 @@ if [ "$comments" -eq 1 ]; then
     # is one nothing should be launched over.
     # Quiet where it passes: this recipe's one status line is the launch it prints below,
     # and the command's refusals reach standard error whatever this does with its answer.
-    "${tickets_module[@]}" check-gathering --board "$board" --feedback "$feedback" "$run" >/dev/null ||
+    "${tickets_module[@]}" check-gathering --board "$board" --feedback "$feedback" "$key" >/dev/null ||
         fail "'$feedback' is not a gathering of '$board' this run could answer, so no follow-up run was launched" \
             "gather the board's comments with 'just follow-ups-answer-comments --run $run', which writes one"
     # Asked of the module rather than restated here: where one gathering's account goes is
@@ -469,13 +496,13 @@ if [ "$comments" -eq 1 ]; then
     account=$("${tickets_module[@]}" responses-path --feedback "$feedback") ||
         fail "where the account answering '$feedback' goes could not be read" \
             "restore the pinned toolchain with 'just bootstrap', then retry"
-    validator=("${tickets_module[@]}" check-responses --board "$board" --feedback "$feedback" "$run")
+    validator=("${tickets_module[@]}" check-responses --board "$board" --feedback "$feedback" "$key")
 else
     mode=initial
     # Written before the launch, never by the dispatch: the agent deletes each draft a
     # ticket consumed, so an input set derived afterwards would be the drafts nothing
     # happened to. The artifact only grows, so a re-dispatch keeps the first pass's account.
-    account=$("${tickets_module[@]}" open-dispositions --root "$drafts_root" "$run") ||
+    account=$("${tickets_module[@]}" open-dispositions --root "$drafts_root" "$key") ||
         fail "the drafts of run '$run' could not be recorded as this dispatch's input set under $drafts_root" \
             "repair the account or draft file the refusal above names, keeping every answer it records, then retry 'just follow-ups $run'"
     # The one closeout, run after settlement so a final board edit or comment cannot escape
@@ -488,7 +515,7 @@ else
     cp -- "$budget_account" "$hook_snapshot" ||
         fail "the budget account could not be captured for the closeout" "free disk space and retry"
     "${tickets_module[@]}" write-closeout --root "$drafts_root" --board "$board" \
-        --measured "$hook_snapshot" --hook "$closeout_hook" "$run" >/dev/null ||
+        --measured "$hook_snapshot" --hook "$closeout_hook" "$key" >/dev/null ||
         fail "the closeout hook could not be written" "repair the refusal above and retry"
     closeout_hooks=(--success-hook "$closeout_hook" --failure-hook "$closeout_hook")
 fi
@@ -502,7 +529,7 @@ engine="$checkout/.venv/bin/onepipeline"
 load template-env.sh
 export_template_root follow-ups || exit "$?"
 
-answering=(answers --mode "$mode" --root "$drafts_root" --run "$run"
+answering=(answers --mode "$mode" --root "$drafts_root" --run "$key"
     --board "$board"
     --validate "\"$python\" -m orchestrator.follow_up_tickets validate"
     --board-status "\"$python\" -m orchestrator.follow_up_tickets board-status"
@@ -515,14 +542,14 @@ if [ "$comments" -eq 1 ]; then
     printf -v quoted_python '%q' "$python"
     printf -v quoted_board '%q' "$board"
     printf -v quoted_feedback '%q' "$feedback"
-    printf -v quoted_run '%q' "$run"
+    printf -v quoted_run '%q' "$key"
     answering+=(--responses "$account"
         --check-responses "$quoted_python -m orchestrator.follow_up_tickets check-responses --board $quoted_board --feedback $quoted_feedback $quoted_run")
 else
     printf -v quoted_python '%q' "$python"
     printf -v quoted_root '%q' "$drafts_root"
     printf -v quoted_board '%q' "$board"
-    printf -v quoted_run '%q' "$run"
+    printf -v quoted_run '%q' "$key"
     answering+=(--dispositions "$account"
         --check-dispositions "$quoted_python -m orchestrator.follow_up_tickets check-dispositions --root $quoted_root $quoted_run"
         --budgets "$budget_account"

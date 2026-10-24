@@ -11,6 +11,10 @@ module on stdin and acts on the one line it prints:
 * ``crashed <word>`` — nothing drives it, it has not ended, and nothing is decided on;
 * ``unreadable <why>`` — the answer is not the engine's document.
 
+With ``--public-id`` it prints instead the run's public id — the reading's `public_id`, what
+the run is named by wherever a destination is not private — which every follow-up record of
+the run is keyed by. The engine decides it; nothing here derives one.
+
 The answer crosses a process boundary, so every field is checked against the document
 before anything is decided from it: an answer that half-matches is not one to launch on.
 The vocabulary below restates the published schema, and
@@ -40,6 +44,7 @@ __all__ = [
     "Unreadable",
     "decide",
     "main",
+    "public_id",
 ]
 
 #: The run a reading is asked of, which the reading has to name back.
@@ -142,6 +147,14 @@ INBOX_FIELDS = frozenset(FIELD_TYPES["InboxNote"])
 INBOX_STATE = "queued"
 INBOX_DELIVERY_FIELDS = frozenset({"state", "node", "since"})
 INBOX_DELIVERY_OPTIONAL = frozenset({"deadline"})
+#: The JSON types of that delivery's fields besides its one `state`, as the schema declares
+#: them in its `InboxDelivery`, which states its one shape as a `oneOf` alternative rather than
+#: as the plain object :data:`FIELD_TYPES` spells.
+INBOX_DELIVERY_TYPES: dict[str, frozenset[str]] = {
+    "node": frozenset({"string"}),
+    "since": frozenset({"string"}),
+    "deadline": frozenset({"string", "null"}),
+}
 
 
 class Unreadable(ValueError):
@@ -174,6 +187,7 @@ def _is(value: object, types: frozenset[str]) -> bool:
         "string": isinstance(value, str),
         "boolean": isinstance(value, bool),
         "null": value is None,
+        "object": isinstance(value, dict),
     }
     return any(held[each] for each in types)
 
@@ -250,9 +264,11 @@ def _inbox(value: object) -> None:
             raise Unreadable(
                 f"a note in its inbox is {json.dumps(delivery['state'])}, not {INBOX_STATE}"
             )
-        if not all(isinstance(delivery[field], str) for field in ("node", "since")):
+        if not all(
+            _is(delivery[field], INBOX_DELIVERY_TYPES[field]) for field in ("node", "since")
+        ):
             raise Unreadable("a note in its inbox names its node or its time as no string")
-        if not _is(delivery.get("deadline"), frozenset({"string", "null"})):
+        if not _is(delivery.get("deadline"), INBOX_DELIVERY_TYPES["deadline"]):
             raise Unreadable("a note in its inbox has a deadline that is not a string")
 
 
@@ -284,8 +300,8 @@ def _waiting(value: object) -> str:
     return "; ".join(waiting)
 
 
-def decide(answer: str, run: RunId) -> Decided:
-    """Decide what the recipe does with ``run`` from the engine's ``answer`` about it."""
+def _checked(answer: str, run: RunId) -> dict[str, object]:
+    """The engine's ``answer`` about ``run``, every field it carries held to the document."""
     try:
         parsed: object = json.loads(answer)
     except ValueError as error:
@@ -296,12 +312,13 @@ def decide(answer: str, run: RunId) -> Decided:
         raise Unreadable(f"it is schema {json.dumps(version)}, not {SCHEMA_VERSION}")
     if reading["run_id"] != run:
         raise Unreadable(f"it reads run {json.dumps(reading['run_id'])}, not {run}")
-    word = _word(reading["word"], WORDS, "its word")
-    _word(reading["liveness"], LIVENESS, "its liveness")
-    driven = reading["driven"]
-    if not _is(driven, FIELD_TYPES["RunReading"]["driven"]):
-        raise Unreadable("its driven field is not true or false")
     _labelled(reading)
+    if not reading["public_id"]:
+        raise Unreadable("its public id is empty")
+    _word(reading["word"], WORDS, "its word")
+    _word(reading["liveness"], LIVENESS, "its liveness")
+    if not _is(reading["driven"], FIELD_TYPES["RunReading"]["driven"]):
+        raise Unreadable("its driven field is not true or false")
     if "unanswered" in reading:
         _unanswered(reading["unanswered"])
     if "inbox" in reading:
@@ -309,11 +326,27 @@ def decide(answer: str, run: RunId) -> Decided:
     ending, paused = reading["ending"], reading["paused"]
     if ending is not None:
         _ending(ending)
-    waiting = None if paused is None else _waiting(paused)
+    if paused is not None:
+        _waiting(paused)
     if ending is not None and paused is not None:
         raise Unreadable("it reads both ended and paused")
-    if driven and (ending is not None or paused is not None):
+    if reading["driven"] and (ending is not None or paused is not None):
         raise Unreadable("it reads driven and yet ended or paused")
+    return reading
+
+
+def public_id(answer: str, run: RunId) -> str:
+    """The public id the engine's ``answer`` names ``run`` by, from a reading held whole."""
+    return str(_checked(answer, run)["public_id"])
+
+
+def decide(answer: str, run: RunId) -> Decided:
+    """Decide what the recipe does with ``run`` from the engine's ``answer`` about it."""
+    reading = _checked(answer, run)
+    word = str(reading["word"])
+    driven = reading["driven"]
+    ending, paused = reading["ending"], reading["paused"]
+    waiting = None if paused is None else _waiting(paused)
     if ending is not None:
         return Decided(Decision.ENDED, "")
     if driven:
@@ -325,13 +358,23 @@ def decide(answer: str, run: RunId) -> Decided:
 
 def main(argv: list[str] | None = None) -> int:
     """Read the answer on stdin for the run ``argv`` names, and print the decision line."""
-    arguments = sys.argv[1:] if argv is None else argv
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    public = arguments[:1] == ["--public-id"]
+    if public:
+        arguments = arguments[1:]
     if len(arguments) != 1:
-        print("usage: python -m orchestrator.run_reading <run-id> < answer", file=sys.stderr)
+        print(
+            "usage: python -m orchestrator.run_reading [--public-id] <run-id> < answer",
+            file=sys.stderr,
+        )
         return 2
     try:
-        print(decide(sys.stdin.read(), RunId(arguments[0])).line())
+        answer, run = sys.stdin.read(), RunId(arguments[0])
+        print(public_id(answer, run) if public else decide(answer, run).line())
     except Unreadable as unreadable:
+        if public:
+            print(f"run_reading: unreadable {unreadable}", file=sys.stderr)
+            return 1
         print(f"unreadable {unreadable}")
     return 0
 

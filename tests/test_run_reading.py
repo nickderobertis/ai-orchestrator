@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import io
 import json
-from typing import Any, NamedTuple, cast
+from typing import NamedTuple
 
 import jsonschema
 import pytest
@@ -42,6 +42,8 @@ PAUSED = ENDED | {
     "paused": {"human_actions": ["gate"], "blocking_surface": True},
 }
 CRASHED = ENDED | {"word": "DRIVER DEAD", "ending": None}
+#: A live note's delivery as the engine prints it while the note waits in an inbox.
+QUEUED = {"state": "queued", "node": "a", "since": "2026-10-23T00:00:00Z", "deadline": None}
 
 
 def _read(reading: object) -> run_reading.Decided:
@@ -128,6 +130,7 @@ def test_each_reading_the_engine_gives_is_decided(reading: object, line: str) ->
         (json.dumps(ENDED | {"labels": []}), "its labels are not an object of strings"),
         (json.dumps(ENDED | {"group": 3}), "its group is neither a string nor null"),
         (json.dumps(ENDED | {"public_id": None}), "its public id is not a string"),
+        (json.dumps(ENDED | {"public_id": ""}), "its public id is empty"),
         (json.dumps(DRIVEN | {"inbox": {}}), "its inbox is not a list"),
         (
             json.dumps(DRIVEN | {"inbox": [{"envelope": "7"}]}),
@@ -297,12 +300,45 @@ def test_the_command_prints_one_decision_line_for_the_answer_on_stdin(
     assert capsys.readouterr().out == "unreadable the answer is not one JSON document\n"
 
 
+#: A run whose id names something private, as the engine names it in public instead.
+PUBLIC = "run-0123456789ab"
+
+
+def test_the_public_id_is_the_one_the_engine_names_and_nothing_derived() -> None:
+    assert run_reading.public_id(json.dumps(ENDED | {"public_id": RUN}), RUN) == RUN
+    assert run_reading.public_id(json.dumps(DRIVEN | {"public_id": PUBLIC}), RUN) == PUBLIC
+    with pytest.raises(Unreadable, match="its public id is empty"):
+        run_reading.public_id(json.dumps(ENDED | {"public_id": ""}), RUN)
+    with pytest.raises(Unreadable, match='it reads run "run-2", not run-1'):
+        run_reading.public_id(json.dumps(ENDED | {"run_id": "run-2"}), RUN)
+    with pytest.raises(Unreadable, match="its ending does not carry"):
+        run_reading.public_id(json.dumps(ENDED | {"ending": {"kind": "failed"}}), RUN)
+    with pytest.raises(Unreadable, match="it reads driven and yet ended or paused"):
+        run_reading.public_id(json.dumps(ENDED | {"driven": True}), RUN)
+
+
+def test_the_command_prints_the_public_id_or_refuses_an_unreadable_answer(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(CRASHED | {"public_id": PUBLIC})))
+    assert run_reading.main(["--public-id", RUN]) == 0
+    assert capsys.readouterr().out == f"{PUBLIC}\n"
+
+    monkeypatch.setattr("sys.stdin", io.StringIO("not json"))
+    assert run_reading.main(["--public-id", RUN]) == 1
+    printed = capsys.readouterr()
+    assert printed.out == ""
+    assert "unreadable the answer is not one JSON document" in printed.err
+
+
 def test_the_command_refuses_a_call_that_names_no_single_run(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setattr("sys.argv", ["run_reading"])
     assert run_reading.main() == 2
-    assert "usage: python -m orchestrator.run_reading <run-id>" in capsys.readouterr().err
+    assert "usage: python -m orchestrator.run_reading [--public-id] <run-id>" in (
+        capsys.readouterr().err
+    )
 
 
 # llmlint: ignore-block[shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker] This
@@ -388,6 +424,22 @@ def _types(field: dict[str, object]) -> frozenset[str]:
 
 
 @pytest.mark.reads_checkouts
+def test_the_inbox_delivery_the_reader_checks_is_the_published_schemas() -> None:
+    """The one shape an inbox note's delivery has: its fields, which are required, and its state."""
+    (shape,) = _definition(_schema(), "InboxDelivery")["oneOf"]
+    assert frozenset(shape["required"]) == run_reading.INBOX_DELIVERY_FIELDS
+    assert frozenset(shape["properties"]) == (
+        run_reading.INBOX_DELIVERY_FIELDS | run_reading.INBOX_DELIVERY_OPTIONAL
+    )
+    assert shape["properties"]["state"]["const"] == run_reading.INBOX_STATE
+    typed = {field: _types(declared) for field, declared in shape["properties"].items()}
+    assert {field: typed[field] for field in run_reading.INBOX_DELIVERY_TYPES} == (
+        run_reading.INBOX_DELIVERY_TYPES
+    )
+    assert frozenset(run_reading.INBOX_DELIVERY_TYPES) == frozenset(typed) - {"state"}
+
+
+@pytest.mark.reads_checkouts
 def test_the_field_types_the_reader_checks_are_the_published_schemas() -> None:
     """Each field the reader type-checks has the types the schema declares, and no other."""
     schema = _schema()
@@ -399,26 +451,6 @@ def test_the_field_types_the_reader_checks_are_the_published_schemas() -> None:
         assert isinstance(properties, dict)
         published = {field: _types(declared) for field, declared in properties.items()}
         assert published == fields, name
-
-
-@pytest.mark.reads_checkouts
-def test_the_inbox_delivery_the_reader_checks_is_the_published_schemas() -> None:
-    """A note in an inbox has the one state, the fields and the optional deadline published.
-
-    `InboxDelivery` is a `oneOf` of exactly one variant, so the reader's restatement of it —
-    its state, its required fields and its one optional field — is held to that variant.
-    """
-    (variant,) = cast(list[dict[str, Any]], _definition(_schema(), "InboxDelivery")["oneOf"])
-    properties = cast(dict[str, Any], variant["properties"])
-
-    assert properties["state"]["const"] == run_reading.INBOX_STATE
-    assert frozenset(variant["required"]) == run_reading.INBOX_DELIVERY_FIELDS
-    assert frozenset(properties) - frozenset(variant["required"]) == (
-        run_reading.INBOX_DELIVERY_OPTIONAL
-    )
-    for field in ("node", "since"):
-        assert properties[field]["type"] == "string", field
-    assert frozenset(properties["deadline"]["type"]) == {"string", "null"}
 
 
 @pytest.mark.reads_checkouts

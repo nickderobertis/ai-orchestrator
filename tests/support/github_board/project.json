@@ -27,6 +27,7 @@
       "{workspaceRoot}/orchestrator/project_store.py",
       "{workspaceRoot}/orchestrator/publication_guard.py",
       "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/orchestrator/run_reading.py",
       "{workspaceRoot}/orchestrator/spike_plan.py",
       "{workspaceRoot}/orchestrator/task_body.py",
       "{projectRoot}/project.json"

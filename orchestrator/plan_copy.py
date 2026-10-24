@@ -85,8 +85,10 @@ UNREADABLE = 2
 OVERSIZED = 4
 
 #: The **destination's** refusal: every task carried a record, the copy was attempted,
-#: and the store answered non-zero. Distinct from :data:`UNREVIEWED` so a caller can tell
-#: "nothing has reviewed this" from "the board would not take it".
+#: and the store answered non-zero — or answered with an item it reports `failed`, which
+#: its own CLI exits non-zero for while the SDK returns the report. Distinct from
+#: :data:`UNREVIEWED` so a caller can tell "nothing has reviewed this" from "the board would
+#: not take it".
 COPY_REFUSED = 3
 
 
@@ -277,7 +279,7 @@ def copy(
         report = plan_store.sdk(
             plan_store.client().project_copy(project, to=destination, **options)
         )
-        _report(report)
+        failed = _report(report)
     except Exception as exc:
         print(f"copy-plan: {exc}", file=sys.stderr)
         print(
@@ -291,6 +293,8 @@ def copy(
             file=sys.stderr,
         )
         return COPY_REFUSED
+    if failed:
+        return _refused_items(project, destination, failed)
     return _documents(project, destination, passthrough, documents)
 
 
@@ -335,7 +339,7 @@ def _documents(
                 dry_run=DRY_RUN in passthrough,
             )
         )
-        _report(report)
+        failed = _report(report)
     except Exception as exc:
         print(f"copy-plan: {exc}", file=sys.stderr)
         print(
@@ -347,7 +351,25 @@ def _documents(
             file=sys.stderr,
         )
         return COPY_REFUSED
+    if failed:
+        return _refused_items(project, destination, failed)
     return OK
+
+
+def _refused_items(project: str, destination: str, failed: Sequence[str]) -> int:
+    """Answer a copy whose report carries ``failed`` items as the destination's refusal.
+
+    The store's own CLI exits non-zero exactly when some entry of its report failed, each
+    entry carrying its failure; the SDK returns that report instead, so the decision is
+    taken here, the way the CLI takes it, after every entry has been printed.
+    """
+    print(
+        f"copy-plan: {destination!r} refused {', '.join(failed)} of {project}, each with the "
+        f"failure its line above reports; what else landed stands, and a copy that partly "
+        f"landed is resumed by repeating it once what each failure names is repaired",
+        file=sys.stderr,
+    )
+    return COPY_REFUSED
 
 
 class CopyOptions(TypedDict, total=False):
@@ -429,12 +451,16 @@ def _copy_options(arguments: Sequence[str]) -> CopyOptions:
     return options
 
 
-def _report(report: CopyReport) -> None:
-    """Render the SDK copy report one record per line."""
+def _report(report: CopyReport) -> list[str]:
+    """Render the SDK copy report one record per line; answer each item it reports failed."""
+    failed: list[str] = []
     for item in report.items:
         print(item.model_dump_json(exclude_none=True))
+        if item.root.action == "failed":
+            failed.append(str(item.root.source.root))
     rewritten = report.references_rewritten
     unresolved = report.references_unresolved
     ambiguous = report.references_ambiguous
     if rewritten or unresolved or ambiguous:
         print(f"references: {rewritten} rewritten, {unresolved} unresolved ({ambiguous} ambiguous)")
+    return failed

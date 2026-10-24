@@ -46,6 +46,7 @@ does not.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import os
 import re
@@ -4234,6 +4235,7 @@ FAILED_ENDING = {"kind": "failed", "nodes": [{"id": "a", "status": "failed", "ou
         (_malformed(labels=[]), 0, "its labels are not an object of strings"),
         (_malformed(group=3), 0, "its group is neither a string nor null"),
         (_malformed(public_id=None), 0, "its public id is not a string"),
+        (_malformed(public_id=""), 0, "its public id is empty"),
         (_malformed(inbox={}), 0, "its inbox is not a list"),
         (
             _malformed(inbox=[{"envelope": "e-1"}]),
@@ -4300,6 +4302,7 @@ FAILED_ENDING = {"kind": "failed", "nodes": [{"id": "a", "status": "failed", "ou
         "labels-not-an-object",
         "group",
         "public-id",
+        "public-id-empty",
         "inbox-not-a-list",
         "inbox-fields",
         "inbox-id",
@@ -5048,11 +5051,23 @@ def test_follow_up_launch_validation_checks_the_board_once_and_refuses_a_late_ch
 # boundary to verify checkout routing, and the next uses the real engine over recorded telemetry
 # with only the paid model doubled. Recorded event timestamps make overruns deterministic
 # without waiting hours or changing the engine.
+#: A run named after a private repository, and the public id the engine names it by: the
+#: hashed form onepipeline's `public_id` contract states. Its budget account is keyed by the
+#: public id while every change it landed is read off the engine by its own id.
+PRIVATELY_NAMED_RUN = "fix-quietharbor-1"
+PRIVATELY_NAMED_KEY = "run-" + hashlib.sha256(PRIVATELY_NAMED_RUN.encode()).hexdigest()[:12]
+
+
+@pytest.mark.parametrize(
+    ("run", "key"), [("run-1", "run-1"), (PRIVATELY_NAMED_RUN, PRIVATELY_NAMED_KEY)]
+)
 @pytest.mark.parametrize("overrun", [True, False])
 def test_follow_ups_measures_each_repository_before_dispatch_and_refuses_an_unaccounted_overrun(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     overrun: bool,
+    run: str,
+    key: str,
 ) -> None:
     # The two repositories this journey registers are public ones, declared so before they
     # are registered: an undeclared one is probed on the host, reads `unknown` — private —
@@ -5124,12 +5139,14 @@ def test_follow_ups_measures_each_repository_before_dispatch_and_refuses_an_unac
         for node in ("overrun", "within") if labels else ("opted-out",):
             changes.append({**change, "node": node, "repository": identity})
     telemetry = tmp_path / "telemetry.json"
-    telemetry.write_text(json.dumps({"schema_version": 1, "run_id": "run-1", "changes": changes}))
-    (checkout / "runs/run-1").mkdir(parents=True)
+    telemetry.write_text(json.dumps({"schema_version": 1, "run_id": run, "changes": changes}))
+    (checkout / "runs" / run).mkdir(parents=True)
+    asked = tmp_path / "telemetry-asked.txt"
     engine = bins / "onepipeline"
     program = engine.read_text().replace(
         'if [ "${1:-}" = template ];',
-        f'if [ "${{1:-}}" = telemetry ]; then cat {shlex.quote(str(telemetry))}; exit 0; fi\n'
+        f'if [ "${{1:-}}" = telemetry ]; then printf "%s\\n" "$*" >> {shlex.quote(str(asked))}; '
+        f"cat {shlex.quote(str(telemetry))}; exit 0; fi\n"
         'if [ "${1:-}" = template ];',
     )
     engine.write_text(program)
@@ -5137,18 +5154,25 @@ def test_follow_ups_measures_each_repository_before_dispatch_and_refuses_an_unac
         checkout,
         trace,
         "follow-ups",
-        "run-1",
-        env={delegation_checkout.STATUS_ANSWER_ENV: json.dumps(WELL_FORMED)},
+        run,
+        env={
+            delegation_checkout.STATUS_ANSWER_ENV: json.dumps(
+                WELL_FORMED | {"run_id": run, "public_id": key}
+            )
+        },
     )
     root = checkout / ".follow-ups"
-    account = json.loads(tickets.budgets_path(root, "run-1").read_text())
+    account = json.loads(tickets.budgets_path(root, key).read_text())
+    assert account["run"] == key
+    # The engine is asked for the run's landed changes by the id it knows the run by.
+    assert asked.read_text().split("\n")[0].split()[:2] == ["telemetry", run]
     match overrun:
         case True:
             assert done.returncode == tickets.UNSOUND, done.stdout + done.stderr
             assert "carries 0 dispositions" in done.stderr
             assert "closeout refused: `check-budgets` refused what is named above" in done.stderr
-            assert "re-dispatch with 'just follow-ups run-1 --feedback FILE'" in done.stderr
-            assert tickets.dispositions_path(root, "run-1").is_file()
+            assert f"re-dispatch with 'just follow-ups {key} --feedback FILE'" in done.stderr
+            assert tickets.dispositions_path(root, key).is_file()
             assert [e["result"] for e in account["entries"]] == ["over", "within", "no-budget"]
             assert _one_task_record(checkout)
         case False:
@@ -5156,14 +5180,14 @@ def test_follow_ups_measures_each_repository_before_dispatch_and_refuses_an_unac
             assert "no follow-up run was launched" in done.stdout
             assert len(done.stdout.splitlines()) == 1
             assert [e["result"] for e in account["entries"]] == ["within", "within", "no-budget"]
-            assert not tickets.dispositions_path(root, "run-1").exists()
+            assert not tickets.dispositions_path(root, key).exists()
     for entry, source in zip(account["entries"], changes, strict=True):
         for field in tickets.TELEMETRY_FIELDS:
             assert entry[field] == source[field]
         assert tickets.change_line(entry) in (done.stdout if overrun else done.stderr)
     measured = [json.loads(line) for line in witness.read_text().splitlines()]
     assert [row["node"] for row in measured] == ["overrun", "within"]
-    assert all(row["cwd"] == str(registered) and row["run"] == "run-1" for row in measured)
+    assert all(row["cwd"] == str(registered) and row["run"] == run for row in measured)
     assert all(row["runs"] == str(checkout / "runs") for row in measured)
     assert all(row["path"].split(os.pathsep)[0] == str(bins) for row in measured)
 

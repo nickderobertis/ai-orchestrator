@@ -9,12 +9,15 @@
   ],
   "implicitDependencies": [
     "support-boundary-home",
+    "support-budget-telemetry",
     "support-conftest",
     "support-fake-backend",
     "support-fake-codex",
+    "support-fake-gh",
     "support-follow-up-ticket-shape",
     "support-follow-up-variables",
     "support-github-board",
+    "support-linear-board",
     "support-no-paid-provider",
     "support-nx-inputs",
     "support-nx-workspace",
@@ -104,12 +107,15 @@
           "input": "testSupport",
           "projects": [
             "support-boundary-home",
+            "support-budget-telemetry",
             "support-conftest",
             "support-fake-backend",
             "support-fake-codex",
+            "support-fake-gh",
             "support-follow-up-ticket-shape",
             "support-follow-up-variables",
             "support-github-board",
+            "support-linear-board",
             "support-no-paid-provider",
             "support-nx-inputs",
             "support-nx-workspace",
@@ -143,6 +149,31 @@
       "outputs": [
         "{workspaceRoot}/.telemetry/plan-tooling-plan-flow/test-docs"
       ]
-    }
+    },
+    "budgets": {
+      "dependsOn": [
+        "test-docs"
+      ],
+      "options": {
+        "cwd": ".",
+        "env": {
+          "BUDGET_TELEMETRY_SOURCES": ".telemetry/plan-tooling-plan-flow/test-docs"
+        }
+      },
+      "inputs": [
+        "{projectRoot}/budgets.yaml",
+        "{workspaceRoot}/config/onebudgetspec.version",
+        {
+          "input": "testSupport",
+          "projects": [
+            "support-budget-telemetry"
+          ]
+        },
+        {
+          "dependentTasksOutputFiles": "**/*.json"
+        }
+      ]
+    },
+    "budgets-host": {}
   }
 }

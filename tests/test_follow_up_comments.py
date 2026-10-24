@@ -15,6 +15,7 @@ older than a response waits for the clock to pass a second between them.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import re
 import shlex
@@ -31,6 +32,7 @@ import follow_up_variables
 import pytest
 
 from orchestrator import follow_up_comments as comments
+from orchestrator import follow_up_drafts as drafts
 from orchestrator import follow_up_tickets as tickets
 from orchestrator import plan_store
 from orchestrator.plan_store import WRITABLE_PLUGIN, QualifiedTaskId
@@ -2806,3 +2808,92 @@ def test_a_selection_leaves_out_every_comment_of_an_item_outside_proposal_and_de
     assert not selection.chosen
     (left,) = selection.left
     assert (left.id, left.reason) == ("c2", "item at Todo")
+
+
+def _privately_named(runs: Path, run: str) -> str:
+    """A run root the installed engine reads for ``run``, its launch recording the hashed
+    public id the engine decides for a privately named run; that id."""
+    from probe_run_root import run_root
+
+    public = "run-" + hashlib.sha256(run.encode()).hexdigest()[:12]
+    directory = run_root(runs, run)
+    launch = json.loads((directory / "launch.json").read_text(encoding="utf-8"))
+    (directory / "launch.json").write_text(
+        json.dumps(launch | {"public_id": public}), encoding="utf-8"
+    )
+    return public
+
+
+def test_a_run_scope_names_the_run_and_gathers_by_the_public_id_its_tickets_are_keyed_by(
+    drafts_root: Path,
+    board: Path,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = "fix-quietharbor-login"
+    monkeypatch.setenv(drafts.RUNS_ROOT_ENV, str(tmp_path / "runs"))
+    public = _privately_named(tmp_path / "runs", run)
+    own = _filed(drafts_root, public, CAUSE)
+    _next_second()
+    _commented(own, "Ours.\n")
+
+    report, plan = _gathered(drafts_root, capsys, "--run", run)
+
+    assert plan is not None and plan.scope == public
+    assert [one for one, _ in plan.runs] == [public]
+    assert own in report
+
+
+def test_a_run_scope_the_engine_cannot_read_is_refused_and_launches_nothing(
+    drafts_root: Path,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(drafts.RUNS_ROOT_ENV, str(tmp_path / "runs"))
+    (tmp_path / "runs" / "unreadable-run").mkdir(parents=True)
+
+    status, intent, _ = _steps(drafts_root, "--to", BOARD, "--run", "unreadable-run")
+
+    assert status != comments.DONE
+    assert not intent.exists()
+    refused = capsys.readouterr().err
+    assert "onepipeline status unreadable-run --json` exited" in refused
+    assert "nothing was launched" in refused
+
+
+def test_a_comment_version_is_held_at_the_precision_its_board_dates_it() -> None:
+    """Linear dates a comment to the microsecond, GitHub to the second; both round-trip."""
+    fine = datetime(2026, 10, 23, 5, 51, 16, 976705, tzinfo=UTC)
+    whole = fine.replace(microsecond=0)
+
+    assert comments.comment_version(fine) == "2026-10-23T05:51:16.976705Z"
+    assert comments.comment_version(whole) == comments.instant(whole) == "2026-10-23T05:51:16Z"
+    assert comments.moment(comments.comment_version(fine), "a version") == fine
+
+
+def test_a_comment_edited_after_its_quoted_version_in_the_same_second_is_unanswered() -> None:
+    """The quoted version answers only the comment as it stood, however close the edit."""
+    quoted = datetime(2026, 10, 23, 5, 51, 16, 100000, tzinfo=UTC)
+    reply = comments.Reply(quoted + timedelta(seconds=3), comments.CommentId("r-1"))
+
+    def standing(changed: datetime) -> comments.Comment:
+        return comments.Comment(
+            id=comments.CommentId("c-1"), author=None, body="Asked.", url=None, last_changed=changed
+        )
+
+    assert comments._answering(standing(quoted), [(reply, quoted)]) == "r-1"
+    edited = quoted.replace(microsecond=900000)
+    assert comments._answering(standing(edited), [(reply, quoted)]) is None
+    assert comments._answering(standing(edited), [(reply, None)]) == "r-1"
+
+
+def test_a_writes_answer_holds_a_body_by_its_meaning_and_any_other_field_exactly() -> None:
+    written = "## Impact\n\n- Severity: high\n- see [the log](https://example.com/a)\n"
+    stored = "## Impact\n\n* Severity: high\n* see [the log](https://example.com/a)\n"
+
+    assert comments._holds("content", stored, written)
+    assert not comments._holds("content", stored.replace("high", "low"), written)
+    assert comments._holds("priority", "high", "high")
+    assert not comments._holds("priority", "High", "high")

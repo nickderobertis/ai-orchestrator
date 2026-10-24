@@ -211,7 +211,9 @@ louder rather than duplicated.
 - **Each draft's transcript.** A draft's `orchestrator.follow-up-draft` record carries a
   `transcript` command, `onepipeline transcript …` or `onepipeline monitor …`. Run it from
   that checkout to read the turns the draft was written from. A manager's draft carries
-  none.
+  none. `{{ run }}` is the run's public id, which names it everywhere you write; a draft
+  whose record also carries `run_id` names there the engine's own id for the run, which that
+  command needs and which no ticket, comment or board text of yours may carry.
 - **Other repositories' trees.** Read them in the registered checkouts `onevcs repos`
   lists. In the checkout of a draft's repository, run `git fetch origin`, then read
   `origin/<base>` with `git show origin/<base>:<path>` and

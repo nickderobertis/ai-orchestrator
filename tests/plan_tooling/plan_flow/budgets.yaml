@@ -1,0 +1,49 @@
+# The plan-flow project's budgets. Unlabelled, so the cached `budgets` target checks them,
+# reading what this project's cached `test-docs` target recorded: each figure counts requests
+# or processes against loopback doubles, which a recording replayed for an unchanged tree
+# answers the same. The command is the one analysis every budget runs
+# (`tests/budget_telemetry.py`), and the journeys that record both are
+# `test_linear_routed_plans_e2e.py`'s.
+schema_version: 1
+budgets:
+  # Basis: measured. Evidence: 125 requests on the loopback Linear over one road of a plan of
+  # the incident's shape (three tasks naming the organization's repository, one `kind: human`
+  # node naming none, one design document with one image), measured on engine 0.86.0 and plan
+  # store 0.11.0: first copy 30, unchanged re-copy 19, approval 8, launch and run reads 11,
+  # settlement write-backs 57 (plan home 27, intake 8, ledger 8, notify 8, sign-off 6), the
+  # journey `test_the_roads_linear_requests_are_recorded_by_phase_node_and_status`. The approved
+  # target is 40; the manager ruled the measured figure plus a fifth, 153, stands until the
+  # store's release spending fewer Linear requests per copy, re-copy and write-back is adopted,
+  # when the threshold returns to 40.
+  - id: linear-requests-per-private-plan-road
+    description: >-
+      Requests one private plan's whole road sends to its Linear tracker, from its first copy
+      through its last settlement write-back — first copy, unchanged re-copy, approval,
+      launch and every node's settlement write-backs — for a plan of three tasks naming the
+      organization's repositories, one human node and one design document with one image.
+      It protects the organization's Linear API allowance, which every plan this host routes
+      there shares.
+    measure: reported
+    command: ["uv", "run", "--directory", "../../..", "python", "-m", "tests.budget_telemetry"]
+    unit: requests
+    direction: max
+    threshold: 153
+  # Basis: measured. Evidence: 40 processes over one finish-plan copy of a public plan of one
+  # project, six tasks, one design document and two spike reports naming two public
+  # repositories, on plan store 0.11.0: 10 checks, one per written item, and 30 inspects, 15 per
+  # repository, because the store inspects a repository once per item rather than once per
+  # copy (`test_one_public_copys_boundary_processes_are_recorded`). The approved target is 15
+  # (2 inspects + 10 checks); the manager ruled the measured figure plus a fifth, 48, stands
+  # until the store's release inspecting once per copy is adopted, when it returns to 15.
+  - id: boundary-invocations-per-public-copy
+    description: >-
+      `onevcs boundary inspect` and `onevcs boundary check` processes one `just finish-plan`
+      of a public plan starts — one project, six tasks, one design document and two spike
+      reports naming two public repositories — inspect apart from check, each check with the
+      items it screened. It protects how long a public plan's copy takes once a host switches
+      the store's public boundary on.
+    measure: reported
+    command: ["uv", "run", "--directory", "../../..", "python", "-m", "tests.budget_telemetry"]
+    unit: processes
+    direction: max
+    threshold: 48

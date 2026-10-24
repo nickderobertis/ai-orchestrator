@@ -40,6 +40,10 @@ labels, project group and public id), takes a live-added task's images through t
 pins follow it; onevcs's store schema is unchanged, so nothing migrates. The read API from
 0.45.0 removes the browser's watch, adopt and per-run and per-session shutdown, so it drives
 no run, and moves its telemetry schema to 24 and its timeline schema to 13.
+The same store crates place a plan naming a private repository in the private source the
+host declares and check a Linear item's stored content against what the store wrote. The
+later engine 0.88.0 and store 0.11.1 are not adopted, because no read API release links
+an engine past 0.86.0 yet.
 From onepipeline 0.80.2, onepipeline-ui 0.43.0 and
 onetaskgraph 0.9.0: the engine 0.81.0 and the read API 0.44.0 that links it carry the
 onetaskgraph 0.9.2 store crates, which copy a plan and list it without reading the whole

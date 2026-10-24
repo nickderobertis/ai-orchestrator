@@ -133,7 +133,7 @@
       ]
     },
     "coverage": {
-      "command": "rm -f .coverage && env -u FORCE_COLOR NO_COLOR=1 uv run coverage combine --keep .coverage.parallel .coverage.budget-gate .coverage.dispatch-bar .coverage.e2e-root .coverage.family-scans .coverage.launch-monitor-observer .coverage.manager-guidance .coverage.plan-guidance .coverage.plan-tooling-check-and-review .coverage.plan-tooling-follow-ups .coverage.plan-tooling-host-layer-routing .coverage.plan-tooling-plan-copy .coverage.plan-tooling-plan-flow .coverage.publish-and-landing .coverage.registry-and-recipes .coverage.release-pins .coverage.spike-brief .coverage.tree-scans .coverage.workspace-copies && env -u FORCE_COLOR NO_COLOR=1 uv run coverage report",
+      "command": "rm -f .coverage && env -u FORCE_COLOR NO_COLOR=1 uv run coverage combine --keep .coverage.parallel .coverage.budget-gate .coverage.dispatch-bar .coverage.e2e-root .coverage.family-scans .coverage.launch-monitor-observer .coverage.manager-guidance .coverage.plan-guidance .coverage.plan-tooling-check-and-review .coverage.plan-tooling-comment-version .coverage.plan-tooling-follow-ups .coverage.plan-tooling-host-layer-routing .coverage.plan-tooling-plan-copy .coverage.plan-tooling-plan-flow .coverage.publish-and-landing .coverage.registry-and-recipes .coverage.release-pins .coverage.spike-brief .coverage.tree-scans .coverage.workspace-copies && env -u FORCE_COLOR NO_COLOR=1 uv run coverage report",
       "options": {
         "cwd": "."
       },
@@ -148,6 +148,7 @@
         {"projects": ["manager-guidance"], "target": "test"},
         {"projects": ["plan-guidance"], "target": "test"},
         {"projects": ["plan-tooling-check-and-review"], "target": "test"},
+        {"projects": ["plan-tooling-comment-version"], "target": "test"},
         {"projects": ["plan-tooling-follow-ups"], "target": "test"},
         {"projects": ["plan-tooling-host-layer-routing"], "target": "test"},
         {"projects": ["plan-tooling-plan-copy"], "target": "test"},

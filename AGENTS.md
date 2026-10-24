@@ -604,10 +604,18 @@ is screened, plans are drafted in the private `authoring` source, and **a host d
 organization's work declares that organization's sources `visibility: private` in its user
 layer before it adopts this change**, since an undeclared tracker refuses every task routed
 to it. Where a plan's home lands is the store's to decide from the repositories its tasks and
-its project name (`docs/orchestration.md`, *The public write boundary*), never yours — a plan
-touching an organization's work homes in that organization's tracker: approve and launch the
-home id `just finish-plan` reports, wherever it landed, and a plan meant to keep its home on
-`plans` names a public repository. On a routed Linear tracker a plan
+its project name (`docs/orchestration.md`, *The public write boundary*), never yours. A plan
+naming any private repository has its home, its documents and its tasks naming no repository
+in the private Linear source the host declares, and its public-repository tasks on `plans` in
+a member project; a task naming no repository never decides the home, and a copy that would
+put a private plan's content on a public destination is refused with nothing written, so a
+plan meant to keep its home on `plans` names a public repository. Approve and launch the home
+id `just finish-plan` reports, wherever it landed — for a Linear home `just approve-design
+<source>:<project>` and `just orchestrate <source>:<project>`, its settlements written back to
+its Linear items. A `plans` copy or public follow-up ticket never spells a private
+repository's name, which the rules `just repos-apply` installs say, and names a run of a
+privately named plan by its public id, the `public_id` `onepipeline status <run> --json`
+reports. On a routed Linear tracker a plan
 task reads Todo once copied, Queued once a run claims it, In Progress while its node works, Needs Attention when that node
 failed, parked or was skipped, and Done once it settled; Proposed, Backlog and Canceled are
 proposed, deferred and withdrawn. The member project reads Planned once copied,

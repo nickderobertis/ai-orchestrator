@@ -65,6 +65,8 @@ BOARD_SOURCE = "plans"
 #: A local stand-in for the source the board's route names, so the plan-location step's
 #: look into the routed source reaches a directory rather than the production workspace.
 ROUTED_STAND_IN = "teamstandin"
+#: The variable declaring that stand-in's visibility, which nothing declares by default.
+ROUTED_VISIBILITY_ENV = f"ONETASKGRAPH_SOURCES__{ROUTED_STAND_IN.upper()}__VISIBILITY"
 #: How many projects an operator filed on the board itself sit beside the plan's copy, on
 #: top of the one the double always holds.
 OTHER_PROJECTS = 4
@@ -471,6 +473,43 @@ def test_the_plan_location_step_finds_the_copy_by_its_link_and_lists_only_for_a_
     assert listed == sorted([BOARD_SOURCE, ROUTED_STAND_IN]), located.calls
     assert all(len(_sources(call)) == 1 for call in _listings(located.calls)), located.calls
     _narrowed_to_the_plan(located)
+
+
+def test_the_plan_location_step_refuses_an_unstamped_copy_in_a_source_declared_private(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A copy between two private sources keeps its origin, so one carrying none is refused.
+
+    The store withholds a private plan's origin only from a destination not declared
+    private, so in the routed source declared private a copy the plan's link names but no
+    origin ties to the plan is not this plan's copy, though the same unstamped copy on the
+    public board is.
+    """
+    monkeypatch.setenv(ROUTED_VISIBILITY_ENV, "private")
+    environment = {**_drafted(tmp_path, monkeypatch), ROUTED_VISIBILITY_ENV: "private"}
+    with _serving_board() as remote:
+        on_the_board = {**environment, **remote}
+        copied = _recipe(on_the_board, "copy-plan", QUALIFIED, "--to", ROUTED_STAND_IN)
+        assert copied.returncode == 0, copied.stdout + copied.stderr
+        routed_project = _copied(copied.stdout)[QUALIFIED]
+        stamped = _located(tmp_path, on_the_board)
+        record = tmp_path / ROUTED_STAND_IN / "projects" / f"{routed_project.partition(':')[2]}.md"
+        held = record.read_text(encoding="utf-8")
+        assert f"{plan_store.ORIGIN_KEY}: {QUALIFIED}" in held, held
+        # llmlint: ignore[tests_mirror_real_usage] The origin is the store's own `onetaskgraph.origin` key, which no store verb clears (`project metadata set` refuses the `onetaskgraph.` namespace), and a `local-md` project is the Markdown file a person edits by hand, so a copy left carrying no origin is reached the way a person leaves it: by editing that file.  # noqa: E501
+        record.write_text(
+            "\n".join(line for line in held.splitlines() if plan_store.ORIGIN_KEY not in line)
+            + "\n",
+            encoding="utf-8",
+        )
+        unstamped = _located(tmp_path, on_the_board)
+
+    assert stamped.ran.returncode == 0, stamped.ran.stdout + stamped.ran.stderr
+    assert f"plan-locations: its home is {routed_project};" in stamped.ran.stdout, stamped.ran
+    assert unstamped.ran.returncode == 2, unstamped.ran.stdout + unstamped.ran.stderr
+    assert f"copy link names {routed_project}" in unstamped.ran.stderr, unstamped.ran.stderr
+    assert "does not record as copied from" in unstamped.ran.stderr, unstamped.ran.stderr
+    assert "holds the plan at" not in unstamped.ran.stdout, unstamped.ran.stdout
 
 
 def test_the_plan_location_step_refuses_a_plan_it_cannot_point_a_reviewer_at(

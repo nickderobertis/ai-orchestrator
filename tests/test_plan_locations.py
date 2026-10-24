@@ -249,6 +249,47 @@ def test_a_link_naming_a_project_not_stamped_as_this_plans_copy_is_refused(
     assert f"does not record as copied from {DRAFTED}" in refusal, refusal
 
 
+@pytest.mark.parametrize(
+    ("declared", "found"),
+    [
+        ({"sources.authoring.visibility": "private", "sources.board.visibility": "public"}, True),
+        ({"sources.board.visibility": "public"}, False),
+        ({"sources.authoring.visibility": "private", "sources.board.visibility": "private"}, False),
+    ],
+)
+def test_a_copy_out_of_a_private_source_is_found_by_its_link_alone(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    declared: dict[str, str],
+    found: bool,
+) -> None:
+    """The store stamps no origin on a copy from a source declared private into one that is not.
+
+    It keeps the correspondence on the private side — the link on the plan's own record —
+    so a linked project carrying no stamp is this plan's copy exactly there; anywhere else a
+    project with no stamp is no copy of it. The journey is
+    `tests/plan_tooling/plan_flow/test_linear_routed_plans_e2e.py`'s public plan under the
+    switched-on boundary.
+    """
+    _holds(
+        monkeypatch,
+        [_project("board:42", origin=None, location={"url": "https://example.invalid/42"})],
+        [_document("board:57", {"url": "https://example.invalid/57"})],
+        link="board:42",
+    )
+    monkeypatch.setattr(plan_store, "configured_settings", lambda: dict(declared))
+
+    answered = plan_locations.main([DRAFTED, "--in", "board"])
+
+    printed = capsys.readouterr()
+    if found:
+        assert answered == plan_locations.OK, printed.err
+        assert "board holds the plan at https://example.invalid/42" in printed.out, printed.out
+    else:
+        assert answered == plan_locations.UNREADABLE, printed.out
+        assert f"does not record as copied from {DRAFTED}" in printed.err, printed.err
+
+
 def test_a_link_naming_a_project_the_store_cannot_show_is_refused_naming_the_plan(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -20,6 +20,7 @@ The registry names the draft reads are held to the installed engine by
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import io
 import json
 import os
@@ -663,3 +664,190 @@ def test_a_malformed_command_line_is_refused_with_the_way_to_the_contract(
         drafts.main(["--as", "robot"], root_env=ROOT_ENV)
     assert exited.value.code == drafts.REFUSED
     assert "run it with --help" in capsys.readouterr().err
+
+
+#: A run whose id names a private repository, and the public id the engine names it by: the
+#: hashed form onepipeline's `public_id` contract states, which is the one recorded public id
+#: other than the run id the engine takes at its word.
+PRIVATE_RUN = "fix-quietharbor-login"
+PUBLIC_ID = "run-" + hashlib.sha256(PRIVATE_RUN.encode()).hexdigest()[:12]
+
+
+def _recorded(runs: Path, run: str, public: str | None) -> Path:
+    """A run root the installed engine reads, its launch recording ``public`` when given."""
+    from probe_run_root import run_root
+
+    directory = run_root(runs, run)
+    if public is not None:
+        launch = json.loads((directory / "launch.json").read_text(encoding="utf-8"))
+        (directory / "launch.json").write_text(
+            json.dumps(launch | {"public_id": public}), encoding="utf-8"
+        )
+    return directory
+
+
+def test_a_run_the_runs_root_holds_no_record_of_is_keyed_by_its_id(tmp_path: Path) -> None:
+    assert drafts.follow_up_key(PRIVATE_RUN, runs=tmp_path) == PRIVATE_RUN
+
+
+def test_a_recorded_run_is_keyed_by_the_public_id_the_engine_names_it_by(tmp_path: Path) -> None:
+    _recorded(tmp_path, PRIVATE_RUN, PUBLIC_ID)
+    _recorded(tmp_path, RUN, None)
+
+    assert drafts.follow_up_key(PRIVATE_RUN, runs=tmp_path) == PUBLIC_ID
+    assert drafts.follow_up_key(RUN, runs=tmp_path) == RUN
+
+
+def test_an_engine_that_cannot_answer_is_a_refusal_naming_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / PRIVATE_RUN).mkdir()
+    with pytest.raises(Refused, match=f"onepipeline status {PRIVATE_RUN} --json` exited"):
+        drafts.follow_up_key(PRIVATE_RUN, runs=tmp_path)
+
+    _recorded(tmp_path, RUN, None)
+    stand_in = tmp_path / "bin"
+    stand_in.mkdir()
+    (stand_in / "python3").symlink_to(sys.executable)
+    (stand_in / drafts.ENGINE).write_text("#!/bin/sh\necho '{}'\n", encoding="utf-8")
+    (stand_in / drafts.ENGINE).chmod(0o755)
+    monkeypatch.setattr(sys, "executable", str(stand_in / "python3"))
+    with pytest.raises(Refused, match="answered no reading this can name the run from"):
+        drafts.follow_up_key(RUN, runs=tmp_path)
+
+    (stand_in / drafts.ENGINE).unlink()
+    monkeypatch.setenv("PATH", str(tmp_path / "nowhere"))
+    with pytest.raises(Refused, match="the engine could not be asked"):
+        drafts.follow_up_key(RUN, runs=tmp_path)
+
+
+def test_a_draft_of_a_privately_named_run_is_keyed_by_its_public_id_and_reads_by_its_id(
+    drafting: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _recorded(tmp_path / "runs", PRIVATE_RUN, PUBLIC_ID)
+    monkeypatch.setenv(drafts.RUN_ID_ENV, PRIVATE_RUN)
+
+    assert drafts.main(ARGUMENTS, root_env=ROOT_ENV) == 0
+
+    (written,) = (drafting / "tasks" / PUBLIC_ID / "drafts").iterdir()
+    draft = drafts.parse(written.read_text(encoding="utf-8"))
+    assert (draft.run, draft.engine_run) == (PUBLIC_ID, PRIVATE_RUN)
+    assert draft.transcript == f"onepipeline transcript {PRIVATE_RUN}"
+    assert not (drafting / "tasks" / PRIVATE_RUN).exists()
+    assert drafts.engine_run(drafting, PUBLIC_ID) == PRIVATE_RUN
+    project = (drafting / "projects" / f"{PUBLIC_ID}.md").read_text(encoding="utf-8")
+    assert project == drafts.render_project(PUBLIC_ID, PRIVATE_RUN)
+
+
+def test_a_run_named_by_its_own_id_writes_the_records_it_always_wrote(
+    drafting: Path, tmp_path: Path
+) -> None:
+    _recorded(tmp_path / "runs", RUN, None)
+
+    assert drafts.main(ARGUMENTS, root_env=ROOT_ENV) == 0
+
+    (written,) = (drafting / "tasks" / RUN / "drafts").iterdir()
+    assert drafts.ENGINE_RUN_KEY not in drafts.record(drafts.parse(written.read_text("utf-8")))
+    project = (drafting / "projects" / f"{RUN}.md").read_text(encoding="utf-8")
+    assert project == drafts.render_project(RUN)
+    assert drafts.render_project(RUN, RUN) == drafts.render_project(RUN)
+    assert drafts.engine_run(drafting, RUN) is None
+
+
+@pytest.mark.parametrize(
+    ("mutate", "refusal"),
+    [
+        (_set(drafts.ENGINE_RUN_KEY, RUN), "is not a run id other than its run"),
+        (_set(drafts.ENGINE_RUN_KEY, 7), "is not a run id other than its run"),
+        (_set(drafts.ENGINE_RUN_KEY, "a b"), "cannot name a draft project"),
+    ],
+)
+def test_an_engine_run_a_draft_record_could_not_have_carried_is_refused(
+    mutate: Callable[[dict[str, object]], None], refusal: str
+) -> None:
+    with pytest.raises(Refused, match=refusal):
+        drafts.parse(_with(mutate))
+
+
+def test_the_engine_run_is_recorded_once_beside_a_public_id_and_read_back(tmp_path: Path) -> None:
+    drafts.record_engine_run(tmp_path, RUN, RUN)
+    assert not (tmp_path / "projects").exists()
+
+    project = tmp_path / "projects" / f"{PUBLIC_ID}.md"
+    project.parent.mkdir()
+    project.write_text(drafts.render_project(PUBLIC_ID), encoding="utf-8")
+    drafts.record_engine_run(tmp_path, PUBLIC_ID, PRIVATE_RUN)
+    assert project.read_text(encoding="utf-8") == drafts.render_project(PUBLIC_ID, PRIVATE_RUN)
+    written = project.stat().st_mtime_ns
+    drafts.record_engine_run(tmp_path, PUBLIC_ID, PRIVATE_RUN)
+
+    assert project.stat().st_mtime_ns == written
+    assert (tmp_path / "tasks" / PUBLIC_ID).is_dir()
+    assert drafts.engine_run(tmp_path, PUBLIC_ID) == PRIVATE_RUN
+    assert list((tmp_path / "projects").iterdir()) == [project]
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        None,
+        '---\nmetadata:\n  "orchestrator.follow-up-drafts": {broken\n---\n',
+        '---\nmetadata:\n  "orchestrator.follow-up-drafts": '
+        '{"schema": 1, "run": "other", "run_id": "x"}\n---\n',
+        '---\nmetadata:\n  "orchestrator.follow-up-drafts": '
+        '{"schema": 1, "run": "run-fb52618c2d94", "run_id": "a b"}\n---\n',
+        '---\nmetadata:\n  "orchestrator.follow-up-drafts": '
+        '{"run": "run-fb52618c2d94", "run_id": "run-1"}\n---\n',
+        '---\nmetadata:\n  "orchestrator.follow-up-drafts": '
+        '{"schema": 2, "run": "run-fb52618c2d94", "run_id": "run-1"}\n---\n',
+        '---\nmetadata:\n  "orchestrator.follow-up-drafts": '
+        '{"schema": true, "run": "run-fb52618c2d94", "run_id": "run-1"}\n---\n',
+    ],
+    ids=[
+        "absent",
+        "unreadable",
+        "another-run",
+        "no-run-id",
+        "no-schema",
+        "another-schema",
+        "schema-not-a-number",
+    ],
+)
+def test_a_public_id_no_project_maps_to_a_run_names_none(
+    tmp_path: Path, content: str | None
+) -> None:
+    if content is not None:
+        (tmp_path / "projects").mkdir()
+        (tmp_path / "projects" / f"{PUBLIC_ID}.md").write_text(content, encoding="utf-8")
+    assert drafts.engine_run(tmp_path, PUBLIC_ID) is None
+    assert drafts.engine_run(tmp_path, "../escape") is None
+
+
+def test_a_public_id_that_cannot_name_a_draft_project_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The engine's answer crosses a process boundary, and its id becomes a directory here."""
+    _recorded(tmp_path, RUN, None)
+    reading = {
+        "labels": {},
+        "group": None,
+        "schema_version": 2,
+        "run_id": RUN,
+        "public_id": "../escape",
+        "word": "SETTLED",
+        "liveness": "DRIVER DEAD",
+        "driven": False,
+        "ending": {"kind": "complete", "nodes": []},
+        "paused": None,
+    }
+    stand_in = tmp_path / "bin"
+    stand_in.mkdir()
+    (stand_in / "python3").symlink_to(sys.executable)
+    answer = stand_in / "reading.json"
+    answer.write_text(json.dumps(reading), encoding="utf-8")
+    (stand_in / drafts.ENGINE).write_text(f"#!/bin/sh\ncat {answer}\n", encoding="utf-8")
+    (stand_in / drafts.ENGINE).chmod(0o755)
+    monkeypatch.setattr(sys, "executable", str(stand_in / "python3"))
+
+    with pytest.raises(Refused, match="cannot name a draft project"):
+        drafts.follow_up_key(RUN, runs=tmp_path)

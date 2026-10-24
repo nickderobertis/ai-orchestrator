@@ -33,12 +33,15 @@ ticket, a source not declared private, to the private item; the copy binds the t
 its own `onetaskgraph.origin` at the item instead, which every later copy follows by the store's
 origin rule — so the re-dispatch phase updates both items and files no duplicate.
 
-**`hiddenco-followups` is a folder of Markdown here** (`tests/onetaskgraph_user_layer.py` says
-why and how), and the copy's own plan-store CLI records each command it is handed
-before running the real one, which is how the seeded search is shown to list nothing.
-GitHub's Projects API is the loopback board `tests/github_board.py` serves, and the paid model
-is the provider's stand-in. The recipes, the engine, the store and its routing, the follow-up
-tooling, and every record read back are real.
+**Linear is the loopback wire `tests/linear_board.py` serves**, one team behind both of the
+example's Linear sources, `hiddenco-followups` and `hiddenco-plans`, its endpoint handed to
+every process through the store's own environment layer. Its credential is the variable the
+example's `api_key_env` names, written in the copy's gitignored `.env`, the file a host's own
+launches load it from (`scripts/credentials-env.sh`). The copy's own plan-store CLI records
+each command it is handed before running the real one, which is how the seeded search is
+shown to list nothing. GitHub's Projects API is the loopback board `tests/github_board.py`
+serves, and the paid model is the provider's stand-in. The recipes, the engine, the store,
+its Linear plugin and its routing, the follow-up tooling, and every record read back are real.
 """
 
 from __future__ import annotations
@@ -77,6 +80,7 @@ from github_board import (
     _Repository,
     _serving_board,
 )
+from linear_board import LinearBoard, linear_board
 from nx_workspace import (
     answering_this_checkouts_origin,
     copy_working_tree,
@@ -108,8 +112,8 @@ PASSING_VERDICT = json.dumps({"passes": True, "findings": []})
 #: The two destinations: the tracked board, and the tracker the example user layer routes to.
 BOARD = tickets.BOARD
 LINEAR = onetaskgraph_user_layer.ORGANIZATION_FOLLOWUPS
-#: The organization's plans tracker the example layer also declares, stood in for as well so
-#: that nothing here can build a Linear source.
+#: The organization's plans tracker the example layer also declares, served by the same
+#: loopback team, so that no source of the layer can reach a Linear workspace.
 LINEAR_PLANS = onetaskgraph_user_layer.ORGANIZATION_PLANS
 
 #: The repository each destination files: a hiddenco one the board's route sends to Linear, and
@@ -250,7 +254,7 @@ class Bench(NamedTuple):
     """The copied checkout every recipe runs in, its stores, and the environment they share."""
 
     checkout: Path
-    linear: Path
+    linear: LinearBoard
     tmp: Path
     drafts_root: Path
     authoring: Path
@@ -289,7 +293,7 @@ def _environment(tmp: Path, remote: Mapping[str, str]) -> dict[str, str]:
 
     Its configuration home carries the user layer the `routed` fixture installed, and its
     `onevcs` state root registers every identity the journey's tickets name, the hiddenco one
-    private; the stand-in tracker is a folder, which takes no Linear endpoint.
+    private; the loopback Linear's endpoint and credential are the `routed` fixture's.
     """
     environment = {
         name: value
@@ -362,16 +366,14 @@ def _item(bench: Bench, qualified: str) -> dict[str, object]:
 
 
 def _status(item: Mapping[str, object]) -> tuple[str, str]:
-    """An item's status category and the name its source reads it at, without case.
+    """An item's status category and the name its source reads it at.
 
-    The stand-in folder writes a state name as its lower-case key; Linear answers the name as
-    the mapping spells it, so the name is compared without case. A copy carries a status by
-    its category's own word, which the folder keeps as it is handed it, where Linear writes
-    the state its mapping names for that category.
+    A copy carries a status by its category's word, and each destination writes the state or
+    option its mapping names for that category, which is the name read back.
     """
     status = item["status"]
     assert isinstance(status, dict), item
-    return str(status["category"]), str(status["name"]).casefold()
+    return str(status["category"]), str(status["name"])
 
 
 def _comments(bench: Bench, qualified: str) -> list[dict[str, object]]:
@@ -389,8 +391,8 @@ def _record(item: Mapping[str, object]) -> Mapping[str, object]:
 
 
 def _linear_items(bench: Bench) -> list[str]:
-    """Every item file the Linear stand-in holds, by path under its root."""
-    return sorted(str(path.relative_to(bench.linear)) for path in bench.linear.rglob("*.md"))
+    """Every issue the loopback Linear holds, by the ticket each records as its origin."""
+    return sorted(str(issue["metadata"].get(tickets.ORIGIN_KEY)) for issue in bench.linear.issues())
 
 
 def _board_issues() -> int:
@@ -622,18 +624,23 @@ class Life(NamedTuple):
 
 
 class Routed(NamedTuple):
-    """The scratch root, the copy of this checkout, its Linear stand-in, and what every
-    command run in the copy carries to run on this checkout's install."""
+    """The scratch root, the copy of this checkout, the loopback Linear, and what every
+    command run in the copy carries to run on this checkout's install and reach that Linear."""
 
     tmp: Path
     checkout: Path
-    linear: Path
+    linear: LinearBoard
     shared: dict[str, str]
 
 
 @pytest.fixture(scope="module")
 def routed(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Routed]:
-    """One copy of this checkout, its Linear stand-in, and its recording plan store."""
+    """One copy of this checkout, the loopback Linear it reaches, and its recording plan store.
+
+    The example layer is installed whole but for the host's own private stores, its Linear
+    sources as it declares them; the wire serves both, and the credential its `api_key_env`
+    names goes in the copy's `.env`, the file a host's own launches read it from.
+    """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
     tmp = tmp_path_factory.mktemp("linear-follow-ups")
@@ -641,23 +648,26 @@ def routed(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Routed]:
     checkout.mkdir()
     copy_working_tree(checkout)
     answering_this_checkouts_origin(checkout)
-    linear = tmp / LINEAR
-    # llmlint: ignore[e2e_not_mocked] A `local-md` source stands in for each Linear source of the example user layer, because no check may reach a Linear workspace; `tests/test_plan_source_roots.py` holds the example's Linear sources to the Linear plugin's schema.  # noqa: E501 - a directive is one line, and its reason is longer than the limit
-    layer = onetaskgraph_user_layer.with_stand_ins(
-        {
-            LINEAR: onetaskgraph_user_layer.stand_in(
-                LINEAR, linear, tmp, copied=[tickets.Status.PROPOSED.value]
-            ),
-            LINEAR_PLANS: onetaskgraph_user_layer.stand_in(LINEAR_PLANS, tmp / LINEAR_PLANS, tmp),
-        }
-    )
-    onetaskgraph_user_layer.installed(
+    home = onetaskgraph_user_layer.installed(
         tmp / "config-home",
-        onetaskgraph_user_layer.without_private_stores(layer),
+        onetaskgraph_user_layer.without_private_stores(),
     )
     shared = share_this_checkouts_install(checkout)
     _recording(checkout)
-    yield Routed(tmp, checkout, linear, shared)
+    # llmlint: ignore[e2e_not_mocked] Linear's GraphQL API is the loopback wire double, because no check may reach a Linear workspace; the store's own Linear plugin is what talks to it.  # noqa: E501 - a directive is one line, and its reason is longer than the limit
+    with linear_board() as board, pytest.MonkeyPatch.context() as patched:
+        # The double reads each source's mapping and credential name off the store's own
+        # resolution, which reads this layer.
+        patched.setenv(onetaskgraph_user_layer.XDG_CONFIG_HOME, str(home))
+        reached = {**board.environment(LINEAR), **board.environment(LINEAR_PLANS)}
+        credentials = {
+            name: value for name, value in reached.items() if not name.startswith("ONETASKGRAPH_")
+        }
+        (checkout / ".env").write_text(
+            "".join(f"{name}={value}\n" for name, value in credentials.items()), encoding="utf-8"
+        )
+        shared.update(reached)
+        yield Routed(tmp, checkout, board, shared)
 
 
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]  # noqa: E501 - a directive is one line, and the three rules it names run past the limit
@@ -668,9 +678,10 @@ def routed(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Routed]:
 # reads that one fixture rather than launching.
 # llmlint: ignore-block[e2e_not_mocked] Three boundaries are doubled and no more: the paid
 # provider process; GitHub's Projects API, the loopback board, because the live board is shared
-# by every run of this repository; and Linear, the folder the journey's user layer declares
-# `hiddenco-followups` as, because no check may reach the production workspace. The recipes,
-# engine, store, routing, follow-up tooling and every record read back are real.
+# by every run of this repository; and Linear's API, the loopback wire double serving the
+# journey's `hiddenco-followups` and `hiddenco-plans`, because no check may reach the
+# production workspace. The recipes, engine, store, its Linear plugin, routing, follow-up
+# tooling and every record read back are real.
 @pytest.fixture(scope="module")
 def life(routed: Routed, oneharness_bin: str) -> Iterator[Life]:  # noqa: PLR0915 - one life, phase by phase
     tmp, checkout, linear, shared = routed
@@ -921,7 +932,9 @@ def life(routed: Routed, oneharness_bin: str) -> Iterator[Life]:  # noqa: PLR091
         )
 
         # A person comments on the filer's Linear ticket, and the gathering answers it once.
-        asked = _commented(bench, filed_linear_item, ASKED, "Ada")
+        # Linear records the API key's user as every comment's author, so the person's comment
+        # carries no author of its own; it is a person's because no run's marker ends it.
+        asked = _commented(bench, filed_linear_item, ASKED)
         replying = _staged(bench, "reply.py", REPLY_PROGRAM)
         _scripted(
             bench,
@@ -1117,19 +1130,29 @@ def _queued_or_as_it_stands(bench: Bench, issue: str) -> dict[str, object]:
 def test_one_run_files_a_hiddenco_root_cause_in_linear_and_another_on_the_board(
     life: Life,
 ) -> None:
-    """The hiddenco ticket lands in the Linear stand-in at `Proposed`, the other at `Proposal`.
+    """The hiddenco ticket lands in Linear at `Proposed`, the other on the board at `Proposal`.
 
-    `Proposed` is the state the example layer's mapping writes `backlog` as; the stand-in reads
-    the copy at that category, under the word the copy carried (`onetaskgraph_user_layer.py`
-    says why).
+    `Proposed` is the state the example layer's mapping writes `backlog` as, and the one the
+    follow-up vocabulary names for it on Linear.
     """
-    assert life.filed_linear_item.startswith(f"{LINEAR}:{FILER}/tickets/"), life.filed_linear_item
-    # The category the example's mapping writes as `Proposed`, under the word the copy carried.
-    assert _status(life.linear_after_filing) == ("backlog", "backlog")
-    assert tickets.linear_state(tickets.Status.PROPOSED) == "Proposed"
-    assert life.linear_files_after_filing == [f"tasks/{FILER}/tickets/{FILED_LINEAR}.md"]
+    linear = life.bench.linear
+    assert life.filed_linear_item.startswith(f"{LINEAR}:"), life.filed_linear_item
+    (issue,) = [
+        one
+        for one in linear.issues()
+        if one["metadata"].get(tickets.ORIGIN_KEY) == tickets.qualified_id(FILER, FILED_LINEAR)
+    ]
+    assert life.filed_linear_item.partition(":")[2] in (issue["id"], issue["identifier"]), issue
+    assert _status(life.linear_after_filing) == (
+        "backlog",
+        tickets.linear_state(tickets.Status.PROPOSED),
+    )
+    assert life.linear_files_after_filing == [tickets.qualified_id(FILER, FILED_LINEAR)]
     assert _record(life.linear_after_filing)["repository"] == _hosted(HIDDENCO)
-    assert _status(life.board_after_filing) == ("backlog", "proposal")
+    assert _status(life.board_after_filing) == (
+        "backlog",
+        tickets.board_option(tickets.Status.PROPOSED),
+    )
     assert life.board_issues_after_filing == 1
     assert _record(life.board_after_filing)["repository"] == _hosted(LIBRARY)
 
@@ -1189,7 +1212,7 @@ def test_a_later_run_finds_each_destinations_open_ticket_by_root_cause_and_lists
     """Each search answers the earlier run's open ticket, and nothing new is filed.
 
     The copy's plan store records every command it was handed: each listing of the Linear
-    stand-in names a narrowing question, and the loopback board saw no request walking its
+    source names a narrowing question, and the loopback board saw no request walking its
     items or searching it unnarrowed.
     """
     assert life.later_searches == {
@@ -1236,7 +1259,7 @@ def test_evidence_and_a_re_estimate_raise_the_linear_estimate_and_a_persons_prio
 
 
 def test_a_persons_comment_on_the_linear_ticket_is_answered_once_by_its_run(life: Life) -> None:
-    """Gathered from the Linear stand-in, routed to the filer, answered once, each board marked."""
+    """Gathered from the loopback Linear, routed to the filer, answered once, each board marked."""
     output = life.answered.stdout + life.answered.stderr
     selected = [line for line in output.splitlines() if line.startswith("selected: ")]
     assert len(selected) == 1, output
@@ -1256,13 +1279,22 @@ def test_a_persons_comment_on_the_linear_ticket_is_answered_once_by_its_run(life
 
 def test_a_node_delivering_the_linear_ticket_queues_it_and_settles_it_done(life: Life) -> None:
     launch = life.delivered_launch
-    assert _status(life.delivered_at_the_gate) == ("queued", "queued"), (
+    assert _status(life.delivered_at_the_gate) == (
+        "queued",
+        tickets.linear_state(tickets.Status.QUEUED),
+    ), (
         f"before any worker turn the ticket read {life.delivered_at_the_gate['status']}\n"
         f"{launch.stdout}{launch.stderr}"
     )
     assert launch.returncode == 0, launch.stdout + launch.stderr
     assert json.loads(launch.stdout.strip().splitlines()[-1])["settlement"] == "complete"
-    assert _status(life.delivered_after) == ("done", "done")
+    assert _status(life.delivered_after) == ("done", tickets.linear_state(tickets.Status.FINISHED))
+    (delivered,) = [
+        one
+        for one in life.bench.linear.issues()
+        if life.filed_linear_item.partition(":")[2] in (one["id"], one["identifier"])
+    ]
+    assert delivered["state"]["name"] == "Done", delivered["state"]
 
 
 # llmlint: ignore-end[e2e_not_mocked]

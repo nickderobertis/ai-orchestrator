@@ -18,6 +18,7 @@ import contextlib
 import copy
 import dataclasses
 import functools
+import hashlib
 import io
 import json
 import os
@@ -57,7 +58,9 @@ from follow_up_ticket_shape import (
 )
 from follow_up_ticket_shape import ROOT_CAUSE as PLAIN_ROOT_CAUSE
 from follow_up_ticket_shape import SCHEMA_10_ROOT_CAUSE as SHARED_ROOT_CAUSE
+from markdown_it import MarkdownIt
 from onetaskgraph_sdk import (
+    CommentWritten,
     CopyReport,
     QueryResponseOfQualifiedTask,
 )
@@ -9397,3 +9400,560 @@ def test_an_answered_issue_another_run_owns_holds_no_ticket_of_this_run_to_its_s
     assert tickets.answered_ticket_problems(feedback, RUN, answered) == []
     feedback.write_text("No snapshot line.\n", encoding="utf-8")
     assert tickets.answered_ticket_problems(feedback, RUN, answered) == []
+
+
+#: A run whose id names a private repository, and the public id the engine names it by: the
+#: hashed form onepipeline's `public_id` contract states, recorded in its launch.
+ALIASED_RUN = "fix-quietharbor-login"
+ALIASED_PUBLIC = "run-" + hashlib.sha256(ALIASED_RUN.encode()).hexdigest()[:12]
+
+
+def _recorded_run(runs: Path, run: str, public: str | None) -> None:
+    """A run root the installed engine reads, its launch recording ``public`` when given."""
+    from probe_run_root import run_root
+
+    directory = run_root(runs, run)
+    if public is not None:
+        launch = json.loads((directory / "launch.json").read_text(encoding="utf-8"))
+        (directory / "launch.json").write_text(
+            json.dumps(launch | {"public_id": public}), encoding="utf-8"
+        )
+
+
+@pytest.fixture
+def aliased_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The runs root the engine reads, recording :data:`ALIASED_RUN` under its public id."""
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    _recorded_run(runs, ALIASED_RUN, ALIASED_PUBLIC)
+    monkeypatch.setenv(drafts.RUNS_ROOT_ENV, str(runs))
+    return runs
+
+
+def _aliased_ticket(cause: str, prose: str, **departures: object) -> tickets.Ticket:
+    """:data:`ALIASED_RUN`'s ticket for ``cause``, its record and prose naming the run id;
+    ``departures`` replace any of those fields."""
+    fields: dict[str, object] = {
+        "title": f"some-service: {cause.replace('-', ' ')}",
+        "root_cause": tickets.RootCause(cause),
+        "created_by_run": tickets.RunId(ALIASED_RUN),
+        "owning_runs": (tickets.RunId(ALIASED_RUN),),
+        "drafts": (tickets.QualifiedDraftId(f"drafts:{ALIASED_RUN}/drafts/a-draft"),),
+        "body": BODY.replace("Verified on", f"{prose}. Verified on"),
+    }
+    return _ticket(**(fields | departures))
+
+
+def _copied_and_bound(drafts_root: Path, ticket: tickets.Ticket, board: str = BOARD) -> str:
+    """Write ``ticket``, decide it and copy it as the agent does; the item it is bound to."""
+    path = _write(drafts_root, ticket)
+    for verb in ("board-status", "copy"):
+        assert tickets.main([verb, "--board", board, str(path)]) == tickets.SOUND, verb
+    held = tickets.read_ticket(path)
+    return f"{tickets.ticket_board(board, held.repositories)}:{held.board_item}"
+
+
+def _evidence_on(issue: str, run: str, cause: str, evidence: str) -> str:
+    """An evidence comment ``run``'s marker names on ``issue``; its id."""
+    body = tickets.render_comment(run, cause, evidence)
+    return plan_store.sdk(plan_store.client().task_comment_add(issue, body=body)).id.root
+
+
+def _realiased(drafts_root: Path, capsys: pytest.CaptureFixture[str]) -> tuple[int, str, str]:
+    status = tickets.main(["realias", "--root", str(drafts_root), "--board", BOARD, ALIASED_RUN])
+    captured = capsys.readouterr()
+    return status, captured.out, captured.err
+
+
+def _board_texts(*roots: Path) -> dict[str, str]:
+    return {
+        str(path): path.read_text(encoding="utf-8")
+        for root in roots
+        for path in sorted(root.rglob("*.md"))
+    }
+
+
+def test_run_alias_replaces_a_run_id_whole_and_as_its_follow_up_runs_prefix() -> None:
+    alias = tickets.run_alias("fix-a-1", "run-x")
+
+    assert alias("run fix-a-1. And `fix-a-1-follow-ups`, fix-a-1-follow-ups-3.") == (
+        "run run-x. And `run-x-follow-ups`, run-x-follow-ups-3."
+    )
+    assert alias('drafts:fix-a-1/tickets/c <!-- run="fix-a-1" -->') == (
+        'drafts:run-x/tickets/c <!-- run="run-x" -->'
+    )
+    for untouched in ("fix-a-12", "xfix-a-1", "fix-a-1-other", "fix-a-1.x", "fix-a-1-follow-ups-a"):
+        assert alias(untouched) == untouched
+
+
+def test_realias_moves_a_runs_records_and_rewrites_its_items_and_comments_in_place(
+    routed: Path,
+    board: Path,
+    drafts_root: Path,
+    aliased_runs: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Every record, item and comment of the run names its public id, and nothing else moved.
+
+    The local folders stand in for both boards; their item ids are paths naming the run, the one
+    thing an id can never stop naming, so the item texts are read for its other occurrences.
+    """
+    del aliased_runs
+    drafted = drafts.write(
+        drafts_root,
+        drafts.Draft(
+            title=f"Seen in {ALIASED_RUN}",
+            run=ALIASED_RUN,
+            author=drafts.Author(kind="manager", node=None, member=None),
+            dispatch=drafts.DispatchStamp(
+                scratch=f"/runs/{ALIASED_RUN}/scratch",
+                session=None,
+                cwd="/work/tree",
+                branch=None,
+                head=None,
+            ),
+            repository=REPOSITORY,
+            paths=("src/cursor.py",),
+            drafted_at="2026-09-13T18:22:05Z",
+            body=drafts.checked_body(
+                "## What happened\nA page went missing.\n\n## Where\n`src/cursor.py`.\n\n"
+                "## Why it is out of scope\nThe run was about something else.\n\n"
+                f"## Evidence\nRun {ALIASED_RUN} saw it.\n"
+            ),
+        ),
+    )[1]
+    own = _copied_and_bound(drafts_root, _aliased_ticket(CAUSE, f"Filed by {ALIASED_RUN}"))
+    private = _copied_and_bound(
+        drafts_root,
+        dataclasses.replace(
+            _routed_ticket(),
+            created_by_run=tickets.RunId(ALIASED_RUN),
+            owning_runs=(tickets.RunId(ALIASED_RUN),),
+            drafts=(tickets.QualifiedDraftId(f"drafts:{ALIASED_RUN}/drafts/a-draft"),),
+            body=_routed_ticket().body.replace(
+                "Verified on", f"Filed by {ALIASED_RUN}-follow-ups-3. Verified on"
+            ),
+        ),
+    )
+    alone_cause = "logout-link-is-hidden"
+    alone = _copied_and_bound(
+        drafts_root, _aliased_ticket(alone_cause, f"Filed by {ALIASED_RUN}-follow-ups")
+    )
+    tickets.ticket_path(drafts_root, ALIASED_RUN, alone_cause).unlink()
+    # A ticket the run kept local, bound to no item: moved like the rest, reaching no board.
+    _write(drafts_root, _aliased_ticket("kept-local", f"Kept by {ALIASED_RUN}"))
+    other = _filed(drafts_root, OTHER_RUN, "export-drops-a-column", "the export drops a column")
+    evidence = _evidence_on(other, ALIASED_RUN, CAUSE, f"Seen again in {ALIASED_RUN}-follow-ups-2.")
+    on_alone = _evidence_on(alone, ALIASED_RUN, alone_cause, f"Seen in {ALIASED_RUN}.")
+    person = _person_said(other, f"Is {ALIASED_RUN} the run that saw it?\n")
+    elsewhere = _evidence_on(other, OTHER_RUN, CAUSE, f"Not {ALIASED_RUN}'s comment.")
+    account = tickets.dispositions_path(drafts_root, ALIASED_RUN)
+    account.parent.mkdir(parents=True, exist_ok=True)
+    account.write_text(
+        json.dumps({"run": ALIASED_RUN, "detail": f"Evidence on {other}."}), encoding="utf-8"
+    )
+    feedback = drafts_root / comments.FEEDBACK_DIRECTORY / ALIASED_RUN / "gathered.md"
+    feedback.parent.mkdir(parents=True)
+    feedback.write_text(f"Run {ALIASED_RUN}'s gathering.\n", encoding="utf-8")
+    notes = drafts_root / "tasks" / ALIASED_RUN / "notes" / "kept.txt"
+    notes.parent.mkdir(parents=True)
+    notes.write_text(f"Kept by {ALIASED_RUN}.\n", encoding="utf-8")
+    decided = drafts_root / tickets.DECISIONS_DIRECTORY / ALIASED_RUN / f"{CAUSE}.json"
+    decided.parent.mkdir(parents=True, exist_ok=True)
+    decided.write_text("{}", encoding="utf-8")
+    gathered = comments.snapshots_directory(drafts_root) / "20260913T182205Z"
+    gathered.mkdir(parents=True)
+    (gathered / "snapshot.json").write_text(
+        json.dumps({"selection": {ALIASED_RUN: []}}), encoding="utf-8"
+    )
+    (gathered / "other.json").write_text(json.dumps({"selection": {}}), encoding="utf-8")
+    pattern = tickets.run_pattern(ALIASED_RUN)
+
+    status, said, _ = _realiased(drafts_root, capsys)
+    assert json.loads((gathered / "snapshot.json").read_text(encoding="utf-8")) == {
+        "selection": {ALIASED_PUBLIC: []}
+    }
+    assert json.loads((gathered / "other.json").read_text(encoding="utf-8")) == {"selection": {}}
+
+    assert status == tickets.SOUND
+    assert ALIASED_PUBLIC in said
+    assert not (drafts_root / "tasks" / ALIASED_RUN).exists()
+    assert not (drafts_root / comments.FEEDBACK_DIRECTORY / ALIASED_RUN).exists()
+    assert not (drafts_root / tickets.DECISIONS_DIRECTORY / ALIASED_RUN).exists()
+    assert not (drafts_root / "projects" / f"{ALIASED_RUN}.md").exists()
+    assert drafts.engine_run(drafts_root, ALIASED_PUBLIC) == ALIASED_RUN
+    moved = drafts_root / "tasks" / ALIASED_PUBLIC / "drafts" / drafted.name
+    draft = drafts.parse(moved.read_text(encoding="utf-8"))
+    assert (draft.run, draft.engine_run) == (ALIASED_PUBLIC, ALIASED_RUN)
+    assert pattern.search(draft.title + draft.body + str(draft.dispatch.scratch)) is None
+    assert (drafts_root / "tasks" / ALIASED_PUBLIC / "notes" / "kept.txt").read_text(
+        encoding="utf-8"
+    ) == f"Kept by {ALIASED_PUBLIC}.\n"
+    assert ALIASED_PUBLIC in tickets.dispositions_path(drafts_root, ALIASED_PUBLIC).read_text(
+        encoding="utf-8"
+    )
+    for cause, item in ((CAUSE, own), (ROUTED_CAUSE, private), (alone_cause, alone)):
+        held = plan_store.task_record(item)
+        metadata = held["metadata"]
+        assert isinstance(metadata, Mapping), held
+        assert metadata[tickets.ORIGIN_KEY] == tickets.qualified_id(ALIASED_PUBLIC, cause)
+        assert tickets.issue_owner(held) == ALIASED_PUBLIC
+        assert pattern.search(f"{held['title']}{held['content']}") is None, item
+        local = tickets.read_ticket(tickets.ticket_path(drafts_root, ALIASED_PUBLIC, cause))
+        assert f"{tickets.ticket_board(BOARD, local.repositories)}:{local.board_item}" == item
+    bodies = dict(
+        (one.id.root, one.body)
+        for issue in (other, alone)
+        for one in plan_store.sdk(plan_store.client().task_comment_list(issue)).comments
+    )
+    for comment in (evidence, on_alone):
+        assert ALIASED_PUBLIC in bodies[comment] and pattern.search(bodies[comment]) is None
+    assert ALIASED_RUN in bodies[person] and ALIASED_RUN in bodies[elsewhere]
+    inventory = json.loads(tickets.realias_path(drafts_root, ALIASED_PUBLIC).read_text("utf-8"))
+    assert inventory["run"] == ALIASED_PUBLIC
+    assert {(entry["kind"], entry["id"]) for entry in inventory["entries"]} == {
+        ("item", own),
+        ("item", private),
+        ("item", alone),
+        ("comment", evidence),
+        ("comment", on_alone),
+    }
+
+    held_boards = _board_texts(board, routed)
+    written = tickets.realias_path(drafts_root, ALIASED_PUBLIC).read_text("utf-8")
+    again, _, _ = _realiased(drafts_root, capsys)
+
+    assert again == tickets.SOUND
+    assert _board_texts(board, routed) == held_boards
+    assert tickets.realias_path(drafts_root, ALIASED_PUBLIC).read_text("utf-8") == written
+
+
+def test_realias_of_a_run_the_engine_names_by_its_own_id_writes_nothing(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _copied_and_bound(drafts_root, _aliased_ticket(CAUSE, "Filed"))
+    before = _board_texts(drafts_root, board)
+
+    status, said, _ = _realiased(drafts_root, capsys)
+
+    assert status == tickets.SOUND
+    assert "nothing to realias" in said
+    assert _board_texts(drafts_root, board) == before
+    assert not (drafts_root / tickets.REALIAS_DIRECTORY).exists()
+
+
+def test_realias_refuses_a_run_whose_public_id_the_engine_cannot_answer(
+    board: Path,
+    drafts_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runs = tmp_path / "runs"
+    (runs / ALIASED_RUN).mkdir(parents=True)
+    monkeypatch.setenv(drafts.RUNS_ROOT_ENV, str(runs))
+
+    status, _, said = _realiased(drafts_root, capsys)
+
+    assert status == tickets.UNRUNNABLE
+    assert "public id" in said
+
+
+def test_realias_refuses_a_record_already_held_differently_under_the_public_id(
+    board: Path, drafts_root: Path, aliased_runs: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    del aliased_runs
+    for key in (ALIASED_RUN, ALIASED_PUBLIC):
+        path = tickets.dispositions_path(drafts_root, key)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f'{{"run": "{key}-and-more"}}', encoding="utf-8")
+
+    status, _, said = _realiased(drafts_root, capsys)
+
+    assert status == tickets.UNRUNNABLE
+    assert "both hold a record of the run" in said
+
+
+def test_realias_refuses_a_draft_it_cannot_read(
+    board: Path, drafts_root: Path, aliased_runs: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    del aliased_runs
+    held = drafts_root / "tasks" / ALIASED_RUN / drafts.DRAFTS / "broken.md"
+    held.parent.mkdir(parents=True)
+    held.write_text("not a draft\n", encoding="utf-8")
+
+    status, _, said = _realiased(drafts_root, capsys)
+
+    assert status == tickets.UNRUNNABLE
+    assert "is no draft this can move" in said
+
+
+def test_realias_refuses_an_inventory_that_is_not_the_runs(
+    board: Path, drafts_root: Path, aliased_runs: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    del aliased_runs
+    path = tickets.realias_path(drafts_root, ALIASED_PUBLIC)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"schema": 1, "run": "another", "entries": []}), encoding="utf-8")
+
+    status, _, said = _realiased(drafts_root, capsys)
+
+    assert status == tickets.UNRUNNABLE
+    assert "is not run" in said
+
+
+def test_realias_copies_nothing_where_its_match_would_reach_no_bound_item(
+    board: Path, drafts_root: Path, aliased_runs: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A title naming the run changes with it, so the store's match finds nothing to re-point.
+
+    The dry run answers a new item, so nothing is written to the board and the ticket stands
+    as the realiasing left it before its copy.
+    """
+    del aliased_runs
+    ticket = _aliased_ticket(CAUSE, "Filed", title=f"some-service: {ALIASED_RUN} pages short")
+    item = _copied_and_bound(drafts_root, ticket)
+    boards_before = _board_texts(board)
+
+    status, _, said = _realiased(drafts_root, capsys)
+
+    assert status == tickets.UNRUNNABLE
+    assert f"where the ticket is bound to {item}" in said
+    assert _board_texts(board) == boards_before
+    moved = tickets.ticket_path(drafts_root, ALIASED_PUBLIC, CAUSE).read_text(encoding="utf-8")
+    assert (
+        tickets.render(tickets.read_ticket(tickets.ticket_path(drafts_root, ALIASED_PUBLIC, CAUSE)))
+        == moved
+    )
+    assert tickets.read_ticket(tickets.ticket_path(drafts_root, ALIASED_PUBLIC, CAUSE)).links
+
+
+def test_realias_leaves_an_item_of_another_run_its_ticket_names_and_refuses_one_naming_no_cause(
+    board: Path, drafts_root: Path, aliased_runs: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    del aliased_runs
+    other = _filed(drafts_root, OTHER_RUN, "export-drops-a-column", "the export drops a column")
+    bound = dataclasses.replace(
+        _aliased_ticket(CAUSE, "Filed"),
+        created_by_run=tickets.RunId(ALIASED_PUBLIC),
+        owning_runs=(tickets.RunId(ALIASED_PUBLIC),),
+        drafts=(tickets.QualifiedDraftId(f"drafts:{ALIASED_PUBLIC}/drafts/a-draft"),),
+        board_item=tickets.BoardItemId(other.removeprefix(f"{BOARD}:")),
+    )
+    _write(drafts_root, bound)
+    before = _board_texts(board)
+
+    status, _, _ = _realiased(drafts_root, capsys)
+
+    assert status == tickets.SOUND
+    assert _board_texts(board) == before
+
+    # A folder of Markdown holds an item as its file, which is what a stray item is there.
+    (board / "tasks" / "stray.md").write_text(
+        frontmatter(
+            {
+                "title": "An item naming no cause",
+                "status": "backlog",
+                "metadata": {tickets.KEY: {"created_by_run": ALIASED_RUN}},
+            },
+            "Stray.",
+        ),
+        encoding="utf-8",
+    )
+    status, _, said = _realiased(drafts_root, capsys)
+
+    assert status == tickets.UNRUNNABLE
+    assert "names no root cause" in said
+
+
+def test_an_edited_comment_is_held_to_the_body_it_sent_and_parts_that_landed() -> None:
+    def written(body: str, outcome: str | None, version: str | None) -> CommentWritten:
+        result = (
+            None
+            if outcome is None
+            else {
+                "parts": [{"fields": {}, "part": "comment", "outcome": outcome, "error": "no"}],
+                "version": version,
+            }
+        )
+        return CommentWritten.model_validate({"id": "c-1", "body": body, "result": result})
+
+    assert tickets.edited_version(written("sent", None, None), "sent", "v1") == "v1"
+    assert tickets.edited_version(written("sent", "landed", "v2"), "sent", "v1") == "v2"
+    assert tickets.edited_version(written("sent", "landed", None), "sent", "v1") == "v1"
+    for refused in (written("other", None, None), written("sent", "unknown", "v2")):
+        with pytest.raises(OSError, match="answered a body or parts other than it sent"):
+            tickets.edited_version(refused, "sent", "v1")
+
+
+def test_a_board_storing_list_items_under_another_marker_still_states_its_estimate() -> None:
+    """Linear stores a list item's `- ` as `* `; the severity and estimate line read through it."""
+    body = _body()
+    starred = re.sub(r"^- ", "* ", body, flags=re.MULTILINE)
+
+    assert tickets.stated_with_workaround(starred) == tickets.stated_with_workaround(body)
+    assert tickets.as_written("* Priority estimate: low") == "- Priority estimate: low"
+    assert tickets.as_written("- Priority estimate: low") == "- Priority estimate: low"
+    item = _item(_ticket(body=starred))
+    reads = tickets.BoardReads({"b:1": item}, {"b:1": ()})
+    assert tickets.board_estimate_problems("b:1", reads) == tickets.board_estimate_problems(
+        "b:1", tickets.BoardReads({"b:1": _item(_ticket())}, {"b:1": ()})
+    )
+
+
+def test_the_engine_run_a_public_id_keys_is_recorded_and_printed_by_the_command_line(
+    drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = str(drafts_root)
+    assert tickets.main(["engine-run", "--root", root, ALIASED_PUBLIC]) == tickets.SOUND
+    assert capsys.readouterr().out == "\n"
+
+    assert tickets.main(["record-engine-run", "--root", root, ALIASED_PUBLIC, ALIASED_RUN]) == (
+        tickets.SOUND
+    )
+    assert tickets.main(["engine-run", "--root", root, ALIASED_PUBLIC]) == tickets.SOUND
+    assert capsys.readouterr().out == f"{ALIASED_RUN}\n"
+
+    refused = tickets.main(["record-engine-run", "--root", root, ALIASED_PUBLIC, "a b"])
+    assert refused == tickets.UNRUNNABLE
+    assert "cannot name a draft project" in capsys.readouterr().err
+
+
+def _as_a_tracker_stores(body: str) -> str:
+    """``body`` respelled the Markdown-equivalent way Linear stores it: `*` bullets, and
+    brackets and tildes escaped, outside code spans and fences."""
+    stored: list[str] = []
+    fenced = False
+    for line in body.split("\n"):
+        if line.startswith("```"):
+            fenced = not fenced
+        if fenced or line.startswith("```"):
+            stored.append(line)
+            continue
+        line = re.sub(r"^(\s*)- ", r"\1* ", line)
+        pieces = line.split("`")
+        pieces[::2] = [re.sub(r"([\[\]~])", r"\\\1", piece) for piece in pieces[::2]]
+        stored.append("`".join(pieces))
+    return "\n".join(stored)
+
+
+def test_a_body_a_tracker_respelled_reads_back_as_the_body_written() -> None:
+    body = _ticket().body + "\n\n- [a link](https://example.com) ~5 `keep \\[ - this`\n"
+    stored = _as_a_tracker_stores(body)
+    assert stored != body
+    assert "* " in stored and "\\[" in stored
+
+    assert tickets.item_content({"content": stored}) == body
+    assert tickets.item_content({"content": body}) == body
+    assert tickets.item_content({"content": "+ one\n  * two"}) == "- one\n  - two"
+    fence = "```\n* kept \\[\n```"
+    assert tickets.item_content({"content": fence}) == fence
+    assert tickets.item_content({"content": None}) == ""
+
+
+#: A CommonMark implementation, the authority :func:`tickets.item_content` restates.
+COMMONMARK = MarkdownIt("commonmark")
+
+#: Every ASCII punctuation character, each of which CommonMark lets a backslash escape.
+ASCII_PUNCTUATION = [chr(code) for code in range(0x21, 0x7F) if not chr(code).isalnum()]
+
+
+def _outside_code(body: str, respell: Callable[[str, bool], str]) -> str:
+    """``body`` with ``respell`` applied to each run of text outside code, told if it opens."""
+    out: list[str] = []
+    fenced = False
+    for line in body.split("\n"):
+        if line.startswith("```"):
+            fenced = not fenced
+            out.append(line)
+            continue
+        if fenced:
+            out.append(line)
+            continue
+        pieces = line.split("`")
+        pieces[::2] = [respell(piece, index == 0) for index, piece in enumerate(pieces[::2])]
+        out.append("`".join(pieces))
+    return "\n".join(out)
+
+
+def _respellings(body: str) -> list[str]:
+    """Spellings a tracker may store ``body`` under: other bullet markers, escaped punctuation.
+
+    Each is generated without regard to meaning, so the test below is what proves CommonMark
+    reads it as ``body``; each is applied outside code, which CommonMark leaves alone.
+    """
+
+    def bullet(marker: str) -> Callable[[str, bool], str]:
+        return lambda text, opens: re.sub(r"^(\s*)- ", rf"\1{marker} ", text) if opens else text
+
+    def escaped(text: str, opens: bool) -> str:
+        lead = len(text) - len(text.lstrip()) + 1 if opens else 0
+        return text[:lead] + "".join(
+            f"\\{one}" if one in ASCII_PUNCTUATION and one not in "`\\" else one
+            for one in text[lead:]
+        )
+
+    return [_outside_code(body, bullet(marker)) for marker in "*+"] + [_outside_code(body, escaped)]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        _ticket().body,
+        "- one\n- two\n  - nested\n\nText with [a link](https://example.com) and ~5.",
+        "```\n- kept \\[ as written\n```\n\n- after the fence `code \\[ - kept`",
+        *[f"A lone {one} between words." for one in ASCII_PUNCTUATION if one not in "`\\"],
+    ],
+)
+def test_a_respelled_body_commonmark_reads_alike_reads_back_as_the_body_written(
+    body: str,
+) -> None:
+    """The normalizer is reconciled with CommonMark itself, never with handcrafted spellings.
+
+    For a body this module writes and each respelling a tracker may store, the reference
+    implementation decides whether the two mean the same; every one it reads alike is read
+    back as the body written, and the body written reads back unchanged.
+    """
+    written = COMMONMARK.render(body)
+    assert tickets.item_content({"content": body}) == body
+    for stored in _respellings(body):
+        if COMMONMARK.render(stored) != written:
+            continue
+        assert tickets.item_content({"content": stored}) == body, stored
+    # A respelling CommonMark reads alike is what the normalizer is for, so one is always met.
+    assert any(
+        COMMONMARK.render(stored) == written and stored != body for stored in _respellings(body)
+    ), body
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "an entry",
+        {"kind": "item", "destination": BOARD, "id": "I_1"},
+        {"kind": "issue", "destination": BOARD, "id": "I_1", "url": None},
+        {"kind": "item", "destination": "a/b", "id": "I_1", "url": None},
+        {"kind": "comment", "destination": BOARD, "id": "", "url": None},
+        {"kind": "comment", "destination": BOARD, "id": "C_1", "url": 3},
+    ],
+)
+def test_a_realias_inventory_entry_realiasing_did_not_write_is_refused(
+    entry: object, tmp_path: Path
+) -> None:
+    with pytest.raises(tickets.Refused, match="is not one realiasing wrote"):
+        tickets._realias_entry(entry, tmp_path / "inventory.json")
+    sound = {"kind": "comment", "destination": BOARD, "id": "C_1", "url": None}
+    assert tickets._realias_entry(sound, tmp_path / "inventory.json") == sound
+
+
+@pytest.mark.parametrize("engine_run", ["../escape", "/abs/run", "."])
+def test_an_engine_run_that_is_not_one_path_component_is_refused_before_anything_is_read(
+    engine_run: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    arguments = ["open-budgets", "--root", str(tmp_path), "--runs-root", str(tmp_path)]
+    arguments += ["--checkout", str(tmp_path), "--engine-run", engine_run, "run-1"]
+    with pytest.raises(SystemExit) as refused:
+        tickets.main(arguments)
+    assert refused.value.code == tickets.UNRUNNABLE
+    assert "RUN-ID must be one safe path component" in capsys.readouterr().err
+    assert not tickets.budgets_path(tmp_path, "run-1").exists()

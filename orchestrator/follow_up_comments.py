@@ -234,6 +234,7 @@ from typing import (
     get_type_hints,
 )
 
+from orchestrator import follow_up_drafts as drafts
 from orchestrator import follow_up_tickets as tickets
 from orchestrator import plan_store
 from orchestrator.plan_store import RECORD_COMPONENT, QualifiedTaskId
@@ -243,6 +244,8 @@ from orchestrator.root import REPO_ROOT
 FEEDBACK_DIRECTORY = "feedback"
 
 MOMENT_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+#: How :func:`comment_version` spells a comment's last change its board dates finer than a second.
+VERSION_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
 STAMP_FORMAT = "%Y%m%dT%H%M%SZ"
 
 UNKNOWN_AUTHOR = "not reported by the board"
@@ -503,6 +506,18 @@ def moment(value: datetime | str | None, what: str) -> datetime:
 def instant(value: datetime) -> str:
     """``value`` as the whole-second RFC 3339 instant every reader here spells."""
     return value.astimezone(UTC).strftime(MOMENT_FORMAT)
+
+
+def comment_version(value: datetime) -> str:
+    """A comment's last change as the RFC 3339 instant its board reported, at that precision.
+
+    A comment's version is held as finely as its board dates it, so an edit later in the same
+    second is a later version: a whole-second time is spelled as :func:`instant` spells it,
+    and a finer one keeps its microseconds.
+    """
+    if value.microsecond == 0:
+        return instant(value)
+    return value.astimezone(UTC).strftime(VERSION_FORMAT)
 
 
 def _web_url(value: object) -> str | None:
@@ -1689,7 +1704,11 @@ def select(
 def _answering(
     comment: Comment, replies: Sequence[tuple[Reply, datetime | None]]
 ) -> CommentId | None:
-    """The latest reply that answers ``comment`` as it now stands, by the module's rule."""
+    """The latest reply that answers ``comment`` as it now stands, by the module's rule.
+
+    Compared at the precision the board dates a comment, which its quoted version is recorded
+    at (:func:`comment_version`), so an edit later in the quoted second is unanswered again.
+    """
     answering = [
         reply
         for reply, quoted in replies
@@ -1805,7 +1824,7 @@ def render(
             f"- Comment id: {selected.id}\n"
             f"- URL: {selected.url}\n"
             f"- Author: {selected.author}\n"
-            f"- Last changed: {instant(selected.last_changed)}\n"
+            f"- Last changed: {comment_version(selected.last_changed)}\n"
             f"- Issue title: {issue.title}\n"
             f"- {ISSUE_LABEL}: "
             + issue_line(
@@ -2147,7 +2166,7 @@ def gather(  # noqa: PLR0913, PLR0915 - each is one flag of the command
                         Chosen(
                             one.issue.id,
                             one.id,
-                            instant(one.last_changed),
+                            comment_version(one.last_changed),
                             body_sha256(one.text),
                         )
                         for one in chosen
@@ -2491,7 +2510,7 @@ def _selected(issue: Issue, chosen: Chosen) -> Selected:
     if (
         comment is None
         or body_sha256(comment.body) != chosen.body_sha256
-        or instant(comment.last_changed) != chosen.last_changed
+        or comment_version(comment.last_changed) != chosen.last_changed
     ):
         raise OSError(
             f"the snapshot's source holds comment {chosen.comment} on {issue.id} other than its "
@@ -2715,6 +2734,18 @@ def write_pending(root: Path, entries: Sequence[PendingEntry]) -> None:
     staged.replace(path)
 
 
+def _holds(key: str, shown: object, requested: object) -> bool:
+    """Whether a write's answer shows ``requested`` for ``key``: a body by the Markdown it
+    means, since a tracker answers in its own spelling of what it stored, any other field
+    exactly."""
+    if key == "content":
+        return (
+            tickets.item_content({"content": shown}).rstrip()
+            == tickets.item_content({"content": requested}).rstrip()
+        )
+    return shown == requested
+
+
 def project(item: Mapping[str, object]) -> Projected:
     """The fields a settle write may set, as ``item`` holds them; :class:`OSError` for one
     answered at another type, which settle would otherwise compare and write as a change."""
@@ -2868,7 +2899,9 @@ def outcome(
                 )
             except OSError as exc:
                 return Outcome("unknown", version, parts, str(exc), reason)
-            unshown = [key for key, value in requested.items() if shown.get(key) != value]
+            unshown = [
+                key for key, value in requested.items() if not _holds(key, shown.get(key), value)
+            ]
             if unshown:
                 said = held.get("written")
                 state: State = "partial" if len(unshown) < len(requested) or said else "failed"
@@ -3354,7 +3387,9 @@ def _re_estimate(  # noqa: PLR0913 - the pass, the issue, and what decides its e
         arguments = ["task", "priority", "set", issue, priority]
         _write_once(state, snapshot, run, issue, "priority", {"priority": priority}, arguments)
     estimate: dict[str, object] = {}
-    if decided.content.rstrip() != now["content"]:
+    # Compared as the Markdown it means, so a tracker's own spelling of the same body is no
+    # change to write back.
+    if decided.content.rstrip() != tickets.item_content({"content": now["content"]}).rstrip():
         estimate["content"] = decided.content.rstrip()
     if decided.record != now["record"]:
         estimate["record"] = decided.record
@@ -3652,6 +3687,12 @@ def _gathered(arguments: argparse.Namespace) -> int:  # noqa: PLR0911 - one refu
     board = tickets.BOARD if arguments.board is None else arguments.board
     if scope is not None and not LAUNCHABLE_RUN.fullmatch(scope):
         return _refuse(f"--run {scope!r} is not a run id")
+    if scope is not None:
+        # A run's tickets are keyed by its public id, which is what the board holds.
+        try:
+            scope = drafts.follow_up_key(scope)
+        except drafts.Refused as refusal:
+            return _refuse(f"{refusal}; nothing was launched")
     issue = arguments.issue
     if issue is not None and not tickets.QUALIFIED_ID.fullmatch(issue):
         return _refuse(f"--issue {issue!r} is not a qualified id, <source>:<native-id>")

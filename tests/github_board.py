@@ -748,6 +748,10 @@ class _Board:
         #: than by the board's own counter: what a journey reasoning about when things happened
         #: — a boundary, a watermark — needs, and what a priced journey's fixed answers do not.
         self.real_time = False
+        #: What the board keeps of a comment an edit sends, from the body it held and the body
+        #: sent, and answers that edit with: the body sent, as GitHub keeps it, unless a journey
+        #: stands in an edit the board answers without applying it.
+        self.stored_comment: Callable[[str, str], str] = lambda _held, sent: sent
 
     def issues_created_and_kept(self) -> list[_Issue]:
         return [issue for issue in self.created if issue in self.issues]
@@ -1432,6 +1436,12 @@ class _Board:
                     issue = payload["issue"]
                     assert isinstance(issue, dict)
                     payload["issue"] = self._detail(issue["id"], comments=True)
+                case "updateIssueComment":
+                    comment = payload["issueComment"]
+                    assert isinstance(comment, dict)
+                    comment["issue"] = self._detail(
+                        self._commented(comment["id"])[0].content_id, comments=True
+                    )
                 case _:
                     item = payload["projectV2Item"]
                     assert isinstance(item, dict)
@@ -1482,6 +1492,38 @@ class _Board:
                 }
             }
         }
+
+    def _commented(self, comment_id: object) -> tuple[_Issue, dict[str, object]]:
+        """The issue holding the comment ``comment_id`` names, and that comment."""
+        for issue in self.issues:
+            for comment in issue.comments:
+                if comment["id"] == comment_id:
+                    return issue, comment
+        raise ValueError(f"the board holds no comment {comment_id!r}")
+
+    def comment_issue_response(self, comment_id: object) -> dict[str, object]:
+        """Which issue one comment is on, or the null GitHub answers an unheld node with."""
+        try:
+            issue, comment = self._commented(comment_id)
+        except ValueError:
+            return {"data": {"node": None}}
+        node = {"__typename": "IssueComment", "id": comment["id"], "body": comment["body"]}
+        return {"data": {"node": node | {"issue": {"id": issue.content_id}}}}
+
+    def update_comment(self, variables: dict[str, object]) -> dict[str, object]:
+        """Replace one comment's body, as GitHub's `updateIssueComment` does, moving its time."""
+        payload = variables.get("input")
+        if not isinstance(payload, dict) or not isinstance(payload.get("body"), str):
+            raise ValueError("updateIssueComment requires an input object with a body")
+        _issue, comment = self._commented(payload.get("id"))
+        self.commented += 1
+        comment["body"] = self.stored_comment(str(comment["body"]), payload["body"])
+        comment["updatedAt"] = (
+            datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+            if self.real_time
+            else f"2026-08-26T00:{self.commented // 60:02d}:{self.commented % 60:02d}Z"
+        )
+        return {"data": {"updateIssueComment": {"issueComment": dict(comment)}}}
 
     def _option_named(self, value: object, options: tuple[_StatusOption, ...] | None = None) -> str:
         """The option a write names, refused when this board's field carries no such option."""
@@ -1666,6 +1708,9 @@ class _Operation(StrEnum):
     UPDATE_FIELDS = "updateFields"
     CLEAR_FIELD = "clearField"
     ADD_COMMENT = "addComment"
+    COMMENT_ISSUE = "commentIssue"
+    UPDATE_COMMENT = "updateComment"
+    UPDATE_COMMENT_WHOLE = "updateCommentWhole"
     ADD_SUB_ISSUE = "addSubIssue"
     ADD_BLOCKED_BY = "addBlockedBy"
     UPDATE_ISSUE = "updateIssue"
@@ -1693,6 +1738,12 @@ _OPERATIONS: dict[str, _Operation] = {
     # origin lookup carries the board-fields read, the repository read and a search; the
     # created-item read an aliased node read; and each write batch its single mutation.
     "@include(if:$ask0)": _Operation.ORIGIN_LOOKUPS,
+    # Before the comment listing's and the issue update's markers, which a comment edit's
+    # whole twin and its plain document carry inside its own: the edit of one comment, and
+    # the read of which issue a comment is on that the store sends before an edit it makes
+    # without its cache.
+    "updateIssueComment(": _Operation.UPDATE_COMMENT,
+    "... on IssueComment{": _Operation.COMMENT_ISSUE,
     "@include(if:$read0)": _Operation.CREATED_BOARD_ITEMS,
     "create0:createIssue(": _Operation.CREATE_ISSUES,
     "field0:updateProjectV2ItemFieldValue(": _Operation.WRITE_FIELD_VALUES,
@@ -1754,6 +1805,7 @@ _OPERATIONS: dict[str, _Operation] = {
 WHOLE_ISSUE_SELECTION = "__typename ...BoardIssue ... on Issue{comments(first:$first){nodes{"
 _WHOLE_TWINS: dict[_Operation, _Operation] = {
     _Operation.ADD_COMMENT: _Operation.ADD_COMMENT_WHOLE,
+    _Operation.UPDATE_COMMENT: _Operation.UPDATE_COMMENT_WHOLE,
     _Operation.UPDATE_ISSUE: _Operation.UPDATE_ISSUE_WHOLE,
     _Operation.UPDATE_FIELD: _Operation.UPDATE_FIELD_WHOLE,
     _Operation.CLEAR_FIELD: _Operation.CLEAR_FIELD_WHOLE,
@@ -2050,7 +2102,13 @@ class _GitHubFixture(BaseHTTPRequestHandler):
         # so a refusal named for a single write still lands on a copy that batches it.
         batched = WRITE_BATCHES.get(operation)
         carried = batched.write if batched is not None else operation
-        if self.refused_operation is not None and self.refused_operation in (operation, carried):
+        # And a write sent as its whole twin, which also answers its issue, is the same write.
+        plain = {whole: write for write, whole in _WHOLE_TWINS.items()}.get(operation)
+        if self.refused_operation is not None and self.refused_operation in (
+            operation,
+            carried,
+            plain,
+        ):
             if _GitHubFixture.refused_after == 0:
                 return {"errors": [{"message": f"{operation} refused by the fixture"}]}
             _GitHubFixture.refused_after -= 1
@@ -2107,6 +2165,14 @@ class _GitHubFixture(BaseHTTPRequestHandler):
                 )
             case _Operation.ADD_COMMENT:
                 return self.board.add_comment(request.variables)
+            case _Operation.COMMENT_ISSUE:
+                return self.board.comment_issue_response(request.variables.get("id"))
+            case _Operation.UPDATE_COMMENT:
+                return self.board.update_comment(request.variables)
+            case _Operation.UPDATE_COMMENT_WHOLE:
+                return self.board.whole_answer("updateIssueComment", self.board.update_comment)(
+                    request.variables
+                )
             case _Operation.CLEAR_FIELD:
                 return self.board.clear_field(request.variables)
             case _Operation.REPOSITORY:
@@ -2809,6 +2875,9 @@ REQUEST_PRICES: dict[_Operation, DocumentPrice] = {
     _Operation.DELETE_ISSUE: DocumentPrice("DELETE_ISSUE", 1),
     _Operation.COMMENTS: DocumentPrice("ISSUE_COMMENTS", 1),
     _Operation.ADD_COMMENT: DocumentPrice("ADD_COMMENT", 1),
+    _Operation.COMMENT_ISSUE: DocumentPrice("COMMENT_ISSUE", 1),
+    _Operation.UPDATE_COMMENT: DocumentPrice("UPDATE_COMMENT", 1),
+    _Operation.UPDATE_COMMENT_WHOLE: DocumentPrice("UPDATE_COMMENT_WHOLE", 1),
     _Operation.ISSUE_COPY_DETAILS: DocumentPrice("ISSUE_COPY_DETAILS", 1),
     _Operation.ADD_COMMENT_WHOLE: DocumentPrice("ADD_COMMENT_WHOLE", 1),
     _Operation.UPDATE_ISSUE_WHOLE: DocumentPrice("UPDATE_ISSUE_WHOLE", 1),
@@ -2876,6 +2945,7 @@ REQUEST_KINDS: dict[_Operation, RequestKind] = {
     _Operation.SUB_ISSUES: RequestKind.ITEM_READ,
     _Operation.ISSUE_DETAIL: RequestKind.ITEM_READ,
     _Operation.COMMENTS: RequestKind.ITEM_READ,
+    _Operation.COMMENT_ISSUE: RequestKind.ITEM_READ,
     _Operation.DEPENDENCIES: RequestKind.ITEM_READ,
     _Operation.REPOSITORY: RequestKind.ITEM_READ,
     _Operation.BOARD_FIELDS: RequestKind.ITEM_READ,

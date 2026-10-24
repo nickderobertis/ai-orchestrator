@@ -102,6 +102,21 @@ routed to it, and the order is the point: the layer first, then this configurati
 does not hold an organization's credential reads its sources as unavailable and goes on: the
 adopted store answers a dependency read and a review with what the reader can see.
 
+**What a public destination may carry.** A `plans` copy or a `followups` ticket never spells a
+private repository's bare name or its `owner/name`, because the boundary refuses either; which
+repositories are private is the rules `just repos-apply` installs, the tracked
+`config/onevcs.rules.yml` under the host's overlay, and `onevcs rules check <repo>` answers for
+one. An organization's own login passes, because the host registers one of its public
+repositories, so the tracker is named by the organization's word and the tracker's, as in
+"hiddenco's Linear". A private source is often named for a private repository, so a text that
+needs a private source's id, `<source>:<project>` included, belongs in a private destination.
+**A run is named on a public board by its public id**: the `public_id` `onepipeline status <run>
+--json` reports, the run id itself unless that names a private repository, and otherwise `run-`
+and twelve hex digits. Every follow-up record of a run, its tickets, markers and comments, is
+keyed by that id; a run is found from it by reading `public_id` off `onepipeline status <run>
+--json` for the runs `just runs` lists, and `python -m orchestrator.follow_up_tickets realias
+<run-id>` moves a run's records filed under its run id onto its public id in place.
+
 `tests/plan_tooling/host_layer_routing/test_screened_host_states_e2e.py`, its
 `follow_ups/` and `plan_flow/` siblings `test_screened_host_states_follow_ups_e2e.py` and
 `test_screened_host_states_plan_flow_e2e.py` drive the plan-store recipes in each host state —
@@ -143,7 +158,7 @@ separate export plan. The tracked configuration remains screened.
 **Where a plan's home goes is the store's rule, and this host states it rather than holding
 its own.** A plan's home is placed by its **voters**: every task naming a repository, and the
 plan project's own `repositories` when it names any. A task naming no repository, and the design
-document, never vote; they go with the home.
+document, never vote, so a task naming no repository never decides the home; they go with it.
 
 - **When every voter routes to one source, the whole plan lands there**: its project, its
   tasks, those naming no repository, and its design document. So a plan whose one
@@ -153,15 +168,18 @@ document, never vote; they go with the home.
 - **Where the boundary is off — in a configuration of its own, never this host's tracked one —
   voters that disagree leave the home on `plans`**, with each routed task in a member project
   of its routed source, a record a reader still meets on a board.
-- **With the boundary on, as it is here, a plan touching an organization's work homes in that
-  organization's tracker.** An organization's repositories then answer private, so the plan is
-  private, and its home goes to the source declared private that its private tasks route to,
-  with every private task and its design document. A public task stays where its own
-  repository places it, under the home's member project, and its write is screened like any
-  other, so nothing it carries onto a public board names the private plan. What the screen
-  refuses — a public task that inherits the private plan's classification at a destination
-  that applies it — is refused before anything is written, and that plan is authored as two.
-  Approve and launch it by the home id `just finish-plan` reports, as for any other plan.
+- **With the boundary on, as it is here, a plan naming any private repository is private.** Its
+  home, its design document and its tasks naming no repository go to the private source its
+  private tasks route to, the organization's Linear source the host declares, and each task
+  naming a public repository goes onto `plans` in a member project of that home, its write
+  screened like any other. A copy that would put any of the private plan's content on a public
+  destination — a public task carrying it, say — is refused before anything is written, so
+  nothing reaches `plans` naming the private plan, and that plan is authored as two.
+- **Such a plan is approved and launched where it lives**: `just approve-design
+  <source>:<project>` records the approval on its Linear design document, and `just orchestrate
+  <source>:<project>` runs the home with its members as one run, each settlement written back to
+  its task's own Linear item. A person's edit to the approved document is a change the launch
+  gate refuses by naming the document.
 - **Personal private work has no route onto a public board at all.** A source's
   classification routes are tried before its repository routes for a private item, and routes
   never chain, so a `{classification: private}` route on `plans` would send an organization's
@@ -180,8 +198,9 @@ organization's root cause reaches its tracker by that route.
 
 **A plan's home goes where its repository-naming work routes**, by the rule stated once at
 the end of [the public write boundary](#the-public-write-boundary). Where that leaves a plan
-split, its home keeps its design document and the tasks that went with it, and each routed
-task goes into one member project in its routed source, tied to the home by
+split, its home keeps its design document and the tasks that went with it, and each task placed
+elsewhere goes into one member project in that source (for a private plan, its public tasks in
+a member project on `plans`), tied to the home by
 `onetaskgraph.members` on the home and `onetaskgraph.member_of` on the member. `just
 finish-plan` reports the home's qualified id wherever it landed; `just approve-design <home>`
 records the approval on the design document wherever it is, and `just orchestrate <home>` runs

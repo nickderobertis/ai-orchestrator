@@ -1,0 +1,49 @@
+{
+  "name": "plan-tooling-comment-version",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/plan_tooling/comment_version",
+  "tags": [
+    "scope:plan-tooling-comment-version",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-follow-up-boundary",
+    "support-follow-up-ticket-shape",
+    "support-follow-up-variables",
+    "support-github-board",
+    "support-published-tools",
+    "support-waits"
+  ],
+  "namedInputs": {
+    "planToolingCommentVersionWorkspace": [
+      "{workspaceRoot}/config/onetaskgraph.version",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/onetaskgraph.yaml",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/scripts/credentials-env.sh",
+      "{workspaceRoot}/scripts/plan-store.sh",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/tests/plan_tooling/comment_version/**/*"
+    ]
+  },
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 COVERAGE_FILE=.coverage.plan-tooling-comment-version uv run pytest tests/plan_tooling/comment_version -n 4 --dist loadgroup --cov=orchestrator --cov-report= --cov-fail-under=0",
+      "options": {
+        "cwd": "."
+      },
+      "outputs": [
+        "{workspaceRoot}/.coverage.plan-tooling-comment-version"
+      ],
+      "inputs": [
+        "planToolingCommentVersionWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ]
+    }
+  }
+}

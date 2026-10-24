@@ -24,6 +24,7 @@
   "namedInputs": {
     "boardCopyApprovalWorkspace": [
       "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/orchestrator/run_reading.py",
       "{workspaceRoot}/pyproject.toml",
       "{workspaceRoot}/uv.lock",
       "{workspaceRoot}/justfile",

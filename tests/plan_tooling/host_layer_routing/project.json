@@ -54,6 +54,7 @@
       "{workspaceRoot}/orchestrator/publication_guard.py",
       "{workspaceRoot}/orchestrator/redaction.py",
       "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/orchestrator/run_reading.py",
       "{workspaceRoot}/orchestrator/spike_plan.py",
       "{workspaceRoot}/orchestrator/structural_guard.py",
       "{workspaceRoot}/orchestrator/task_body.py",

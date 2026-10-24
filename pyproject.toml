@@ -80,6 +80,9 @@ dev = [
     # Reports each budget's figure and breakdown from `tests/budget_telemetry.py`, at the
     # release `config/onebudgetspec.version` pins for the CLI that reads the report.
     "onebudgetspec-sdk==0.1.5",
+    # The CommonMark implementation `tests/test_follow_up_tickets.py` reconciles the ticket
+    # reader's Markdown normalization with, so that normalization restates no rule unchecked.
+    "markdown-it-py==4.0.0",
 ]
 
 [build-system]
