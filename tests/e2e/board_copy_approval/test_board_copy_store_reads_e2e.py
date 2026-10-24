@@ -419,6 +419,72 @@ def test_copying_the_plan_reads_each_local_record_once_and_copies_it_as_before(
     assert _listings(copied.calls) == [], copied.calls
 
 
+def test_recopy_preserves_board_workflow_and_creates_new_tasks_from_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Extending a copied plan retains a settlement and a person's project status."""
+    environment = _drafted(tmp_path, monkeypatch)
+    with _serving_board() as remote:
+        environment.update(remote)
+        first = _recipe(environment, "copy-plan", QUALIFIED, "--to", BOARD_SOURCE)
+        assert first.returncode == 0, first.stdout + first.stderr
+        destinations = _copied(first.stdout)
+        settled = next(issue for issue in BOARD.issues if issue.title == NODES[0].title)
+        finished = _through_the_template(
+            environment, "update", f"plans:{settled.content_id}", "--status", "done"
+        )
+        assert finished.returncode == 0, finished.stdout + finished.stderr
+        project = next(
+            issue
+            for issue in BOARD.issues
+            if destinations[QUALIFIED] == f"plans:{issue.content_id}"
+        )
+        changed = _audited(
+            tmp_path,
+            environment,
+            str(REPO_ROOT / ".venv/bin/onetaskgraph"),
+            "project",
+            "status",
+            "set",
+            destinations[QUALIFIED],
+            "in-progress",
+        )
+        assert changed.ran.returncode == 0, changed.ran.stdout + changed.ran.stderr
+        added = _through_the_template(
+            environment,
+            "create",
+            AUTHORING_SOURCE,
+            "--project",
+            PROJECT,
+            "--title",
+            "feat: extend the copied plan",
+            "--template-loader",
+            "-",
+            "--answers",
+            str(tmp_path / "step-00.json"),
+            '--metadata=onepipeline.id="extension"',
+            '--metadata=onepipeline.persona="engineer"',
+            '--metadata=orchestrator.unit="Listing"',
+        )
+        assert added.returncode == 0, added.stdout + added.stderr
+        reviewed(QUALIFIED)
+        copied = _audited(
+            tmp_path, environment, "just", "copy-plan", QUALIFIED, "--to", BOARD_SOURCE
+        )
+        assert copied.ran.returncode == 0, copied.ran.stdout + copied.ran.stderr
+        assert settled.status == "Done"
+        assert settled.state == "CLOSED"
+        assert settled.state_reason == "COMPLETED"
+        assert project.status == "In Progress"
+        extension = next(
+            issue for issue in BOARD.issues if issue.title == "feat: extend the copied plan"
+        )
+        assert extension.status == "Todo"
+        assert extension.state == "OPEN"
+        copy_call = next(call for call in copied.calls if _verb(call) == ("project", "copy"))
+        assert copy_call[copy_call.index("--status-policy") + 1] == "preserve-destination"
+
+
 def _located(tmp_path: Path, environment: Mapping[str, str]) -> _Audited:
     """`scripts/finish-plan.sh`'s plan-location step for the plan, as that script runs it."""
     return _audited(

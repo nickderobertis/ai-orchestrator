@@ -323,9 +323,11 @@ def test_a_launch_whose_journey_raises_leaves_no_process_and_no_host_graph_state
     whose test failed: the launcher is still attached, the worker still held, the observer
     still watching — and the teardown's stop is refused, so the run's own stop ends
     nothing. Two claims, read once the teardown has run. Nothing is left in the
-    launcher's session or carrying this journey's temporary root. And `oneagentgraph` put
-    the run's member scratch inside that root — where it went, as the control, beside the
-    host's own runs directory gaining nothing that names this launch.
+    launcher's session or carrying this journey's temporary root. And the dispatched
+    member's live process names scratch inside the configured graph-state directory,
+    which survives teardown — ownership evidence rather than copied turn text, which
+    oneagentgraph 0.8.0 keeps in the durable transcript store. The host's own runs
+    directory gains nothing that names this launch.
     """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
@@ -338,10 +340,29 @@ def test_a_launch_whose_journey_raises_leaves_no_process_and_no_host_graph_state
     def in_session() -> list[Left]:
         return [process for process in _owned(session, tmp_path) if process.session == session]
 
+    member_scratch: list[Path] = []
+
+    def worker_is_running() -> bool:
+        member_scratch.clear()
+        for process in in_session():
+            if FAKE_BACKEND.name not in process.command:
+                continue
+            try:
+                environment = Path(f"/proc/{process.pid}/environ").read_bytes().split(b"\0")
+            except OSError:
+                continue  # The process exited between the table read and this read.
+            for value in environment:
+                if value.startswith(b"ONEAGENTGRAPH_SCRATCH_DIR="):
+                    scratch = Path(os.fsdecode(value.partition(b"=")[2]))
+                    # node-scope's dispatched member, rather than dag-scope's monitor.
+                    if scratch.name == "worker":
+                        member_scratch.append(scratch)
+        return bool(member_scratch)
+
     # The precondition: a tree for the teardown to reap, with the dispatched worker in it.
     until(
         "the dispatched worker to run in the launcher's session",
-        lambda: any(FAKE_BACKEND.name in process.command for process in in_session()),
+        worker_is_running,
         seconds=120,
         state=lambda: f"the session held: {[process.command[:120] for process in in_session()]}",
     )
@@ -359,10 +380,10 @@ def test_a_launch_whose_journey_raises_leaves_no_process_and_no_host_graph_state
     assert not ours, f"the launch left member scratch under {HOST_GRAPH_RUNS}: {ours}"
     graph_state = Path(live.environment[GRAPH_STATE_ENV])
     assert graph_state.is_relative_to(tmp_path), graph_state
-    assert _naming(graph_state, token), (
-        f"no member scratch under {graph_state} names the dispatched task, so the launch "
-        "put it somewhere this journey did not name"
-    )
+    assert member_scratch, "the dispatched worker carried no scratch ownership stamp"
+    for scratch in member_scratch:
+        assert scratch.is_relative_to(graph_state), (scratch, graph_state)
+        assert scratch.is_dir(), f"the dispatched member's scratch disappeared: {scratch}"
 
 
 def test_an_adoption_whose_journey_raises_leaves_no_process_of_the_adopted_engine(

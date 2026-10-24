@@ -659,6 +659,10 @@ because an unbounded one once left a plan's own nodes launchable with nobody hav
 approved the document.
 <!-- llmlint: ignore-end[instruction_layer_localized] -->
 
+<!-- llmlint: ignore[agents_md_durable_and_terse] This adoption's acceptance criteria require the withdrawn-task launch rule in both AGENTS.md and docs/orchestration.md; this is the required manager statement, while the detailed guide owns the copy-status policy. -->
+A launch omits withdrawn board tasks (closed as not planned) and refuses any
+dependency on one.
+
 **A green run proves nothing about the board.** The settlement write-back is best-effort
 and off the reconcile loop: a projection that never landed settles the run exactly like
 one that did, with one line on the driver's stderr. `just results`, `just status`, and
@@ -973,7 +977,15 @@ which is unrelated to a node you parked with `cancel`.
 <!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 A run whose driver is dead over
 an intact ledger is adopted with `just orchestrate --adopt <run-id>`, never relaunched
-under a new id — and so is one you stopped: a recorded stop is evidence about the
+under a new id.
+
+<!-- llmlint: ignore[agents_md_durable_and_terse] This adoption's acceptance criteria require both the adopt-time write-back budget and live-add assets_from in AGENTS.md and docs/orchestration.md. This is that required manager statement; the detailed guide owns their full interface. -->
+`just orchestrate --adopt <run> --writeback-item-budget <SECONDS>` revises that run's
+per-item write-back budget. A live `add`'s node may name `assets_from` to carry the task's
+image assets onto the board.
+
+A stopped run is adopted the same way:
+a recorded stop is evidence about the
 driver it ended, cleared at `driver-adopted`, so a stopped-then-adopted run is judged
 by the driver driving it now — `ACTIVE` in `just status`, a watch that stays armed, a
 run `just unwatched` names (`tests/e2e/launch_monitor_observer/test_adopted_engine_reads_an_adopted_run_e2e.py` drives all

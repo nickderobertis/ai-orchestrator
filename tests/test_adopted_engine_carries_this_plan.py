@@ -936,6 +936,20 @@ COPY_SPEED_LANDINGS = (
 
 #: Every landing the adopted release is held to carry.
 LANDINGS = (
+    Landing(
+        "op-withdrawn-tasks",
+        1101,
+        "708720aa",
+        "leave withdrawn board tasks out and refuse dependencies on them",
+    ),
+    Landing("op-live-add-images", 1106, "b66f2aea", "carry assets_from for live-added tasks"),
+    Landing(
+        "op-member-copy-writeback",
+        1111,
+        "a9b6da87",
+        "copy new members without rewriting their board project",
+    ),
+    Landing("op-adopt-budget", 1122, "5b5c5436", "revise the write-back item budget on adoption"),
     Landing("op-host-view", 861, "61194ef", "bound the host view and publish its JSON reading"),
     Landing(
         node="op-relink-status-by-kind",

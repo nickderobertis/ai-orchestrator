@@ -69,7 +69,7 @@ from orchestrator.labels import (
     SCOPE_LABEL,
     Scope,
 )
-from orchestrator.plan_store import WRITABLE_PLUGIN
+from orchestrator.plan_store import WRITABLE_PLUGIN, read_tasks
 from orchestrator.root import REPO_ROOT
 
 # What the recipes these journeys run leave in the temporary directory, by design or
@@ -4606,3 +4606,60 @@ def test_the_guard_refuses_a_stand_in_that_resolves_outside_the_suite(
     )
     assert ran.returncode != 0, ran.stdout + ran.stderr
     assert "is outside this repository's tests" in ran.stderr, ran.stderr
+
+
+# llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This journey belongs to the launch-monitor-observer leaf: it drives the real launcher, whose gates, observer configuration, environment hooks and engine inputs the leaf keys. Narrowing that key would replay a launch verdict over changes to what this recipe runs.  # noqa: E501
+@pytest.mark.parametrize("depends_on_withdrawn", [False, True])
+def test_launch_omits_withdrawn_tasks_and_refuses_their_dependents(
+    tmp_path: Path, oneharness_bin: str, depends_on_withdrawn: bool
+) -> None:
+    """A local plan's cancelled task is excluded, and cannot be a prerequisite."""
+    environment = _environment(tmp_path, oneharness_bin)
+    run = "withdrawal-launch-e2e"
+    plan = tmp_path / "withdrawn.plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "name": run,
+                "tasks": [
+                    _node(id="kept", deps=["withdrawn"] if depends_on_withdrawn else []),
+                    _node(id="withdrawn"),
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    source = project_from_plan(plan)
+    withdrawn = next(task for task in read_tasks(source) if task.node_id == "withdrawn")
+    closed = subprocess.run(
+        [
+            str(REPO_ROOT / ".venv/bin/onetaskgraph"),
+            "task",
+            "update",
+            str(withdrawn.qualified_id),
+            "--status",
+            "cancelled",
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=e2e_timeout(120),
+    )
+    assert closed.returncode == 0, closed.stdout + closed.stderr
+    try:
+        launch = attached(["just", "orchestrate", source, *SETTLES_UNWATCHED], environment)
+        if depends_on_withdrawn:
+            assert launch.returncode != 0, launch.stdout + launch.stderr
+            assert "withdrawn" in launch.stdout + launch.stderr
+            assert "depends on" in launch.stdout + launch.stderr
+        else:
+            assert launch.returncode == 0, launch.stdout + launch.stderr
+            result = _just("results", run, "--json", environment=environment)
+            assert result.returncode == 0, result.stdout + result.stderr
+            nodes = json.loads(result.stdout)["nodes"]
+            assert [node["id"] for node in nodes] == ["kept"]
+    finally:
+        stop_launch(run, environment)

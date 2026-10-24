@@ -31,8 +31,9 @@ import shlex
 import shutil
 import subprocess
 from collections.abc import Iterator
+from functools import partial
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, NotRequired, TypedDict
 
 import boundary_home
 import follow_up_boundary
@@ -186,15 +187,25 @@ def _evidence(bench: Bench, issue: str, run: str, cause: str, evidence: str) -> 
     return str(added["id"])
 
 
+class HeldItem(TypedDict):
+    """The text and comments read back from either board."""
+
+    title: str
+    body: str
+    comments: dict[str, str]
+    origin: NotRequired[str | None]
+    host: NotRequired[str | None]
+
+
 class Held(NamedTuple):
     """Everything both boards hold, as each serves it, read whole for comparison."""
 
-    github: dict[str, dict[str, object]]
-    linear: dict[str, dict[str, object]]
+    github: dict[str, HeldItem]
+    linear: dict[str, HeldItem]
 
 
 def _held(linear: LinearBoard) -> Held:
-    github = {
+    github: dict[str, HeldItem] = {
         str(row.content_id): {
             "title": row.title,
             "body": row.body,
@@ -204,7 +215,7 @@ def _held(linear: LinearBoard) -> Held:
         }
         for row in remote.BOARD.issues
     }
-    lined = {
+    lined: dict[str, HeldItem] = {
         str(issue["id"]): {
             "title": issue["title"],
             "body": issue["description"],
@@ -454,11 +465,9 @@ def realiased(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Realiased]: 
             done = _run([*COMMENTS_MODULE, *step], bench)
             assert done.returncode == 0, done.stdout + done.stderr
         ((_, feedback),) = comments_module.read_plan(plan, bench.drafts_root).runs
-        (listed,) = [
-            one
-            for one in _store(bench, "task", "comment", "list", items[SECOND_CAUSE])["comments"]
-            if isinstance(one, dict) and one["id"] == asked
-        ]
+        held_comments = _store(bench, "task", "comment", "list", items[SECOND_CAUSE])["comments"]
+        assert isinstance(held_comments, list), held_comments
+        (listed,) = [one for one in held_comments if isinstance(one, dict) and one["id"] == asked]
         reply_body = _staged(
             bench,
             "reply.md",
@@ -563,13 +572,24 @@ def realiased(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Realiased]: 
             rewritten = _run(realias, bench)
         finally:
             remote.BOARD.stored_comment = sent_as_is
-        # The board loses the answer to a comment edit before applying it, so the store reports
-        # the edit's one part `unknown` rather than `landed`: the invocation stops on it, and the
-        # comment, unwritten, still names the run for the invocation that completes.
-        _GitHubFixture.dropped_operation = (_Operation.UPDATE_COMMENT_WHOLE, "before")
+        # Lose the next comment edit before applying it, whether the store sends its
+        # plain document or the whole-issue twin used by a guarded cache write.
+        lost_edits: list[_Operation] = []
+
+        def lose_comment_edit(operation: _Operation) -> None:
+            lost_edits.append(operation)
+            _GitHubFixture.dropped_operation = (operation, "before")
+
+        comment_edits = (_Operation.UPDATE_COMMENT, _Operation.UPDATE_COMMENT_WHOLE)
+        for operation in comment_edits:
+            _GitHubFixture.before_operation[operation] = partial(lose_comment_edit, operation)
         try:
             unlanded = _run(realias, bench)
+            assert lost_edits, "the lost-comment fault was never reached"
+            assert _GitHubFixture.dropped_operation is None, lost_edits
         finally:
+            for operation in comment_edits:
+                _GitHubFixture.before_operation.pop(operation, None)
             _GitHubFixture.dropped_operation = None
         first = _run(realias, bench)
         after = _held(linear)
@@ -700,7 +720,7 @@ def _board_of(qualified: str) -> str:
     return qualified.partition(":")[0]
 
 
-def _texts(held: Held, qualified: str) -> dict[str, object]:
+def _texts(held: Held, qualified: str) -> HeldItem:
     side = held.linear if _board_of(qualified) == LINEAR else held.github
     return side[_native(qualified)]
 
@@ -887,10 +907,10 @@ def test_an_edit_no_part_of_which_landed_stops_the_verb_and_a_rerun_completes(
 ) -> None:
     """A comment edit whose part did not land is never read as rewritten.
 
-    The adopted store reports a part answered other than `landed` — `unknown` here, its answer
-    lost — with its failure document and a non-zero exit, so the verb stops on the store's own
-    refusal before :func:`tickets.edited_version` reads a part; `realias` names it and lists
-    nothing for the comment, and the next invocation rewrites it.
+    The adopted store refuses the lost HTTP answer with a non-zero exit, for a plain
+    comment edit as well as its guarded whole-issue twin. The verb stops on that refusal
+    before :func:`tickets.edited_version` reads an answer; the next invocation rewrites
+    the comment and completes.
     """
     stopped = realiased.unlanded
     assert stopped.returncode != OK, stopped.stdout + stopped.stderr

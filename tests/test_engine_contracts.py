@@ -3429,6 +3429,9 @@ def test_the_node_a_live_edit_states_is_read_with_the_fields_the_engine_declares
         f"preflight's command validation drifted: engine={sorted(node_fields)}, "
         f"check={sorted(envelope_review.NODE_FIELDS)}"
     )
+    assert "assets_from" in node_fields
+    for document in (MANAGER, ORCHESTRATION):
+        assert "`assets_from`" in document.read_text(encoding="utf-8"), document
     for name in ("AMENDMENT", "NO_DISPATCH"):
         assert getattr(envelope_review, name) in node_fields, (
             f"onepipeline {ONEPIPELINE.ref}'s `Node` no longer carries the field "

@@ -338,10 +338,9 @@ def test_a_settlement_is_one_targeted_update_and_a_failure_carries_only_what_had
     ], creating
     (creation,) = creating
     assert (creation.scope, creation.whole_because) == ("members", None), creation
-    assert creation.calls.get("project-copy") == 1 and creation.calls.get("project-show") == 1, (
-        creation
-    )
-    assert "task-list" not in creation.calls, creation
+    # The adopted member-copy path adds only this node, without reading or rewriting
+    # its existing board project (onepipeline #1111).
+    assert creation.calls == {"project-copy": 1}, creation
     assert creation.actions is not None and creation.actions["created"] == 1, creation
     assert landed(driven)[ADDED_NODE].destination == created.identifier, landed(driven)
     now = _by_node(driven)

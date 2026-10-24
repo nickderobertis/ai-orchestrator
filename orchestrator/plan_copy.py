@@ -277,7 +277,9 @@ def copy(
     options = _copy_options(passthrough)
     try:
         report = plan_store.sdk(
-            plan_store.client().project_copy(project, to=destination, **options)
+            plan_store.client().project_copy(
+                project, to=destination, status_policy="preserve-destination", **options
+            )
         )
         failed = _report(report)
     except Exception as exc:
@@ -399,8 +401,8 @@ class CopyOptions(TypedDict, total=False):
 #: board item rather than file a second; and `members_only`, because this recipe copies a
 #: whole plan, project record included, and a copy of named members into a project already on
 #: the destination is the engine's write-back to make, not a manager's; and `status_policy`,
-#: because a plan's re-copy carries the status it was authored at, the store's default, and
-#: the status a run moves a board item to is the engine's settlement projection, not a copy's.
+#: because every plan copy fixes it to `preserve-destination`: board statuses and open/closed
+#: state belong to runs and people, while new items take their source status.
 #: Named rather than left out of the reconciliation, so a parameter the SDK adds later still
 #: fails it by name.
 UNEXPOSED: frozenset[str] = frozenset(
