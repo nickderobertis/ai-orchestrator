@@ -233,6 +233,15 @@
       "allowed_tools": {
         "value": null
       },
+      "analytics": {
+        "value": false
+      },
+      "app_server": {
+        "value": "shared"
+      },
+      "apps": {
+        "value": false
+      },
       "args": {
         "value": [
           "-c",
@@ -254,16 +263,34 @@
       "model": {
         "value": "gpt-6.1-sol"
       },
+      "model_catalog_refresh_seconds": {
+        "value": 3600
+      },
+      "plugins": {
+        "value": false
+      },
       "reasoning": {
         "value": null
       },
       "settings": {
         "value": null
       },
+      "shared_model_catalog": {
+        "value": true
+      },
       "variant": {
         "alternate": {
           "allowed_tools": {
             "value": null
+          },
+          "analytics": {
+            "value": false
+          },
+          "app_server": {
+            "value": "shared"
+          },
+          "apps": {
+            "value": false
           },
           "args": {
             "value": null
@@ -289,11 +316,20 @@
           "model": {
             "value": "gpt-6.1-sol"
           },
+          "model_catalog_refresh_seconds": {
+            "value": 3600
+          },
+          "plugins": {
+            "value": false
+          },
           "reasoning": {
             "value": null
           },
           "settings": {
             "value": null
+          },
+          "shared_model_catalog": {
+            "value": true
           },
           "unset_env": {
             "value": [
@@ -306,6 +342,15 @@
         "primary": {
           "allowed_tools": {
             "value": null
+          },
+          "analytics": {
+            "value": false
+          },
+          "app_server": {
+            "value": "shared"
+          },
+          "apps": {
+            "value": false
           },
           "args": {
             "value": null
@@ -327,11 +372,20 @@
           "model": {
             "value": "gpt-6.1-sol"
           },
+          "model_catalog_refresh_seconds": {
+            "value": 3600
+          },
+          "plugins": {
+            "value": false
+          },
           "reasoning": {
             "value": null
           },
           "settings": {
             "value": null
+          },
+          "shared_model_catalog": {
+            "value": true
           },
           "unset_env": {
             "value": [
@@ -400,7 +454,7 @@
   "schema_max_retries": {
     "value": null
   },
-  "schema_version": "0.11",
+  "schema_version": "0.12",
   "server_overloaded_max_retries": {
     "value": 2
   },

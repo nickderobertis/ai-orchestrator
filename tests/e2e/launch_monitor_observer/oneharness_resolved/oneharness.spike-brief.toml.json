@@ -1,106 +1,32 @@
 {
-  "schema_version": "0.11",
   "all": {
     "value": null
   },
-  "harnesses": {
-    "value": [
-      "codex:primary",
-      "codex:alternate"
-    ]
-  },
-  "exclude": {
-    "value": null
-  },
-  "model": {
-    "value": null
-  },
-  "models": {
-    "value": null
-  },
-  "system": {
-    "value": null
-  },
-  "reasoning": {
+  "allowed_tools": {
     "value": null
   },
   "bypass": {
     "value": false
   },
-  "mode": {
-    "value": null
-  },
-  "timeout": {
-    "value": 300
-  },
-  "output_format": {
-    "value": null
-  },
-  "stream": {
-    "value": false
-  },
-  "schema_file": {
-    "value": null
-  },
-  "schema_max_retries": {
-    "value": null
-  },
-  "server_overloaded_max_retries": {
-    "value": 2
-  },
-  "max_parallel": {
-    "value": null
-  },
-  "run_mode": {
-    "value": "fallback"
-  },
-  "require_available": {
-    "value": false
-  },
-  "history": {
-    "value": true
-  },
-  "history_dir": {
-    "value": null
-  },
-  "history_pointer_file": {
-    "value": null
-  },
-  "history_labels": {},
-  "allowed_tools": {
-    "value": null
-  },
   "denied_tools": {
     "value": null
   },
-  "hooks": {
+  "env": {},
+  "exclude": {
     "value": null
   },
-  "env": {},
   "harness": {
     "claude-code": {
-      "model": {
-        "value": null
-      },
-      "reasoning": {
-        "value": null
-      },
-      "bin": {
+      "allowed_tools": {
         "value": null
       },
       "args": {
         "value": null
       },
-      "allowed_tools": {
+      "bin": {
         "value": null
       },
       "denied_tools": {
-        "value": null
-      },
-      "hooks": {
-        "value": null
-      },
-      "settings": {
         "value": null
       },
       "env": {
@@ -108,32 +34,33 @@
           "value": "1"
         }
       },
+      "hooks": {
+        "value": null
+      },
+      "model": {
+        "value": null
+      },
+      "reasoning": {
+        "value": null
+      },
+      "settings": {
+        "value": null
+      },
       "variant": {
         "alternate": {
-          "model": {
-            "value": "claude-opus-5-5"
-          },
-          "reasoning": {
-            "value": null
-          },
-          "bin": {
+          "allowed_tools": {
             "value": null
           },
           "args": {
             "value": null
           },
-          "allowed_tools": {
+          "bin": {
             "value": null
           },
           "denied_tools": {
             "value": null
           },
-          "hooks": {
-            "value": null
-          },
-          "settings": {
-            "value": null
-          },
+          "env": {},
           "env_file": {
             "value": null
           },
@@ -142,6 +69,18 @@
               "value": "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR"
             }
           },
+          "hooks": {
+            "value": null
+          },
+          "model": {
+            "value": "claude-opus-5-5"
+          },
+          "reasoning": {
+            "value": null
+          },
+          "settings": {
+            "value": null
+          },
           "unset_env": {
             "value": [
               "ANTHROPIC_API_KEY",
@@ -151,34 +90,22 @@
               "GH_PROJECTS_TOKEN",
               "<organization-linear-key>"
             ]
-          },
-          "env": {}
+          }
         },
         "alternate2": {
-          "model": {
-            "value": "claude-opus-5-5"
-          },
-          "reasoning": {
-            "value": null
-          },
-          "bin": {
+          "allowed_tools": {
             "value": null
           },
           "args": {
             "value": null
           },
-          "allowed_tools": {
+          "bin": {
             "value": null
           },
           "denied_tools": {
             "value": null
           },
-          "hooks": {
-            "value": null
-          },
-          "settings": {
-            "value": null
-          },
+          "env": {},
           "env_file": {
             "value": null
           },
@@ -187,6 +114,18 @@
               "value": "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR"
             }
           },
+          "hooks": {
+            "value": null
+          },
+          "model": {
+            "value": "claude-opus-5-5"
+          },
+          "reasoning": {
+            "value": null
+          },
+          "settings": {
+            "value": null
+          },
           "unset_env": {
             "value": [
               "ANTHROPIC_API_KEY",
@@ -196,34 +135,22 @@
               "GH_PROJECTS_TOKEN",
               "<organization-linear-key>"
             ]
-          },
-          "env": {}
+          }
         },
         "primary": {
-          "model": {
-            "value": "claude-opus-5-5"
-          },
-          "reasoning": {
-            "value": null
-          },
-          "bin": {
+          "allowed_tools": {
             "value": null
           },
           "args": {
             "value": null
           },
-          "allowed_tools": {
+          "bin": {
             "value": null
           },
           "denied_tools": {
             "value": null
           },
-          "hooks": {
-            "value": null
-          },
-          "settings": {
-            "value": null
-          },
+          "env": {},
           "env_file": {
             "value": null
           },
@@ -232,6 +159,18 @@
               "value": "ORCHESTRATOR_CLAUDE_PRIMARY_CONFIG_DIR"
             }
           },
+          "hooks": {
+            "value": null
+          },
+          "model": {
+            "value": "claude-opus-5-5"
+          },
+          "reasoning": {
+            "value": null
+          },
+          "settings": {
+            "value": null
+          },
           "unset_env": {
             "value": [
               "ANTHROPIC_API_KEY",
@@ -241,34 +180,22 @@
               "GH_PROJECTS_TOKEN",
               "<organization-linear-key>"
             ]
-          },
-          "env": {}
+          }
         },
         "primary-backup": {
-          "model": {
-            "value": "claude-opus-5-5"
-          },
-          "reasoning": {
-            "value": null
-          },
-          "bin": {
+          "allowed_tools": {
             "value": null
           },
           "args": {
             "value": null
           },
-          "allowed_tools": {
+          "bin": {
             "value": null
           },
           "denied_tools": {
             "value": null
           },
-          "hooks": {
-            "value": null
-          },
-          "settings": {
-            "value": null
-          },
+          "env": {},
           "env_file": {
             "value": null
           },
@@ -277,6 +204,18 @@
               "value": "ORCHESTRATOR_CLAUDE_PRIMARY_BACKUP_CONFIG_DIR"
             }
           },
+          "hooks": {
+            "value": null
+          },
+          "model": {
+            "value": "claude-opus-5-5"
+          },
+          "reasoning": {
+            "value": null
+          },
+          "settings": {
+            "value": null
+          },
           "unset_env": {
             "value": [
               "ANTHROPIC_API_KEY",
@@ -286,63 +225,78 @@
               "GH_PROJECTS_TOKEN",
               "<organization-linear-key>"
             ]
-          },
-          "env": {}
+          }
         }
       }
     },
     "codex": {
-      "model": {
-        "value": "gpt-6.1-sol"
+      "allowed_tools": {
+        "value": null
       },
-      "reasoning": {
+      "analytics": {
+        "value": false
+      },
+      "app_server": {
+        "value": "shared"
+      },
+      "apps": {
+        "value": false
+      },
+      "args": {
         "value": null
       },
       "bin": {
         "value": null
       },
-      "args": {
-        "value": null
-      },
-      "allowed_tools": {
-        "value": null
-      },
       "denied_tools": {
         "value": null
       },
+      "env": {},
       "hooks": {
+        "value": null
+      },
+      "model": {
+        "value": "gpt-6.1-sol"
+      },
+      "model_catalog_refresh_seconds": {
+        "value": 3600
+      },
+      "plugins": {
+        "value": false
+      },
+      "reasoning": {
         "value": null
       },
       "settings": {
         "value": null
       },
-      "env": {},
+      "shared_model_catalog": {
+        "value": true
+      },
       "variant": {
         "alternate": {
-          "model": {
-            "value": "gpt-6.1-sol"
+          "allowed_tools": {
+            "value": null
           },
-          "reasoning": {
+          "analytics": {
+            "value": false
+          },
+          "app_server": {
+            "value": "shared"
+          },
+          "apps": {
+            "value": false
+          },
+          "args": {
             "value": null
           },
           "bin": {
             "value": null
           },
-          "args": {
-            "value": null
-          },
-          "allowed_tools": {
-            "value": null
-          },
           "denied_tools": {
             "value": null
           },
-          "hooks": {
-            "value": null
-          },
-          "settings": {
-            "value": null
-          },
+          "env": {},
           "env_file": {
             "value": null
           },
@@ -351,53 +305,153 @@
               "value": "ORCHESTRATOR_CODEX_ALT_HOME"
             }
           },
+          "hooks": {
+            "value": null
+          },
+          "model": {
+            "value": "gpt-6.1-sol"
+          },
+          "model_catalog_refresh_seconds": {
+            "value": 3600
+          },
+          "plugins": {
+            "value": false
+          },
+          "reasoning": {
+            "value": null
+          },
+          "settings": {
+            "value": null
+          },
+          "shared_model_catalog": {
+            "value": true
+          },
           "unset_env": {
             "value": [
               "OPENAI_API_KEY",
               "GH_PROJECTS_TOKEN",
               "<organization-linear-key>"
             ]
-          },
-          "env": {}
+          }
         },
         "primary": {
-          "model": {
-            "value": "gpt-6.1-sol"
+          "allowed_tools": {
+            "value": null
           },
-          "reasoning": {
+          "analytics": {
+            "value": false
+          },
+          "app_server": {
+            "value": "shared"
+          },
+          "apps": {
+            "value": false
+          },
+          "args": {
             "value": null
           },
           "bin": {
             "value": null
           },
-          "args": {
-            "value": null
-          },
-          "allowed_tools": {
-            "value": null
-          },
           "denied_tools": {
             "value": null
           },
+          "env": {},
+          "env_file": {
+            "value": null
+          },
+          "env_from": {},
           "hooks": {
+            "value": null
+          },
+          "model": {
+            "value": "gpt-6.1-sol"
+          },
+          "model_catalog_refresh_seconds": {
+            "value": 3600
+          },
+          "plugins": {
+            "value": false
+          },
+          "reasoning": {
             "value": null
           },
           "settings": {
             "value": null
           },
-          "env_file": {
-            "value": null
+          "shared_model_catalog": {
+            "value": true
           },
-          "env_from": {},
           "unset_env": {
             "value": [
               "GH_PROJECTS_TOKEN",
               "<organization-linear-key>"
             ]
-          },
-          "env": {}
+          }
         }
       }
     }
+  },
+  "harnesses": {
+    "value": [
+      "codex:primary",
+      "codex:alternate"
+    ]
+  },
+  "history": {
+    "value": true
+  },
+  "history_dir": {
+    "value": null
+  },
+  "history_labels": {},
+  "history_pointer_file": {
+    "value": null
+  },
+  "hooks": {
+    "value": null
+  },
+  "max_parallel": {
+    "value": null
+  },
+  "mode": {
+    "value": null
+  },
+  "model": {
+    "value": null
+  },
+  "models": {
+    "value": null
+  },
+  "output_format": {
+    "value": null
+  },
+  "reasoning": {
+    "value": null
+  },
+  "require_available": {
+    "value": false
+  },
+  "run_mode": {
+    "value": "fallback"
+  },
+  "schema_file": {
+    "value": null
+  },
+  "schema_max_retries": {
+    "value": null
+  },
+  "schema_version": "0.12",
+  "server_overloaded_max_retries": {
+    "value": 2
+  },
+  "stream": {
+    "value": false
+  },
+  "system": {
+    "value": null
+  },
+  "timeout": {
+    "value": 300
   }
 }

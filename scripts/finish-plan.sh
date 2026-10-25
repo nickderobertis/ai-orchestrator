@@ -919,13 +919,16 @@ echo "finish-plan: launching run $design_run to write the design document for $p
 
 # 3. The design-document launch, through the shared wrapper rather than `uv run`
 # directly, because that is where this launch's identity is established: a run launched
-# without it records `unknown`, and `just runs --mine` and `just stop` then disown it.
+# without it records `unknown`, and `just runs --mine` and `just stop` then disown it. It
+# is labelled `kind=design` and grouped under the plan it documents, which its own
+# writer project does not name — as `--group=`, so the launch gate does not ask for the
+# approval of a plan whose document this run is writing.
 launch_status=0
 # The judge's artifacts reach the launch through `env` rather than `export`, so they are
 # this launch's alone: the copy and the report after it run no judge, and a list left in
 # this shell would be inherited by anything a later step spawns.
 # llmlint: ignore[boundary_inputs_validated, tool_output_is_signal, robust_shell] `onepipeline start` validates its own surface and restating it here is the drift this repository gates against; this is an attached launch, so streaming the run as it goes is what a manager stays attached for — the lines this script owns are its own; and the three array expansions are the `set -u` idiom whose `+` part alone is unquoted, measured to keep `one two`, `*` and the empty string each one argument.
-env ${judge_artifacts[@]+"${judge_artifacts[@]}"} "$script_dir/onepipeline.sh" start "$PLAN_SOURCE:$design_run" \
+env ${judge_artifacts[@]+"${judge_artifacts[@]}"} "$script_dir/onepipeline.sh" start "$PLAN_SOURCE:$design_run" --label kind=design "--group=$plan_project" \
     ${PLAN_OPT_FORWARDED[@]+"${PLAN_OPT_FORWARDED[@]}"} ${observer[@]+"${observer[@]}"} || launch_status=$?
 if [ "$launch_status" -ne 0 ]; then
     echo "finish-plan: run $design_run did not settle, so nothing was copied into '$destination'; read it with 'just channel-next $design_run', and run this command again once the document is written" >&2

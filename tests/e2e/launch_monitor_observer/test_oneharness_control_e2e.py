@@ -38,9 +38,21 @@ CONTROL_ARGV = ("--input-format", "stream-json")
 STREAM_ARGV = ("--output-format", "stream-json")
 #: codex's mechanism is a whole different process, not a flag on a one-shot turn:
 #: `codex-app-server` speaks its protocol over stdio, so the argv IS the server — followed
-#: by the worker role's `[harness.codex] args`, the one-hour command ceiling, which reaches
-#: a controlled turn's server exactly as it reaches a one-shot `exec`.
-CODEX_CONTROL_ARGV = ("codex", "app-server", *CODEX_CEILING_ARGS)
+#: by the overrides the adopted oneharness derives from the codex family's resolved
+#: `plugins`, `apps` and `analytics` (all `false`) and `shared_model_catalog` (`true`),
+#: then the worker role's `[harness.codex] args`, the one-hour command ceiling, which
+#: reaches a controlled turn's server exactly as it reaches a one-shot `exec`.
+CODEX_SERVER_OVERRIDES = (
+    "-c",
+    "features.plugins=false",
+    "-c",
+    "features.apps=false",
+    "-c",
+    "analytics.enabled=false",
+    "-c",
+    'model_catalog_json="<shared model catalog>"',
+)
+CODEX_CONTROL_ARGV = ("codex", "app-server", *CODEX_SERVER_OVERRIDES, *CODEX_CEILING_ARGS)
 #: The prompt every plan below is rendered for. A controlled turn moves it off argv.
 PROMPT = "hi"
 

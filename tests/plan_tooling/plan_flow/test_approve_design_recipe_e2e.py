@@ -632,6 +632,24 @@ def _settled(launched: subprocess.CompletedProcess[str]) -> str:
     return settlement
 
 
+def _run_id(launched: subprocess.CompletedProcess[str]) -> str:
+    """The run an attached launch reports it settled."""
+    reported = [line for line in launched.stdout.splitlines() if line.startswith('{"run_id"')]
+    assert reported, f"the launch reported no run:\n{launched.stdout}\n{launched.stderr}"
+    run = json.loads(reported[-1])["run_id"]
+    assert isinstance(run, str)
+    return run
+
+
+def _status(run: str, runs: Path) -> dict[str, object]:
+    """The engine's own reading of ``run``, its effective labels and group among it."""
+    read = _just("status", run, "--json", runs=runs)
+    assert read.returncode == 0, read.stdout + read.stderr
+    reading: object = json.loads(read.stdout)
+    assert isinstance(reading, dict), read.stdout
+    return reading
+
+
 @pytest.fixture(autouse=True)
 def _requires_just() -> None:
     if shutil.which("just") is None:
@@ -957,6 +975,22 @@ def test_a_copied_document_that_is_not_the_rendering_in_force_is_repaired_from_s
     launched = _launch(landed, runs)
     assert launched.returncode == 0, launched.stdout + launched.stderr
     assert _settled(launched) == "complete", launched.stdout
+
+    # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] These lines launch
+    # nothing: they read the run the launch above already settled, in the plan-flow project
+    # whose key covers the recipe and engine pin they read.
+    # A main run launched from the board copy is labelled `kind=main` and names no group of
+    # its own, and the engine groups it through the copy's origin under the plan it was
+    # drafted as — which is what puts it beside that plan's planning runs in the browser.
+    run = _run_id(launched)
+    launch = json.loads((runs / run / "launch.json").read_text(encoding="utf-8"))
+    assert launch.get("labels") == {"kind": "main"}, launch
+    assert "group" not in launch, launch
+    assert launch["project"] == landed, launch
+    reading = _status(run, runs)
+    assert reading["labels"] == {"kind": "main"}, reading
+    assert reading["group"] == drafted, reading
+    # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 @pytest.mark.xdist_group("approve-design")

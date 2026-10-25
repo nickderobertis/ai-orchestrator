@@ -270,6 +270,10 @@ def launch(project: str, parent: str, spikes: str) -> None:
                 "--detach",
                 "--dag-graph",
                 "off",
+                "--label",
+                "kind=spike-brief",
+                # One argument, so the launch gate does not ask for this plan's approval.
+                f"--group={project}",
                 "--success-hook",
                 str(REPO_ROOT / "scripts/spike-brief-ready.sh"),
             ],

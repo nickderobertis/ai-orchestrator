@@ -293,6 +293,9 @@ fi
 
 # A run with no run root is a run nothing drives. One that has one is asked, once, for the
 # engine's reading of it, and only a run that ended is followed up.
+# The follow-up run is grouped where the engine groups the run it follows, read off that
+# same reading; a run with no root, or one the engine groups nowhere, gives no group.
+grouping=()
 if [ -e "$runs_root/$run" ]; then
     # The engine's own diagnostic reaches stderr as it writes it, so a read that fails is
     # explained in its words above the recipe's line.
@@ -329,6 +332,11 @@ if [ -e "$runs_root/$run" ]; then
     public=$(printf '%s' "$answered" | "$python" -m orchestrator.run_reading --public-id "$run") ||
         fail "the public id of run '$run' could not be read from the engine's reading" \
             "read the run with 'just status $run --json', then retry"
+    group=$(printf '%s' "$answered" | "$python" -m orchestrator.run_reading --group "$run") ||
+        fail "the project group of run '$run' could not be read from the engine's reading" \
+            "read the run with 'just status $run --json', then retry"
+    # As `--group=`, so the launch gate does not read the followed run's plan as this one.
+    [ -z "$group" ] || grouping=("--group=$group")
     [ "$key" = "$run" ] || [ "$key" = "$public" ] ||
         fail "'$key' keys the follow-ups of run '$run', which the engine names '$public'" \
             "follow it up as 'just follow-ups $run', then retry"
@@ -608,9 +616,8 @@ if [ "$detached" -eq 1 ]; then
     launched=0
     # The engine's own launch record goes to standard error, so standard output is the two
     # lines below and nothing else.
-    # llmlint: ignore[tool_output_is_signal] The engine's launch record is kept for an operator reading standard error, and standard output carries only the two lines the success hook relays.
-    "$script_dir/onepipeline.sh" start "$project" --dag-graph off --detach \
-        "${closeout_hooks[@]}" >&2 || launched=$?
+    # llmlint: ignore[tool_output_is_signal, robust_shell] The engine's launch record is kept for an operator reading standard error, and standard output carries only the two lines the success hook relays; `${grouping[@]+"${grouping[@]}"}` is the `set -u` idiom for a possibly-empty array, whose `+` part alone is unquoted, measured to keep every element one argument.
+    "$script_dir/onepipeline.sh" start "$project" --dag-graph off --detach --label kind=follow-ups ${grouping[@]+"${grouping[@]}"} "${closeout_hooks[@]}" >&2 || launched=$?
     [ ! -f "$runs_root/$follow_up_run/launch.json" ] || hook_handed_off=1
     if [ "$launched" -ne 0 ]; then
         echo "follow-ups: the detached launch of run $follow_up_run over run $run failed; the diagnostic above names why" >&2
@@ -632,8 +639,8 @@ fi
 status=0
 # The attached launch names no run-end hook: it runs the same closeout itself once the run
 # returns, below, so the checks run once and their answer is this recipe's exit status.
-# llmlint: ignore[tool_output_is_signal] This is an attached launch, so streaming the run as it goes is what the operator stays attached for.
-"$script_dir/onepipeline.sh" start "$project" --dag-graph off || status=$?
+# llmlint: ignore[tool_output_is_signal, robust_shell] This is an attached launch, so streaming the run as it goes is what the operator stays attached for; `${grouping[@]+"${grouping[@]}"}` is the `set -u` idiom for a possibly-empty array, whose `+` part alone is unquoted, measured to keep every element one argument.
+"$script_dir/onepipeline.sh" start "$project" --dag-graph off --label kind=follow-ups ${grouping[@]+"${grouping[@]}"} || status=$?
 
 # With no judge, this is what holds the output to its shape. Initial mode runs the closeout
 # a detached launch's run-end hook runs, which names each refusal and keeps itself and its

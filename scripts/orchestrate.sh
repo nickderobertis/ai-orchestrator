@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # `just orchestrate`'s mechanism; the comment above the recipe states each default, why a
-# caller's own flag wins, and why `--adopt` adds none. Two things are this script's alone:
+# caller's own flag wins, and why `--adopt` adds none (an adopted run keeps the labels it
+# was launched with). Two things are this script's alone:
 # a flag counts as named in either spelling, `--flag VALUE` or `--flag=VALUE`, and the hook
 # is named by an absolute path, because the engine spawns it from the launch record's
 # directory rather than from this checkout.
@@ -36,6 +37,21 @@ for index in "${!flags[@]}"; do
     done
     [[ -n "$named" ]] || defaults+=("$flag" "${values[$index]}")
 done
+
+# The run's kind, which the engine records as an opaque label and the browser groups by:
+# a caller's own `kind` label wins in either spelling, because the engine refuses a key
+# named twice. No `--group`: a launch from a board copy is grouped through the copy's
+# origin, and one from its own project by that project.
+kind=
+previous=
+for argument in "$@"; do
+    if [[ "$argument" == --label=kind=* || ( "$previous" == "--label" && "$argument" == kind=* ) ]]; then
+        kind=1
+        break
+    fi
+    previous=$argument
+done
+[[ -n "$kind" ]] || defaults+=(--label kind=main)
 
 # llmlint: ignore[tool_output_is_signal] Streaming the run as it goes is what an attached launch is for, and its validated launch failures name the input to correct; `--detach` is the spelling that returns one line.
 exec "$script_dir/onepipeline.sh" start "$@" ${defaults[@]+"${defaults[@]}"}

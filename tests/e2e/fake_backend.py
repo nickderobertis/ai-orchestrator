@@ -775,6 +775,19 @@ def _answer(
         environment["MOCK_STREAM_DELAY_MS"] = str(activity.interval_ms)
     if lost:
         environment[MOCK_EXIT_ENV] = "1"
+    if lost or activity is not None:
+        # A `--control` codex turn runs on the shared mock app-server, which answers
+        # `MOCK_STDOUT`'s text alone — no `MOCK_EXIT`, and none of the codex exec event
+        # lines a busy turn streams (oneharness#1506) — so a lost or busy turn is run
+        # uncontrolled: its provider process is what fails, or what streams the calls. A
+        # busy turn is the one that cannot be interrupted, which is what it stands for.
+        # llmlint: ignore-block[e2e_not_mocked, tests_mirror_real_usage] The mock app-server
+        # oneharness 0.26.1 runs a controlled codex turn on offers no knob that fails one turn
+        # or streams several scripted calls, so the journeys scripting a lost or
+        # uninterruptible busy turn run it as the exec turn they were written against; the
+        # gap is drafted upstream as a follow-up.
+        argv = [argument for argument in argv if argument != CONTROL_FLAG]
+        # llmlint: ignore-end[e2e_not_mocked, tests_mirror_real_usage]
     # `--mock-harness ID` replaces the selected harness's *provider process* and
     # nothing above it — this repository's one sanctioned fake, under a different
     # name. Proof: under `--mock-harness codex`

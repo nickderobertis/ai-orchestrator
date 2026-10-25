@@ -1,9 +1,9 @@
 """What `docs/dag-ui.md` says the DAG Observatory can do, against the reader's own contract.
 
-`docs/dag-ui.md` lists the browser's supervising surface — the channel and its reply
-composer, `attest`, `stop`, the host's shutdown, the Host page's unwatched report, the
-rendered reads, the project list and the agents panel — and the refusal a stranger's
-stop meets.
+`docs/dag-ui.md` lists the browser's supervising surface — the project-centric sidebar,
+the channel and its reply composer, `attest`, the per-run `stop`, the Host page with its
+unwatched report and its one host-wide shutdown, and the rendered reads — the refusal a
+stranger's stop meets, and that those controls are the whole of what the view acts through.
 Every one of those is `onepipeline-ui`'s: this repository builds none of the view and
 none of the API, and the list is a copy of a contract somebody else versions. A copy of
 a route list is exactly what goes stale in silence, because a route the reader dropped
@@ -12,7 +12,10 @@ finds out otherwise only by trying.
 
 So each capability the page names is held to a route the adopted reader declares, in
 `onepipeline-ui`'s own `docs/contract.md` at `v<config/onepipeline-ui.version>`, and so
-is every route the page spells in full. The refusal's status and code are held the same
+is every route the page spells in full. The page's statement that those controls are the
+whole of it is held to the same contract's route list and to the run view's own tabs in the
+view's source at that tag.
+The refusal's status and code are held the same
 way, since `tests/dag_ui/test_dag_ui_serving_e2e.py` asserts the served refusal and this
 is what says the contract still promises it.
 
@@ -37,6 +40,8 @@ pytestmark = pytest.mark.reads_checkouts
 
 #: The reader, at the release this host adopted, read out of its own documentation.
 UI_API = Engine("onepipeline-ui", _pinned_tag("onepipeline-ui"), "docs")
+#: The view's own application shell at that release, where its run tabs are declared.
+UI_VIEW = Engine("onepipeline-ui", _pinned_tag("onepipeline-ui"), "apps/dag-ui/src/app")
 CONTRACT = "contract.md"
 #: This repository's page that restates the surface.
 PAGE = REPO_ROOT / "docs" / "dag-ui.md"
@@ -53,10 +58,11 @@ class Capability(NamedTuple):
 #: Written as fragments rather than whole routes because the page names capabilities in
 #: words and the contract states them as paths: the pairing *is* the claim being held.
 CAPABILITIES = (
+    Capability("The navigation is project-centric", " /api/v2/projects "),
     Capability("the channel", " /api/v2/runs/{run}/channel "),
     Capability("reply composer", "/channel/reply"),
     Capability("`attest`", "/api/v2/runs/{run}/attest"),
-    Capability("`stop`", "/api/v2/runs/{run}/stop"),
+    Capability("per-run **Stop**", "/api/v2/runs/{run}/stop"),
     Capability("the unwatched route", "/api/v2/unwatched"),
     Capability("`status`", "/api/v2/runs/{run}/status"),
     Capability("`results`", "/api/v2/runs/{run}/results"),
@@ -64,11 +70,29 @@ CAPABILITIES = (
     Capability("`transcript`", "/api/v2/runs/{run}/transcript"),
     Capability("`telemetry`", "/api/v2/runs/{run}/telemetry"),
     Capability("`host`", "/api/v2/host"),
-    Capability("landing project list", "/api/v2/projects"),
-    Capability("per-project", "/api/v2/projects/{project}"),
-    Capability("**Agents**", "/api/v2/runs/{run}/agents"),
+    Capability("**Host** is a page of its own", "/api/v2/host"),
     Capability("**Shut down the entire host**", " /api/v2/shutdown "),
 )
+
+#: The page's statement that the controls it lists are all the view acts through.
+WHOLE = "Those controls are the whole of what the view acts through."
+#: Every write route the contract declares, against the words the page lists it in.
+CONTROLS = {
+    "POST /api/v2/runs/{run}/stop": "its per-run **Stop**",
+    "POST /api/v2/runs/{run}/channel/next": "its channel's **Next**",
+    "POST /api/v2/runs/{run}/channel/reply": "reply,",
+    "POST /api/v2/runs/{run}/channel/surface": "raised surface",
+    "POST /api/v2/runs/{run}/attest": "and `attest`, and the host",
+    "POST /api/v2/shutdown": "the host by its one host-wide shutdown",
+}
+#: The write routes a tab reads its state through, which act on no run and no host.
+SUBSCRIPTION_ROUTES = {
+    "POST /api/v2/subscriptions",
+    "DELETE /api/v2/subscriptions/{subscription}",
+}
+
+#: The run view's tabs, as the page names them, against the view's own declaration.
+RUN_TABS = {"graph": "**Graph**", "overall": "**Overall**", "channel": "**Channel**"}
 
 
 def _routes() -> str:
@@ -131,6 +155,48 @@ def test_every_route_the_page_spells_in_full_is_one_the_reader_declares() -> Non
         f"docs/dag-ui.md spells {missing}, which {UI_API.crate} {UI_API.ref} does not "
         "declare. A path on the page is one an operator will try"
     )
+
+
+def test_the_controls_the_page_lists_are_every_write_route_and_tab_the_release_declares() -> None:
+    """The page's controls are the whole of it: every write route, and every run tab.
+
+    The page says once that its listed controls are all the view acts through, and an
+    operator reads anything else as "do this from a terminal". The view reaches the
+    engine only through the reader's routes, so a control anywhere in it — a new tab or
+    a new button inside an existing one — is a route other than a `GET`. So the
+    contract's complete set of those routes, less the subscription a tab reads its
+    state through, is compared with the set the page lists as controls, in both
+    directions; a removed route answers `404 removed_route`; and the run view's own
+    tabs, read off the view's application shell at the pinned tag, are exactly the
+    three the page names.
+    """
+    page = _page()
+    assert WHOLE in page, f"docs/dag-ui.md no longer says {WHOLE!r}"
+    for named in CONTROLS.values():
+        assert named in page, f"docs/dag-ui.md no longer lists the control {named!r}"
+    writes = {
+        f"{method} {path}"
+        for method, path in re.findall(r"^(POST|PUT|PATCH|DELETE) (\S+)", _routes(), re.MULTILINE)
+    }
+    controls = writes - SUBSCRIPTION_ROUTES
+    assert controls == set(CONTROLS), (
+        f"{UI_API.crate} {UI_API.ref} declares the write routes {sorted(controls)} beside "
+        f"its subscription, and docs/dag-ui.md lists controls for {sorted(CONTROLS)}; a "
+        "route only one side names is a control the page omits or one the view no longer "
+        "offers, so correct the page in the same change"
+    )
+    assert writes >= SUBSCRIPTION_ROUTES, (
+        f"{UI_API.crate} {UI_API.ref} no longer declares {sorted(SUBSCRIPTION_ROUTES - writes)}; "
+        "re-read how a tab subscribes before treating every other write route as a control"
+    )
+    assert "`404 removed_route`" in " ".join(_source(UI_API, CONTRACT).split())
+    declared = set(re.findall(r'<TabsTrigger value="([a-z-]+)">', _source(UI_VIEW, "App.tsx")))
+    assert declared == set(RUN_TABS), (
+        f"{UI_VIEW.crate} {UI_VIEW.ref}'s run view declares the tabs {sorted(declared)}, and "
+        f"docs/dag-ui.md names {sorted(RUN_TABS)}; correct the page in the same change"
+    )
+    for named in RUN_TABS.values():
+        assert named in page, f"docs/dag-ui.md no longer names the {named} tab"
 
 
 def test_the_refusal_the_page_describes_is_the_one_the_contract_promises() -> None:

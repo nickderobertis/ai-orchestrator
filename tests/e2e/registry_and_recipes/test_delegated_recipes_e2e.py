@@ -81,6 +81,15 @@ THE_BOARD = "plans"
 #: What `just plan` adds to its planning launch, and only to that one: its one node is the
 #: manager's hand-written brief, which no template renders, so it names the opt-out itself.
 PLANNING_RENDERED = "--require-rendered false"
+#: The kind and group every planning launch carries: the draft's kind, under the plan
+#: project its brief declares, joined to its flag so the launch gate does not read it as
+#: a second plan to approve.
+PLANNING_LABELS = f"--label kind=planning --group={PLAN_PROJECT}"
+
+
+def _design_labels(project: str) -> str:
+    """The kind and group the design-document launch carries, under the plan it documents."""
+    return f"--label kind=design --group={project}"
 
 
 def _flow(script: str, name: str, *arguments: str) -> str:
@@ -113,9 +122,10 @@ def _tail(destination: str = THE_BOARD, project: str = PLAN_PROJECT) -> tuple[st
         f"uv run orchestrator-check-plan {project}",
         *_graph_reads(project),
         *_writer_task(project),
-        f"uv run orchestrator-launch-gate {DESIGN_PROJECT} --dag-graph off",
+        f"uv run orchestrator-launch-gate {DESIGN_PROJECT} {_design_labels(project)}"
+        f" --dag-graph off",
         ENGINE_VERSION,
-        f"{ENGINE} start {DEFAULTS} {DESIGN_PROJECT} --dag-graph off",
+        f"{ENGINE} start {DEFAULTS} {DESIGN_PROJECT} {_design_labels(project)} --dag-graph off",
         f"uv run orchestrator-copy-plan {project} --to {destination}",
         f"uv run orchestrator-plan-locations {project} --in {destination}",
     )
@@ -217,14 +227,14 @@ DELEGATIONS = (
         "orchestrate",
         ("authoring:probe",),
         f"{ENGINE} start {DEFAULTS} authoring:probe --dag-graph graphs/dag-scope.yaml"
-        f" --pr-author-graph graphs/pr-author.yaml{REVIEW_REPLY} {HOOKS}",
+        f" --pr-author-graph graphs/pr-author.yaml{REVIEW_REPLY} {HOOKS} --label kind=main",
     ),
     Delegation(
         "orchestrate",
         ("authoring:probe", "--detach"),
         f"{ENGINE} start {DEFAULTS} authoring:probe --detach"
         " --dag-graph graphs/dag-scope.yaml"
-        f" --pr-author-graph graphs/pr-author.yaml{REVIEW_REPLY} {HOOKS}",
+        f" --pr-author-graph graphs/pr-author.yaml{REVIEW_REPLY} {HOOKS} --label kind=main",
     ),
     # A caller who names one keeps it: the flags refuse to be given twice, so adding
     # a default over an explicit one would break the launch outright. Per flag, so
@@ -233,37 +243,40 @@ DELEGATIONS = (
         "orchestrate",
         ("authoring:probe", "--dag-graph", "off"),
         f"{ENGINE} start {DEFAULTS} authoring:probe --dag-graph off"
-        f" --pr-author-graph graphs/pr-author.yaml{REVIEW_REPLY} {HOOKS}",
+        f" --pr-author-graph graphs/pr-author.yaml{REVIEW_REPLY} {HOOKS} --label kind=main",
     ),
     Delegation(
         "orchestrate",
         ("authoring:probe", "--dag-graph=graphs/other.yaml"),
         f"{ENGINE} start {DEFAULTS} authoring:probe --dag-graph=graphs/other.yaml"
-        f" --pr-author-graph graphs/pr-author.yaml{REVIEW_REPLY} {HOOKS}",
+        f" --pr-author-graph graphs/pr-author.yaml{REVIEW_REPLY} {HOOKS} --label kind=main",
     ),
     Delegation(
         "orchestrate",
         ("authoring:probe", "--pr-author-graph", "graphs/other.yaml"),
         f"{ENGINE} start {DEFAULTS} authoring:probe --pr-author-graph graphs/other.yaml"
-        f" --dag-graph graphs/dag-scope.yaml{REVIEW_REPLY} {HOOKS}",
+        f" --dag-graph graphs/dag-scope.yaml{REVIEW_REPLY} {HOOKS} --label kind=main",
     ),
     Delegation(
         "orchestrate",
         ("authoring:probe", "--pr-author-graph=graphs/other.yaml", "--dag-graph=off"),
         f"{ENGINE} start {DEFAULTS} authoring:probe"
-        f" --pr-author-graph=graphs/other.yaml --dag-graph=off{REVIEW_REPLY} {HOOKS}",
+        f" --pr-author-graph=graphs/other.yaml --dag-graph=off{REVIEW_REPLY} {HOOKS}"
+        f" --label kind=main",
     ),
     Delegation(
         "orchestrate",
         ("authoring:probe", "--review-reply-graph", "graphs/other.yaml"),
         f"{ENGINE} start {DEFAULTS} authoring:probe --review-reply-graph graphs/other.yaml"
-        f" --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml {HOOKS}",
+        f" --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml {HOOKS}"
+        f" --label kind=main",
     ),
     Delegation(
         "orchestrate",
         ("authoring:probe", "--review-reply-graph="),
         f"{ENGINE} start {DEFAULTS} authoring:probe --review-reply-graph="
-        f" --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml {HOOKS}",
+        f" --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml {HOOKS}"
+        f" --label kind=main",
     ),
     # Each hook is kept per flag too, in either spelling and including a blank value,
     # which is how a caller says this launch has none.
@@ -273,13 +286,14 @@ DELEGATIONS = (
         f"{ENGINE} start {DEFAULTS} authoring:probe"
         " --success-hook /elsewhere/on-success"
         f" --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml{REVIEW_REPLY}"
-        f" --failure-hook {RUN_ENDED}",
+        f" --failure-hook {RUN_ENDED} --label kind=main",
     ),
     Delegation(
         "orchestrate",
         ("authoring:probe", "--failure-hook=", "--success-hook="),
         f"{ENGINE} start {DEFAULTS} authoring:probe --failure-hook= --success-hook="
-        f" --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml{REVIEW_REPLY}",
+        f" --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml{REVIEW_REPLY}"
+        f" --label kind=main",
     ),
     # The dispatch-env hook and the maintenance schedule are `scripts/onepipeline.sh`'s
     # own defaults rather than the recipe's, and each is kept per flag the same way: a
@@ -292,7 +306,7 @@ DELEGATIONS = (
         f"{ENGINE} start {BUS_CONFIG} {MAINTENANCE_CONFIG} authoring:probe"
         " --dispatch-env-hook /elsewhere/refresh-env"
         " --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml"
-        f"{REVIEW_REPLY} {HOOKS}",
+        f"{REVIEW_REPLY} {HOOKS} --label kind=main",
     ),
     Delegation(
         "orchestrate",
@@ -300,7 +314,7 @@ DELEGATIONS = (
         f"{ENGINE} start {BUS_CONFIG} {MAINTENANCE_CONFIG} authoring:probe"
         " --dispatch-env-hook="
         " --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml"
-        f"{REVIEW_REPLY} {HOOKS}",
+        f"{REVIEW_REPLY} {HOOKS} --label kind=main",
     ),
     Delegation(
         "orchestrate",
@@ -308,7 +322,7 @@ DELEGATIONS = (
         f"{ENGINE} start {BUS_CONFIG} {DISPATCH_ENV_HOOK} authoring:probe"
         " --maintenance-config /elsewhere/schedule.yaml"
         " --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml"
-        f"{REVIEW_REPLY} {HOOKS}",
+        f"{REVIEW_REPLY} {HOOKS} --label kind=main",
     ),
     Delegation(
         "orchestrate",
@@ -316,7 +330,7 @@ DELEGATIONS = (
         f"{ENGINE} start {BUS_CONFIG} {DISPATCH_ENV_HOOK} authoring:probe"
         " --maintenance-config="
         " --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml"
-        f"{REVIEW_REPLY} {HOOKS}",
+        f"{REVIEW_REPLY} {HOOKS} --label kind=main",
     ),
     # Naming both, in either spelling, leaves the bus configuration alone as the default.
     Delegation(
@@ -325,7 +339,31 @@ DELEGATIONS = (
         f"{ENGINE} start {BUS_CONFIG} authoring:probe"
         " --dispatch-env-hook= --maintenance-config="
         " --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml"
+        f"{REVIEW_REPLY} {HOOKS} --label kind=main",
+    ),
+    # The run's kind is a label the recipe adds as `kind=main`, and a caller's own `kind`
+    # label keeps it in either spelling, because the engine refuses a key given twice; a
+    # label of another key leaves the default in place beside it.
+    Delegation(
+        "orchestrate",
+        ("authoring:probe", "--label", "kind=hotfix"),
+        f"{ENGINE} start {DEFAULTS} authoring:probe --label kind=hotfix"
+        f" --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml"
         f"{REVIEW_REPLY} {HOOKS}",
+    ),
+    Delegation(
+        "orchestrate",
+        ("authoring:probe", "--label=kind=hotfix"),
+        f"{ENGINE} start {DEFAULTS} authoring:probe --label=kind=hotfix"
+        f" --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml"
+        f"{REVIEW_REPLY} {HOOKS}",
+    ),
+    Delegation(
+        "orchestrate",
+        ("authoring:probe", "--label", "team=listing"),
+        f"{ENGINE} start {DEFAULTS} authoring:probe --label team=listing"
+        f" --dag-graph graphs/dag-scope.yaml --pr-author-graph graphs/pr-author.yaml"
+        f"{REVIEW_REPLY} {HOOKS} --label kind=main",
     ),
     # Adoption attaches a fresh driver to an intact ledger, which already records the
     # graphs, hooks and dispatch-env hook its launch chose, so no default is added to it.
@@ -347,7 +385,8 @@ DELEGATIONS = (
     Delegation(
         "plan",
         (BRIEF,),
-        f"{ENGINE} start {DEFAULTS} authoring:cursor-shape --dag-graph off {PLANNING_RENDERED}",
+        f"{ENGINE} start {DEFAULTS} authoring:cursor-shape {PLANNING_LABELS} --dag-graph off"
+        f" {PLANNING_RENDERED}",
         then=_tail(),
         before=(_flow("plan.sh", "cursor-shape", BRIEF),),
     ),
@@ -357,7 +396,8 @@ DELEGATIONS = (
     Delegation(
         "plan",
         (BRIEF, "--name", "listing-api", "--max-turns", "40", "--detach"),
-        f"{ENGINE} start {DEFAULTS} authoring:listing-api --detach --dag-graph off "
+        f"{ENGINE} start {DEFAULTS} authoring:listing-api {PLANNING_LABELS} --detach"
+        f" --dag-graph off "
         f"{PLANNING_RENDERED}",
         before=(
             _flow(
@@ -378,7 +418,8 @@ DELEGATIONS = (
     Delegation(
         "plan",
         (BRIEF, "--name=listing-api", "--max-turns=40", "--detach"),
-        f"{ENGINE} start {DEFAULTS} authoring:listing-api --detach --dag-graph off "
+        f"{ENGINE} start {DEFAULTS} authoring:listing-api {PLANNING_LABELS} --detach"
+        f" --dag-graph off "
         f"{PLANNING_RENDERED}",
         before=(
             _flow(
@@ -392,7 +433,8 @@ DELEGATIONS = (
     Delegation(
         "plan",
         (BRIEF, "--no-design-doc"),
-        f"{ENGINE} start {DEFAULTS} authoring:cursor-shape --dag-graph off {PLANNING_RENDERED}",
+        f"{ENGINE} start {DEFAULTS} authoring:cursor-shape {PLANNING_LABELS} --dag-graph off"
+        f" {PLANNING_RENDERED}",
         before=(_flow("plan.sh", "cursor-shape", BRIEF, "--no-design-doc"),),
     ),
     # `--to` is the tail's own flag and reaches it rather than `onepipeline start`: the
@@ -401,7 +443,8 @@ DELEGATIONS = (
     Delegation(
         "plan",
         (BRIEF, "--to", "elsewhere"),
-        f"{ENGINE} start {DEFAULTS} authoring:cursor-shape --dag-graph off {PLANNING_RENDERED}",
+        f"{ENGINE} start {DEFAULTS} authoring:cursor-shape {PLANNING_LABELS} --dag-graph off"
+        f" {PLANNING_RENDERED}",
         then=_tail(destination="elsewhere"),
         before=(_flow("plan.sh", "cursor-shape", BRIEF, "--to", "elsewhere"),),
     ),
@@ -412,7 +455,8 @@ DELEGATIONS = (
     Delegation(
         "plan",
         (BRIEF, "--dag-graph", "graphs/dag-scope.yaml"),
-        f"{ENGINE} start {DEFAULTS} authoring:cursor-shape --dag-graph graphs/dag-scope.yaml "
+        f"{ENGINE} start {DEFAULTS} authoring:cursor-shape {PLANNING_LABELS}"
+        f" --dag-graph graphs/dag-scope.yaml "
         f"{PLANNING_RENDERED}",
         then=_tail(),
         before=(_flow("plan.sh", "cursor-shape", BRIEF, "--dag-graph", "graphs/dag-scope.yaml"),),
@@ -420,7 +464,8 @@ DELEGATIONS = (
     Delegation(
         "plan",
         (BRIEF, "--dag-graph=graphs/other.yaml", "--detach"),
-        f"{ENGINE} start {DEFAULTS} authoring:cursor-shape --dag-graph=graphs/other.yaml --detach "
+        f"{ENGINE} start {DEFAULTS} authoring:cursor-shape {PLANNING_LABELS}"
+        f" --dag-graph=graphs/other.yaml --detach "
         f"{PLANNING_RENDERED}",
         before=(
             _flow("plan.sh", "cursor-shape", BRIEF, "--dag-graph=graphs/other.yaml", "--detach"),
@@ -439,9 +484,11 @@ DELEGATIONS = (
             "uv run orchestrator-check-plan authoring:listing-cursor",
             *_graph_reads("authoring:listing-cursor"),
             *_writer_task("authoring:listing-cursor"),
-            "uv run orchestrator-launch-gate authoring:cursor-shape-design --dag-graph off",
+            "uv run orchestrator-launch-gate authoring:cursor-shape-design "
+            f"{_design_labels('authoring:listing-cursor')} --dag-graph off",
             ENGINE_VERSION,
-            f"{ENGINE} start {DEFAULTS} authoring:cursor-shape-design --dag-graph off",
+            f"{ENGINE} start {DEFAULTS} authoring:cursor-shape-design "
+            f"{_design_labels('authoring:listing-cursor')} --dag-graph off",
             "uv run orchestrator-copy-plan authoring:listing-cursor --to elsewhere",
             "uv run orchestrator-plan-locations authoring:listing-cursor --in elsewhere",
         ),
@@ -1095,7 +1142,8 @@ def test_the_plan_recipe_launches_a_brief_named_after_its_plan_under_another_nam
 
     assert result.returncode == 0, result.stderr
     published = (
-        f"{ENGINE} start {DEFAULTS} authoring:{run} --detach --dag-graph off {PLANNING_RENDERED}"
+        f"{ENGINE} start {DEFAULTS} authoring:{run} --label kind=planning"
+        f" --group={COLLIDING_PROJECT} --detach --dag-graph off {PLANNING_RENDERED}"
     ).replace(CHECKOUT, str(checkout.resolve()))
     assert published in trace.read_text(encoding="utf-8").splitlines(), trace.read_text()
     assert (checkout / ".plans" / "projects" / f"{run}.md").is_file(), result.stderr
@@ -1129,7 +1177,8 @@ def test_the_plan_recipe_launches_a_run_named_as_a_plan_in_another_source(
     assert result.returncode == 0, result.stderr
     assert "the native id of the brief's plan project" not in result.stderr, result.stderr
     published = (
-        f"{ENGINE} start {DEFAULTS} authoring:{native} --detach --dag-graph off {PLANNING_RENDERED}"
+        f"{ENGINE} start {DEFAULTS} authoring:{native} --label kind=planning"
+        f" --group={elsewhere} --detach --dag-graph off {PLANNING_RENDERED}"
     ).replace(CHECKOUT, str(checkout.resolve()))
     assert published in trace.read_text(encoding="utf-8").splitlines(), trace.read_text()
     assert (checkout / ".plans" / "projects" / f"{native}.md").is_file(), result.stderr

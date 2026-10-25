@@ -3498,6 +3498,42 @@ def test_a_run_that_ended_any_way_is_followed_up(
     ]
 
 
+def test_a_run_launched_by_orchestrate_is_a_main_run_grouped_under_its_own_project(
+    endings: Endings,
+) -> None:
+    """`just orchestrate` labels the run it launches `kind=main` and groups it by nothing
+    of its own, so the engine groups it under the project it was launched from."""
+    for name in ("failed", "stopped", "complete", "unfinished"):
+        ending = endings.endings[name]
+        launch = json.loads(
+            (endings.bench.runs / ending.run / "launch.json").read_text(encoding="utf-8")
+        )
+        assert launch.get("labels") == {"kind": "main"}, launch
+        assert "group" not in launch, launch
+        assert ending.reading["labels"] == {"kind": "main"}, ending.reading
+        assert ending.reading["group"] == launch["project"], ending.reading
+
+
+@pytest.mark.parametrize("name", ["failed", "stopped", "complete", "unfinished", "unlaunched"])
+def test_a_follow_up_run_is_labelled_follow_ups_and_grouped_where_its_run_is(
+    endings: Endings, name: str
+) -> None:
+    """The follow-up run's launch record carries `kind=follow-ups` and the group the
+    engine's reading gives the run it follows, so the browser shows it beside that run;
+    a run id no run root holds has no reading, and its follow-up run names no group."""
+    ending = endings.endings[name]
+    followed = f"{ending.run}{SUFFIX}"
+    launch = json.loads((endings.bench.runs / followed / "launch.json").read_text("utf-8"))
+
+    assert launch.get("labels") == {"kind": "follow-ups"}, launch
+    if name == "unlaunched":
+        assert ending.reading == {}, ending.reading
+        assert "group" not in launch, launch
+    else:
+        assert isinstance(ending.reading["group"], str), ending.reading
+        assert launch.get("group") == ending.reading["group"], launch
+
+
 def test_a_stopped_run_with_waiting_human_nodes_reads_ended_and_launches(
     endings: Endings,
 ) -> None:
@@ -4529,10 +4565,11 @@ def test_the_follow_ups_recipe_launches_one_direct_node_under_its_graph_on_a_fre
         *(
             delegation_checkout.at(checkout, line)
             for line in (
-                "uv run orchestrator-launch-gate follow-up-runs:run-1-follow-ups --dag-graph off",
+                "uv run orchestrator-launch-gate follow-up-runs:run-1-follow-ups --dag-graph off"
+                " --label kind=follow-ups",
                 delegation_checkout.ENGINE_VERSION,
                 f"{delegation_checkout.ENGINE} start {delegation_checkout.DEFAULTS} "
-                "follow-up-runs:run-1-follow-ups --dag-graph off",
+                "follow-up-runs:run-1-follow-ups --dag-graph off --label kind=follow-ups",
             )
         ),
     )
@@ -4715,10 +4752,11 @@ def test_a_run_id_carrying_capitals_launches_the_project_the_store_wrote(
         *(
             delegation_checkout.at(checkout, line)
             for line in (
-                "uv run orchestrator-launch-gate follow-up-runs:run-1-follow-ups --dag-graph off",
+                "uv run orchestrator-launch-gate follow-up-runs:run-1-follow-ups --dag-graph off"
+                " --label kind=follow-ups",
                 delegation_checkout.ENGINE_VERSION,
                 f"{delegation_checkout.ENGINE} start {delegation_checkout.DEFAULTS} "
-                "follow-up-runs:run-1-follow-ups --dag-graph off",
+                "follow-up-runs:run-1-follow-ups --dag-graph off --label kind=follow-ups",
             )
         ),
     ]

@@ -359,13 +359,15 @@ def test_each_site_that_restates_one_of_these_names_still_carries_it(
 
 #: The sentence of `docs/telemetry.md`'s enriched-record continuity paragraph that names
 #: the adopted `oneharness-cli`, the core its wheel is compiled against, and the core
-#: before it, with the history and usage-report schema versions it states at both.
+#: before it, with the usage-report schema version it states at both and the history
+#: schema version it states at each.
 ADOPTED_HARNESS_MOVE = re.compile(
     r"`oneharness-cli` (?P<cli>\d+\.\d+\.\d+) is compiled against `oneharness-core` "
     r"(?P<core>\d+\.\d+\.\d+), read off its wheel's own SBOM, and between "
     r"`oneharness-core-v(?P<previous>\d+\.\d+\.\d+)` and `oneharness-core-v(?P=core)` "
-    r".*? that report's own `SCHEMA_VERSION` stays `(?P<usage>[\d.]+)` .*? the history "
-    r"format, whose `SCHEMA_VERSION` is `(?P<history>[\d.]+)` at both tags"
+    r"`domain/usage.rs` gains only the millisecond RFC 3339 reader .*? that report's own "
+    r"`SCHEMA_VERSION` stays `(?P<usage>[\d.]+)` .*? the history format's `SCHEMA_VERSION` "
+    r"moves from `(?P<history_before>[\d.]+)` to `(?P<history>[\d.]+)`"
 )
 SCHEMA_VERSION = re.compile(r'^pub const SCHEMA_VERSION: &str = "(?P<value>[^"]+)";', re.M)
 
@@ -401,7 +403,7 @@ def test_the_telemetry_upgrade_boundary_states_the_adopted_harness_move_truthful
     """The continuity paragraph's newest oneharness move is what the wheel and tags say.
 
     It argues enriched records stay comparable across the move from what changed in
-    `domain/usage.rs` and from the history schema at both cores, so each of those is
+    `domain/usage.rs` and from the history schema at each core, so each of those is
     read again here: the CLI release from the pin, the core from the installed wheel's
     SBOM, and both schema versions and the file's change from the two tags.
     """
@@ -418,15 +420,24 @@ def test_the_telemetry_upgrade_boundary_states_the_adopted_harness_move_truthful
     assert stated["core"] == _cli_wheel_core()
 
     previous, core = stated["previous"], stated["core"]
-    for relative, key in (("domain/history.rs", "history"), ("domain/usage.rs", "usage")):
-        assert (
-            _schema_version(previous, relative) == _schema_version(core, relative) == stated[key]
-        ), (
-            f"{relative}'s SCHEMA_VERSION is not {stated[key]} at both "
-            f"oneharness-core-v{previous} and oneharness-core-v{core}"
-        )
-    before = _core_source(previous, "domain/usage.rs")
-    after = _core_source(core, "domain/usage.rs")
-    assert "reset_credits" not in before and "pub reset_credits: ResetCredits" in after, (
-        "docs/telemetry.md says domain/usage.rs gained `reset_credits` across this move"
+    usage = "domain/usage.rs"
+    assert _schema_version(previous, usage) == _schema_version(core, usage) == stated["usage"], (
+        f"{usage}'s SCHEMA_VERSION is not {stated['usage']} at both "
+        f"oneharness-core-v{previous} and oneharness-core-v{core}"
+    )
+    history = "domain/history.rs"
+    assert (_schema_version(previous, history), _schema_version(core, history)) == (
+        stated["history_before"],
+        stated["history"],
+    ), (
+        f"{history}'s SCHEMA_VERSION is not {stated['history_before']} at "
+        f"oneharness-core-v{previous} and {stated['history']} at oneharness-core-v{core}"
+    )
+    assert '#[serde(rename = "run-started")]' in _core_source(core, history), (
+        "docs/telemetry.md says the history format gained the `run-started` opening line"
+    )
+    before = _core_source(previous, usage)
+    after = _core_source(core, usage)
+    assert "epoch_millis_from_rfc3339" not in before and "epoch_millis_from_rfc3339" in after, (
+        "docs/telemetry.md says domain/usage.rs gained the millisecond RFC 3339 reader"
     )

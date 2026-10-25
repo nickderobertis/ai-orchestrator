@@ -205,16 +205,19 @@ upgrade:
 #     ends. A run whose every node ended `done` launches its follow-up run detached
 #     through `just follow-ups`, and prints that run and its watch command; a run that
 #     ended any other way launches nothing and says how to verify its drafts by hand.
+#   * `--label kind=main` — the run kind the browser groups a plan's runs by. No
+#     `--group`: the engine groups a launch from a board copy through the copy's
+#     origin, and a launch from its own project by that project.
 #
 # An operator who names any of them themselves keeps it, per flag and including
-# `--dag-graph off` or a blank hook: the flags refuse to be given twice, and the
-# caller's intent is the specific one.
+# `--dag-graph off` or a blank hook (and per label key for `kind`): the flags refuse to
+# be given twice, and the caller's intent is the specific one.
 #
 # `just orchestrate --adopt <run-id>` is `onepipeline adopt`: the published surface
 # splits adoption into its own verb, and this recipe keeps the one spelling the
 # planner doctrine names. `--adopt` has to lead, because everything after it is the
-# adopt verb's own. It takes none of the five flags — adoption attaches a fresh driver
-# to an intact ledger, which already records the graphs and hooks its launch chose.
+# adopt verb's own. It takes none of the six flags — adoption attaches a fresh driver
+# to an intact ledger, which already records the graphs, hooks and labels its launch chose.
 # `scripts/orchestrate.sh` is the mechanism.
 #
 # Per-side routing is a property of the launched graphs. `onepipeline start`

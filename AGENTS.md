@@ -373,9 +373,10 @@ What each tool is *for here*. How to use it is the tool's own to say — in
   also **supervises** it — stopping, replying to and attesting on runs and shutting down
   the host, each behind the engine's own authority and the acting session the server runs
   as — by wrapping those post-launch verbs as routes, and carrying its own copy of the
-  engine. It watches and adopts no run, so **this pin governs no dispatch**, and the two
-  pins are still held to linking one engine by `tests/test_linked_libraries.py` rather than
-  by anyone remembering to read `/healthz`.
+  engine. It drives no run, so **this pin governs no dispatch**; the two pins are held to
+  linking one engine for read compatibility — the reader parses the records the pinned
+  engine writes — by `tests/test_linked_libraries.py` rather than by anyone remembering
+  to read `/healthz`.
   Governed by
   `config/onepipeline-ui.version`. Its CLI is
   `onepipeline-api`: `onepipeline-api --help`;
@@ -448,8 +449,9 @@ engine over an older CLI pin. `config/onetaskgraph.version` is reconciled as a f
 the engine links the `onetaskgraph-*` crates one workspace version releases beside the
 CLI, so the pin must name the one release they resolve. The read API
 (`config/onepipeline-ui.version`) statically links its own engine and governs no
-dispatch, since the browser adopts no run — `tests/test_linked_libraries.py` still holds
-the two pins to one engine, so the reader reads the records the dispatching engine wrote. And
+dispatch, because it drives no run; `tests/test_linked_libraries.py` holds the two pins to
+one engine for read compatibility, so the reader parses the records the dispatching
+engine wrote. And
 a fix that lands as CI configuration, scripts, or a dev-only crate is in force by
 merging, in that repository's build graph, with no pin here to move: `git tag
 --contains` says the release carries the commit while the archive carries nothing of
@@ -1877,11 +1879,27 @@ it. A run that settled with every node done has had its dispatch scratch removed
 that ended otherwise or paused keeps it, and `just status` and `just results` print a
 `scratch kept:` line naming its size, which `uv run --no-sync onepipeline scratch discard
 <run-id>` removes once the run has ended. Answer a run's questions through `just channel-next` on that run, and read a
-blocking surface the bus marks `abandoned` as one nobody is waiting on now. A run's journal holds a dispatch's own evidence —
-every tool call and its output — beside the run and outliving the worktree, and `just
-transcript` renders it: reach for it when a settled node's evidence seems missing from
-its report. These views change no record the run keeps of itself; a reader writes only
-the run's derived checkpoint cache.
+blocking surface the bus marks `abandoned` as one nobody is waiting on now. A run's journal records a dispatch's own evidence —
+every tool call and its output — as references into the oneharness history store, which
+outlives the worktree, and `just transcript` resolves and renders it: reach for it when a
+settled node's evidence seems missing from its report. These views change no record the
+run keeps of itself; a reader writes only the run's derived checkpoint cache.
+
+<!-- llmlint: ignore-block[agents_md_durable_and_terse] The task that adopted transcript references requires AGENTS.md to state who may delete history files and to carry this incident whole — the date, the owner's archival, the spike report and the removers it examined, its evidence and scope — because every run journal's transcript reference now depends on that store, and the dated-claim marker below classifies the dates as history. -->
+**Only a person deletes oneharness history files**, by running `oneharness history clear
+--yes`; no recipe, script or hook here does, and
+`tests/tree_scans/test_history_store_never_pruned.py` refuses one that would, because every
+run journal's transcript reference resolves in that store. This host's store holds no
+session file dated before 2026-10-07: the host owner archived those files to off-host
+storage and removed them, and no tool of this stack deleted them. The spike report
+`dag-ui-project-centric-spike-transcript-source-report` examined this stack's removers —
+`oneagentgraph sweep`, `onepipeline scratch discard`, worktree reaping, and oneharness,
+which deletes only on `history clear --yes` and has no retention policy — and none
+reaches the store; on this host's store alone, the 3,111 pointer lines dated 2026-09-23 to
+2026-10-06 all name missing files. A run journal's transcript reference to an archived
+session reads as unavailable on this host.
+<!-- dated-claim: incident the dates bound the sessions this host's owner archived off-host and removed, which records that event and asserts nothing about how any tool behaves now -->
+<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 
 `just sweep` runs `onevcs sweep` then `oneagentgraph sweep`, which remove only what no
 live process references and own their reports and their families; the recipe passes a

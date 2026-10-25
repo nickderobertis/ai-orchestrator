@@ -27,9 +27,14 @@ with the real tools, what each of the flow's runs leaves behind when it settles:
   plan's task with the `spikes` answer linking each report and branch;
 * the **design** run renders the design document into the plan's project.
 
+A journey may instead hand the spikes or the finalize run's `start` to the real engine,
+unchanged, by naming its stage in `FAKE_ENGINE_REAL_STARTS`, so that run's launch record
+is the engine's own rather than one this stand-in wrote.
+
 Each writes its launch record as it starts, as the engine does — the launching session, this
-process as the driver with the start token this host reports for it, and, when it is
-launched under `ONEPIPELINE_FLOW`, that flow as its `flow` — then settles by writing the
+process as the driver with the start token this host reports for it, the launch's `--label`
+pairs and `--group`, and, when it is launched under `ONEPIPELINE_FLOW`, that flow as its
+`flow` — then settles by writing the
 `result.json` ledger record and ending as an attached `start` does. A `hold` scenario keeps
 one run started and unsettled, its driver alive, until the journey releases it. Every call is
 appended to a log, so a journey reads what was launched, in order. The scenario is a JSON
@@ -61,6 +66,10 @@ STORE = "FAKE_ENGINE_STORE"
 ONEVCS = "FAKE_ENGINE_ONEVCS"
 SCENARIO = "FAKE_ENGINE_SCENARIO"
 LOG = "FAKE_ENGINE_LOG"
+#: The stages, by run-id suffix (`-spikes`, `-finalize`), whose `start` a journey hands to
+#: the real engine unchanged rather than to this stand-in, comma-separated: the launch
+#: record that run gets is then the engine's own.
+REAL_STARTS = "FAKE_ENGINE_REAL_STARTS"
 
 #: `start`'s flags that take no value; every other flag takes the next argument.
 SWITCHES = {"--attach", "--detach", "--acknowledge-concurrent"}
@@ -587,6 +596,10 @@ class Launch(TypedDict):
     started_at: str
     #: The flow it was launched in, absent for a run of no flow.
     flow: NotRequired[FlowId]
+    #: The launch's `--label` pairs and its `--group`, each omitted when the launch named
+    #: none, as the engine's `LaunchRecord` omits them.
+    labels: NotRequired[dict[str, str]]
+    group: NotRequired[str]
 
 
 class Member(TypedDict):
@@ -604,7 +617,9 @@ def _started() -> str:
     return f"linux-proc-stat:{stat[stat.rindex(')') + 2 :].split()[19]}"
 
 
-def _launched(root: Path, run: str, project: str) -> None:
+def _launched(
+    root: Path, run: str, project: str, labels: dict[str, str], group: str | None
+) -> None:
     """Write the launch record a real `start` writes as it starts a run, before any node works.
 
     The session is the launcher identity `scripts/onepipeline.sh` exports, and the driver is
@@ -625,6 +640,10 @@ def _launched(root: Path, run: str, project: str) -> None:
         # The launch instant the engine records as it starts a run, which an adoption keeps.
         "started_at": datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
     }
+    if labels:
+        launch["labels"] = labels
+    if group:
+        launch["group"] = group
     if flow := os.environ.get("ONEPIPELINE_FLOW"):
         launch["flow"] = FlowId(flow)
         # And the membership a launch in a flow records beside the flow, which is what a
@@ -650,6 +669,8 @@ def _held(scenario: Scenario, suffix: str) -> None:
 
 def start(arguments: list[str]) -> int:
     project, template, detached, rest = "", "", False, list(arguments)
+    labels: dict[str, str] = {}
+    group: str | None = None
     while rest:
         match rest.pop(0):
             case "--detach":
@@ -658,6 +679,13 @@ def start(arguments: list[str]) -> int:
                 pass
             case "--branch-template":
                 template = rest.pop(0) if rest else ""
+            case "--label":
+                key, _, value = (rest.pop(0) if rest else "").partition("=")
+                labels[key] = value
+            case "--group":
+                group = rest.pop(0) if rest else None
+            case word if word.startswith("--group="):
+                group = word.removeprefix("--group=")
             case word if word.startswith("--") and "=" not in word:
                 rest = rest[1:]
             case word if not word.startswith("--") and not project:
@@ -670,10 +698,14 @@ def start(arguments: list[str]) -> int:
     with Path(os.environ[LOG]).open("a", encoding="utf-8") as log:
         log.write(json.dumps({"run": run, "project": project, "arguments": arguments}) + "\n")
     flow = scenario["run"]
+    if run.removeprefix(flow) in {
+        stage for stage in os.environ.get(REAL_STARTS, "").split(",") if stage
+    }:
+        os.execv(os.environ[REAL], [os.environ[REAL], "start", *arguments])
     root = Path(os.environ.get("ONEPIPELINE_RUNS_DIR", "runs")) / run
     refused = run == f"{flow}-spikes" and scenario.get("refuse_spikes")
     if not refused:
-        _launched(root, run, project)
+        _launched(root, run, project, labels, group)
         _held(scenario, run.removeprefix(flow))
     match run:
         case _ if run == flow:

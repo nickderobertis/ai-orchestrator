@@ -31,8 +31,17 @@ def answer(
     configs = [argv[index + 1] for index, flag in enumerate(argv[:-1]) if flag == "--config"]
     config = configs[-1] if configs else ""
     selection = [] if "/spike-brief-" in config else ["--harness", "codex"]
+    # A `--control` codex turn runs on the shared codex app-server, and the codex this
+    # fixture stands in speaks `codex exec` alone, so the server it would start exits
+    # before listening. These journeys script whole turns and interrupt none, so each
+    # turn runs uncontrolled: the paid words are still the fixture's and nothing else is.
+    # llmlint: ignore-block[e2e_not_mocked, tests_mirror_real_usage] `fake_codex.py` serves
+    # no codex app-server, which oneharness 0.26.1 runs every controlled codex turn on, and
+    # these journeys interrupt nothing; the gap is drafted upstream as a follow-up.
+    forwarded = [argument for argument in argv[1:] if argument != "--control"]
+    # llmlint: ignore-end[e2e_not_mocked, tests_mirror_real_usage]
     return subprocess.run(
-        [environment["REAL_ONEHARNESS_BIN"], argv[0], *selection, *argv[1:]],
+        [environment["REAL_ONEHARNESS_BIN"], argv[0], *selection, *forwarded],
         env=environment,
         stdin=subprocess.DEVNULL,
         check=False,

@@ -2662,13 +2662,19 @@ def test_the_spike_flow_doubles_launch_record_is_one_the_engine_declares(
     monkeypatch.setenv("ONEPIPELINE_LAUNCHER_SESSION", probe_run_root.DEFAULT_SESSION)
     monkeypatch.setenv("ONEPIPELINE_FLOW", "probe-flow")
     root = tmp_path / "runs" / "probe-run"
-    double._launched(root, "probe-run", "authoring:probe-run")
+    # The labels and group every planning-flow launch carries, so the optional keys the
+    # double writes for them are held to the engine's declaration too.
+    double._launched(
+        root, "probe-run", "authoring:probe-run", {"kind": "spikes"}, "authoring:probe-plan"
+    )
 
     composed = json.loads((root / "launch.json").read_text("utf-8"))
     declared = _declared_fields(ONEPIPELINE, "ledger.rs", "LaunchRecord")
     names = {field.name for field in declared}
     required = {field.name for field in declared if not field.optional}
     assert composed.get("flow") == "probe-flow", composed
+    assert composed.get("labels") == {"kind": "spikes"}, composed
+    assert composed.get("group") == "authoring:probe-plan", composed
     assert set(composed) <= names, (
         f"{SPIKE_FLOW_ENGINE.name} writes {sorted(set(composed) - names)} into a launch "
         f"record, which onepipeline {ONEPIPELINE.ref}'s `LaunchRecord` does not declare"

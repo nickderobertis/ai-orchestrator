@@ -792,10 +792,13 @@ class EventLabels(TypedDict, total=False):
 
 
 class TurnMessage(TypedDict, total=False):
-    """The payload of a `turn-message`, narrowed to what a member actually said."""
+    """The payload of a `turn-message`, narrowed to who spoke.
+
+    What was said is not here: the record carries a reference into the oneharness
+    history file, which the engine resolves (:func:`_what_the_monitor_said`).
+    """
 
     role: str
-    text: str
 
 
 class GraphEvent(TypedDict, total=False):
@@ -846,20 +849,50 @@ TURN_MESSAGE = "turn-message"
 SPOKEN_BY_THE_MEMBER = "assistant"
 
 
-def _what_the_monitor_said(events: list[GraphEvent]) -> list[str]:
-    """Every word the monitor's agent side actually produced, from the graph's own record.
+class Resolved(TypedDict, total=False):
+    """A `watch` machine record's `transcript`: the engine's resolution of a reference."""
 
-    Read here rather than off the stand-in's prompt log: that log records the answer the
-    stand-in was *told* to give, and `turn-message` is the graph's own record of what came
-    back, so it is the only witness that the scripted turn is the turn that happened.
+    description: str
+    message: str
+
+
+def _what_the_monitor_said(environment: dict[str, str], run: str) -> list[Resolved]:
+    """Every word the monitor's agent side produced, as the engine resolves each turn.
+
+    A `turn-message` journals a reference into the oneharness history file rather than
+    the words, and `views::transcript` is the one place the engine reads them back: its
+    `watch` machine record carries each reference's `description` and whole `message`
+    beside the event. So this reads the run once through that verb, every event and no
+    profile, while the history this launch wrote is still on disk — the graph's own
+    record of what came back, not the stand-in's log of what it was told to say.
     """
-    return [
-        payload["text"]
-        for event in _of_the_monitor(events, TURN_MESSAGE)
-        if isinstance(payload := event.get("payload"), dict)
-        and payload.get("role") == SPOKEN_BY_THE_MEMBER
-        and isinstance(payload.get("text"), str)
-    ]
+    read = subprocess.run(  # noqa: S603 - the pinned engine's own view of the run
+        [str(PINNED_ONEPIPELINE), "watch", run, "--all", "--timeout", "0"],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+    assert read.returncode == 0, read.stdout + read.stderr
+    said: list[Resolved] = []
+    for line in read.stdout.splitlines():
+        # `Any` because this is the engine's wire format; each field read is checked.
+        record: Any = json.loads(line)
+        if not isinstance(record, dict) or record.get("watch") != "event":
+            continue
+        event = record["event"]
+        if (
+            event.get("kind") == TURN_MESSAGE
+            and event.get("labels", {}).get("member") == MONITOR_MEMBER
+            and event.get("payload", {}).get("role") == SPOKEN_BY_THE_MEMBER
+        ):
+            assert isinstance(record.get("transcript"), dict), (
+                f"the engine resolved no transcript reference for the monitor's turn: {record}"
+            )
+            said.append(cast(Resolved, record["transcript"]))
+    return said
 
 
 def _launch_to_settlement(environment: dict[str, str], run: str, tmp_path: Path) -> str:
@@ -975,14 +1008,21 @@ def test_a_monitor_taking_quiet_turns_survives_a_whole_real_run(
         f"on — a member that never took a second turn is not one that kept watching:\n"
         f"{printed}"
     )
-    said_by_the_monitor = _what_the_monitor_said(events)
+    said_by_the_monitor = _what_the_monitor_said(environment, LAUNCHED_RUN)
     assert len(said_by_the_monitor) >= TURNS_PROVING_IT_KEPT_WATCHING, (
         f"the monitor produced {len(said_by_the_monitor)} message(s), so this run cannot "
         f"show that a quiet turn was answered at all: {said_by_the_monitor}"
     )
-    assert all(spoken == SAID_ON_A_QUIET_TURN for spoken in said_by_the_monitor), (
-        "the monitor said something other than the quiet turn this run scripted, so "
-        f"survival was measured against another answer: {said_by_the_monitor}"
+    # The whole text the history file holds, and the one-line description the engine
+    # writes for it — its first line — never a cut copy or an unavailable reference.
+    assert all(
+        spoken.get("message") == SAID_ON_A_QUIET_TURN
+        and spoken.get("description") == SAID_ON_A_QUIET_TURN.splitlines()[0]
+        for spoken in said_by_the_monitor
+    ), (
+        "the monitor said something other than the quiet turn this run scripted, or the "
+        "engine could not read it back whole, so survival was measured against another "
+        f"answer: {said_by_the_monitor}"
     )
     decided = [event["payload"].get("decision") for event in _of_the_monitor(events, JUDGE_DECIDED)]
     assert decided and set(decided) == {DECIDED_CONTINUE}, (

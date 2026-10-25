@@ -1,8 +1,8 @@
 # DAG Observatory
 
 The live and historical view of orchestrated DAG execution — which also
-**supervises** it, stopping, replying to and attesting on runs and shutting down the
-host, each behind the engine's own authority and the acting session the server runs as — is
+**supervises** it, stopping runs, replying to and attesting on them, and shutting down
+the host, each behind the engine's own authority and the acting session the server runs as — is
 [`onepipeline-ui`](https://github.com/nickderobertis/onepipeline-ui). It is not
 built in this repository, and since `onepipeline-api serve --ui` it is not even
 composed here: the design record, the component choices, the schema validation, and
@@ -13,10 +13,11 @@ around it does.
 
 It is not a read-only view, and that changes what starting it means rather than
 only what it shows: the API wraps the post-launch verbs a person acts through, and the
-browser performs each one as **one acting session**. It never drives a run: from
-onepipeline-ui 0.45.0 the browser neither watches nor adopts one. [Supervising from the
-browser](#supervising-from-the-browser) is that half; start there before acting from a
-tab, because it is about *whose* run each action is taken on.
+browser performs each one as **one acting session**. It drives no run: driving a run is
+the engine CLI's, and the binary has no control, in the browser or as a hidden CLI verb,
+that takes one over. [Supervising from the browser](#supervising-from-the-browser) is
+that half; start there before acting from a tab, because it is about *whose* run each
+action is taken on.
 
 ## The one published binary
 
@@ -81,20 +82,38 @@ address.
 
 ## Supervising from the browser
 
+**The navigation is project-centric.** The sidebar is one list, the projects
+`GET /api/v2/projects` serves, newest activity first, each expanding into its runs.
+A run sits in its **effective group**, which the engine resolves: the `--group` its
+launch named, else the origin of the board copy it was launched from, else its own
+project, as any label overlay `onepipeline label` wrote leaves it. Every launch path
+here passes the engine's `--label kind=<kind>` — `main` from `just orchestrate`;
+`planning`, `spikes`, `spike-brief`, `finalize` and `design` from the planning flow,
+each grouped under the brief's declared plan project; `follow-ups` from `just
+follow-ups`, grouped where the run it follows is — so a plan's runs sit together under
+that plan and the view's kind filter, built from the kinds the runs carry, tells them
+apart. A run with no group sits under **Other runs**. Opening a project selects its
+newest run; there is no separate project page.
+
 **The post-launch verbs a person acts through are routes, and the view offers them.**
-The run page carries the channel and its reply composer, `attest` and `stop`; the
-host's shutdown ([below](#shutting-the-host-down-from-the-browser)) is a control of its
-own, and **Host** reads the acting session's report from the unwatched route; the
-rendered reads (`status`, `results`, `goals`, `transcript`, `telemetry`, `host`) are
-routes whose information the view shows across **Run details**, **Overall**, **Task**,
-**Remote** and **Host** rather than in a panel of its own; a landing project list in
-the sidebar and a per-project page are the view's front door; and an **Agents** panel
-lists every oneharness session each of a run's dispatches opened. **Watching, adopting
-and shutting down one run or one session's runs are not the browser's**: onepipeline-ui
-0.45.0 removed them, because a person at a tab cannot tell how they would affect
-another manager already watching or driving the run, and each removed route answers
-`404 removed_route`. What the
-browser never does is launch: a plan is authored and launched from a terminal, and
+A run has three tabs — **Graph**, **Overall** and **Channel** — under a header carrying
+its status and liveness, its **Run details**, and a per-run **Stop**, which is `stop`
+as the acting session behind a confirm. **Channel** carries the channel's queue, its
+reply composer, which sends the envelope byte for byte, and `attest` on each ready
+human action, beside **Next**, which claims the queue's next surface, and a form that
+raises a surface of its own. The rendered reads (`status`, `results`, `goals`,
+`transcript`, `telemetry`, `host`) are routes whose information the view shows across
+**Run details**, **Overall**, a node's **Task** and **Remote** tabs, the conversation
+and **Host**, rather than in a tab of their own. **Host** is a page of its own: the
+host's resources, provider health, dispatches and runs, the acting session's report
+from the unwatched route, and the one **host-wide shutdown**
+([below](#shutting-the-host-down-from-the-browser)).
+
+**Those controls are the whole of what the view acts through.** A run is acted on by
+its per-run **Stop**, its channel's **Next**, reply, raised surface and `attest`, and the
+host by its one host-wide shutdown; every other route the view calls reads. Every read
+lives in the project sidebar, the run's three tabs, **Run details** and **Host**.
+What the browser never does is launch: a plan is authored and launched from a terminal, and
 everything here is *post*-launch. Which is also why **a planning run's channel is
 answerable from the browser like any other** — `just plan`'s two launches are
 ordinary runs with ordinary channels, and a reply is the same post-launch route
@@ -125,14 +144,11 @@ launcher — because the refusal on its own is equally satisfied by a server wit
 session at all. Each of those is a `POST` to the same origin the view was served from,
 which is the arrangement an operator acts through.
 
-**The browser adopts nothing, so no dispatch runs under the engine the reader links.**
-Through onepipeline-ui 0.44.0 the adopt route retained this API binary at its own driver
-verb, so a run adopted from a tab was driven by the engine `onepipeline-ui` links rather
-than by the CLI `config/onepipeline.version` installs, and that pin could govern a
-dispatch. From 0.45.0 the route answers `404 removed_route` and the binary drives no
-run, hidden CLI verbs included; `tests/e2e/launch_monitor_observer/test_extends_chain_dispatch_e2e.py`
-holds that a run offered to it for adoption stays undriven. The suite still holds the two
-pins to linking one engine — see [Which release is answering](#which-release-is-answering)
+**No dispatch runs under the engine the reader links.** The binary drives no run, hidden
+CLI verbs included, so `config/onepipeline-ui.version` governs nothing a dispatch does;
+`tests/e2e/launch_monitor_observer/test_extends_chain_dispatch_e2e.py` holds that a run
+offered to it stays undriven. The suite still holds the two pins to linking one engine,
+for read compatibility — see [Which release is answering](#which-release-is-answering)
 for the gate and for the one question it leaves to `/healthz`.
 
 ### Shutting the host down from the browser
@@ -146,12 +162,12 @@ What a soft shutdown does to a run —
 and why it is not a stop — is `AGENTS.md`'s supervision guidance under `just
 shutdown`; `just shutdown` is the terminal form of the same three scopes.
 
-**Shut down the entire host** is a control at the top of the run listing, and is
-`POST /api/v2/shutdown` with `scope` `host`; every other scope — the run and the
+**Shut down the entire host** is the one shutdown the view has, on the **Host** page,
+and is `POST /api/v2/shutdown` with `scope` `host`; every other scope — the run and the
 acting session's own, which onepipeline-ui 0.45.0 removed — is refused
 `400 removed_shutdown_scope`, naming it. A single run is stopped from its own page
-instead, with the stop above, so `just shutdown <run>` and `just shutdown --mine` are
-the terminal's alone.
+instead, with the per-run Stop above, so `just shutdown <run>` and `just shutdown
+--mine` are the terminal's alone.
 
 It opens a **confirm dialog, and nothing is sent until it is confirmed**. Before
 anything is sent the dialog names every listed run and its recorded launcher, reading
@@ -192,7 +208,7 @@ own liveness *and* the `onepipeline` release it links:
 
 ```sh
 curl -s http://127.0.0.1:8765/healthz
-{"status":"ok","onepipeline_version":"0.89.0"}
+{"status":"ok","onepipeline_version":"0.89.2"}
 ```
 
 That release is the reader's own, and it is a **different adoption** from
@@ -200,14 +216,13 @@ That release is the reader's own, and it is a **different adoption** from
 separately, and the reader links whatever its release was built against. What the
 field is for is being able to say which engine is answering rather than assuming it.
 
-**The two are kept level, and the reason was an adopt.** They used to be free to differ
-in either direction, because a reader that only read runs constrained nothing about what
-a dispatch ran. Through onepipeline-ui 0.44.0 an adoption made from the browser was not a
-read: its route retained the API binary at its own driver verb, so the run it revived was
-driven by the engine **this reader** links, and `config/onepipeline-ui.version` was a pin
-that could govern a dispatch on this host. From 0.45.0 the reader drives no run again, and
-the two are still held level — a reader linking the engine a dispatch runs reads that
-engine's records as they were written — and **not by an operator remembering to check**:
+**The two are kept level, and the reason is read compatibility.** The reader parses every
+run's journal, launch record and label overlay with the engine it links, and those
+records are written by the engine `config/onepipeline.version` pins; a reader linking an
+older engine than the writer is how a newer record schema has rendered as nothing here
+before. The reader drives no run, so its pin governs no dispatch — what it decides is
+whether the dispatching engine's records can be read — and the two are held level **not
+by an operator remembering to check**:
 `tests/test_linked_libraries.py::test_the_ui_api_links_the_pinned_engine`
 reads the engine out of the adopted read-API wheel's own bill of materials and fails
 when it is not the release `config/onepipeline.version` names, so a bump that moves one
@@ -226,9 +241,9 @@ renders no transcript. Through an earlier adoption the reader linked onepipeline
 while the CLI a dispatch ran was nine minor releases ahead. It was the reverse for two
 adoptions — the engine pin was held at 0.18.4 for a settlement write-back defect that had
 nothing to do with reading runs, and the Observatory was adopted anyway because the
-reader carries its own engine. None of those readers could drive a run from a browser;
-the 0.22.1 to 0.44.0 readers could, which is what ended the freedom, and 0.45.0 took that
-back without anything here loosening the gate.
+reader carries its own engine. What ended that freedom is that a reader parsing records
+a newer engine wrote has to understand them, and nothing here has loosened the gate
+since.
 
 `tests/dag_ui/test_dag_ui_serving_e2e.py` holds a freshly started server to the
 adopted release from that same served surface: the view handed back is byte-for-byte
@@ -238,12 +253,14 @@ serves another fails there instead of being noticed by a person.
 
 ### What the adopted view renders, and what it has nothing to render
 
-**`onepipeline-ui` 0.50.0**, the release `config/onepipeline-ui.version` pins, carries
-what makes this a supervising surface: the project sidebar and per-project page are the
-landing view, the run page carries the channel with its byte-for-byte reply composer,
-`attest` and `stop` with the owner-naming refusal, the host's shutdown is its own
-control, and an **Agents** panel lists every oneharness session a run's dispatches
-opened, per run, per node and per project. The whole of that
+**`onepipeline-ui` 0.51.0**, the release `config/onepipeline-ui.version` pins, carries
+what makes this a supervising surface: the project sidebar grouped by each run's
+effective group with its kind filter, the run's **Channel** tab with its byte-for-byte
+reply composer and `attest`, the per-run **Stop** with the owner-naming refusal, and the
+**Host** page with the one host-wide shutdown. It reads every turn whole from the
+oneharness history file its record points at, through the engine's transcript
+resolver, and a reference whose file this host no longer holds reads as **transcript
+unavailable** rather than as an empty turn. The whole of that
 is [Supervising from the browser](#supervising-from-the-browser) above; what belongs
 here is what the view has to *render* and may find nothing behind.
 

@@ -1335,3 +1335,29 @@ def test_the_flow_leaves_no_review_snapshot_and_keeps_its_graph(planned: Planned
     assert any(name.startswith("finish-plan-graph.") for name in planned.left_in_tmpdir), (
         planned.left_in_tmpdir
     )
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This test launches
+# nothing: it reads the launch records the module-scoped `planned` flow already wrote, in
+# the `plan-tooling-plan-flow` project whose key covers the recipes and engine pin it reads.
+@pytest.mark.xdist_group("plan-flow")
+def test_each_run_of_the_flow_is_labelled_with_its_kind_and_grouped_under_the_declared_plan(
+    planned: Planned,
+) -> None:
+    """The draft and the design runs carry the kind the browser groups a plan's runs by.
+
+    Read off the launch records the real engine wrote, so what is asserted is what the
+    Observatory reads rather than the flags the recipe meant to pass: each run is labelled
+    with its stage's `kind` and grouped under the plan project the brief declared, which
+    neither run's own project names. The spikes and finalize runs of a flow whose draft
+    wrote spikes are held the same way in `test_plan_spike_flow_e2e.py`.
+    """
+    runs = Path(planned.environment["ONEPIPELINE_RUNS_DIR"])
+    for run, kind in ((RUN, "planning"), (DESIGN_RUN, "design")):
+        launch = json.loads((runs / run / "launch.json").read_text(encoding="utf-8"))
+        assert launch.get("labels") == {"kind": kind}, (run, launch)
+        assert launch.get("group") == planned.stored.qualified, (run, launch)
+        assert launch["project"] != planned.stored.qualified, (run, launch)
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

@@ -28,9 +28,13 @@ import json
 import os
 import shutil
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+import short_state
+from harness_indirections import established_indirections
+from project_fixtures import helper, project_from_plan
 from waits import timeout as e2e_timeout
 
 from orchestrator.root import REPO_ROOT
@@ -213,3 +217,181 @@ def test_the_rendered_result_lines_carry_the_output_the_journal_holds(
         f"started bounding or summarizing these, update AGENTS.md in the same change: "
         f"{result_lines!r}"
     )
+
+
+#: The run a real dispatch writes for the reference journey, and its one node. A
+#: dispatch with history on journals every turn as a reference into the oneharness history
+#: file rather than a copy, so this is the run whose records name the history store.
+DISPATCHED_RUN = "transcript-referenced"
+DISPATCHED_NODE = "measure"
+#: The task's marker, and the shell command each controlled codex turn of the run really
+#: runs: the mock provider's own `MOCK_CODEX_RUN_COMMAND`, which has the shared app-server
+#: execute it and stream its call and output as codex does. Two lines of output, so a
+#: render that kept only the first — as every bounded copy did — fails.
+TASK_MARKER = "Measure what the engine links, then report."
+RUN_COMMAND = "printf 'onevcs 0.56.10\\nthe whole second line a bounded copy would cut'"
+RUN_OUTPUT = "onevcs 0.56.10\nthe whole second line a bounded copy would cut"
+FAKE_BACKEND = helper("fake_backend.py")
+FAKE_CODEX = helper("fake_codex.py")
+PAID_PROVIDER_GUARD = helper("no-paid-provider")
+INDIRECTION_CALLER = "tests/e2e/registry_and_recipes/test_transcript_recipe_e2e.py"
+#: The launcher identities a dispatch would otherwise inherit from this process.
+LAUNCHER_ENVIRONMENT = (
+    "ONEPIPELINE_LAUNCHER",
+    "ONEPIPELINE_LAUNCHER_SESSION",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_SESSION_ID",
+    "CODEX_THREAD_ID",
+    "CODEX_SESSION_ID",
+)
+#: `onepipeline watch`'s exit status for a run that has settled, which `--timeout 0` reads once.
+WATCH_SETTLED = 0
+
+
+def _dispatch_environment(root: Path, oneharness_bin: str) -> dict[str, str]:
+    """A launch's environment with only the paid provider substituted."""
+    environment = dict(os.environ)
+    for name in LAUNCHER_ENVIRONMENT:
+        environment.pop(name, None)
+    environment["CLAUDE_CODE_SESSION_ID"] = "e2e-transcript-referenced"
+    environment["ONEPIPELINE_RUNS_DIR"] = str(root / "runs")
+    environment["XDG_STATE_HOME"] = str(short_state.state_home(root))
+    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
+    environment["ONEAGENTGRAPH_ONEHARNESS_BIN"] = str(FAKE_BACKEND)
+    environment["REAL_ONEHARNESS_BIN"] = oneharness_bin
+    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
+    environment["ONEHARNESS_BIN_CODEX"] = str(FAKE_CODEX)
+    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
+    environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
+    environment.update(established_indirections(INDIRECTION_CALLER))
+    # llmlint: ignore[e2e_not_mocked] The mock provider's own knob: the command is real.
+    environment["MOCK_CODEX_RUN_COMMAND"] = RUN_COMMAND
+    return environment
+
+
+def _just(environment: dict[str, str], *arguments: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["just", *arguments],
+        cwd=REPO_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=e2e_timeout(600),
+        check=False,
+    )
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split] One
+# launch of the installed engine, about ten seconds, which is what proves a dispatch's
+# references read back: it uses the stand-ins this `registry-and-recipes` project already
+# depends on, and what it reads — the engine pin, the recipes and the wrapper scripts — is
+# what that project's key covers, so a project or tier of its own would be keyed on the same
+# files, as the project's own file-scoped directive for its installed-tool journeys says.
+@pytest.fixture(scope="module")
+def dispatched(
+    tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str
+) -> Iterator[dict[str, str]]:
+    """One real dispatch, launched by the real `just orchestrate` and driven to settlement.
+
+    Everything between the recipe and the model is real — the engine, `oneagentgraph`,
+    the onejudge conversation and the `oneharness` CLI writing its history — and each
+    controlled codex turn runs `RUN_COMMAND` for real on the mock provider's app-server,
+    so the run's journal holds the references a dispatch with history on writes. The run's history
+    stays under this fixture's state home until the module ends.
+    """
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    root = tmp_path_factory.mktemp("transcript-referenced")
+    environment = _dispatch_environment(root, oneharness_bin)
+    plan = root / "plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "goal": {"text": "Leave a run whose turns are journalled as references"},
+                "name": DISPATCHED_RUN,
+                "tasks": [
+                    {
+                        "id": DISPATCHED_NODE,
+                        "persona": "engineer",
+                        "task": (
+                            f"## What\n\n{TASK_MARKER}\n\n"
+                            "## Why\n\nThe run's transcript is the subject.\n\n"
+                            "## Acceptance criteria\n\n- The dispatch reports.\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    launched = _just(
+        environment,
+        "orchestrate",
+        project_from_plan(plan, DISPATCHED_RUN),
+        "--dag-graph",
+        "off",
+    )
+    try:
+        assert launched.returncode == 0, launched.stdout + launched.stderr
+        yield environment
+    finally:
+        _just(environment, "stop", DISPATCHED_RUN)
+
+
+def test_a_dispatched_turn_reads_back_whole_from_its_history_file(
+    dispatched: dict[str, str],
+) -> None:
+    """A real dispatch's turns, journalled as references, read back whole through the engine.
+
+    From the adopted engine a dispatch with history on journals no copy of a call or its
+    output, only where the oneharness history file holds it, so what `just transcript`
+    shows and what the engine's own machine record says are both the engine's resolution
+    of those references: the one-line description it writes for each call and the call's
+    whole input and output. `just transcript` renders each call's resolved input; the
+    output a codex call carries in the same history event is read off `watch`'s machine
+    record, which is where the engine states it whole.
+    """
+    journal = Path(dispatched["ONEPIPELINE_RUNS_DIR"]) / DISPATCHED_RUN / "events.jsonl"
+    referenced = [
+        record
+        for record in (json.loads(line) for line in journal.read_text("utf-8").splitlines())
+        if record.get("kind") == "turn-activity"
+        and record["labels"].get("node") == DISPATCHED_NODE
+        and "transcript" in record["payload"]
+    ]
+    assert referenced, journal.read_text("utf-8")
+
+    rendered = _just(dispatched, "transcript", DISPATCHED_RUN)
+    assert rendered.returncode == 0, rendered.stderr
+    rendered_calls = [line for line in rendered.stdout.splitlines() if "tool_call" in line]
+    assert rendered_calls, rendered.stdout
+    assert all(json.dumps(RUN_COMMAND)[1:-1] in line for line in rendered_calls), rendered.stdout
+
+    watched = subprocess.run(
+        [str(REPO_ROOT / ".venv" / "bin" / "onepipeline"), "watch", DISPATCHED_RUN]
+        + ["--all", "--timeout", "0"],
+        cwd=REPO_ROOT,
+        env=dispatched,
+        capture_output=True,
+        text=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+    assert watched.returncode == WATCH_SETTLED, watched.stdout + watched.stderr
+    calls = [
+        record["transcript"]
+        for record in (json.loads(line) for line in watched.stdout.splitlines())
+        if record.get("watch") == "event"
+        and record["event"].get("kind") == "turn-activity"
+        and record["event"]["labels"].get("node") == DISPATCHED_NODE
+        and "input" in record.get("transcript", {})
+    ]
+    assert calls, watched.stdout
+    for call in calls:
+        assert call["description"] == RUN_COMMAND, call
+        assert json.loads(call["input"])["command"] == RUN_COMMAND, call
+        assert call["output"] == RUN_OUTPUT, call
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split]

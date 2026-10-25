@@ -721,7 +721,10 @@ take_snapshot() {
         "restore the pinned toolchain with 'just bootstrap', then retry"
 }
 
-# Launch the project ``$1`` under the run ``$2``, with this launch's own flags last,
+# Launch the project ``$1`` under the run ``$2`` as a run of the kind ``$3``, labelled with
+# that kind and grouped under the brief's declared plan project, where it declares one —
+# the plan every stage of this flow is about, which no stage's own project names — with
+# this launch's own flags last,
 # through the shared wrapper rather than `uv run` directly, because that is where a
 # planner's identity is established: a run launched without it records `unknown`, and
 # `just runs --mine` and `just stop` then disown it. The run's id is exported so its
@@ -733,12 +736,17 @@ take_snapshot() {
 # `tests/test_cli_surface_drift.py` exists to catch and turn a pass-through into a version
 # pin.
 launch() {
-    local project=$1 run_name=$2
-    shift 2
+    local project=$1 run_name=$2 kind=$3 labels
+    shift 3
+    labels=(--label "kind=$kind")
+    # A `--no-design-doc` brief may declare no plan project, and then there is no group.
+    # Spelled `--group=` so the launch gate, which asks the store about every bare qualified
+    # id a launch names, does not read the plan this run is grouped under as the one it runs.
+    [ -z "$declared_project" ] || labels+=("--group=$declared_project")
     export "$PLAN_RUN_ID_ENV=$run_name"
     # One directive rather than two stacked ones: a directive's scope is the line under it, so the upper of a stacked pair covers the lower and never the command, and the judge reported whichever of the two it had stranded.
     # llmlint: ignore[boundary_inputs_validated, tool_output_is_signal, robust_shell] `onepipeline start` validates its own surface and restating it here is the drift this repository gates against; this is `just orchestrate`'s attached launch with a plan written first, so streaming the run as it goes is what a manager stays attached for — the lines this script owns are printed beside it; and the array expansions are the `set -u` idiom whose `+` part alone is unquoted, measured to keep `one two`, `*` and the empty string each one argument.
-    "$script_dir/onepipeline.sh" start "$project" ${PLAN_OPT_FORWARDED[@]+"${PLAN_OPT_FORWARDED[@]}"} ${observer[@]+"${observer[@]}"} "$@"
+    "$script_dir/onepipeline.sh" start "$project" "${labels[@]}" ${PLAN_OPT_FORWARDED[@]+"${PLAN_OPT_FORWARDED[@]}"} ${observer[@]+"${observer[@]}"} "$@"
 }
 
 # Record, after a planner launch that settled, what that planner authored: a planning run
@@ -791,7 +799,7 @@ if [ -z "$PLAN_OPT_RESUME" ]; then
     take_snapshot
     status=0
     # llmlint: ignore[robust_shell] `${a[@]+"${a[@]}"}` is the `set -u` idiom for a possibly-empty array, measured to keep every element one argument.
-    launch "$PLAN_SOURCE:$name" "$name" ${rendered[@]+"${rendered[@]}"} || status=$?
+    launch "$PLAN_SOURCE:$name" "$name" planning ${rendered[@]+"${rendered[@]}"} || status=$?
     # A detached launch has already been told how to carry the flow on, on the receipt
     # above: everything after the draft is about the plan the planner writes, and this
     # hands back before there is one.
@@ -855,7 +863,7 @@ if [ ! -e "$runs_root/$spikes_run" ]; then
     # '*/spike-*'` lists it from any machine. How the run ended is read below rather than
     # off this status: a spike that settled `failed` is named there, node by node.
     launched=0
-    launch "$spikes_project" "$spikes_run" --branch-template "$plan_native/{{ node.id }}" || launched=$?
+    launch "$spikes_project" "$spikes_run" spikes --branch-template "$plan_native/{{ node.id }}" || launched=$?
     spikes_launched=1
     if [ "$detached" -eq 1 ]; then
         [ "$launched" -eq 0 ] ||
@@ -914,7 +922,7 @@ if [ "$spikes_ran" -eq 1 ] && [ ! -e "$runs_root/$finalize_run" ]; then
     take_snapshot
     status=0
     # llmlint: ignore[robust_shell] `${a[@]+"${a[@]}"}` is the `set -u` idiom for a possibly-empty array, measured to keep every element one argument.
-    launch "$PLAN_SOURCE:$finalize_run" "$finalize_run" ${rendered[@]+"${rendered[@]}"} || status=$?
+    launch "$PLAN_SOURCE:$finalize_run" "$finalize_run" finalize ${rendered[@]+"${rendered[@]}"} || status=$?
     [ "$detached" -eq 0 ] || exit "$status"
     [ "$status" -eq 0 ] ||
         stop "run $finalize_run, the finalize planner, did not settle (status $status); read it with 'just channel-next $finalize_run'" finalize "$status"

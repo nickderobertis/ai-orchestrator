@@ -56,7 +56,7 @@ from nx_workspace import (
 )
 from project_fixtures import no_budgets
 from scratch_identity import PLANNING_FLOW_ORIGIN, seeded
-from spike_flow_engine import Node
+from spike_flow_engine import REAL_STARTS, Node
 from test_plan_flow_e2e import (
     DESTINATION,
     FAKE_CODEX,
@@ -423,6 +423,69 @@ def test_the_finalize_planner_runs_after_the_spikes_and_its_closeout_before_the_
             and f"branch `{branch}`" in content
         )
     assert "holds the plan at" in done.stdout + done.stderr
+
+
+def test_every_run_of_the_flow_is_labelled_with_its_kind_and_grouped_under_the_plan(
+    spiked: tuple[Flow, subprocess.CompletedProcess[str]],
+) -> None:
+    """Each stage's launch record carries its kind and the brief's declared plan project.
+
+    The draft, spikes, finalize and design runs each launch a project of their own, so
+    without the group the browser would scatter one plan's flow across four projects.
+    Read off each launch record, which the engine — here its `start` double, which records
+    a launch's labels and group as the engine's `LaunchRecord` does — wrote from the flags
+    the recipe passed.
+    """
+    flow, done = spiked
+    assert done.returncode == 0, done.stdout + done.stderr
+
+    kinds = {
+        flow.run: "planning",
+        f"{flow.run}-spikes": "spikes",
+        f"{flow.run}-finalize": "finalize",
+        f"{flow.run}-design": "design",
+    }
+    assert set(_runs_started(flow)) == set(kinds), _runs_started(flow)
+    for run, kind in kinds.items():
+        launch = json.loads((flow.runs / run / "launch.json").read_text(encoding="utf-8"))
+        assert launch.get("labels") == {"kind": kind}, (run, launch)
+        assert launch.get("group") == flow.plan, (run, launch)
+
+
+@pytest.mark.parametrize("stage", ["spikes", "finalize"])
+def test_the_engine_records_the_spikes_and_finalize_runs_kind_and_the_declared_plan_as_group(
+    workspace: Workspace, tmp_path: Path, stage: str
+) -> None:
+    """The real engine's launch record of a spikes or finalize run carries its kind and group.
+
+    The stage's `start` is handed to the installed engine unchanged, so the record read here
+    is the one `onepipeline start` wrote from the flags `just plan` passed, rather than one
+    the stand-in composed. Every earlier stage runs as the other journeys run it, and the
+    flow is carried on detached, one stage at a time, so it returns once the real launch is
+    recorded; that run is stopped before its nodes can do anything.
+    """
+    flow = _flow(workspace, tmp_path, f"real-{stage}")
+    flow.environment[REAL_STARTS] = f"-{stage}"
+    run = f"{flow.run}-{stage}"
+    stages = [_plan(flow, "--detach")]
+    try:
+        while (
+            not (flow.runs / run / "launch.json").exists()
+            and "carry the flow on with: " in stages[-1].stderr
+            and len(stages) < 4
+        ):
+            assert stages[-1].returncode == 0, stages[-1].stdout + stages[-1].stderr
+            stages.append(_resumed(flow, stages[-1]))
+        assert stages[-1].returncode == 0, stages[-1].stdout + stages[-1].stderr
+        launch = json.loads((flow.runs / run / "launch.json").read_text(encoding="utf-8"))
+    finally:
+        _just(flow, "stop", run)
+
+    # The engine's own record: the stand-in writes no launch configuration.
+    assert "bus_config" in launch and "dispatch_env_hook" in launch, sorted(launch)
+    assert launch.get("labels") == {"kind": stage}, launch
+    assert launch.get("group") == flow.plan, launch
+    assert launch["project"] != flow.plan, launch
 
 
 def _resolved_checklist(flow: Flow) -> dict[str, Any]:

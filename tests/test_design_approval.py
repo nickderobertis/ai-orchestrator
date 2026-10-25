@@ -1017,8 +1017,24 @@ def test_the_gate_asks_about_the_project_a_launch_names_wherever_it_sits(
 
 @pytest.mark.parametrize(
     "argument",
-    ["--filter-profile", "graphs/dag-scope.yaml", "elsewhere:demo", "1800", "a=b"],
-    ids=["a flag", "a graph ref", "an unconfigured source", "a number", "a setting"],
+    [
+        "--filter-profile",
+        "graphs/dag-scope.yaml",
+        "elsewhere:demo",
+        "1800",
+        "a=b",
+        "--group=authoring:demo",
+        "kind=planning",
+    ],
+    ids=[
+        "a flag",
+        "a graph ref",
+        "an unconfigured source",
+        "a number",
+        "a setting",
+        "a group joined to its flag",
+        "a label",
+    ],
 )
 def test_the_gate_asks_nothing_about_an_argument_that_names_no_configured_project(
     argument: str, monkeypatch: pytest.MonkeyPatch

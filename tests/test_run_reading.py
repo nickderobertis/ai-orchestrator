@@ -331,12 +331,38 @@ def test_the_command_prints_the_public_id_or_refuses_an_unreadable_answer(
     assert "unreadable the answer is not one JSON document" in printed.err
 
 
+def test_the_group_is_the_effective_one_the_engine_reads_or_none() -> None:
+    grouped = ENDED | {"group": "authoring:widget", "labels": {"kind": "main"}}
+    assert run_reading.group(json.dumps(grouped), RUN) == "authoring:widget"
+    assert run_reading.group(json.dumps(ENDED | {"group": None}), RUN) is None
+    with pytest.raises(Unreadable, match="its group is neither a string nor null"):
+        run_reading.group(json.dumps(ENDED | {"group": 7}), RUN)
+
+
+def test_the_command_prints_the_group_an_empty_line_or_refuses(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(ENDED | {"group": "plans:board"})))
+    assert run_reading.main(["--group", RUN]) == 0
+    assert capsys.readouterr().out == "plans:board\n"
+
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(ENDED | {"group": None})))
+    assert run_reading.main(["--group", RUN]) == 0
+    assert capsys.readouterr().out == "\n"
+
+    monkeypatch.setattr("sys.stdin", io.StringIO("not json"))
+    assert run_reading.main(["--group", RUN]) == 1
+    printed = capsys.readouterr()
+    assert printed.out == ""
+    assert "unreadable the answer is not one JSON document" in printed.err
+
+
 def test_the_command_refuses_a_call_that_names_no_single_run(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setattr("sys.argv", ["run_reading"])
     assert run_reading.main() == 2
-    assert "usage: python -m orchestrator.run_reading [--public-id] <run-id>" in (
+    assert "usage: python -m orchestrator.run_reading [--public-id | --group] <run-id>" in (
         capsys.readouterr().err
     )
 

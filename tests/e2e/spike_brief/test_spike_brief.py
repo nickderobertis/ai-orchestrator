@@ -241,6 +241,12 @@ def test_engine_launches_one_detached_codex_writer_for_six_actual_agents(
             time.sleep(0.05)
         receipt = spike_brief.read(tmp_path / "runs/probe" / spike_brief.RECEIPT)
         assert receipt is not None and receipt["writer_run"] == writer
+        # The writer's run is a `spike-brief` run grouped under the plan it briefs, which
+        # its own writer project does not name.
+        record = json.loads((tmp_path / "runs" / writer / "launch.json").read_text("utf-8"))
+        assert record.get("labels") == {"kind": "spike-brief"}, record
+        assert record.get("group") == "authoring:probe", record
+        assert record["project"] == f"authoring:{writer}", record
         # The parent's receipt names its spikes run; a launch naming another is refused.
         foreign = flow(capsys, "launch", "authoring:probe", "probe", "probe-other-spikes")
         assert "existing receipt belongs to another flow" in foreign.stderr, foreign.stderr

@@ -43,6 +43,7 @@
       "{workspaceRoot}/tests/e2e/registry_and_recipes/test_repos_bootstrap_e2e.py",
       "{workspaceRoot}/tests/session_setup/test_locked_plan_store_setup_e2e.py",
       "{workspaceRoot}/tests/test_planner_channel_personas.py",
+      "{workspaceRoot}/tests/tree_scans/test_history_store_never_pruned.py",
       "{workspaceRoot}/tests/test_linked_libraries.py",
       "{workspaceRoot}/tests/release_pins/**/*"
     ]

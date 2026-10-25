@@ -13,7 +13,10 @@ module on stdin and acts on the one line it prints:
 
 With ``--public-id`` it prints instead the run's public id — the reading's `public_id`, what
 the run is named by wherever a destination is not private — which every follow-up record of
-the run is keyed by. The engine decides it; nothing here derives one.
+the run is keyed by. The engine decides it; nothing here derives one. With ``--group`` it
+prints the run's effective project group — the reading's `group`, its launch group, project
+origin or project, as any label overlay leaves it — or an empty line where the run has none,
+which the follow-up run it launches is grouped under.
 
 The answer crosses a process boundary, so every field is checked against the document
 before anything is decided from it: an answer that half-matches is not one to launch on.
@@ -43,6 +46,7 @@ __all__ = [
     "RunId",
     "Unreadable",
     "decide",
+    "group",
     "main",
     "public_id",
 ]
@@ -340,6 +344,12 @@ def public_id(answer: str, run: RunId) -> str:
     return str(_checked(answer, run)["public_id"])
 
 
+def group(answer: str, run: RunId) -> str | None:
+    """The effective project group the engine's ``answer`` puts ``run`` in, if any."""
+    grouped = _checked(answer, run)["group"]
+    return None if grouped is None else str(grouped)
+
+
 def decide(answer: str, run: RunId) -> Decided:
     """Decide what the recipe does with ``run`` from the engine's ``answer`` about it."""
     reading = _checked(answer, run)
@@ -359,20 +369,26 @@ def decide(answer: str, run: RunId) -> Decided:
 def main(argv: list[str] | None = None) -> int:
     """Read the answer on stdin for the run ``argv`` names, and print the decision line."""
     arguments = list(sys.argv[1:] if argv is None else argv)
-    public = arguments[:1] == ["--public-id"]
-    if public:
+    field = arguments[0] if arguments[:1] in (["--public-id"], ["--group"]) else None
+    if field is not None:
         arguments = arguments[1:]
     if len(arguments) != 1:
         print(
-            "usage: python -m orchestrator.run_reading [--public-id] <run-id> < answer",
+            "usage: python -m orchestrator.run_reading [--public-id | --group] <run-id> < answer",
             file=sys.stderr,
         )
         return 2
     try:
         answer, run = sys.stdin.read(), RunId(arguments[0])
-        print(public_id(answer, run) if public else decide(answer, run).line())
+        match field:
+            case "--public-id":
+                print(public_id(answer, run))
+            case "--group":
+                print(group(answer, run) or "")
+            case _:
+                print(decide(answer, run).line())
     except Unreadable as unreadable:
-        if public:
+        if field is not None:
             print(f"run_reading: unreadable {unreadable}", file=sys.stderr)
             return 1
         print(f"unreadable {unreadable}")

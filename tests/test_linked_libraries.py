@@ -703,12 +703,12 @@ class LinkedCore(NamedTuple):
 
 #: The pin and the crate are separate artifacts on separate cadences, so no equality
 #: between them would mean anything. Re-measured 2026-10-24 on this host's installed
-#: wheels: `config/oneharness.version` reads 0.22.0 and names the `oneharness-cli`
+#: wheels: `config/oneharness.version` reads 0.26.1 and names the `oneharness-cli`
 #: wheel, whose own CycloneDX SBOM declares the `oneharness-core` it is compiled
-#: against as 0.25.0 (`tests/test_engine_history_vocabulary.py` re-reads that pairing
-#: off the wheel for `docs/telemetry.md`); on the adopted onepipeline 0.89.0 the
+#: against as 0.29.1 (`tests/test_engine_history_vocabulary.py` re-reads that pairing
+#: off the wheel for `docs/telemetry.md`); on the adopted onepipeline 0.89.2 the
 #: engine wheel links 0.29.1 for every dependent — while the sibling `oneagentgraph-cli`
-#: and `onejudge-cli` wheels declare 0.29.1 and 0.29.0, respectively, which is the pairing
+#: wheel declares 0.29.1 and `onejudge-cli` 0.29.0, which is the pairing
 #: `test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs`
 #: holds and a different artifact from the `oneharness-cli` this pin names. The pin's
 #: number and the crate's **differ on this adoption**, as they have on most adoptions
@@ -729,7 +729,7 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 LINKED_HARNESS_CORES = (
     LinkedCore(dependent="oneagentgraph", dependent_version="0.8.0", core="0.29.1"),
     LinkedCore(dependent="onejudge", dependent_version="0.21.0", core="0.29.1"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.89.0", core="0.29.1"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.89.2", core="0.29.1"),
 )
 
 #: How a crate names itself in a compiled binary: cargo embeds the registry source
@@ -753,7 +753,7 @@ LINKED_IN_BINARY = re.compile(
 #: installable from PyPI at all, or where this host's own verbs must run a later release
 #: than any engine links — never as a convenience, and never as "not yet looked at",
 #: because both read identically from here a release cycle later. Empty, and kept: the
-#: adopted engine 0.89.0 links the onevcs 0.56.9 the manager's verbs run, so the last
+#: adopted engine 0.89.2 links the onevcs 0.56.10 the manager's verbs run, so the last
 #: declared pair closed with it.
 DECLARED_DIVERGENCES: dict[str, Divergence] = {}
 
@@ -917,15 +917,13 @@ def _ui_api_linked_engine() -> str:
 def test_the_ui_api_links_the_pinned_engine() -> None:
     """The reader's own engine, held level with `config/onepipeline.version`.
 
-    **This is a determinism standing in for a judgment.** The reader used to be free to
-    link any engine, because a process that only read runs could not decide what a
-    dispatch ran. Through onepipeline-ui 0.44.0 it could: its adopt route retained the
-    read-API binary at its own driver verb, so a run adopted from the browser was driven
-    by the engine *this* wheel links, and `config/onepipeline-ui.version` governed a
-    dispatch on this host. From 0.45.0 the route is removed and the reader drives no
-    run, and the two are still held level, because a reader linking another engine than
+    **The reason is read compatibility.** The read API parses every run's journal, launch
+    record and label overlay with the engine it links, and those records are written by
+    the engine `config/onepipeline.version` pins. A reader linking another engine than
     the one that wrote a run's records is how a newer record schema came to render as
-    nothing here before.
+    nothing here before. The browser adopts no run, watches none and drives no dispatch,
+    so `config/onepipeline-ui.version` governs nothing a dispatch does; what it decides
+    is whether the records the dispatching engine wrote can be read.
 
     So the prerequisite is enforced here, where nobody has to remember it: the two pins
     name releases that resolve one engine, and a bump that moves either alone fails on
@@ -1231,11 +1229,13 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
     The sentence this backs is the sharpest form of the whole module's subject: the
     `oneagentgraph` and `onejudge` a dispatch runs are compiled *into the engine wheel*,
     and this host also installs each of them as a standalone CLI whose wheel resolved its
-    own `oneharness-core`. Those two numbers are free to differ, as earlier adoptions
-    demonstrate — so a reader who measured the sibling's own wheel
-    would be measuring an artifact no dispatch loads. On this adoption the graph CLI
-    coincides at 0.29.1 while the judge CLI resolves 0.29.0. An earlier adoption
-    coincided at 0.24.0 and parted when the engine moved to 0.24.1 — a coincidence and not
+    own `oneharness-core`. Those two numbers are free to differ, and have on every
+    adoption recorded here but one — so a reader who measured the sibling's own wheel
+    would be measuring an artifact no dispatch loads. On this adoption one pair differs
+    and one coincides: `onejudge-cli` resolved 0.29.0 while the engine links 0.29.1 for
+    it, and `oneagentgraph-cli` resolved the same 0.29.1. They coincided before too, at
+    0.24.0, on an
+    earlier adoption, and parted when the engine moved to 0.24.1 — a coincidence and not
     a contract: it is the reason the pairing below is written out rather than asserted
     as an inequality.
 

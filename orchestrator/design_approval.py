@@ -1202,7 +1202,9 @@ def gate_main(argv: Sequence[str] | None = None) -> int:
     one of those. What it does instead is ask the store about every argument shaped like a
     qualified id whose source this checkout configures — so a project the launch names is
     checked wherever it sits on the command line, and a flag value that is not one is not
-    a project any source answers for.
+    a project any source answers for. A value joined to its flag, `--group=<project>`, is
+    one argument starting with `-` and is not asked about: that is how a launch names the
+    plan it is grouped under, which is not the one it runs.
 
     A candidate whose project cannot be read is refused rather than skipped, and that
     costs nothing a launch was going to keep: the engine reads the same project through

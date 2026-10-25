@@ -28,8 +28,10 @@ import http.server
 import json
 import os
 import shutil
+import signal
 import subprocess
 import threading
+import time
 from functools import lru_cache
 from pathlib import Path
 from typing import NamedTuple, TypedDict
@@ -250,7 +252,7 @@ def controlled_turn(
             "--timeout",
             "60",
         ],
-        env={**_environment(home), "HOME": str(root)},
+        env={**_environment(home), "HOME": str(root), "XDG_STATE_HOME": str(_state(root))},
         text=True,
         capture_output=True,
         timeout=GUARD_SECONDS,
@@ -262,9 +264,11 @@ def controlled_turn(
     result = json.loads(streamed[-1])["report"]["results"][0]
     # The producer path is an assertion and not a detail: `codex exec` streams a
     # different vocabulary entirely, and a run that quietly took it would be reconciled
-    # against frames no dispatch here ever sees.
-    spawned = [Path(result["command"][0]).name, *result["command"][1:2]]
-    assert spawned == [PRODUCER, "app-server"], result["command"]
+    # against frames no dispatch here ever sees. The adopted oneharness spawns a shared
+    # server from the binary's resolved path, so the producer is compared resolved too.
+    spawned = [Path(result["command"][0]).resolve(), *result["command"][1:2]]
+    assert spawned == [Path(codex_bin).resolve(), "app-server"], result["command"]
+    _stop_shared_servers(root)
     # The report is parsed JSON, and the producer's own shape is what the journeys read;
     # narrowing it to the fields they assert on is the whole of the modelling.
     return ControlledResult(
@@ -273,6 +277,85 @@ def controlled_turn(
         model=result.get("model"),
         observed_model=result.get("observed_model"),
     )
+
+
+#: How long a stopped shared server and its sweeper may take to be gone.
+STOP_SECONDS = 30.0
+
+
+def _state(root: Path) -> Path:
+    """The state home the run keeps its shared codex app-server pool under."""
+    return root / ".local" / "state"
+
+
+def _stop_shared_servers(root: Path) -> None:
+    """Stop the shared codex app-server the run left lingering, and wait until it is gone.
+
+    oneharness keeps a controlled turn's `codex app-server` alive after the run, detached,
+    for about a minute in case another turn reuses it, and exposes no verb that stops one.
+    Left alone it outlives the pytest session, and on its way out codex writes
+    `thread-writer-locks/.coordination.lock` back under the codex home the session had
+    already removed — the entries the gate's `gate-leftovers` budget counted. So the
+    server this run started is stopped here, by the pid the run recorded for it, and only
+    once its command line still names this run's own socket, so a reused pid is never
+    signalled; then every process naming that socket, and the pool's sweeper, is waited out.
+
+    The pool's layout — `oneharness/servers/<key>/server.json` and `sweeper.json` under the
+    state home, each naming a `pid`, the server's also its `address.path` — is oneharness's
+    own and undocumented, so this is the check that holds it: every caller has just
+    asserted the run took the `app-server` path, so a pool with no server record is the
+    layout having moved, and it fails here by name rather than skipping the stop.
+    """
+    pool = _state(root) / "oneharness" / "servers"
+    records = sorted(pool.glob("*/server.json"))
+    if not records:
+        raise AssertionError(
+            f"the controlled turn ran on a shared codex app-server but {pool} holds no "
+            "<key>/server.json: oneharness has moved its pool's layout, so the server it "
+            "left lingering cannot be stopped here and will outlive the test's home"
+        )
+    for record in records:
+        server = json.loads(record.read_text(encoding="utf-8"))
+        socket = str(server["address"]["path"])
+        if socket in _command_line(int(server["pid"])):
+            os.kill(int(server["pid"]), signal.SIGTERM)
+        sweeper = record.with_name("sweeper.json")
+        sweeper_pid = (
+            int(json.loads(sweeper.read_text(encoding="utf-8"))["pid"])
+            if sweeper.is_file()
+            else None
+        )
+        deadline = time.monotonic() + STOP_SECONDS
+        while _serving(socket) or (sweeper_pid is not None and _alive(sweeper_pid)):
+            if time.monotonic() > deadline:
+                raise AssertionError(f"the shared codex app-server on {socket} did not stop")
+            time.sleep(0.1)
+
+
+def _command_line(pid: int) -> str:
+    """The command line of `pid`, or nothing for a process that is gone."""
+    try:
+        return Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode()
+    except OSError:
+        return ""
+
+
+def _serving(socket: str) -> bool:
+    """Whether any process still names `socket` on its command line."""
+    return any(
+        socket in _command_line(int(entry.name))
+        for entry in Path("/proc").iterdir()
+        if entry.name.isdigit()
+    )
+
+
+def _alive(pid: int) -> bool:
+    """Whether `pid` is still a process that has not been reaped."""
+    try:
+        status = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return status.rsplit(")", 1)[-1].split()[0] != "Z"
 
 
 def _environment(home: Path) -> dict[str, str]:
