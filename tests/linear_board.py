@@ -14,6 +14,7 @@ import copy
 import json
 import re
 import threading
+import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -245,6 +246,9 @@ class LinearBoard:
         self._assets: dict[str, bytes] = {}
         self._states: list[State] = []
         self._statuses: list[State] = []
+        self._arrivals: list[int] = []
+        self._limited_for_ms: int | None = None
+        self._limited_until_ms: int | None = None
         self._lock = threading.RLock()
 
     def environment(self, source: str) -> dict[str, str]:
@@ -386,6 +390,47 @@ class LinearBoard:
         """GraphQL operations and asset HTTP methods, whose variables name their path."""
         with self._lock:
             return [asdict(request) for request in self._requests]
+
+    def rate_limit_for(self, window_ms: int) -> None:
+        """Answer every GraphQL request rate limited for ``window_ms`` from the first one.
+
+        Linear refuses a spent quota with HTTP 429, an error coded `RATELIMITED`, and its
+        reset as epoch milliseconds in `X-RateLimit-Requests-Reset`
+        (https://linear.app/developers/rate-limiting); from the reset on, requests are
+        answered again. The window opens at the first request rather than when it is set,
+        so a caller slow to reach the stand-in still meets the whole of it.
+        """
+        with self._lock:
+            self._limited_for_ms = window_ms
+            self._limited_until_ms = None
+
+    def reset_at(self) -> int | None:
+        """The epoch milliseconds the rate limit lifts at, once a request has opened it."""
+        with self._lock:
+            return self._limited_until_ms
+
+    def arrivals(self) -> list[int]:
+        """The epoch milliseconds every GraphQL request arrived at, refused or answered."""
+        with self._lock:
+            return list(self._arrivals)
+
+    def _refusal(self) -> int | None:
+        """Record a request's arrival, and the reset it is refused until while one stands."""
+        now = time.time_ns() // 1_000_000
+        with self._lock:
+            self._arrivals.append(now)
+            if self._limited_for_ms is not None and self._limited_until_ms is None:
+                self._limited_until_ms = now + self._limited_for_ms
+            until = self._limited_until_ms
+            return until if until is not None and now < until else None
+
+    def create_issue(self, native_id: str, title: str, description: str) -> None:
+        """Hold an issue of the team in its first state, written as a person wrote it."""
+        with self._lock:
+            if not self._states:
+                self._states.append(State(id=StateId("task-state-0"), name="Todo"))
+            self._write("issue", NativeId(native_id), {"title": title})
+            self._issues[NativeId(native_id)].description = description
 
     def edit(self, native_id: str, content: str) -> None:
         native = NativeId(native_id)
@@ -609,6 +654,26 @@ def linear_board(*, rewrites: Sequence[Rewrite] = LINEAR_REWRITES) -> Iterator[L
             pass
 
         def do_POST(self) -> None:
+            reset = board._refusal()
+            if reset is not None:
+                self.rfile.read(int(self.headers["Content-Length"]))
+                refused = json.dumps(
+                    {
+                        "errors": [
+                            {
+                                "message": "Rate limit exceeded",
+                                "extensions": {"code": "RATELIMITED"},
+                            }
+                        ]
+                    }
+                ).encode()
+                self.send_response(429)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("X-RateLimit-Requests-Reset", str(reset))
+                self.send_header("Content-Length", str(len(refused)))
+                self.end_headers()
+                self.wfile.write(refused)
+                return
             try:
                 payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 answer: dict[str, Any] = {

@@ -1,0 +1,39 @@
+{
+  "name": "plan-store-dependency-read",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/plan_store_dependency_read",
+  "tags": [
+    "scope:plan-store-dependency-read",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-onetaskgraph-user-layer",
+    "support-published-tools"
+  ],
+  "namedInputs": {
+    "planStoreDependencyReadWorkspace": [
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/tests/plan_store_dependency_read/**/*"
+    ]
+  },
+  "targets": {
+    "test-pypi": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/plan_store_dependency_read -n 4 --dist loadgroup --no-cov",
+      "inputs": [
+        "planStoreDependencyReadWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ],
+      "options": {
+        "cwd": "."
+      }
+    }
+  }
+}

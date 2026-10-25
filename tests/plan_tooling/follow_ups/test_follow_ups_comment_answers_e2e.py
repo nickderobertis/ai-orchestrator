@@ -1077,9 +1077,10 @@ def test_from_its_launch_to_settle_the_dispatch_sends_the_board_nothing_but_its_
     The snapshot was taken past the minute GitHub holds an item's change token back for, so it
     holds every item at a settled version: each reply expects its item's, and not one request
     precedes them. The replies then changed every item within the minute, so settle's one
-    batched read gives none a version. The first narrow status update is read once by the
-    store boundary's `admit_existing` for classification and once by the update's own
-    binding read; the remaining copies use their known records. Writes move a field where
+    batched read gives none a version. The first narrow status update is read once, by the
+    update's own binding read: plan store 0.12.0 dropped the separate classification read
+    its boundary's `admit_existing` used to make before it, and the remaining copies use
+    their known records. Writes move a field where
     priority or status moves and the issue where text or metadata moves.
     """
     _settled(answered)
@@ -1093,7 +1094,7 @@ def test_from_its_launch_to_settle_the_dispatch_sends_the_board_nothing_but_its_
     assert answered.operations == (
         [_Operation.ADD_COMMENT_WHOLE] * quoted
         + [_Operation.ISSUE_DETAILS]
-        + [read, read, field, issue]
+        + [read, field, issue]
         + [read, fields, issue]
         + [read, field, issue] * 6
         + [read, issue] * 4

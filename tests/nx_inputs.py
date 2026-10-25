@@ -108,13 +108,19 @@ SCHEMA_CACHE_WORKSPACE = "schemaCacheWorkspace"
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one catalog
 # of test projects, where every project has its entry, and
 # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside the
-# tiers it describes; the plan-store-assets and render-diagram entries sit beside the
-# others' rather than in a domain of their own because the catalog is the domain.
+# tiers it describes; the plan-store-assets, plan-store-dependency-read and render-diagram
+# entries sit beside the others' rather than in a domain of their own because the catalog is
+# the domain.
 #: The key `plan-store-assets:test` is memoized on: the lock that decides which plan-store
 #: CLI answers, the store configuration it loads from this checkout, the project's own
 #: files, and the suite modules `tests/conftest.py` imports — nothing else, because the
 #: journey writes only temporary roots.
 PLAN_STORE_ASSETS_WORKSPACE = "planStoreAssetsWorkspace"
+#: The key `plan-store-dependency-read:test` is memoized on: the lock that decides which
+#: plan-store CLI answers and the project's own files, which name the earlier published
+#: release the journey contrasts it with — immutable on PyPI — and nothing else, because the
+#: journey reads a store configured wholly under its own temporary roots.
+PLAN_STORE_DEPENDENCY_READ_WORKSPACE = "planStoreDependencyReadWorkspace"
 #: The key `render-diagram:test` is memoized on: what a render reads — the recipe and its
 #: script, the committed `config/mermaid/` files, `.puppeteerrc.json`, and the lockfile that
 #: names mermaid-cli, Playwright and so the Chromium revision, and the font — the project's
@@ -677,8 +683,9 @@ SCHEMA_CACHE_ROOT = "tests/schema_cache"
 # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one catalog
 # of test projects, where every project has its entry, and
 # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside the
-# tiers it describes; the plan-store-assets and render-diagram entries sit beside the
-# others' rather than in a domain of their own because the catalog is the domain.
+# tiers it describes; the plan-store-assets, plan-store-dependency-read and render-diagram
+# entries sit beside the others' rather than in a domain of their own because the catalog is
+# the domain.
 #: The project whose test target owns the journey over a document's image assets: the
 #: locked plan-store CLI creating one with `--asset`, copying it into a second `local-md`
 #: source and reading both back. A project of its own because it drives a real host tool,
@@ -688,6 +695,15 @@ PLAN_STORE_ASSETS_PROJECT = "plan-store-assets"
 PLAN_STORE_ASSETS_SCOPED = "test"
 #: The directory it owns, which every other project's tiers ignore.
 PLAN_STORE_ASSETS_ROOT = "tests/plan_store_assets"
+#: The project whose test target owns the journey over which sources a dependency read asks:
+#: the locked plan-store CLI and an earlier published release, each under a synthetic user
+#: layer. A project of its own for the reason the one above is.
+PLAN_STORE_DEPENDENCY_READ_PROJECT = "plan-store-dependency-read"
+#: That project's one target, which reads no prose and fetches the earlier release from PyPI,
+#: so it is a `test-pypi` target for the reason `SESSION_SETUP_PYPI_SCOPED` states.
+PLAN_STORE_DEPENDENCY_READ_SCOPED = "test-pypi"
+#: The directory it owns, which every other project's tiers ignore.
+PLAN_STORE_DEPENDENCY_READ_ROOT = "tests/plan_store_dependency_read"
 #: The project whose test target owns the journeys over `just render-diagram`: a real
 #: Chromium drawing a Mermaid source in the locked font, and every refusal. A project of its
 #: own for the reason the one above is.
@@ -1032,6 +1048,7 @@ def catalogued_roots() -> dict[str, str]:
         MANAGER_ALLOWLIST_PROJECT: MANAGER_ALLOWLIST_ROOT,
         MERGE_POLICY_PROJECT: MERGE_POLICY_ROOT,
         PLAN_STORE_ASSETS_PROJECT: PLAN_STORE_ASSETS_ROOT,
+        PLAN_STORE_DEPENDENCY_READ_PROJECT: PLAN_STORE_DEPENDENCY_READ_ROOT,
         PROJECT_STORE_RACE_PROJECT: PROJECT_STORE_RACE_ROOT,
         RENDER_DIAGRAM_PROJECT: RENDER_DIAGRAM_ROOT,
         RUN_END_HOOKS_PROJECT: RUN_END_HOOKS_ROOT,

@@ -702,11 +702,11 @@ class LinkedCore(NamedTuple):
 
 
 #: The pin and the crate are separate artifacts on separate cadences, so no equality
-#: between them would mean anything. Re-measured 2026-10-24 on this host's installed
+#: between them would mean anything. Re-measured 2026-10-25 on this host's installed
 #: wheels: `config/oneharness.version` reads 0.26.1 and names the `oneharness-cli`
 #: wheel, whose own CycloneDX SBOM declares the `oneharness-core` it is compiled
 #: against as 0.29.1 (`tests/test_engine_history_vocabulary.py` re-reads that pairing
-#: off the wheel for `docs/telemetry.md`); on the adopted onepipeline 0.89.2 the
+#: off the wheel for `docs/telemetry.md`); on the adopted onepipeline 0.90.0 the
 #: engine wheel links 0.29.1 for every dependent — while the sibling `oneagentgraph-cli`
 #: wheel declares 0.29.1 and `onejudge-cli` 0.29.0, which is the pairing
 #: `test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs`
@@ -729,7 +729,7 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 LINKED_HARNESS_CORES = (
     LinkedCore(dependent="oneagentgraph", dependent_version="0.8.0", core="0.29.1"),
     LinkedCore(dependent="onejudge", dependent_version="0.21.0", core="0.29.1"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.89.2", core="0.29.1"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.90.0", core="0.29.1"),
 )
 
 #: How a crate names itself in a compiled binary: cargo embeds the registry source
@@ -753,7 +753,7 @@ LINKED_IN_BINARY = re.compile(
 #: installable from PyPI at all, or where this host's own verbs must run a later release
 #: than any engine links — never as a convenience, and never as "not yet looked at",
 #: because both read identically from here a release cycle later. Empty, and kept: the
-#: adopted engine 0.89.2 links the onevcs 0.56.10 the manager's verbs run, so the last
+#: adopted engine 0.90.0 links the onevcs 0.56.11 the manager's verbs run, so the last
 #: declared pair closed with it.
 DECLARED_DIVERGENCES: dict[str, Divergence] = {}
 

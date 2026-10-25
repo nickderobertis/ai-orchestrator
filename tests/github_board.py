@@ -1771,6 +1771,9 @@ _OPERATIONS: dict[str, _Operation] = {
     "boardFields:repositoryOwner": _Operation.BOARD_FIELDS,
     "optionId field{": _Operation.FIELD_SNAPSHOT,
     "createProjectV2Field(": _Operation.CREATE_FIELD,
+    # Before the board read's own marker, which this root also carries: the adopted store's
+    # read of what one item depends on asks for the board's id beside it, to place a draft.
+    "board:repositoryOwner(": _Operation.DEPENDENCIES,
     "repositoryOwner": _Operation.BOARD,
     "search(query:": _Operation.SEARCH,
     "subIssues(first:": _Operation.SUB_ISSUES,

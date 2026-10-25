@@ -22,7 +22,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.89.2 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.90.0 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -466,14 +466,14 @@ served them.
    `just telemetry-server` — or by `just dag-ui`, which is the same published server
    with the browser view built into it answering on the same origin) is the structured
    view. Measured against real runs on
-   **`onepipeline-api` 0.51.0**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.52.0**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
-   what re-opens this paragraph: `telemetry_schema_version` 26 on the envelope, where
+   what re-opens this paragraph: `telemetry_schema_version` 26 on the envelope, as 0.51.0 served, where
    0.48.1 served 24, 0.44.0 served 21, 0.13.0 served 20 and
    0.11.0 served 19, 0.9.0 served 17, 0.7.3 served 16 and 0.7.2 served 15 — 26 reads every
    turn whole from the history file its record points at, through the engine's transcript
    resolver, and marks the turn's transcript unavailable where that file cannot be read;
-   `timeline_schema_version` 14, where 0.48.1 served 13, 0.44.0 served 12, 0.41.0 served
+   `timeline_schema_version` 14, as 0.51.0 served, where 0.48.1 served 13, 0.44.0 served 12, 0.41.0 served
    11 and 0.21.1 served 10 — 14 gives every `turn-started`, `turn-message` and
    `turn-activity` event a one-line `description` the engine's resolver writes, 13 counts a
    journal record relayed again under one `(stream, seq)` once, and bounds each session lane

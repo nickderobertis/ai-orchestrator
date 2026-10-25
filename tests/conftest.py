@@ -56,6 +56,9 @@ from nx_inputs import (
     MERGE_POLICY_WORKSPACE,
     PLAN_STORE_ASSETS_ROOT,
     PLAN_STORE_ASSETS_WORKSPACE,
+    PLAN_STORE_DEPENDENCY_READ_ROOT,
+    PLAN_STORE_DEPENDENCY_READ_SCOPED,
+    PLAN_STORE_DEPENDENCY_READ_WORKSPACE,
     PLAN_TOOLING_PROJECTS,
     PRE_PUSH_PROVISIONING_ROOT,
     PRE_PUSH_PROVISIONING_WORKSPACE,
@@ -250,9 +253,15 @@ OWNED_PROJECTS = {
     # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
     # catalog of test projects, where every project has its entry, and
     # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside
-    # the tiers it describes; the plan-store-assets and render-diagram entries sit beside
-    # the others' rather than in a domain of their own because the catalog is the domain.
+    # the tiers it describes; the plan-store-assets, plan-store-dependency-read and
+    # render-diagram entries sit beside the others' rather than in a domain of their own
+    # because the catalog is the domain.
     PLAN_STORE_ASSETS_ROOT: OwnedProject(key=PLAN_STORE_ASSETS_WORKSPACE, docs_tier=False),
+    PLAN_STORE_DEPENDENCY_READ_ROOT: OwnedProject(
+        key=PLAN_STORE_DEPENDENCY_READ_WORKSPACE,
+        docs_tier=False,
+        target=PLAN_STORE_DEPENDENCY_READ_SCOPED,
+    ),
     RENDER_DIAGRAM_ROOT: OwnedProject(key=RENDER_DIAGRAM_WORKSPACE, docs_tier=False),
     # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     UNPUBLISHED_VIEW_ROOT: OwnedProject(key=UNPUBLISHED_VIEW_WORKSPACE, docs_tier=False),

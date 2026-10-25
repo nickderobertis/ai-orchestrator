@@ -86,6 +86,8 @@ from nx_inputs import (
     MERGE_POLICY_SCOPED,
     PLAN_STORE_ASSETS_ROOT,
     PLAN_STORE_ASSETS_SCOPED,
+    PLAN_STORE_DEPENDENCY_READ_ROOT,
+    PLAN_STORE_DEPENDENCY_READ_SCOPED,
     PLAN_TOOLING_DOCS_SCOPED,
     PLAN_TOOLING_PROJECTS,
     PLAN_TOOLING_ROOT,
@@ -836,9 +838,11 @@ SUITE_TIERS = (
     # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
     # catalog of test projects, where every project has its entry, and
     # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside
-    # the tiers it describes; the plan-store-assets and render-diagram entries sit beside
-    # the others' rather than in a domain of their own because the catalog is the domain.
+    # the tiers it describes; the plan-store-assets, plan-store-dependency-read and
+    # render-diagram entries sit beside the others' rather than in a domain of their own
+    # because the catalog is the domain.
     (f"{PLAN_STORE_ASSETS_ROOT}/project.json", PLAN_STORE_ASSETS_SCOPED),
+    (f"{PLAN_STORE_DEPENDENCY_READ_ROOT}/project.json", PLAN_STORE_DEPENDENCY_READ_SCOPED),
     (f"{RENDER_DIAGRAM_ROOT}/project.json", RENDER_DIAGRAM_SCOPED),
     # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     (f"{UNPUBLISHED_VIEW_ROOT}/project.json", UNPUBLISHED_VIEW_SCOPED),

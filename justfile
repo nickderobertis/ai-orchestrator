@@ -119,8 +119,9 @@ gate remote="" base="":
 # A green run says one line, like `check`: the suite's own output is the failure
 # report, and it is streamed in full when there is one.
 #
-# It runs one tier `check` never does: `session-setup-pypi:test-pypi`, the journeys that
-# install the adopted published tools from PyPI, which no diff selection may reach.
+# It runs one tier `check` never does: `test-pypi` — `session-setup-pypi`'s journeys that
+# install the adopted published tools from PyPI, and `plan-store-dependency-read`'s, which
+# fetches an earlier plan-store release from there — which no diff selection may reach.
 test *nx_args:
     @log=$(mktemp); trap 'rm -f "$log"' EXIT; ./scripts/nx.sh run-many -t test,test-docs,test-recipes,test-checkouts,test-pypi,coverage {{nx_args}} >"$log" 2>&1 || { cat "$log" >&2; echo "test: suites failed; fix the reported findings and rerun 'just test'" >&2; exit 1; }; echo "test: all suites passed"
 
