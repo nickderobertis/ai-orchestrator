@@ -325,7 +325,7 @@ def _board_text() -> str:
     ("name", "repositories", "on_the_board"),
     [
         ("organization", [ORGANIZATION, ORGANIZATION], []),
-        ("mixed", [PUBLIC, ORGANIZATION], ["mixed", "Task 0"]),
+        ("mixed", [PUBLIC, ORGANIZATION], ["Public work", "Task 0"]),
     ],
 )
 def test_a_plan_touching_an_organizations_work_homes_in_its_tracker_and_keeps_it_private(
@@ -334,10 +334,11 @@ def test_a_plan_touching_an_organizations_work_homes_in_its_tracker_and_keeps_it
     """A copy onto `plans` homes a plan holding an organization's work in that tracker.
 
     The plan is private, so its home goes to the source declared private that its private
-    tasks route to, with every private task and the project's record. A public task of a
-    mixed plan stays where its own repository places it, under a member project of the home
-    on the board, written through the screened boundary — and nothing the board holds names
-    the private home, the private task, or the organization's repository.
+    tasks route to, with every task of the plan and the project's record. A public task of a
+    mixed plan is seen where its own repository places it only as the store's neutral view,
+    under a `Public work` project on the board, written through the screened boundary — and
+    nothing the board holds names the private home, any canonical task, or the organization's
+    repository.
     """
     plan = _plan(layer, name, repositories)
     folder = layer.folders[onetaskgraph_user_layer.ORGANIZATION_PLANS]
@@ -347,11 +348,7 @@ def test_a_plan_touching_an_organizations_work_homes_in_its_tracker_and_keeps_it
     assert copied.returncode == 0, copied.stdout + copied.stderr
     home = f"{onetaskgraph_user_layer.ORGANIZATION_PLANS}:{name}"
     assert home in copied.stdout, copied.stdout
-    private = [
-        f"tasks/{name}/task-{index}.md"
-        for index, repository in enumerate(repositories)
-        if repository == ORGANIZATION
-    ]
+    private = [f"tasks/{name}/task-{index}.md" for index in range(len(repositories))]
     assert _held(folder) == sorted([f"projects/{name}.md", *private]), _held(folder)
     assert [issue.title for issue in BOARD.created] == on_the_board
     held = _board_text()

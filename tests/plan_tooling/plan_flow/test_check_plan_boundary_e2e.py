@@ -3,14 +3,14 @@
 The engine's boundary guidance — what a planner of a mixed brief is handed — prescribes one
 plan: a private `publish: "preserve"` producer, an export edge, and a public consumer whose task
 carries the no-private-reference criterion. With the tracked `onetaskgraph.yaml` switching the
-store's public boundary on, that plan cannot pass. A plan holding private work is private, so it
-is stored only in a source declared private — `authoring`, which the suite's fixture source
-stands in for here, declared private as it is — and the pinned store tightens every task under a
-private project to private, so the export consumer is never the public node the engine requires
-and `just check-plan` refuses the plan naming that. The same two nodes authored as two plans —
-the private producer's in the private source, the public consumer's in a public one — each
-pass; but an export edge names nodes of its own plan, so the public plan cannot carry one from
-the private plan's producer, and the generalized work does not cross by the engine's export.
+store's public boundary on, a plan holding private work is private, so it is stored only in a
+source declared private — `authoring`, which the suite's fixture source stands in for here,
+declared private as it is. The pinned store gives each task its own classification, which the
+private project it is filed under never tightens, so the export consumer stays the public node
+the engine requires and `just check-plan` passes the plan. The same two nodes authored as two
+plans — the private producer's in the private source, the public consumer's in a public one —
+each pass too; but an export edge names nodes of its own plan, so the public plan cannot carry
+one from the private plan's producer.
 
 The two repositories are synthetic and the scratch registry's rules make one public and one
 private. Only the paid model is stood in, for the reviews the plans need.
@@ -109,10 +109,10 @@ def renders(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
-def test_the_guidance_s_one_plan_shape_is_refused_its_consumer_not_public(
+def test_the_guidance_s_one_plan_shape_passes_its_consumer_public(
     renders: Path, registry: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The producer, the edge and the consumer in one plan, drafted privately: refused."""
+    """The producer, the edge and the consumer in one plan, drafted privately: it passes."""
     for name, value in DRAFTED_PRIVATE.items():
         monkeypatch.setenv(name, value)
     tasks = [_producer(renders), _consumer(renders, deps=[PRODUCER])]
@@ -122,8 +122,10 @@ def test_the_guidance_s_one_plan_shape_is_refused_its_consumer_not_public(
     checked = _run("just", "check-plan", project, environment={**registry, **DRAFTED_PRIVATE})
 
     said = checked.stdout + checked.stderr
-    assert checked.returncode != 0, f"the one-plan shape was accepted:\n{said}"
-    assert "an export consumer must be a public lifecycle node" in said, said
+    assert checked.returncode == 0, f"the one-plan shape was refused:\n{said}"
+    assert "an export consumer must be a public lifecycle node" not in said, said
+    tasks = {task["id"]: task for task in read_project_plan(project)["tasks"]}
+    assert NO_PRIVATE_REFERENCE in tasks[CONSUMER]["task"]
 
 
 def test_the_same_nodes_as_two_plans_each_pass_and_no_edge_crosses_them(

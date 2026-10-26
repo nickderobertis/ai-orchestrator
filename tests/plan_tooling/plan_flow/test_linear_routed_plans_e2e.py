@@ -5,9 +5,9 @@ own configuration home — routes every `github.com/hiddenco/*` task from `plans
 organization's `hiddenco-plans` Linear source; the store's public boundary is on, as the
 tracked configuration switches it, and the layer declares every source it defines private.
 Under that boundary the store places a plan by its voters, and any item that classifies
-private moves the home: the home, its documents and every task naming no
-repository go to the private source its private voters route to, and a task naming a public
-repository goes onto `plans` in a member project. A private item copied to a public
+private moves the home: the home, its documents and every task go to the private source
+its private voters route to, and a task naming only a public repository is seen on `plans`
+only as the store's neutral view under a `Public work` project. A private item copied to a public
 destination is refused before anything is written. The `onevcs` state root every command reads
 registers the organization's repository private and the public ones public, so the boundary
 classifies from rules this module wrote and never asks GitHub.
@@ -16,8 +16,9 @@ These journeys drive that through the real recipes:
 
 * an all-hiddenco plan, and a plan whose only repository-naming task routes there, land whole
   in Linear;
-* a mixed plan lands its home, design document and repository-less tasks in Linear and its
-  public task in a `plans` member project, and a re-copy into Linear holds it one project;
+* a mixed plan lands its home, design document and every task in Linear and its public
+  task's view on `plans`, and a re-copy into Linear holds it one project; a mixed plan whose
+  public task carries a budget anchor is refused at copy;
 * **the road**: a plan of the incident's shape — three tasks naming the organization's
   repositories and one `kind: human` node naming none — is finished, approved and launched
   over `hiddenco-plans:<project>`, its three workers commit and land, its human node is
@@ -53,6 +54,7 @@ import urllib.request
 from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from dataclasses import asdict
 from pathlib import Path
 from typing import NamedTuple, NewType
 
@@ -87,6 +89,7 @@ from waits import timeout as e2e_timeout
 
 from orchestrator import design_approval, plan_check, plan_copy, plan_store
 from orchestrator.criteria_guard import APPENDIX
+from orchestrator.plan_budgets import BudgetId, ModernBudget, Source
 from orchestrator.plan_store import QualifiedProjectId
 from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
@@ -817,6 +820,11 @@ def test_an_all_hiddenco_plan_lands_whole_in_linear(
     # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]  # noqa: E501
 
 
+#: Where the store records, on a private home only, each public task's view, and the title
+#: of the neutral project the views on one public source are filed under.
+PUBLIC_PROJECTIONS = "onetaskgraph.public_projections"
+PUBLIC_WORK = "Public work"
+
 MIXED = (
     Node(
         NodeId("library"),
@@ -851,15 +859,17 @@ def _private_named(text: str) -> list[str]:
 # llmlint: ignore-block[e2e_not_mocked] The same three doubled boundaries as the journey above.
 @COPIES_THE_TRACKED_TREE
 @pytest.mark.xdist_group("linear-routed")
-def test_a_mixed_plan_keeps_its_home_in_linear_and_its_public_task_on_the_board(
+def test_a_mixed_plan_keeps_every_task_in_linear_and_shows_its_public_task_on_the_board(
     routed: Routed, tmp_path: Path, oneharness_bin: str
 ) -> None:
-    """A private item moves the home: only the public task's member reaches `plans`.
+    """A private item moves the home: only the public task's neutral view reaches `plans`.
 
-    The home, its design document and the task naming no repository land in the Linear
-    double beside the hiddenco task; the task naming this public repository lands in a
-    `plans` member project; and nothing on the board names a private repository. A copy of
-    the same plan into Linear afterwards finds the project it put there and holds one.
+    The home, its design document and every task — the hiddenco one, the one naming no
+    repository and the one naming this public repository — land in the Linear double; the
+    public task is seen on `plans` only as the store's view of it, under a `Public work`
+    project, recorded on the private home and nowhere public; and nothing on the board names
+    a private repository. A copy of the same plan into Linear afterwards finds the project it
+    put there and holds one.
     """
     with _gated(tmp_path, oneharness_bin, routed, public=[THIS_REPOSITORY]) as bench:
         name = f"test-{os.getpid()}-mixed"
@@ -868,18 +878,27 @@ def test_a_mixed_plan_keeps_its_home_in_linear_and_its_public_task_on_the_board(
         assert home.startswith(f"{LINEAR}:"), f"the home landed at {home}, not in {LINEAR}"
         stored = _items(routed, bench, home)
         placed = {node: str(held["id"]).partition(":")[0] for node, held in stored.items()}
-        assert placed == {"library": BOARD, "consumer": LINEAR, "rollout": LINEAR}, placed
+        assert placed == {"library": LINEAR, "consumer": LINEAR, "rollout": LINEAR}, placed
         shown = _just(routed, bench, "plans", "project", "show", home, "--json", seconds=120)
         assert shown.returncode == 0, shown.stdout + shown.stderr
-        members = json.loads(shown.stdout)["items"][0]["item"]["metadata"][plan_store.MEMBERS_KEY]
-        assert [str(member).partition(":")[0] for member in members] == [BOARD], members
+        metadata = json.loads(shown.stdout)["items"][0]["item"]["metadata"]
+        assert plan_store.MEMBERS_KEY not in metadata, metadata
+        views = [
+            (str(view["task"]), str(view["projection"]).partition(":")[0])
+            for view in metadata[PUBLIC_PROJECTIONS]["tasks"]
+        ]
+        assert views == [(str(stored["library"]["id"]), BOARD)], views
         assert f"`just orchestrate {home}`" in reported, reported
         project = _home_project(bench.linear, home)
         documents = [held for held in bench.linear.documents() if held["project"]]
         assert [held["project"]["id"] for held in documents] == [project["id"]], documents
         assert "orchestrator.plan-budgets" in project["metadata"], project["metadata"]
-        # One project and one task on the board, none of whose text names a private one.
-        assert len(BOARD_FIXTURE.created) == 2, [issue.title for issue in BOARD_FIXTURE.created]
+        # One neutral project and the public task's view on the board, none of whose text
+        # names a private one.
+        assert [issue.title for issue in BOARD_FIXTURE.created] == [
+            PUBLIC_WORK,
+            MIXED[0].title,
+        ], [issue.title for issue in BOARD_FIXTURE.created]
         for issue in BOARD_FIXTURE.created:
             assert _private_named(f"{issue.title}\n{issue.body}") == [], issue
 
@@ -941,6 +960,92 @@ def test_a_plan_whose_only_repository_naming_task_routes_lands_whole_in_linear(
     # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]  # noqa: E501
 
 
+def _copy_budget(node: Node, change: str) -> ModernBudget:
+    """A modern budget record ``node``'s task owns, of the ``change`` a design document lists."""
+    return ModernBudget(
+        id=BudgetId(f"{node.id}-{change}-copy-seconds"),
+        name=f"{node.id} {change} copy time",
+        schema_version=2,
+        source=Source.TELEMETRY,
+        check_runtime_seconds=1,
+        basis="design",
+        # Each budget is the repository's whose task owns it: a public task's record
+        # naming a private repository is refused at the public board.
+        repository=node.repository,
+        file="apps/web/budgets.yaml",
+        file_change=change,
+        measure="elapsed seconds of loopback copy",
+        inner_measure_reason="",
+        unit="seconds",
+        direction="max",
+        threshold=60,
+        workload="One loopback fixture copy.",
+        evidence="Synthetic routing fixture; whole record-read runtime estimated at 1 s.",
+        command="Read the fixture copy timing record without launching another copy.",
+    )
+
+
+def _budgeted_answers(node: Node) -> dict[str, object]:
+    """The answers ``node``'s task is regenerated from once it owns a budget."""
+    return {
+        "what": f"{COMMIT_MARKER} Name it {node.id}." if node.commits else "Reply with done.",
+        "why": "Exercise routing with a modern budget record.",
+        "acceptance_criteria": [
+            "The route is exercised end to end.",
+            "Every claim the dispatch makes about the finished work is true of the "
+            "tree as it finally stands.",
+        ],
+    }
+
+
+#: What the store says of a public view whose content carries a budget's anchor, which
+#: `templates/plan-task-budgets.md.j2` renders as raw HTML carrying an `id` attribute.
+RAW_HTML_REFUSED = "a local link or raw HTML its public projection cannot carry"
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]  # noqa: E501
+# The same placement and reason as the journeys above.
+# llmlint: ignore-block[e2e_not_mocked] The same three doubled boundaries as the journeys above.
+@COPIES_THE_TRACKED_TREE
+@pytest.mark.xdist_group("linear-routed")
+def test_a_mixed_plan_whose_public_task_carries_a_budget_is_refused_at_copy(
+    routed: Routed, tmp_path: Path, oneharness_bin: str
+) -> None:
+    """A public task's budget anchor refuses the whole copy of a mixed plan, writing nothing.
+
+    The task's budget section opens with the anchor its design document links to, raw HTML
+    carrying an attribute, which a public view cannot carry because it cannot read where the
+    HTML points. So until that template renders no raw HTML, a plan naming public and private
+    repositories whose public task carries a budget is refused at copy, naming the anchor.
+    """
+    from project_fixtures import owning
+
+    with _gated(tmp_path, oneharness_bin, routed, public=[THIS_REPOSITORY]) as bench:
+        name = f"test-{os.getpid()}-public-budget-anchor"
+        project = _draft(bench, name, MIXED)
+        library = MIXED[0]
+        owning(
+            AUTHORING,
+            name,
+            library.id,
+            [asdict(_copy_budget(library, "add"))],
+            bench.environment,
+            answers=_budgeted_answers(library),
+        )
+
+        copied = _just(routed, bench, "plans", "project", "copy", project, "--to", BOARD)
+
+        said = copied.stdout + copied.stderr
+        assert copied.returncode != 0, f"the public task's budget anchor was copied:\n{said}"
+        assert RAW_HTML_REFUSED in said, said
+        assert f'<a id=\\"{library.id}-add-copy-seconds\\">' in said, said
+        assert BOARD_FIXTURE.created == [], [issue.title for issue in BOARD_FIXTURE.created]
+        assert bench.linear.projects() == [], bench.linear.projects()
+        assert bench.linear.issues() == [], bench.linear.issues()
+    # llmlint: ignore-end[e2e_not_mocked]
+    # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]  # noqa: E501
+
+
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]  # noqa: E501
 # The same placement and reason as the journeys above.
 # llmlint: ignore-block[e2e_not_mocked] The same three doubled boundaries as the journeys above.
@@ -949,7 +1054,13 @@ def test_a_plan_whose_only_repository_naming_task_routes_lands_whole_in_linear(
 def test_modern_budget_links_are_recomputed_after_a_routed_copy(
     routed: Routed, tmp_path: Path, oneharness_bin: str
 ) -> None:
-    """Real routing creates current GitHub and Linear destinations from authoring."""
+    """Real routing creates current Linear destinations from authoring for a mixed plan.
+
+    Every task of a plan holding a private one is canonical in the private home, so the
+    budgets the private task owns link to its Linear issue. They sit on that task because a
+    public task's budget anchor is raw HTML its public view cannot carry, which
+    `test_a_mixed_plan_whose_public_task_carries_a_budget_is_refused_at_copy` holds.
+    """
     from project_fixtures import owning
 
     with _gated(tmp_path, oneharness_bin, routed, public=[THIS_REPOSITORY]) as bench:
@@ -958,48 +1069,15 @@ def test_modern_budget_links_are_recomputed_after_a_routed_copy(
         # One budget added and one changed, the two `file_change`s a design document lists
         # and links; an unchanged one is presentation-filtered out of the section these links
         # are in.
-        for node, change in zip(MIXED[:2], ("add", "change"), strict=True):
-            budget = {
-                "id": f"{node.id}-copy-seconds",
-                "name": f"{node.id} copy time",
-                "schema_version": 2,
-                "source": "telemetry",
-                "check_runtime_seconds": 1,
-                "basis": "design",
-                # Each budget is the repository's whose task owns it: a public task's record
-                # naming a private repository is refused at the public board.
-                "repository": node.repository,
-                "file": "apps/web/budgets.yaml",
-                "file_change": change,
-                "measure": "elapsed seconds of loopback copy",
-                "inner_measure_reason": "",
-                "unit": "seconds",
-                "direction": "max",
-                "threshold": 60,
-                "workload": "One loopback fixture copy.",
-                "evidence": (
-                    "Synthetic routing fixture; whole record-read runtime estimated at 1 s."
-                ),
-                "command": "Read the fixture copy timing record without launching another copy.",
-            }
-            owning(
-                AUTHORING,
-                name,
-                node.id,
-                [budget],
-                bench.environment,
-                answers={
-                    "what": f"{COMMIT_MARKER} Name it {node.id}."
-                    if node.commits
-                    else "Reply with done.",
-                    "why": "Exercise routing with a modern budget record.",
-                    "acceptance_criteria": [
-                        "The route is exercised end to end.",
-                        "Every claim the dispatch makes about the finished work is true of the "
-                        "tree as it finally stands.",
-                    ],
-                },
-            )
+        consumer = MIXED[1]
+        owning(
+            AUTHORING,
+            name,
+            consumer.id,
+            [asdict(_copy_budget(consumer, change)) for change in ("add", "change")],
+            bench.environment,
+            answers=_budgeted_answers(consumer),
+        )
         answers = no_budgets([HIDDENCO, THIS_REPOSITORY])
         answers.update(schema_version=2, checklist=[], repo_wide_effects=[])
         budgeted(AUTHORING, name, answers, bench.environment)
@@ -1032,8 +1110,9 @@ def test_modern_budget_links_are_recomputed_after_a_routed_copy(
                 assert "section_url" not in budget
                 assert str(bench.authoring) not in budget["location"]
                 hosts.add(budget["location"].split("/")[2])
-            # The public task's budget links to GitHub, the hiddenco one's to Linear.
-            assert hosts == {"github.com", "linear.app"}, writer["budgets"]
+            # Both budgets are the hiddenco task's, whose canonical issue is Linear's.
+            assert hosts == {"linear.app"}, writer["budgets"]
+            assert len(writer["budgets"]) == 2, writer["budgets"]
             assert writer["budgets"][0]["schema_version"] == 2
             # Re-render using current destination answers; no source-host fragment persists.
             base = _design_answers(MIXED)

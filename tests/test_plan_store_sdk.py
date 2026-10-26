@@ -1062,10 +1062,11 @@ def test_a_public_home_sends_a_plan_holding_a_private_task_to_the_private_source
     """Onto a public home a plan naming only private repositories is homed where they route.
 
     The boundary is on, so a plan every task of which routes to the source declared private
-    lands there whole, home and tasks. A mixed plan routes its private task away without
-    naming private work in the public home. An explicitly private project is refused at
-    that public home before anything is written. A single task copy is routed, which is
-    how a follow-up ticket of the organization reaches its own tracker.
+    lands there whole, home and tasks. A mixed plan lands there whole too, and its public
+    task is seen at the public home only as a neutral view naming no private work. An
+    explicitly private project is refused at that public home before anything is written. A
+    single task copy is routed, which is how a follow-up ticket of the organization reaches
+    its own tracker.
     """
     _routed_sources(monkeypatch, tmp_path, home="public")
     monkeypatch.setenv("ONETASKGRAPH_SOURCES__DRAFT__VISIBILITY", "private")
@@ -1105,15 +1106,23 @@ def test_a_public_home_sends_a_plan_holding_a_private_task_to_the_private_source
         for item in report.items
         if item.root.destination
     }
-    assert destinations["draft:mixed"] == "member", destinations
-    assert destinations["draft:mixed/task-0"] == "home", destinations
-    assert destinations["draft:mixed/task-1"] == "member", destinations
+    # Every task of a plan holding a private one stays canonical beside its private home; the
+    # public task is seen at the public home only as the store's neutral view of it.
+    assert destinations == {
+        "draft:mixed": "member",
+        "draft:mixed/task-0": "member",
+        "draft:mixed/task-1": "member",
+    }, destinations
     public_records = {
         path: path.read_text(encoding="utf-8") for path in (tmp_path / "home").rglob("*.md")
     }
-    assert public_records
+    views = [content for content in public_records.values() if "title: Task 0" in content]
+    assert len(views) == 1, public_records
+    assert "github.com/nickderobertis/onevcs" in views[0], views
+    assert any("title: Public work" in content for content in public_records.values())
     for path, content in public_records.items():
         assert "hiddenco" not in content and "qh-api" not in content, (path, content)
+        assert "mixed" not in content and "Task 1" not in content, (path, content)
 
     # Public repositories leave no route to a private home: only the project's explicit
     # classification makes this copy private, so it must refuse at the requested home.

@@ -843,6 +843,27 @@ def _of_the_monitor(events: list[GraphEvent], kind: str) -> list[GraphEvent]:
     ]
 
 
+#: The rule `oneagentgraph` records a member's death under when its graph was signalled to
+#: stop. A settled run's driver signals its observer graph before it exits (onepipeline's
+#: "end the monitor's judge command when its run ends", released in 0.91.1), so a monitor
+#: that kept watching to the end of its run is recorded dying this way as the run ends.
+STOPPED_WITH_ITS_RUN = "signalled"
+GRAPH_SETTLED = "graph-settled"
+
+
+def _ended_with_the_run(events: list[GraphEvent], death: GraphEvent) -> bool:
+    """Whether ``death`` is the run's own end stopping the graph rather than the incident.
+
+    Only a death by the graph's stop signal that is the graph's last word — followed by
+    its `graph-settled` and no other member's event — is: a monitor its own quiet turn
+    killed dies under the rule its own failure names, mid-run, with the graph going on.
+    """
+    if death.get("payload", {}).get("rule") != STOPPED_WITH_ITS_RUN:
+        return False
+    after = events[events.index(death) + 1 :]
+    return [event.get("kind") for event in after] == [GRAPH_SETTLED]
+
+
 #: The event a member's own words arrive on, and the role that makes them the member's
 #: rather than its supervisor's.
 TURN_MESSAGE = "turn-message"
@@ -993,7 +1014,11 @@ def test_a_monitor_taking_quiet_turns_survives_a_whole_real_run(
         f"the dag-scope graph recorded nothing for this run, so the absence of a "
         f"`{MEMBER_DIED}` below proves nothing:\n{printed}"
     )
-    died = _of_the_monitor(events, MEMBER_DIED)
+    died = [
+        death
+        for death in _of_the_monitor(events, MEMBER_DIED)
+        if not _ended_with_the_run(events, death)
+    ]
     assert not died, (
         f"the `{MONITOR_MEMBER}` member did not survive a run of quiet turns; the graph "
         f"recorded {json.dumps(died)}. The run goes on being driven and reporting "

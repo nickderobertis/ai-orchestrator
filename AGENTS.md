@@ -607,11 +607,16 @@ route is filed there; read where one lands with `just plans sources route plans 
 is screened, plans are drafted in the private `authoring` source, and **a host doing an
 organization's work declares that organization's sources `visibility: private` in its user
 layer before it adopts this change**, since an undeclared tracker refuses every task routed
-to it. Where a plan's home lands is the store's to decide from the repositories its tasks and
+to it. **An exact public phrase that carries a private repository's term** — a machine name a
+follow-up ticket records, say — goes in the host's phrase list,
+`$ONEVCS_HOME/public-phrases.yml`: host state outside every checkout, which nothing tracked
+writes and `just repos-apply` does not install. Never list the term itself, and never edit a
+private repository's own declarations to the same end. Where a plan's home lands is the store's to decide from the repositories its tasks and
 its project name (`docs/orchestration.md`, *The public write boundary*), never yours. A plan
-naming any private repository has its home, its documents and its tasks naming no repository
-in the private Linear source the host declares, and its public-repository tasks on `plans` in
-a member project; a task naming no repository never decides the home, and a copy that would
+naming any private repository has its home, its documents and every task in the private
+Linear source the host declares, each public-repository task seen on `plans` only as the
+store's neutral view under a `Public work` project; a task naming no repository never decides
+the home, and a copy that would
 put a private plan's content on a public destination is refused with nothing written, so a
 plan meant to keep its home on `plans` names a public repository. Approve and launch the home
 id `just finish-plan` reports, wherever it landed — for a Linear home `just approve-design

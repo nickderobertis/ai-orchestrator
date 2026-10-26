@@ -706,7 +706,7 @@ class LinkedCore(NamedTuple):
 #: wheels: `config/oneharness.version` reads 0.26.1 and names the `oneharness-cli`
 #: wheel, whose own CycloneDX SBOM declares the `oneharness-core` it is compiled
 #: against as 0.29.1 (`tests/test_engine_history_vocabulary.py` re-reads that pairing
-#: off the wheel for `docs/telemetry.md`); on the adopted onepipeline 0.90.0 the
+#: off the wheel for `docs/telemetry.md`); on the adopted onepipeline 0.92.0 the
 #: engine wheel links 0.29.1 for every dependent — while the sibling `oneagentgraph-cli`
 #: wheel declares 0.29.1 and `onejudge-cli` 0.29.0, which is the pairing
 #: `test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs`
@@ -729,7 +729,7 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 LINKED_HARNESS_CORES = (
     LinkedCore(dependent="oneagentgraph", dependent_version="0.8.0", core="0.29.1"),
     LinkedCore(dependent="onejudge", dependent_version="0.21.0", core="0.29.1"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.90.0", core="0.29.1"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.92.0", core="0.29.1"),
 )
 
 #: How a crate names itself in a compiled binary: cargo embeds the registry source

@@ -208,7 +208,7 @@ own liveness *and* the `onepipeline` release it links:
 
 ```sh
 curl -s http://127.0.0.1:8765/healthz
-{"status":"ok","onepipeline_version":"0.90.0"}
+{"status":"ok","onepipeline_version":"0.92.0"}
 ```
 
 That release is the reader's own, and it is a **different adoption** from
@@ -253,7 +253,7 @@ serves another fails there instead of being noticed by a person.
 
 ### What the adopted view renders, and what it has nothing to render
 
-**`onepipeline-ui` 0.52.0**, the release `config/onepipeline-ui.version` pins, carries
+**`onepipeline-ui` 0.54.0**, the release `config/onepipeline-ui.version` pins, carries
 what makes this a supervising surface: the project sidebar grouped by each run's
 effective group with its kind filter, the run's **Channel** tab with its byte-for-byte
 reply composer and `attest`, the per-run **Stop** with the owner-naming refusal, and the
