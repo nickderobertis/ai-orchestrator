@@ -27,7 +27,12 @@ from sibling_facts import (
     scratch_checkout,
 )
 
-from orchestrator.host_installs import AWAITING_FIRST_ADOPTION, INSTALLED, by_producer
+from orchestrator.host_installs import (
+    AWAITING_FIRST_ADOPTION,
+    CONSUMER_DEFAULTS,
+    INSTALLED,
+    by_producer,
+)
 
 #: Three scratch siblings, each the shape one of this host's producers has been in: one
 #: declaring nothing and named by no rule, one that gained targets and a language after
@@ -89,7 +94,9 @@ def test_only_the_sibling_contradicting_the_tracked_override_is_named(tmp_path: 
     }
     defaults = override_default_targets(RELEASES.read_text(encoding="utf-8"))
 
-    assert release_contradictions(defaults, declarations, INSTALLED, AWAITING_FIRST_ADOPTION) == [
+    assert release_contradictions(
+        defaults, declarations, INSTALLED, AWAITING_FIRST_ADOPTION, CONSUMER_DEFAULTS
+    ) == [
         f"{CONTRADICTING} no longer declares the default target 'cli' "
         "config/onevcs.releases.yml names for it; it declares ['crate']"
     ]
@@ -107,3 +114,14 @@ def test_an_installed_producer_resolves_the_default_its_row_installs() -> None:
     assert default_target_complaint(QUIET, "pypi", defaults) is not None
     assert default_target_complaint(QUIET, None, defaults) is None
     assert default_target_complaint(CONTRADICTING, "cli", defaults) is None
+
+
+def test_a_consumer_default_resolves_the_overrides_target_with_no_row() -> None:
+    """printobserver is resolved the override's default, which no row of the table names."""
+    printobserver = "github.com/nickderobertis/printobserver"
+    defaults = override_default_targets(RELEASES.read_text(encoding="utf-8"))
+    assert by_producer(printobserver) is None and printobserver in CONSUMER_DEFAULTS
+
+    assert default_target_complaint(printobserver, "github-release", defaults) is None
+    unresolved = default_target_complaint(printobserver, None, defaults)
+    assert unresolved is not None and "CONSUMER_DEFAULTS" in unresolved, unresolved

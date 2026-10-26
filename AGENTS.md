@@ -482,11 +482,13 @@ package — and a consumer says which one it consumes, because "the crate is out
 sits outside the registry and the rules file so an older `onevcs` sharing the host reads
 a byte-identical registry. **This host's override is tracked as
 `config/onevcs.releases.yml` and installed by `just repos-apply`** beside the rules file;
-it names, per producer this host installs, the wheel it installs as that producer's
-`default_target` — the one a consumer naming no `consumes` waits for, since a
-`local-direct` identity refuses a `consumes` — and gives this repository alone the
-`published` rung, leaving every other repository on the global `fast`.
-`orchestrator/host_installs.py` is the table those default targets are held to. So a
+it names each producer's `default_target` — the one a consumer naming no `consumes`
+waits for, since a `local-direct` identity refuses a `consumes` — and gives this
+repository alone the `published` rung, leaving every other repository on the global
+`fast`. A default is one of two kinds: for a producer this host installs, the wheel it
+installs; for one it installs nothing of, such as `printobserver`'s `github-release`, the
+artifact a consumer outside this repository waits on. `orchestrator/host_installs.py`
+says which each producer is and is the table those defaults are held to. So a
 plan of this repository awaits a release by
 **depending on the producer's node and naming no `consumes`**: the node resolves
 `published` from the override and waits for the release carrying that producer's
@@ -1773,7 +1775,8 @@ identity. It also refuses the release-adoption shapes a matcher can see will nev
 complete — a `consumes` naming a target its producer does not resolve, a `published`
 node with no target to wait on, a `fast` node behind a release publishing where no change
 request opens, a node of this repository waiting on an artifact nothing here installs, a
-node elsewhere taking this host's own `default_target` — while whether an adoption is
+node elsewhere taking the `default_target` of a producer this host installs, which is this
+host's own wheel — while whether an adoption is
 the *right* one, the goal needing it and the task naming the pin that governs the fix,
 is `just review-plan`'s judged question and never this tier's. And it refuses a task
 whose issue body, as `orchestrator/task_body.py` composes and measures it, would exceed

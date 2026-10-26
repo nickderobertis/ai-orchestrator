@@ -31,6 +31,7 @@ from sibling_facts import (
     advance,
     declaration,
     declared_targets,
+    default_target_accounting,
     held_checkouts,
     override_default_targets,
     read_declarations,
@@ -42,6 +43,7 @@ from sibling_facts import (
 
 from orchestrator.host_installs import (
     AWAITING_FIRST_ADOPTION,
+    CONSUMER_DEFAULTS,
     INSTALLED,
     Installed,
     by_artifact,
@@ -280,39 +282,34 @@ def _override_default_targets() -> dict[RepoIdentity, str]:
 #: for the reason `EXPECTED_ROWS` is: none, since `onebudgetspec`'s first release was
 #: adopted with its row, its pin and its dependency.
 EXPECTED_AWAITING: frozenset[RepoIdentity] = frozenset()
+#: The producers whose override default is the artifact a consumer outside this repository
+#: waits on, stated in full for the same reason: printobserver, whose `github-release` is the
+#: program's own release.
+PRINTOBSERVER: RepoIdentity = "github.com/nickderobertis/printobserver"
+EXPECTED_CONSUMER_DEFAULTS: frozenset[RepoIdentity] = frozenset({PRINTOBSERVER})
 #: A producer that has released nothing yet, standing in for the next one whose override
 #: rule precedes its first adoption: the set is empty, and what it admits still has to be
 #: shown on a copy holding one.
 UNRELEASED: RepoIdentity = "github.com/nickderobertis/unreleased"
+#: The one row every "in two sets" case below puts in a second one.
+ONEBUDGETSPEC: RepoIdentity = "github.com/nickderobertis/onebudgetspec"
 
 
 def override_complaints(
     defaults: dict[RepoIdentity, str],
     rows: tuple[Installed, ...],
     awaiting: frozenset[RepoIdentity],
+    consumers: frozenset[RepoIdentity] = CONSUMER_DEFAULTS,
 ) -> list[str]:
-    """Every way the override's default targets disagree with the table and the set.
+    """Every way the override's default targets disagree with the table and the two sets.
 
     Taken as arguments rather than read here so that each refusal can be shown on a
-    defective copy, beside the tracked one passing.
+    defective copy, beside the tracked one passing. Which set accounts for each default
+    is `tests/sibling_facts.py`'s :func:`default_target_accounting`, the reader the
+    checkout tiers run too; what is added here is that a row's default is its target.
     """
     expected = {row.producer: row.target for row in rows}
-    found = [
-        f"{producer} is both a row and awaiting its first adoption; the node that adds "
-        "the row removes it from the set"
-        for producer in sorted(awaiting & expected.keys())
-    ]
-    found += [
-        f"config/onevcs.releases.yml names {producer}'s default target {target!r}, and "
-        "neither a row nor the awaiting-first-adoption set accounts for it"
-        for producer, target in sorted(defaults.items())
-        if producer not in expected and producer not in awaiting
-    ]
-    found += [
-        f"{producer} is awaiting its first adoption, and config/onevcs.releases.yml names "
-        "no default target for it"
-        for producer in sorted(awaiting - defaults.keys())
-    ]
+    found = default_target_accounting(defaults, rows, awaiting, consumers)
     found += [
         f"config/onevcs.releases.yml names {producer}'s default target "
         f"{defaults.get(producer)!r}, and its row says {target!r}"
@@ -327,11 +324,13 @@ def test_the_overrides_default_target_per_producer_is_the_rows_target() -> None:
 
     Both directions: a producer in the override with no row is a default target nothing
     says the artifact of, and a row with no rule is a producer a consumer naming no
-    `consumes` would get no target from — held for ever under `published`. The one
-    admitted gap is a producer on the awaiting-first-adoption set, whose rule precedes
-    the release that would give it a row.
+    `consumes` would get no target from — held for ever under `published`. The admitted
+    gaps are a producer on the awaiting-first-adoption set, whose rule precedes the release
+    that would give it a row, and one in `CONSUMER_DEFAULTS`, whose default is no wheel here.
     """
     assert AWAITING_FIRST_ADOPTION == EXPECTED_AWAITING
+    assert CONSUMER_DEFAULTS == EXPECTED_CONSUMER_DEFAULTS
+    assert _override_default_targets()[PRINTOBSERVER] == "github-release"
     assert (
         override_complaints(_override_default_targets(), INSTALLED, AWAITING_FIRST_ADOPTION) == []
     )
@@ -342,7 +341,19 @@ def test_a_producer_in_the_override_with_neither_a_row_nor_an_entry_is_refused()
 
     assert override_complaints(defaults, INSTALLED, AWAITING_FIRST_ADOPTION) == [
         "config/onevcs.releases.yml names github.com/nickderobertis/unadopted's default "
-        "target 'pypi', and neither a row nor the awaiting-first-adoption set accounts for it"
+        "target 'pypi', and neither a row, AWAITING_FIRST_ADOPTION nor CONSUMER_DEFAULTS "
+        "accounts for it"
+    ]
+
+
+def test_printobservers_rule_is_accounted_for_by_the_consumer_set_alone() -> None:
+    """Off `CONSUMER_DEFAULTS`, printobserver's tracked rule is a default nothing accounts for."""
+    assert by_producer(PRINTOBSERVER) is None
+    assert override_complaints(
+        _override_default_targets(), INSTALLED, AWAITING_FIRST_ADOPTION, frozenset()
+    ) == [
+        f"config/onevcs.releases.yml names {PRINTOBSERVER}'s default target 'github-release', "
+        "and neither a row, AWAITING_FIRST_ADOPTION nor CONSUMER_DEFAULTS accounts for it"
     ]
 
 
@@ -353,29 +364,51 @@ def test_the_set_is_what_admits_an_awaiting_producer() -> None:
     assert override_complaints(defaults, INSTALLED, frozenset({UNRELEASED})) == []
     assert override_complaints(defaults, INSTALLED, frozenset()) == [
         f"config/onevcs.releases.yml names {UNRELEASED}'s default target 'pypi', and neither "
-        "a row nor the awaiting-first-adoption set accounts for it"
+        "a row, AWAITING_FIRST_ADOPTION nor CONSUMER_DEFAULTS accounts for it"
     ]
 
 
 def test_the_onebudgetspec_row_is_what_accounts_for_its_tracked_rule() -> None:
     """Adopted, onebudgetspec's rule is admitted by its row: without the row it is refused."""
-    producer = "github.com/nickderobertis/onebudgetspec"
-    without = tuple(row for row in INSTALLED if row.producer != producer)
+    without = tuple(row for row in INSTALLED if row.producer != ONEBUDGETSPEC)
 
     assert len(without) == len(INSTALLED) - 1
     assert override_complaints(_override_default_targets(), without, AWAITING_FIRST_ADOPTION) == [
-        f"config/onevcs.releases.yml names {producer}'s default target 'pypi', and neither "
-        "a row nor the awaiting-first-adoption set accounts for it"
+        f"config/onevcs.releases.yml names {ONEBUDGETSPEC}'s default target 'pypi', and "
+        "neither a row, AWAITING_FIRST_ADOPTION nor CONSUMER_DEFAULTS accounts for it"
     ]
 
 
-def test_a_producer_with_both_a_row_and_an_entry_on_the_set_is_refused() -> None:
-    """The adopting node adds the row and empties the entry together; half of that fails."""
-    producer = "github.com/nickderobertis/onebudgetspec"
-
-    assert override_complaints(_override_default_targets(), INSTALLED, frozenset({producer})) == [
-        f"{producer} is both a row and awaiting its first adoption; the node that adds the "
-        "row removes it from the set"
+@pytest.mark.parametrize(
+    "awaiting,consumers,holding",
+    (
+        pytest.param(
+            frozenset({ONEBUDGETSPEC}),
+            CONSUMER_DEFAULTS,
+            f"{ONEBUDGETSPEC} is in a row of orchestrator/host_installs.py and "
+            "AWAITING_FIRST_ADOPTION",
+            id="a row awaiting its first adoption",
+        ),
+        pytest.param(
+            frozenset(),
+            CONSUMER_DEFAULTS | {ONEBUDGETSPEC},
+            f"{ONEBUDGETSPEC} is in a row of orchestrator/host_installs.py and CONSUMER_DEFAULTS",
+            id="a row that is a consumer default",
+        ),
+        pytest.param(
+            frozenset({PRINTOBSERVER}),
+            CONSUMER_DEFAULTS,
+            f"{PRINTOBSERVER} is in AWAITING_FIRST_ADOPTION and CONSUMER_DEFAULTS",
+            id="a consumer default awaiting its first adoption",
+        ),
+    ),
+)
+def test_a_producer_in_two_of_the_three_is_refused(
+    awaiting: frozenset[RepoIdentity], consumers: frozenset[RepoIdentity], holding: str
+) -> None:
+    """Each set decides whose artifact the default is, so two of them decide it twice."""
+    assert override_complaints(_override_default_targets(), INSTALLED, awaiting, consumers) == [
+        f"{holding}; a producer the override gives a default target is in exactly one of the three"
     ]
 
 
@@ -383,8 +416,21 @@ def test_an_entry_on_the_set_the_override_does_not_name_is_refused() -> None:
     awaiting = AWAITING_FIRST_ADOPTION | {"github.com/nickderobertis/unruled"}
 
     assert override_complaints(_override_default_targets(), INSTALLED, awaiting) == [
-        "github.com/nickderobertis/unruled is awaiting its first adoption, and "
+        "github.com/nickderobertis/unruled is in AWAITING_FIRST_ADOPTION, and "
         "config/onevcs.releases.yml names no default target for it"
+    ]
+
+
+def test_a_consumer_default_the_override_does_not_name_is_refused() -> None:
+    defaults = {
+        producer: target
+        for producer, target in _override_default_targets().items()
+        if producer != PRINTOBSERVER
+    }
+
+    assert override_complaints(defaults, INSTALLED, AWAITING_FIRST_ADOPTION) == [
+        f"{PRINTOBSERVER} is in CONSUMER_DEFAULTS, and config/onevcs.releases.yml names no "
+        "default target for it"
     ]
 
 
@@ -420,8 +466,9 @@ def _scratch_producers(root: Path, defaults: dict[RepoIdentity, str] | None = No
     """A checkout list of one scratch producer per rule of the tracked override.
 
     Each declares only what this repository decides of it: a row's target under the
-    row's artifact, and for a producer awaiting its first adoption the override's
-    default target under an id of its own, since nothing here names that artifact yet.
+    row's artifact, and for a producer with no row — awaiting its first adoption, or a
+    consumer default — the override's default target under an id of its own, since
+    nothing here names that artifact.
     """
     rows = {row.producer: row for row in INSTALLED}
     paths = [
@@ -449,17 +496,22 @@ def _contradictions(
     manifest: Path,
     defaults: dict[RepoIdentity, str] | None = None,
     awaiting: frozenset[RepoIdentity] = AWAITING_FIRST_ADOPTION,
+    consumers: frozenset[RepoIdentity] = CONSUMER_DEFAULTS,
 ) -> list[str]:
     """What the readers find, over the checkouts ``manifest`` lists, against the tracked files.
 
-    ``defaults`` and ``awaiting`` default to the tracked override and set; a journey about
-    a producer ahead of its first adoption names a copy holding one.
+    ``defaults``, ``awaiting`` and ``consumers`` default to the tracked override and sets; a
+    journey about a defective registration names a copy holding the defect.
     """
     declarations = {
         identity: declared_targets(paths[0]) for identity, paths in held_checkouts(manifest).items()
     }
     return release_contradictions(
-        defaults or _override_default_targets(), declarations, INSTALLED, awaiting
+        defaults if defaults is not None else _override_default_targets(),
+        declarations,
+        INSTALLED,
+        awaiting,
+        consumers,
     )
 
 
@@ -597,15 +649,99 @@ def test_a_producer_awaiting_its_first_adoption_still_contradicts_by_dropping_it
 def test_a_repository_the_override_names_no_default_for_is_never_judged(tmp_path: Path) -> None:
     """A registered repository declaring targets the override says nothing of is its business."""
     manifest = _scratch_producers(tmp_path)
+    unruled = "github.com/nickderobertis/unruled-sibling"
     other = scratch_checkout(
-        tmp_path / "printobserver",
-        "github.com/nickderobertis/printobserver",
-        {"release-targets.toml": declaration({"crate": "crate:printobserver"})},
+        tmp_path / "unruled-sibling",
+        unruled,
+        {"release-targets.toml": declaration({"crate": "crate:unruled-sibling"})},
     )
     manifest.write_text(manifest.read_text(encoding="utf-8") + f"{other}\n", encoding="utf-8")
 
-    assert "github.com/nickderobertis/printobserver" in held_checkouts(manifest)
+    assert unruled in held_checkouts(manifest)
     assert _contradictions(manifest) == []
+
+
+def test_printobserver_declaring_its_default_and_more_contradicts_nothing(tmp_path: Path) -> None:
+    """A consumer default has no row, so no artifact is compared: the target name is all."""
+    manifest = _scratch_producers(tmp_path)
+    advance(
+        _checkout(manifest, PRINTOBSERVER),
+        {
+            "release-targets.toml": declaration(
+                {
+                    "crate": "crate:printobserver",
+                    "pypi-cli": "pypi:printobserver-cli",
+                    "github-release": "release:printobserver",
+                }
+            )
+        },
+    )
+
+    assert _contradictions(manifest) == []
+
+
+@pytest.mark.parametrize(
+    "declared,complaint",
+    (
+        pytest.param(
+            {"crate": "crate:printobserver"},
+            f"{PRINTOBSERVER} no longer declares the default target 'github-release' "
+            "config/onevcs.releases.yml names for it; it declares ['crate']",
+            id="a declaration without the default target",
+        ),
+        pytest.param(
+            None,
+            f"{PRINTOBSERVER} declares no release targets at its base, and "
+            "config/onevcs.releases.yml names 'github-release' as its default target",
+            id="no declaration at all",
+        ),
+    ),
+)
+def test_a_consumer_default_its_base_does_not_declare_contradicts_the_override(
+    tmp_path: Path, declared: dict[str, str] | None, complaint: str
+) -> None:
+    """The one contradiction a consumer default can have, over a real scratch checkout."""
+    manifest = _scratch_producers(tmp_path)
+    advance(
+        _checkout(manifest, PRINTOBSERVER),
+        {"release-targets.toml": None if declared is None else declaration(declared)},
+    )
+
+    assert _contradictions(manifest) == [complaint]
+
+
+def test_the_readers_refuse_each_way_the_three_sets_can_miss_the_override(tmp_path: Path) -> None:
+    """The accounting, through the readers the checkout tier runs, over real scratch checkouts.
+
+    Every producer declares exactly what its rule names, so each finding is the
+    registration's alone: a producer in two of the three sets, a consumer default the
+    override names no rule for, and an override producer in none of them.
+    """
+    unadopted = "github.com/nickderobertis/unadopted"
+    defaults = {**_override_default_targets(), unadopted: "pypi"}
+    manifest = _scratch_producers(tmp_path, defaults)
+    tracked = _override_default_targets()
+    no_rule = {
+        producer: target for producer, target in tracked.items() if producer != PRINTOBSERVER
+    }
+
+    assert _contradictions(manifest, tracked) == []
+    assert _contradictions(manifest, tracked, frozenset({PRINTOBSERVER})) == [
+        f"{PRINTOBSERVER} is in AWAITING_FIRST_ADOPTION and CONSUMER_DEFAULTS; a producer the "
+        "override gives a default target is in exactly one of the three"
+    ]
+    assert _contradictions(manifest, tracked, consumers=CONSUMER_DEFAULTS | {ONEBUDGETSPEC}) == [
+        f"{ONEBUDGETSPEC} is in a row of orchestrator/host_installs.py and CONSUMER_DEFAULTS; a "
+        "producer the override gives a default target is in exactly one of the three"
+    ]
+    assert _contradictions(manifest, no_rule) == [
+        f"{PRINTOBSERVER} is in CONSUMER_DEFAULTS, and config/onevcs.releases.yml names no "
+        "default target for it"
+    ]
+    assert _contradictions(manifest, defaults) == [
+        f"config/onevcs.releases.yml names {unadopted}'s default target 'pypi', and neither a "
+        "row, AWAITING_FIRST_ADOPTION nor CONSUMER_DEFAULTS accounts for it"
+    ]
 
 
 # llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] This marker is not a
@@ -637,7 +773,9 @@ def test_a_held_producers_contradiction_fails_only_a_change_editing_the_registra
     settle_drift(
         [
             *read.unreadable,
-            *release_contradictions(defaults, read.found, INSTALLED, AWAITING_FIRST_ADOPTION),
+            *release_contradictions(
+                defaults, read.found, INSTALLED, AWAITING_FIRST_ADOPTION, CONSUMER_DEFAULTS
+            ),
         ]
     )
     # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]

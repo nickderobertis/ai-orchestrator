@@ -46,6 +46,11 @@ from criteria_examples import (
     RELEASED_ELSEWHERE_IN_PROSE,
     STATES_THE_PROPERTY_INSTEAD,
 )
+from nx_workspace import (
+    answering_this_checkouts_origin,
+    copy_working_tree,
+    share_this_checkouts_install,
+)
 from project_fixtures import older_engine as _older_engine
 from project_fixtures import project_from_plan, reviewed
 from scratch_identity import GIT_IDENTITY, registered, rules_for_hosted, seeded
@@ -3036,15 +3041,18 @@ def test_a_node_of_this_repository_adopting_a_wheel_is_accepted_whatever_its_cri
     assert "2 dispatched node(s)" in accepted.stdout, accepted.stdout
 
 
-def test_a_node_elsewhere_taking_the_hosts_default_target_is_told_what_to_write(
+def test_a_node_elsewhere_naming_its_target_or_behind_an_unknown_producer_is_accepted(
     tmp_path: Path,
 ) -> None:
-    """R7: the shape every planner outside this repository meets first.
+    """R7 passes over a producer this host installs nothing from, and over a named target.
 
-    The override gives the producer a `default_target`, exactly as this host's tracked
-    one does for every producer it installs, and a `published` node of another
-    repository naming no `consumes` would take it — this host's own wheel. The refusal
-    says what to write and lists the producer's targets; writing it is accepted.
+    The override gives a scratch producer a `default_target`, and that producer is in none
+    of `host_installs`'s three sets, so this host cannot say whose artifact the default is:
+    a `published` node of another repository naming no `consumes` takes it unrefused. The
+    same node publishing under a change-request policy and naming its target in `consumes`
+    is accepted too, which is the shape the refusal for this host's own wheels asks for.
+    The refusal itself is driven under the tracked override below, over producers named by
+    their real origins.
     """
     root = tmp_path / "registry"
     registered(
@@ -3055,19 +3063,15 @@ def test_a_node_elsewhere_taking_the_hosts_default_target_is_told_what_to_write(
         releases=_releases(root, library={"default_target": "pypi"}),
     )
 
-    refused = _adoption_check(tmp_path, PRODUCER, _consumer(adoption="published"))
-    accepted = _adoption_check(
+    defaulted = _adoption_check(tmp_path, PRODUCER, _consumer(adoption="published"))
+    named = _adoption_check(
         tmp_path, PRODUCER, _consumer(adoption="published", consumes={"producer": "crate"})
     )
 
-    assert refused.returncode == 1, refused.stdout + refused.stderr
-    assert "check-plan: scripts/plan-check.sh: consumer: consumes:" in refused.stderr, (
-        refused.stderr
-    )
-    assert "`default_target` ('pypi')" in refused.stderr, refused.stderr
-    assert "`consumes: {producer: <target>}`" in refused.stderr, refused.stderr
-    assert "resolves: pypi, crate" in refused.stderr, refused.stderr
-    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    for accepted in (defaulted, named):
+        assert _adoption_refusals(accepted) == [], accepted.stderr
+        assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+        assert "2 dispatched node(s)" in accepted.stdout, accepted.stdout
 
 
 def test_a_plan_whose_repositories_the_registry_does_not_know_earns_no_adoption_refusal(
@@ -3144,6 +3148,10 @@ LLMLINT = "github.com/nickderobertis/llmlint"
 UNRULED = "github.com/nickderobertis/unruled-producer"
 #: A repository of this owner that is neither this one nor a producer: a node elsewhere.
 ELSEWHERE = "github.com/nickderobertis/service"
+#: The producer whose tracked default is the artifact a consumer outside this repository
+#: waits on, and that artifact as printobserver's own declaration names it.
+PRINTOBSERVER = "github.com/nickderobertis/printobserver"
+PRINTOBSERVER_RELEASE = ("github-release", "release:printobserver")
 
 
 def _hosted_checkout(root: Path, origin: str, declaration: str | None = None) -> Path:
@@ -3187,7 +3195,14 @@ def tracked_override(tmp_path_factory: pytest.TempPathFactory) -> dict[str, str]
     # llmlint is named outright rather than only through the table, so a table that lost
     # its row still registers the producer and the journeys below read that as a refusal
     # rather than missing it as a repository this host cannot answer for.
-    producers = sorted({LLMLINT, *(row.producer for row in host_installs.INSTALLED)})
+    producers = sorted(
+        {
+            LLMLINT,
+            PRINTOBSERVER,
+            *(row.producer for row in host_installs.INSTALLED),
+            *host_installs.CONSUMER_DEFAULTS,
+        }
+    )
     checkouts = [_hosted_checkout(root, producer, _stand_in(producer)) for producer in producers]
     checkouts.append(
         _hosted_checkout(root, UNRULED, _declaring(("pypi", "pypi:unruled-producer-cli")))
@@ -3221,12 +3236,18 @@ def tracked_override(tmp_path_factory: pytest.TempPathFactory) -> dict[str, str]
 
 
 def _stand_in(producer: str) -> str:
-    """``producer``'s declaration as the table has it: its row's target, and a crate."""
+    """``producer``'s declaration as the table has it: its row's target, and a crate.
+
+    printobserver has no row, and declares the release its own declaration names
+    `github-release` — the target the tracked override gives it as its default.
+    """
     name = producer.rpartition("/")[2]
     row = host_installs.by_producer(producer)
     declared = [("crate", f"crate:{name}")]
     if row is not None:
         declared.append((row.target, row.artifact))
+    if producer == PRINTOBSERVER:
+        declared.append(PRINTOBSERVER_RELEASE)
     return _declaring(*declared)
 
 
@@ -3306,7 +3327,13 @@ def test_a_node_of_this_repository_waiting_on_llmlints_crate_is_still_refused(
 def test_a_node_elsewhere_taking_any_producers_default_target_is_still_refused(
     tmp_path: Path, tracked_override: dict[str, str], row: host_installs.Installed
 ) -> None:
-    """Every default the tracked override sets is this host's, llmlint's among them."""
+    """Every default the tracked override gives a producer this host installs, llmlint's too.
+
+    Each row of `host_installs.INSTALLED` names a wheel this host installs, so a node
+    elsewhere taking that default is refused. The override's other kind of default, the
+    artifact a consumer outside this repository waits on, is printobserver's, which the
+    journey below accepts.
+    """
     released, adopting = _behind(row.producer, repo=ELSEWHERE, adoption="published")
 
     checked = _adoption_check(tmp_path, released, adopting, environment=tracked_override)
@@ -3315,6 +3342,144 @@ def test_a_node_elsewhere_taking_any_producers_default_target_is_still_refused(
     (refused,) = _adoption_refusals(checked)
     assert refused.startswith("check-plan: scripts/plan-check.sh: adopting: consumes:"), refused
     assert f"`default_target` ({row.target!r})" in refused, refused
+    assert f"{row.producer} is a producer this host installs from" in refused, refused
+
+
+def test_a_local_direct_node_elsewhere_awaits_printobservers_release_with_no_refusal(
+    tmp_path: Path, tracked_override: dict[str, str]
+) -> None:
+    """The wait the printobserver rule exists for, on a repository that cannot name `consumes`.
+
+    `ELSEWHERE` publishes `local-direct`, whose engine refuses a `consumes` entry, so the
+    producer's default is the only target it can wait on — and the tracked override gives
+    printobserver one, `github-release`, which `host_installs` holds as a consumer default
+    rather than as a wheel this host installs. Nothing about the node is refused.
+    """
+    released, adopting = _behind(PRINTOBSERVER, repo=ELSEWHERE, adoption="published")
+
+    checked = _adoption_check(tmp_path, released, adopting, environment=tracked_override)
+
+    assert PRINTOBSERVER in host_installs.CONSUMER_DEFAULTS
+    assert _adoption_refusals(checked) == [], checked.stderr
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+    assert "2 dispatched node(s)" in checked.stdout, checked.stdout
+
+
+def test_a_node_of_this_repository_behind_printobserver_is_refused_as_uninstalled(
+    tmp_path: Path, tracked_override: dict[str, str]
+) -> None:
+    """R5 still holds: the consumer default is an artifact nothing here installs."""
+    checked = _adoption_check(tmp_path, *_behind(PRINTOBSERVER), environment=tracked_override)
+
+    assert checked.returncode == 1, checked.stdout + checked.stderr
+    (refused,) = _adoption_refusals(checked)
+    assert refused.startswith("check-plan: scripts/plan-check.sh: adopting: consumes:"), refused
+    assert f"`{PRINTOBSERVER_RELEASE[1]}`" in refused, refused
+    assert "nothing a dispatch here runs installs it" in refused, refused
+
+
+#: A producer standing in for the next one whose override rule precedes its first adoption,
+#: which the copy below names on `AWAITING_FIRST_ADOPTION` and in its override.
+AWAITING = "github.com/nickderobertis/awaiting-producer"
+
+
+def _awaiting_copy(root: Path) -> tuple[Path, dict[str, str]]:
+    """A copy of this tree whose set and override both name ``AWAITING``, and its variables.
+
+    The tracked set is empty, so the one way to drive R7 over a producer awaiting its
+    first adoption through the recipe is a tree that names one: this tree exactly, with
+    one entry added to `AWAITING_FIRST_ADOPTION` and the rule that goes with it appended to
+    the override, run on this checkout's install with `orchestrator` imported from the copy.
+    """
+    copy = root / "checkout"
+    copy.mkdir()
+    copy_working_tree(copy)
+    answering_this_checkouts_origin(copy)
+    shared = share_this_checkouts_install(copy)
+    installs = copy / "orchestrator" / "host_installs.py"
+    empty = "AWAITING_FIRST_ADOPTION: frozenset[str] = frozenset()\n"
+    text = installs.read_text(encoding="utf-8")
+    assert empty in text, "the tracked set is no longer empty, so this copy has nothing to add"
+    installs.write_text(
+        text.replace(
+            empty, f"AWAITING_FIRST_ADOPTION: frozenset[str] = frozenset({{{AWAITING!r}}})\n"
+        ),
+        encoding="utf-8",
+    )
+    releases = copy / "config" / "onevcs.releases.yml"
+    releases.write_text(
+        releases.read_text(encoding="utf-8")
+        + "  - match: {host: github.com, owner: nickderobertis, name: awaiting-producer}\n"
+        + "    declaration: merge\n    default_target: pypi\n",
+        encoding="utf-8",
+    )
+    return copy, shared
+
+
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] Routed within its project:
+# tests/plan_tooling/AGENTS.md states this project's split: the journey copies this checkout,
+# which reads everything git tracks, and `reads_docs` routes it to
+# `plan-tooling-check-and-review:test-docs`, keyed on the whole workspace because copying the
+# tracked tree reads all of it, and never out of this project.
+@pytest.mark.reads_docs
+def test_a_node_elsewhere_taking_an_awaiting_producers_default_is_refused_from_a_copy(
+    tmp_path: Path,
+) -> None:
+    """R7 over a producer awaiting its first adoption, through the recipe run in a copy.
+
+    The copy's `just repos-apply` installs the copy's override into a scratch registry,
+    and its `just check-plan` imports the copy's `host_installs`: the producer's default is
+    the wheel this host will install, so a `local-direct` node elsewhere taking it naming no
+    `consumes` is refused on `consumes`, exactly as behind a producer with a row.
+    """
+    copy, shared = _awaiting_copy(tmp_path)
+    root = tmp_path / "registry"
+    root.mkdir()
+    declared = _declaring(("pypi", "pypi:awaiting-producer-cli"), ("crate", "crate:awaiting"))
+    checkouts = [_hosted_checkout(root, AWAITING, declared), _hosted_checkout(root, ELSEWHERE)]
+    manifest = root / "onevcs.checkouts"
+    manifest.write_text("".join(f"{path}\n" for path in checkouts), encoding="utf-8")
+    rules = root / "onevcs.rules.yml"
+    rules.write_text(
+        rules_for_hosted("github.com", "nickderobertis", visibility="public"), encoding="utf-8"
+    )
+    home = root / "onevcs"
+    (root / "xdg-config").mkdir()
+    in_copy = {**os.environ, **shared, "ONEVCS_HOME": str(home)}
+    applied = subprocess.run(
+        ["just", "repos-apply", "--checkouts", str(manifest), "--rules", str(rules)],
+        cwd=copy,
+        env={**in_copy, "XDG_CONFIG_HOME": str(root / "xdg-config")},
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(180),
+        check=False,
+    )
+    assert applied.returncode == 0, applied.stdout + applied.stderr
+    assert (home / "releases.yml").read_bytes() == (
+        copy / "config" / "onevcs.releases.yml"
+    ).read_bytes()
+    released, adopting = _behind(AWAITING, repo=ELSEWHERE, adoption="published")
+    project = reviewed(project_from_plan(_publishing_plan(tmp_path, released, adopting)))
+
+    checked = subprocess.run(
+        ["just", "check-plan", project],
+        cwd=copy,
+        env=in_copy,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+
+    assert checked.returncode == 1, checked.stdout + checked.stderr
+    (refused,) = _adoption_refusals(checked)
+    assert refused.startswith("check-plan: scripts/plan-check.sh: adopting: consumes:"), refused
+    assert "`default_target` ('pypi')" in refused, refused
+    assert f"{AWAITING} is a producer this host installs from" in refused, refused
+
+
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

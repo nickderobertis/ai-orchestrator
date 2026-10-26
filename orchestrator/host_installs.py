@@ -34,6 +34,18 @@ by that script's next run rather than by moving a pin. It is still a row because
 `published` node of this repository waits on that wheel like any other: without it, the
 override would name a ``default_target`` nothing here installs.
 
+Not every producer the override gives a ``default_target`` is one this host installs
+from. ``CONSUMER_DEFAULTS`` names the producers whose default is instead the artifact a
+consumer *outside* this repository waits on — `printobserver`'s `github-release`, which a
+`local-direct` repository elsewhere adopts the program from — so a `published` node of
+such a repository can wait on that release naming no ``consumes``, which `local-direct`
+refuses. Such a producer has no row, because nothing here installs it, and every
+producer the override gives a default is in exactly one of ``INSTALLED``,
+``AWAITING_FIRST_ADOPTION`` and ``CONSUMER_DEFAULTS``: `tests/test_host_installs.py`
+holds that, and `tests/sibling_facts.py` holds each default to the producer's own
+declaration. The difference matters to `orchestrator/adoption_guard.py`'s R7, which
+refuses a node elsewhere taking a default this host installs, and none of these.
+
 One thing this host runs is deliberately not a row. `oneharness-core` is a *crate* the
 engine links on its own account, published from the `oneharness` repository on a
 cadence of its own: the wheel this host installs from that repository is the CLI, and
@@ -46,6 +58,7 @@ from typing import NamedTuple
 
 __all__ = [
     "AWAITING_FIRST_ADOPTION",
+    "CONSUMER_DEFAULTS",
     "INSTALLED",
     "Installed",
     "by_artifact",
@@ -166,11 +179,22 @@ INSTALLED: tuple[Installed, ...] = (
 #: resolves and never release. A producer stands here instead of in ``INSTALLED`` — never
 #: in both — and the node that adopts its release moves it into a row, with the pin and
 #: the dependency, emptying its entry. `tests/test_host_installs.py` holds the override
-#: to the two together.
+#: to the three sets together.
 # llmlint: ignore-block[modern_domain_modeling] Each entry is an `Installed.producer` value
 # waiting to become one, compared against that `str` field and against the identity text
 # `onevcs` prints, for the reason the block above `Installed` gives.
 AWAITING_FIRST_ADOPTION: frozenset[str] = frozenset()
+# llmlint: ignore-end[modern_domain_modeling]
+
+#: Producers `config/onevcs.releases.yml` gives a ``default_target`` that this host
+#: installs nothing of, each as ``github.com/<owner>/<name>``: each default names the
+#: artifact a consumer outside this repository waits on, rather than a wheel here. Never
+#: also a row or awaiting its first adoption, and never a producer the override names no
+#: default for; `tests/test_host_installs.py` holds the override to all three sets.
+# llmlint: ignore-block[modern_domain_modeling] Each entry is compared against the identity
+# text `onevcs` prints and against the override's rules, both plain `str` at that boundary,
+# for the reason the block above `Installed` gives.
+CONSUMER_DEFAULTS: frozenset[str] = frozenset({"github.com/nickderobertis/printobserver"})
 # llmlint: ignore-end[modern_domain_modeling]
 
 

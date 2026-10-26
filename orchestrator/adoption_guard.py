@@ -15,9 +15,12 @@ for, or never fail at all:
 * a node of this repository consuming a **crate or an npm launcher** waits on an artifact
   nothing here installs: a dispatch runs the engine wheel, and a crate reaches this host
   only through the wheel that links it;
-* a node outside this repository taking a producer's ``default_target`` has taken **this
-  host's own wheel**, which the override alone can set and which says nothing about
-  what that node consumes.
+* a node outside this repository taking the ``default_target`` of a producer this host
+  **installs from** — a row of :data:`orchestrator.host_installs.INSTALLED`, or one
+  awaiting its first adoption — has taken **this host's own wheel**, which says nothing
+  about what that node consumes. A producer whose default the override sets for
+  consumers elsewhere (:data:`orchestrator.host_installs.CONSUMER_DEFAULTS`) is the
+  default such a node is meant to take, and is not refused.
 
 Each is a field a matcher can read before anything is dispatched, and this module reads
 them, modelled on :mod:`orchestrator.publication_guard`: every field leniently, ``onevcs``
@@ -577,7 +580,15 @@ def _uninstalled_artifact_refusals(
 def _default_taken_refusals(
     node: Node, by_id: Mapping[NodeId, Node], host: Host, adoption: Adoption | None
 ) -> Iterator[Refusal]:
-    """R7: a node outside this repository taking a default only this host's wheel sets."""
+    """R7: a node outside this repository taking a default that is this host's own wheel.
+
+    Only a producer this host installs from is refused: one with a row of
+    :data:`host_installs.INSTALLED`, or one in :data:`host_installs.AWAITING_FIRST_ADOPTION`,
+    whose default is the wheel a node of this repository adopts. A producer in
+    :data:`host_installs.CONSUMER_DEFAULTS` defaults to the artifact a consumer elsewhere
+    waits on, so taking it is the point; and a producer in none of the sets is one this
+    host cannot answer for, which this rule passes over, as every rule here does.
+    """
     if adoption is not Adoption.PUBLISHED or host.is_own(node.repo) is not False:
         return
     for dependency in node.deps:
@@ -587,17 +598,23 @@ def _default_taken_refusals(
         answered = releasing(node, producer, host)
         if answered is None or answered.default_target is None:
             continue
+        if (
+            host_installs.by_producer(answered.identity) is None
+            and answered.identity not in host_installs.AWAITING_FIRST_ADOPTION
+        ):
+            continue
         yield Refusal(
             node=node.id,
             field="consumes",
             reason=(
                 f"this node adopts `published` behind its dependency {dependency!r} and "
                 f"names no `consumes` entry for it, so it would wait on that producer's "
-                f"`default_target` ({answered.default_target!r}) — a default only this "
-                f"host's override sets, naming the wheel *this host* installs, which says "
-                f"nothing about what this node's repository ({node.repo}) consumes. Write "
-                f"`consumes: {{{dependency}: <target>}}` naming the target this node "
-                f"actually consumes; that producer resolves: {answered.names}."
+                f"`default_target` ({answered.default_target!r}) — and {answered.identity} "
+                f"is a producer this host installs from, so that default names the wheel "
+                f"*this host* installs, which says nothing about what this node's "
+                f"repository ({node.repo}) consumes. Write `consumes: {{{dependency}: "
+                f"<target>}}` naming the target this node actually consumes; that "
+                f"producer resolves: {answered.names}."
             ),
         )
 

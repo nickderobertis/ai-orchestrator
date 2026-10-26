@@ -78,7 +78,11 @@ def _contradiction(tmp_path: Path) -> list[str]:
         {"release-targets.toml": declaration({"crate": "crate:onejudge"})},
     )
     return release_contradictions(
-        {PRODUCER: "cli"}, {PRODUCER: declared_targets(checkout)}, INSTALLED, frozenset()
+        {PRODUCER: "cli"},
+        {PRODUCER: declared_targets(checkout)},
+        INSTALLED,
+        frozenset(),
+        frozenset(),
     )
 
 

@@ -48,7 +48,12 @@ from registered_checkouts import (
     sibling_git,
 )
 
-from orchestrator.host_installs import AWAITING_FIRST_ADOPTION, Installed, by_producer
+from orchestrator.host_installs import (
+    AWAITING_FIRST_ADOPTION,
+    CONSUMER_DEFAULTS,
+    Installed,
+    by_producer,
+)
 from orchestrator.root import REPO_ROOT
 
 #: The files that say which repositories this host registers, how it routes, pools and
@@ -248,23 +253,69 @@ def override_default_targets(text: str) -> dict[RepoIdentity, str]:
     return defaults
 
 
+def default_target_accounting(
+    defaults: Mapping[RepoIdentity, str],
+    rows: Sequence[Installed],
+    awaiting: Collection[RepoIdentity],
+    consumers: Collection[RepoIdentity],
+) -> list[str]:
+    """Every producer the override gives a default that is not in exactly one of the three sets.
+
+    A producer the override gives a ``default_target`` is a row of the table — this host
+    installs that wheel — or awaiting its first adoption, or in ``consumers``, whose default
+    is the artifact a consumer outside this repository waits on; and an entry of either set
+    names a producer the override gives a default. Each set decides something different
+    about the default — whose artifact it is, and so whether a node elsewhere may take it —
+    so a producer in two of them, or in none, is one whose default nothing decides.
+    """
+    sets = {
+        "a row of orchestrator/host_installs.py": {row.producer for row in rows},
+        "AWAITING_FIRST_ADOPTION": set(awaiting),
+        "CONSUMER_DEFAULTS": set(consumers),
+    }
+    found: list[str] = []
+    for producer in sorted(set().union(*sets.values()) | defaults.keys()):
+        holding = [name for name, members in sets.items() if producer in members]
+        if len(holding) > 1:
+            found.append(
+                f"{producer} is in {' and '.join(holding)}; a producer the override gives a "
+                "default target is in exactly one of the three"
+            )
+        elif not holding:
+            found.append(
+                f"config/onevcs.releases.yml names {producer}'s default target "
+                f"{defaults[producer]!r}, and neither a row, AWAITING_FIRST_ADOPTION nor "
+                "CONSUMER_DEFAULTS accounts for it"
+            )
+        elif producer not in defaults and holding[0] != "a row of orchestrator/host_installs.py":
+            found.append(
+                f"{producer} is in {holding[0]}, and config/onevcs.releases.yml names no "
+                "default target for it"
+            )
+    return found
+
+
 def release_contradictions(
     defaults: Mapping[RepoIdentity, str],
     declarations: Mapping[RepoIdentity, dict[str, str] | None],
     rows: Sequence[Installed],
     awaiting: Collection[RepoIdentity],
+    consumers: Collection[RepoIdentity],
 ) -> list[str]:
-    """Every way a producer's declaration contradicts the override and the table.
+    """Every way the override, the table and the sets disagree, and producers contradict them.
 
-    ``declarations`` holds what each producer this host could read declares, None for
-    one declaring nothing; a producer absent from it was not read and is not judged.
+    First :func:`default_target_accounting`, which reads no producer. Then
+    ``declarations``, which holds what each producer this host could read declares, None
+    for one declaring nothing; a producer absent from it was not read and is not judged.
     Only a contradiction is named: a default target the declaration does not carry, or
     one it carries under an id other than the artifact the table says this host installs.
     A producer declaring targets the override never names, or more targets than it did, is
     no contradiction; and a producer awaiting its first adoption may declare nothing yet.
+    A producer in ``consumers`` has no row, so its one contradiction is a base that does
+    not declare its default target, declaring nothing at all among them.
     """
     installed = {row.producer: row for row in rows}
-    found: list[str] = []
+    found = default_target_accounting(defaults, rows, awaiting, consumers)
     for producer, target in sorted(defaults.items()):
         if producer not in declarations:
             continue
@@ -299,7 +350,9 @@ def default_target_complaint(
 
     A producer this host installs resolves its row's target; a producer awaiting its
     first adoption resolves the override's default target with no row, which is the
-    state the override names it in on purpose; every other identity resolves none.
+    state the override names it in on purpose; a producer in ``CONSUMER_DEFAULTS``
+    resolves the override's default target with no row too, the artifact a consumer
+    outside this repository waits on; every other identity resolves none.
     """
     row = by_producer(identity)
     if row is not None:
@@ -308,6 +361,12 @@ def default_target_complaint(
     elif identity in AWAITING_FIRST_ADOPTION:
         expected = defaults.get(identity)
         why = "the target config/onevcs.releases.yml names ahead of its first adoption"
+    elif identity in CONSUMER_DEFAULTS:
+        expected = defaults.get(identity)
+        why = (
+            "the target config/onevcs.releases.yml names for consumers outside this "
+            "repository, which orchestrator/host_installs.py's CONSUMER_DEFAULTS holds"
+        )
     else:
         expected = None
         why = "none, since orchestrator/host_installs.py says this host installs nothing from it"

@@ -20,15 +20,24 @@
 #     draft exists to hold back. So a `fast` node of this repository behind a release
 #     could never land; a `published` one waits, then lands the released version.
 #
-#   - Every other rule names a producer this host installs and says which of its
-#     targets a consumer naming no `consumes` gets: `default_target` is the wheel this
-#     host installs, spelled as that producer's own `release-targets.toml` names it.
+#   - Every other rule names a producer and says which of its targets a consumer naming
+#     no `consumes` gets, spelled as that producer's own `release-targets.toml` names it.
 #     `declaration: merge` keeps the producer's declaration as the source of its
 #     targets, and no rule carries `targets:` of its own, because a target restated
-#     here replaces the producer's whole and stops matching it the day it moves.
-#     `llmlint` is one of them though no `config/` pin governs it: its `cli` is the
-#     `llmlint-cli` wheel `scripts/setup-llmlint.sh` installs, and its row in
-#     `orchestrator/host_installs.py` names that script in place of a pin.
+#     here replaces the producer's whole and stops matching it the day it moves. Such a
+#     rule is one of two kinds, and `orchestrator/host_installs.py` says which:
+#
+#       - A producer this host installs, whose `default_target` is the wheel this host
+#         installs — a row of `INSTALLED`. `llmlint` is one of them though no `config/`
+#         pin governs it: its `cli` is the `llmlint-cli` wheel
+#         `scripts/setup-llmlint.sh` installs, and its row names that script in place
+#         of a pin.
+#
+#       - A producer this host installs nothing of, whose `default_target` is the
+#         artifact a consumer outside this repository waits on — named in
+#         `CONSUMER_DEFAULTS`. `printobserver`'s `github-release` is the program's own
+#         release, which lets a `published` node of a `local-direct` repository wait on
+#         it with no `consumes`, the field `local-direct` refuses.
 #
 #   - A producer this host will install but has not yet adopted may carry its rule
 #     ahead of its first release, so a node adopting that release waits for the right
@@ -70,3 +79,6 @@ repositories:
   - match: {host: github.com, owner: nickderobertis, name: llmlint}
     declaration: merge
     default_target: cli
+  - match: {host: github.com, owner: nickderobertis, name: printobserver}
+    declaration: merge
+    default_target: github-release

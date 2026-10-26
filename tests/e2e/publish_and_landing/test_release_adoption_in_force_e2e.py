@@ -5,7 +5,9 @@ release this host installed contained, and then — once all three of its halves
 adopted — a host on which nothing used it. It now makes the pair of claims this journey
 holds it to: that this host **can** perform them, and that this host's tracked override,
 `config/onevcs.releases.yml`, **configures** them — a default target per producer this
-host installs, and the `published` rung for this repository. Both are invisible from a
+host installs, the wheel it installs, and per producer in `CONSUMER_DEFAULTS`, the
+artifact a consumer outside this repository waits on, and the `published` rung for this
+repository. Both are invisible from a
 run: a plan of this repository executes identically whether its nodes wait on a release
 or adopt a branch, until the day one of them has to, so both are driven here rather than
 asserted.
@@ -18,7 +20,8 @@ loader that reads a plan:
 * that the same CLI reports **no release targets** for this repository and the
   `published` rung for it, reports the set of registered repositories that do declare
   one, and resolves for each producer this host installs the wheel it installs as that
-  producer's default target — which is what makes "a node of this repository waits on
+  producer's default target, and for each producer in `CONSUMER_DEFAULTS` the artifact
+  its own declaration names — which is what makes "a node of this repository waits on
   a release by depending on the producer's node" a measurement rather than an
   assumption. The resolution itself is proven against a scratch state root the
   installer has been applied to, in `tests/e2e/test_repo_registry_apply_e2e.py`; what
@@ -492,7 +495,8 @@ def test_this_host_resolves_what_the_tracked_override_configures() -> None:
     """The override's answer on this host, once `just repos-apply` has put it in force.
 
     Each producer this host installs resolves the wheel it installs as its default
-    target — the row `orchestrator/host_installs.py` gives it — and this repository
+    target — the row `orchestrator/host_installs.py` gives it — each producer in its
+    `CONSUMER_DEFAULTS` resolves the artifact the override names, and this repository
     resolves the `published` rung, while every other registered identity stays on the
     global `fast`. Read through the same verb a dispatch resolves it with, because the
     override is a file `onevcs` reads and what it resolves is the only thing a dispatch

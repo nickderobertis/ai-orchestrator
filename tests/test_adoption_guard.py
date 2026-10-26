@@ -55,6 +55,14 @@ CRATE = ("crate", "crate:onepipeline")
 #: The origin a made-here checkout stands in as this host's own repository under.
 OWN = "github.com/acme/harness"
 
+#: Three producer identities, one per answer R7 gives a default: the engine's, which
+#: `host_installs` has a row for and whose default is this host's wheel; printobserver,
+#: whose default the override sets for consumers outside this repository; and one no set
+#: names, which this host cannot answer for.
+INSTALLED_PRODUCER = "github.com/nickderobertis/onepipeline"
+CONSUMER_DEFAULT_PRODUCER = "github.com/nickderobertis/printobserver"
+UNKNOWN_PRODUCER = "id/library"
+
 
 def _own_checkout(
     root: Path, monkeypatch: pytest.MonkeyPatch, origin: str | None = OWN, *, remote: str = "scp"
@@ -436,7 +444,7 @@ def test_a_checkout_with_no_origin_of_its_own_decides_nothing_about_its_own_node
     _onevcs(
         tmp_path,
         monkeypatch,
-        releases={"library": _answer("id/library", WHEEL, CRATE, default="crate")},
+        releases={"library": _answer(INSTALLED_PRODUCER, WHEEL, CRATE, default="crate")},
     )
     _own_checkout(tmp_path, monkeypatch, origin=None)
 
@@ -472,7 +480,7 @@ def test_a_node_elsewhere_taking_a_producers_default_target_is_refused_naming_co
     _onevcs(
         tmp_path,
         monkeypatch,
-        releases={"library": _answer("id/library", WHEEL, CRATE, default="pypi")},
+        releases={"library": _answer(INSTALLED_PRODUCER, WHEEL, CRATE, default="pypi")},
         resolved={"service": ("/srv/service", Workflow.CHANGE_AUTO.value)},
     )
     _own_checkout(tmp_path, monkeypatch)
@@ -481,8 +489,60 @@ def test_a_node_elsewhere_taking_a_producers_default_target_is_refused_naming_co
 
     assert (refused.node, refused.field) == ("consumer", "consumes")
     assert "`default_target` ('pypi')" in refused.reason
+    assert f"{INSTALLED_PRODUCER} is a producer this host installs from" in refused.reason
     assert "`consumes: {producer: <target>}`" in refused.reason
     assert "resolves: pypi, crate" in refused.reason
+
+
+def test_a_producer_awaiting_its_first_adoption_has_its_default_refused_the_same_way(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A rule ahead of a first adoption defaults to the wheel this host will install."""
+    awaiting = "github.com/nickderobertis/unreleased"
+    monkeypatch.setattr(adoption_guard.host_installs, "AWAITING_FIRST_ADOPTION", {awaiting})
+    _onevcs(
+        tmp_path,
+        monkeypatch,
+        releases={"library": _answer(awaiting, ("pypi", "pypi:unreleased-cli"), default="pypi")},
+        resolved={"service": ("/srv/service", Workflow.LOCAL_DIRECT.value)},
+    )
+    _own_checkout(tmp_path, monkeypatch)
+
+    (refused,) = refusals(_plan(_producer(), _consumer(adoption="published")))
+
+    assert (refused.node, refused.field) == ("consumer", "consumes")
+    assert f"{awaiting} is a producer this host installs from" in refused.reason
+
+
+@pytest.mark.parametrize(
+    "identity",
+    (
+        pytest.param(CONSUMER_DEFAULT_PRODUCER, id="a default set for consumers elsewhere"),
+        pytest.param(UNKNOWN_PRODUCER, id="a producer no set names"),
+    ),
+)
+def test_a_default_this_host_installs_nothing_of_is_taken_with_no_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, identity: str
+) -> None:
+    """R7 passes over a producer this host installs nothing from, on `local-direct` too.
+
+    The node names no `consumes`, which `local-direct` refuses, so the producer's default
+    is the one way it can wait; R3 is satisfied by that default and R4 does not read a
+    `published` node, so nothing else refuses it either.
+    """
+    _onevcs(
+        tmp_path,
+        monkeypatch,
+        releases={
+            "library": _answer(
+                identity, ("github-release", "release:printobserver"), default="github-release"
+            )
+        },
+        resolved={"service": ("/srv/service", Workflow.LOCAL_DIRECT.value)},
+    )
+    _own_checkout(tmp_path, monkeypatch)
+
+    assert refusals(_plan(_producer(), _consumer(adoption="published"))) == []
 
 
 def test_a_hosted_repository_that_is_not_this_hosts_own_is_outside_it(
@@ -492,7 +552,7 @@ def test_a_hosted_repository_that_is_not_this_hosts_own_is_outside_it(
     _onevcs(
         tmp_path,
         monkeypatch,
-        releases={"library": _answer("id/library", WHEEL, default="pypi")},
+        releases={"library": _answer(INSTALLED_PRODUCER, WHEEL, default="pypi")},
     )
     _own_checkout(tmp_path, monkeypatch)
     plan = _plan(_producer(), _consumer(repo="github.com/acme/service", adoption="published"))
@@ -517,7 +577,7 @@ def test_a_default_is_taken_only_by_a_published_node_that_names_nothing(
     _onevcs(
         tmp_path,
         monkeypatch,
-        releases={"library": _answer("id/library", WHEEL, CRATE, default="pypi")},
+        releases={"library": _answer(INSTALLED_PRODUCER, WHEEL, CRATE, default="pypi")},
         resolved={"service": ("/srv/service", Workflow.CHANGE_AUTO.value)},
     )
     _own_checkout(tmp_path, monkeypatch)

@@ -460,10 +460,14 @@ just repos-apply
   `$ONEVCS_HOME/releases.yml`. It decides how a node waits on another repository's
   release: this repository's nodes resolve the `published` rung, so one that depends
   on a producer's node waits for the release carrying that work rather than adopting
-  its branch, and each producer this host installs — those `pyproject.toml` and
-  `config/*.version` pin, and `llmlint`, whose wheel `scripts/setup-llmlint.sh`
-  installs with no pin — names the wheel this host installs as its `default_target`,
-  which is what a consumer naming no `consumes` waits for. Every rule merges the
+  its branch. Every other rule names a producer's `default_target`, which is what a
+  consumer naming no `consumes` waits for, and is one of two kinds. Each producer this
+  host installs — those `pyproject.toml` and `config/*.version` pin, and `llmlint`,
+  whose wheel `scripts/setup-llmlint.sh` installs with no pin — names the wheel this
+  host installs. A producer this host installs nothing of — `printobserver`, whose
+  default is `github-release` — names the artifact a consumer outside this repository
+  waits on, so a `published` node of a `local-direct` repository elsewhere can wait on
+  its release; `orchestrator/host_installs.py`'s `CONSUMER_DEFAULTS` lists those. Every rule merges the
   producer's own `release-targets.toml` and restates no target of its own, and the
   file's header says why this repository's rung is `published`. The candidate is
   validated through `onevcs release targets` in a scratch home, so a document `onevcs` cannot load — a rung it does not know, a
