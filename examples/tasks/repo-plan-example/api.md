@@ -8,7 +8,7 @@ metadata:
   "orchestrator.unit": "Service API"
   "onepipeline.repo_type": "team"
   "onepipeline.persona": "engineer"
-  "onetaskgraph.template": {"answers_digest":"sha256:6982ec6052a5898797144b9d9455f608fb0ca855bf91118507a5bbad2118d768","body_digest":"sha256:1220668c5b7ea05e121c6f3bdd84dabff20ff9a6eb0fabe63aa7caed4f10c9c3","digest":"sha256:02c4dffa2f5b549c69f5f1d78d6f19a934c864bcffc64548ba4051bc31086e94","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:6982ec6052a5898797144b9d9455f608fb0ca855bf91118507a5bbad2118d768","body_digest":"sha256:8500ee2584a1160bbcfc650f58b68e17a9f66667dbfdb86e00e99aa7e6210906","digest":"sha256:3aa0b10cef465f7f3aec19d71a71bd1510f11ec0e4abb6c2c33db3e690095715","template":"onepipeline:plan-task"}
   "orchestrator.budgets": [{"basis":"estimate","check_runtime_seconds":3,"command":"python scripts/budgets/health_latency.py .budgets/health-requests.jsonl","direction":"max","evidence":"Estimate: the handler returns build metadata fixed at startup and reads no store, so its time is routing and serialization, a few milliseconds; 50 ms leaves headroom for a loaded test host.","file":"budgets.yaml","file_change":"add","id":"health-endpoint-p95-latency","inner_measure_reason":"","measure":"The 95th-percentile time a poller waits for `GET /health`, from the request sent to the response read through the service's real HTTP stack, over the requests the endpoint's request tests record; its analysis reports the median and the slowest request as its breakdown.","name":"Health endpoint p95 latency","repository":"github.com/nickderobertis/some-service","schema_version":2,"source":"telemetry","threshold":50,"unit":"ms","workload":"200 sequential `GET /health` requests against one service instance, the requests three monitoring probes polling every 10 s and a load balancer checking every 5 s make over about five minutes."}]
 ---
 ## What
@@ -21,9 +21,9 @@ Operators currently learn a deploy is unhealthy from user reports, because nothi
 
 ## Budgets
 
-<a id="health-endpoint-p95-latency"></a>
-### Health endpoint p95 latency
+### Budget health-endpoint-p95-latency
 
+- **Name:** Health endpoint p95 latency
 - **Id:** `health-endpoint-p95-latency`
 - **Measure:** The 95th-percentile time a poller waits for `GET /health`, from the request sent to the response read through the service's real HTTP stack, over the requests the endpoint's request tests record; its analysis reports the median and the slowest request as its breakdown.
 - **Target:** at most 50 ms

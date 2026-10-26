@@ -128,6 +128,59 @@ def _break_the_budget(project: str, environment: dict[str, str]) -> None:
     )
 
 
+#: The last commit whose budget partial anchored a budget in raw HTML rather than a heading.
+PREVIOUS_BUDGET_PARTIAL = "1b785db7877084b6f85237fb4218dc58f8b768c5"
+
+
+def _previous_template_root(tmp_path: Path) -> Path:
+    """A host root that differs from this checkout's in the budget partial alone, as it was.
+
+    Every other template is linked, so a rendering from it is what a task rendered before
+    budgets moved to plain headings looks like from here.
+    """
+    previous = tmp_path / "previous-templates"
+    previous.mkdir()
+    partial = plan_budgets.TASK_PARTIAL.name
+    for entry in plan_budgets.TEMPLATE_ROOT.iterdir():
+        if entry.name != partial:
+            (previous / entry.name).symlink_to(entry)
+    shown = subprocess.run(
+        ["git", "show", f"{PREVIOUS_BUDGET_PARTIAL}:templates/{partial}"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert shown.stdout != plan_budgets.TASK_PARTIAL.read_text(encoding="utf-8")
+    (previous / partial).write_text(shown.stdout, encoding="utf-8")
+    return previous
+
+
+def _render_under(
+    root: Path, project: str, environment: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    """Regenerate the health task from its own answers through the pipe, under ``root``."""
+    return subprocess.run(
+        [
+            "bash",
+            "-c",
+            "set -euo pipefail; "
+            '"$1" template resolve plan-task --json | "$2" task render "$3" '
+            "--template-loader - --no-interactive",
+            "render-under",
+            str(REPO_ROOT / ".venv" / "bin" / "onepipeline"),
+            str(plan_store.locked_binary()),
+            f"{project}/health",
+        ],
+        cwd=REPO_ROOT,
+        env={**environment, "ONEPIPELINE_TEMPLATE_ROOT": str(root)},
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=e2e_timeout(120),
+    )
+
+
 def _refusals(checked: subprocess.CompletedProcess[str]) -> list[str]:
     return [line for line in checked.stderr.splitlines() if line.startswith("check-plan: ")]
 
@@ -210,6 +263,7 @@ def test_the_same_records_under_another_local_source_are_refused_for_their_revie
     [
         ("budget", "does not carry the `## Budgets` section"),
         ("body", "body differs from its rendering"),
+        ("previous-chain", "template changed since rendering"),
     ],
 )
 def test_an_example_breaking_another_rule_is_still_refused(
@@ -219,7 +273,10 @@ def test_an_example_breaking_another_rule_is_still_refused(
 
     Driven over a copy of the examples, with one rule broken the way a reader editing an
     example would break it: a budget's target changed in its record without regenerating
-    the task, or the task's body edited by hand after it was rendered.
+    the task, its body edited by hand after rendering, or its provenance holding the plan-task
+    chain from before budgets moved to plain Markdown headings — rendered through the real
+    pipe from a template root holding that commit's budget partial, then checked against the
+    templates in force.
     """
     project = f"{EXAMPLES}:health-endpoint"
     environment = _registry(tmp_path, [project])
@@ -227,11 +284,17 @@ def test_an_example_breaking_another_rule_is_still_refused(
     shutil.copytree(REPO_ROOT / EXAMPLES, copied)
     environment[EXAMPLES_ROOT] = str(copied)
     record = copied / "tasks" / "health-endpoint" / "health.md"
-    if broken == "budget":
-        _break_the_budget(project, environment)
-    else:
-        text = record.read_text(encoding="utf-8")
-        record.write_text(text.replace("## Why\n\n", "## Why\n\nEdited by hand. ", 1))
+    match broken:
+        case "budget":
+            _break_the_budget(project, environment)
+        case "previous-chain":
+            shipped = record.read_text(encoding="utf-8")
+            rendered = _render_under(_previous_template_root(tmp_path), project, environment)
+            assert rendered.returncode == 0, rendered.stdout + rendered.stderr
+            assert record.read_text(encoding="utf-8") != shipped
+        case _:
+            text = record.read_text(encoding="utf-8")
+            record.write_text(text.replace("## Why\n\n", "## Why\n\nEdited by hand. ", 1))
 
     checked = _check_plan(project, environment)
 

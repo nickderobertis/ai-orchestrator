@@ -6,7 +6,7 @@ metadata:
   "onepipeline.id": "research"
   "orchestrator.unit": "Scheduler research"
   "onepipeline.persona": "engineer"
-  "onetaskgraph.template": {"answers_digest":"sha256:bc44dacccf31d2aef0f608f0558c99a3f574bfbe1c331b60200835939ae09f44","body_digest":"sha256:231aed76d26ddce28f2dff4bab0d6ad567fb4aefc5f9a6b029fe8139cf026a79","digest":"sha256:02c4dffa2f5b549c69f5f1d78d6f19a934c864bcffc64548ba4051bc31086e94","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:bc44dacccf31d2aef0f608f0558c99a3f574bfbe1c331b60200835939ae09f44","body_digest":"sha256:231aed76d26ddce28f2dff4bab0d6ad567fb4aefc5f9a6b029fe8139cf026a79","digest":"sha256:3aa0b10cef465f7f3aec19d71a71bd1510f11ec0e4abb6c2c33db3e690095715","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What

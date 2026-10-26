@@ -128,7 +128,7 @@ BUDGET_VARIABLES: dict[str, tuple[str, str | None, Keys | None]] = {
     "budgets": (
         "list",
         "object",
-        dict.fromkeys(("node", "location", *plan_budgets.MODERN_BUDGET_KEYS)),
+        dict.fromkeys(plan_budgets.BudgetAnswer.__annotations__),
     ),
 }
 
@@ -363,6 +363,20 @@ def test_each_section_and_its_guidance_is_a_block_of_its_own_in_order() -> None:
     source = TEMPLATE.read_text(encoding="utf-8")
     defined = tuple(re.findall(r"{%-?\s*block\s+(\w+)\s*-?%}", source))
     assert defined == BLOCKS, f"{TEMPLATE.name} defines the blocks {defined}"
+
+
+def test_a_budget_answer_declares_every_budget_field_beside_its_owner_and_anchor() -> None:
+    """The typed `budgets` answer, whose keys the template declares, carries every record field.
+
+    So a field a budget record gains reaches the design document's writer only once
+    `plan_budgets.BudgetAnswer` declares it, rather than through an untyped mapping.
+    """
+    assert set(plan_budgets.BudgetAnswer.__annotations__) == {
+        "node",
+        "location",
+        *plan_budgets.MODERN_BUDGET_KEYS,
+        "anchor",
+    }
 
 
 def test_the_template_declares_each_variable_with_its_type(loader: str) -> None:
@@ -648,7 +662,13 @@ def test_the_1568_fixture_holds_the_shape_the_budget_measures() -> None:
     for entry in answers["budgets"]:
         owned[entry["node"]].append(
             plan_budgets.parse_budgets(
-                [{key: value for key, value in entry.items() if key not in {"node", "location"}}]
+                [
+                    {
+                        key: value
+                        for key, value in entry.items()
+                        if key not in {"node", "location", "anchor"}
+                    }
+                ]
             )[0]
         )
     legacy = json.loads(BUDGET_FIXTURE.with_name("issue-1568-legacy.json").read_text())
@@ -742,6 +762,7 @@ def test_only_added_changed_budgets_have_sequential_links_and_modern_anchors(
         {
             **answers["budgets"][0],
             "id": f"target-{i}",
+            "anchor": plan_budgets.budget_anchor(f"target-{i}"),
             "name": f"Target {i}",
             "location": f"https://github.com/acme/app/issues/{i + 1}",
             "file_change": change,
@@ -755,7 +776,8 @@ def test_only_added_changed_budgets_have_sequential_links_and_modern_anchors(
     displayed = [entry for entry in budgets if entry["file_change"] in {"add", "change"}]
     for index, entry in enumerate(displayed, 1):
         assert f"[{entry['name']}][{index}]" in section
-        assert f"[{index}]: {entry['location']}#user-content-{entry['id']}\n" in section
+        anchor = plan_budgets.budget_anchor(entry["id"])
+        assert f"[{index}]: {entry['location']}#user-content-{anchor}\n" in section
     for entry in budgets:
         if entry["file_change"] == "none":
             assert entry["name"] not in section and entry["location"] not in section

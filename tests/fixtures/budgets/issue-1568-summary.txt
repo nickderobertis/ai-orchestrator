@@ -16,14 +16,14 @@
 | [Linear copy time for a 24-image plan][8] | ≤90 seconds | arithmetic | direct | ≈20 s |
 | [Linear copies refused, 3 at once][9] | ≤0 copies | design | not recorded | not recorded |
 
-[1]: https://github.com/nickderobertis/onetaskgraph/issues/3304#user-content-github-asset-requests-per-new-asset
-[2]: https://github.com/nickderobertis/onetaskgraph/issues/3304#user-content-github-asset-requests-per-unchanged-asset
-[3]: https://github.com/nickderobertis/onetaskgraph/issues/3305#user-content-linear-asset-requests-per-new-asset
-[4]: https://github.com/nickderobertis/onetaskgraph/issues/3305#user-content-linear-asset-requests-per-unchanged-asset
-[5]: https://github.com/nickderobertis/onetaskgraph/issues/3304#user-content-github-asset-copy-seconds
-[6]: https://github.com/nickderobertis/onetaskgraph/issues/3304#user-content-github-concurrent-copies-refused
-[7]: https://github.com/nickderobertis/onetaskgraph/issues/3304#user-content-github-concurrent-copy-seconds
-[8]: https://github.com/nickderobertis/onetaskgraph/issues/3305#user-content-linear-asset-copy-seconds
+[1]: https://github.com/nickderobertis/onetaskgraph/issues/3304#user-content-budget-github-asset-requests-per-new-asset
+[2]: https://github.com/nickderobertis/onetaskgraph/issues/3304#user-content-budget-github-asset-requests-per-unchanged-asset
+[3]: https://github.com/nickderobertis/onetaskgraph/issues/3305#user-content-budget-linear-asset-requests-per-new-asset
+[4]: https://github.com/nickderobertis/onetaskgraph/issues/3305#user-content-budget-linear-asset-requests-per-unchanged-asset
+[5]: https://github.com/nickderobertis/onetaskgraph/issues/3304#user-content-budget-github-asset-copy-seconds
+[6]: https://github.com/nickderobertis/onetaskgraph/issues/3304#user-content-budget-github-concurrent-copies-refused
+[7]: https://github.com/nickderobertis/onetaskgraph/issues/3304#user-content-budget-github-concurrent-copy-seconds
+[8]: https://github.com/nickderobertis/onetaskgraph/issues/3305#user-content-budget-linear-asset-copy-seconds
 [9]: https://github.com/nickderobertis/onetaskgraph/issues/3305
 
 **Not budgeted:**

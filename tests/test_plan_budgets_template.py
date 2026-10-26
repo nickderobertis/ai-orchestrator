@@ -288,6 +288,61 @@ def test_a_task_owning_budgets_renders_each_in_full_after_its_why(
     assert alone.stdout in body
 
 
+#: Two schema-2 budgets sharing one display name, each with an id GitHub keeps as it is.
+MODERN_PAIR: list[dict[str, object]] = [
+    {**BUDGET, "schema_version": 2, "source": "direct", "check_runtime_seconds": 3},
+    {
+        **BUDGET,
+        "id": "listing-memory-2",
+        "schema_version": 2,
+        "source": "telemetry",
+        "check_runtime_seconds": 1,
+    },
+]
+
+
+def _section(budgets: object) -> str:
+    """The `## Budgets` section the partial renders alone, through the pinned store's pipe."""
+    alone = _run(
+        [str(ONETASKGRAPH_BIN), "template", "render", str(PARTIAL)]
+        + ["--search-path", str(plan_budgets.TEMPLATE_ROOT), "--answers", "-", "--no-interactive"],
+        json.dumps({"budgets": budgets}),
+    )
+    assert alone.returncode == 0, alone.stderr
+    return alone.stdout
+
+
+def _github_id(heading: str) -> str:
+    """The element id GitHub gives a heading: `user-content-` and its github-slugger slug."""
+    return "user-content-" + re.sub(r"[^\w\- ]", "", heading.lower()).replace(" ", "-")
+
+
+def test_a_modern_budget_renders_under_a_plain_heading_anchored_at_budget_anchor() -> None:
+    """`### Budget <id>`, then its name, and no raw HTML: a public copy may carry it."""
+    section = _section(MODERN_PAIR)
+
+    headings = re.findall(r"^### (.+)$", section, re.MULTILINE)
+    assert headings == ["Budget listing-latency", "Budget listing-memory-2"], headings
+    for budget, heading in zip(MODERN_PAIR, headings, strict=True):
+        assert f"### {heading}\n\n- **Name:** {budget['name']}\n- **Id:** `{budget['id']}`\n" in (
+            section
+        )
+        assert _github_id(heading) == "user-content-" + plan_budgets.budget_anchor(
+            str(budget["id"])
+        )
+    assert re.search(r"<[A-Za-z/!?]", section) is None, section
+
+
+def test_a_legacy_budget_renders_as_it_was_stored() -> None:
+    """The stored legacy section, rendered before the plain heading existed, byte for byte."""
+    fixture = json.loads(
+        (REPO_ROOT / "tests" / "fixtures" / "budgets" / "legacy-stored-records.json").read_text()
+    )
+
+    assert _section(fixture["budgets"]) == fixture["section"]
+    assert "### Budget " not in fixture["section"] and "**Name:**" not in fixture["section"]
+
+
 def test_a_task_owning_no_budget_renders_no_budgets_section(
     task_loader: str, tmp_path: Path
 ) -> None:

@@ -203,11 +203,11 @@ document, never vote, so a task naming no repository never decides the home; the
   work`, its write screened like any other. The private home alone records which view is which
   task's, and the engine runs and writes back the canonical tasks, never a view. A copy that
   would put any of the private plan's content on a public destination — a view carrying it,
-  say, or raw HTML the store cannot classify, such as the budget anchor
-  `templates/plan-task-budgets.md.j2` renders — is refused before anything is written, so
-  nothing reaches `plans` naming the private plan, and a mixed plan's budgets sit on its
-  private tasks until that template renders none. onetaskgraph's README, under *Public
-  projections of a private plan*, is the authority on the views.
+  say, or raw HTML the store cannot classify — is refused before anything is written, so
+  nothing reaches `plans` naming the private plan. A public task's budgets travel on its view,
+  because `templates/plan-task-budgets.md.j2` renders each under a plain Markdown heading and
+  no raw HTML. onetaskgraph's README, under *Public projections of a private plan*, is the
+  authority on the views.
 - **Such a plan is approved and launched where it lives**: `just approve-design
   <source>:<project>` records the approval on its Linear design document, and `just orchestrate
   <source>:<project>` runs the home with its members as one run, each settlement written back to

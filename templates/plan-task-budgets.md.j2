@@ -47,17 +47,23 @@ variables:
 {#-
   THE READERS. The worker this task dispatches, its judge, and a person following a design
   document's link to this section. The heading is exactly `## Budgets`, so the section's
-  anchor is `budgets`; each budget's own heading is its name.
+  anchor is `budgets`. A schema-2 budget's own heading is `Budget <id>`, plain Markdown and no
+  raw HTML, which a public copy of the task may carry: its slug is the anchor
+  `orchestrator/plan_budgets.py`'s `budget_anchor` states, because `just check-plan` holds
+  the id to onebudgetspec's id pattern. A legacy budget's heading is its name.
 -#}
 {% if budgets %}
 ## Budgets
 
 {% for budget in budgets %}
 {% if (budget.schema_version | default(0)) == 2 %}
-<a id="{{ budget.id | e }}"></a>
-{% endif %}
+### Budget {{ budget.id }}
+
+- **Name:** {{ budget.name }}
+{% else %}
 ### {{ budget.name }}
 
+{% endif %}
 - **Id:** `{{ budget.id }}`
 - **Measure:** {{ budget.measure }}
 {% if budget.inner_measure_reason %}

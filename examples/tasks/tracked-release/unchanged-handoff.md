@@ -7,7 +7,7 @@ metadata:
   "onepipeline.id": "unchanged-handoff"
   "orchestrator.unit": "Handoff"
   "onepipeline.expects_no_diff": true
-  "onetaskgraph.template": {"answers_digest":"sha256:0d67cf8b1306e9649b3406142190af170698adbdd17590b6ef980aada51343f0","body_digest":"sha256:fbff834aba8a8069d19b9fc5dff78e9c89e9eca823dc06da4df410a940a8b9d1","digest":"sha256:02c4dffa2f5b549c69f5f1d78d6f19a934c864bcffc64548ba4051bc31086e94","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:0d67cf8b1306e9649b3406142190af170698adbdd17590b6ef980aada51343f0","body_digest":"sha256:fbff834aba8a8069d19b9fc5dff78e9c89e9eca823dc06da4df410a940a8b9d1","digest":"sha256:3aa0b10cef465f7f3aec19d71a71bd1510f11ec0e4abb6c2c33db3e690095715","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What

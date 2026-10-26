@@ -55,9 +55,10 @@ shaped = (
     and isinstance(answers["budgets"], list)
     and all(
         isinstance(entry, dict)
-        and set(entry) in ({"node", "location", *plan_budgets.BUDGET_KEYS}, {"node", "location", *plan_budgets.MODERN_BUDGET_KEYS})
+        and set(entry) in ({"node", "location", "anchor", *plan_budgets.BUDGET_KEYS}, {"node", "location", "anchor", *plan_budgets.MODERN_BUDGET_KEYS})
         and isinstance(entry["node"], str)
         and isinstance(entry["location"], str)
+        and isinstance(entry["anchor"], str)
         for entry in answers["budgets"]
     )
 )
@@ -65,13 +66,13 @@ if not shaped:
     sys.exit(
         "budget-design-doc-summary: the fixture does not hold exactly the three budget "
         "answers `python -m orchestrator.plan_budgets` prints: the predates reason as text, "
-        "and each budget with its node and its location as text and the keys a task's "
+        "and each budget with its node, its location and its anchor as text and the keys a task's "
         "budgets record holds"
     )
 try:
     plan_budgets.parse_plan(answers["plan_budgets"])
     plan_budgets.parse_budgets(
-        [{key: value for key, value in entry.items() if key not in {"node", "location"}} for entry in answers["budgets"]]
+        [{key: value for key, value in entry.items() if key not in {"node", "location", "anchor"}} for entry in answers["budgets"]]
     )
 except plan_budgets.BudgetsError as exc:
     sys.exit(f"budget-design-doc-summary: the fixture's answers are malformed: {exc}")

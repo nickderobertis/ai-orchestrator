@@ -97,8 +97,9 @@ variables:
       `orchestrator.budgets` record holds it — `id`, `name`, `basis`, `repository`, `file`,
       `file_change`, `measure`, `inner_measure_reason`, `unit`, `direction`, `threshold`,
       `workload`, `evidence` and `command`, plus modern `schema_version`, `source` and
-      `check_runtime_seconds` — with two keys added, `node` (the id of the task
-      that owns it) and `location` (where the plan store reports that task).
+      `check_runtime_seconds` — with three keys added, `node` (the id of the task
+      that owns it), `location` (where the plan store reports that task) and `anchor` (the
+      anchor of the budget's heading in that task, or `""` for a legacy budget).
     type: list
     items: object
     required: false
@@ -365,7 +366,7 @@ variables:
 {% endfor %}
 
 {% for budget in displayed.items %}
-[{{ loop.index }}]: {{ budget.location }}{% if (budget.schema_version | default(0)) == 2 and budget.location is startingwith("https://github.com/") %}#user-content-{{ budget.id | urlencode }}{% endif %}{{ "\n" -}}
+[{{ loop.index }}]: {{ budget.location }}{% if (budget.anchor | default("")) and budget.location is startingwith("https://github.com/") %}#user-content-{{ budget.anchor }}{% endif %}{{ "\n" -}}
 {% endfor %}
 
 {% endif %}

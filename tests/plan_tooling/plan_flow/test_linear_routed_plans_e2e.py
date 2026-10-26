@@ -18,7 +18,7 @@ These journeys drive that through the real recipes:
   in Linear;
 * a mixed plan lands its home, design document and every task in Linear and its public
   task's view on `plans`, and a re-copy into Linear holds it one project; a mixed plan whose
-  public task carries a budget anchor is refused at copy;
+  public task carries a budget copies it to its view and its private home alike;
 * **the road**: a plan of the incident's shape — three tasks naming the organization's
   repositories and one `kind: human` node naming none — is finished, approved and launched
   over `hiddenco-plans:<project>`, its three workers commit and land, its human node is
@@ -75,7 +75,7 @@ from fake_backend import (
 )
 from github_board import BOARD as BOARD_FIXTURE
 from github_board import SIBLING_REPOSITORY, _GitHubFixture, _serving_board
-from linear_board import LINEAR_REWRITES, LinearBoard, Rewrite, linear_board
+from linear_board import LINEAR_REWRITES, LinearBoard, Rewrite, linear_board, stored_form
 from nx_workspace import (
     answering_this_checkouts_origin,
     copy_working_tree,
@@ -87,7 +87,7 @@ from scratch_identity import Identity
 from scratch_identity import seeded as seeded_identity
 from waits import timeout as e2e_timeout
 
-from orchestrator import design_approval, plan_check, plan_copy, plan_store
+from orchestrator import design_approval, plan_budgets, plan_check, plan_copy, plan_store
 from orchestrator.criteria_guard import APPENDIX
 from orchestrator.plan_budgets import BudgetId, ModernBudget, Source
 from orchestrator.plan_store import QualifiedProjectId
@@ -998,9 +998,10 @@ def _budgeted_answers(node: Node) -> dict[str, object]:
     }
 
 
-#: What the store says of a public view whose content carries a budget's anchor, which
-#: `templates/plan-task-budgets.md.j2` renders as raw HTML carrying an `id` attribute.
-RAW_HTML_REFUSED = "a local link or raw HTML its public projection cannot carry"
+def _budgets_of(body: str) -> str:
+    """The `## Budgets` section of ``body``, up to the next section's heading."""
+    assert "## Budgets\n" in body, body
+    return "## Budgets\n" + body.split("## Budgets\n", 1)[1].split("\n## ", 1)[0]
 
 
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]  # noqa: E501
@@ -1008,27 +1009,28 @@ RAW_HTML_REFUSED = "a local link or raw HTML its public projection cannot carry"
 # llmlint: ignore-block[e2e_not_mocked] The same three doubled boundaries as the journeys above.
 @COPIES_THE_TRACKED_TREE
 @pytest.mark.xdist_group("linear-routed")
-def test_a_mixed_plan_whose_public_task_carries_a_budget_is_refused_at_copy(
+def test_a_mixed_plan_whose_public_task_carries_a_budget_copies_it_to_both_destinations(
     routed: Routed, tmp_path: Path, oneharness_bin: str
 ) -> None:
-    """A public task's budget anchor refuses the whole copy of a mixed plan, writing nothing.
+    """A public task's budget travels on its view, under a plain heading and no raw HTML.
 
-    The task's budget section opens with the anchor its design document links to, raw HTML
-    carrying an attribute, which a public view cannot carry because it cannot read where the
-    HTML points. So until that template renders no raw HTML, a plan naming public and private
-    repositories whose public task carries a budget is refused at copy, naming the anchor.
+    The task's budget section renders each schema-2 budget under `### Budget <id>`, plain
+    Markdown a public view can carry, so a plan naming public and private repositories whose
+    public task owns a budget copies whole: its view on `plans` carries the heading, and its
+    canonical task in the private home carries the whole section.
     """
     from project_fixtures import owning
 
     with _gated(tmp_path, oneharness_bin, routed, public=[THIS_REPOSITORY]) as bench:
-        name = f"test-{os.getpid()}-public-budget-anchor"
+        name = f"test-{os.getpid()}-public-budget"
         project = _draft(bench, name, MIXED)
         library = MIXED[0]
+        budget = asdict(_copy_budget(library, "add"))
         owning(
             AUTHORING,
             name,
             library.id,
-            [asdict(_copy_budget(library, "add"))],
+            [budget],
             bench.environment,
             answers=_budgeted_answers(library),
         )
@@ -1036,12 +1038,22 @@ def test_a_mixed_plan_whose_public_task_carries_a_budget_is_refused_at_copy(
         copied = _just(routed, bench, "plans", "project", "copy", project, "--to", BOARD)
 
         said = copied.stdout + copied.stderr
-        assert copied.returncode != 0, f"the public task's budget anchor was copied:\n{said}"
-        assert RAW_HTML_REFUSED in said, said
-        assert f'<a id=\\"{library.id}-add-copy-seconds\\">' in said, said
-        assert BOARD_FIXTURE.created == [], [issue.title for issue in BOARD_FIXTURE.created]
-        assert bench.linear.projects() == [], bench.linear.projects()
-        assert bench.linear.issues() == [], bench.linear.issues()
+        assert copied.returncode == 0, f"the public task's budget was not copied:\n{said}"
+        heading = f"### Budget {budget['id']}\n\n- **Name:** {budget['name']}\n"
+        (view,) = [issue for issue in BOARD_FIXTURE.created if issue.title == library.title]
+        shown = _budgets_of(view.body)
+        assert heading in shown, shown
+        assert re.search(r"<[A-Za-z/!?]", shown) is None, shown
+        for issue in BOARD_FIXTURE.created:
+            assert _private_named(f"{issue.title}\n{issue.body}") == [], issue
+        (held,) = bench.linear.projects()
+        home = QualifiedProjectId(f"{LINEAR}:{held['id']}")
+        canonical = _items(routed, bench, home)[library.id]
+        assert str(canonical["id"]).startswith(f"{LINEAR}:"), canonical["id"]
+        # As Linear stores Markdown, which the double rewrites the way Linear does.
+        section = stored_form(plan_budgets.render_section([budget]).strip("\n"), LINEAR_REWRITES)
+        content = str(canonical["item"]["content"])
+        assert section in content, content
     # llmlint: ignore-end[e2e_not_mocked]
     # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge, shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]  # noqa: E501
 
@@ -1057,9 +1069,8 @@ def test_modern_budget_links_are_recomputed_after_a_routed_copy(
     """Real routing creates current Linear destinations from authoring for a mixed plan.
 
     Every task of a plan holding a private one is canonical in the private home, so the
-    budgets the private task owns link to its Linear issue. They sit on that task because a
-    public task's budget anchor is raw HTML its public view cannot carry, which
-    `test_a_mixed_plan_whose_public_task_carries_a_budget_is_refused_at_copy` holds.
+    budgets each task owns — the public task's as well as the private one's — link to that
+    task's Linear issue, with no fragment, whatever anchor the writer prints for them.
     """
     from project_fixtures import owning
 
@@ -1069,12 +1080,20 @@ def test_modern_budget_links_are_recomputed_after_a_routed_copy(
         # One budget added and one changed, the two `file_change`s a design document lists
         # and links; an unchanged one is presentation-filtered out of the section these links
         # are in.
-        consumer = MIXED[1]
+        library, consumer = MIXED[0], MIXED[1]
+        owning(
+            AUTHORING,
+            name,
+            library.id,
+            [asdict(_copy_budget(library, "add"))],
+            bench.environment,
+            answers=_budgeted_answers(library),
+        )
         owning(
             AUTHORING,
             name,
             consumer.id,
-            [asdict(_copy_budget(consumer, change)) for change in ("add", "change")],
+            [asdict(_copy_budget(consumer, "change"))],
             bench.environment,
             answers=_budgeted_answers(consumer),
         )
@@ -1110,10 +1129,16 @@ def test_modern_budget_links_are_recomputed_after_a_routed_copy(
                 assert "section_url" not in budget
                 assert str(bench.authoring) not in budget["location"]
                 hosts.add(budget["location"].split("/")[2])
-            # Both budgets are the hiddenco task's, whose canonical issue is Linear's.
+            # One budget is the public task's and one the hiddenco task's, both canonical in
+            # Linear, and each prints its heading's anchor.
             assert hosts == {"linear.app"}, writer["budgets"]
-            assert len(writer["budgets"]) == 2, writer["budgets"]
-            assert writer["budgets"][0]["schema_version"] == 2
+            assert sorted(budget["node"] for budget in writer["budgets"]) == [
+                consumer.id,
+                library.id,
+            ], writer["budgets"]
+            for budget in writer["budgets"]:
+                assert budget["schema_version"] == 2
+                assert budget["anchor"] == plan_budgets.budget_anchor(budget["id"]), budget
             # Re-render using current destination answers; no source-host fragment persists.
             base = _design_answers(MIXED)
             supplied = bench.tmp_path / "destination-answers.json"
@@ -1139,12 +1164,8 @@ def test_modern_budget_links_are_recomputed_after_a_routed_copy(
             ).stdout
             assert "## Budgets\n" in rendered, rendered
             for index, budget in enumerate(writer["budgets"], 1):
-                fragment = (
-                    f"#user-content-{budget['id']}"
-                    if budget["location"].startswith("https://github.com/")
-                    else ""
-                )
-                assert f"[{index}]: {budget['location']}{fragment}\n" in rendered
+                assert f"[{index}]: {budget['location']}\n" in rendered
+            assert "#user-content-" not in rendered, rendered
         finally:
             _just(routed, bench, "stop", f"{name}-design", seconds=60)
     # llmlint: ignore-end[e2e_not_mocked]

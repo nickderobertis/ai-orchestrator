@@ -432,6 +432,27 @@ def test_a_budget_with_no_id_is_refused_by_its_position() -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    "budget_id", ["listing latency", "Listing-latency", 'listing"latency', "9-listing"]
+)
+def test_a_modern_budget_id_outside_the_pattern_is_refused_and_a_legacy_one_is_not(
+    budget_id: str,
+) -> None:
+    modern = _budget(id=budget_id, schema_version=2, source="direct", check_runtime_seconds=0)
+
+    (refused,) = plan_budgets.budget_refusals(NODE, plan_budgets.parse_budgets([modern]))
+
+    assert refused.reason == (
+        f"budget {budget_id!r} has an `id` outside onebudgetspec's id pattern "
+        f"`{plan_budgets.BUDGET_ID_PATTERN}`, so its `### Budget <id>` heading is not "
+        f"anchored at `{plan_budgets.budget_anchor(budget_id)}`"
+    )
+    assert (
+        plan_budgets.budget_refusals(NODE, plan_budgets.parse_budgets([_budget(id=budget_id)]))
+        == []
+    )
+
+
 def test_a_repository_named_by_alias_is_compared_as_written() -> None:
     plan = {**PLAN, "tasks": [{**PLAN["tasks"][0], "repo": "ai-orchestrator-isolated"}]}
     effects = [
@@ -888,9 +909,13 @@ def test_the_writers_answers_are_the_records_with_each_budgets_owner_and_its_loc
     assert stated == {
         "predates_budgets": "",
         "plan_budgets": ANSWERS,
-        "budgets": [{"node": NODE, "location": task.location, **BUDGET}],
+        "budgets": [{"node": NODE, "location": task.location, **BUDGET, "anchor": ""}],
     }
     assert task.location is not None and Path(task.location).is_absolute()
+
+    modern = _budget(schema_version=2, source="direct", check_runtime_seconds=0)
+    (written,) = _writer(_plan(budgets=[modern]), capsys)["budgets"]
+    assert written["anchor"] == "budget-listing-latency" == plan_budgets.budget_anchor(BUDGET["id"])
 
     predated = _writer("authoring:approved-budgets", capsys)
     assert predated == {
@@ -1312,7 +1337,9 @@ def test_absent_analysis_keeps_the_three_answer_contract(
     assert _writer(project, capsys) == {
         "predates_budgets": "",
         "plan_budgets": {},
-        "budgets": [{"node": NODE, "location": task.location, **entry} for entry in budgets],
+        "budgets": [
+            {"node": NODE, "location": task.location, **entry, "anchor": ""} for entry in budgets
+        ],
     }
     assert plan_budgets.plan_record(project) is None
 

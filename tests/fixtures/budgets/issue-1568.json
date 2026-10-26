@@ -153,7 +153,8 @@
       "command": "Analysis of the telemetry the GitHub Projects (`onetaskgraph-github-projects-e2e`) domain's asset journeys record during its ordinary `test` target, reported through `onebudgetspec_core::report` by the command (or the one generic runner reading `ONEBUDGETSPEC_BUDGET_ID`) the convention lands in `otg-linear-budgets-domain`. It runs no journey and no `cargo test`, and it is cached on the domain tree, the measured production code and the onebudgetspec pin.",
       "schema_version": 2,
       "source": "telemetry",
-      "check_runtime_seconds": 1
+      "check_runtime_seconds": 1,
+      "anchor": "budget-github-asset-requests-per-new-asset"
     },
     {
       "node": "otg-assets-github",
@@ -174,7 +175,8 @@
       "command": "Analysis of the telemetry the GitHub Projects (`onetaskgraph-github-projects-e2e`) domain's asset journeys record during its ordinary `test` target, reported through `onebudgetspec_core::report` by the command (or the one generic runner reading `ONEBUDGETSPEC_BUDGET_ID`) the convention lands in `otg-linear-budgets-domain`. It runs no journey and no `cargo test`, and it is cached on the domain tree, the measured production code and the onebudgetspec pin.",
       "schema_version": 2,
       "source": "telemetry",
-      "check_runtime_seconds": 1
+      "check_runtime_seconds": 1,
+      "anchor": "budget-github-asset-requests-per-unchanged-asset"
     },
     {
       "node": "otg-assets-linear",
@@ -195,7 +197,8 @@
       "command": "Analysis of the telemetry the Linear (`onetaskgraph-linear-e2e`) domain's asset journeys record during its ordinary `test` target, reported through `onebudgetspec_core::report` by the command (or the one generic runner reading `ONEBUDGETSPEC_BUDGET_ID`) the convention lands in `otg-linear-budgets-domain`. It runs no journey and no `cargo test`, and it is cached on the domain tree, the measured production code and the onebudgetspec pin.",
       "schema_version": 2,
       "source": "telemetry",
-      "check_runtime_seconds": 1
+      "check_runtime_seconds": 1,
+      "anchor": "budget-linear-asset-requests-per-new-asset"
     },
     {
       "node": "otg-assets-linear",
@@ -216,7 +219,8 @@
       "command": "Analysis of the telemetry the Linear (`onetaskgraph-linear-e2e`) domain's asset journeys record during its ordinary `test` target, reported through `onebudgetspec_core::report` by the command (or the one generic runner reading `ONEBUDGETSPEC_BUDGET_ID`) the convention lands in `otg-linear-budgets-domain`. It runs no journey and no `cargo test`, and it is cached on the domain tree, the measured production code and the onebudgetspec pin.",
       "schema_version": 2,
       "source": "telemetry",
-      "check_runtime_seconds": 1
+      "check_runtime_seconds": 1,
+      "anchor": "budget-linear-asset-requests-per-unchanged-asset"
     },
     {
       "node": "otg-assets-github",
@@ -237,7 +241,8 @@
       "command": "Analysis of the telemetry the GitHub Projects (`onetaskgraph-github-projects-e2e`) domain's asset journeys record during its ordinary `test` target, reported through `onebudgetspec_core::report` by the command (or the one generic runner reading `ONEBUDGETSPEC_BUDGET_ID`) the convention lands in `otg-linear-budgets-domain`. It runs no journey and no `cargo test`, and it is cached on the domain tree, the measured production code and the onebudgetspec pin.",
       "schema_version": 2,
       "source": "telemetry",
-      "check_runtime_seconds": 1
+      "check_runtime_seconds": 1,
+      "anchor": "budget-github-asset-copy-seconds"
     },
     {
       "node": "otg-assets-github",
@@ -258,7 +263,8 @@
       "command": "Analysis of the telemetry the GitHub Projects (`onetaskgraph-github-projects-e2e`) domain's asset journeys record during its ordinary `test` target, reported through `onebudgetspec_core::report` by the command (or the one generic runner reading `ONEBUDGETSPEC_BUDGET_ID`) the convention lands in `otg-linear-budgets-domain`. It runs no journey and no `cargo test`, and it is cached on the domain tree, the measured production code and the onebudgetspec pin.",
       "schema_version": 2,
       "source": "telemetry",
-      "check_runtime_seconds": 1
+      "check_runtime_seconds": 1,
+      "anchor": "budget-github-concurrent-copies-refused"
     },
     {
       "node": "otg-assets-github",
@@ -279,7 +285,8 @@
       "command": "Analysis of the telemetry the GitHub Projects (`onetaskgraph-github-projects-e2e`) domain's asset journeys record during its ordinary `test` target, reported through `onebudgetspec_core::report` by the command (or the one generic runner reading `ONEBUDGETSPEC_BUDGET_ID`) the convention lands in `otg-linear-budgets-domain`. It runs no journey and no `cargo test`, and it is cached on the domain tree, the measured production code and the onebudgetspec pin.",
       "schema_version": 2,
       "source": "telemetry",
-      "check_runtime_seconds": 1
+      "check_runtime_seconds": 1,
+      "anchor": "budget-github-concurrent-copy-seconds"
     },
     {
       "node": "otg-assets-linear",
@@ -300,7 +307,8 @@
       "command": "Illustrative direct workload: execute the Linear loopback 24-image asset-copy journey and report its elapsed seconds, including setup; do not read historical telemetry.",
       "schema_version": 2,
       "source": "direct",
-      "check_runtime_seconds": 20
+      "check_runtime_seconds": 20,
+      "anchor": "budget-linear-asset-copy-seconds"
     },
     {
       "node": "otg-assets-linear",
@@ -318,7 +326,8 @@
       "threshold": 0,
       "workload": "3 processes start the same copy as linear-asset-copy-seconds within 1 s of each other, sharing one key. Each copy's 24 images are generated PNGs of about 500 KB (450,000 to 500,000 bytes), about 36 MB across the three copies; the journey records each image's size and the analysis fails without a figure when the count or any size differs.",
       "evidence": "Design: about 72 asset requests per copy, about 216 across three, waited out within a bounded retry. No spike; the published limit is the node's to read and record.",
-      "command": "Analysis of the telemetry the Linear (`onetaskgraph-linear-e2e`) domain's asset journeys record during its ordinary `test` target, reported through `onebudgetspec_core::report` by the command (or the one generic runner reading `ONEBUDGETSPEC_BUDGET_ID`) the convention lands in `otg-linear-budgets-domain`. It runs no journey and no `cargo test`, and it is cached on the domain tree, the measured production code and the onebudgetspec pin."
+      "command": "Analysis of the telemetry the Linear (`onetaskgraph-linear-e2e`) domain's asset journeys record during its ordinary `test` target, reported through `onebudgetspec_core::report` by the command (or the one generic runner reading `ONEBUDGETSPEC_BUDGET_ID`) the convention lands in `otg-linear-budgets-domain`. It runs no journey and no `cargo test`, and it is cached on the domain tree, the measured production code and the onebudgetspec pin.",
+      "anchor": ""
     }
   ]
 }

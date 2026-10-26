@@ -48,7 +48,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
-from typing import Any, ClassVar, NamedTuple, NewType, Protocol, TypedDict
+from typing import Any, ClassVar, NamedTuple, NewType, NotRequired, Protocol, TypedDict
 
 import yaml
 
@@ -145,6 +145,22 @@ PLACEHOLDER = re.compile(r"\A\s*(?:todo|tbd|fixme|xxx|n/?a|none|placeholder|\.+|
 
 #: A budget's id in its budgets file, and every reference to one.
 BudgetId = NewType("BudgetId", str)
+
+#: The pattern a schema-2 budget's id matches: onebudgetspec's own id pattern, held to the
+#: installed library's `onebudgetspec schema` by `tests/test_budgets_files.py`. Every
+#: character it admits is one GitHub's heading slugger keeps, so a task's `### Budget <id>`
+#: heading is anchored at exactly :func:`budget_anchor`.
+BUDGET_ID_PATTERN = "^[a-z][a-z0-9-]*$"
+_BUDGET_ID = re.compile(BUDGET_ID_PATTERN)
+
+
+def budget_anchor(budget_id: str) -> str:
+    """The anchor of a schema-2 budget's heading in its task's `## Budgets` section.
+
+    The one definition of it: the slug of the heading `Budget <id>` the partial renders,
+    which a GitHub rendering prefixes with `user-content-` for the element's id.
+    """
+    return f"budget-{budget_id}"
 
 
 class BudgetsError(OSError):
@@ -293,6 +309,63 @@ class TaskBudgets(NamedTuple):
     record: object
 
 
+class BudgetAnswer(TypedDict):
+    """One budget as the design document's `budgets` answer states it: its record's fields,
+    flattened beside the node owning it, that task's location and its heading's anchor."""
+
+    node: str
+    location: str
+    id: str
+    name: str
+    basis: str
+    repository: str
+    file: str
+    file_change: str
+    measure: str
+    inner_measure_reason: str
+    unit: str
+    direction: str
+    threshold: int | float
+    workload: str
+    evidence: str
+    command: str
+    #: A schema-2 record's own fields, absent from a legacy one's answer.
+    schema_version: NotRequired[int]
+    source: NotRequired[str]
+    check_runtime_seconds: NotRequired[int | float]
+    #: :func:`budget_anchor` of a schema-2 budget's id, and `""` for a legacy one.
+    anchor: str
+
+
+def budget_answer(node: str, location: str, budget: Budget) -> BudgetAnswer:
+    """``budget``, owned by ``node`` at ``location``, as the writer's answer states it."""
+    answer = BudgetAnswer(
+        node=node,
+        location=location,
+        id=budget.id,
+        name=budget.name,
+        basis=budget.basis,
+        repository=budget.repository,
+        file=budget.file,
+        file_change=budget.file_change,
+        measure=budget.measure,
+        inner_measure_reason=budget.inner_measure_reason,
+        unit=budget.unit,
+        direction=budget.direction,
+        threshold=budget.threshold,
+        workload=budget.workload,
+        evidence=budget.evidence,
+        command=budget.command,
+        anchor="",
+    )
+    if isinstance(budget, ModernBudget):
+        answer["schema_version"] = budget.schema_version
+        answer["source"] = budget.source
+        answer["check_runtime_seconds"] = budget.check_runtime_seconds
+        answer["anchor"] = budget_anchor(budget.id)
+    return answer
+
+
 class WriterAnswers(TypedDict):
     """The design document's budget answers, exactly as the writer copies them."""
 
@@ -300,8 +373,9 @@ class WriterAnswers(TypedDict):
     predates_budgets: str
     #: The plan's :data:`PLAN_RECORD`, or `{}` when project analysis is absent.
     plan_budgets: Mapping[str, object]
-    #: Every budget of every task, each with its owning node and that task's location.
-    budgets: list[dict[str, object]]
+    #: Every budget of every task, each with its owning node, that task's location and its
+    #: heading's anchor: :func:`budget_anchor` for a schema-2 budget, `""` for a legacy one.
+    budgets: list[BudgetAnswer]
 
 
 class _Kind(NamedTuple):
@@ -614,6 +688,12 @@ def budget_refusals(node: str, budgets: Sequence[Budget]) -> list[Refusal]:
         named = budget.id.strip() or f"budget {position}"
         if not budget.id.strip():
             refuse(f"{named} has no `id`, and every budget is named by one")
+        elif isinstance(budget, ModernBudget) and not _BUDGET_ID.fullmatch(budget.id):
+            refuse(
+                f"budget {named!r} has an `id` outside onebudgetspec's id pattern "
+                f"`{BUDGET_ID_PATTERN}`, so its `### Budget <id>` heading is not anchored at "
+                f"`{budget_anchor(budget.id)}`"
+            )
         if not budget.name.strip() or not _one_line(budget.name, NAME_LIMIT):
             refuse(
                 f"budget {named!r} has the `name` {budget.name!r}, which is not a short "
@@ -1084,8 +1164,8 @@ def writer_answers(project: str) -> WriterAnswers:
     """The design document's budget answers for ``project``: what its writer copies.
 
     The migration list's reason when it names the plan; otherwise the plan's
-    :data:`PLAN_RECORD`, and every budget of every task, each with its owning node id and the
-    location the plan store reports for that task, sorted by node. Raises
+    :data:`PLAN_RECORD`, and every budget of every task, each with its owning node id, the
+    location the plan store reports for that task and its `anchor`, sorted by node. Raises
     :class:`BudgetsError` for missing analysis when a task adds/changes a budget.
     With no such budget, absent analysis returns an empty object and all task budgets.
     """
@@ -1097,15 +1177,14 @@ def writer_answers(project: str) -> WriterAnswers:
     held = record.get(PLAN_RECORD) if isinstance(record, Mapping) else None
     if present:
         parse_plan(held)
-    budgets: list[dict[str, object]] = []
+    budgets: list[BudgetAnswer] = []
     for task in sorted(plan_store.read_tasks(project), key=lambda task: task.node_id):
         record = task_record(task.metadata)
         if record is None:
             continue
         location = task.location or str(task.qualified_id)
         budgets.extend(
-            {"node": task.node_id, "location": location, **dataclasses.asdict(budget)}
-            for budget in parse_budgets(record)
+            budget_answer(task.node_id, location, budget) for budget in parse_budgets(record)
         )
     if not present and any(budget["file_change"] in ("add", "change") for budget in budgets):
         raise BudgetsError(
@@ -1155,7 +1234,7 @@ def design_refusals(project: str) -> tuple[str, list[str]]:
     return document, found
 
 
-def _budget_differences(held: list[object], expected: list[dict[str, object]]) -> list[str]:
+def _budget_differences(held: list[object], expected: list[BudgetAnswer]) -> list[str]:
     """What separates the document's `budgets` answer from the records, budget by budget."""
     by_id = {str(entry.get("id")): entry for entry in held if isinstance(entry, dict)}
     found: list[str] = []

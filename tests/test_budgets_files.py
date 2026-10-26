@@ -36,7 +36,7 @@ import pytest
 import yaml
 from nx_inputs import BUDGET_HOST_SCOPED, BUDGET_SCOPED, project_declarations
 
-from orchestrator.plan_budgets import BUDGETS_FILE, Direction
+from orchestrator.plan_budgets import BUDGET_ID_PATTERN, BUDGETS_FILE, Direction
 from orchestrator.root import REPO_ROOT
 
 ROOT_BUDGETS = REPO_ROOT / "budgets.yaml"
@@ -373,3 +373,8 @@ def test_the_direction_vocabulary_and_file_name_are_the_installed_librarys() -> 
     assert template_file.group(1) == file_name, template_file.group(0)
     assert list(Direction) == directions
     assert file_name == BUDGETS_FILE
+
+
+def test_the_budget_id_pattern_is_the_installed_librarys() -> None:
+    """`plan_budgets.py`'s copy, which a schema-2 budget's heading anchor rests on."""
+    assert _schema()["$defs"]["Budget"]["properties"]["id"]["pattern"] == BUDGET_ID_PATTERN

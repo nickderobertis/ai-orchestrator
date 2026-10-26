@@ -7,7 +7,7 @@ metadata:
   "onepipeline.id": "api"
   "orchestrator.unit": "Shortener API"
   "onepipeline.persona": "engineer"
-  "onetaskgraph.template": {"answers_digest":"sha256:fb23bc8ecf0b928b4b9db11ee2643bddec12bc81cbf40bf07ef5cda6f5d5d876","body_digest":"sha256:c7dbebcc06737ce2f65100dde1cf9d6fdc1e7457ead40d78153eac92147e39f0","digest":"sha256:02c4dffa2f5b549c69f5f1d78d6f19a934c864bcffc64548ba4051bc31086e94","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:fb23bc8ecf0b928b4b9db11ee2643bddec12bc81cbf40bf07ef5cda6f5d5d876","body_digest":"sha256:c7dbebcc06737ce2f65100dde1cf9d6fdc1e7457ead40d78153eac92147e39f0","digest":"sha256:3aa0b10cef465f7f3aec19d71a71bd1510f11ec0e4abb6c2c33db3e690095715","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What

@@ -7,7 +7,7 @@ metadata:
   "onepipeline.id": "review"
   "orchestrator.unit": "Review"
   "onepipeline.persona": "reviewer"
-  "onetaskgraph.template": {"answers_digest":"sha256:127e264008687ada1935875ac80e6a05910eb7d6e31194d4f69cb93835b02a59","body_digest":"sha256:e1307faa55c3974575ef323d6e0b59dae392d850a19493f45509d1b28500b8b1","digest":"sha256:02c4dffa2f5b549c69f5f1d78d6f19a934c864bcffc64548ba4051bc31086e94","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:127e264008687ada1935875ac80e6a05910eb7d6e31194d4f69cb93835b02a59","body_digest":"sha256:e1307faa55c3974575ef323d6e0b59dae392d850a19493f45509d1b28500b8b1","digest":"sha256:3aa0b10cef465f7f3aec19d71a71bd1510f11ec0e4abb6c2c33db3e690095715","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What
