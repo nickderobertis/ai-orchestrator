@@ -7,18 +7,25 @@ it enforces is tested here directly, on a duplicate the store itself never sends
 from __future__ import annotations
 
 import json
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 from github_board import (
     BATCHED_CLEARS,
     BATCHED_WRITES,
+    CONFIGURED_REPOSITORY,
+    COPY_BATCHES,
     COPY_ORIGIN_SLOTS,
-    COPY_WRITE_SLOTS,
+    COPY_WIDE_SLOTS,
+    MEASURED_PLACEMENT_SECONDS,
+    REPOSITORY_NODE_IDS,
     REQUEST_KINDS,
     REQUEST_LATENCY_MS,
     RequestCost,
     RequestKind,
+    _Board,
     _bounded_step,
     _GitHubFixture,
     _GraphQLRequest,
@@ -99,20 +106,21 @@ def test_a_batched_field_document_whose_slots_moved_is_named_rather_than_modelle
     ]
 
 
-def test_a_batched_copy_write_whose_slots_moved_is_named_rather_than_modelled() -> None:
-    """A copy's aliased writes are held to the store's batch size and spelling, by name."""
-    document = (
-        "mutation{"
-        + "".join(
-            f" field{n}:updateProjectV2ItemFieldValue(input:$field{n}) @include(if:$send{n})"
-            "{projectV2Item{id}}"
-            for n in range(COPY_WRITE_SLOTS)
-        )
-        + "}"
+def _wide(prefix: str, root: str, send: str, selection: str) -> str:
+    """One kind's slots of a copy's wide write batch, spelled as the store spells them."""
+    return "".join(
+        f" {prefix}{n}:{root}(input:${prefix}{n}) @include(if:${send}{n}){{{selection}}}"
+        for n in range(COPY_WIDE_SLOTS)
     )
 
+
+def test_a_batched_copy_write_whose_slots_moved_is_named_rather_than_modelled() -> None:
+    """A copy's aliased writes are held to the store's batch size and spelling, by name."""
+    fields = _wide("field", "updateProjectV2ItemFieldValue", "send", "projectV2Item{id}")
+    document = f"mutation{{{fields}}}"
+
     assert copy_batch_drift(_Operation.WRITE_FIELD_VALUES, document) == []
-    last = COPY_WRITE_SLOTS - 1
+    last = COPY_WIDE_SLOTS - 1
     shrunk = document.replace(
         f" field{last}:updateProjectV2ItemFieldValue(input:$field{last}) @include(if:$send{last})"
         "{projectV2Item{id}}",
@@ -121,8 +129,108 @@ def test_a_batched_copy_write_whose_slots_moved_is_named_rather_than_modelled() 
     assert copy_batch_drift(_Operation.WRITE_FIELD_VALUES, shrunk) == [
         "the batched copy document lacks "
         f"`field{last}:updateProjectV2ItemFieldValue(input:$field{last}) @include(if:$send{last})`",
-        f"the batched copy document carries {last} slots, not {COPY_WRITE_SLOTS}",
+        f"the batched copy document carries {last} slots, not {COPY_WIDE_SLOTS}",
     ]
+
+
+def test_a_request_of_field_values_and_edges_runs_every_value_before_the_first_edge() -> None:
+    """The batch of both kinds is held to both kinds' slots, and is applied fields first.
+
+    Its slots are told apart by `$sendField<n>` and `$sendBlock<n>`, so a release spelling them
+    as the single-kind batches do is named, and a board answering it applies each sent slot of
+    each kind in the order GitHub runs a document's mutation fields.
+    """
+    fields = _wide("field", "updateProjectV2ItemFieldValue", "sendField", "projectV2Item{id}")
+    blocks = _wide("block", "addBlockedBy", "sendBlock", "issue{id} blockingIssue{id}")
+    document = f"mutation({'$sendField0:Boolean!'}){{{fields}{blocks}}}"
+    request = _GraphQLRequest(document, {}, 0.0)
+
+    assert request.operation is _Operation.WRITE_FIELDS_AND_EDGES
+    assert copy_batch_drift(_Operation.WRITE_FIELDS_AND_EDGES, document) == []
+    single = document.replace("$sendBlock", "$send")
+    assert copy_batch_drift(_Operation.WRITE_FIELDS_AND_EDGES, single)[0] == (
+        "the batched copy document lacks "
+        "`block0:addBlockedBy(input:$block0) @include(if:$sendBlock0)`"
+    )
+
+    applied: list[str] = []
+
+    def write(kind: str, root: str) -> Callable[[dict[str, object]], dict[str, object]]:
+        def written(variables: dict[str, object]) -> dict[str, object]:
+            applied.append(f"{kind} {variables['input']}")
+            return {"data": {root: {"id": kind}}}
+
+        return written
+
+    board = _Board()
+    writes = {
+        _Operation.UPDATE_FIELD: write("field", "updateProjectV2ItemFieldValue"),
+        _Operation.ADD_BLOCKED_BY: write("edge", "addBlockedBy"),
+    }
+    answered = board.write_batch(COPY_BATCHES[_Operation.WRITE_FIELDS_AND_EDGES], writes)(
+        {
+            "sendBlock0": True,
+            "block0": "b0",
+            "sendField0": True,
+            "field0": "f0",
+            "sendField1": False,
+            "field1": "f1",
+            "sendField2": True,
+            "field2": "f2",
+        }
+    )
+    assert applied == ["field f0", "field f2", "edge b0"]
+    assert answered == {
+        "data": {
+            "field0": {"id": "field"},
+            "field2": {"id": "field"},
+            "block0": {"id": "edge"},
+        }
+    }
+
+
+def test_a_created_issue_is_on_the_board_only_once_its_measured_delay_has_passed() -> None:
+    """A create filing an issue with `projectV2Ids` is placed late, and placed only once.
+
+    Until its delay passes a read of the created issue's board items finds none, as GitHub
+    answers one; once placed, filing it again is refused "Content already exists in this
+    project" rather than answered — and an issue filed before its placement is answered.
+    """
+    board = _Board()
+    board.placement_delays = (0.2, 30.0)
+    issue = {
+        "title": "T",
+        "body": "B",
+        "repositoryId": REPOSITORY_NODE_IDS[CONFIGURED_REPOSITORY],
+        "projectV2Ids": [board.node_id],
+    }
+
+    def created() -> str:
+        answer = board.create_issue({"input": issue})["data"]
+        assert isinstance(answer, dict)
+        return str(answer["createIssue"]["issue"]["id"])
+
+    def items(content: str) -> list[object]:
+        data = board.created_items_response({"id0": content, "read0": True})["data"]
+        assert isinstance(data, dict)
+        nodes = data["i0"]["projectItems"]["nodes"]
+        assert isinstance(nodes, list)
+        return nodes
+
+    soon, late = created(), created()
+    assert items(soon) == [] and items(late) == []
+    deadline = time.monotonic() + 5
+    while not items(soon):
+        assert time.monotonic() < deadline, "the first create was never placed"
+        time.sleep(0.05)
+    assert items(late) == []
+    refused = board.add_to_board({"input": {"contentId": soon}})
+    assert refused["errors"] == [{"message": "Content already exists in this project"}]
+    filed = board.add_to_board({"input": {"contentId": late}})
+    assert filed["data"] == {"addProjectV2ItemById": {"item": {"id": board._issue(late).item_id}}}
+    assert items(late) != []
+    assert min(MEASURED_PLACEMENT_SECONDS) == 0.453
+    assert max(MEASURED_PLACEMENT_SECONDS) == 1.837
 
 
 def test_a_batched_copy_read_whose_slots_moved_is_named_rather_than_modelled() -> None:
@@ -184,5 +292,6 @@ def test_a_project_member_listing_is_charged_as_one_items_read_and_a_batched_rea
         _Operation.ISSUE_DETAILS,
         _Operation.ISSUE_COPY_DETAILS,
         _Operation.ORIGIN_LOOKUPS,
+        _Operation.ORIGIN_LOOKUPS_WITH_MEMBERS,
         _Operation.CREATED_BOARD_ITEMS,
     }

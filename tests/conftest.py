@@ -36,6 +36,9 @@ from nx_inputs import (
     ASK_SEAM_JOURNEYS,
     BOARD_COPY_APPROVAL_ROOT,
     BOARD_COPY_APPROVAL_WORKSPACE,
+    BOARD_COPY_QUOTA_HANDOVER_ROOT,
+    BOARD_COPY_QUOTA_HANDOVER_SCOPED,
+    BOARD_COPY_QUOTA_HANDOVER_WORKSPACE,
     CHECKOUT_SCOPED,
     CODE_SCOPED,
     DAG_UI_ROOT,
@@ -253,14 +256,19 @@ OWNED_PROJECTS = {
     # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the repository's one
     # catalog of test projects, where every project has its entry, and
     # `tests/tree_scans/test_nx_cache_scope.py` fails when a project's tests fall outside
-    # the tiers it describes; the plan-store-assets, plan-store-dependency-read and
-    # render-diagram entries sit beside the others' rather than in a domain of their own
-    # because the catalog is the domain.
+    # the tiers it describes; the plan-store-assets, plan-store-dependency-read,
+    # board-copy-quota-handover and render-diagram entries sit beside the others' rather than
+    # in a domain of their own because the catalog is the domain.
     PLAN_STORE_ASSETS_ROOT: OwnedProject(key=PLAN_STORE_ASSETS_WORKSPACE, docs_tier=False),
     PLAN_STORE_DEPENDENCY_READ_ROOT: OwnedProject(
         key=PLAN_STORE_DEPENDENCY_READ_WORKSPACE,
         docs_tier=False,
         target=PLAN_STORE_DEPENDENCY_READ_SCOPED,
+    ),
+    BOARD_COPY_QUOTA_HANDOVER_ROOT: OwnedProject(
+        key=BOARD_COPY_QUOTA_HANDOVER_WORKSPACE,
+        docs_tier=False,
+        target=BOARD_COPY_QUOTA_HANDOVER_SCOPED,
     ),
     RENDER_DIAGRAM_ROOT: OwnedProject(key=RENDER_DIAGRAM_WORKSPACE, docs_tier=False),
     # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]

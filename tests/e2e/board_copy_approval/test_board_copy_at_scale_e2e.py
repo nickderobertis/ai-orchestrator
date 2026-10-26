@@ -5,18 +5,26 @@ several times while it is revised, and both used to grow with every plan ever fi
 board: a copy and an approval each walked it. These journeys drive the real `just copy-plan`
 and `just approve-design` recipes and the locked `.venv/bin/onetaskgraph` against the loopback
 board double filled with other people's plans — once at the `plans` board's scale, 2,000
-items, and once at a tenth of it — beside one 10-item plan, and hold three things: the copy
-lands the plan whole, the approval is recorded on the copy and admits its launch, and by the
-double's own request log neither recipe reads a whole-board page and each sends exactly the
-same requests, operation by operation, at either size.
+items, and once at ten times it — beside one 10-item plan, and hold three things: every
+copy lands the plan whole — the first, a re-copy after one task's body was regenerated, and a
+re-copy of the unchanged plan — the approval is recorded on the copy and admits its launch, and
+by the double's own request log neither recipe reads a whole-board page and each sends exactly
+the same requests, operation by operation, at either size. The double places each issue a copy
+creates only the delay after its create that the feasibility spike measured GitHub taking, as
+onetaskgraph's own loopback board does, and prices each request at the points it measured.
 
-The approval makes exactly four store calls to the board — the project's record by id, its
-tasks and its documents each listed by project, and one metadata write guarded on the change
-token the document listing returned — and reads no document on its own; its other calls read
-the store's configuration and the local `authoring` source, and send the board nothing. What
-it costs at the `plans` board's scale is two budgets. `plan-approval-points` is the points the
-double's price table charges, recorded per store call during the `test` target's run.
-`plan-approval-seconds` is the recipe's real elapsed time plus the GitHub latency the
+What those copies and the approval spend of the board token's allowance is budgeted in the plan
+store, whose release registers a points budget for each copy scenario, one for a first copy's
+content creations and one for an approval's calls, which
+`tests/board_copy_quota_handover/test_board_copy_quota_handover.py` reads at the pin. So what
+these journeys hold is that every request a recipe sends the board
+comes from the store calls those budgets measure: a copy's `project copy` then `document copy`,
+and an approval's four — the project's record by id, its tasks and its documents each listed by
+project, and one metadata write guarded on the change token the document listing returned —
+with every other store call they make reading only the local `authoring` source or the store's
+configuration, and sending the board nothing.
+
+`plan-approval-seconds` is the approval's real elapsed time plus the GitHub latency the
 copy-speed spike measured for each request the double logged (`REQUEST_LATENCY_MS`), recorded
 per store call by the journey the uncached `test-host` target runs alone, because a wall clock
 a cache replayed would be another moment's.
@@ -25,6 +33,7 @@ a cache replayed would be another moment's.
 from __future__ import annotations
 
 import bisect
+import dataclasses
 import json
 import random
 import struct
@@ -42,6 +51,7 @@ from github_board import (
     AUTHORING_ROOT_ENV,
     AUTHORING_SOURCE,
     BOARD,
+    MEASURED_PLACEMENT_SECONDS,
     PLANS_BOARD_SCALE,
     REQUEST_LATENCY_MS,
     _audit_follow_up_calls,
@@ -77,8 +87,8 @@ DESIGN = f"{QUALIFIED}-design"
 TASKS = 8
 #: The board the plan is copied onto, as every plan of this repository is.
 BOARD_SOURCE = "plans"
-#: The two board sizes a cost is compared across: the `plans` board's, and a tenth of it.
-SIZES = (PLANS_BOARD_SCALE, PLANS_BOARD_SCALE // 10)
+#: The required board sizes: ten times the `plans` board's scale, and that scale itself.
+SIZES = (PLANS_BOARD_SCALE * 10, PLANS_BOARD_SCALE)
 #: The size of the plan graph image the design document carries, as the budgets' workload
 #: states it: about what `just finish-plan` renders for a plan of this many tasks.
 IMAGE_BYTES = 104 * 1024
@@ -123,6 +133,26 @@ def _graph_image(directory: Path) -> GraphImage:
     return GraphImage(answers={"dag_image": image.name}, assets=[image])
 
 
+def _answers(directory: Path, node: str, what: str) -> Path:
+    """The template answers task ``node`` is rendered from, saying ``what`` it delivers."""
+    answered = directory / f"{node}-{len(list(directory.glob(f'{node}-*.json')))}.json"
+    answered.write_text(
+        json.dumps(
+            {
+                "what": what,
+                "why": "An operator cannot see past the first screen of nodes.",
+                "acceptance_criteria": [
+                    f"The route serves {node} and rejects an invalid request.",
+                    "A request-level test drives the route end to end and covers both.",
+                    CLOSING,
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return answered
+
+
 def _authored(tmp_path: Path, root: Path, environment: Mapping[str, str]) -> dict[str, str]:
     """Author :data:`PROJECT` as a planner does: its record, then each task through the template.
 
@@ -139,21 +169,7 @@ def _authored(tmp_path: Path, root: Path, environment: Mapping[str, str]) -> dic
     )
     created: dict[str, str] = {}
     for node, title in NODES:
-        answered = tmp_path / f"{node}.json"
-        answered.write_text(
-            json.dumps(
-                {
-                    "what": f"Deliver {node} and the test that drives it.",
-                    "why": "An operator cannot see past the first screen of nodes.",
-                    "acceptance_criteria": [
-                        f"The route serves {node} and rejects an invalid request.",
-                        "A request-level test drives the route end to end and covers both.",
-                        CLOSING,
-                    ],
-                }
-            ),
-            encoding="utf-8",
-        )
+        answered = _answers(tmp_path, node, f"Deliver {node} and the test that drives it.")
         depends = [f"--depends-on={created[NODES[0].title]}"] if node == NODES[1].node else []
         made = _through_the_template(
             environment,
@@ -178,11 +194,15 @@ def _authored(tmp_path: Path, root: Path, environment: Mapping[str, str]) -> dic
     return created
 
 
-def _drafted(root: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
-    """Author, design and review the plan where it was drafted, leaving it unapproved there.
+class _Drafted(NamedTuple):
+    """The plan as drafted: the environment its tools run in, and each task's id by title."""
 
-    Answers the environment its store, the engine and the recipes run in.
-    """
+    environment: dict[str, str]
+    tasks: dict[str, str]
+
+
+def _drafted(root: Path, monkeypatch: pytest.MonkeyPatch) -> _Drafted:
+    """Author, design and review the plan where it was drafted, leaving it unapproved there."""
     root.mkdir(parents=True)
     # `reviewed` and the in-process reads read the store in this process's environment.
     monkeypatch.setenv(AUTHORING_ROOT_ENV, str(root / "authoring"))
@@ -203,7 +223,32 @@ def _drafted(root: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
     ]
     designed(AUTHORING_SOURCE, PROJECT, rows, environment, **_graph_image(root / "graph"))
     reviewed(QUALIFIED)
-    return environment
+    return _Drafted(environment, tasks)
+
+
+#: The task a revision regenerates, as a manager changes a planned task: one with no edge.
+REVISED = NODES[3]
+
+
+def _revised(root: Path, drafted: _Drafted) -> None:
+    """Regenerate :data:`REVISED` from changed answers, then review the plan again.
+
+    The way a manager changes a task — `onetaskgraph task render` over the `plan-task`
+    template, keeping its id, dependencies and metadata — and the review `just copy-plan`
+    requires of every task before it copies one.
+    """
+    rendered = _through_the_template(
+        drafted.environment,
+        "render",
+        drafted.tasks[REVISED.title],
+        "--template-loader",
+        "-",
+        "--no-interactive",
+        "--answers",
+        str(_answers(root, REVISED.node, f"Deliver {REVISED.node} paged, and its test.")),
+    )
+    assert rendered.returncode == 0, rendered.stdout + rendered.stderr
+    reviewed(QUALIFIED)
 
 
 class _Launch(NamedTuple):
@@ -292,23 +337,35 @@ def _store_calls(run: _Run) -> list[_StoreCall]:
     ]
 
 
+class _Copied(NamedTuple):
+    """One `just copy-plan` of the plan, and the board it left."""
+
+    run: _Run
+    #: Each copied record's board id by its local id, as the copy reported it.
+    destinations: dict[str, str]
+    #: The plan's local task bodies by title, as the copy read them.
+    bodies: dict[str, str]
+    #: The issues every copy so far created and kept, by title.
+    landed: dict[str, _Issue]
+    #: Every image the board took, by the path it serves it at.
+    attachments: dict[str, bytes]
+    #: How many issues every copy so far created, kept or not.
+    created: int
+
+
 class _Scaled(NamedTuple):
     """What copying and approving the plan on a board of one size came to."""
 
-    copy: _Run
+    #: The first copy, then — where the journey revises the plan — the re-copy after one task
+    #: was regenerated and the re-copy of the unchanged plan after it.
+    copies: list[_Copied]
     approval: _Run
     gate: subprocess.CompletedProcess[str]
     #: The board project the copy landed the plan at.
     board_project: str
-    #: Each copied record's board id by its local id.
-    destinations: dict[str, str]
     #: The approval the copied design document records, and the key its content hashes to.
     recorded: design_approval.ApprovalKey | None
     expected: design_approval.ApprovalKey
-    #: The issues the copy created and kept, by title.
-    landed: dict[str, _Issue]
-    #: Every image the board took, by the path it serves it at.
-    attachments: dict[str, bytes]
     #: The generated PNG the authored document references, before copying it.
     expected_image: bytes
     #: The change token a listing of the copied plan's documents returned before the approval.
@@ -341,23 +398,41 @@ def _local_bodies(environment: Mapping[str, str]) -> dict[str, str]:
     return {str(item["item"]["title"]): str(item["item"].get("content") or "") for item in items}
 
 
+def _copy(root: Path, environment: Mapping[str, str]) -> _Copied:
+    """`just copy-plan` of the plan onto the board, and what it left there."""
+    bodies = _local_bodies(environment)
+    run = _run(root, environment, "just", "copy-plan", QUALIFIED, "--to", BOARD_SOURCE)
+    assert run.ran.returncode == 0, run.ran.stdout + run.ran.stderr
+    return _Copied(
+        run=run,
+        destinations=_copied(run.ran.stdout),
+        bodies=bodies,
+        # Copied, because the board's own issues move with every later write.
+        landed={
+            issue.title: dataclasses.replace(issue, blocked_by=list(issue.blocked_by))
+            for issue in BOARD.issues_created_and_kept()
+        },
+        attachments=dict(BOARD.attachments),
+        created=len(BOARD.created),
+    )
+
+
 def _copied_and_approved(
-    root: Path, monkeypatch: pytest.MonkeyPatch, size: int
-) -> tuple[_Scaled, dict[str, str]]:
+    root: Path, monkeypatch: pytest.MonkeyPatch, size: int, *, revise: bool = True
+) -> _Scaled:
     """Copy the plan onto a board of ``size`` items and approve it there, through the recipes.
 
-    Answers what both came to, and the plan's local task bodies by title.
+    The board places each created issue the measured delay after its create. With
+    ``revise``, the approved plan then has one task regenerated and is copied again, and
+    copied once more unchanged.
     """
-    environment = _drafted(root, monkeypatch)
-    bodies = _local_bodies(environment)
-    with _serving_board() as remote:
-        on_the_board = {**environment, **remote}
+    drafted = _drafted(root, monkeypatch)
+    with _serving_board(placement=MEASURED_PLACEMENT_SECONDS) as remote:
+        on_the_board = {**drafted.environment, **remote}
         populate(BOARD, size)
         assert len(BOARD.issues) == size, len(BOARD.issues)
-        copy = _run(root, on_the_board, "just", "copy-plan", QUALIFIED, "--to", BOARD_SOURCE)
-        assert copy.ran.returncode == 0, copy.ran.stdout + copy.ran.stderr
-        destinations = _copied(copy.ran.stdout)
-        board_project = destinations[QUALIFIED]
+        copies = [_copy(root, on_the_board)]
+        board_project = copies[0].destinations[QUALIFIED]
         _on_the_board(monkeypatch, remote)
         (listed,) = design_approval.design_documents(
             board_project, plan_store.read_documents(board_project)
@@ -365,39 +440,64 @@ def _copied_and_approved(
         approval = _run(root, on_the_board, "just", "approve-design", board_project)
         gate = _launch_gate(on_the_board, board_project)
         document = design_approval.design_document(board_project)
-        scaled = _Scaled(
-            copy=copy,
+        if revise:
+            monkeypatch.setenv(AUTHORING_ROOT_ENV, drafted.environment[AUTHORING_ROOT_ENV])
+            _revised(root, drafted)
+            copies.append(_copy(root, on_the_board))
+            copies.append(_copy(root, on_the_board))
+        return _Scaled(
+            copies=copies,
             approval=approval,
             gate=gate,
             board_project=board_project,
-            destinations=destinations,
             recorded=design_approval.recorded(document),
             expected=design_approval.approval_key(document, design_approval.resolved_digest()),
-            landed={issue.title: issue for issue in BOARD.issues_created_and_kept()},
-            attachments=dict(BOARD.attachments),
             expected_image=(root / "graph" / "plan-dag.png").read_bytes(),
             listed_version=listed.version,
         )
-    return scaled, bodies
 
 
-def _the_plan_landed_whole(scaled: _Scaled, bodies: Mapping[str, str]) -> None:
-    """The board holds the plan's project, its tasks and its document as the local records are."""
-    assert len(scaled.destinations) == 1 + TASKS + 1, scaled.destinations
-    project = scaled.landed[PROJECT]
+def _the_plan_landed_whole(copied: _Copied, scaled: _Scaled) -> None:
+    """The board holds the plan's project, its tasks and its document as the local records are.
+
+    Each record once, each task under its project with its own body and its one edge, and the
+    document under the project carrying the plan's image at the address the board serves it.
+    """
+    assert len(copied.destinations) == 1 + TASKS + 1, copied.destinations
+    assert copied.destinations == scaled.copies[0].destinations, copied.destinations
+    assert len(copied.landed) == 1 + TASKS + 1, sorted(copied.landed)
+    project = copied.landed[PROJECT]
     # A board files a document as an issue whose title the store marks as a document's.
-    design = scaled.landed[f"DESIGN: Design: {PROJECT}"]
-    for title, body in bodies.items():
-        task = scaled.landed[title]
+    design = copied.landed[f"DESIGN: Design: {PROJECT}"]
+    for title, body in copied.bodies.items():
+        task = copied.landed[title]
         assert task.parent_id == project.content_id, (title, task.parent_id)
         assert body.strip() and body.strip() in task.body, (title, body, task.body)
-    assert sorted(bodies) == sorted(node.title for node in NODES), sorted(bodies)
-    first, second = (scaled.landed[node.title] for node in NODES[:2])
+    assert sorted(copied.bodies) == sorted(node.title for node in NODES), sorted(copied.bodies)
+    first, second = (copied.landed[node.title] for node in NODES[:2])
     assert second.blocked_by == [first.content_id], second.blocked_by
-    assert all(scaled.landed[node.title].blocked_by == [] for node in NODES[2:])
+    assert all(copied.landed[node.title].blocked_by == [] for node in NODES[2:])
     assert design.parent_id == project.content_id, design.parent_id
-    (served,) = [path for path, held in scaled.attachments.items() if held == scaled.expected_image]
+    (served,) = [path for path, held in copied.attachments.items() if held == scaled.expected_image]
     assert served in design.body, (served, design.body[:400])
+
+
+def _the_revisions_landed_in_place(scaled: _Scaled) -> None:
+    """A re-copy updates the plan's own issues: none created, and only the revised body moved."""
+    first, changed, unchanged = scaled.copies
+    assert changed.created == unchanged.created == first.created, (
+        first.created,
+        changed.created,
+        unchanged.created,
+    )
+    moved = [
+        title
+        for title in first.bodies
+        if first.bodies[title].strip() != changed.bodies[title].strip()
+    ]
+    assert moved == [REVISED.title], moved
+    assert "paged, and its test" in changed.landed[REVISED.title].body
+    assert changed.bodies == unchanged.bodies
 
 
 def _the_approval_admits_the_copy(scaled: _Scaled) -> None:
@@ -471,16 +571,33 @@ def _the_approval_makes_only_its_four_calls(scaled: _Scaled) -> None:
     assert _flag(write, "--expect") == scaled.listed_version, (write, scaled.listed_version)
 
 
-def _recorded_points(approval: _Run) -> None:
-    """Record `plan-approval-points`: each store call's points, with its requests beside them."""
-    for call in _store_calls(approval):
-        budget_telemetry.record(
-            "plan-approval-points",
-            call.label,
-            sum(_request_points(request) for request in call.requests),
-            unit="points",
-            requests=len(call.requests),
-        )
+#: The store calls a copy makes to the `plans` board, in order: the plan's project with its
+#: tasks, then its document — the calls the store's copy budgets measure.
+COPY_CALLS = (("project", "copy"), ("document", "copy"))
+
+
+def _the_copy_makes_only_its_two_calls(copied: _Copied) -> None:
+    """Every request a copy sends the board comes from its `project copy` or `document copy`.
+
+    A store call reaches the board when it copies to the `plans` source or names it; each
+    other call the recipe makes — reads of the local `authoring` source and the store's
+    configuration — is held to sending the board nothing, and each request the double logged
+    to the call the recipe had launched last when it arrived.
+    """
+    calls = copied.run.calls
+
+    def on_the_board(argv: list[str]) -> bool:
+        return _flag(argv, "--to") == BOARD_SOURCE or _source(argv) == BOARD_SOURCE
+
+    board_calls = [tuple(call.argv[:2]) for call in calls if on_the_board(call.argv)]
+    assert board_calls == list(COPY_CALLS), [call.argv for call in calls]
+    sent = _store_calls(copied.run)
+    assert all(
+        call.requests == []
+        for call, launch in zip(sent, calls, strict=True)
+        if not on_the_board(launch.argv)
+    ), [(call.label, len(call.requests)) for call in sent]
+    assert sum(len(call.requests) for call in sent) == len(copied.run.requests)
 
 
 def _recorded_seconds(approval: _Run) -> None:
@@ -510,15 +627,15 @@ def _recorded_seconds(approval: _Run) -> None:
         )
 
 
-def _printed_cost(approval: _Run) -> None:
-    """Print what ``approval`` spent, per store call: requests, points and charged latency."""
-    latency = sum(request_latency_ms(request) for request in approval.requests) / 1000
-    points = sum(_request_points(request) for request in approval.requests)
+def _printed_cost(recipe: _Run, named: str) -> None:
+    """Print what ``recipe`` spent, per store call: requests, points and charged latency."""
+    latency = sum(request_latency_ms(request) for request in recipe.requests) / 1000
+    points = sum(_request_points(request) for request in recipe.requests)
     print(
-        f"approve-design at {PLANS_BOARD_SCALE} items: requests={len(approval.requests)}, "
-        f"points={points}, real={approval.seconds:.2f}s, latency added={latency:.2f}s"
+        f"{named} at {PLANS_BOARD_SCALE} items: requests={len(recipe.requests)}, "
+        f"points={points}, real={recipe.seconds:.2f}s, latency added={latency:.2f}s"
     )
-    for call in _store_calls(approval):
+    for call in _store_calls(recipe):
         print(
             f"  {call.label}: requests={len(call.requests)}, "
             f"points={sum(_request_points(request) for request in call.requests)}, "
@@ -540,35 +657,42 @@ def _printed_cost(approval: _Run) -> None:
 def test_copying_and_approving_a_plan_costs_the_same_requests_on_any_size_of_board(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The copy and the approval send the same requests at 2,000 items as at 200, and no page.
+    """Every copy and the approval send the same requests at 20,000 items as at 2,000, and no page.
 
-    At both sizes the copy lands the plan whole and the approval is recorded on the copied
-    document and admits the launch, through exactly its four store calls to the board. What
-    the approval at the `plans` board's scale cost in points is recorded per store call as
-    `plan-approval-points`, and printed with its latency.
+    At both sizes each of the three copies — the first, the re-copy after one task was
+    regenerated, and the unchanged re-copy — lands the plan whole through the store's
+    `project copy` then `document copy` and nothing else, and the approval is recorded on the
+    copied document and admits the launch through exactly its four store calls to the board.
+    What the approval at the `plans` board's scale cost is printed per store call.
     """
     scaled: dict[int, _Scaled] = {}
     for size in SIZES:
-        scaled[size], bodies = _copied_and_approved(tmp_path / str(size), monkeypatch, size)
-        _the_plan_landed_whole(scaled[size], bodies)
+        scaled[size] = _copied_and_approved(tmp_path / str(size), monkeypatch, size)
+        for copied in scaled[size].copies:
+            _the_plan_landed_whole(copied, scaled[size])
+            _the_copy_makes_only_its_two_calls(copied)
+        _the_revisions_landed_in_place(scaled[size])
         _the_approval_admits_the_copy(scaled[size])
         _the_approval_makes_only_its_four_calls(scaled[size])
-        for recipe in (scaled[size].copy, scaled[size].approval):
+        recipes = [copied.run for copied in scaled[size].copies] + [scaled[size].approval]
+        for recipe in recipes:
             assert recipe.requests, recipe.ran.args
             assert _whole_board(recipe.requests) == [], (size, recipe.ran.args)
 
     large, small = (scaled[size] for size in SIZES)
-    assert _by_operation(large.copy.requests) == _by_operation(small.copy.requests), (
-        _by_operation(large.copy.requests),
-        _by_operation(small.copy.requests),
-    )
+    for larger, smaller in zip(large.copies, small.copies, strict=True):
+        assert _by_operation(larger.run.requests) == _by_operation(smaller.run.requests), (
+            _by_operation(larger.run.requests),
+            _by_operation(smaller.run.requests),
+        )
     assert _by_operation(large.approval.requests) == _by_operation(small.approval.requests), (
         _by_operation(large.approval.requests),
         _by_operation(small.approval.requests),
     )
 
-    _recorded_points(large.approval)
-    _printed_cost(large.approval)
+    for copied in large.copies:
+        _printed_cost(copied.run, "copy-plan")
+    _printed_cost(large.approval, "approve-design")
     # llmlint: ignore-end[e2e_not_mocked]
     # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
@@ -577,13 +701,12 @@ def test_copying_and_approving_a_plan_costs_the_same_requests_on_any_size_of_boa
 # target runs this journey alone and the `test` target deselects it, because the wall clock it
 # records for `plan-approval-seconds` has to be this run's rather than a cache's.
 # llmlint: ignore-block[e2e_not_mocked] The same one doubled boundary as the journey above.
-# llmlint: ignore-block[budgets_reuse_gate_telemetry] The task registering these budgets
-# requires `plan-approval-points` to be recorded by the cached `test` target and
-# `plan-approval-seconds` by the uncached `test-host` target, which runs only this journey
-# while `test` deselects it, so the wall clock is this run's and never a cache's. The
-# journey above cannot be that target's: it also copies and approves at 200 items, and a
-# cached replay of it is what the points budget reads. So this repeats the 2,000-item copy
-# only as setup for the one approval it times, and records nothing the journey above does.
+# llmlint: ignore-block[budgets_reuse_gate_telemetry] The task registering this budget
+# requires `plan-approval-seconds` to be recorded by the uncached `test-host` target, which
+# runs only this journey while `test` deselects it, so the wall clock is this run's and never
+# a cache's. The journey above cannot be that target's: it also copies, re-copies and approves
+# at 20,000 items, and its `test` target is cached. So this repeats the 2,000-item copy only as
+# setup for the one approval it times, and records nothing the journey above does.
 def test_approving_a_plan_at_the_plans_boards_scale_records_the_time_a_person_waits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -593,14 +716,14 @@ def test_approving_a_plan_at_the_plans_boards_scale_records_the_time_a_person_wa
     elapsed time is its process starts, its own steps and any wait the store really sleeps,
     and each request the double logged is charged the spike's latency for its kind.
     """
-    scaled, _ = _copied_and_approved(
-        tmp_path / str(PLANS_BOARD_SCALE), monkeypatch, PLANS_BOARD_SCALE
+    scaled = _copied_and_approved(
+        tmp_path / str(PLANS_BOARD_SCALE), monkeypatch, PLANS_BOARD_SCALE, revise=False
     )
     _the_approval_admits_the_copy(scaled)
     _the_approval_makes_only_its_four_calls(scaled)
 
     _recorded_seconds(scaled.approval)
-    _printed_cost(scaled.approval)
+    _printed_cost(scaled.approval, "approve-design")
     # llmlint: ignore-end[budgets_reuse_gate_telemetry]
     # llmlint: ignore-end[e2e_not_mocked]
     # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

@@ -208,7 +208,7 @@ own liveness *and* the `onepipeline` release it links:
 
 ```sh
 curl -s http://127.0.0.1:8765/healthz
-{"status":"ok","onepipeline_version":"0.92.0"}
+{"status":"ok","onepipeline_version":"0.93.0"}
 ```
 
 That release is the reader's own, and it is a **different adoption** from
@@ -253,7 +253,7 @@ serves another fails there instead of being noticed by a person.
 
 ### What the adopted view renders, and what it has nothing to render
 
-**`onepipeline-ui` 0.54.0**, the release `config/onepipeline-ui.version` pins, carries
+**`onepipeline-ui` 0.55.0**, the release `config/onepipeline-ui.version` pins, carries
 what makes this a supervising surface: the project sidebar grouped by each run's
 effective group with its kind filter, the run's **Channel** tab with its byte-for-byte
 reply composer and `attest`, the per-run **Stop** with the owner-naming refusal, and the
@@ -323,7 +323,7 @@ answer *with*, and that is a third pin: a run's turn transcripts are written by 
 the version in force is whatever that release's own build resolved — and the
 installed wheel says which that is, without a network or a clone. `onepipeline-cli`
 ships a CycloneDX SBOM under its `dist-info/sboms/`, declaring one version per
-linked crate; on the adopted release that is **oneagentgraph 0.8.0**.
+linked crate; on the adopted release that is **oneagentgraph 0.9.0**.
 
 The session-conversation producer landed in oneagentgraph 0.3.3, so what put it in
 force here was moving **`config/onepipeline.version`**, and installing a new

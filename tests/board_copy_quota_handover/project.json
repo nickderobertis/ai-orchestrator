@@ -1,0 +1,43 @@
+{
+  "name": "board-copy-quota-handover",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/board_copy_quota_handover",
+  "tags": [
+    "scope:board-copy-quota-handover",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-github-board",
+    "support-sibling-facts"
+  ],
+  "namedInputs": {
+    "boardCopyQuotaHandoverWorkspace": [
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/config/onetaskgraph.version",
+      "{workspaceRoot}/config/onevcs.checkouts",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/tests/e2e/board_copy_approval/budgets.yaml",
+      "{workspaceRoot}/tests/board_copy_quota_handover/**/*"
+    ]
+  },
+  "targets": {
+    "test-checkouts": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/board_copy_quota_handover -n 4 --dist loadgroup --no-cov",
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "boardCopyQuotaHandoverWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ],
+      "cache": false
+    }
+  }
+}

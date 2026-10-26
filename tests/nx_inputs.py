@@ -121,6 +121,11 @@ PLAN_STORE_ASSETS_WORKSPACE = "planStoreAssetsWorkspace"
 #: release the journey contrasts it with — immutable on PyPI — and nothing else, because the
 #: journey reads a store configured wholly under its own temporary roots.
 PLAN_STORE_DEPENDENCY_READ_WORKSPACE = "planStoreDependencyReadWorkspace"
+#: The key `board-copy-quota-handover:test-checkouts` is described by: the pin naming the
+#: onetaskgraph release whose budgets it reads, the checkout list naming where that release is
+#: read from, the board-copy budgets file it holds, and the project's own files. Its target is
+#: uncached all the same, because what it reads is the registered checkout itself.
+BOARD_COPY_QUOTA_HANDOVER_WORKSPACE = "boardCopyQuotaHandoverWorkspace"
 #: The key `render-diagram:test` is memoized on: what a render reads — the recipe and its
 #: script, the committed `config/mermaid/` files, `.puppeteerrc.json`, and the lockfile that
 #: names mermaid-cli, Playwright and so the Chromium revision, and the font — the project's
@@ -704,6 +709,16 @@ PLAN_STORE_DEPENDENCY_READ_PROJECT = "plan-store-dependency-read"
 PLAN_STORE_DEPENDENCY_READ_SCOPED = "test-pypi"
 #: The directory it owns, which every other project's tiers ignore.
 PLAN_STORE_DEPENDENCY_READ_ROOT = "tests/plan_store_dependency_read"
+#: The project whose target owns the checks that the board-copy journeys' quota is budgeted in
+#: the adopted plan store: they read the store's budgets file and its loopback board's
+#: placement delays at the tag `config/onetaskgraph.version` names, from the registered
+#: onetaskgraph checkout. A project of its own because what it reads lives outside every
+#: cache key, which a project's whole tier says rather than a marker inside another's.
+BOARD_COPY_QUOTA_HANDOVER_PROJECT = "board-copy-quota-handover"
+#: That project's one target, uncached because it reads another repository's checkout.
+BOARD_COPY_QUOTA_HANDOVER_SCOPED = "test-checkouts"
+#: The directory it owns, which every other project's tiers ignore.
+BOARD_COPY_QUOTA_HANDOVER_ROOT = "tests/board_copy_quota_handover"
 #: The project whose test target owns the journeys over `just render-diagram`: a real
 #: Chromium drawing a Mermaid source in the locked font, and every refusal. A project of its
 #: own for the reason the one above is.
@@ -1049,6 +1064,7 @@ def catalogued_roots() -> dict[str, str]:
         MERGE_POLICY_PROJECT: MERGE_POLICY_ROOT,
         PLAN_STORE_ASSETS_PROJECT: PLAN_STORE_ASSETS_ROOT,
         PLAN_STORE_DEPENDENCY_READ_PROJECT: PLAN_STORE_DEPENDENCY_READ_ROOT,
+        BOARD_COPY_QUOTA_HANDOVER_PROJECT: BOARD_COPY_QUOTA_HANDOVER_ROOT,
         PROJECT_STORE_RACE_PROJECT: PROJECT_STORE_RACE_ROOT,
         RENDER_DIAGRAM_PROJECT: RENDER_DIAGRAM_ROOT,
         RUN_END_HOOKS_PROJECT: RUN_END_HOOKS_ROOT,

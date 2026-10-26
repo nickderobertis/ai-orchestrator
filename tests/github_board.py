@@ -405,6 +405,13 @@ class _Issue:
     changed_at: str = field(default=ISSUE_CREATED_AT, compare=False)
     item_changed_at: str = field(default=ISSUE_CREATED_AT, compare=False)
     relationship_events: int = field(default=0, compare=False)
+    #: Whether the create that made this issue filed it on its board through `projectV2Ids`,
+    #: and the moment on the monotonic clock GitHub places it there — `None` once it is on the
+    #: board. Modelled because GitHub answers such a create with no board item and adds the
+    #: item some time later (:data:`MEASURED_PLACEMENT_SECONDS`), so a read of the issue's
+    #: board items before then finds none, and a later `addProjectV2ItemById` is refused.
+    filed_by_create: bool = field(default=False, compare=False)
+    placed_at: float | None = field(default=None, compare=False)
     _seen: _IssueState | None = field(default=None, compare=False, repr=False)
     _seen_row: _RowState | None = field(default=None, compare=False, repr=False)
     _seen_edges: frozenset[_Edge] | None = field(default=None, compare=False, repr=False)
@@ -439,6 +446,11 @@ class _Issue:
             self.item_changed_at = _one_second_after(self.item_changed_at)
         self.relationship_events += len(edges ^ (self._seen_edges or frozenset()))
         self._seen, self._seen_row, self._seen_edges = state, row, edges
+
+    @property
+    def placed(self) -> bool:
+        """Whether this issue is on its board yet, as GitHub's delayed placement leaves it."""
+        return self.placed_at is None or time.monotonic() >= self.placed_at
 
     @property
     def held_by(self) -> _Board:
@@ -652,17 +664,44 @@ BATCHED_CLEARS = (
 
 
 #: How many slots the adopted store's batched copy documents carry: its `MUTATION_BATCH`
-#: writes, its `ORIGIN_BATCH` origins and its `COPY_DETAIL_BATCH` created items.
+#: creates and closes, its `WRITE_BATCH` field values and blocked-by edges — of each kind, in
+#: a request carrying both — its `DELETE_BATCH` deletes, its `ORIGIN_BATCH` origins and its
+#: `COPY_DETAIL_BATCH` created items.
 COPY_WRITE_SLOTS = 11
+COPY_WIDE_SLOTS = 19
+COPY_DELETE_SLOTS = 5
 COPY_ORIGIN_SLOTS = 10
 COPY_READ_SLOTS = 21
 
-
-class _CopyBatch(NamedTuple):
-    """One of a copy's batched writes: each slot's alias prefix and the single write's root."""
-
-    prefix: str
-    root: str
+#: How long after its create was answered GitHub placed each child issue a create filed on a
+#: board with `projectV2Ids`, in milliseconds: the feasibility spike's ten samples of eight
+#: children each (`board-copy-gaps-2026-10-24-spike-feasibility-report`, its `probe-placement`
+#: runs), in the order measured — 0.45 to 1.84 seconds, and never in the create's own answer.
+#: The same samples onetaskgraph's loopback board replays, as its `MEASURED_PLACEMENT_MILLIS`
+#: in `crates/onetaskgraph-e2e-support/src/fixtures.rs`, which
+#: `tests/board_copy_quota_handover/test_board_copy_quota_handover.py` holds this copy to at the
+#: release `config/onetaskgraph.version` names.
+MEASURED_PLACEMENT_MILLIS = (
+    *(453,) * 7,
+    1423,
+    *(482,) * 7,
+    1622,
+    *(509,) * 7,
+    1555,
+    *(548,) * 7,
+    1553,
+    *(577,) * 7,
+    1526,
+    *(537,) * 8,
+    *(523,) * 7,
+    1837,
+    *(614,) * 8,
+    *(626,) * 7,
+    1692,
+    *(568,) * 8,
+)
+#: Those delays in seconds, as a board's `placement_delays` takes them.
+MEASURED_PLACEMENT_SECONDS = tuple(millis / 1000 for millis in MEASURED_PLACEMENT_MILLIS)
 
 
 def batched_slot_drift(query: str) -> list[str]:
@@ -752,6 +791,12 @@ class _Board:
         #: sent, and answers that edit with: the body sent, as GitHub keeps it, unless a journey
         #: stands in an edit the board answers without applying it.
         self.stored_comment: Callable[[str, str], str] = lambda _held, sent: sent
+        #: How long after its create GitHub places each issue a create files on this board
+        #: through `projectV2Ids`, each create's in turn and cycled, or empty to place every
+        #: one at once: a journey measuring a copy sets :data:`MEASURED_PLACEMENT_SECONDS`.
+        self.placement_delays: tuple[float, ...] = ()
+        #: How many placement delays this board has handed out, which picks the next one.
+        self.placements = 0
 
     def issues_created_and_kept(self) -> list[_Issue]:
         return [issue for issue in self.created if issue in self.issues]
@@ -824,7 +869,7 @@ class _Board:
                         "title": self.title,
                         "fields": self._fields(),
                         "items": {
-                            "nodes": [issue.item() for issue in self.issues],
+                            "nodes": [issue.item() for issue in self.issues if issue.placed],
                             "pageInfo": {"hasNextPage": False, "endCursor": None},
                         },
                     }
@@ -907,7 +952,9 @@ class _Board:
             }
         }
 
-    def origin_lookup_response(self, variables: dict[str, object]) -> dict[str, object]:
+    def origin_lookup_response(
+        self, variables: dict[str, object], first: object = None
+    ) -> dict[str, object]:
         """The rows whose origin field holds one copy origin, and the search for it in bodies.
 
         Two reads in one document, as the source sends them: the board's own `items`
@@ -924,18 +971,23 @@ class _Board:
         search = variables.get("search")
         if not isinstance(search, str):
             raise ValueError("the origin lookup sent no search")
-        searched = self.search_response(search)["data"]
+        searched = self.search_response(search, first)["data"]
         if not isinstance(searched, dict):
             raise ValueError("the origin search returned no data object")
+        # Paged as the search is when the request names a page size — the batched lookup asks
+        # for a page of one carrier — so a second carrier of one origin says there is more.
+        rows = [issue for issue in self.issues if issue.origin == origin and issue.placed]
+        page = rows[:first] if isinstance(first, int) else rows
         return {
             "data": {
                 "originItems": {
                     "projectV2": {
                         "items": {
-                            "nodes": [
-                                issue.item() for issue in self.issues if issue.origin == origin
-                            ],
-                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            "nodes": [issue.item() for issue in page],
+                            "pageInfo": {
+                                "hasNextPage": len(page) < len(rows),
+                                "endCursor": str(len(page)) if len(page) < len(rows) else None,
+                            },
                         }
                     }
                 },
@@ -968,6 +1020,40 @@ class _Board:
                     }
                 }
         return {"data": {"node": None}}
+
+    def members_page(self, project: _Issue, first: object) -> tuple[list[_Issue], bool]:
+        """A page of at most ``first`` issues filed under ``project``, and whether more follow."""
+        members = [held for held in self.issues if held.parent_id == project.content_id]
+        page = members[:first] if isinstance(first, int) else members
+        return page, len(page) < len(members)
+
+    def document_in_project_response(self, variables: dict[str, object]) -> dict[str, object]:
+        """One document by its id, as :meth:`node_response` reads one, with its project beside it.
+
+        The project issue the document is filed under, whole, and a page of that project's
+        members, each without a page of what blocks it — what a guarded metadata write reads to
+        hold the document to who may read its project. A document filed under nothing answers
+        `project` as GitHub answers an issue with no parent: null.
+        """
+        answered = self.node_response(variables.get("id"))
+        data = answered["data"]
+        assert isinstance(data, dict)
+        node = data["node"]
+        if not isinstance(node, dict):
+            return answered
+        issue = self._issue(variables.get("id"))
+        if issue.parent_id is None:
+            node["project"] = None
+            return answered
+        project = self._issue(issue.parent_id)
+        page, more = self.members_page(project, variables.get("memberFirst"))
+        node["project"] = project.board_issue() | {
+            "subIssues": {
+                "pageInfo": {"hasNextPage": more, "endCursor": str(len(page)) if more else None},
+                "nodes": [member.board_issue() for member in page],
+            }
+        }
+        return answered
 
     def issues_by_reference_response(self, variables: dict[str, object]) -> dict[str, object]:
         """The issues one batch names by repository and number, each with its row's `Status`.
@@ -1085,6 +1171,14 @@ class _Board:
             repository=_repository_of(payload.get("repositoryId")),
         )
         created.board = self
+        # Filed on this board by the create itself, as a copy's `projectV2Ids` does — and,
+        # where the board models it, placed only the measured delay after the answer.
+        filed = payload.get("projectV2Ids")
+        created.filed_by_create = isinstance(filed, list) and self.node_id in filed
+        if created.filed_by_create and self.placement_delays:
+            delay = self.placement_delays[self.placements % len(self.placement_delays)]
+            self.placements += 1
+            created.placed_at = time.monotonic() + delay
         # Filed under its project by the create itself, as a copy's `parentIssueId` does.
         if (parent := payload.get("parentIssueId")) is not None:
             held = self._issue(parent)
@@ -1129,13 +1223,16 @@ class _Board:
         payload = variables.get("input")
         if not isinstance(payload, dict):
             raise ValueError("addProjectV2ItemById requires an input object")
-        return {
-            "data": {
-                "addProjectV2ItemById": {
-                    "item": {"id": self._issue(payload.get("contentId")).item_id}
-                }
+        issue = self._issue(payload.get("contentId"))
+        # GitHub files an issue once: one its create has placed already is refused rather
+        # than answered with the item it holds.
+        if issue.filed_by_create and issue.placed:
+            return {
+                "data": {"addProjectV2ItemById": None},
+                "errors": [{"message": "Content already exists in this project"}],
             }
-        }
+        issue.placed_at = None
+        return {"data": {"addProjectV2ItemById": {"item": {"id": issue.item_id}}}}
 
     def _applied(self, payload: object) -> object:
         """Apply one field write's input to its row, and name the row it wrote."""
@@ -1366,24 +1463,25 @@ class _Board:
         return {"data": answer}
 
     def write_batch(
-        self, prefix: str, root: str, write: Callable[[dict[str, object]], dict[str, object]]
+        self,
+        parts: Sequence[_BatchPart],
+        writes: Mapping[_Operation, Callable[[dict[str, object]], dict[str, object]]],
     ) -> Callable[[dict[str, object]], dict[str, object]]:
-        """A copy's aliased writes of one kind: each sent slot ``write`` applied, in order.
+        """A copy's aliased writes: each sent slot of each part applied, in the order sent.
 
-        Slot `<n>` carries its input as `$<prefix><n>` and is sent only while `$send<n>`
-        holds, so only those are applied and answered — under `<prefix><n>`, as the single
-        write's own root answers — which is what GitHub does with an `@include(if:)`.
+        A part's slot `<n>` carries its input as `$<prefix><n>` and is sent only while
+        `$<send><n>` holds, so only those are applied and answered — under `<prefix><n>`, as
+        the single write's own root answers — which is what GitHub does with an
+        `@include(if:)`, running a document's mutation fields in the order it lists them.
         """
 
         def answered(variables: dict[str, object]) -> dict[str, object]:
-            slots = sorted(int(name[4:]) for name in variables if re.fullmatch(r"send\d+", name))
             answer: dict[str, object] = {}
-            for n in slots:
-                if variables[f"send{n}"] is not True:
-                    continue
-                data = write({"input": variables[f"{prefix}{n}"]})["data"]
-                assert isinstance(data, dict)
-                answer[f"{prefix}{n}"] = data[root]
+            for part in parts:
+                for n in part.sent(variables):
+                    data = writes[part.write]({"input": variables[f"{part.prefix}{n}"]})["data"]
+                    assert isinstance(data, dict)
+                    answer[f"{part.prefix}{n}"] = data[part.root]
             return {"data": answer}
 
         return answered
@@ -1399,17 +1497,16 @@ class _Board:
             if variables[f"read{n}"] is not True:
                 continue
             issue = self._issue(variables[f"id{n}"])
+            placed = [
+                {
+                    "id": issue.item_id,
+                    "project": {"id": self.node_id},
+                    "status": {"name": issue.status},
+                }
+            ]
             answer[f"i{n}"] = {
                 "id": issue.content_id,
-                "projectItems": {
-                    "nodes": [
-                        {
-                            "id": issue.item_id,
-                            "project": {"id": self.node_id},
-                            "status": {"name": issue.status},
-                        }
-                    ]
-                },
+                "projectItems": {"nodes": placed if issue.placed else []},
             }
         return {"data": answer}
 
@@ -1659,7 +1756,11 @@ class _GraphQLRequest:
     @property
     def repository(self) -> _Repository:
         """The repository this request looks up: alone, or beside the board's fields."""
-        if self.operation in (_Operation.CREATION_CONTEXT, _Operation.ORIGIN_LOOKUPS):
+        if self.operation in (
+            _Operation.CREATION_CONTEXT,
+            _Operation.ORIGIN_LOOKUPS,
+            _Operation.ORIGIN_LOOKUPS_WITH_MEMBERS,
+        ):
             return _Repository(
                 owner=self.string("repositoryOwner"), name=self.string("repositoryName")
             )
@@ -1672,6 +1773,7 @@ class _GraphQLRequest:
             _Operation.REPOSITORY,
             _Operation.CREATION_CONTEXT,
             _Operation.ORIGIN_LOOKUPS,
+            _Operation.ORIGIN_LOOKUPS_WITH_MEMBERS,
         )
 
     def string(self, name: str) -> str:
@@ -1721,11 +1823,15 @@ class _Operation(StrEnum):
     UPDATE_FIELD_WHOLE = "updateFieldWhole"
     CLEAR_FIELD_WHOLE = "clearFieldWhole"
     ORIGIN_LOOKUPS = "originLookups"
+    ORIGIN_LOOKUPS_WITH_MEMBERS = "originLookupsWithMembers"
+    DOCUMENT_IN_PROJECT = "documentInProject"
     CREATED_BOARD_ITEMS = "createdBoardItems"
     CREATE_ISSUES = "createIssues"
     WRITE_FIELD_VALUES = "writeFieldValues"
     CLOSE_ISSUES = "closeIssues"
     ADD_BLOCKED_BYS = "addBlockedBys"
+    WRITE_FIELDS_AND_EDGES = "writeFieldsAndEdges"
+    DELETE_ISSUES = "deleteIssues"
     CLOSED_ITEMS = "closedItems"
     ISSUES_BY_REFERENCE = "issuesByReference"
 
@@ -1736,7 +1842,10 @@ class _Operation(StrEnum):
 _OPERATIONS: dict[str, _Operation] = {
     # A copy's aliased documents, each before every marker its slots also carry: the batched
     # origin lookup carries the board-fields read, the repository read and a search; the
-    # created-item read an aliased node read; and each write batch its single mutation.
+    # created-item read an aliased node read; and each write batch its single mutation. The
+    # screened document copy's lookup carries the plain lookup's slots beside its project's
+    # members, so it is told by those first.
+    "members:node(id:$project)": _Operation.ORIGIN_LOOKUPS_WITH_MEMBERS,
     "@include(if:$ask0)": _Operation.ORIGIN_LOOKUPS,
     # Before the comment listing's and the issue update's markers, which a comment edit's
     # whole twin and its plain document carry inside its own: the edit of one comment, and
@@ -1746,9 +1855,15 @@ _OPERATIONS: dict[str, _Operation] = {
     "... on IssueComment{": _Operation.COMMENT_ISSUE,
     "@include(if:$read0)": _Operation.CREATED_BOARD_ITEMS,
     "create0:createIssue(": _Operation.CREATE_ISSUES,
+    # Before both single-kind batches, whose first slots this request of both kinds carries.
+    "$sendField0": _Operation.WRITE_FIELDS_AND_EDGES,
     "field0:updateProjectV2ItemFieldValue(": _Operation.WRITE_FIELD_VALUES,
     "close0:updateIssue(": _Operation.CLOSE_ISSUES,
     "block0:addBlockedBy(": _Operation.ADD_BLOCKED_BYS,
+    "delete0:deleteIssue(": _Operation.DELETE_ISSUES,
+    # Before the sub-issue listing's marker and the item read's, both of which it carries: a
+    # document read by its id with the project it is filed under and that project's members.
+    "project:parent{": _Operation.DOCUMENT_IN_PROJECT,
     # Before the sub-issue listing's marker, which this batch's `children` read of its
     # project also carries, and the batched detail read's own, which its aliases carry: a
     # copy's read of the tasks it carries, each with its comments unconditionally and its
@@ -1891,11 +2006,54 @@ class RestRequest:
     body: dict[str, object]
 
 
-COPY_BATCHES: dict[_Operation, _CopyBatch] = {
-    _Operation.CREATE_ISSUES: _CopyBatch("create", "createIssue"),
-    _Operation.WRITE_FIELD_VALUES: _CopyBatch("field", "updateProjectV2ItemFieldValue"),
-    _Operation.CLOSE_ISSUES: _CopyBatch("close", "updateIssue"),
-    _Operation.ADD_BLOCKED_BYS: _CopyBatch("block", "addBlockedBy"),
+class _BatchPart(NamedTuple):
+    """One kind of write a copy's aliased batch carries, and how its slots are spelled.
+
+    Slot `<n>` carries its input as `$<prefix><n>`, is sent only while `$<send><n>` holds, and
+    is the single write `write` — the root field `root` — answered under `<prefix><n>`.
+    """
+
+    prefix: str
+    send: str
+    root: str
+    write: _Operation
+    slots: int
+
+    def spelled(self, n: int) -> str:
+        """How slot ``n`` of this part reads in the document the store sends."""
+        return f"{self.prefix}{n}:{self.root}(input:${self.prefix}{n}) @include(if:${self.send}{n})"
+
+    def sent(self, variables: Mapping[str, object]) -> list[int]:
+        """The slots of this part ``variables`` send, in slot order."""
+        return [n for n in range(self.slots) if variables.get(f"{self.send}{n}") is True]
+
+
+_FIELD_PART = _BatchPart(
+    "field", "send", "updateProjectV2ItemFieldValue", _Operation.UPDATE_FIELD, COPY_WIDE_SLOTS
+)
+_BLOCK_PART = _BatchPart(
+    "block", "send", "addBlockedBy", _Operation.ADD_BLOCKED_BY, COPY_WIDE_SLOTS
+)
+
+#: Each aliased write batch a copy sends, by the operation the batch arrives as: the kinds of
+#: write it carries, in the order GitHub runs them — a request of field values and edges runs
+#: every field value before the first edge.
+COPY_BATCHES: dict[_Operation, tuple[_BatchPart, ...]] = {
+    _Operation.CREATE_ISSUES: (
+        _BatchPart("create", "send", "createIssue", _Operation.CREATE_ISSUE, COPY_WRITE_SLOTS),
+    ),
+    _Operation.WRITE_FIELD_VALUES: (_FIELD_PART,),
+    _Operation.CLOSE_ISSUES: (
+        _BatchPart("close", "send", "updateIssue", _Operation.UPDATE_ISSUE, COPY_WRITE_SLOTS),
+    ),
+    _Operation.ADD_BLOCKED_BYS: (_BLOCK_PART,),
+    _Operation.WRITE_FIELDS_AND_EDGES: (
+        _FIELD_PART._replace(send="sendField"),
+        _BLOCK_PART._replace(send="sendBlock"),
+    ),
+    _Operation.DELETE_ISSUES: (
+        _BatchPart("delete", "send", "deleteIssue", _Operation.DELETE_ISSUE, COPY_DELETE_SLOTS),
+    ),
 }
 
 
@@ -1908,6 +2066,9 @@ class _CopyRead(NamedTuple):
 
 COPY_READS: dict[_Operation, _CopyRead] = {
     _Operation.ORIGIN_LOOKUPS: _CopyRead(
+        "o{n}:repositoryOwner(login:$owner) @include(if:$ask{n})", COPY_ORIGIN_SLOTS
+    ),
+    _Operation.ORIGIN_LOOKUPS_WITH_MEMBERS: _CopyRead(
         "o{n}:repositoryOwner(login:$owner) @include(if:$ask{n})", COPY_ORIGIN_SLOTS
     ),
     _Operation.CREATED_BOARD_ITEMS: _CopyRead(
@@ -1938,15 +2099,12 @@ def copy_batch_drift(operation: _Operation, query: str) -> list[str]:
     Read off the document on every such write, as `batched_slot_drift` reads the field
     document, so a release that resizes or renames a batch fails the journey that met it.
     """
-    batch = COPY_BATCHES[operation]
-    spelled = [
-        f"{batch.prefix}{slot}:{batch.root}(input:${batch.prefix}{slot}) @include(if:$send{slot})"
-        for slot in range(COPY_WRITE_SLOTS)
-    ]
+    parts = COPY_BATCHES[operation]
+    spelled = [part.spelled(n) for part in parts for n in range(part.slots)]
     drift = [f"the batched copy document lacks `{slot}`" for slot in spelled if slot not in query]
     sent = query.count("@include(")
-    if sent != COPY_WRITE_SLOTS:
-        drift.append(f"the batched copy document carries {sent} slots, not {COPY_WRITE_SLOTS}")
+    if sent != len(spelled):
+        drift.append(f"the batched copy document carries {sent} slots, not {len(spelled)}")
     return drift
 
 
@@ -2103,15 +2261,14 @@ class _GitHubFixture(BaseHTTPRequestHandler):
             return {"errors": [{"message": str(unknown)}]}
         # A write the store sends in an aliased batch is refused with the batch carrying it,
         # so a refusal named for a single write still lands on a copy that batches it.
-        batched = WRITE_BATCHES.get(operation)
-        carried = batched.write if batched is not None else operation
+        carried = {part.write for part in COPY_BATCHES.get(operation, ())}
         # And a write sent as its whole twin, which also answers its issue, is the same write.
         plain = {whole: write for write, whole in _WHOLE_TWINS.items()}.get(operation)
-        if self.refused_operation is not None and self.refused_operation in (
+        if self.refused_operation is not None and self.refused_operation in {
             operation,
-            carried,
+            *carried,
             plain,
-        ):
+        }:
             if _GitHubFixture.refused_after == 0:
                 return {"errors": [{"message": f"{operation} refused by the fixture"}]}
             _GitHubFixture.refused_after -= 1
@@ -2218,26 +2375,22 @@ class _GitHubFixture(BaseHTTPRequestHandler):
                 return self.board.whole_answer(
                     "clearProjectV2ItemFieldValue", self.board.clear_field
                 )(request.variables)
-            case _Operation.ORIGIN_LOOKUPS:
+            case _Operation.ORIGIN_LOOKUPS | _Operation.ORIGIN_LOOKUPS_WITH_MEMBERS:
                 return self._origin_lookups(request)
+            case _Operation.DOCUMENT_IN_PROJECT:
+                return self.board.document_in_project_response(request.variables)
             case _Operation.CREATED_BOARD_ITEMS:
                 return self.board.created_items_response(request.variables)
-            case _Operation.CREATE_ISSUES:
-                return self.board.write_batch("create", "createIssue", self.board.create_issue)(
-                    request.variables
-                )
-            case _Operation.WRITE_FIELD_VALUES:
-                return self.board.write_batch(
-                    "field", "updateProjectV2ItemFieldValue", self.board.set_field
-                )(request.variables)
-            case _Operation.CLOSE_ISSUES:
-                return self.board.write_batch("close", "updateIssue", self.board.update_issue)(
-                    request.variables
-                )
-            case _Operation.ADD_BLOCKED_BYS:
-                return self.board.write_batch("block", "addBlockedBy", self.board.add_blocked_by)(
-                    request.variables
-                )
+            case operation if operation in COPY_BATCHES:
+                writes = {
+                    _Operation.CREATE_ISSUE: self.board.create_issue,
+                    _Operation.UPDATE_FIELD: self.board.set_field,
+                    _Operation.UPDATE_ISSUE: self.board.update_issue,
+                    _Operation.ADD_BLOCKED_BY: self.board.add_blocked_by,
+                    _Operation.DELETE_ISSUE: self.board.delete_issue,
+                }
+                return self.board.write_batch(COPY_BATCHES[operation], writes)(request.variables)
+        raise ValueError(f"no fixture answer for {operation}")
 
     def _origin_lookups(self, request: _GraphQLRequest) -> dict[str, object]:
         """A copy's first read: the board's fields, its repository, and up to ten origins.
@@ -2268,11 +2421,34 @@ class _GitHubFixture(BaseHTTPRequestHandler):
             if variables[f"ask{n}"] is not True:
                 continue
             one = self.board.origin_lookup_response(
-                {"filter": variables[f"filter{n}"], "search": variables[f"search{n}"]}
+                {"filter": variables[f"filter{n}"], "search": variables[f"search{n}"]},
+                variables.get("lookupFirst"),
             )["data"]
             assert isinstance(one, dict)
             answer[f"o{n}"] = one["originItems"]
             answer[f"s{n}"] = one["search"]
+        # A screened document copy's lookup also reads its project's members, each trimmed to
+        # what classifying it reads.
+        if request.operation is _Operation.ORIGIN_LOOKUPS_WITH_MEMBERS:
+            project = self.board._issue(variables.get("project"))
+            page, more = self.board.members_page(project, variables.get("memberFirst"))
+            answer["members"] = {
+                "subIssues": {
+                    "pageInfo": {
+                        "hasNextPage": more,
+                        "endCursor": str(len(page)) if more else None,
+                    },
+                    "nodes": [
+                        {
+                            "id": member.content_id,
+                            "body": member.body,
+                            "parent": {"id": project.content_id},
+                            "repository": {"nameWithOwner": str(member.repository)},
+                        }
+                        for member in page
+                    ],
+                }
+            }
         return {"data": answer}
 
     @staticmethod
@@ -2301,6 +2477,7 @@ def _serving_board(
     number: int = CONFIGURED_PROJECT_NUMBER,
     *,
     linear: bool = False,
+    placement: tuple[float, ...] = (),
 ) -> Iterator[dict[str, str]]:
     """Serve the board fixture, yielding the environment that points `plans` at it.
 
@@ -2314,11 +2491,14 @@ def _serving_board(
     ``options`` are the Status options the board carries, and ``number`` the board number
     the source being served is configured with, which an issue's membership answers under.
     ``linear`` says the caller's user layer declares the example's Linear sources, which
-    are then pointed at a port nothing serves (:func:`unserved_linear`).
+    are then pointed at a port nothing serves (:func:`unserved_linear`). ``placement`` is
+    how long after its create each issue a create files on the board appears there
+    (:attr:`_Board.placement_delays`); empty, every one is placed at once.
     """
     _GitHubFixture.refusal = refusal
     try:
         with _served(_GitHubFixture, BOARD, options, number) as endpoint:
+            BOARD.placement_delays = placement
             yield {
                 "GH_PROJECTS_TOKEN": "fixture-token",
                 "ONETASKGRAPH_SOURCES__PLANS__CONFIG__ENDPOINT": endpoint,
@@ -2629,32 +2809,9 @@ def _sent(
     ]
 
 
-class _WriteBatch(NamedTuple):
-    """An aliased write batch a copy sends."""
-
-    #: The prefix each of its slots' inputs carries.
-    prefix: str
-    #: The single write each sent slot is.
-    write: _Operation
-
-
-#: Each aliased write batch a copy sends, by the operation the batch arrives as.
-WRITE_BATCHES: dict[_Operation, _WriteBatch] = {
-    _Operation.CREATE_ISSUES: _WriteBatch("create", _Operation.CREATE_ISSUE),
-    _Operation.WRITE_FIELD_VALUES: _WriteBatch("field", _Operation.UPDATE_FIELD),
-    _Operation.CLOSE_ISSUES: _WriteBatch("close", _Operation.UPDATE_ISSUE),
-    _Operation.ADD_BLOCKED_BYS: _WriteBatch("block", _Operation.ADD_BLOCKED_BY),
-}
-
-
-def _slots(request: _GraphQLRequest, prefix: str) -> list[dict[str, object]]:
-    """The input of each slot of an aliased batch ``request`` sent, in slot order."""
-    sent = sorted(
-        int(name[4:])
-        for name, value in request.variables.items()
-        if re.fullmatch(r"send\d+", name) and value is True
-    )
-    inputs = [request.variables.get(f"{prefix}{slot}") for slot in sent]
+def _slots(request: _GraphQLRequest, part: _BatchPart) -> list[dict[str, object]]:
+    """The input of each slot of ``part`` the aliased batch ``request`` sent, in slot order."""
+    inputs = [request.variables.get(f"{part.prefix}{n}") for n in part.sent(request.variables)]
     return [payload for payload in inputs if isinstance(payload, dict)]
 
 
@@ -2673,9 +2830,9 @@ def _write_inputs(
             payload = request.variables.get("input")
             if isinstance(payload, dict):
                 written.append(payload)
-        batched = WRITE_BATCHES.get(request.operation)
-        if batched is not None and batched.write is operation:
-            written.extend(_slots(request, batched.prefix))
+        for part in COPY_BATCHES.get(request.operation, ()):
+            if part.write is operation:
+                written.extend(_slots(request, part))
     return written
 
 
@@ -2688,8 +2845,9 @@ def _field_writes(requests: list[_GraphQLRequest]) -> list[dict[str, object]]:
     """
     written: list[dict[str, object]] = []
     for request in requests:
-        if request.operation is _Operation.WRITE_FIELD_VALUES:
-            written.extend(_slots(request, WRITE_BATCHES[request.operation].prefix))
+        for part in COPY_BATCHES.get(request.operation, ()):
+            if part.write is _Operation.UPDATE_FIELD:
+                written.extend(_slots(request, part))
         carried = {
             _Operation.UPDATE_FIELD: (SINGLE_WRITE,),
             _Operation.UPDATE_FIELDS: BATCHED_WRITES,
@@ -2740,7 +2898,7 @@ def _searches(request: _GraphQLRequest) -> list[str]:
     match request.operation:
         case _Operation.SEARCH | _Operation.ORIGIN_LOOKUP:
             return [request.string("search")]
-        case _Operation.ORIGIN_LOOKUPS:
+        case _Operation.ORIGIN_LOOKUPS | _Operation.ORIGIN_LOOKUPS_WITH_MEMBERS:
             asked = [name[3:] for name, value in request.variables.items() if name[:3] == "ask"]
             return [
                 request.string(f"search{slot}")
@@ -2887,12 +3045,16 @@ REQUEST_PRICES: dict[_Operation, DocumentPrice] = {
     _Operation.UPDATE_FIELD_WHOLE: DocumentPrice("UPDATE_FIELD_WHOLE", 1),
     _Operation.CLEAR_FIELD_WHOLE: DocumentPrice("CLEAR_FIELD_WHOLE", 1),
     _Operation.CLOSED_ITEMS: DocumentPrice("CLOSED_ITEMS", 2),
-    _Operation.ORIGIN_LOOKUPS: DocumentPrice("ORIGIN_LOOKUPS", 2),
+    _Operation.ORIGIN_LOOKUPS: DocumentPrice("ORIGIN_LOOKUPS", 1),
+    _Operation.ORIGIN_LOOKUPS_WITH_MEMBERS: DocumentPrice("ORIGIN_LOOKUPS_WITH_MEMBERS", 1),
+    _Operation.DOCUMENT_IN_PROJECT: DocumentPrice("DOCUMENT_IN_PROJECT", 1),
     _Operation.CREATED_BOARD_ITEMS: DocumentPrice("CREATED_BOARD_ITEMS", 1),
     _Operation.CREATE_ISSUES: DocumentPrice("CREATE_ISSUES", 1),
     _Operation.WRITE_FIELD_VALUES: DocumentPrice("WRITE_FIELD_VALUES", 1),
     _Operation.CLOSE_ISSUES: DocumentPrice("CLOSE_ISSUES", 1),
     _Operation.ADD_BLOCKED_BYS: DocumentPrice("ADD_BLOCKED_BYS", 1),
+    _Operation.WRITE_FIELDS_AND_EDGES: DocumentPrice("WRITE_FIELDS_AND_EDGES", 1),
+    _Operation.DELETE_ISSUES: DocumentPrice("DELETE_ISSUES", 1),
 }
 
 
@@ -2942,9 +3104,11 @@ REQUEST_KINDS: dict[_Operation, RequestKind] = {
     _Operation.ISSUE_DETAILS: RequestKind.BATCHED_READ,
     _Operation.ISSUE_COPY_DETAILS: RequestKind.BATCHED_READ,
     _Operation.ORIGIN_LOOKUPS: RequestKind.BATCHED_READ,
+    _Operation.ORIGIN_LOOKUPS_WITH_MEMBERS: RequestKind.BATCHED_READ,
     _Operation.CREATED_BOARD_ITEMS: RequestKind.BATCHED_READ,
     _Operation.ORIGIN_LOOKUP: RequestKind.ITEM_READ,
     _Operation.ISSUE: RequestKind.ITEM_READ,
+    _Operation.DOCUMENT_IN_PROJECT: RequestKind.ITEM_READ,
     _Operation.SUB_ISSUES: RequestKind.ITEM_READ,
     _Operation.ISSUE_DETAIL: RequestKind.ITEM_READ,
     _Operation.COMMENTS: RequestKind.ITEM_READ,
@@ -2957,6 +3121,8 @@ REQUEST_KINDS: dict[_Operation, RequestKind] = {
     _Operation.WRITE_FIELD_VALUES: RequestKind.ALIASED_MUTATIONS,
     _Operation.CLOSE_ISSUES: RequestKind.ALIASED_MUTATIONS,
     _Operation.ADD_BLOCKED_BYS: RequestKind.ALIASED_MUTATIONS,
+    _Operation.WRITE_FIELDS_AND_EDGES: RequestKind.ALIASED_MUTATIONS,
+    _Operation.DELETE_ISSUES: RequestKind.ALIASED_MUTATIONS,
 }
 
 

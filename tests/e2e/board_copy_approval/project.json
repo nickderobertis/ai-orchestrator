@@ -15,6 +15,7 @@
     "support-follow-up-variables",
     "support-github-board",
     "support-no-paid-provider",
+    "support-onetaskgraph-user-layer",
     "support-plan-fixture-source",
     "support-plan-root-variable",
     "support-project-fixtures",
@@ -75,7 +76,8 @@
       "{workspaceRoot}/tests/e2e/board_copy_approval/test_board_copy_spike_evidence_e2e.py",
       "{workspaceRoot}/tests/e2e/board_copy_approval/test_board_copy_store_reads_e2e.py",
       "{workspaceRoot}/orchestrator/plan_locations.py",
-      "{workspaceRoot}/tests/e2e/board_copy_approval/test_board_copy_at_scale_e2e.py"
+      "{workspaceRoot}/tests/e2e/board_copy_approval/test_board_copy_at_scale_e2e.py",
+      "{workspaceRoot}/tests/e2e/board_copy_approval/test_board_copy_screening_e2e.py"
     ]
   },
   "targets": {
