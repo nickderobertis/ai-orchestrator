@@ -57,7 +57,7 @@ import yaml
 from fake_backend import PANEL_JUDGE_CONFIG
 from harness_indirections import established_indirections
 from onejudge_sdk import OneJudge, ProviderConfig, RunConfig, RunResult, UserConfig
-from persona_probe import probe_environment
+from persona_probe import node_scratch, probe_environment
 from project_fixtures import helper
 
 from orchestrator import plan_checklist_budgets as budgets
@@ -484,6 +484,8 @@ def test_the_planner_graph_validates_and_composes_its_reviewer_then_the_plan_che
     }
     # llmlint: ignore-end[e2e_not_mocked]
     environment["ONEAGENTGRAPH_STATE_DIR"] = str(tmp_path / "graph-state")
+    # The panel's sides run the roles a node's dispatch runs, so they get its node scratch.
+    environment |= node_scratch(tmp_path)
     # A planning run of its own whose brief names no plan yet, so the checklist side judges
     # nothing and this journey reads the panel starting and settling, not a verdict.
     environment |= _planning_run(tmp_path, None)

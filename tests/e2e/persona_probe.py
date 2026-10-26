@@ -105,10 +105,29 @@ def probe_environment(tmp_path: Path, oneharness_bin: str, caller: str) -> dict[
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
     environment.update(established_indirections(caller))
+    environment.update(node_scratch(tmp_path))
     # Keeps this run's graph scratch and history out of the host's, so a probe never
     # reads or reclaims a live dispatch's.
     environment["XDG_STATE_HOME"] = str(short_state.state_home(tmp_path))
     return environment
+
+
+#: The node scratch the engine hands every dispatch, which the worker and judge configs'
+#: runtime-directory repoint reads.
+NODE_SCRATCH_ENV = "ONEPIPELINE_NODE_SCRATCH_DIR"
+
+
+def node_scratch(tmp_path: Path) -> dict[str, str]:
+    """The node scratch a probe's members are handed, as the engine hands a dispatch one.
+
+    A probe runs the roles a node's dispatch runs, whose configs repoint
+    `XDG_RUNTIME_DIR` from this indirection, so it is the probe's own rather than one
+    inherited from whatever dispatch is running the suite, which a manager's or a
+    publication's gate never is.
+    """
+    scratch = tmp_path / "node-scratch"
+    scratch.mkdir(exist_ok=True)
+    return {NODE_SCRATCH_ENV: str(scratch)}
 
 
 def run_graph(graph: Path, environment: dict[str, str], task: str) -> list[Envelope]:

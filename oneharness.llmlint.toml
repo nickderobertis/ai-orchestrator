@@ -1,6 +1,6 @@
 # llmlint: ignore-file[changed_behavior_has_e2e] the judged tier's journeys and the plan checklist's (tests/e2e/workspace_copies/test_llmlint_cache_e2e.py, tests/e2e/registry_and_recipes/test_plan_checklist_e2e.py) run this chain through the real llmlint and oneharness without spending a paid model invocation.
 # LLM lint is a third, independent side of the harness, with its own priority
-# order — it keeps that order even though the worker's discovered oneharness.toml
+# order — it keeps that order even though the worker's oneharness.toml
 # prefers Claude Code. Named under `oneharness.config` by `llmlint.yml` and
 # `config/plan-checklist.llmlint.yml`, so llmlint hands it to oneharness itself.
 #

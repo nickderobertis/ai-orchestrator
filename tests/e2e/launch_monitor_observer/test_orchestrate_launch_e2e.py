@@ -289,6 +289,12 @@ INHERITED_HISTORY_ENVIRONMENT = (
     "ONEHARNESS_HISTORY_LABELS",
 )
 
+#: What a dispatch running this suite is handed for its own node and a manager's session
+#: never holds. Inherited, it sets the indirection `oneharness.dispatch.toml` repoints a
+#: dispatched side's `XDG_RUNTIME_DIR` from, so a launch here would pass where a
+#: manager's is refused on it. The engine hands each of its dispatches its own.
+DISPATCH_ONLY_ENVIRONMENT = ("ONEPIPELINE_NODE_SCRATCH_DIR",)
+
 
 class Launched(NamedTuple):
     """One launched run: the environment it lives in, and how its launch ended.
@@ -436,14 +442,15 @@ def _environment(
     every path; the two seams below are what cover this one.
     """
     environment = dict(os.environ)
-    # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This clears three
-    # inherited variables in the existing shared environment so the host's history store
-    # cannot decide these journeys' verdicts; it adds no launch and moves none, and
+    # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This clears the
+    # inherited variables in the existing shared environment so neither the host's
+    # history store nor the dispatch running the suite can decide these journeys'
+    # verdicts; it adds no launch and moves none, and
     # re-homing `tests/e2e` into an Nx project of its own is enforcement configuration
     # this change may not move in order to pass.
     # llmlint: ignore-block[shell_test_tiers_stay_split] Same site, same reason; and this
     # is a pytest journey over the real recipe, not a shell test suite.
-    for name in LAUNCHER_ENVIRONMENT + INHERITED_HISTORY_ENVIRONMENT:
+    for name in LAUNCHER_ENVIRONMENT + INHERITED_HISTORY_ENVIRONMENT + DISPATCH_ONLY_ENVIRONMENT:
         environment.pop(name, None)
     # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
     # llmlint: ignore-end[shell_test_tiers_stay_split]
@@ -769,6 +776,16 @@ def test_node_graph_uses_the_generic_base_when_no_persona_is_overridden(
     environment = _environment(tmp_path, oneharness_bin)
     environment[PROMPT_LOG_ENV] = str(tmp_path / "prompts.jsonl")
     # llmlint: ignore-end[e2e_not_mocked]
+    # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] An existing journey
+    # in the existing `tests/e2e` project; these lines only hand it the node scratch the
+    # engine hands every dispatch, and re-homing the tree is enforcement configuration
+    # this change may not move in order to pass.
+    # The worker role a node's dispatch runs, so it is handed the node scratch the engine
+    # hands every dispatch, which its config's runtime-directory repoint reads.
+    node_scratch = tmp_path / "node-scratch"
+    node_scratch.mkdir()
+    environment[DISPATCH_ONLY_ENVIRONMENT[0]] = str(node_scratch)
+    # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
     run = subprocess.run(
         [
             "oneagentgraph",

@@ -1,6 +1,6 @@
 # Agent side of the onejudge conversation: WHICH harness + model does the work.
-# oneharness discovers this file by walking up from the working directory, so it stays
-# at the repo root under this exact name. See docs/onejudge-integration.md.
+# Named as the worker's agent-side config, at the repo root under this exact name.
+# See docs/onejudge-integration.md.
 #
 # The six identities it routes over — their variants, models, credential masks and
 # environment indirections — are stated once in `oneharness.identities.toml`, and the

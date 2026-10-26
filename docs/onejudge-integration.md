@@ -25,11 +25,20 @@ subtask reach "actually done" instead of "the agent said done."
 ## The two sides of the conversation
 
 A onejudge run is a two-party conversation. Harness/model selection for each side
-lives in an oneharness config, not in onejudge:
+lives in an oneharness config, not in onejudge. **A graph member's agent side runs under
+exactly the config its graph names** — `agent.oneharness_config`, which the linked
+oneagentgraph stamps into the member's scratch and hands onejudge as the provider's
+`worker_config` — and onejudge layers its history default and that file alone, with nothing
+discovered from the member's working directory, in the releases the adopted engine links.
+Before them the agent side took no config of its own, so a
+monitor started in this repository's root discovered the worker's `oneharness.toml` and was
+refused on its `ONEPIPELINE_NODE_SCRATCH_DIR` indirection;
+`tests/e2e/launch_monitor_observer/test_observer_monitor_first_turn_e2e.py` launches from the
+root with no node scratch to hold that:
 
 | Side | Role | Config file |
 | --- | --- | --- |
-| **Agent** | does the work | `oneharness.toml` (discovered from the repo root) |
+| **Agent** | does the work | `oneharness.toml` (the engine's node-scope graph names it as the worker's `agent.oneharness_config`) |
 | **Judge / simulated user** | supervises + scores | `oneharness.judge.toml` (via the base config's `provider.judge_config`) |
 
 A third role sits beside both: the **monitor** `just orchestrate` attaches watches
@@ -297,7 +306,8 @@ This repository uses three onejudge provider arrangements:
 - `command` is the deterministic test path. A local JSON-lines process stands in
   for the paid harness boundary.
 - The monitor is a two-sided onejudge member whose judge side is the **live
-  planner**: its agent side runs under `oneharness.orchestrator.toml`, and its
+  planner**: its agent side runs under `oneharness.orchestrator.toml` alone, as its
+  `worker_config`, and its
   judge side is a command provider running `onemessagebus serve surfaces --codec
   monitor` over `config/onemessagebus.yaml` (`graphs/dag-scope.yaml` names it) — the
   bus's generic binding interpreter running the `monitor` binding this host declares

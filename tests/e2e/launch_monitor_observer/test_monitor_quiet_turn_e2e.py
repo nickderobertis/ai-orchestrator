@@ -801,12 +801,22 @@ class TurnMessage(TypedDict, total=False):
     role: str
 
 
+class MemberDeath(TypedDict, total=False):
+    """The payload of a `member-died`, narrowed to the rule and cause it died under."""
+
+    rule: str
+    cause: str
+
+
 class GraphEvent(TypedDict, total=False):
     """The additive graph event, narrowed to the fields this journey reads."""
 
     kind: str
+    #: When it was recorded, in the stream's own ISO stamp, which orders as text.
+    ts: str
     labels: EventLabels
-    payload: TurnMessage
+    #: A `turn-message`'s payload, or a `member-died`'s — the two kinds read here.
+    payload: TurnMessage | MemberDeath
 
 
 def _graph_events(scratch: Path) -> list[GraphEvent]:
@@ -851,14 +861,25 @@ STOPPED_WITH_ITS_RUN = "signalled"
 GRAPH_SETTLED = "graph-settled"
 
 
-def _ended_with_the_run(events: list[GraphEvent], death: GraphEvent) -> bool:
+#: The cause `oneagentgraph` records when the driver's closeout cancels a turn still running
+#: once the run has settled — its judge side ended by `SIGTERM` — the other shape that end
+#: takes.
+CANCELLED_WITH_ITS_RUN = "cancelled"
+
+
+def _ended_with_the_run(events: list[GraphEvent], death: GraphEvent, settled_at: str) -> bool:
     """Whether ``death`` is the run's own end stopping the graph rather than the incident.
 
-    Only a death by the graph's stop signal that is the graph's last word — followed by
-    its `graph-settled` and no other member's event — is: a monitor its own quiet turn
-    killed dies under the rule its own failure names, mid-run, with the graph going on.
+    A death by the graph's stop signal that is the graph's last word — followed by its
+    `graph-settled` and no other member's event — is, and so is a turn cancelled at or
+    after ``settled_at``, the run's settlement: a monitor its own quiet turn killed dies
+    under the rule its own failure names, mid-run, with the graph going on.
     """
-    if death.get("payload", {}).get("rule") != STOPPED_WITH_ITS_RUN:
+    # Every event here is a `member-died`, whose payload is the union's death arm.
+    payload = cast(MemberDeath, death.get("payload", {}))
+    if payload.get("cause") == CANCELLED_WITH_ITS_RUN:
+        return str(death.get("ts")) >= settled_at
+    if payload.get("rule") != STOPPED_WITH_ITS_RUN:
         return False
     after = events[events.index(death) + 1 :]
     return [event.get("kind") for event in after] == [GRAPH_SETTLED]
@@ -914,6 +935,11 @@ def _what_the_monitor_said(environment: dict[str, str], run: str) -> list[Resolv
             )
             said.append(cast(Resolved, record["transcript"]))
     return said
+
+
+#: The line an attached launch prints the held node's settlement on — the run's own, since
+#: the run holds that one node — stamped on the clock the graph's events carry.
+SETTLED_LINE = re.compile(rf"^(?P<at>\S+)\s+graph:{HELD_NODE}\s+node-settled\b", re.MULTILINE)
 
 
 def _launch_to_settlement(environment: dict[str, str], run: str, tmp_path: Path) -> str:
@@ -1014,10 +1040,15 @@ def test_a_monitor_taking_quiet_turns_survives_a_whole_real_run(
         f"the dag-scope graph recorded nothing for this run, so the absence of a "
         f"`{MEMBER_DIED}` below proves nothing:\n{printed}"
     )
+    settled = SETTLED_LINE.search(printed)
+    assert settled is not None, (
+        f"the launch printed no settlement of `{HELD_NODE}`, so a death cannot be placed "
+        f"before or after it:\n{printed}"
+    )
     died = [
         death
         for death in _of_the_monitor(events, MEMBER_DIED)
-        if not _ended_with_the_run(events, death)
+        if not _ended_with_the_run(events, death, settled.group("at"))
     ]
     assert not died, (
         f"the `{MONITOR_MEMBER}` member did not survive a run of quiet turns; the graph "

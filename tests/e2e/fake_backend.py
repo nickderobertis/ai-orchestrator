@@ -102,6 +102,38 @@ PASSED_THROUGH_VERBS = frozenset({"interrupt"})
 #: candidate.
 MOCK_HARNESS = "codex"
 
+#: The candidate `--harness` leaves wherever the turn's chain names it, rather than the
+#: bare id `MOCK_HARNESS` mocks it by: a bare id carries no variant, so a variant's
+#: `env_from` indirections would go unresolved here where a real turn resolves them. A
+#: chain naming only the bare id keeps it, since `--harness` must name a candidate the
+#: chain holds.
+PINNED_IDENTITY = "codex:primary"
+
+
+def _pinned_identity(real: str, argv: list[str]) -> str:
+    """The codex candidate to pin this turn to: the variant, unless its chain names none.
+
+    The chain is the one the real CLI resolves for this turn — `oneharness config` over the
+    turn's own `--config` layers, or discovered from its `--cwd` when it names none — so
+    its `extends` layering is the tool's own and never restated here.
+    """
+    layers = [value for flag, value in zip(argv, argv[1:], strict=False) if flag == CONFIG_FLAG]
+    where = (
+        [part for layer in layers for part in (CONFIG_FLAG, layer)]
+        if layers
+        else [CWD_FLAG, _flag(argv, CWD_FLAG) or os.getcwd()]
+    )
+    resolved = subprocess.run(
+        [real, "config", *where, "--format", "json"],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    chain = json.loads(resolved.stdout)["harnesses"]["value"] or []
+    return PINNED_IDENTITY if PINNED_IDENTITY in chain else MOCK_HARNESS
+
+
 #: How the shipped mock responder is told what to answer.
 MOCK_STDOUT_ENV = "MOCK_STDOUT"
 
@@ -737,9 +769,10 @@ def _answer(
         return 2
     environment = dict(os.environ)
     environment[MOCK_STDOUT_ENV] = json.dumps({"result": text})
-    harness = MOCK_HARNESS
+    harness = _pinned_identity(real, argv)
+    mocked = MOCK_HARNESS
     if controlled is not None:
-        harness = CONTROLLED_MOCK_HARNESS
+        harness = mocked = CONTROLLED_MOCK_HARNESS
         # Nothing ahead of the turn's own frames: the mock writes this before the turn,
         # and the result documents it ends each turn with are its own.
         environment[MOCK_STDOUT_ENV] = ""
@@ -799,7 +832,7 @@ def _answer(
     # `tests/e2e/launch_monitor_observer/test_quota_fallthrough_e2e.py` already fake at.
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
     completed = subprocess.run(
-        [real, argv[0], "--harness", harness, "--mock-harness", harness, *argv[1:]],
+        [real, argv[0], "--harness", harness, "--mock-harness", mocked, *argv[1:]],
         env=environment,
         stdin=subprocess.DEVNULL,
         check=False,
