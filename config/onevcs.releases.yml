@@ -51,7 +51,7 @@ repositories:
     adoption: published
   - match: {host: github.com, owner: nickderobertis, name: onepipeline}
     declaration: merge
-    default_target: pypi
+    default_target: npm
   - match: {host: github.com, owner: nickderobertis, name: onevcs}
     declaration: merge
     default_target: pypi
@@ -69,7 +69,7 @@ repositories:
     default_target: pypi
   - match: {host: github.com, owner: nickderobertis, name: onepipeline-ui}
     declaration: merge
-    default_target: pypi-cli
+    default_target: npm-cli
   - match: {host: github.com, owner: nickderobertis, name: onemessagebus}
     declaration: merge
     default_target: pypi

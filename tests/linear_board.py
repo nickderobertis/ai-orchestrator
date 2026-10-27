@@ -551,23 +551,38 @@ class LinearBoard:
         named = operation_name or (declaration[1] if declaration else operation)
         with self._lock:
             self._requests.append(Request(named, copy.deepcopy(variables)))
+            resolution = {
+                "organization": {"id": "synthetic-workspace"},
+                "teams": _connection(
+                    [
+                        {
+                            "id": "synthetic-team",
+                            "states": _connection([asdict(state) for state in self._states]),
+                        }
+                    ]
+                ),
+                "projectStatuses": _connection([asdict(status) for status in self._statuses]),
+            }
             match operation:
                 case "organization":
+                    return resolution
+                case "originIssues":
+                    # onetaskgraph 0.12.5's batched read ahead of a copy's lookups by origin:
+                    # the `issues` and `projects` connections, aliased, beside the resolution
+                    # read, in one request. Narrowed as each connection is below.
                     return {
-                        "organization": {"id": "synthetic-workspace"},
-                        "teams": _connection(
+                        "originIssues": _page(
                             [
-                                {
-                                    "id": "synthetic-team",
-                                    "states": _connection(
-                                        [asdict(state) for state in self._states]
-                                    ),
-                                }
-                            ]
+                                node
+                                for node in (self._wire(item) for item in self._issues.values())
+                                if _matches(node, variables.get("issuesFilter"))
+                            ],
+                            variables.get("issuesFirst"),
                         ),
-                        "projectStatuses": _connection(
-                            [asdict(status) for status in self._statuses]
+                        "originProjects": _connection(
+                            [self._wire(item) for item in self._projects.values()]
                         ),
+                        **resolution,
                     }
                 case "viewer":
                     return {operation: {"id": "synthetic-user"}}
@@ -600,15 +615,7 @@ class LinearBoard:
                         return {operation: self._wire(item) if item else None}
                     case requested if requested == kind + "s":
                         nodes = [self._wire(item) for item in items.values()]
-                        project_filter = (variables.get("filter") or {}).get("project", {})
-                        if "id" in project_filter:
-                            nodes = [
-                                item
-                                for item in nodes
-                                if (item.get("project") or {}).get("id")
-                                == project_filter["id"]["eq"]
-                            ]
-                        return {operation: _connection(nodes)}
+                        return {operation: _connection(_in_project(nodes, variables.get("filter")))}
                     case requested if requested == kind + "Delete":
                         native = NativeId(_text(variables, "id"))
                         match kind:
@@ -642,6 +649,57 @@ class LinearBoard:
                             }
                         }
             raise ValueError("unsupported operation " + named)
+
+
+def _matches(node: dict[str, Any], query_filter: Any) -> bool:
+    """Whether ``node`` passes a GraphQL filter, read for the members a copy narrows by.
+
+    `and`, `or`, a text field's `contains`, `containsIgnoreCase` and `eq`, and a project's
+    `id.eq`; a member this board does not model — the team scope among them, which every
+    item here is in — narrows nothing.
+    """
+    if not isinstance(query_filter, dict):
+        return True
+    for member, condition in query_filter.items():
+        match member:
+            case "and":
+                if not all(_matches(node, part) for part in condition):
+                    return False
+            case "or":
+                if not any(_matches(node, part) for part in condition):
+                    return False
+            case "title" | "description":
+                text = node.get(member) or ""
+                for comparator, value in condition.items():
+                    held = {
+                        "contains": value in text,
+                        "containsIgnoreCase": value.lower() in text.lower(),
+                        "eq": text == value,
+                    }.get(comparator, True)
+                    if not held:
+                        return False
+            case "project" if "id" in condition:
+                if (node.get("project") or {}).get("id") != condition["id"].get("eq"):
+                    return False
+    return True
+
+
+def _page(nodes: list[dict[str, Any]], first: Any) -> dict[str, Any]:
+    """A connection of at most ``first`` of ``nodes``, saying whether more remain."""
+    if not isinstance(first, int) or len(nodes) <= first:
+        return _connection(nodes)
+    page = _connection(nodes[:first])
+    page["pageInfo"]["hasNextPage"] = True
+    return page
+
+
+def _in_project(nodes: list[dict[str, Any]], query_filter: Any) -> list[dict[str, Any]]:
+    """The ``nodes`` a filter naming one project's id keeps; every node for any other filter."""
+    project_filter = (query_filter or {}).get("project", {})
+    if "id" not in project_filter:
+        return nodes
+    wanted = project_filter["id"]["eq"]
+    return [node for node in nodes if (node.get("project") or {}).get("id") == wanted]
 
 
 @contextmanager

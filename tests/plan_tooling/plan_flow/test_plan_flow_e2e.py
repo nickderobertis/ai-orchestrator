@@ -200,7 +200,7 @@ DESIGN_TEMPLATE_VARIABLES = (
 
 #: The pinned engine, whose `template resolve design-doc` the doubled writer pipes into the
 #: store exactly as the task tells a real one to.
-ENGINE_BIN = REPO_ROOT / ".venv" / "bin" / "onepipeline"
+ENGINE_BIN = REPO_ROOT / "node_modules" / ".bin" / "onepipeline"
 
 #: The key the store records a rendering's provenance under, and what a design-doc
 #: rendering records there. Reading it is how this journey tells a document the store

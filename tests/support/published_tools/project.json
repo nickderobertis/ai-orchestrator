@@ -9,6 +9,7 @@
   "namedInputs": {
     "testSupport": [
       "{workspaceRoot}/tests/published_tools.py",
+      "{workspaceRoot}/orchestrator/npm_installs.py",
       "{workspaceRoot}/orchestrator/root.py",
       "{projectRoot}/project.json"
     ]

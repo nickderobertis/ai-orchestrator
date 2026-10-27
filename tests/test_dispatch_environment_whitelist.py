@@ -184,6 +184,7 @@ def _constructed(tmp_path: Path, planted: dict[str, str]) -> dict[str, str]:
         "construct_dispatch_environment probe\n"
         "compgen -e | sort\n"
         'printf "PATH_HEAD=%s\\n" "${PATH%%:*}"\n'
+        'printf "PATH_ENGINE=%s\\n" "$(command -v onepipeline)"\n'
     )
     completed = subprocess.run(
         [
@@ -206,6 +207,8 @@ def _constructed(tmp_path: Path, planted: dict[str, str]) -> dict[str, str]:
     for line in completed.stdout.splitlines():
         if line.startswith("PATH_HEAD="):
             kept["PATH_HEAD"] = line[len("PATH_HEAD=") :]
+        elif line.startswith("PATH_ENGINE="):
+            kept["PATH_ENGINE"] = line[len("PATH_ENGINE=") :]
         else:
             kept[line] = ""
     return kept
@@ -294,6 +297,22 @@ def test_the_worktree_environment_is_put_at_the_front_of_a_dispatchs_path(
     assert kept["PATH_HEAD"] == ".venv/bin", (
         f"a dispatch's PATH begins with {kept['PATH_HEAD']!r} rather than its own "
         "worktree's environment, so a bare `python` is whichever one the host offers"
+    )
+
+
+def test_a_bare_onepipeline_on_a_dispatchs_path_is_this_checkouts_npm_install(
+    tmp_path: Path,
+) -> None:
+    """The monitor, the pacemaker and the planner run a bare `onepipeline`.
+
+    `bun.lock` installs it into this checkout's `node_modules`, and no Python environment
+    carries it, so the constructed PATH is the only thing that lets those members reach it.
+    """
+    kept = _constructed(tmp_path, {})
+
+    assert kept["PATH_ENGINE"] == str(REPO_ROOT / "node_modules/.bin/onepipeline"), (
+        f"a bare `onepipeline` on a dispatch's PATH resolves to {kept['PATH_ENGINE']!r} "
+        "rather than this checkout's npm-installed engine"
     )
 
 

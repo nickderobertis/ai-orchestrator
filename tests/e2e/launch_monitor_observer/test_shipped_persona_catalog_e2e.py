@@ -29,6 +29,7 @@ import pytest
 import short_state
 from waits import timeout as e2e_timeout
 
+from orchestrator import npm_installs
 from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
 
@@ -221,7 +222,7 @@ def test_a_plan_node_naming_an_unshipped_persona_fails_before_a_harness_starts(
     environment["ONEPIPELINE_LAUNCHER_SESSION"] = "persona-catalog-e2e"
 
     launched = subprocess.run(
-        ["onepipeline", "start", "authoring:persona-probe"],
+        [str(npm_installs.ENGINE), "start", "authoring:persona-probe"],
         cwd=launch_dir,
         env=environment,
         text=True,
@@ -236,7 +237,7 @@ def test_a_plan_node_naming_an_unshipped_persona_fails_before_a_harness_starts(
     assert launched.returncode in (0, 3), launched.stdout + launched.stderr
 
     results = subprocess.run(
-        ["onepipeline", "results", "persona-probe"],
+        [str(npm_installs.ENGINE), "results", "persona-probe"],
         cwd=launch_dir,
         env=environment,
         text=True,

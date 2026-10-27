@@ -32,10 +32,12 @@ idempotent. It:
 - `uv sync`s the exact `onejudge` (`config/onejudge.version`) and `oneharness`
   (`config/oneharness.version`) versions into the worktree's `.venv` and verifies
   each as both a distribution and a CLI;
-- brings the four published tools this repository configures — `oneagentgraph`,
-  `onevcs`, `onepipeline`, and `onepipeline-ui` (PyPI's `onepipeline-api-cli`) —
-  from PyPI through that same `uv sync`, at the releases adopted in
-  `config/<tool>.version`, and verifies each one the same two ways;
+- brings the published tools this repository configures — `oneagentgraph` and
+  `onevcs` from PyPI through that same `uv sync`, verified the same two ways, and the
+  engine `onepipeline` (`onepipeline-cli`) and the read API `onepipeline-ui`
+  (`onepipeline-api-cli`) from npmjs.com through `bun.lock`, installed frozen — at the
+  releases adopted in `config/<tool>.version` — refusing a checkout whose installed
+  binary reports another version than its pin;
 - starts the host sweep detached from the hook, at most one at a time and once an hour
   ([The host sweep](#the-host-sweep-detached-one-at-a-time-once-an-hour));
 - installs `bun` via npm, and `codex` via npm when it is absent, exposing a stable

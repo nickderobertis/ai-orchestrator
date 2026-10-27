@@ -42,7 +42,7 @@ WATCH_SECTION = "### Never let dispatched work run unwatched"
 
 #: The engine this host installed, from this checkout's own environment, and a recorded
 #: run it is driven over: one that settled, so a watch reads it once and returns.
-ENGINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
+ENGINE = REPO_ROOT / "node_modules" / ".bin" / "onepipeline"
 RECORDED_RUNS = REPO_ROOT / "tests" / "fixtures" / "timeline-runs"
 SETTLED_RUN = "gate-parity-2"
 #: The watcher and watch-terms records a live `onepipeline watch` writes and removes inside

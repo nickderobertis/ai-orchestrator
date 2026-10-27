@@ -12,7 +12,14 @@ from typing import cast
 
 from pydantic import JsonValue
 
-from orchestrator import design_approval, plan_budgets, plan_store, planned_tasks, spike_flow
+from orchestrator import (
+    design_approval,
+    npm_installs,
+    plan_budgets,
+    plan_store,
+    planned_tasks,
+    spike_flow,
+)
 from orchestrator.root import REPO_ROOT
 
 
@@ -25,7 +32,7 @@ def loader(name: str, scratch: Path) -> str:
     path = scratch / (name + "-loader.json")
     path.write_text(
         run(
-            str(REPO_ROOT / ".venv/bin/onepipeline"),
+            str(npm_installs.ENGINE),
             "template",
             "resolve",
             name,

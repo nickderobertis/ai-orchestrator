@@ -34,7 +34,7 @@ import plan_store_cache
 import plan_store_user_layer
 import pytest
 from onetaskgraph_sdk import TaskDetail
-from published_tools import ONETASKGRAPH_BIN
+from published_tools import LOCKED_INSTALLS_PATH, ONETASKGRAPH_BIN
 
 from orchestrator import follow_up_drafts as drafts
 from orchestrator import plan_store
@@ -68,7 +68,7 @@ EVENT_LINE = re.compile(r"^\d{4}-\d{2}-\d{2}T\S+\s")
 def _path(*extra: str | None) -> str:
     """A search path holding this checkout's tools, the shell's, and anything named."""
     directories = [
-        str(REPO_ROOT / ".venv" / "bin"),
+        LOCKED_INSTALLS_PATH,
         *(item for item in extra if item),
         "/usr/bin",
         "/bin",

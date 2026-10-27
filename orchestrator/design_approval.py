@@ -95,7 +95,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal, NamedTuple, NewType, TypedDict, cast
 
-from orchestrator import design_chain, plan_store, spike_plan
+from orchestrator import design_chain, npm_installs, plan_store, spike_plan
 from orchestrator.plan_store import NodeId, StoreDocument
 from orchestrator.root import REPO_ROOT
 
@@ -372,7 +372,7 @@ def resolved_loader(root: Path = TEMPLATE_ROOT, repository: str | None = None) -
 
     :func:`resolved_digest`'s answer whole, for the one reader that renders through it.
     """
-    engine = REPO_ROOT / ".venv" / "bin" / "onepipeline"
+    engine = npm_installs.ENGINE
     command = [
         str(engine),
         "template",

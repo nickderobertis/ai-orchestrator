@@ -58,6 +58,7 @@ from delegation_checkout import (
     MAINTENANCE_CONFIG,
     PINNED_ENGINE,
     PLAN_PROJECT,
+    READ_API,
     RESOLVED_LOADER_ENV,
     ROOT,
     SEEDED_PLAN_RECORDS,
@@ -156,14 +157,14 @@ def _writer_task(project: str) -> tuple[str, ...]:
     gate, because a task the engine refuses is one nothing launches.
     """
     return (
-        "uv run onepipeline template resolve plan-task --json",
+        f"{ENGINE} template resolve plan-task --json",
         "uv run onetaskgraph task create authoring --template-loader - --no-interactive"
         f" --project {DESIGN_PROJECT.partition(':')[2]}"
         f" --title Write the design document for {project} {ANSWERS}"
         ' --metadata onepipeline.id="design-doc"'
         ' --metadata onepipeline.persona="../personas/design-doc.yaml"'
         ' --metadata onepipeline.agent_graph="graphs/design-doc.yaml" --json',
-        f"uv run onepipeline template check plan-task --item {CREATED_TASK}",
+        f"{ENGINE} template check plan-task --item {CREATED_TASK}",
     )
 
 
@@ -493,28 +494,28 @@ DELEGATIONS = (
             "uv run orchestrator-plan-locations authoring:listing-cursor --in elsewhere",
         ),
     ),
-    Delegation("channel-next", ("run-1",), "uv run onepipeline next run-1"),
+    Delegation("channel-next", ("run-1",), f"{ENGINE} next run-1"),
     # The read profile is the CLI's own default, so the recipes name no filter and
     # pass one through untouched when the caller does.
     Delegation(
         "channel-next",
         ("run-1", "--filter", "detailed"),
-        "uv run onepipeline next run-1 --filter detailed",
+        f"{ENGINE} next run-1 --filter detailed",
     ),
-    Delegation("channel-next", ("run-1", "--all"), "uv run onepipeline next run-1 --all"),
+    Delegation("channel-next", ("run-1", "--all"), f"{ENGINE} next run-1 --all"),
     Delegation(
         "monitor",
         ("run-1", "--filter", "detailed"),
-        "uv run onepipeline monitor run-1 --filter detailed",
+        f"{ENGINE} monitor run-1 --filter detailed",
     ),
-    Delegation("monitor", ("run-1", "--all"), "uv run onepipeline monitor run-1 --all"),
+    Delegation("monitor", ("run-1", "--all"), f"{ENGINE} monitor run-1 --all"),
     # An envelope named as a file is handed to the engine's own `reply` as the caller
     # named it; the table's runner writes the envelope a row names. Every other shape goes
     # the same way, which the `test_the_reply_recipe_*` journeys below state.
     Delegation(
         "channel-reply",
         ("run-1", "reply.json"),
-        "uv run onepipeline reply run-1 reply.json",
+        f"{ENGINE} reply run-1 reply.json",
     ),
     # The text is handed over on the verb's stdin rather than as `--message`, so no
     # prose this recipe was given is ever a command-line word — the hazard the two
@@ -522,30 +523,30 @@ DELEGATIONS = (
     Delegation(
         "channel-surface",
         ("run-1", "a status update"),
-        "uv run onepipeline surface --kind check-in run-1",
+        f"{ENGINE} surface --kind check-in run-1",
         then=("stdin a status update",),
     ),
-    Delegation("stop", ("run-1", "--force"), "uv run onepipeline stop run-1 --force"),
+    Delegation("stop", ("run-1", "--force"), f"{ENGINE} stop run-1 --force"),
     # The soft shutdown, in each of its three scopes. Forwarded untouched through the
     # same wrapper as `stop`, because `--mine` is an ownership comparison and a caller
     # the wrapper did not identify would match no run at all.
-    Delegation("shutdown", ("run-1",), "uv run onepipeline shutdown run-1"),
-    Delegation("shutdown", ("--mine",), "uv run onepipeline shutdown --mine"),
+    Delegation("shutdown", ("run-1",), f"{ENGINE} shutdown run-1"),
+    Delegation("shutdown", ("--mine",), f"{ENGINE} shutdown --mine"),
     Delegation(
         "shutdown",
         ("--host", "--grace", "120"),
-        "uv run onepipeline shutdown --host --grace 120",
+        f"{ENGINE} shutdown --host --grace 120",
     ),
-    Delegation("shutdown", ("--host", "--force"), "uv run onepipeline shutdown --host --force"),
-    Delegation("runs", ("--mine",), "uv run onepipeline runs --mine"),
-    Delegation("status", ("run-1",), "uv run onepipeline status run-1"),
+    Delegation("shutdown", ("--host", "--force"), f"{ENGINE} shutdown --host --force"),
+    Delegation("runs", ("--mine",), f"{ENGINE} runs --mine"),
+    Delegation("status", ("run-1",), f"{ENGINE} status run-1"),
     Delegation(
         "unwatched",
         ("--session", "manager-1"),
-        "uv run onepipeline unwatched --session manager-1",
+        f"{ENGINE} unwatched --session manager-1",
     ),
-    Delegation("host", (), "uv run onepipeline host"),
-    Delegation("monitor", ("run-1",), "uv run onepipeline monitor run-1"),
+    Delegation("host", (), f"{ENGINE} host"),
+    Delegation("monitor", ("run-1",), f"{ENGINE} monitor run-1"),
     # The watch recipe is the engine's own verb with every argument forwarded and
     # nothing asked first: the verb writes both forms unconditionally — the operator's
     # lines on standard error, the machine-readable one on standard output — so there is
@@ -553,10 +554,10 @@ DELEGATIONS = (
     Delegation(
         "watch",
         ("run-1", "--timeout", "600", "--tick-interval", "60", "--until", "node=a"),
-        "uv run onepipeline watch run-1 --timeout 600 --tick-interval 60 --until node=a",
+        f"{ENGINE} watch run-1 --timeout 600 --tick-interval 60 --until node=a",
     ),
-    Delegation("results", ("run-1",), "uv run onepipeline results run-1"),
-    Delegation("transcript", ("run-1",), "uv run onepipeline transcript run-1"),
+    Delegation("results", ("run-1",), f"{ENGINE} results run-1"),
+    Delegation("transcript", ("run-1",), f"{ENGINE} transcript run-1"),
     # The optional node operand, which is what turns a whole run's transcript into one
     # dispatch's. `tests/e2e/registry_and_recipes/test_transcript_recipe_e2e.py` proves the
     # narrowing against a recorded run; this row is what proves the recipe passes the
@@ -564,12 +565,10 @@ DELEGATIONS = (
     Delegation(
         "transcript",
         ("run-1", "node-a"),
-        "uv run onepipeline transcript run-1 node-a",
+        f"{ENGINE} transcript run-1 node-a",
     ),
-    Delegation("goals", (), "uv run onepipeline goals"),
-    Delegation(
-        "telemetry", ("run-1", "--breakdown"), "uv run onepipeline telemetry run-1 --breakdown"
-    ),
+    Delegation("goals", (), f"{ENGINE} goals"),
+    Delegation("telemetry", ("run-1", "--breakdown"), f"{ENGINE} telemetry run-1 --breakdown"),
     Delegation("history", (), "uv run oneagentgraph history"),
     Delegation("history-show", ("oh:abc123",), "uv run oneagentgraph history show oh:abc123"),
     # The one recipe here that reaches two verbs, `onevcs sweep` first. Both are named
@@ -616,7 +615,7 @@ DELEGATIONS = (
     Delegation(
         "repo-recover",
         ("claude/work", "--repo", "/checkout"),
-        "uv run onepipeline repo-recover --pr-author-graph graphs/pr-author.yaml "
+        f"{ENGINE} repo-recover --pr-author-graph graphs/pr-author.yaml "
         "claude/work --repo /checkout",
     ),
     # The third landing verb, and the one that closes the gap the other two left: a
@@ -625,7 +624,7 @@ DELEGATIONS = (
     Delegation(
         "publish-branch",
         ("claude/work", "--repo", "/checkout"),
-        "uv run onepipeline publish-branch --pr-author-graph graphs/pr-author.yaml "
+        f"{ENGINE} publish-branch --pr-author-graph graphs/pr-author.yaml "
         "claude/work --repo /checkout",
     ),
     # Both optional flags reach the verb. That they arrive as the *words* they were
@@ -642,27 +641,27 @@ DELEGATIONS = (
             "--policy",
             "change-open",
         ),
-        "uv run onepipeline publish-branch --pr-author-graph graphs/pr-author.yaml "
+        f"{ENGINE} publish-branch --pr-author-graph graphs/pr-author.yaml "
         "claude/work --repo /checkout --title Add the thing --policy change-open",
     ),
     # The two escapes from drafting reach the engine verb that honours them.
     Delegation(
         "publish-branch",
         ("claude/work", "--repo", "/checkout", "--no-draft"),
-        "uv run onepipeline publish-branch --pr-author-graph graphs/pr-author.yaml "
+        f"{ENGINE} publish-branch --pr-author-graph graphs/pr-author.yaml "
         "claude/work --repo /checkout --no-draft",
     ),
     Delegation(
         "repo-recover",
         ("claude/work", "--repo", "/checkout", "--body-file", "/tmp/body.md"),
-        "uv run onepipeline repo-recover --pr-author-graph graphs/pr-author.yaml "
+        f"{ENGINE} repo-recover --pr-author-graph graphs/pr-author.yaml "
         "claude/work --repo /checkout --body-file /tmp/body.md",
     ),
     # The two review recipes reach the engine's own verbs over the run they name, with
     # nothing added: the reply drafter is the one the run's launch recorded.
-    Delegation("review-comments", ("run-1",), "uv run onepipeline review run-1"),
-    Delegation("review-comments", ("run-1", "--json"), "uv run onepipeline review run-1 --json"),
-    Delegation("readjust-stack", ("run-1",), "uv run onepipeline readjust run-1"),
+    Delegation("review-comments", ("run-1",), f"{ENGINE} review run-1"),
+    Delegation("review-comments", ("run-1", "--json"), f"{ENGINE} review run-1 --json"),
+    Delegation("readjust-stack", ("run-1",), f"{ENGINE} readjust run-1"),
     Delegation("recoverable", (), "uv run onevcs recoverable"),
     # Scoped to one identity from wherever it runs. The wrapper reads its arguments only
     # for `--json`, so `--repo` has to arrive at the verb whole, beside its value.
@@ -697,7 +696,7 @@ DELEGATIONS = (
     Delegation(
         "integrate",
         ("claude/a", "claude/b", "--push"),
-        "uv run onepipeline integrate claude/a claude/b --push",
+        f"{ENGINE} integrate claude/a claude/b --push",
     ),
     Delegation("sync", ("main",), "uv run onevcs sync main"),
     # The line `just unpublished` prints for a superseded branch; every argument, the
@@ -769,15 +768,19 @@ def test_a_delegated_recipe_reaches_its_published_verb(
     ]
 
 
+def _traced_at(checkout: Path, trace: Path) -> list[str]:
+    """The trace's lines with this checkout's path spelled as the rows spell it."""
+    return trace.read_text().replace(str(checkout.resolve()), CHECKOUT).splitlines()
+
+
 #: Every row whose published verb is `onepipeline`, reached through `scripts/onepipeline.sh`
-#: — a launch's installed engine or a view's `uv run onepipeline`. `channel-surface` is
+#: — the launcher `bun.lock` installs into the checkout. `channel-surface` is
 #: the one such recipe with a wrapper of its own, `scripts/planner-surface.sh`, which
 #: raises a surface and resolves no template.
 ENGINE_DELEGATIONS = tuple(
     row
     for row in DELEGATIONS
-    if row.published.startswith((f"{ENGINE} ", "uv run onepipeline "))
-    and row.recipe != "channel-surface"
+    if row.published.startswith(f"{ENGINE} ") and row.recipe != "channel-surface"
 )
 
 
@@ -813,7 +816,7 @@ def test_every_engine_call_the_wrapper_makes_names_this_checkouts_template_root(
     calls = [
         line
         for line in roots.read_text(encoding="utf-8").splitlines()
-        if f" {engine} " in f"{line} " or " uv run onepipeline " in line
+        if f" {engine} " in f"{line} "
     ]
     assert calls, f"{delegation.recipe} reached no onepipeline call:\n{trace.read_text()}"
     expected = f"{checkout.resolve() / 'templates'} "
@@ -891,7 +894,7 @@ def test_an_engine_that_cannot_be_run_is_explained_rather_than_left_to_the_shell
     the engine could not be run.
     """
     checkout, trace = _checkout(tmp_path)
-    engine = checkout / ".venv/bin/onepipeline"
+    engine = Path(_at(checkout, ENGINE))
     engine.write_text("#!/nonexistent/interpreter\n", encoding="utf-8")
     engine.chmod(0o755)
 
@@ -911,7 +914,7 @@ def test_a_read_only_view_asks_the_engine_for_no_version(tmp_path: Path) -> None
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "engine requested" not in result.stderr + result.stdout
-    assert trace.read_text().splitlines() == ["uv run onepipeline next run-1"]
+    assert _traced_at(checkout, trace) == [f"{ENGINE} next run-1"]
 
 
 def test_the_orchestrate_recipe_refuses_a_checkout_whose_run_end_hook_cannot_run(
@@ -1473,8 +1476,8 @@ def test_the_reply_recipe_hands_every_envelope_to_the_engine_unchanged(
     piped = _run(checkout, trace, "channel-reply", "run-1", *bound, stdin=f"{envelope}\n")
 
     assert piped.returncode == 0, piped.stderr
-    assert trace.read_text().splitlines() == [
-        " ".join(("uv run onepipeline reply run-1", *bound)),
+    assert _traced_at(checkout, trace) == [
+        " ".join((f"{ENGINE} reply run-1", *bound)),
         f"stdin {envelope}",
     ]
 
@@ -1483,15 +1486,15 @@ def test_the_reply_recipe_hands_every_envelope_to_the_engine_unchanged(
     named = _run(checkout, trace, "channel-reply", "run-1", "reply.json", *bound)
 
     assert named.returncode == 0, named.stderr
-    assert trace.read_text().splitlines() == [
-        " ".join(("uv run onepipeline reply run-1 reply.json", *bound)),
+    assert _traced_at(checkout, trace) == [
+        " ".join((f"{ENGINE} reply run-1 reply.json", *bound)),
     ]
 
 
 #: Records argv one word per line rather than as one joined string. The shared trace
 #: above joins with spaces, which cannot tell `--title "Add the thing"` from three
 #: separate words — and that is exactly the difference a quoting bug in a wrapper makes.
-ARGV_RECORDING_UV = """#!/usr/bin/env bash
+ARGV_RECORDING_ENGINE = """#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$@" >>"$TRACE_FILE"
 """
@@ -1507,7 +1510,7 @@ def test_the_publish_branch_recipe_forwards_a_title_as_one_word(tmp_path: Path) 
     cannot see the difference; this one records a word per line.
     """
     checkout, trace = _checkout(tmp_path)
-    (checkout / "bin/uv").write_text(ARGV_RECORDING_UV)
+    Path(_at(checkout, ENGINE)).write_text(ARGV_RECORDING_ENGINE)
     title = "Add the thing"
 
     result = _run(
@@ -1523,8 +1526,6 @@ def test_the_publish_branch_recipe_forwards_a_title_as_one_word(tmp_path: Path) 
 
     assert result.returncode == 0, result.stderr
     assert trace.read_text().splitlines() == [
-        "run",
-        "onepipeline",
         "publish-branch",
         "--pr-author-graph",
         "graphs/pr-author.yaml",
@@ -1536,10 +1537,10 @@ def test_the_publish_branch_recipe_forwards_a_title_as_one_word(tmp_path: Path) 
     ]
 
 
-#: `uv`, recording each call's argument vector, the environment it was handed and whether
+#: The engine, recording each call's argument vector, the environment it was handed and whether
 #: it had a terminal, as one JSON line apiece: an environment is on no command line, so the
 #: shared trace cannot say what a drafting turn below the verb would be handed.
-ENVIRONMENT_RECORDING_UV = """#!/usr/bin/env python3
+ENVIRONMENT_RECORDING_ENGINE = """#!/usr/bin/env python3
 import json, os, sys
 
 try:
@@ -1609,7 +1610,7 @@ def test_a_review_recipe_runs_its_verb_unattended_with_a_drafting_turns_environm
     home = tmp_path / "home"
     home.mkdir()
     checkout, trace = _checkout(tmp_path)
-    (checkout / "bin/uv").write_text(ENVIRONMENT_RECORDING_UV)
+    Path(_at(checkout, ENGINE)).write_text(ENVIRONMENT_RECORDING_ENGINE)
     (checkout / ".env").write_text(
         f"{REVIEW_CREDENTIAL}={REVIEW_CREDENTIAL_VALUE}\n", encoding="utf-8"
     )
@@ -1625,7 +1626,7 @@ def test_a_review_recipe_runs_its_verb_unattended_with_a_drafting_turns_environm
 
     assert result.returncode == 0, result.stderr
     calls = [RecordedCall(**json.loads(line)) for line in trace.read_text().splitlines()]
-    assert [call.argv for call in calls] == [["run", "onepipeline", verb, "review-run"]], (
+    assert [call.argv for call in calls] == [[verb, "review-run"]], (
         f"`just {recipe} review-run` reached {[call.argv for call in calls]}"
     )
     (call,) = calls
@@ -1687,8 +1688,8 @@ def test_a_verdict_recipe_sends_its_envelope_through_the_reply_recipe(
     result = _run(checkout, trace, *invocation)
 
     assert result.returncode == 0, result.stderr
-    assert trace.read_text().splitlines() == [
-        "uv run onepipeline reply run-1",
+    assert _traced_at(checkout, trace) == [
+        f"{ENGINE} reply run-1",
         f"stdin {envelope}",
     ]
 
@@ -1706,8 +1707,8 @@ def test_a_verdict_message_reaches_the_envelope_as_json_rather_than_as_text(
     result = _run(checkout, trace, "channel-reject", "run-1", 'it said "no"; try\nagain')
 
     assert result.returncode == 0, result.stderr
-    assert trace.read_text().splitlines() == [
-        "uv run onepipeline reply run-1",
+    assert _traced_at(checkout, trace) == [
+        f"{ENGINE} reply run-1",
         'stdin {"version":3,"completion":false,"reason":"it said \\"no\\"; try\\nagain",'
         '"message":"it said \\"no\\"; try\\nagain"}',
     ]
@@ -1749,8 +1750,8 @@ def test_the_telemetry_server_recipe_supplies_the_runs_root_the_other_views_read
     address = (ROOT / "config/read-api.address").read_text(encoding="utf-8").strip()
 
     assert _run(checkout, trace, "telemetry-server").returncode == 0
-    assert trace.read_text().splitlines() == [
-        f"uv run onepipeline-api serve --runs-root runs --bind {address}",
+    assert _traced_at(checkout, trace) == [
+        f"{READ_API} serve --runs-root runs --bind {address}",
     ]
 
 
@@ -1769,8 +1770,8 @@ def test_the_dag_ui_recipe_is_that_same_server_with_the_published_ui_flag(
     address = (ROOT / "config/read-api.address").read_text(encoding="utf-8").strip()
 
     assert _run(checkout, trace, "dag-ui").returncode == 0
-    assert trace.read_text().splitlines() == [
-        f"uv run onepipeline-api serve --runs-root runs --bind {address} --ui",
+    assert _traced_at(checkout, trace) == [
+        f"{READ_API} serve --runs-root runs --bind {address} --ui",
     ]
 
 
@@ -1788,8 +1789,8 @@ def test_the_dag_ui_recipe_forwards_what_a_caller_names(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    assert trace.read_text().splitlines() == [
-        "uv run onepipeline-api serve --ui --runs-root /elsewhere --bind 127.0.0.1:19000",
+    assert _traced_at(checkout, trace) == [
+        f"{READ_API} serve --ui --runs-root /elsewhere --bind 127.0.0.1:19000",
     ]
 
 
@@ -1805,8 +1806,8 @@ def test_the_telemetry_server_recipe_binds_the_address_its_one_source_moved_to(
     (checkout / "config/read-api.address").write_text("0.0.0.0:19000\n", encoding="utf-8")
 
     assert _run(checkout, trace, "telemetry-server").returncode == 0
-    assert trace.read_text().splitlines() == [
-        "uv run onepipeline-api serve --runs-root runs --bind 0.0.0.0:19000",
+    assert _traced_at(checkout, trace) == [
+        f"{READ_API} serve --runs-root runs --bind 0.0.0.0:19000",
     ]
 
 
@@ -1815,8 +1816,8 @@ def test_the_telemetry_server_recipe_leaves_an_explicit_bind_alone(tmp_path: Pat
     checkout, trace = _checkout(tmp_path)
 
     assert _run(checkout, trace, "telemetry-server", "--bind", "0.0.0.0:19000").returncode == 0
-    assert trace.read_text().splitlines() == [
-        "uv run onepipeline-api serve --runs-root runs --bind 0.0.0.0:19000",
+    assert _traced_at(checkout, trace) == [
+        f"{READ_API} serve --runs-root runs --bind 0.0.0.0:19000",
     ]
 
 
@@ -1844,9 +1845,8 @@ def test_the_telemetry_server_recipe_hands_the_api_the_session_it_derives(
     )
 
     assert result.returncode == 0, result.stderr
-    assert trace.read_text().splitlines() == [
-        "uv run onepipeline-api serve --runs-root runs --session a-manager-session "
-        f"--bind {address}",
+    assert _traced_at(checkout, trace) == [
+        f"{READ_API} serve --runs-root runs --session a-manager-session --bind {address}",
     ]
 
 
@@ -1879,9 +1879,9 @@ def test_the_telemetry_server_recipe_leaves_an_explicit_session_alone(
     )
 
     assert result.returncode == 0, result.stderr
-    rendered = trace.read_text().splitlines()
+    rendered = _traced_at(checkout, trace)
     assert rendered == [
-        f"uv run onepipeline-api serve --runs-root runs --bind {address} {' '.join(spelling)}",
+        f"{READ_API} serve --runs-root runs --bind {address} {' '.join(spelling)}",
     ]
     assert rendered[0].count("--session") == 1, (
         f"the recipe rendered {rendered[0]!r}, which names `--session` more than once; "
@@ -1941,8 +1941,8 @@ def test_the_telemetry_server_recipe_names_no_session_when_it_can_resolve_none(
     address = (ROOT / "config/read-api.address").read_text(encoding="utf-8").strip()
 
     assert _run(checkout, trace, "telemetry-server").returncode == 0
-    assert trace.read_text().splitlines() == [
-        f"uv run onepipeline-api serve --runs-root runs --bind {address}",
+    assert _traced_at(checkout, trace) == [
+        f"{READ_API} serve --runs-root runs --bind {address}",
     ]
 
 
@@ -1974,9 +1974,8 @@ def test_the_telemetry_server_recipe_keeps_a_malformed_inherited_session_and_say
     assert result.returncode == 0, result.stderr
     assert "the inherited ONEPIPELINE_LAUNCHER_SESSION is not the shape" in result.stderr
     assert "it is kept" in result.stderr
-    assert trace.read_text().splitlines() == [
-        "uv run onepipeline-api serve --runs-root runs --session inherited;session "
-        f"--bind {address}",
+    assert _traced_at(checkout, trace) == [
+        f"{READ_API} serve --runs-root runs --session inherited;session --bind {address}",
     ]
 
 
@@ -2025,19 +2024,19 @@ def test_a_caller_that_cannot_load_the_session_helper_refuses_naming_it(
     [
         (
             ("telemetry-server", "--runs-root", "/elsewhere"),
-            "uv run onepipeline-api serve --bind 127.0.0.1:8765 --runs-root /elsewhere",
+            f"{READ_API} serve --bind 127.0.0.1:8765 --runs-root /elsewhere",
         ),
         (
             ("telemetry-server", "--runs-root=/elsewhere"),
-            "uv run onepipeline-api serve --bind 127.0.0.1:8765 --runs-root=/elsewhere",
+            f"{READ_API} serve --bind 127.0.0.1:8765 --runs-root=/elsewhere",
         ),
         (
             ("telemetry-server", "--bind", "0.0.0.0:9000"),
-            "uv run onepipeline-api serve --runs-root runs --bind 0.0.0.0:9000",
+            f"{READ_API} serve --runs-root runs --bind 0.0.0.0:9000",
         ),
         (
             ("telemetry-server", "--bind=0.0.0.0:9000"),
-            "uv run onepipeline-api serve --runs-root runs --bind=0.0.0.0:9000",
+            f"{READ_API} serve --runs-root runs --bind=0.0.0.0:9000",
         ),
     ],
     ids=("runs-root", "runs-root-equals", "bind", "bind-equals"),
@@ -2057,7 +2056,7 @@ def test_a_default_the_caller_spelled_is_not_supplied_twice(
     checkout, trace = _checkout(tmp_path)
 
     assert _run(checkout, trace, *invocation).returncode == 0
-    rendered = trace.read_text().splitlines()
+    rendered = _traced_at(checkout, trace)
     assert rendered == [delegated]
     assert rendered[0].count("--runs-root") == 1, rendered
     assert rendered[0].count("--bind") == 1, rendered
@@ -2090,7 +2089,7 @@ def test_a_retired_flag_spelling_is_forwarded_to_the_published_verb_as_typed(
     result = _run(checkout, trace, *invocation)
 
     assert result.returncode == 0, result.stderr
-    rendered = trace.read_text().splitlines()
+    rendered = _traced_at(checkout, trace)
     assert len(rendered) == 1, rendered
     assert rendered[0].endswith(" ".join(invocation[1:])), (
         f"the wrapper rendered {rendered[0]!r} rather than forwarding {invocation[1]!r} as "
@@ -2116,8 +2115,8 @@ def test_a_surface_with_no_text_is_read_from_stdin(
     # The whole update reaches the CLI rather than its first line, and it reaches it on
     # stdin: the trace records the command line, then one `stdin` line per line piped
     # through to the verb.
-    assert trace.read_text().splitlines() == [
-        "uv run onepipeline surface --kind check-in run-1",
+    assert _traced_at(checkout, trace) == [
+        f"{ENGINE} surface --kind check-in run-1",
         "stdin a long update",
         "stdin over two lines",
     ]

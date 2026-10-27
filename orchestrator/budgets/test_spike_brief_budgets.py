@@ -268,7 +268,7 @@ def test_real_budget_cli_selects_saved_completed_flows(
             ["attest", writer, "done"],
         ]:
             subprocess.run(
-                [str(REPO_ROOT / ".venv/bin/onepipeline"), *arguments],
+                [str(REPO_ROOT / "node_modules/.bin/onepipeline"), *arguments],
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -429,7 +429,7 @@ def test_real_budget_cli_refuses_incomplete_selection(
             operations += [["attest", writer, "done"], ["adopt", writer, "--attach"]]
         for arguments in operations:
             subprocess.run(
-                [str(REPO_ROOT / ".venv/bin/onepipeline"), *arguments],
+                [str(REPO_ROOT / "node_modules/.bin/onepipeline"), *arguments],
                 capture_output=True,
                 text=True,
                 timeout=30,

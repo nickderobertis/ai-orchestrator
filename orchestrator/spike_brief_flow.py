@@ -13,7 +13,7 @@ from typing import cast
 
 from onetaskgraph_sdk import CopyReport, QueryResponseOfQualifiedProject
 
-from orchestrator import design_approval, plan_store, spike_brief, spike_flow
+from orchestrator import design_approval, npm_installs, plan_store, spike_brief, spike_flow
 from orchestrator.root import REPO_ROOT
 
 NODE = "spike-brief"
@@ -126,7 +126,7 @@ def command(argv: list[str], *, input: str | None = None) -> str:
 
 
 def engine(*argv: str) -> str:
-    return command([str(REPO_ROOT / ".venv/bin/onepipeline"), *argv])
+    return command([str(npm_installs.ENGINE), *argv])
 
 
 def acknowledge(receipt: spike_brief.Receipt) -> None:
@@ -399,7 +399,7 @@ def ready(path: Path, *, blocking: bool = True) -> None:
         )
         command(
             [
-                str(REPO_ROOT / ".venv/bin/onepipeline"),
+                str(npm_installs.ENGINE),
                 "surface",
                 "--kind",
                 "check-in",

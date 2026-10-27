@@ -24,6 +24,13 @@ result=${ONEBUDGETSPEC_RESULT:-}
 [ -n "$result" ] || fail "ONEBUDGETSPEC_RESULT names no result file; run this as the design-doc-budget-summary-length budget's command, through onebudgetspec check"
 fixture="$root/tests/fixtures/budgets/issue-1568.json"
 [ -r "$fixture" ] || fail "the fixture $fixture cannot be read, so there are no answers to render; restore it with 'git checkout -- tests/fixtures/budgets/issue-1568.json' and retry"
+# The engine `bun.lock` installs: the platform package's binary, never the npm launcher, for
+# the reason `scripts/npm-binary.sh` gives.
+# shellcheck source=scripts/npm-binary.sh
+# llmlint: ignore[boundary_inputs_validated, robust_shell, tool_output_is_signal] A tracked sibling is a checkout invariant, not an input at a trust boundary: one that is missing or will not load is a broken checkout, and the shell says so on the line it fails the source at.
+. "$root/scripts/npm-binary.sh"
+engine=$(npm_binary onepipeline-cli onepipeline) || exit 1
+[ -x "$engine" ] || fail "this checkout has no engine at $engine; provision the checkout with 'just bootstrap' and retry"
 python="$root/.venv/bin/python"
 [ -x "$python" ] || fail "$python is not this checkout's locked interpreter; provision the checkout with 'just bootstrap' and retry"
 
@@ -39,7 +46,7 @@ trap discard EXIT
 loader="$scratch/loader.json"
 answers="$scratch/answers.json"
 
-"$root/.venv/bin/onepipeline" template resolve design-doc --json --template-root "$root/templates" >"$loader" ||
+"$engine" template resolve design-doc --json --template-root "$root/templates" >"$loader" ||
   fail "the pinned engine did not resolve the design-doc template through $root/templates (its diagnostic is above); repair the template until 'scripts/onepipeline.sh template check design-doc' passes, then retry"
 "$python" - "$fixture" "$root" >"$answers" <<'PY' ||
 import json, sys

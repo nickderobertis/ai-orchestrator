@@ -141,9 +141,9 @@ close, in `just sweep`, and on the engine's idle maintenance — and a pool slot
 removed, only returned. A superseded branch that still differs from its base is your
 call, printed with its evidence and answered with `just reclaim-branch <branch> --repo
 <checkout>`; `just unpublished --acknowledge` is for work deliberately kept. For a run
-that settled before this host's engine recorded supersessions, `uv run --no-sync
-onepipeline supersessions <run-id> --record`, run once by hand, records its retries'
-superseded branches. `just work-status
+that settled before this host's engine recorded supersessions,
+`node_modules/.bin/onepipeline supersessions <run-id> --record`, run once by hand,
+records its retries' superseded branches. `just work-status
 <change-url|session|branch|commit>` reports everything `onevcs` knows about one piece
 of work. `just import-branch <branch> --repo <checkout>` makes a branch finished in a
 session worktree or a run clone reachable from an identity's registered checkouts,
@@ -416,8 +416,9 @@ moving any other one moves nothing a dispatch does — reading the wrong pin has
 a wrong diagnosis here twice, both times with every pin looking current while a real
 run came out empty.
 
-**The installed binary decides, and measuring it is the answer.** The `onepipeline-cli`
-wheel ships a CycloneDX SBOM declaring one version per linked crate, and
+**The installed binary decides, and measuring it is the answer.** The npm platform
+package `onepipeline-cli` installs through `bun.lock` ships a CycloneDX SBOM under its
+`sboms/` declaring one version per linked crate, and
 `tests/test_linked_libraries.py` reconciles the CLI pins to it on every gate run, so a
 bump that left a sibling pin behind fails there rather than diverging silently. A
 release's `Cargo.lock` at the installed tag is corroboration only: a lock says what a
@@ -483,18 +484,20 @@ sits outside the registry and the rules file so an older `onevcs` sharing the ho
 a byte-identical registry. **This host's override is tracked as
 `config/onevcs.releases.yml` and installed by `just repos-apply`** beside the rules file;
 it names each producer's `default_target` — the one a consumer naming no `consumes`
-waits for, since a `local-direct` identity refuses a `consumes` — and gives this
+waits for, since this host's plan check refuses a `consumes` on a `local-direct`
+identity — and gives this
 repository alone the `published` rung, leaving every other repository on the global
-`fast`. A default is one of two kinds: for a producer this host installs, the wheel it
-installs; for one it installs nothing of, such as `printobserver`'s `github-release`, the
+`fast`. A default is one of two kinds: for a producer this host installs, the package it
+installs — a wheel, or the npm package for the engine and the read API; for one it installs nothing of, such as `printobserver`'s `github-release`, the
 artifact a consumer outside this repository waits on. `orchestrator/host_installs.py`
 says which each producer is and is the table those defaults are held to. So a
 plan of this repository awaits a release by
 **depending on the producer's node and naming no `consumes`**: the node resolves
 `published` from the override and waits for the release carrying that producer's
-default target, and no task states any of it. That rung is not a preference — under
-`fast` a node behind an unreleased producer publishes as a draft carrying the pin it
-launched against, which `local-direct` refuses by name, so it could never land at all.
+default target, and no task states any of it. That rung holds the node before it
+works rather than after: under `fast` a node behind an unreleased producer works against
+the pin it launched with, and a `local-direct` publication of it is held unlanded on its
+origin as `complete-but-held` until that release exists.
 `ai-orchestrator` itself declares no target, and a repository declaring none releases
 nothing, so a plan of this repository earns no reference row and no hold as a producer.
 Discovery: `onevcs release --help`, onevcs's own `docs/contract.md`, and onepipeline's
@@ -1885,7 +1888,7 @@ line for every filesystem a run writes to, and `--no-providers` keeps it, so a w
 sees it — read it, and leave acting on a filling disk to whoever owns what is filling
 it. A run that settled with every node done has had its dispatch scratch removed; one
 that ended otherwise or paused keeps it, and `just status` and `just results` print a
-`scratch kept:` line naming its size, which `uv run --no-sync onepipeline scratch discard
+`scratch kept:` line naming its size, which `node_modules/.bin/onepipeline scratch discard
 <run-id>` removes once the run has ended. Answer a run's questions through `just channel-next` on that run, and read a
 blocking surface the bus marks `abandoned` as one nobody is waiting on now. A run's journal records a dispatch's own evidence —
 every tool call and its output — as references into the oneharness history store, which
@@ -1963,7 +1966,7 @@ envelope on `just channel-reply`'s standard input writes no file at all. A
 log*` also passed `git -C <path> merge log-fix`, and neither is a `git log`, `diff` or
 `show` here, whose `--output` writes a file, so those reads go to the classifier. Of `onevcs`'s own verbs, the release reads and
 acknowledgement, `rules check` and `pool status` are granted, and `onevcs session close
-<session>` closes a session you opened. `uv run --no-sync onepipeline scratch discard
+<session>` closes a session you opened. `node_modules/.bin/onepipeline scratch discard
 <run-id>` is granted because it deletes only the regenerable scratch of a run whose
 status word says it ended, never follows a link out of it, and refuses a paused, driven
 or unknown run. The development tier — this repository's own

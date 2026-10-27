@@ -72,7 +72,7 @@ DRAFT = "drafted"
 
 #: The pinned engine, whose `template resolve design-doc` states the template every
 #: document here is rendered from, exactly as a design-doc dispatch pipes it.
-ENGINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
+ENGINE = REPO_ROOT / "node_modules" / ".bin" / "onepipeline"
 
 #: The provenance key the store records a rendering under, and what a design-doc
 #: rendering records there.

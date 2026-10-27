@@ -69,7 +69,7 @@ from published_tools import ONETASKGRAPH_BIN
 from orchestrator import follow_up_comments as comments
 from orchestrator import follow_up_drafts as drafts
 from orchestrator import follow_up_tickets as tickets
-from orchestrator import plan_store
+from orchestrator import npm_installs, plan_store
 from orchestrator.plan_budgets import Direction
 from orchestrator.plan_store import WRITABLE_PLUGIN
 from orchestrator.project_store import frontmatter
@@ -1107,7 +1107,7 @@ FEEDBACK_ACCOUNT: dict[str, object] = {
 #: The pinned engine, which states this host's `follow-up-task` template through its layers
 #: as the loader document the store renders; the host root `scripts/template-env.sh`
 #: exports for every launch; and the name `templates/templates.yaml` registers.
-ENGINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
+ENGINE = REPO_ROOT / "node_modules" / ".bin" / "onepipeline"
 TEMPLATE_ROOT = REPO_ROOT / "templates"
 TEMPLATE_NAME = "follow-up-task"
 #: What the recipe answers `placement_note` with is `scripts/plan-brief.sh`'s; a note of
@@ -7745,8 +7745,12 @@ def _executable(path: Path, program: str) -> None:
 
 
 @pytest.fixture
-def budget_launch(tmp_path: Path) -> tuple[Path, Path, Path]:
-    """Only published engine/registry CLIs are doubled; comparison is the real library."""
+def budget_launch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path, Path]:
+    """Only published engine/registry CLIs are doubled; comparison is the real library.
+
+    A decoy `onepipeline` leads the inherited search path, so a budget command reaches the
+    launch's locked engine only because the script resolves that engine itself.
+    """
     launch = tmp_path / "launcher"
     installs = launch / ".venv/bin"
     installs.mkdir(parents=True)
@@ -7754,9 +7758,20 @@ def budget_launch(tmp_path: Path) -> tuple[Path, Path, Path]:
     captured = _cycle_document()
     fixture = tmp_path / "telemetry.json"
     fixture.write_text(json.dumps(captured))
+    engine = npm_installs.platform_binary(node_modules=launch / "node_modules")
+    _executable(engine, f"import sys\nsys.stdout.write(open({str(fixture)!r}).read())\n")
+    # The budget's script, its engine resolver and an interpreter sit in the launch, the
+    # checkout whose locked engine the script resolves beside itself.
+    (launch / "scripts").mkdir()
+    for name in ("budget-cycle-time.sh", "npm-binary.sh"):
+        shutil.copy2(REPO_ROOT / "scripts" / name, launch / "scripts" / name)
+    (installs / "python3").symlink_to(sys.executable)
+    decoys = tmp_path / "decoys"
     _executable(
-        installs / "onepipeline", f"import sys\nsys.stdout.write(open({str(fixture)!r}).read())\n"
+        decoys / "onepipeline",
+        "import sys\nsys.stderr.write('decoy onepipeline ahead of the locked one')\nsys.exit(97)\n",
     )
+    monkeypatch.setenv("PATH", f"{decoys}{os.pathsep}{os.environ['PATH']}")
     checkout = tmp_path / "service"
     checkout.mkdir()
     registry = tmp_path / "registry.json"
@@ -7776,7 +7791,14 @@ print(json.dumps({{"publication_checkout": mapping[sys.argv[-1]]}}))
     return launch, checkout, runs
 
 
-def _measuring_file(checkout: Path, *, threshold: float, label: bool = True) -> None:
+def _budget_path(launch: Path) -> str:
+    """The search path `budget_report` hands a budget's command: the launch's locked installs
+    ahead of the inherited one, whose decoy engine leads it."""
+    engine = npm_installs.platform_binary(node_modules=launch / "node_modules")
+    return os.pathsep.join((str(launch / ".venv/bin"), str(engine.parent), os.environ["PATH"]))
+
+
+def _measuring_file(checkout: Path, launch: Path, *, threshold: float, label: bool = True) -> None:
     import yaml
 
     budget = dict(_cycle_entry()["budget"])
@@ -7784,7 +7806,7 @@ def _measuring_file(checkout: Path, *, threshold: float, label: bool = True) -> 
     budget.update(
         threshold=threshold,
         measure="reported",
-        command=[str(REPO_ROOT / "scripts/budget-cycle-time.sh")],
+        command=[str(launch / "scripts/budget-cycle-time.sh")],
     )
     if label:
         budget["labels"] = ["onepipeline"]
@@ -7817,10 +7839,13 @@ def test_open_budget_account_uses_each_real_library_result_and_preserves_telemet
     (runs.parent / "telemetry.json").write_text(json.dumps(captured))
     if case != "missing":
         _measuring_file(
-            checkout, threshold=change.get("cycle_seconds") or 1, label=case != "unlabelled"
+            checkout,
+            launch,
+            threshold=change.get("cycle_seconds") or 1,
+            label=case != "unlabelled",
         )
         if case == "over":
-            _measuring_file(checkout, threshold=change["cycle_seconds"] / 2)
+            _measuring_file(checkout, launch, threshold=change["cycle_seconds"] / 2)
     arguments = [
         "open-budgets",
         "--root",
@@ -7873,7 +7898,7 @@ def test_open_budget_account_uses_each_real_library_result_and_preserves_telemet
                     "ONEPIPELINE_RUN_ID": captured["run_id"],
                     "ONEPIPELINE_NODE_ID": change["node"],
                     "ONEPIPELINE_RUNS_DIR": str(runs),
-                    "PATH": f"{launch / '.venv/bin'}{os.pathsep}{os.environ['PATH']}",
+                    "PATH": _budget_path(launch),
                 },
                 cwd=checkout,
                 text=True,
@@ -7884,13 +7909,13 @@ def test_open_budget_account_uses_each_real_library_result_and_preserves_telemet
             assert reported["verdict"] == "error"
             # The script's own explanation of why the cycle is absent from the telemetry.
             direct = subprocess.run(
-                [str(REPO_ROOT / "scripts/budget-cycle-time.sh")],
+                [str(launch / "scripts/budget-cycle-time.sh")],
                 env={
                     **os.environ,
                     "ONEPIPELINE_RUN_ID": captured["run_id"],
                     "ONEPIPELINE_NODE_ID": change["node"],
                     "ONEBUDGETSPEC_RESULT": str(checkout / "result.json"),
-                    "PATH": f"{launch / '.venv/bin'}{os.pathsep}{os.environ['PATH']}",
+                    "PATH": _budget_path(launch),
                 },
                 text=True,
                 capture_output=True,
@@ -7941,13 +7966,13 @@ def test_cycle_script_through_installed_budgetspec_reports_verdicts_and_failure_
     node = "absent" if node_kind == "absent" else change["node"]
     environment = {
         **os.environ,
-        "PATH": f"{launch / '.venv/bin'}:{os.environ['PATH']}",
+        "PATH": _budget_path(launch),
         "ONEPIPELINE_RUN_ID": document["run_id"],
         "ONEPIPELINE_NODE_ID": node,
         "ONEPIPELINE_RUNS_DIR": str(runs),
     }
     for multiplier, verdict in ((2, "within"), (0.5, "over")):
-        _measuring_file(checkout, threshold=(change["cycle_seconds"] or 1) * multiplier)
+        _measuring_file(checkout, launch, threshold=(change["cycle_seconds"] or 1) * multiplier)
         import yaml
 
         budgets = yaml.safe_load((checkout / "budgets.yaml").read_text())
@@ -7976,7 +8001,7 @@ def test_cycle_script_through_installed_budgetspec_reports_verdicts_and_failure_
         if node_kind != "measured":
             assert result["verdict"] == "error"
             direct = subprocess.run(
-                [str(REPO_ROOT / "scripts/budget-cycle-time.sh")],
+                [str(launch / "scripts/budget-cycle-time.sh")],
                 env={**environment, "ONEBUDGETSPEC_RESULT": str(checkout / "result.json")},
                 text=True,
                 capture_output=True,
@@ -8168,7 +8193,12 @@ def test_budget_account_refuses_an_unreadable_engine_or_registry_boundary(
     reason: str,
 ) -> None:
     launch, _, runs = budget_launch
-    _executable(launch / ".venv/bin" / tool, body + "\n")
+    doubled = (
+        npm_installs.platform_binary(node_modules=launch / "node_modules")
+        if tool == "onepipeline"
+        else launch / ".venv/bin" / tool
+    )
+    _executable(doubled, body + "\n")
     with pytest.raises(OSError, match=reason):
         tickets.open_budgets(
             drafts_root, _cycle_document()["run_id"], runs, tickets.Installs(launch / ".venv/bin")
@@ -8197,7 +8227,7 @@ def test_budget_account_refuses_an_existing_foreign_account_and_a_missing_instal
     assert tickets.main(arguments) == tickets.UNRUNNABLE
     assert "not this run's budget account" in capsys.readouterr().err
     path.unlink()
-    (launch / ".venv/bin/onepipeline").unlink()
+    (npm_installs.platform_binary(node_modules=launch / "node_modules")).unlink()
     assert tickets.main(arguments) == tickets.UNRUNNABLE
     assert "did not run" in capsys.readouterr().err
     assert (
@@ -8549,6 +8579,8 @@ def test_budget_entry_model_matches_the_serialized_key_contract() -> None:
         ("no-result", "names no result file"),
         ("no-interpreter", "no interpreter is installed"),
         ("engine-failed", "engine could not report"),
+        ("no-engine", "has no engine at"),
+        ("no-resolver", "engine resolver"),
         ("unwritable-result", "no cycle of"),
         ("invalid-cycle", "was not measured"),
         ("empty-landing", "has not landed"),
@@ -8560,11 +8592,11 @@ def test_cycle_script_refuses_each_broken_boundary_with_a_remediation(
     launch, _, runs = budget_launch
     document = _cycle_document()
     change = next(c for c in document["changes"] if c["cycle_seconds"] is not None)
-    script = REPO_ROOT / "scripts/budget-cycle-time.sh"
+    script = launch / "scripts/budget-cycle-time.sh"
     result = launch / "result.json"
     environment = {
         **os.environ,
-        "PATH": f"{launch / '.venv/bin'}:{os.environ['PATH']}",
+        "PATH": _budget_path(launch),
         "ONEPIPELINE_RUN_ID": document["run_id"],
         "ONEPIPELINE_NODE_ID": change["node"],
         "ONEPIPELINE_RUNS_DIR": str(runs),
@@ -8572,7 +8604,10 @@ def test_cycle_script_refuses_each_broken_boundary_with_a_remediation(
     }
     match case:
         case "invalid-json":
-            _executable(launch / ".venv/bin/onepipeline", "print('invalid JSON')\n")
+            _executable(
+                npm_installs.platform_binary(node_modules=launch / "node_modules"),
+                "print('invalid JSON')\n",
+            )
         case "wrong-run":
             document["run_id"] = "foreign"
         case "wrong-schema":
@@ -8597,9 +8632,20 @@ def test_cycle_script_refuses_each_broken_boundary_with_a_remediation(
             shutil.copy2(REPO_ROOT / "scripts/budget-cycle-time.sh", script)
         case "engine-failed":
             _executable(
-                launch / ".venv/bin/onepipeline",
+                npm_installs.platform_binary(node_modules=launch / "node_modules"),
                 "import sys\nsys.stderr.write('broken telemetry')\nsys.exit(4)\n",
             )
+        case "no-resolver":
+            bare = launch / "bare"
+            script = bare / "scripts/budget-cycle-time.sh"
+            script.parent.mkdir(parents=True)
+            shutil.copy2(REPO_ROOT / "scripts/budget-cycle-time.sh", script)
+            (bare / ".venv/bin").mkdir(parents=True)
+            (bare / ".venv/bin/python3").symlink_to(sys.executable)
+        case "no-engine":
+            # The decoy still leads the search path: an absent locked engine is refused,
+            # never answered by whichever `onepipeline` that path offers.
+            npm_installs.platform_binary(node_modules=launch / "node_modules").unlink()
         case "unwritable-result":
             result.mkdir()
         case "invalid-cycle":
@@ -8616,6 +8662,33 @@ def test_cycle_script_refuses_each_broken_boundary_with_a_remediation(
     assert not result.is_file()
 
 
+def test_cycle_script_reaches_its_checkouts_locked_engine_past_a_decoy_on_path(
+    budget_launch: tuple[Path, Path, Path],
+) -> None:
+    """Run as a person would, with only the inherited search path, whose decoy leads it."""
+    launch, _, runs = budget_launch
+    document = _cycle_document()
+    change = next(c for c in document["changes"] if c["cycle_seconds"] is not None)
+    result = launch / "result.json"
+    done = subprocess.run(
+        [str(launch / "scripts/budget-cycle-time.sh")],
+        env={
+            **os.environ,
+            "ONEPIPELINE_RUN_ID": document["run_id"],
+            "ONEPIPELINE_NODE_ID": change["node"],
+            "ONEPIPELINE_RUNS_DIR": str(runs),
+            "ONEBUDGETSPEC_RESULT": str(result),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert shutil.which("onepipeline") is not None
+    assert "decoy" in Path(shutil.which("onepipeline") or "").parent.name
+    assert done.returncode == 0, done.stderr
+    assert json.loads(result.read_text())["value"] == change["cycle_seconds"]
+
+
 def test_budget_account_reports_a_real_subprocess_timeout_as_unrunnable(
     budget_launch: tuple[Path, Path, Path],
     drafts_root: Path,
@@ -8623,7 +8696,10 @@ def test_budget_account_reports_a_real_subprocess_timeout_as_unrunnable(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     launch, _, runs = budget_launch
-    _executable(launch / ".venv/bin/onepipeline", "import time\ntime.sleep(1)\n")
+    _executable(
+        npm_installs.platform_binary(node_modules=launch / "node_modules"),
+        "import time\ntime.sleep(1)\n",
+    )
     monkeypatch.setattr(tickets, "BUDGET_TIMEOUT_SECONDS", 0.02)
     result = tickets.main(
         [

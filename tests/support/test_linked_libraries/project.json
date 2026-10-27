@@ -11,6 +11,7 @@
   "namedInputs": {
     "testSupport": [
       "{workspaceRoot}/tests/test_linked_libraries.py",
+      "{workspaceRoot}/orchestrator/npm_installs.py",
       "{workspaceRoot}/orchestrator/root.py",
       "{projectRoot}/project.json"
     ]

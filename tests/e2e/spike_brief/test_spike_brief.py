@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from orchestrator import run_reading, spike_brief
+from orchestrator import npm_installs, run_reading, spike_brief
 from orchestrator.root import REPO_ROOT
 
 
@@ -57,7 +57,7 @@ def script_paid_words(monkeypatch: pytest.MonkeyPatch) -> None:
 def _render(tmp_path: Path, overview: str, rows: list[dict[str, str]]) -> str:
     loader = subprocess.run(
         [
-            str(REPO_ROOT / ".venv/bin/onepipeline"),
+            str(npm_installs.ENGINE),
             "template",
             "resolve",
             "spike-brief",
@@ -252,7 +252,7 @@ def test_engine_launches_one_detached_codex_writer_for_six_actual_agents(
         assert "existing receipt belongs to another flow" in foreign.stderr, foreign.stderr
         assert spike_brief.read(tmp_path / "runs/probe" / spike_brief.RECEIPT) == receipt
         amended = subprocess.run(
-            [str(REPO_ROOT / ".venv/bin/onepipeline"), "reply", writer],
+            [str(npm_installs.ENGINE), "reply", writer],
             input=json.dumps(
                 {
                     "version": 3,
@@ -269,7 +269,7 @@ def test_engine_launches_one_detached_codex_writer_for_six_actual_agents(
         assert "applied" in amended.stdout
         owed = subprocess.run(
             [
-                str(REPO_ROOT / ".venv/bin/onepipeline"),
+                str(npm_installs.ENGINE),
                 "unwatched",
                 "--session",
                 "spike-brief-probe",
@@ -320,7 +320,7 @@ def test_engine_launches_one_detached_codex_writer_for_six_actual_agents(
         assert len(list((tmp_path / "runs").glob("*/launch.json"))) == 1
         answer = subprocess.run(
             [
-                str(REPO_ROOT / ".venv/bin/onepipeline"),
+                str(npm_installs.ENGINE),
                 "unwatched",
                 "--session",
                 "spike-brief-probe",
@@ -336,7 +336,7 @@ def test_engine_launches_one_detached_codex_writer_for_six_actual_agents(
         (gate / "released").touch()
         if (tmp_path / "runs" / writer / "launch.json").exists():
             stopped = subprocess.run(
-                [str(REPO_ROOT / ".venv/bin/onepipeline"), "stop", writer],
+                [str(npm_installs.ENGINE), "stop", writer],
                 capture_output=True,
                 text=True,
                 timeout=60,
@@ -499,7 +499,7 @@ def test_the_resolved_template_digest_is_held_to_the_spike_brief_template(
 
     resolved = subprocess.run(
         [
-            str(REPO_ROOT / ".venv/bin/onepipeline"),
+            str(npm_installs.ENGINE),
             "template",
             "resolve",
             "spike-brief",
@@ -693,7 +693,7 @@ def write_invalid_document(tmp_path: Path, fault: str) -> None:
         old_template.write_text(old_template.read_text() + "\n{# Previous guidance revision. #}\n")
         resolved = subprocess.run(
             [
-                str(REPO_ROOT / ".venv/bin/onepipeline"),
+                str(npm_installs.ENGINE),
                 "template",
                 "resolve",
                 "spike-brief",
@@ -800,7 +800,12 @@ def test_real_stored_document_boundary_refuses_invalid_briefs(
     deadline = time.monotonic() + 60
     while True:
         status = subprocess.run(
-            [str(REPO_ROOT / ".venv/bin/onepipeline"), "status", receipt["writer_run"], "--json"],
+            [
+                str(npm_installs.ENGINE),
+                "status",
+                receipt["writer_run"],
+                "--json",
+            ],
             capture_output=True,
             text=True,
             timeout=30,
@@ -833,7 +838,7 @@ def test_real_stored_document_boundary_refuses_invalid_briefs(
 
 def _engine(*argv: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [str(REPO_ROOT / ".venv/bin/onepipeline"), *argv],
+        [str(npm_installs.ENGINE), *argv],
         capture_output=True,
         text=True,
         timeout=60,

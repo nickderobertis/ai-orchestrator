@@ -52,9 +52,10 @@ import pytest
 from unpublished_registry import BASE, Registry, Session, commit_on, git, seeded
 from waits import timeout as e2e_timeout
 
+from orchestrator import npm_installs
 from orchestrator.root import REPO_ROOT
 
-ONEPIPELINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
+ONEPIPELINE = npm_installs.ENGINE
 ONEVCS = REPO_ROOT / ".venv" / "bin" / "onevcs"
 SETTINGS = REPO_ROOT / ".claude" / "settings.json"
 #: The drafter graph every landing command the engine prints has to run.
@@ -833,15 +834,20 @@ def test_the_own_sessions_read_lists_only_its_own_branches_at_this_hosts_scale(
     )
 
 
-def _scratch_checkout(root: Path, helper: str | None = None) -> Path:
+def _scratch_checkout(root: Path, helper: str | None = None, *, engine: bool = True) -> Path:
     """A checkout holding the real justfile, the wrapper, the helper, the modules
-    `unfinished.py` loads and the drafter graph, and no `.venv`.
+    `unfinished.py` loads, the drafter graph and — unless ``engine`` is false — the
+    installed engine where `bun.lock` puts it, and no `.venv`.
 
     With no `.venv/bin` beside the module, the interpreter is the `python3` on the search
-    path and the engine the `onepipeline` there — the one place a journey can hand it an
-    engine that answers wrong. ``helper`` replaces the identity helper's text, and the
-    empty string leaves it out.
+    path; the engine is only ever the checkout's own, which is the one place a journey can
+    hand it an engine that answers wrong. ``helper`` replaces the identity helper's text,
+    and the empty string leaves it out.
     """
+    if engine:
+        locked = npm_installs.platform_binary(node_modules=root / "node_modules")
+        locked.parent.mkdir(parents=True)
+        locked.symlink_to(ONEPIPELINE)
     (root / "scripts").mkdir(parents=True)
     (root / "orchestrator").mkdir()
     (root / "graphs").mkdir()
@@ -859,23 +865,36 @@ def _scratch_checkout(root: Path, helper: str | None = None) -> Path:
         )
     # llmlint: ignore-end[e2e_not_mocked]
     # `unfinished.py` reads the spike-brief receipts through `spike_brief.py`, which reads
-    # run state through `run_reading.py`; both load under the system interpreter as well.
-    for module in ("unfinished.py", "spike_brief.py", "run_reading.py", "root.py"):
+    # run state through `run_reading.py`, and both resolve the engine through
+    # `npm_installs.py`; each loads under the system interpreter as well.
+    for module in (
+        "unfinished.py",
+        "spike_brief.py",
+        "run_reading.py",
+        "npm_installs.py",
+        "root.py",
+    ):
         shutil.copy2(REPO_ROOT / "orchestrator" / module, root / "orchestrator" / module)
     return root / "scripts" / "unfinished.sh"
 
 
-def _search_path(root: Path, *, engine: bool = True, python: bool = True) -> Path:
-    """A search path of exactly the tools a run of the wrapper needs.
+#: What the decoy `onepipeline` on every wrapper journey's search path says when reached.
+DECOY = "decoy onepipeline ahead of the locked one"
 
-    The installed `onevcs` and `onepipeline` — the engine left out when ``engine`` is
-    false — `python3` unless ``python`` is false, and what the wrapper and `onevcs` spawn.
+
+def _search_path(root: Path, *, python: bool = True) -> Path:
+    """A search path of exactly the tools a run of the wrapper needs, led by a decoy engine.
+
+    The installed `onevcs`, a decoy `onepipeline` that refuses every verb — so a journey
+    answering at all proves the view asked the checkout's locked engine instead — `python3`
+    unless ``python`` is false, and what the wrapper and `onevcs` spawn.
     """
     tools = root / "bin"
     tools.mkdir(parents=True)
     (tools / "onevcs").symlink_to(ONEVCS)
-    if engine:
-        (tools / "onepipeline").symlink_to(ONEPIPELINE)
+    decoy = tools / "onepipeline"
+    decoy.write_text(f"#!/bin/sh\necho '{DECOY}' >&2\nexit 97\n", encoding="utf-8")
+    decoy.chmod(0o755)
     for tool in (
         "bash",
         "dirname",
@@ -927,9 +946,10 @@ def test_an_engine_that_cannot_answer_is_never_nothing_owed(
 ) -> None:
     """Through the real wrapper: the unwatched half fails, the status says so, and the
     unpublished half that did answer is still shown."""
-    script = _scratch_checkout(tmp_path / "checkout")
-    tools = _search_path(tmp_path, engine=False)
-    stand_in = tools / "onepipeline"
+    script = _scratch_checkout(tmp_path / "checkout", engine=False)
+    tools = _search_path(tmp_path)
+    stand_in = npm_installs.platform_binary(node_modules=tmp_path / "checkout" / "node_modules")
+    stand_in.parent.mkdir(parents=True)
     stand_in.write_text(
         f'#!/bin/sh\nif [ "$1" = unwatched ]; then {engine}; fi\nexec {ONEPIPELINE} "$@"\n',
         encoding="utf-8",
@@ -946,10 +966,12 @@ def test_an_engine_that_cannot_answer_is_never_nothing_owed(
 
 
 def test_a_missing_engine_leaves_both_halves_unanswered(world: World, tmp_path: Path) -> None:
-    script = _scratch_checkout(tmp_path / "checkout")
-    done = _wrapper(world, tmp_path, script, _search_path(tmp_path, engine=False))
+    """The decoy leading the search path is never asked in the locked engine's place."""
+    script = _scratch_checkout(tmp_path / "checkout", engine=False)
+    done = _wrapper(world, tmp_path, script, _search_path(tmp_path))
     assert done.returncode == UNANSWERED, done.stderr
     assert done.stderr.count("found no `onepipeline`") == 2 and done.stdout == ""
+    assert DECOY not in done.stderr
 
 
 @pytest.mark.parametrize(
@@ -980,7 +1002,7 @@ def test_the_wrapper_runs_under_the_system_interpreter_and_refuses_without_one(
     script = _scratch_checkout(tmp_path / "checkout")
     found = _wrapper(world, tmp_path / "with", script, _search_path(tmp_path / "with"))
     assert found.returncode == UNPUBLISHED, found.stderr
-    assert world.unlanded.branch in found.stdout
+    assert world.unlanded.branch in found.stdout and DECOY not in found.stderr
 
     path = _search_path(tmp_path / "without", python=False)
     missing = _wrapper(world, tmp_path / "without", script, path)

@@ -56,7 +56,7 @@ from project_fixtures import project_from_plan, reviewed
 from scratch_identity import GIT_IDENTITY, registered, rules_for_hosted, seeded
 from waits import timeout as e2e_timeout
 
-from orchestrator import host_installs, plan_store, task_body
+from orchestrator import host_installs, npm_installs, plan_store, task_body
 from orchestrator.criteria_guard import (
     APPENDIX,
     AUTHORIZATIONS,
@@ -1933,7 +1933,7 @@ def _loaded_plan(project: str, root: Path) -> str:
     )
     recorder.chmod(0o755)
     read = subprocess.run(
-        ["uv", "run", "onepipeline", "plan", "check", project, "--check", str(recorder)],
+        [str(npm_installs.ENGINE), "plan", "check", project, "--check", str(recorder)],
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,
@@ -2097,7 +2097,7 @@ def test_the_registered_check_reports_a_plan_it_cannot_read_as_unrunnable(tmp_pa
     project = reviewed(project_from_plan(_plan(tmp_path, STATES_ITS_BAR)))
 
     read = subprocess.run(
-        ["uv", "run", "onepipeline", "plan", "check", project, "--check", str(refusing), "--json"],
+        [str(npm_installs.ENGINE), "plan", "check", project, "--check", str(refusing), "--json"],
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,
@@ -2482,17 +2482,16 @@ def test_a_title_the_destinations_own_hook_refuses_is_refused_before_the_launch(
     assert "it did not run" in refused.stderr, refused.stderr
 
 
-def test_a_node_consuming_a_release_its_identity_never_publishes_is_refused_at_the_loader(
+def test_a_node_consuming_a_release_its_identity_never_publishes_is_refused_by_this_host(
     tmp_path: Path,
 ) -> None:
     """The other refusal a whole dispatch was paid for, and which side now makes it.
 
     A node consuming a release target on an identity that opens no change request is
     waiting on a publication that identity never makes — one ran an hour and thirty-six
-    minutes before anything said so. This repository refused it before the engine did;
-    the adopted engine's loader refuses it itself, which is strictly better, because a
-    refusal the loader makes is one `onepipeline start` makes too rather than one a
-    pre-launch read has to remember.
+    minutes before anything said so. The adopted engine's loader accepts it since
+    onepipeline 0.94.0, which holds such a node's landing until the release instead, so
+    this host's registered check is the side that refuses it, after the loader passed.
 
     Driven beside the title journey above rather than folded into it: each is refused on
     its own, and a plan carrying both would prove only that whichever the loader reached
@@ -2520,12 +2519,12 @@ def test_a_node_consuming_a_release_its_identity_never_publishes_is_refused_at_t
     assert "consumer: consumes:" in refused.stderr, refused.stderr
     assert "local-direct" in refused.stderr, refused.stderr
     assert "opens no change request" in refused.stderr, refused.stderr
-    # Which side refused it, and what that left undone. Both are what a reader of this
-    # output has to be able to tell: an engine refusal and a registered check's refusal
-    # are corrected in different places, and a check that did not run is not a check
-    # that passed.
-    assert "check-plan: engine:" in refused.stderr, refused.stderr
-    assert "it did not run" in refused.stderr, refused.stderr
+    # Which side refused it is what a reader of this output has to be able to tell: an
+    # engine refusal and a registered check's refusal are corrected in different places.
+    assert "check-plan: scripts/plan-check.sh: consumer: consumes:" in refused.stderr, (
+        refused.stderr
+    )
+    assert "check-plan: engine:" not in refused.stderr, refused.stderr
 
 
 def test_a_stated_change_request_policy_lets_a_local_direct_node_consume_a_release(
@@ -2825,8 +2824,9 @@ def test_a_node_consuming_a_release_its_identity_really_publishes_is_not_refused
     assert "2 dispatched node(s)" in accepted.stdout, accepted.stdout
 
 
-#: A wheel this host installs, as `host_installs` names it, and two artifacts it does
-#: not: what a scratch producer declares so a node can wait on either kind.
+#: The engine's npm package, which this host installs as `host_installs` names it, and
+#: two artifacts it does not — the engine's wheel and its crate: what a scratch producer
+#: declares so a node can wait on either kind.
 WHEEL = ("pypi", "pypi:onepipeline-cli")
 CRATE = ("crate", "crate:onepipeline")
 NPM = ("npm", "npm:onepipeline-cli")
@@ -2983,9 +2983,9 @@ def test_a_node_of_this_repository_resolving_a_crate_is_refused_naming_the_judge
 ) -> None:
     """R5: a crate reaches nothing a dispatch here runs, and the pin question is the judge's.
 
-    The scratch producer declares what the engine's real producer declares — a crate,
-    the wheel `host_installs` names, and an npm launcher — so the artifact the refusal
-    names is one the real verb read off a real declaration.
+    The scratch producer declares what the engine's real producer declares — a crate, a
+    wheel, and the npm package `host_installs` names — so the artifact the refusal names
+    is one the real verb read off a real declaration.
     """
     registered(
         tmp_path / "registry", ["library"], declarations={"library": _declaring(CRATE, WHEEL, NPM)}
@@ -2999,9 +2999,9 @@ def test_a_node_of_this_repository_resolving_a_crate_is_refused_naming_the_judge
         refused.stderr
     )
     assert "`crate:onepipeline`" in refused.stderr, refused.stderr
-    assert "engine wheel" in refused.stderr, refused.stderr
+    assert "engine's npm package" in refused.stderr, refused.stderr
     assert "`just review-plan`'s question" in refused.stderr, refused.stderr
-    assert host_installs.by_artifact(WHEEL[1]) is not None, "the pass case below names no wheel"
+    assert host_installs.by_artifact(NPM[1]) is not None, "the pass case below names no package"
 
 
 @pytest.mark.parametrize(
@@ -3014,13 +3014,13 @@ def test_a_node_of_this_repository_resolving_a_crate_is_refused_naming_the_judge
         ),
     ),
 )
-def test_a_node_of_this_repository_adopting_a_wheel_is_accepted_whatever_its_criteria_say(
+def test_a_node_of_this_repository_adopting_its_package_is_accepted_whatever_its_criteria_say(
     tmp_path: Path, criteria: str
 ) -> None:
     """The correction R5 names, and the line this tier does not cross.
 
     Two fixtures differing only in whether the criteria name the `config/<pin>.version`
-    the wheel governs, and both pass: no rule of this module reads a task's prose, so
+    the npm package governs, and both pass: no rule of this module reads a task's prose, so
     whether the pin named is the right one for the fix is `just review-plan`'s question
     and never this recipe's refusal.
     """
@@ -3031,7 +3031,7 @@ def test_a_node_of_this_repository_adopting_a_wheel_is_accepted_whatever_its_cri
         repo=THIS_REPOSITORY,
         adoption="published",
         merge_policy="change-open",
-        consumes={"producer": "pypi"},
+        consumes={"producer": "npm"},
         task=_task(criteria),
     )
 
@@ -3622,9 +3622,8 @@ def test_a_release_this_host_cannot_ask_about_refuses_nothing(
         # llmlint: ignore-end[e2e_not_mocked]
         path = f"{binary}{os.pathsep}{os.environ['PATH']}"
     else:
-        engine = shutil.which("onepipeline")
-        assert engine is not None, "the installed engine is what the check reads the bar from"
-        (binary / "onepipeline").symlink_to(engine)
+        # The locked engine, never one a caller's PATH offers first.
+        (binary / "onepipeline").symlink_to(npm_installs.ENGINE)
         store = shutil.which("onetaskgraph")
         assert store is not None, "the installed store is what the check reads the plan record from"
         (binary / "onetaskgraph").symlink_to(store)

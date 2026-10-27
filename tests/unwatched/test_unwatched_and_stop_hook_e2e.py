@@ -56,7 +56,7 @@ from orchestrator.root import REPO_ROOT
 #: The engine this checkout installs from its own pin. Named as a path rather than
 #: resolved off `PATH`, because a journey that measured whichever copy some other
 #: checkout left on the search path would be a journey about that checkout.
-ONEPIPELINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
+ONEPIPELINE = REPO_ROOT / "node_modules" / ".bin" / "onepipeline"
 
 #: The settings file whose `Stop` entry every hook journey below runs.
 SETTINGS = REPO_ROOT / ".claude" / "settings.json"
@@ -479,6 +479,10 @@ def test_a_listing_answers_from_the_summary_document_without_opening_the_event_s
         # fold — and folding is what this journey says the served path does not do.
         stored["journal_len"] = int(stored["journal_len"]) + 1
         document.write_text(json.dumps(stored), encoding="utf-8")
+        # From onepipeline 0.95.0 a fold resumes from the run's checkpoint rather than
+        # from byte 0, so the checkpoint goes too: the figure must have no source left
+        # but the document this control has just made stale.
+        (owned.root / "listed" / "checkpoint.json").unlink(missing_ok=True)
         folded = _verb("runs", "--mine", environment=_environment(owned))
         assert counted not in _row(folded.stdout, "listed"), (
             "the same listing rendered the same figure with the document no longer "

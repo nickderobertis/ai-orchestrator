@@ -73,7 +73,7 @@ import probe_run_root
 import pytest
 from test_linked_libraries import _linked_version
 
-from orchestrator import follow_up_drafts, spike_flow
+from orchestrator import follow_up_drafts, npm_installs, spike_flow
 from orchestrator.root import REPO_ROOT
 
 pytestmark = pytest.mark.reads_checkouts
@@ -4029,7 +4029,7 @@ def test_the_drafter_starts_from_sections_the_pinned_engine_composes() -> None:
     description the worker had begun.
     """
     prompt = (REPO_ROOT / "graphs" / "pr-author.yaml").read_text(encoding="utf-8")
-    engine = (REPO_ROOT / ".venv" / "bin" / "onepipeline").read_bytes()
+    engine = npm_installs.platform_binary().read_bytes()
     for heading in DRAFTING_STARTING_POINTS:
         assert f"`{heading}`" in prompt, (
             f"graphs/pr-author.yaml no longer names {heading!r} in backticks, so this gate "
@@ -4089,7 +4089,7 @@ def test_each_drafting_graph_reads_literals_the_pinned_engine_composes(
     # The two-line sentence is wrapped in the prompt's block scalar, so the prompt is
     # compared with its whitespace collapsed.
     prompt = " ".join((REPO_ROOT / "graphs" / graph).read_text(encoding="utf-8").split())
-    engine = (REPO_ROOT / ".venv" / "bin" / "onepipeline").read_bytes()
+    engine = npm_installs.platform_binary().read_bytes()
     for literal in literals:
         assert f"`{literal}`" in prompt, (
             f"graphs/{graph} no longer names {literal!r} in backticks, so this gate reads a "

@@ -18,6 +18,7 @@
       "{workspaceRoot}/config/plan-checklist.llmlint.yml",
       "{workspaceRoot}/scripts/require-provisioned.sh",
       "{workspaceRoot}/scripts/planner-surface.sh",
+      "{workspaceRoot}/scripts/npm-binary.sh",
       "{workspaceRoot}/scripts/new-persona.sh",
       "{workspaceRoot}/scripts/telemetry-server.sh",
       "{workspaceRoot}/scripts/smoke.sh",
@@ -51,8 +52,10 @@
       "{workspaceRoot}/scripts/repos.sh",
       "{workspaceRoot}/scripts/recoverable.sh",
       "{workspaceRoot}/scripts/host-sweep.sh",
+      "{workspaceRoot}/orchestrator/npm_installs.py",
       "{workspaceRoot}/orchestrator/plan_units.py",
       "{workspaceRoot}/orchestrator/project_store.py",
+      "{workspaceRoot}/orchestrator/root.py",
       "{projectRoot}/project.json"
     ]
   },

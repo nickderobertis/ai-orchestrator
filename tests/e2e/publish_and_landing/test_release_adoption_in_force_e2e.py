@@ -5,7 +5,7 @@ release this host installed contained, and then — once all three of its halves
 adopted — a host on which nothing used it. It now makes the pair of claims this journey
 holds it to: that this host **can** perform them, and that this host's tracked override,
 `config/onevcs.releases.yml`, **configures** them — a default target per producer this
-host installs, the wheel it installs, and per producer in `CONSUMER_DEFAULTS`, the
+host installs, the package it installs, and per producer in `CONSUMER_DEFAULTS`, the
 artifact a consumer outside this repository waits on, and the `published` rung for this
 repository. Both are invisible from a
 run: a plan of this repository executes identically whether its nodes wait on a release
@@ -19,7 +19,7 @@ loader that reads a plan:
   has to carry the `release` verb group for a target to be configurable at all;
 * that the same CLI reports **no release targets** for this repository and the
   `published` rung for it, reports the set of registered repositories that do declare
-  one, and resolves for each producer this host installs the wheel it installs as that
+  one, and resolves for each producer this host installs the package it installs as that
   producer's default target, and for each producer in `CONSUMER_DEFAULTS` the artifact
   its own declaration names — which is what makes "a node of this repository waits on
   a release by depending on the producer's node" a measurement rather than an
@@ -77,6 +77,7 @@ from sibling_facts import (
 from test_linked_libraries import LINKED_IN_BINARY, Release
 from waits import timeout as e2e_timeout
 
+from orchestrator import npm_installs
 from orchestrator.root import REPO_ROOT
 
 #: The release that added `onevcs release` and the release-target document behind it,
@@ -127,13 +128,13 @@ RELEASE_SUBCOMMANDS = (
 #: measures is the copy a manager would actually get.
 ONEVCS = ("uv", "run", "onevcs")
 
-#: The engine binary a dispatch runs, installed by session setup into this checkout's
-#: own environment.
-ENGINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
-#: How the recipes reach the read API, which is the view half's own artifact: the same
-#: `uv run` `scripts/telemetry-server.sh` ends in, so this measures the copy an
+#: The engine binary a dispatch runs: the one the platform package `bun.lock` installs
+#: from npmjs.com carries for this host.
+ENGINE = npm_installs.ENGINE
+#: How the recipes reach the read API, which is the view half's own artifact: the
+#: platform binary `scripts/telemetry-server.sh` execs, so this measures the copy an
 #: operator would serve rather than whatever else is on PATH.
-READ_API = ("uv", "run", "onepipeline-api")
+READ_API = (str(npm_installs.READ_API),)
 
 #: This repository, as `onevcs` resolves it. Asked about itself rather than about a
 #: sibling because it is the one identity this checkout is guaranteed to be inside.
@@ -494,7 +495,7 @@ def test_which_registered_repositories_declare_a_release_target() -> None:
 def test_this_host_resolves_what_the_tracked_override_configures() -> None:
     """The override's answer on this host, once `just repos-apply` has put it in force.
 
-    Each producer this host installs resolves the wheel it installs as its default
+    Each producer this host installs resolves the package it installs as its default
     target — the row `orchestrator/host_installs.py` gives it — each producer in its
     `CONSUMER_DEFAULTS` resolves the artifact the override names, and this repository
     resolves the `published` rung, while every other registered identity stays on the
@@ -656,11 +657,11 @@ def test_the_plan_loader_reads_consumes_against_the_nodes_own_dependencies(
 def test_the_read_api_the_view_is_served_from_is_the_adopted_release() -> None:
     """The third half is two artifacts of one release, and this is the one with a CLI.
 
-    `config/onepipeline-ui.version` names a release published as both a wheel and an
-    npm package, and only the wheel can be asked its own version — the wheel that also
-    carries the view, since `serve --ui`. The bundle half is read where it is served, in
-    `tests/dag_ui/test_dag_ui_serving_e2e.py`, which is the only place a bundle can
-    honestly be asked anything.
+    `config/onepipeline-ui.version` names a release published as two npm packages, the
+    `onepipeline-api-cli` binary and the `onepipeline-ui` bundle, and only the binary can
+    be asked its own version — the binary that also carries the view, since `serve --ui`.
+    The bundle half is read where it is served, in `tests/dag_ui/test_dag_ui_serving_e2e.py`,
+    which is the only place a bundle can honestly be asked anything.
     """
     adopted = (REPO_ROOT / "config" / "onepipeline-ui.version").read_text("utf-8").strip()
     assert Release.parse(adopted, "config/onepipeline-ui.version") >= RELEASE_VIEW_FLOOR, (

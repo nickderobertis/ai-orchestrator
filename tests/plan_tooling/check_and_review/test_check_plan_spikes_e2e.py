@@ -55,7 +55,7 @@ def _boundary_answers(monkeypatch: pytest.MonkeyPatch) -> None:
 _SEQUENCE = itertools.count()
 
 #: The pinned engine, which states each template as a loader document.
-ENGINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
+ENGINE = REPO_ROOT / "node_modules" / ".bin" / "onepipeline"
 
 #: The one repository the plans here change and measure.
 REPOSITORY = "github.com/nickderobertis/some-service"

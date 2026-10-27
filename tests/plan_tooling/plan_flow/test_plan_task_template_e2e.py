@@ -28,7 +28,7 @@ from typing import NamedTuple
 import plan_root_variable
 import pytest
 from fake_backend import AUTHOR_PLAN_ENV, PROMPT_LOG_ENV, RUN_ON_MARKER_ENV
-from published_tools import ONETASKGRAPH_BIN
+from published_tools import LOCKED_INSTALLS_PATH, ONETASKGRAPH_BIN
 from scratch_identity import PLANNING_FLOW_ORIGIN
 from test_plan_flow_e2e import (
     DESIGN_RUN_SUFFIX,
@@ -56,7 +56,7 @@ AUTHORING = "authoring"
 AUTHORING_ROOT = plan_root_variable.name()
 
 #: The pinned engine, which states the template as a loader document.
-ENGINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
+ENGINE = REPO_ROOT / "node_modules" / ".bin" / "onepipeline"
 
 #: The provenance key the plan store records and the reference the engine's loader
 #: document names for a registered task template.
@@ -385,7 +385,7 @@ def regenerated(authored: Authored) -> Regenerated:
         ],
         env={
             **os.environ,
-            "PATH": f"{REPO_ROOT / '.venv' / 'bin'}{os.pathsep}{os.environ['PATH']}",
+            "PATH": f"{LOCKED_INSTALLS_PATH}{os.pathsep}{os.environ['PATH']}",
             "ONEPIPELINE_TEMPLATE_ROOT": str(REPO_ROOT / "templates"),
         },
         cwd=REPO_ROOT,

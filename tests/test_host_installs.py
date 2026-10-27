@@ -1,9 +1,10 @@
 """The table of what this host installs, held to every copy of it.
 
-`orchestrator/host_installs.py` states, per producer, which wheel this host installs,
+`orchestrator/host_installs.py` states, per producer, which artifact this host installs,
 what the producer's own declaration calls it, and which `config/<pin>.version` it
 governs. Three other places this repository writes carry a piece of that same answer —
-`pyproject.toml`'s pinned distributions, the `config/*.version` files, and
+`pyproject.toml`'s pinned distributions (`package.json`'s for the two ``npm:`` rows),
+the `config/*.version` files, and
 `config/onevcs.releases.yml`'s ``default_target`` per producer — and a piece that moved
 in one of them without the table is the drift a `published` node would then wait on:
 the wrong artifact, or one no release carries. Those are reconciled in the cached tier.
@@ -19,6 +20,7 @@ change that edits the registration and is reported, not failed, for any other.
 from __future__ import annotations
 
 import importlib.metadata
+import json
 import tomllib
 import warnings
 from pathlib import Path
@@ -54,11 +56,12 @@ from orchestrator.root import REPO_ROOT
 
 #: The rows this table is fixed to, stated here in full rather than derived from the
 #: module: a test that read them out of the code under test would hold the module to
-#: itself. Ten producers, the override's order, the engine wheel alone marked as what a
-#: dispatch runs, and `llmlint` alone governed by no pin, naming its installer instead.
+#: itself. Ten producers, the override's order, the engine alone marked as what a
+#: dispatch runs, the engine and the read API alone installed from npm, and `llmlint`
+#: alone governed by no pin, naming its installer instead.
 EXPECTED_ROWS = (
     Installed(
-        "github.com/nickderobertis/onepipeline", "pypi", "pypi:onepipeline-cli", "onepipeline", True
+        "github.com/nickderobertis/onepipeline", "npm", "npm:onepipeline-cli", "onepipeline", True
     ),
     Installed("github.com/nickderobertis/onevcs", "pypi", "pypi:onevcs-cli", "onevcs", False),
     Installed(
@@ -85,8 +88,8 @@ EXPECTED_ROWS = (
     ),
     Installed(
         "github.com/nickderobertis/onepipeline-ui",
-        "pypi-cli",
-        "pypi:onepipeline-api-cli",
+        "npm-cli",
+        "npm:onepipeline-api-cli",
         "onepipeline-ui",
         False,
     ),
@@ -115,6 +118,7 @@ EXPECTED_ROWS = (
 )
 
 PYPROJECT = REPO_ROOT / "pyproject.toml"
+PACKAGE_JSON = REPO_ROOT / "package.json"
 VERSION_FILES = REPO_ROOT / "config"
 RELEASES = REPO_ROOT / "config" / "onevcs.releases.yml"
 
@@ -202,6 +206,9 @@ def test_a_row_names_a_pin_or_an_installer_and_never_both() -> None:
     assert {
         _distribution(row) for row in INSTALLED if row.installer is not None
     } == INSTALLED_OUTSIDE_PYPROJECT
+    assert not [row for row in INSTALLED if _registry(row) == "npm" and row.installer], (
+        "an npm row is installed by bun.lock and names no installer"
+    )
 
 
 def _pinned_distributions() -> dict[str, str]:
@@ -215,14 +222,58 @@ def _pinned_distributions() -> dict[str, str]:
     return pinned
 
 
-def _distribution(row: Installed) -> str:
-    """The distribution name a row's `pypi:<name>` artifact installs."""
-    registry, separator, name = row.artifact.partition(":")
-    assert separator and registry == "pypi", (
-        f"{row.producer}'s artifact {row.artifact!r} is not a PyPI distribution, and the "
-        "wheel is the one artifact this host installs from a producer"
+def _registry(row: Installed) -> str:
+    """The registry a row's `<registry>:<name>` artifact is installed from."""
+    registry, separator, _ = row.artifact.partition(":")
+    assert separator and registry in {"pypi", "npm"}, (
+        f"{row.producer}'s artifact {row.artifact!r} is neither a PyPI distribution nor an "
+        "npm package, the two kinds of artifact this host installs from a producer"
     )
-    return name
+    return registry
+
+
+def _distribution(row: Installed) -> str:
+    """The distribution or package name a row's `<registry>:<name>` artifact installs."""
+    _registry(row)
+    return row.artifact.partition(":")[2]
+
+
+def _npm_dependencies() -> dict[str, str]:
+    """Every runtime dependency `package.json` pins, by name."""
+    dependencies: dict[str, str] = json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))[
+        "dependencies"
+    ]
+    return dependencies
+
+
+#: The runtime npm dependency that is not a row's artifact: the browser bundle of the read
+#: API's own release, which `tests/test_published_tools.py` holds to that release's pin.
+NPM_BESIDE_A_ROW = frozenset({"onepipeline-ui"})
+
+
+def test_npm_rows_are_exactly_the_runtime_npm_dependencies_at_their_pins() -> None:
+    """`package.json` and the table name the same npm packages, both ways round.
+
+    An npm row is installed by `bun.lock` at the release its `config/<pin>.version` names,
+    so `package.json` pins its package exactly there, and nothing it pins at runtime is
+    unaccounted for. No npm row is pinned in `pyproject.toml`, which installs from PyPI.
+    """
+    dependencies = _npm_dependencies()
+    rows = {_distribution(row): row for row in INSTALLED if _registry(row) == "npm"}
+    assert set(dependencies) - NPM_BESIDE_A_ROW == set(rows), (
+        f"package.json pins {sorted(dependencies)} at runtime, and the table's npm rows "
+        f"are {sorted(rows)}"
+    )
+    for package, row in rows.items():
+        pinned = (VERSION_FILES / f"{row.pin}.version").read_text(encoding="utf-8").strip()
+        assert dependencies[package] == pinned, (
+            f"package.json pins {package} at {dependencies[package]}, and its row's "
+            f"config/{row.pin}.version names {pinned}"
+        )
+    assert not set(rows) & set(_pinned_distributions()), (
+        f"pyproject.toml pins {sorted(set(rows) & set(_pinned_distributions()))}, which this "
+        "host installs from npm"
+    )
 
 
 def test_every_pin_file_has_a_row_and_every_pinned_row_a_pin_file() -> None:
@@ -245,7 +296,7 @@ def test_pinned_wheels_are_rows_and_rows_are_pinned_or_a_stated_exception() -> N
     the wheels and named as the library it is.
     """
     pinned = _pinned_distributions()
-    wheels = {_distribution(row) for row in INSTALLED}
+    wheels = {_distribution(row) for row in INSTALLED if _registry(row) == "pypi"}
 
     carried: dict[str, str] = {}
     for sdk, wheel in SDK_CARRYING_A_ROWS_WHEEL.items():
@@ -538,7 +589,7 @@ def test_a_producer_gaining_targets_and_a_language_since_registration_contradict
         _checkout(manifest, row.producer),
         {
             "release-targets.toml": declaration(
-                {row.target: row.artifact, "crate": "crate:scratch", "npm": "npm:@scratch/cli"}
+                {row.target: row.artifact, "crate": "crate:scratch", "pypi": "pypi:scratch-cli"}
             ),
             "Cargo.toml": '[workspace]\nmembers = ["crates/*"]\n',
         },
@@ -547,7 +598,7 @@ def test_a_producer_gaining_targets_and_a_language_since_registration_contradict
     assert declared_targets(_checkout(manifest, row.producer)) == {
         row.target: row.artifact,
         "crate": "crate:scratch",
-        "npm": "npm:@scratch/cli",
+        "pypi": "pypi:scratch-cli",
     }
     assert _contradictions(manifest) == []
     with warnings.catch_warnings():

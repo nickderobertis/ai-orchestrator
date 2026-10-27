@@ -123,7 +123,9 @@ def _recorded_run(bench: Bench, run: str) -> None:
 
 def _engine_public_id(bench: Bench, run: str) -> str:
     """The public id the installed engine names ``run`` by: the journey's oracle."""
-    read = _run([str(REPO_ROOT / ".venv" / "bin" / "onepipeline"), "status", run, "--json"], bench)
+    read = _run(
+        [str(REPO_ROOT / "node_modules" / ".bin" / "onepipeline"), "status", run, "--json"], bench
+    )
     assert read.returncode == 0, read.stdout + read.stderr
     reading = json.loads(read.stdout)
     assert reading["word"] == "SETTLED", reading

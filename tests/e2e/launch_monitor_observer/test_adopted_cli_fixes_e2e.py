@@ -94,6 +94,7 @@ from project_fixtures import helper
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
+from orchestrator import npm_installs
 from orchestrator.project_store import publish_record, read_records
 from orchestrator.root import REPO_ROOT
 
@@ -192,8 +193,11 @@ class SettleEnvelope(TypedDict):
 
 
 def _installed(binary: str, pin: str) -> Path:
-    """The installed `binary`, failing unless it reports the release `config/<pin>.version` pins."""
-    path = INSTALLED / binary
+    """The installed `binary`, failing unless it reports the release `config/<pin>.version` pins.
+
+    The engine is the platform binary `bun.lock` installs; every other CLI is `uv.lock`'s.
+    """
+    path = npm_installs.ENGINE if binary == "onepipeline" else INSTALLED / binary
     adopted = (REPO_ROOT / "config" / f"{pin}.version").read_text(encoding="utf-8").strip()
     assert path.exists(), f"no {binary} at {path}; run `scripts/session-setup.sh`"
     reported = subprocess.run(

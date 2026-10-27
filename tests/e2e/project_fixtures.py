@@ -472,7 +472,7 @@ def approved(project: str) -> str:
 
 #: The pinned engine, whose `template resolve` states the design-doc template a fixture's
 #: document is rendered from.
-_ENGINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
+_ENGINE = REPO_ROOT / "node_modules" / ".bin" / "onepipeline"
 
 
 def _designed(native: str) -> None:

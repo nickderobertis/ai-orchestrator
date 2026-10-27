@@ -50,6 +50,7 @@
       "{workspaceRoot}/pyproject.toml",
       "{workspaceRoot}/scripts/ask-manager-env.sh",
       "{workspaceRoot}/scripts/ask-manager.sh",
+      "{workspaceRoot}/scripts/npm-binary.sh",
       "{workspaceRoot}/scripts/claude-alt-config-dir.sh",
       "{workspaceRoot}/scripts/codex-alt-home.sh",
       "{workspaceRoot}/scripts/credentials-env.sh",

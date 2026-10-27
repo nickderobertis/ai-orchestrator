@@ -29,9 +29,10 @@
   `onepipeline: engine requested <pin> (config/onepipeline.version), about to run
   <reported> (<binary>)`. Nothing installs, restores, or refuses a mismatched pair — which
   pair is expected is the manager's call. By hand, from the checkout root:
-  1. `uv pip install --python .venv/bin/python onepipeline-cli==<version>`.
-  2. Launch with `UV_NO_SYNC=1`: the design-approval gate ahead of `start` is a `uv run`,
-     which re-syncs the pin.
+  1. `bun add --exact --no-save onepipeline-cli@<version>`, which installs it into this
+     checkout's `node_modules` without rewriting `package.json` or `bun.lock`.
+  2. Launch: `scripts/onepipeline.sh` runs the platform binary that install put under
+     `node_modules`, which nothing before `start` reinstalls.
   3. `about to run` differing from `requested` is the proof on the installed release; the
      two agreeing means the install did not survive and the verdict says nothing about it.
   4. `just bootstrap` afterwards puts the pin back.

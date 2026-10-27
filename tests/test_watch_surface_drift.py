@@ -95,7 +95,7 @@ ENGINE_PIN = "config/onepipeline.version"
 #: The engine this host installed, read from this checkout's own environment rather
 #: than from PATH: a sibling checkout's copy is a different release and would be
 #: reconciled against the wrong surface.
-ENGINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
+ENGINE = REPO_ROOT / "node_modules" / ".bin" / "onepipeline"
 #: The recorded runs this drives the verb over. Checked in, so what the engine is asked
 #: is fixed by this tree rather than by whatever this host happens to have run.
 RECORDED_RUNS = REPO_ROOT / "tests" / "fixtures" / "timeline-runs"

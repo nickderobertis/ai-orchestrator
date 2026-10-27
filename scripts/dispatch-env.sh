@@ -234,6 +234,11 @@ DISPATCH_ENVIRONMENT_WORKTREE_BIN=".venv/bin"
 #: rather than from `$PWD`, because the environment being built is this checkout's.
 DISPATCH_ENVIRONMENT_CHECKOUT_BIN=".venv/bin"
 
+#: And behind that, this checkout's npm-installed tools, where `bun.lock` puts the engine
+#: and the read API. The monitor, the check-in pacemaker, the planner and the
+#: design-document writer each run a bare `onepipeline`, which this is what resolves.
+DISPATCH_ENVIRONMENT_CHECKOUT_ENGINE_BIN="node_modules/.bin"
+
 # Whether $1 is a name a dispatch keeps. Reads the three tables above and the record of
 # what the resolvers established, in that order of authority.
 dispatch_environment_keeps() {
@@ -282,5 +287,5 @@ construct_dispatch_environment() {
         echo "$caller: this checkout could not be resolved, so a dispatch's PATH cannot be built; run the launch from a readable checkout, then retry" >&2
         return 2
     fi
-    export PATH="$DISPATCH_ENVIRONMENT_WORKTREE_BIN:$here/$DISPATCH_ENVIRONMENT_CHECKOUT_BIN${PATH:+:$PATH}"
+    export PATH="$DISPATCH_ENVIRONMENT_WORKTREE_BIN:$here/$DISPATCH_ENVIRONMENT_CHECKOUT_BIN:$here/$DISPATCH_ENVIRONMENT_CHECKOUT_ENGINE_BIN${PATH:+:$PATH}"
 }

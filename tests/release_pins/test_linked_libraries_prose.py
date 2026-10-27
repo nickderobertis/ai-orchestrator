@@ -10,11 +10,13 @@ registered checkout in `orchestrator:test-checkouts`.
 
 from __future__ import annotations
 
-import importlib.metadata
-from pathlib import Path
-
 import pytest
-from test_linked_libraries import ENGINE_DISTRIBUTION, LINKED_VERSION_CLAIMS, _linked_version
+from test_linked_libraries import (
+    ENGINE_DISTRIBUTION,
+    LINKED_VERSION_CLAIMS,
+    _linked_version,
+    npm_sbom,
+)
 
 from orchestrator.root import REPO_ROOT
 
@@ -72,10 +74,11 @@ def test_the_engine_prints_the_scratch_and_maintenance_lines_the_documents_quote
     """Each line a document quotes from the engine's views is one the installed binary
     carries, so a release that respells it fails here rather than leaving the documents
     naming a line no view prints."""
-    distribution = importlib.metadata.distribution(ENGINE_DISTRIBUTION)
-    binaries = [entry for entry in (distribution.files or ()) if Path(entry).name == "onepipeline"]
-    assert len(binaries) == 1, f"{ENGINE_DISTRIBUTION} installs {binaries}, not one engine"
-    carried = Path(str(distribution.locate_file(binaries[0]))).read_bytes()
+    # The platform package's own binary, beside the SBOM it ships: the launcher in
+    # `node_modules/.bin` is a script that runs it.
+    binary = npm_sbom(ENGINE_DISTRIBUTION).parent.parent / "bin" / "onepipeline"
+    assert binary.is_file(), f"{ENGINE_DISTRIBUTION} installs no engine at {binary}"
+    carried = binary.read_bytes()
 
     for spelling, documents in ENGINE_VIEW_LINES.items():
         assert spelling.encode() in carried, (

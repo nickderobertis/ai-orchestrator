@@ -40,7 +40,7 @@ from github_board import (
     _serving_board,
 )
 from project_fixtures import designed, graph_image, reviewed
-from published_tools import ONETASKGRAPH_BIN
+from published_tools import LOCKED_INSTALLS_PATH, ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
 from orchestrator import design_approval, plan_check, plan_store
@@ -97,7 +97,7 @@ def _rendering_environment(root: Path) -> dict[str, str]:
     """
     environment = _plan_environment(root)
     environment.pop(plan_check.REQUIRE_RENDERED_ENV, None)
-    environment["PATH"] = f"{REPO_ROOT / '.venv' / 'bin'}{os.pathsep}{environment['PATH']}"
+    environment["PATH"] = f"{LOCKED_INSTALLS_PATH}{os.pathsep}{environment['PATH']}"
     environment["ONEPIPELINE_TEMPLATE_ROOT"] = str(REPO_ROOT / "templates")
     return environment
 

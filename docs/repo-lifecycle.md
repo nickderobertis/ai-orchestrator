@@ -13,8 +13,8 @@ onejudge dispatch mechanics are in [onejudge-integration.md](./onejudge-integrat
 Everything below about engine behaviour was read out of the engines' own source
 rather than remembered, and the load-bearing part of it — [the outcome
 vocabulary](#the-outcome-vocabulary-is-closed-and-it-is-this) — is reconciled against
-that source on every `just check` rather than restated: **`onepipeline` v0.93.0**
-(`config/onepipeline.version`) and **`onevcs` 0.57.0**, read from the installed engine wheel's SBOM. That is the copy a dispatched lifecycle node publishes through
+that source on every `just check` rather than restated: **`onepipeline` v0.95.1**
+(`config/onepipeline.version`) and **`onevcs` 0.57.0**, read from the SBOM the installed engine's npm platform package ships. That is the copy a dispatched lifecycle node publishes through
 and the copy `just publish-branch`, `just repo-recover` and `just integrate` land
 through, since all three run the engine's own landing verbs, each supervised as its
 manager's work. The other manager verbs — `just recoverable`, `just work-status` — run
@@ -70,6 +70,16 @@ the placement back, and whose approval reads a document with its project in one 
 The engine links oneagentgraph 0.9.0 and onejudge 0.22.0, which run a member's worker side
 under its own config, so their CLI pins follow it; onevcs stays at 0.57.0. The read API
 links that engine and serves the same telemetry and timeline schemas.
+The adoption after that installs the engine and the read API from npmjs.com through
+`bun.lock` rather than as PyPI wheels, because neither producer publishes to PyPI any longer:
+the engine moves to 0.95.1, the first release whose npm platform package ships its
+CycloneDX SBOM, and the read API to 0.58.1, which ships its own and links that engine. The
+engine links the store crates at 0.12.5 and onemessagebus 0.9.4, so the store and bus CLI pins,
+still from PyPI, follow it; onevcs stays at 0.57.0. Its 0.94.0 holds a `fast` node whose
+publication opens no change request unlanded as `complete-but-held` until the release it
+adopted early exists, and its 0.95.0 keeps each in-flight member's heartbeat in
+`liveness.json` rather than the journal, so a run with no dispatch in flight and a live
+observer can read `PARKED` where it read `ACTIVE`.
 From onepipeline 0.80.2, onepipeline-ui 0.43.0 and
 onetaskgraph 0.9.0: the engine 0.81.0 and the read API 0.44.0 that links it carry the
 onetaskgraph 0.9.2 store crates, which copy a plan and list it without reading the whole
@@ -182,6 +192,7 @@ A node's `outcome` is not free text. `onepipeline` writes exactly these words, a
 | `done` | `no-changes` | Every step declared no diff, or the base already carried the branch's content. |
 | `failed` | `empty-branch` | A lifecycle dispatch left its branch level with its base, having committed nothing to it, and the node declared no `expects_no_diff` — settled before any drafting or publication is spent, naming the branch and what it was compared against (https://github.com/nickderobertis/onepipeline/pull/229). The other reading `no-changes` used to cover: a worker asked for a change that produced none. A retry carrying `expects_no_diff` accepts it as that deterministic success, which settles without a dispatch; an amended task sends it back to produce a diff. |
 | `complete-but-draft` | `change-draft` | Every step ran and the branch is published, and the host is holding its change request as a **draft** because a release the node adopted early has not happened yet. Deliberately neither `done` nor a failure and deliberately not settled: merging now would make the node's temporary git pin permanent in a base branch, so no dependent starts on it and no run holding one has settled. What clears it is the release arriving, which puts a new worker on the branch this node already has. |
+| `complete-but-held` | `held-for-release` | The `local-direct` counterpart of `complete-but-draft`: a node adopting a release early whose publication opens no change request is never published as a draft, so its finished branch is kept unlanded on its origin through `onevcs preserve` and nothing reaches its base. Read everywhere `complete-but-draft` is: no dependent starts on it and no run holding one has settled. The release arriving re-dispatches it on that branch, whose publication then lands as any `local-direct` one does. |
 | `done` | `change-draft` | The node declared `draft: true`, so its change request is left as a draft for a person to lift, whatever its checks said; no landing, and its dependents proceed. |
 | `done` | `change-review-draft` | The required checks are **green** and the change request is kept as a draft for its user's review, because the identity resolves `change-open` with `approvals: required`. Finished and verified, with no landing; its dependents proceed, and its user lifts it on the host or with the verb the settlement names. Distinct from both `change-draft` rows: nothing asked for this draft but the policy, and a red one never reaches it, settling `checks-failed` instead. |
 | `done` | *(none)* | A direct agent node — no publication to name. |
@@ -806,7 +817,7 @@ the merge left in progress**, and reports it as the session's `conflict` (`paths
 the refusal at open that used to be the only answer, and nothing on this host asks for
 it. A publication over a merge nobody concluded is refused as a
 sync conflict before anything is committed or pushed, and a session's teardown aborts
-the merge and keeps every commit. onepipeline 0.93.0 dispatches the worker into that
+the merge and keeps every commit. onepipeline 0.95.1 dispatches the worker into that
 session — a node's first step, a pinned continuation, or the re-dispatch after a
 `sync-conflict` — with the conflict under `## Planner context` and one engine-written
 criterion under `### Merge resolution` at the end of `## Acceptance criteria`, so the
@@ -869,7 +880,7 @@ gate-skipping switch to inherit. The `Node` schema is `deny_unknown_fields`, so
 `recorded_gate`, `verify_cmd`, `skip_verify`, and `no_identity_gate` are not
 "accepted and ignored" — a plan carrying any of them is **refused while it loads**. `verify_via_ci` was the one
 survivor and is no longer even that: it is not a field of `Node` on onepipeline
-v0.93.0 and is refused **by its own name**, at every schema version and on a live
+v0.95.1 and is refused **by its own name**, at every schema version and on a live
 edit's `add` alike, because a plan's author has to act on the field rather than on
 a version number. The refusal says where what it asked for went, which is the whole
 of the change: nothing ever read the flag, and the host's own required checks are
@@ -1927,7 +1938,7 @@ warn on the node — `onepipeline: node '<id>': … so it publishes with no body
 publish with no body at all. There is no deterministic body it falls back to and no
 retry of the graph run.
 
-**It is not silent either, on the adopted onepipeline 0.93.0.** Where a drafting
+**It is not silent either, on the adopted onepipeline 0.95.1.** Where a drafting
 dispatch was *configured and attempted* and produced no body, the run records a
 `body-not-drafted` event against the node carrying `ending` and `detail`, and the
 same `detail` lands on the node's own settlement — after the publication's reason
@@ -2004,7 +2015,7 @@ goes when the session does.
 **A pause pushes nothing and opens nothing.** The conclusion is unchanged and the
 reason it used to rest on is gone: both engines now have a draft change request —
 `onevcs` 0.57.0 answers `PublishOutcome::ChangeDraft`, *"change request open as a draft
-… which cannot land while it is one"*, and `onepipeline` v0.93.0 settles the node that
+… which cannot land while it is one"*, and `onepipeline` v0.95.1 settles the node that
 made one `complete-but-draft` where a release is awaited — so "no notion of one" is no
 longer why. A draft is a **publication** outcome, reached once the last step has settled and
 the publication starts, because a release the node adopted early has not happened yet,
@@ -2122,6 +2133,7 @@ runs/<run-id>/result.json    rewritten whenever a driver closes out
 runs/<run-id>/summary.json   the row a listing renders, folded as the journal is written
 runs/<run-id>/checkpoint.json where a reader resumes a fold from instead of replaying
 runs/<run-id>/maintenance.json the marker a live driver's pool-maintenance sweep holds while it runs
+runs/<run-id>/liveness.json  each in-flight dispatch member's latest heartbeat, kept beside the journal
 runs/<run-id>/owner.lock     the single-writer ownership lock
 runs/<run-id>/driver.log     a detached driver's own output
 runs/<run-id>/channel/       the planner channel's transport state
@@ -2758,7 +2770,7 @@ exist.
 **The cost analysis that used to follow this section has been removed rather than
 corrected.** It measured a Python lifecycle implementation that no longer exists —
 `run_repo_task`, `MAX_AUTOMATIC_STEP_RESUMES`, `terminate_process_group`, and every
-journey it named are absent from `onepipeline` v0.93.0 — so every number in it was a
+journey it named are absent from `onepipeline` v0.95.1 — so every number in it was a
 measurement of something else. The one part of it that still holds is the shape:
 **read a journey's price as its number of dispatches times the price of one**, since
 the clone, the worktree, the commit and the push are not the cost and never were.

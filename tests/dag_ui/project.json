@@ -25,6 +25,7 @@
       "{workspaceRoot}/config/onepipeline-ui.version",
       "{workspaceRoot}/scripts/launcher-session.sh",
       "{workspaceRoot}/scripts/telemetry-server.sh",
+      "{workspaceRoot}/scripts/npm-binary.sh",
       "{workspaceRoot}/tests/dag_ui/**/*",
       "!{workspaceRoot}/tests/dag_ui/**/*.md",
       "{workspaceRoot}/tests/fixtures/timeline-runs/**/*",

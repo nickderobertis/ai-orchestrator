@@ -10,12 +10,13 @@ through `onepipeline unwatched` — owes that flow a watch for as long as it liv
 One journey drives that end to end: the real `.claude/settings.json` Stop entry, run as the
 harness runs it; the real `just plan`, `just watch` and `just unwatched` recipes; and the
 installed engine registering the flow, recording each run's `flow`, watching and judging.
-**Only the engine's `start` is doubled**, by `tests/plan_tooling/plan_flow/spike_flow_engine.py`
-at a copy's `.venv/bin/onepipeline`, as `just plan`'s own spike journeys double it: it writes
-what each stage's run leaves behind with the real store, and the launch record a real
-`start` writes, `flow` included. The paid reviewer is the stand-in every planning journey
-uses, held in flight to keep the flow in its review step — a step with no run live — for
-two and a half wake budgets.
+**Only the engine's `start` is doubled**, by
+`tests/plan_tooling/plan_flow/spike_flow_engine.py` over a copy's platform binary that
+`orchestrator.npm_installs` resolves, as `just plan`'s own spike journeys double it: it writes
+what each stage's run leaves behind with the real store, and the launch record a real `start`
+writes, `flow` included. The paid reviewer is the stand-in every planning journey uses, held in
+flight to keep the flow in its review step — a step with no run live — for two and a half wake
+budgets.
 
 It also records the budget `flow-wake-gap` (`tests/unwatched/budgets.yaml`): each watch it
 arms through the `watch` recipe is timed on the wall clock from spawn to exit, as a fraction
@@ -23,7 +24,7 @@ of the wake budget, with its ending and the deadline its terms record configured
 journey asserts no time; whether the figure is within the threshold is the budget check's.
 
 It runs in a copy because the wrapper runs the engine at its checkout's own
-`.venv/bin/onepipeline` and nowhere else. The copy holds the tracked files of the trees a
+platform binary and nowhere else. The copy holds the tracked files of the trees a
 planning flow reads and nothing more, every one of them in `unwatchedWorkspace`, so this
 journey stays in the project's cached `test` target, keyed on what it reads.
 
@@ -43,7 +44,6 @@ import re
 import shutil
 import signal
 import subprocess
-import sys
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -56,7 +56,12 @@ import budget_telemetry
 import plan_fixture_source
 import pytest
 import short_state
-from nx_workspace import answering_this_checkouts_origin, share_this_checkouts_install
+from nx_workspace import (
+    REAL_ENGINE,
+    answering_this_checkouts_origin,
+    double_the_engine,
+    share_this_checkouts_install,
+)
 from project_fixtures import helper, no_budgets
 from run_snapshot import is_staging_name
 from scratch_identity import PLANNING_FLOW_ORIGIN, seeded
@@ -72,7 +77,7 @@ pytestmark = [pytest.mark.xdist_group("flow-stop-hook"), pytest.mark.usefixtures
 
 #: The double, installed over the copy's engine, and the real engine this checkout pins.
 STAND_IN = REPO_ROOT / "tests" / "plan_tooling" / "plan_flow" / "spike_flow_engine.py"
-ONEPIPELINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
+ONEPIPELINE = REPO_ROOT / "node_modules" / ".bin" / "onepipeline"
 
 #: The settings file whose `Stop` entry the harness runs at the end of a turn.
 SETTINGS = REPO_ROOT / ".claude" / "settings.json"
@@ -98,6 +103,7 @@ COPIED_SCRIPTS = (
     "launcher-session.sh",
     "setup-llmlint.sh",
     "lock-timeout.sh",
+    "npm-binary.sh",
     "onepipeline.sh",
     "orchestrate.sh",
     "plan-brief.sh",
@@ -261,16 +267,7 @@ def copy(tmp_path_factory: pytest.TempPathFactory) -> Copy:
     answering_this_checkouts_origin(checkout)
     shared = share_this_checkouts_install(checkout)
     # The copy's own link to the engine, replaced by the double; this checkout's stays.
-    engine = checkout / ".venv" / "bin" / "onepipeline"
-    real = engine.with_name("onepipeline-real")
-    engine.rename(real)
-    # The double on its second line, then the real binary's bytes, which bash never reads:
-    # `just check-plan` reads the roles a persona name resolves to out of the installed
-    # engine's own bytes, as `just plan`'s spike journeys install it.
-    engine.write_bytes(
-        f'#!/usr/bin/env bash\nexec {sys.executable} {STAND_IN} "$@"\n'.encode() + real.read_bytes()
-    )
-    engine.chmod(0o755)
+    double_the_engine(checkout, STAND_IN)
     return Copy(checkout, shared)
 
 
@@ -311,7 +308,7 @@ def _flow(copy: Copy, tmp_path: Path) -> Flow:
         f"ONETASKGRAPH_SOURCES__{DESTINATION.upper()}__PLUGIN": "local-md",
         f"ONETASKGRAPH_SOURCES__{DESTINATION.upper()}__CONFIG__ROOT": str(destination),
         "ONETASKGRAPH_DEFAULT_SOURCES": f"authoring,{plan_fixture_source.SOURCE},{DESTINATION}",
-        "FAKE_ENGINE_REAL": str(bin_dir / "onepipeline-real"),
+        "FAKE_ENGINE_REAL": str(REAL_ENGINE),
         "FAKE_ENGINE_STORE": str(bin_dir / "onetaskgraph"),
         "FAKE_ENGINE_ONEVCS": str(bin_dir / "onevcs"),
         "FAKE_ENGINE_LOG": str(tmp_path / "starts.jsonl"),

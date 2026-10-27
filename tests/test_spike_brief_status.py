@@ -23,6 +23,7 @@ def test_every_authoritative_ending_retires_the_advisory(kind: str) -> None:
         "driven": False,
         "ending": {"kind": kind, "nodes": []},
         "paused": None,
+        "nodes": [],
     }
     assert spike_brief.terminal_reading(json.dumps(reading), run_reading.RunId("spikes"))
 
@@ -44,6 +45,7 @@ def test_nonterminal_readings_retain_the_advisory(liveness: str, paused: bool) -
         "driven": liveness in ["ACTIVE", "PARKED"],
         "ending": None,
         "paused": {"human_actions": [], "blocking_surface": True} if paused else None,
+        "nodes": [],
     }
     assert not spike_brief.terminal_reading(json.dumps(reading), run_reading.RunId("spikes"))
 

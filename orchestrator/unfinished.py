@@ -36,14 +36,13 @@ import json
 import os
 import re
 import shlex
-import shutil
 import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import NamedTuple, NewType, Protocol
 
-from orchestrator import spike_brief
+from orchestrator import npm_installs, spike_brief
 from orchestrator.root import REPO_ROOT
 
 __all__ = [
@@ -170,20 +169,14 @@ def acknowledgements() -> Path:
     return Path(state).joinpath(*ACKNOWLEDGEMENTS_UNDER)
 
 
-def _binary(name: str) -> str | None:
-    """This checkout's installed ``name``, else the one on the search path, else `None`."""
-    installed = REPO_ROOT / ".venv" / "bin" / name
-    return str(installed) if os.access(installed, os.X_OK) else shutil.which(name)
-
-
 def _engine() -> str:
-    binary = _binary("onepipeline")
-    if binary is None:
+    """This checkout's npm-installed engine, never whichever the search path offers."""
+    if not os.access(npm_installs.ENGINE, os.X_OK):
         raise Unanswered(
-            f"found no `onepipeline` to ask, at {REPO_ROOT / '.venv' / 'bin' / 'onepipeline'} "
-            "or on the search path; run `just bootstrap` from the checkout root"
+            f"found no `onepipeline` to ask at {npm_installs.ENGINE}, where this checkout's "
+            "bun.lock installs it; run `just bootstrap` from the checkout root"
         )
-    return binary
+    return str(npm_installs.ENGINE)
 
 
 def _unwatched(session: str, err: Writer) -> Half:

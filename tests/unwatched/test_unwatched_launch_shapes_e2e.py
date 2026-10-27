@@ -55,7 +55,7 @@ from orchestrator.root import REPO_ROOT
 #: The engine this checkout installs from its own pin, asked directly. The recipe is what
 #: *launches*; what is read back has to be the engine, because the question is what a
 #: manager's hook would be told.
-ONEPIPELINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
+ONEPIPELINE = REPO_ROOT / "node_modules" / ".bin" / "onepipeline"
 
 #: This repository's own entry point, for the one verb no recipe wraps: attesting the
 #: human action an adopted run is parked on.

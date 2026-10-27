@@ -1,34 +1,48 @@
 """The published tools this repository pins, shared by every check that reads them.
 
-`scripts/session-setup.sh` carries the same table as `PUBLISHED_TOOL_SPECS`; the drift
-gate in `tests/test_published_tools.py` holds the two together, so a tool added here
-without being wired into session setup fails rather than going unprovisioned.
+`scripts/session-setup.sh` carries the same table as `PUBLISHED_TOOL_SPECS` and
+`NPM_TOOL_SPECS`; the drift gate in `tests/test_published_tools.py` holds the two
+together, so a tool added here without being wired into session setup fails rather than
+going unprovisioned.
 """
 
 from __future__ import annotations
 
+import os
 import re
-from typing import NamedTuple
+from pathlib import Path
+from typing import Literal, NamedTuple
 
 import pytest
 
+from orchestrator import npm_installs
 from orchestrator.root import REPO_ROOT
 
 
 class PublishedTool(NamedTuple):
     """One adopted published tool: where its release is declared, and what carries it.
 
-    ``npm_package`` is set only for a tool this repository also installs from npm.
-    `onepipeline-ui` ships as two artifacts of one release — the read API as a wheel
-    and the browser bundle as an npm package — and `just dag-ui` serves the second
-    against the first, so a pin that moved on one side alone would serve a bundle
-    against an API of another release.
+    ``registry`` says which package registry this host installs ``distribution`` from:
+    PyPI through `uv.lock` into `.venv/bin`, or npmjs.com through `bun.lock` into
+    `node_modules/.bin`. The engine and the read API are the npm ones.
+
+    ``npm_package`` is set only for a further npm artifact of the same release.
+    `onepipeline-ui` ships the read API and its browser bundle as two packages of one
+    release, and `just dag-ui` serves the second against the first, so a pin that moved
+    on one side alone would serve a bundle against an API of another release.
     """
 
     version_file: str
     distribution: str
     binary: str
     npm_package: str | None = None
+    registry: Literal["pypi", "npm"] = "pypi"
+
+    def executable(self, checkout: Path = REPO_ROOT) -> Path:
+        """Where `checkout`'s own provisioning installs this tool's CLI."""
+        if self.registry == "npm":
+            return checkout / "node_modules" / ".bin" / self.binary
+        return checkout / ".venv" / "bin" / self.binary
 
     @property
     def adopted_version(self) -> str:
@@ -46,13 +60,17 @@ class PublishedTool(NamedTuple):
 
 #: The published implementations this repository is a configuration layer over, each
 #: verified uniformly from this one table. `onepipeline-ui` is the tool's name and
-#: `onepipeline-api-cli` the distribution PyPI carries it under.
+#: `onepipeline-api-cli` the npm package carrying its read API.
 PUBLISHED_TOOLS = (
     PublishedTool("oneagentgraph.version", "oneagentgraph-cli", "oneagentgraph"),
     PublishedTool("onevcs.version", "onevcs-cli", "onevcs"),
-    PublishedTool("onepipeline.version", "onepipeline-cli", "onepipeline"),
+    PublishedTool("onepipeline.version", "onepipeline-cli", "onepipeline", registry="npm"),
     PublishedTool(
-        "onepipeline-ui.version", "onepipeline-api-cli", "onepipeline-api", "onepipeline-ui"
+        "onepipeline-ui.version",
+        "onepipeline-api-cli",
+        "onepipeline-api",
+        "onepipeline-ui",
+        registry="npm",
     ),
     PublishedTool("onemessagebus.version", "onemessagebus-cli", "onemessagebus"),
     PublishedTool("onetaskgraph.version", "onetaskgraph-cli", "onetaskgraph"),
@@ -63,6 +81,19 @@ PUBLISHED_TOOLS = (
 #: they stay outside the uniform table. Named so a caller enumerating
 #: `config/*.version` can say which files `PUBLISHED_TOOLS` is deliberately silent about.
 SEPARATELY_GATED_VERSION_FILES = frozenset({"onejudge.version", "oneharness.version"})
+#: The two halves of that table: what `uv.lock` installs, and what `bun.lock` does.
+PYPI_TOOLS = tuple(tool for tool in PUBLISHED_TOOLS if tool.registry == "pypi")
+NPM_TOOLS = tuple(tool for tool in PUBLISHED_TOOLS if tool.registry == "npm")
+#: The engine every recipe runs, at the path this checkout's `bun.lock` installs it.
+ENGINE_BIN = REPO_ROOT / "node_modules" / ".bin" / "onepipeline"
+
+#: The search path this checkout's locked installs lead: `uv.lock`'s `.venv/bin`, then the
+#: directory of the engine binary `bun.lock` installs, so a bare `onepipeline` or
+#: `onetaskgraph` a command runs is the pinned release rather than one a caller's PATH
+#: offers. Prepended to a caller's own PATH, never standing in for it.
+LOCKED_INSTALLS_PATH = os.pathsep.join(
+    (str(REPO_ROOT / ".venv" / "bin"), str(npm_installs.ENGINE.parent))
+)
 
 #: Where this checkout's own provisioning installs the standalone `onetaskgraph` CLI,
 #: and the one place the suite reads it from. It is per checkout rather than a

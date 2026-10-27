@@ -172,6 +172,7 @@ def _detached_recipe(tmp_path: Path) -> Path:
         # The flow it enters before writing, through the engine `give_flow_engine` puts
         # below: a checkout without one is refused there, before these journeys' refusals.
         "launch-flow.sh",
+        "npm-binary.sh",
         "credentials-env.sh",
         "ask-manager-env.sh",
         "ask-manager.sh",

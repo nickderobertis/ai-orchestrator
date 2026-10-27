@@ -22,7 +22,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.93.0 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.95.1 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -322,8 +322,8 @@ Claude Code: each record's `usage` block is the same five keys and nothing else.
 It moved again to 0.19.5 with the engine 0.75.0, to 0.20.0 with the engine 0.80.2 and to
 0.21.0 with the engine 0.89.2 and to 0.22.0 with the engine 0.93.0, and both files are unchanged between `onejudge-v0.19.0` and
 `onejudge-v0.22.0` too, and the
-engine wheel links `oneharness-core` 0.29.1 for itself, onejudge 0.22.0 and oneagentgraph 0.9.0, read off its
-own SBOM. Between `oneharness-core-v0.24.2` and `oneharness-core-v0.28.2`, `domain/usage.rs`
+engine links `oneharness-core` 0.29.1 for itself, onejudge 0.22.0 and oneagentgraph 0.9.0, read off the
+SBOM its npm platform package ships. Between `oneharness-core-v0.24.2` and `oneharness-core-v0.28.2`, `domain/usage.rs`
 gains the reset-credit report above and a millisecond RFC 3339 reader
 ([oneharness#1464](https://github.com/nickderobertis/oneharness/pull/1464)), touching
 no per-turn token usage, and it is unchanged from there to `oneharness-core-v0.29.1`; this
@@ -466,15 +466,17 @@ served them.
    `just telemetry-server` — or by `just dag-ui`, which is the same published server
    with the browser view built into it answering on the same origin) is the structured
    view. Measured against real runs on
-   **`onepipeline-api` 0.55.0**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.58.1**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
-   what re-opens this paragraph: `telemetry_schema_version` 26 on the envelope, as 0.52.0
-   and 0.51.0 served, where
+   what re-opens this paragraph: `telemetry_schema_version` 27 on the envelope, where
+   0.55.0, 0.52.0 and 0.51.0 served 26 and
    0.48.1 served 24, 0.44.0 served 21, 0.13.0 served 20 and
    0.11.0 served 19, 0.9.0 served 17, 0.7.3 served 16 and 0.7.2 served 15 — 26 reads every
    turn whole from the history file its record points at, through the engine's transcript
-   resolver, and marks the turn's transcript unavailable where that file cannot be read;
-   `timeline_schema_version` 14, as 0.52.0 and 0.51.0 served, where 0.48.1 served 13, 0.44.0 served 12, 0.41.0 served
+   resolver, and marks the turn's transcript unavailable where that file cannot be read, and
+   27 serves a node's `complete-but-draft` and `complete-but-held` statuses as themselves and
+   gives a node's result the `awaiting` releases its settlement still awaits;
+   `timeline_schema_version` 14, as 0.58.1, 0.58.0, 0.52.0 and 0.51.0 served, where 0.48.1 served 13, 0.44.0 served 12, 0.41.0 served
    11 and 0.21.1 served 10 — 14 gives every `turn-started`, `turn-message` and
    `turn-activity` event a one-line `description` the engine's resolver writes, 13 counts a
    journal record relayed again under one `(stream, seq)` once, and bounds each session lane
@@ -551,7 +553,7 @@ served them.
    <!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] These field names
    have no authoritative declaration this host can read: `onepipeline-api` is in no
    registered checkout, its source is in neither the `onepipeline` repository nor the
-   installed wheel, and `onepipeline-api serve` is its only verb — there is no schema
+   installed npm package, and `onepipeline-api serve` is its only verb — there is no schema
    to dump. Every other engine contract in these documents is reconciled against
    source; this one is a *measurement* off a live response, so what
    `tests/release_pins/test_onejudge_version.py::test_claims_about_the_adopted_read_api_name_the_adopted_release`

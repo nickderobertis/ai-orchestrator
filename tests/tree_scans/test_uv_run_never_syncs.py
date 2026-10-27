@@ -198,10 +198,10 @@ def test_every_command_typed_by_hand_spells_no_sync(path: str) -> None:
 
 def test_the_scan_tells_an_invocation_from_a_mention_and_a_context_from_none() -> None:
     """Each rule above, refusing the shape it exists for and passing its counterpart."""
-    assert syncing_by_hand("run `uv run onepipeline supersessions <run-id>` once") == [
-        (1, "run `uv run onepipeline supersessions <run-id>` once")
+    assert syncing_by_hand("run `uv run onevcs sweep <run-id>` once") == [
+        (1, "run `uv run onevcs sweep <run-id>` once")
     ]
-    assert syncing_by_hand("run `uv run --no-sync onepipeline supersessions` once") == []
+    assert syncing_by_hand("run `uv run --no-sync onevcs sweep` once") == []
     assert syncing_by_hand("every recipe that runs `uv run` exports it") == []
 
     unprovided = "#!/usr/bin/env bash\nset -euo pipefail\nexec uv run onevcs repos\n"

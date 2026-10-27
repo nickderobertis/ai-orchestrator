@@ -122,18 +122,18 @@ allowed_tools = [
 
     # The `uv run` forms AGENTS.md tells a manager to run, and no interpreter-wide one.
     "Bash(uv run --no-sync python -m orchestrator.follow_up_tickets statuses)",
-    # llmlint: ignore-block[least_privilege_grants] `just follow-up`, `just follow-ups`, `just follow-ups-answer-comments`, `uv run --no-sync onepipeline supersessions` and the `board-items`, `check-dispositions`, `check-responses` and `check-gathering` subcommands of `orchestrator.follow_up_tickets`: each suffix is only the run, board, file or filter the one verb names, and the verb bounds it — `follow-up` records one unverified draft against its run, `follow-ups` and `follow-ups-answer-comments` launch their verification through the engine's ledger, `supersessions` reads the named run's journal and with `--record` records only its superseded branches, and the four subcommands read or validate.
+    # llmlint: ignore-block[least_privilege_grants] `just follow-up`, `just follow-ups`, `just follow-ups-answer-comments`, `node_modules/.bin/onepipeline supersessions` and the `board-items`, `check-dispositions`, `check-responses` and `check-gathering` subcommands of `orchestrator.follow_up_tickets`: each suffix is only the run, board, file or filter the one verb names, and the verb bounds it — `follow-up` records one unverified draft against its run, `follow-ups` and `follow-ups-answer-comments` launch their verification through the engine's ledger, `supersessions` reads the named run's journal and with `--record` records only its superseded branches, and the four subcommands read or validate.
     "Bash(just follow-up:*)",
     "Bash(just follow-ups:*)",
     "Bash(just follow-ups-answer-comments:*)",
-    "Bash(uv run --no-sync onepipeline supersessions:*)",
+    "Bash(node_modules/.bin/onepipeline supersessions:*)",
     "Bash(uv run --no-sync python -m orchestrator.follow_up_tickets board-items:*)",
     "Bash(uv run --no-sync python -m orchestrator.follow_up_tickets check-dispositions:*)",
     "Bash(uv run --no-sync python -m orchestrator.follow_up_tickets check-responses:*)",
     "Bash(uv run --no-sync python -m orchestrator.follow_up_tickets check-gathering:*)",
     # llmlint: ignore-end[least_privilege_grants]
-    # llmlint: ignore[least_privilege_grants] `uv run --no-sync onepipeline scratch discard`: the suffix is only the run id the one verb names, which Claude Code has no narrower pattern for, and the verb bounds it — it deletes only the regenerable scratch of a run whose status word says it ended, never follows a link out of it, and refuses a paused, driven or unknown run with nothing deleted.
-    "Bash(uv run --no-sync onepipeline scratch discard:*)",
+    # llmlint: ignore[least_privilege_grants] `node_modules/.bin/onepipeline scratch discard`: the suffix is only the run id the one verb names, which Claude Code has no narrower pattern for, and the verb bounds it — it deletes only the regenerable scratch of a run whose status word says it ended, never follows a link out of it, and refuses a paused, driven or unknown run with nothing deleted.
+    "Bash(node_modules/.bin/onepipeline scratch discard:*)",
 
     "Bash(git status)",
     "Bash(git config core.bare)",

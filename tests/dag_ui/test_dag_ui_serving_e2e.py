@@ -22,7 +22,6 @@ so the probe that used to hold this tier to needing none has no client left to h
 from __future__ import annotations
 
 import contextlib
-import importlib.metadata
 import json
 import os
 import re
@@ -43,6 +42,7 @@ from published_tools import PUBLISHED_TOOLS
 from served_recipe import serve, stop
 from waits import timeout as e2e_timeout
 
+from orchestrator import npm_installs
 from orchestrator.root import REPO_ROOT
 
 #: The one source for the address the read API answers on, which the recipe reads
@@ -181,7 +181,7 @@ TURN_USAGE_FIGURES = (
 TIMELINE_SCHEMA_VERSION = 14
 #: The envelope's telemetry schema, restated for the same reason and moved with the same
 #: paragraph.
-TELEMETRY_SCHEMA_VERSION = 26
+TELEMETRY_SCHEMA_VERSION = 27
 
 #: The variable `scripts/launcher-session.sh` resolves the acting session into, and
 #: `scripts/telemetry-server.sh` renders as the server's `--session`.
@@ -1086,27 +1086,27 @@ def test_the_dialog_names_this_sessions_own_run_as_its_own(served_as_owner: Serv
 
 
 def _linked_onepipeline_release() -> str:
-    """The `onepipeline` release the adopted read-API wheel was built against.
+    """The `onepipeline` release the adopted read API was built against.
 
     The reader answers `/healthz` with this value, and nothing this repository
     tracks declares it — `config/onepipeline.version` pins the *engine CLI*, which
-    is a separate adoption and is deliberately allowed to differ. So the expectation
-    comes from the adopted wheel's own bill of materials, which ships in its
-    `dist-info` and moves with every release: a literal here would have to be
-    hand-edited on each bump, which is exactly the drift this journey is about.
+    is a separate adoption. So the expectation comes from the read API's own bill of
+    materials, which the npm platform package `bun.lock` installs for this host ships
+    under its `sboms/` and which moves with every release: a literal here would have to
+    be hand-edited on each bump, which is exactly the drift this journey is about.
     """
-    distribution = importlib.metadata.distribution(ADOPTED_UI.distribution)
-    boms = [entry for entry in distribution.files or [] if "sboms/" in str(entry)]
+    package = npm_installs.READ_API.parent.parent
+    boms = sorted((package / "sboms").glob("*")) if (package / "sboms").is_dir() else []
     if len(boms) != 1:
         pytest.fail(
-            f"{ADOPTED_UI.distribution} must ship exactly one bill of materials to read "
-            f"its linked releases from; found {[str(entry) for entry in boms]}"
+            f"{package.name} must ship exactly one bill of materials under sboms/ to read "
+            f"its linked releases from; found {[entry.name for entry in boms]}"
         )
-    components = json.loads(Path(boms[0].locate()).read_text(encoding="utf-8"))["components"]
+    components = json.loads(boms[0].read_text(encoding="utf-8"))["components"]
     linked = [item["version"] for item in components if item["name"] == "onepipeline"]
     if len(linked) != 1:
         pytest.fail(
-            f"{ADOPTED_UI.distribution} {ADOPTED_UI.adopted_version} must record exactly one "
+            f"{package.name} {ADOPTED_UI.adopted_version} must record exactly one "
             f"linked onepipeline release; found {linked}"
         )
     return str(linked[0])

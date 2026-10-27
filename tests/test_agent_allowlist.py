@@ -28,19 +28,22 @@ from manager_invocations import (
     placeholders,
 )
 
+from orchestrator import npm_installs
 from orchestrator.root import REPO_ROOT
 
 SOURCE = REPO_ROOT / "config" / "manager-allowlist.toml"
 SETTINGS = REPO_ROOT / ".claude" / "settings.json"
 #: The `Stop` hook's command: the engine's stop guard in its own docs page's
-#: Claude Code wiring, named by path out of this checkout's locked install — through
+#: Claude Code wiring, run out of this checkout's locked install — through
 #: `$CLAUDE_PROJECT_DIR`, which is what makes one registration work from every worktree of
-#: this repository — with nothing of this repository's between the harness and the verb.
+#: this repository — by `scripts/npm-binary.sh`, which replaces itself with the platform
+#: package's binary this host installed, so nothing of this repository's stays between the
+#: harness and the verb.
 #: `--unpublished` has the verb ask, in its own process, whether the session owes a
 #: preserved branch, under this host's acknowledgement directory and drafter graph; no
 #: `--source` is declared.
 STOP_HOOK = (
-    '"$CLAUDE_PROJECT_DIR/.venv/bin/onepipeline" stop-guard '
+    'bash "$CLAUDE_PROJECT_DIR/scripts/npm-binary.sh" onepipeline-cli onepipeline stop-guard '
     "--wake-budget 2100 --format claude-code --unpublished "
     '--unpublished-acknowledgements "${XDG_STATE_HOME:-$HOME/.local/state}/'
     'ai-orchestrator/stop-unfinished/acknowledged" '
@@ -448,7 +451,7 @@ def test_the_stop_hook_asks_which_runs_nothing_is_watching() -> None:
     assert [command["command"] for command in commands] == [STOP_HOOK], (
         f"the Stop hook is not the engine's stop guard wired as its page gives: {commands}"
     )
-    assert (REPO_ROOT / ".venv" / "bin" / "onepipeline").is_file(), (
+    assert npm_installs.ENGINE.is_file(), (
         "the Stop hook names this checkout's locked engine, and there is none installed"
     )
     bounds = [command.get("timeout") for command in commands]

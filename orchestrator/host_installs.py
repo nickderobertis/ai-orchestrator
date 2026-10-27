@@ -1,19 +1,23 @@
-"""What this host installs from each producer it depends on, and the pin each wheel governs.
+"""What this host installs from each producer it depends on, and the pin each artifact governs.
 
 Ten repositories publish the tools this harness configures, and each publishes
 several artifacts — a crate, a wheel, an npm launcher, an SDK — of which this host
 installs exactly one: the wheel `pyproject.toml` pins, or, for `onejudge` and
 `onetaskgraph`, the CLI wheel the pinned SDK carries from `uv.lock` at its own version,
 which is the one `config/onetaskgraph.version` names, or, for `llmlint`, the wheel its
-row's ``installer`` puts in place with no pin of its own. A node waiting on a release
+row's ``installer`` puts in place with no pin of its own, or, for `onepipeline` and
+`onepipeline-ui`, the npm package `package.json` pins and `bun.lock` installs from
+npmjs.com — the engine's `onepipeline-cli` and the read API's `onepipeline-api-cli`,
+whose ``npm:`` artifacts are the only ones here not from PyPI. A node waiting on a release
 has to say *which* artifact it waits for, because "the crate is out" and "the wheel is
 out" are different waits, and `config/onevcs.releases.yml` says it once per producer as
 that producer's ``default_target``. This module is the one table the pieces of that
 answer are held to: the producer, the short target name the override names, the
 registry-qualified artifact the producer's own declaration gives that name, and the
-``config/<pin>.version`` file the installed wheel governs — or, where no pin governs it,
-the script that installs it. `tests/test_host_installs.py`
-reconciles the table against `pyproject.toml`, `config/`, and the override; its
+``config/<pin>.version`` file the installed artifact governs — or, where no pin governs
+it, the script that installs it. `tests/test_host_installs.py`
+reconciles the table against `pyproject.toml` (or `package.json` for an ``npm:``
+artifact), `config/`, and the override; its
 `reads_checkouts` tier reads each producer's own declaration for a contradiction of a
 row, which refuses a change that edits this registration and is reported for any other.
 
@@ -80,15 +84,16 @@ class Installed(NamedTuple):
     #: The producer's short target name — the override's ``default_target`` for it.
     target: str
     #: The registry-qualified id the producer's declaration gives that target,
-    #: ``<registry>:<distribution>``; its distribution is what `pyproject.toml` pins.
+    #: ``<registry>:<distribution>``; its distribution is what `pyproject.toml` pins, or
+    #: `package.json` for an ``npm:`` one.
     artifact: str
-    #: The stem of the ``config/<pin>.version`` file this wheel governs, or None for a
+    #: The stem of the ``config/<pin>.version`` file this artifact governs, or None for a
     #: wheel no pin governs, which names its ``installer`` instead.
     pin: str | None
-    #: Whether a dispatched node runs this artifact: true for the engine wheel alone.
+    #: Whether a dispatched node runs this artifact: true for the engine alone.
     governs_dispatch: bool
     #: The script that installs a wheel no pin governs, from this repository's root;
-    #: None for every pinned wheel, which `pyproject.toml` and `uv.lock` install.
+    #: None for every pinned artifact, which `uv.lock` or `bun.lock` installs.
     installer: str | None = None
 
 
@@ -99,8 +104,8 @@ class Installed(NamedTuple):
 INSTALLED: tuple[Installed, ...] = (
     Installed(
         producer="github.com/nickderobertis/onepipeline",
-        target="pypi",
-        artifact="pypi:onepipeline-cli",
+        target="npm",
+        artifact="npm:onepipeline-cli",
         pin="onepipeline",
         governs_dispatch=True,
     ),
@@ -141,8 +146,8 @@ INSTALLED: tuple[Installed, ...] = (
     ),
     Installed(
         producer="github.com/nickderobertis/onepipeline-ui",
-        target="pypi-cli",
-        artifact="pypi:onepipeline-api-cli",
+        target="npm-cli",
+        artifact="npm:onepipeline-api-cli",
         pin="onepipeline-ui",
         governs_dispatch=False,
     ),
@@ -199,7 +204,7 @@ CONSUMER_DEFAULTS: frozenset[str] = frozenset({"github.com/nickderobertis/printo
 
 
 def by_artifact(artifact: str) -> Installed | None:
-    """The row installing ``artifact`` (``pypi:onepipeline-cli``), or None for none."""
+    """The row installing ``artifact`` (``npm:onepipeline-cli``), or None for none."""
     return next((row for row in INSTALLED if row.artifact == artifact), None)
 
 

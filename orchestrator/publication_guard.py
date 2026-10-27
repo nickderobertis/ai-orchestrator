@@ -14,10 +14,12 @@ once the branch is finished:
   Another node here ran an hour and thirty-six minutes before that was reported.
 
 Both are knowable before anything is dispatched, from what this host already holds, and
-this is where they are asked. The engine makes the same two refusals at its own loader;
-what keeps the two agreeing is that **both read the destination repository's own hook**
+this is where they are asked. The engine refuses the title at its own loader too; what
+keeps the two agreeing is that **both read the destination repository's own hook**
 rather than a copy of that repository's release-type policy — this module runs it, so
-there is nothing here to keep in step with the rule.
+there is nothing here to keep in step with the rule. The ``consumes`` shape is this
+module's alone since onepipeline 0.94.0, whose loader accepts it and holds such a node's
+landing until the release instead.
 
 A third shape is refused for what it does to the *record* rather than to the branch: a
 node naming a GitHub-hosted repository on the reserved ``onepipeline.repo`` key. The

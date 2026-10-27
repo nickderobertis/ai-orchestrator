@@ -122,7 +122,7 @@ def _approved_in_the_copy(root: Path) -> None:
         ).stdout
         resolve = shlex.split(stated)
         loader = subprocess.run(
-            [str(REPO_ROOT / ".venv" / "bin" / resolve[0]), *resolve[1:]]
+            [str(REPO_ROOT / "node_modules" / ".bin" / resolve[0]), *resolve[1:]]
             + ["--template-root", str(REPO_ROOT / "templates")],
             cwd=REPO_ROOT,
             env=environment,

@@ -747,7 +747,7 @@ PACEMAKER_SURFACE_FORM = re.compile(r"onepipeline surface --kind (?P<kind>\S+) <
 
 #: The `onepipeline` this checkout pins. A bare name would let the ambient environment
 #: decide which release answers.
-PINNED_ONEPIPELINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
+PINNED_ONEPIPELINE = REPO_ROOT / "node_modules" / ".bin" / "onepipeline"
 
 
 def _pacemaker_surface_kind() -> str:

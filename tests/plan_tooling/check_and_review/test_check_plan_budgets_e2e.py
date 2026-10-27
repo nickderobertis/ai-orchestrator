@@ -588,7 +588,7 @@ def test_heading_anchor_capture_and_ordered_example_through_real_templates(tmp_p
     written.write_text(json.dumps(answers), encoding="utf-8")
     loader = subprocess.run(
         [
-            str(REPO_ROOT / ".venv/bin/onepipeline"),
+            str(REPO_ROOT / "node_modules/.bin/onepipeline"),
             "template",
             "resolve",
             "design-doc",
@@ -705,7 +705,7 @@ def test_budget_links_anchor_modern_github_budgets_and_fall_back_for_legacy_and_
     loader = tmp_path / "loader.json"
     resolved = subprocess.run(
         [
-            str(REPO_ROOT / ".venv/bin/onepipeline"),
+            str(REPO_ROOT / "node_modules/.bin/onepipeline"),
             "template",
             "resolve",
             "design-doc",
@@ -781,7 +781,7 @@ def test_summary_keeps_scoped_omissions_with_added_budgets_and_omits_all_effects
     loader = tmp_path / "loader.json"
     resolved = subprocess.run(
         [
-            str(REPO_ROOT / ".venv/bin/onepipeline"),
+            str(REPO_ROOT / "node_modules/.bin/onepipeline"),
             "template",
             "resolve",
             "design-doc",

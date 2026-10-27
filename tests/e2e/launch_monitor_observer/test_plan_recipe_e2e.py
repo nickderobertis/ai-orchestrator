@@ -1551,6 +1551,7 @@ def test_a_planner_that_could_not_ask_questions_is_not_launched_at_all(tmp_path:
         "plan.sh",
         "plan-brief.sh",
         "launch-flow.sh",
+        "npm-binary.sh",
         "credentials-env.sh",
         "ask-manager-env.sh",
     ):

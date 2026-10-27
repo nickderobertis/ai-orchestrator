@@ -6,7 +6,7 @@ binary moves a message. The observer's judge side and the manager's recipes are 
 at this binary next, so this journey drives it the way they will — through its own
 queue verbs over a transport directory it owns — and holds `onemessagebus --version`
 to the pin, the way `tests/session_setup_pypi/test_linked_engine_reconciliation_e2e.py` drives
-`.venv/bin/onepipeline`.
+`node_modules/.bin/onepipeline`.
 
 Nothing is doubled: the binary is the installed release, the transport is a local
 directory under `tmp_path`, and every reading is the verb's own output. The queue is
@@ -17,7 +17,7 @@ that is the configuration and the queue the judge side and the recipes raise and
 llmlint: ignore-file[shell_test_tiers_stay_split] This module runs in the `launch-monitor-observer`
 project, whose tiers are split by pytest marker over named inputs, and the binary this drives is the
 locked `.venv` install `scripts/nx.sh` heals from `uv.lock` — the input every workspace
-tier is already keyed on, exactly as `.venv/bin/onepipeline` is for the journey named
+tier is already keyed on, exactly as `node_modules/.bin/onepipeline` is for the journey named
 above. It reaches no network and no tool outside the workspace, so a project of its own
 would be keyed on the same lock and separate nothing.
 """

@@ -8,9 +8,9 @@ key already carries `orchestrator/follow_up_tickets.py`, so an edit to that modu
 one tier rather than every recipe journey. One definition, so the two tiers build the same checkout
 and a change to it reaches both.
 
-Only `uv` and the engine a launch reaches are doubled here, as the delegation table's
-module docstring states: the recipes, the wrapper scripts and the shell they run in are
-real.
+Only `uv` and the engine every `onepipeline` recipe reaches are doubled here, as the
+delegation table's module docstring states: the recipes, the wrapper scripts and the
+shell they run in are real.
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ import follow_up_variables
 import plan_root_variable
 from project_fixtures import budgeted, designed, no_budgets
 
+from orchestrator import npm_installs
 from orchestrator.project_store import write_plan_project
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,8 +42,10 @@ WRAPPER_SCRIPTS = (
     # The trust probe's two JSON steps, which `smoke.sh` runs.
     "smoke-probe.py",
     # Every `onepipeline` recipe goes through this one, which is where the planner's
-    # identity and a launch's harness environment are established.
+    # identity and a launch's harness environment are established, and it and every other
+    # script reaching the engine or the read API resolves the binary through the second.
     "onepipeline.sh",
+    "npm-binary.sh",
     # The acting-session ladder both that one and `telemetry-server.sh` source, so a
     # copied checkout can run either of them at all — and so the `--session` the read
     # API is handed is derived the way a real invocation derives it rather than by a
@@ -145,14 +148,14 @@ def at(checkout: Path, line: str) -> str:
     return line.replace(CHECKOUT, str(checkout.resolve()))
 
 
-#: How a launch reaches the engine: the installed binary in this checkout's own `.venv`,
-#: by absolute path, rather than `uv run onepipeline`. `uv run` activates the project
-#: environment for the process it starts, so it exports `VIRTUAL_ENV` naming this
-#: checkout's `.venv` into the engine — and the engine hands its environment to every
-#: dispatch, which is how a worker's own `uv pip install` came to write into the
-#: environment every concurrent node shares (ai-orchestrator#1162). A read-only view
-#: still goes through `uv run`, which is why the rows below are not all one spelling.
-ENGINE = f"{CHECKOUT}/.venv/bin/onepipeline"
+#: How every recipe reaches the engine: the platform package's binary this checkout's
+#: `bun.lock` installs into its own `node_modules`, by absolute path, never the npm
+#: launcher in front of it (`scripts/npm-binary.sh` says why). No Python environment
+#: carries it, so no `uv run` is in front of it, and a launch hands no checkout's
+#: `VIRTUAL_ENV` to the dispatches under it (ai-orchestrator#1162).
+ENGINE = f"{CHECKOUT}/node_modules/{npm_installs.ENGINE.relative_to(npm_installs.NODE_MODULES)}"
+#: And the read API `scripts/telemetry-server.sh` execs, from the same install.
+READ_API = f"{CHECKOUT}/node_modules/{npm_installs.READ_API.relative_to(npm_installs.NODE_MODULES)}"
 
 #: The bus configuration `scripts/onepipeline.sh` hands every launch that names none,
 #: immediately after `start`, as the copied checkout's own absolute path.
@@ -233,6 +236,9 @@ def delegation_checkout(tmp_path: Path) -> tuple[Path, Path]:
     (checkout / "personas").mkdir()
     (checkout / "config").mkdir()
     (checkout / "templates").mkdir()
+    # Where `uv.lock` installs every tool but the engine and the read API, which a journey
+    # links the store and the rest into as it needs them.
+    (checkout / ".venv" / "bin").mkdir(parents=True)
     shutil.copy2(ROOT / "justfile", checkout / "justfile")
     # The one source the wrappers read the read API's address from; a checkout
     # without it is not one these recipes can run in.
@@ -293,20 +299,6 @@ if [ ! -t 0 ]; then
   while IFS= read -r line; do printf 'stdin %s\\n' "$line" >>"$TRACE_FILE"; done
 fi
 case "$*" in
-  "run onepipeline template resolve plan-task --json")
-    if [ -n "${FAKE_RESOLVED_LOADER-}" ]; then
-      printf '%s' "$FAKE_RESOLVED_LOADER"
-    else
-      printf '{"reference":"onepipeline:plan-task","entry":"plan-task.md.j2",'
-      printf '"templates":[{"name":"plan-task.md.j2","source":"## Acceptance criteria"}]}'
-    fi ;;
-  "run onepipeline status "*" --json")
-    printf '%s' "${FAKE_STATUS_ANSWER-}" ;;
-  "run onepipeline template check plan-task --item "*)
-    if [ -n "${FAKE_CHECK_OUTPUT-}" ]; then
-      printf '%s\\n' "$FAKE_CHECK_OUTPUT" >&2
-      exit 2
-    fi ;;
   "run onetaskgraph project graph "*)
     cd "$PINNED_ROOT" && exec .venv/bin/onetaskgraph "${@:3}" ;;
   "run onetaskgraph task create "*)
@@ -334,14 +326,13 @@ exit "${FAKE_UV_EXIT:-0}"
         .replace('"$PINNED_ROOT"', shlex.quote(str(ROOT)))
     )
     uv.chmod(0o755)
-    # The engine a **launch** reaches, and a launcher's flow: the installed binary in this
-    # checkout's own `.venv`, which is what `scripts/onepipeline.sh` execs rather than `uv run
-    # onepipeline` so that the engine — and so every dispatch under it — is not handed
-    # this checkout's `VIRTUAL_ENV` (ai-orchestrator#1162). Traced the same way `uv` is,
-    # under its own name, and it answers the `--version` every launch asks for the pair
-    # it prints, answering the pin unless a journey names a hand-installed release
-    # instead.
-    engine = checkout / ".venv/bin/onepipeline"
+    # The engine every `onepipeline` recipe reaches, and a launcher's flow: the platform
+    # package's binary this checkout's `bun.lock` installs into its own `node_modules`,
+    # which is what `scripts/onepipeline.sh` execs. Traced the same way `uv` is, under its
+    # own path, and it answers the `--version` every launch asks for the pair it prints,
+    # answering the pin unless a journey names a hand-installed release instead, and the
+    # template and status reads a recipe's tail makes, as each journey states them.
+    engine = Path(at(checkout, ENGINE))
     engine.parent.mkdir(parents=True, exist_ok=True)
     engine.write_text(
         f"""#!/usr/bin/env bash
@@ -355,6 +346,33 @@ if [ "$*" = "--version" ]; then
   echo "onepipeline ${{{ENGINE_REPORTS_ENV}:-{PINNED_ENGINE}}}"
   exit 0
 fi
+# A view's piped input — a reply's envelope, a surface's text — is the recipe's product,
+# so it is traced after the command line; a launch's and a flow's stdin is their own.
+case "${{1:-}}" in
+  start | adopt | flow) ;;
+  *)
+    if [ ! -t 0 ]; then
+      while IFS= read -r line; do printf 'stdin %s\\n' "$line" >>"$TRACE_FILE"; done
+    fi ;;
+esac
+case "$*" in
+  "template resolve plan-task --json")
+    if [ -n "${{FAKE_RESOLVED_LOADER-}}" ]; then
+      printf '%s' "$FAKE_RESOLVED_LOADER"
+    else
+      printf '{{"reference":"onepipeline:plan-task","entry":"plan-task.md.j2",'
+      printf '"templates":[{{"name":"plan-task.md.j2","source":"## Acceptance criteria"}}]}}'
+    fi
+    exit 0 ;;
+  "status "*" --json")
+    printf '%s' "${{FAKE_STATUS_ANSWER-}}"
+    exit "${{FAKE_ENGINE_EXIT:-0}}" ;;
+  "template check plan-task --item "*)
+    if [ -n "${{FAKE_CHECK_OUTPUT-}}" ]; then
+      printf '%s\\n' "$FAKE_CHECK_OUTPUT" >&2
+      exit 2
+    fi ;;
+esac
 # A flow runs its program, as the engine's `flow run` does: in the flow it names, or in
 # the one already entered, which is the engine's joining a live flow of the same session.
 # `FAKE_FLOW_ID` stands for an engine minting an id this repository should not print.
@@ -372,6 +390,13 @@ exit "${{FAKE_ENGINE_EXIT:-0}}"
 """
     )
     engine.chmod(0o755)
+    # The read API `just telemetry-server` and `just dag-ui` exec, traced the same way.
+    read_api = Path(at(checkout, READ_API))
+    read_api.parent.mkdir(parents=True, exist_ok=True)
+    read_api.write_text(
+        '#!/usr/bin/env bash\nprintf \'%s %s\\n\' "$0" "$*" >>"$TRACE_FILE"\nexit 0\n'
+    )
+    read_api.chmod(0o755)
     return checkout, trace
 
 

@@ -38,7 +38,7 @@ PLAN_TASK = ROOT / "plan-task.md.j2"
 #: The follow-up agent's task, which this host registers and supplies at its own layer.
 FOLLOW_UP = ROOT / "follow-up-task.md.j2"
 APPENDIX = ROOT / "dispatch-appendix.md"
-ENGINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
+ENGINE = REPO_ROOT / "node_modules" / ".bin" / "onepipeline"
 PLAN_STORE = REPO_ROOT / ".venv" / "bin" / "onetaskgraph"
 DISPATCH_ENV = REPO_ROOT / "scripts" / "dispatch-env.sh"
 

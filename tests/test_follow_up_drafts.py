@@ -32,6 +32,7 @@ from pathlib import Path
 import pytest
 
 from orchestrator import follow_up_drafts as drafts
+from orchestrator import npm_installs
 from orchestrator.follow_up_drafts import Author, DispatchStamp, Draft, Refused
 from orchestrator.project_store import frontmatter
 
@@ -708,15 +709,19 @@ def test_an_engine_that_cannot_answer_is_a_refusal_naming_the_run(
     _recorded(tmp_path, RUN, None)
     stand_in = tmp_path / "bin"
     stand_in.mkdir()
-    (stand_in / "python3").symlink_to(sys.executable)
     (stand_in / drafts.ENGINE).write_text("#!/bin/sh\necho '{}'\n", encoding="utf-8")
     (stand_in / drafts.ENGINE).chmod(0o755)
-    monkeypatch.setattr(sys, "executable", str(stand_in / "python3"))
+    monkeypatch.setattr(npm_installs, "ENGINE", stand_in / drafts.ENGINE)
     with pytest.raises(Refused, match="answered no reading this can name the run from"):
         drafts.follow_up_key(RUN, runs=tmp_path)
 
+    # With no engine installed, a decoy leading the search path is never asked instead.
     (stand_in / drafts.ENGINE).unlink()
-    monkeypatch.setenv("PATH", str(tmp_path / "nowhere"))
+    decoys = tmp_path / "decoys"
+    decoys.mkdir()
+    (decoys / drafts.ENGINE).write_text("#!/bin/sh\necho '{}'\n", encoding="utf-8")
+    (decoys / drafts.ENGINE).chmod(0o755)
+    monkeypatch.setenv("PATH", f"{decoys}{os.pathsep}{os.environ['PATH']}")
     with pytest.raises(Refused, match="the engine could not be asked"):
         drafts.follow_up_key(RUN, runs=tmp_path)
 
@@ -831,7 +836,7 @@ def test_a_public_id_that_cannot_name_a_draft_project_is_refused(
     reading = {
         "labels": {},
         "group": None,
-        "schema_version": 2,
+        "schema_version": 3,
         "run_id": RUN,
         "public_id": "../escape",
         "word": "SETTLED",
@@ -839,15 +844,15 @@ def test_a_public_id_that_cannot_name_a_draft_project_is_refused(
         "driven": False,
         "ending": {"kind": "complete", "nodes": []},
         "paused": None,
+        "nodes": [],
     }
     stand_in = tmp_path / "bin"
     stand_in.mkdir()
-    (stand_in / "python3").symlink_to(sys.executable)
     answer = stand_in / "reading.json"
     answer.write_text(json.dumps(reading), encoding="utf-8")
     (stand_in / drafts.ENGINE).write_text(f"#!/bin/sh\ncat {answer}\n", encoding="utf-8")
     (stand_in / drafts.ENGINE).chmod(0o755)
-    monkeypatch.setattr(sys, "executable", str(stand_in / "python3"))
+    monkeypatch.setattr(npm_installs, "ENGINE", stand_in / drafts.ENGINE)
 
     with pytest.raises(Refused, match="cannot name a draft project"):
         drafts.follow_up_key(RUN, runs=tmp_path)

@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from orchestrator import plan_store
+from orchestrator import npm_installs, plan_store
 from orchestrator.root import REPO_ROOT
 
 
@@ -15,7 +15,7 @@ def write(scratch: Path) -> None:
     loader.write_text(
         subprocess.check_output(
             [
-                str(REPO_ROOT / ".venv/bin/onepipeline"),
+                str(npm_installs.ENGINE),
                 "template",
                 "resolve",
                 "spike-brief",

@@ -155,9 +155,9 @@ _ACKNOWLEDGE = (
 _RELEASE_STATUS = "the adopted `onevcs` has the first `release status` that decides such a landing"
 _POOL = "`onevcs pool status <repo>` reads them"
 _SESSION_CLOSE = "`onevcs session close <session>` closes a session you opened"
-_SUPERSESSIONS = "`uv run --no-sync onepipeline supersessions <run-id> --record`, run once by hand"
+_SUPERSESSIONS = "`node_modules/.bin/onepipeline supersessions <run-id> --record`, run once by hand"
 _SCRATCH_DISCARD = (
-    "`uv run --no-sync onepipeline scratch discard <run-id>` is granted because it deletes "
+    "`node_modules/.bin/onepipeline scratch discard <run-id>` is granted because it deletes "
     "only the regenerable scratch of a run whose status word says it ended, never follows a "
     "link out of it, and refuses a paused, driven or unknown run"
 )
@@ -356,10 +356,12 @@ INVOCATIONS: tuple[Invocation, ...] = (
         _COMMENTS,
     ),
     _allow(
-        "supersessions", "uv run --no-sync onepipeline supersessions {run} --record", _SUPERSESSIONS
+        "supersessions",
+        "node_modules/.bin/onepipeline supersessions {run} --record",
+        _SUPERSESSIONS,
     ),
     _allow(
-        "scratch-discard", "uv run --no-sync onepipeline scratch discard {run}", _SCRATCH_DISCARD
+        "scratch-discard", "node_modules/.bin/onepipeline scratch discard {run}", _SCRATCH_DISCARD
     ),
     _allow(
         "tickets-statuses",
@@ -472,7 +474,7 @@ INVOCATIONS: tuple[Invocation, ...] = (
     # command is held to a rule of its own, and none grants the deletion.
     _refuse(
         "scratch-discard-and-rm",
-        "uv run --no-sync onepipeline scratch discard {run} && rm -rf {workspace}",
+        "node_modules/.bin/onepipeline scratch discard {run} && rm -rf {workspace}",
         _SCRATCH_DISCARD,
     ),
     _refuse(

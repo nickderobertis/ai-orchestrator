@@ -234,7 +234,7 @@ class SessionStart:
                     )
                 else:
                     _write_version_double(
-                        venv_bin / tool.binary, f"{tool.binary} {tool.adopted_version}"
+                        tool.executable(self.repo), f"{tool.binary} {tool.adopted_version}"
                     )
             # llmlint: ignore-end[e2e_not_mocked]
         # llmlint: ignore-block[e2e_not_mocked] `bun` is a published toolchain binary session

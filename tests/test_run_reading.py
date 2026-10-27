@@ -25,7 +25,7 @@ RUN = RunId("run-1")
 ENDED = {
     "labels": {"onepipeline.project": "plans:1"},
     "group": "plans:1",
-    "schema_version": 2,
+    "schema_version": 3,
     "run_id": RUN,
     "public_id": "run-0123456789ab",
     "word": "ENDED failed",
@@ -33,6 +33,16 @@ ENDED = {
     "driven": False,
     "ending": {"kind": "failed", "nodes": [{"id": "a", "status": "failed", "outcome": None}]},
     "paused": None,
+    "nodes": [
+        {"id": "a", "status": "failed", "outcome": "checks-failed", "detail": "red"},
+        {
+            "id": "b",
+            "status": "complete-but-held",
+            "outcome": "held-for-release",
+            "detail": None,
+            "awaiting": [],
+        },
+    ],
 }
 #: The same run read while driven, paused on a human node and a question, and crashed.
 DRIVEN = ENDED | {"word": "ACTIVE", "liveness": "ACTIVE", "driven": True, "ending": None}
@@ -125,7 +135,7 @@ def test_each_reading_the_engine_gives_is_decided(reading: object, line: str) ->
         ("", "the answer is not one JSON document"),
         ("[]", "the reading does not carry exactly"),
         (json.dumps(ENDED | {"extra": 1}), "the reading does not carry exactly"),
-        (json.dumps(ENDED | {"schema_version": 1}), "it is schema 1, not 2"),
+        (json.dumps(ENDED | {"schema_version": 1}), "it is schema 1, not 3"),
         (json.dumps(ENDED | {"labels": {"a": 1}}), "its labels are not an object of strings"),
         (json.dumps(ENDED | {"labels": []}), "its labels are not an object of strings"),
         (json.dumps(ENDED | {"group": 3}), "its group is neither a string nor null"),
@@ -212,7 +222,7 @@ def test_each_reading_the_engine_gives_is_decided(reading: object, line: str) ->
             json.dumps(DRIVEN | {"unanswered": [{"envelope": "7", "delivery": "held"}]}),
             "an unanswered envelope's delivery is not an object",
         ),
-        (json.dumps(ENDED | {"schema_version": True}), "it is schema true, not 2"),
+        (json.dumps(ENDED | {"schema_version": True}), "it is schema true, not 3"),
         (json.dumps(ENDED | {"run_id": "run-2"}), 'it reads run "run-2", not run-1'),
         (json.dumps(ENDED | {"word": ["SETTLED"]}), 'its word is ["SETTLED"], which'),
         (json.dumps(ENDED | {"liveness": "GONE"}), 'its liveness is "GONE", which'),
@@ -275,6 +285,40 @@ def test_each_reading_the_engine_gives_is_decided(reading: object, line: str) ->
         (
             json.dumps(PAUSED | {"paused": {"human_actions": [], "blocking_surface": False}}),
             "its pause names nothing waiting",
+        ),
+        (json.dumps(ENDED | {"nodes": {}}), "its nodes are not a list"),
+        (
+            json.dumps(ENDED | {"nodes": [{"id": "a", "status": "done", "outcome": None}]}),
+            "a node does not carry exactly",
+        ),
+        (
+            json.dumps(
+                ENDED | {"nodes": [{"id": "a", "status": "lost", "outcome": None, "detail": None}]}
+            ),
+            'the status of a node is "lost", which',
+        ),
+        (
+            json.dumps(
+                ENDED | {"nodes": [{"id": "a", "status": "done", "outcome": None, "detail": 3}]}
+            ),
+            "a node has a detail that is not null or string",
+        ),
+        (
+            json.dumps(
+                ENDED
+                | {
+                    "nodes": [
+                        {
+                            "id": "a",
+                            "status": "done",
+                            "outcome": None,
+                            "detail": None,
+                            "awaiting": "x",
+                        }
+                    ]
+                }
+            ),
+            "a node awaits releases that are not a list",
         ),
         (json.dumps(ENDED | {"paused": PAUSED["paused"]}), "it reads both ended and paused"),
         (json.dumps(ENDED | {"driven": True}), "it reads driven and yet ended or paused"),
@@ -423,6 +467,7 @@ def test_the_vocabulary_the_reader_restates_is_the_published_schemas() -> None:
     assert frozenset(ending["required"]) == run_reading.ENDING_FIELDS
     assert frozenset(node["required"]) == run_reading.NODE_FIELDS
     assert _enum(node, "status") == run_reading.NODE_STATUSES
+    assert _enum(_definition(schema, "ReadingNode"), "status") == run_reading.READING_NODE_STATUSES
     assert frozenset(paused["required"]) == run_reading.PAUSE_FIELDS
     kind = _definition(schema, "EndingKind")
     named = kind.get("enum") or [one["const"] for one in kind["oneOf"]]

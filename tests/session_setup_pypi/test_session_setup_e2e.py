@@ -2,7 +2,8 @@
 
 Every journey here runs the real `scripts/session-setup.sh` in a fixture repository
 `tests/e2e/provisioning.py` builds, and that script's real `uv sync` installs the
-adopted published tools from PyPI. That is a cost and an outside service no ordinary
+adopted published tools from PyPI, and its real frozen `bun install` the engine and the
+read API from npmjs.com. That is a cost and outside services no ordinary
 edit should pay for, so this module belongs to the `session-setup-pypi` project, whose
 one target no selection `just check` makes can reach: keyed on what the journeys copy
 and run, and run by `just test` and `just upgrade`.
@@ -27,7 +28,9 @@ from provisioning import (
     run_setup,
     setup_repo,
 )
-from published_tools import PUBLISHED_TOOLS
+from published_tools import NPM_TOOLS, PUBLISHED_TOOLS, PublishedTool
+
+from orchestrator import npm_installs
 
 
 def test_session_setup_syncs_real_pinned_clis_and_then_needs_no_uv(tmp_path: Path) -> None:
@@ -74,26 +77,37 @@ def test_session_setup_syncs_real_pinned_clis_and_then_needs_no_uv(tmp_path: Pat
     assert "cannot install required project dependencies" not in without_uv.stderr
 
 
-def test_session_setup_syncs_every_published_tool_from_pypi(tmp_path: Path) -> None:
-    """The four adopted pins are real releases a real `uv sync` installs and runs.
+def test_session_setup_installs_every_published_tool_from_its_registry(tmp_path: Path) -> None:
+    """The adopted pins are real releases a real install puts in place and runs.
 
-    This is the only proof that matters for a pin: the sync resolves each
-    distribution from PyPI into a fresh venv, and the CLI it lands reports the
-    version `config/<tool>.version` adopted. A version nobody published, a git ref,
-    or a vendored copy cannot survive it.
+    This is the only proof that matters for a pin: `uv sync` resolves each PyPI
+    distribution into a fresh venv, the frozen `bun install` resolves the engine and the
+    read API from npmjs.com out of `bun.lock` — leaving the lock as it found it — and
+    the CLI each lands reports the version `config/<tool>.version` adopted. A version
+    nobody published, a git ref, or a vendored copy cannot survive it. Each npm tool's
+    platform binary, the one `orchestrator.npm_installs` resolves and every caller here
+    runs, answers as the npm launcher beside it does.
     """
     repo = setup_repo(tmp_path)
+    lock = (repo / "bun.lock").read_bytes()
 
     installed = run_setup(repo, tmp_path)
 
     assert installed.returncode == 0, installed.stderr
+    assert (repo / "bun.lock").read_bytes() == lock, "session setup rewrote bun.lock"
     for tool in PUBLISHED_TOOLS:
-        executable = repo / ".venv" / "bin" / tool.binary
+        executable = tool.executable(repo)
         assert f"ready ({tool.binary}: {tool.adopted_version} at {executable})" in installed.stderr
         reported = subprocess.run(
             [executable, "--version"], text=True, capture_output=True, check=True
         )
         assert reported.stdout.strip() == f"{tool.binary} {tool.adopted_version}"
+    for tool in NPM_TOOLS:
+        binary = npm_installs.platform_binary(
+            tool.distribution, tool.binary, node_modules=repo / "node_modules"
+        )
+        direct = subprocess.run([binary, "--version"], text=True, capture_output=True, check=True)
+        assert direct.stdout.strip() == f"{tool.binary} {tool.adopted_version}"
 
 
 def test_session_setup_fails_when_a_published_tool_misses_its_adopted_version(
@@ -114,6 +128,28 @@ def test_session_setup_fails_when_a_published_tool_misses_its_adopted_version(
         "required pinned onejudge, oneharness, and published-tool dependencies are unavailable"
         in result.stderr
     )
+
+
+@pytest.mark.parametrize("stale", NPM_TOOLS, ids=[tool.binary for tool in NPM_TOOLS])
+def test_session_setup_refuses_an_npm_tool_the_lock_installs_at_another_release(
+    tmp_path: Path, stale: PublishedTool
+) -> None:
+    """A pin `bun.lock` does not install is refused by the tool's name and both versions.
+
+    The lock installs the release the tracked pin names, so a pin moved without the lock
+    leaves a binary reporting the release it really is — which is the checkout session
+    setup has to refuse, as it refuses a stale wheel.
+    """
+    tool = stale
+    repo = setup_repo(tmp_path, adopted_published={tool.version_file: "99.99.99"})
+
+    result = run_setup(repo, tmp_path)
+
+    assert result.returncode == 1
+    assert (
+        f"{tool.binary} verification failed: expected '{tool.binary} 99.99.99', "
+        f"got '{tool.binary} {tool.adopted_version}'"
+    ) in result.stderr, result.stderr
 
 
 def test_session_setup_fails_when_synced_cli_misses_adopted_version(tmp_path: Path) -> None:

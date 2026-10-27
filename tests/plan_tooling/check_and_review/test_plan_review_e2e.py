@@ -54,9 +54,10 @@ from project_fixtures import (
     no_budgets,
     owning,
 )
+from published_tools import LOCKED_INSTALLS_PATH
 from waits import timeout as e2e_timeout
 
-from orchestrator import plan_budgets, plan_checklist_budgets, plan_review, plan_store
+from orchestrator import npm_installs, plan_budgets, plan_checklist_budgets, plan_review, plan_store
 from orchestrator.criteria_guard import APPENDIX
 from orchestrator.project_store import render_plan_project, write_plan_project
 from orchestrator.root import REPO_ROOT
@@ -850,7 +851,7 @@ def _loaded_by_the_engine(tmp_path: Path, project: str) -> dict[str, dict[str, o
     )
     recorder.chmod(0o755)
     read = subprocess.run(
-        ["uv", "run", "onepipeline", "plan", "check", project, "--check", str(recorder)],
+        [str(npm_installs.ENGINE), "plan", "check", project, "--check", str(recorder)],
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,
@@ -1511,6 +1512,9 @@ def _a_checkout_of_its_own(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
     # `scripts/plan.sh` takes its interpreter from the tree it runs in and falls back to
     # whatever `python3` is on PATH, which need not be the pinned one.
     (checkout / ".venv").symlink_to(REPO_ROOT / ".venv", target_is_directory=True)
+    # The engine the launch runs is the platform binary `bun.lock` installed under the
+    # tree's own `node_modules`; nothing here doubles it, so this checkout's install serves.
+    (checkout / "node_modules").symlink_to(REPO_ROOT / "node_modules", target_is_directory=True)
     # Each source's own configured root, under the copy: read from the store rather than
     # restated, so a root moved in `onetaskgraph.yaml` moves this with it.
     roots = {
@@ -1824,8 +1828,8 @@ def test_the_reviewer_is_asked_what_state_would_falsify_each_criterion(
 
 #: The adopting node of this host's own repository, in the shape the release-adoption
 #: bar asks for: it waits `published` on the producer, names no `consumes` — the host
-#: override names the wheel — and its criteria name the `config/<pin>.version` the
-#: installed engine wheel governs, with no version of its own.
+#: override names the npm package — and its criteria name the `config/<pin>.version` the
+#: installed engine package governs, with no version of its own.
 ADOPTS_THE_ENGINE = (
     "- `config/onepipeline.version` names the engine release whose lockfile resolves the "
     "linked fix, and the installed `onepipeline` reports that same release.\n"
@@ -2085,7 +2089,7 @@ def test_an_adopting_node_naming_no_pin_is_the_judged_turns_to_refuse(tmp_path: 
     criterion is what leaves it without a record, no plan-level turn is spent, and `just
     check-plan` refuses the plan naming the task. The prompt that turn was handed, read
     back from the provider's log, carried every fact the question turns on — the
-    repository, the adoption, this host's own origin, the table row for the engine wheel
+    repository, the adoption, this host's own origin, the table row for the engine's npm package
     — and the criteria without the path, so the judge decided with nothing missing.
     """
     project = _adoption_project("review-no-pin", ADOPTS_NAMING_NO_PIN)
@@ -2118,8 +2122,8 @@ def test_an_adopting_node_naming_no_pin_is_the_judged_turns_to_refuse(tmp_path: 
         '"repo": "github.com/nickderobertis/ai-orchestrator"',
         '"adoption": "published"',
         "`github.com/nickderobertis/ai-orchestrator` — the origin the task's `repo`",
-        "github.com/nickderobertis/onepipeline releases its `pypi` target as "
-        "`pypi:onepipeline-cli`, which `config/onepipeline.version` pins",
+        "github.com/nickderobertis/onepipeline releases its `npm` target as "
+        "`npm:onepipeline-cli`, which `config/onepipeline.version` pins",
         "The installed `onepipeline` reports the engine release whose lockfile resolves "
         "the linked fix",
     ):
@@ -2204,7 +2208,7 @@ def test_the_record_the_review_wrote_is_the_record_the_spawned_check_reads(
     )
     recorder.chmod(0o755)
     read = subprocess.run(
-        ["uv", "run", "onepipeline", "plan", "check", project, "--check", str(recorder)],
+        [str(npm_installs.ENGINE), "plan", "check", project, "--check", str(recorder)],
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,
@@ -2350,7 +2354,7 @@ def _regenerate(tmp_path: Path, project: str, node_id: str, answers: dict[str, o
         cwd=REPO_ROOT,
         env={
             **os.environ,
-            "PATH": f"{REPO_ROOT / '.venv' / 'bin'}{os.pathsep}{os.environ['PATH']}",
+            "PATH": f"{LOCKED_INSTALLS_PATH}{os.pathsep}{os.environ['PATH']}",
             "ONEPIPELINE_TEMPLATE_ROOT": str(REPO_ROOT / "templates"),
         },
         text=True,

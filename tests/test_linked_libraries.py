@@ -9,10 +9,13 @@ while every dispatched run came out with no transcript in it because the engine 
 0.3.0.
 
 Both times the missing thing was a source. There is one, published with the release
-and installed alongside it: the `onepipeline-cli` wheel ships a CycloneDX SBOM under
-its `dist-info/sboms/`, declaring one version per linked crate. Reading it needs no
-network, no clone of the engine, and no `Cargo.lock` — so the claims this repository's
-prose makes about the linked versions are reconciled here rather than mirrored by hand.
+and installed alongside it: the npm platform package `bun.lock` installs for this host's
+platform — `onepipeline-cli-linux-x64` here — ships a CycloneDX SBOM under its `sboms/`,
+declaring one version per linked crate, and the read API's platform package does the
+same. Reading it needs no network, no clone of the engine, and no `Cargo.lock` — so the
+claims this repository's prose makes about the linked versions are reconciled here
+rather than mirrored by hand. Nothing here fetches or generates an SBOM: a platform
+package without exactly one is a producer gap, and the failure names the package.
 """
 
 from __future__ import annotations
@@ -29,21 +32,53 @@ from typing import NamedTuple
 import pytest
 from llmlint_install import LLMLINT_DISTRIBUTION, host_tool_dir, installed_llmlint
 
+from orchestrator import npm_installs
 from orchestrator.root import REPO_ROOT
 
-#: The distribution whose SBOM answers the question. It is the same wheel
-#: `tests/published_tools.py` pins and `scripts/session-setup.sh` verifies; this
-#: module reads what that wheel *contains* rather than which version it is.
+#: The npm package whose platform package's SBOM answers the question. It is the same
+#: package `tests/published_tools.py` pins and `scripts/session-setup.sh` verifies; this
+#: module reads what it *contains* rather than which version it is.
 ENGINE_DISTRIBUTION = "onepipeline-cli"
-#: Where a wheel is required to put SBOMs, per PEP 770.
+#: Where a platform package puts its one SBOM.
 SBOM_DIRECTORY = "sboms"
+#: Where `bun.lock` installs this checkout's npm packages.
+NODE_MODULES = REPO_ROOT / "node_modules"
+
+
+def platform_package(package: str) -> str:
+    """The platform package of `package` npm installs for this host's platform."""
+    return npm_installs.platform_binary(package).parent.parent.name
+
+
+def npm_sbom(package: str, node_modules: Path = NODE_MODULES) -> Path:
+    """The one CycloneDX SBOM `package`'s installed platform package ships under `sboms/`.
+
+    A platform package without exactly one is a gap in what the producer published, and
+    the failure names the package rather than reading another source in its place.
+    """
+    installed = platform_package(package)
+    directory = node_modules / installed / SBOM_DIRECTORY
+    found = sorted(entry.name for entry in directory.iterdir()) if directory.is_dir() else []
+    assert len(found) == 1, (
+        f"{installed}, the platform package {package} installs here, must ship exactly one "
+        f"SBOM under {directory} for what it links to be read from; found {found}. Run "
+        "'just bootstrap' if it is not installed, or surface the gap to its producer"
+    )
+    return directory / found[0]
+
+
+def npm_installed_version(package: str) -> str:
+    """The release of `package` `bun.lock` installed into this checkout."""
+    manifest = NODE_MODULES / package / "package.json"
+    assert manifest.is_file(), f"{package} is not installed at {manifest}; run 'just bootstrap'"
+    return str(json.loads(manifest.read_text(encoding="utf-8"))["version"])
 
 
 class Release(NamedTuple):
     """One crate release, ordered so a floor can be stated as a comparison.
 
     A named type rather than a bare tuple because both sides of that comparison are
-    read from somewhere else — one from the engine wheel's SBOM, one declared here —
+    read from somewhere else — one from the engine's SBOM, one declared here —
     and a positional triple gives a reader nothing to check the pairing against.
     """
 
@@ -273,20 +308,13 @@ SCRATCH_RECLAIM_ENGINE_FLOOR = Release(0, 74, 1)
 
 
 def _linked_versions() -> dict[str, set[str]]:
-    """Every crate the adopted engine wheel declares it links, as name → versions.
+    """Every crate the adopted engine's SBOM declares it links, as name → versions.
 
     A version *set* rather than one version, because a Cargo graph legitimately carries
     two majors of a transitive crate at once. Only the crates this repository makes a
     claim about have to resolve to one, and `_linked_version` is where that is required.
     """
-    distribution = importlib.metadata.distribution(ENGINE_DISTRIBUTION)
-    files = distribution.files or ()
-    sboms = [entry for entry in files if SBOM_DIRECTORY in Path(entry).parts]
-    assert len(sboms) == 1, (
-        f"{ENGINE_DISTRIBUTION} must ship exactly one SBOM for the linked versions to be "
-        f"read from; found {[str(entry) for entry in sboms]}"
-    )
-    document = json.loads(Path(str(distribution.locate_file(sboms[0]))).read_text("utf-8"))
+    document = json.loads(npm_sbom(ENGINE_DISTRIBUTION).read_text("utf-8"))
     linked: dict[str, set[str]] = {}
     for component in document["components"]:
         linked.setdefault(component["name"], set()).add(component["version"])
@@ -312,9 +340,7 @@ def _linked_by_dependent(crate: str) -> tuple[LinkedCore, ...]:
     twice and cannot say *why*, which for a crate linked twice is the whole of the
     answer.
     """
-    distribution = importlib.metadata.distribution(ENGINE_DISTRIBUTION)
-    sboms = [entry for entry in (distribution.files or ()) if SBOM_DIRECTORY in Path(entry).parts]
-    document = json.loads(Path(str(distribution.locate_file(sboms[0]))).read_text("utf-8"))
+    document = json.loads(npm_sbom(ENGINE_DISTRIBUTION).read_text("utf-8"))
     components = {component["bom-ref"]: component for component in document["components"]}
     # The engine's own crate is the document's subject rather than one of its
     # components, and from onepipeline 0.37.0 it depends on the core directly.
@@ -357,13 +383,15 @@ LINKED_VERSION_CLAIMS: dict[str, dict[str, tuple[str, ...]]] = {
         "docs/dag-ui.md": ("the adopted release that is **oneagentgraph {version}**",),
         # The telemetry record's continuity across the latest onejudge move names what the
         # engine it was re-taken under links.
-        "docs/telemetry.md": ("and oneagentgraph {version}, read off its own SBOM",),
+        "docs/telemetry.md": (
+            "and oneagentgraph {version}, read off the SBOM its npm platform package ships",
+        ),
     },
     "onejudge": {
         "docs/telemetry.md": ("for itself, onejudge {version} and oneagentgraph",),
     },
     "oneharness-core": {
-        "docs/telemetry.md": ("the engine wheel links `oneharness-core` {version} for itself",),
+        "docs/telemetry.md": ("engine links `oneharness-core` {version} for itself",),
     },
     "onevcs": {
         # Which onevcs the lifecycle page's engine-behaviour claims were read at. Every
@@ -373,7 +401,8 @@ LINKED_VERSION_CLAIMS: dict[str, dict[str, tuple[str, ...]]] = {
         # constant gate below caught the rename, and nothing held the header sentence
         # that had just stopped naming the release the rename happened in.
         "docs/repo-lifecycle.md": (
-            "**`onevcs` {version}**, read from the installed engine wheel's SBOM",
+            "**`onevcs` {version}**, read from the SBOM the installed engine's npm platform "
+            "package ships",
             # This site used to be a *denial* — "`onevcs` {version} has none to open" —
             # and onevcs 0.18.0 made it false: a publication can now answer
             # `PublishOutcome::ChangeDraft`, which onepipeline settles a node
@@ -387,7 +416,7 @@ LINKED_VERSION_CLAIMS: dict[str, dict[str, tuple[str, ...]]] = {
 }
 
 
-def test_the_engine_wheel_declares_one_version_per_linked_crate() -> None:
+def test_the_engine_sbom_declares_one_version_per_linked_crate() -> None:
     """The SBOM is only a source if it answers for the crates the prose asks about."""
     linked = _linked_versions()
 
@@ -396,6 +425,30 @@ def test_the_engine_wheel_declares_one_version_per_linked_crate() -> None:
             f"{ENGINE_DISTRIBUTION}'s SBOM declares no {crate}; this repository's prose "
             f"claims a linked {crate} version that nothing here can now reconcile"
         )
+
+
+@pytest.mark.parametrize("package", [ENGINE_DISTRIBUTION, "onepipeline-api-cli"])
+def test_each_npm_platform_package_ships_exactly_one_sbom_and_a_gap_names_it(
+    package: str, tmp_path: Path
+) -> None:
+    """The installed platform package holds one SBOM; none, or two, fails naming it.
+
+    The two failing shapes are a copy of the installed package with its SBOM removed and
+    with a second beside it, so the refusal proved is the one a producer gap would meet.
+    """
+    installed = npm_sbom(package)
+    assert installed.parent.parent.name == platform_package(package)
+    copy = tmp_path / platform_package(package) / SBOM_DIRECTORY
+    copy.mkdir(parents=True)
+
+    for shape in ((), (installed.name, "second.cyclonedx.json")):
+        for name in shape:
+            (copy / name).write_bytes(installed.read_bytes())
+        with pytest.raises(AssertionError) as refused:
+            npm_sbom(package, tmp_path)
+        assert f"{platform_package(package)}, the platform package {package}" in str(
+            refused.value
+        ), refused.value
 
 
 def test_the_linked_oneagentgraph_carries_the_session_conversation_producer() -> None:
@@ -566,14 +619,12 @@ def test_the_linked_onevcs_records_gate_runs_and_discards_a_kept_branch() -> Non
 
 
 def _engine_release() -> Release:
-    """The adopted engine's own release, read as the subject of its wheel's SBOM."""
-    distribution = importlib.metadata.distribution(ENGINE_DISTRIBUTION)
-    sboms = [entry for entry in (distribution.files or ()) if SBOM_DIRECTORY in Path(entry).parts]
-    document = json.loads(Path(str(distribution.locate_file(sboms[0]))).read_text("utf-8"))
+    """The adopted engine's own release, read as the subject of its SBOM."""
+    document = json.loads(npm_sbom(ENGINE_DISTRIBUTION).read_text("utf-8"))
     subject = document.get("metadata", {}).get("component", {})
     assert subject.get("name") == "onepipeline", (
         f"{ENGINE_DISTRIBUTION}'s SBOM names {subject.get('name')!r} as its subject, not the "
-        "engine, so nothing here can read which engine release the wheel carries"
+        "engine, so nothing here can read which engine release the package carries"
     )
     return Release.parse(subject["version"])
 
@@ -634,7 +685,7 @@ class Divergence(NamedTuple):
     end, and one that only named a reason would be inherited silently.
     """
 
-    #: What the adopted engine wheel resolved.
+    #: What the adopted engine resolved.
     linked: str
     #: What `config/<crate>.version` names instead.
     pinned: str
@@ -702,12 +753,12 @@ class LinkedCore(NamedTuple):
 
 
 #: The pin and the crate are separate artifacts on separate cadences, so no equality
-#: between them would mean anything. Re-measured 2026-10-25 on this host's installed
-#: wheels: `config/oneharness.version` reads 0.26.1 and names the `oneharness-cli`
+#: between them would mean anything. Re-measured 2026-10-27 on this host's installed
+#: packages: `config/oneharness.version` reads 0.26.1 and names the `oneharness-cli`
 #: wheel, whose own CycloneDX SBOM declares the `oneharness-core` it is compiled
 #: against as 0.29.1 (`tests/test_engine_history_vocabulary.py` re-reads that pairing
-#: off the wheel for `docs/telemetry.md`); on the adopted onepipeline 0.93.0 the
-#: engine wheel links 0.29.1 for every dependent — while the sibling `oneagentgraph-cli`
+#: off the wheel for `docs/telemetry.md`); on the adopted onepipeline 0.95.1 the
+#: engine links 0.29.1 for every dependent — while the sibling `oneagentgraph-cli`
 #: wheel declares 0.29.1 and `onejudge-cli` 0.29.0, which is the pairing
 #: `test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs`
 #: holds and a different artifact from the `oneharness-cli` this pin names. The pin's
@@ -729,7 +780,7 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 LINKED_HARNESS_CORES = (
     LinkedCore(dependent="oneagentgraph", dependent_version="0.9.0", core="0.29.1"),
     LinkedCore(dependent="onejudge", dependent_version="0.22.0", core="0.29.1"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.93.0", core="0.29.1"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.95.1", core="0.29.1"),
 )
 
 #: How a crate names itself in a compiled binary: cargo embeds the registry source
@@ -753,7 +804,7 @@ LINKED_IN_BINARY = re.compile(
 #: installable from PyPI at all, or where this host's own verbs must run a later release
 #: than any engine links — never as a convenience, and never as "not yet looked at",
 #: because both read identically from here a release cycle later. Empty, and kept: the
-#: adopted engine 0.93.0 links the onevcs 0.57.0 the manager's verbs run, so the last
+#: adopted engine 0.95.1 links the onevcs 0.57.0 the manager's verbs run, so the last
 #: declared pair closed with it.
 DECLARED_DIVERGENCES: dict[str, Divergence] = {}
 
@@ -815,12 +866,12 @@ def test_every_cli_pin_beside_a_linked_crate_is_reconciled_or_declared_unreconci
 
 @pytest.mark.parametrize(("crate", "version_file"), sorted(RECONCILED_PINS.items()))
 def test_the_cli_pin_names_the_release_the_engine_linked(crate: str, version_file: str) -> None:
-    """`config/<crate>.version` is the release the adopted engine wheel resolved.
+    """`config/<crate>.version` is the release the adopted engine resolved.
 
     Not because the two *have* to be one number — they are genuinely different
     adoptions — but because a host on which they differ has two answers to "which
     `onevcs` is in force", and this host has twice acted on the wrong one. Held
-    against the wheel's own SBOM rather than against a lockfile or a `Cargo.toml`
+    against the engine's own SBOM rather than against a lockfile or a `Cargo.toml`
     requirement, for the reason the module docstring gives.
     """
     linked = _linked_version(crate)
@@ -879,9 +930,9 @@ def test_the_engine_links_the_store_that_maps_statuses_per_item_kind() -> None:
     )
 
 
-#: The distribution behind `just telemetry-server` — the Observatory's API, which from the
+#: The npm package behind `just telemetry-server` — the Observatory's API, which from the
 #: adopted release mutates as well as reads — and the pin that names its release.
-#: It links `onepipeline` on its own account the way the engine wheel links its
+#: It links `onepipeline` on its own account the way the engine links its
 #: siblings, which is why it is read here rather than beside the recipes.
 UI_API_DISTRIBUTION = "onepipeline-api-cli"
 
@@ -894,14 +945,8 @@ DECLARED_UI_ENGINE_DIVERGENCE: Divergence | None = None
 
 
 def _ui_api_linked_engine() -> str:
-    """The `onepipeline` release the adopted Observatory API wheel was built against."""
-    installed = importlib.metadata.distribution(UI_API_DISTRIBUTION)
-    sboms = [entry for entry in (installed.files or ()) if SBOM_DIRECTORY in Path(entry).parts]
-    assert len(sboms) == 1, (
-        f"{UI_API_DISTRIBUTION} must ship exactly one SBOM for the engine it links to be "
-        f"read from; found {[str(entry) for entry in sboms]}"
-    )
-    document = json.loads(Path(str(installed.locate_file(sboms[0]))).read_text("utf-8"))
+    """The `onepipeline` release the adopted Observatory API was built against."""
+    document = json.loads(npm_sbom(UI_API_DISTRIBUTION).read_text("utf-8"))
     declared = {
         str(component["version"])
         for component in document["components"]
@@ -931,7 +976,7 @@ def test_the_ui_api_links_the_pinned_engine() -> None:
     useful as a check on a *running* server — which release is answering on that port
     right now.
 
-    Read off the wheels' own bills of materials for the reason the module docstring
+    Read off the two packages' own bills of materials for the reason the module docstring
     gives, and `tests/dag_ui/test_dag_ui_serving_e2e.py` holds the served `/healthz` to
     the same number, so this and the surface an operator reads cannot disagree.
 
@@ -964,13 +1009,7 @@ RETIRED_BUS_AGENT_CRATE = "onemessagebus-agent"
 
 def _sbom_crates(distribution: str) -> set[str]:
     """Every crate name `distribution`'s one CycloneDX SBOM declares it links."""
-    installed = importlib.metadata.distribution(distribution)
-    sboms = [entry for entry in (installed.files or ()) if SBOM_DIRECTORY in Path(entry).parts]
-    assert len(sboms) == 1, (
-        f"{distribution} must ship exactly one SBOM for what it links to be read from; "
-        f"found {[str(entry) for entry in sboms]}"
-    )
-    document = json.loads(Path(str(installed.locate_file(sboms[0]))).read_text("utf-8"))
+    document = json.loads(npm_sbom(distribution).read_text("utf-8"))
     return {component["name"] for component in document["components"]}
 
 
@@ -980,7 +1019,7 @@ def test_no_engine_this_host_installs_links_the_retired_bus_agent_crate(
 ) -> None:
     """Re-adopting a release that still links `onemessagebus-agent` fails here.
 
-    Both wheels carrying an engine — the launcher's, which drives every dispatch, and the
+    Both packages carrying an engine — the launcher's, which drives every dispatch, and the
     read API's, which reads what it wrote — are read, because either one linking the
     crate is a build resolving two owners of the agent envelope, and that is what the
     move off the bus existed to end. The bus core it sat over must still be linked,
@@ -1004,7 +1043,8 @@ def test_no_engine_this_host_installs_links_the_retired_bus_agent_crate(
 #: nobody maintains: the advisory that retired them names each one. The adopted engine
 #: and llmlint read YAML with `serde-saphyr` instead, and a later adoption that brings any
 #: of these back — through the engine itself or a sibling it links — is refused here, by
-#: the wheel's own bill of materials, rather than found by an audit this host never runs.
+#: the installed package's own bill of materials, rather than found by an audit this host
+#: never runs.
 BANNED_YAML_CRATES = frozenset(
     {
         "libyml",
@@ -1062,7 +1102,7 @@ def _guarded_sbom(subject: str) -> Path:
     """The installed SBOM the guard reads for `subject`."""
     if subject == LLMLINT_DISTRIBUTION:
         return _sbom_path(_installed_llmlint(), subject)
-    return _sbom_path(importlib.metadata.distribution(subject), subject)
+    return npm_sbom(subject)
 
 
 def _with_component(sbom: Path, crate: str, copy: Path) -> Path:
@@ -1114,7 +1154,7 @@ def test_the_guard_refuses_an_sbom_declaring_a_banned_yaml_crate(
     """Each banned crate added to a copy of the installed SBOM is refused by its name.
 
     The copy is the real document with one component more, so what this proves is that
-    the guard above reads the shape these wheels actually publish, not a fixture's.
+    the guard above reads the shape these packages actually publish, not a fixture's.
     """
     copy = _with_component(_guarded_sbom(subject), crate, tmp_path / "sbom.cyclonedx.json")
 
@@ -1227,7 +1267,7 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
     """Each sibling CLI's own core, against the one the engine resolved for that crate.
 
     The sentence this backs is the sharpest form of the whole module's subject: the
-    `oneagentgraph` and `onejudge` a dispatch runs are compiled *into the engine wheel*,
+    `oneagentgraph` and `onejudge` a dispatch runs are compiled *into the engine*,
     and this host also installs each of them as a standalone CLI whose wheel resolved its
     own `oneharness-core`. Those two numbers are free to differ, and have on every
     adoption recorded here but one — so a reader who measured the sibling's own wheel
@@ -1382,8 +1422,8 @@ def test_the_installed_oneharness_cli_is_built_from_a_core_carrying_the_chain_cl
 
 
 # Everything above is an *internal* consistency check: the pins in `config/` against
-# the bill of materials of the wheel this host installed. It is silent about the one
-# question an adoption starts from — whether that wheel is the newest the registry
+# the bill of materials of the engine this host installed. It is silent about the one
+# question an adoption starts from — whether that release is the newest the registry
 # publishes — so a host a release cycle behind reads exactly like a host that is
 # current, on every gate run, for as long as nobody thinks to look.
 #
@@ -1395,9 +1435,10 @@ def test_the_installed_oneharness_cli_is_built_from_a_core_carrying_the_chain_cl
 # against state outside this workspace, and a memo keyed on this tree would replay a
 # green across the very registry move it exists to notice.
 
-#: Where a distribution's published releases are read from. The JSON API rather than
-#: the simple index, because it names each release as its own key and needs no HTML.
-REGISTRY_URL = "https://pypi.org/pypi/{distribution}/json"
+#: Where a package's published releases are read from: npmjs.com's registry, which this
+#: host installs the engine from, and whose package document names each release as a key
+#: of its `versions`.
+REGISTRY_URL = "https://registry.npmjs.org/{distribution}"
 
 #: How long this reading waits on the registry. Short deliberately: an unreachable
 #: registry is one of this reading's ordinary answers, and a check that reports rather
@@ -1411,7 +1452,7 @@ RELEASE_SPELLING = re.compile(r"^\d+\.\d+\.\d+$")
 
 
 class RegistryReading(NamedTuple):
-    """What the registry says about the wheel this host installed.
+    """What the registry says about the engine this host installed.
 
     ``newest`` is `None` when the registry could not be read at all, which is a third
     answer rather than "not behind": an unreachable registry has said nothing about the
@@ -1438,11 +1479,11 @@ class RegistryReading(NamedTuple):
             )
         if self.behind:
             return (
-                f"{self.distribution} {self.installed} is installed and PyPI publishes "
+                f"{self.distribution} {self.installed} is installed and npm publishes "
                 f"{self.newest}; the pins in config/ are reconciled against the older "
-                "wheel, so adopting is a decision to make between runs"
+                "release, so adopting is a decision to make between runs"
             )
-        return f"{self.distribution} {self.installed} is installed and is the newest PyPI publishes"
+        return f"{self.distribution} {self.installed} is installed and is the newest npm publishes"
 
 
 class RegistryReadingWarning(UserWarning):
@@ -1474,9 +1515,9 @@ def orderable_releases(distribution: str) -> tuple[tuple[Release, ...], str | No
             payload = json.loads(answer.read().decode("utf-8"))
     except (urllib.error.URLError, TimeoutError, ValueError, OSError) as unread:
         return (), f"{type(unread).__name__}: {unread}"
-    releases = payload.get("releases")
+    releases = payload.get("versions")
     if not isinstance(releases, dict):
-        return (), "the registry answered without a releases object"
+        return (), "the registry answered without a versions object"
     return (
         tuple(
             sorted(
@@ -1514,18 +1555,18 @@ def registry_reading(
 # holds the four selectors to a partition of the suite, so a marker that stopped routing
 # is a failing check rather than a test nothing runs.
 @pytest.mark.reads_checkouts
-def test_whether_the_installed_engine_wheel_is_behind_the_registry_is_read_and_reported() -> None:
+def test_whether_the_installed_engine_is_behind_the_registry_is_read_and_reported() -> None:
     """Take the reading against the real registry, and report it without enforcing it.
 
-    The gates above hold this host's pins to what the installed wheel linked and say
-    nothing about whether that wheel is current — which is the question an adoption
+    The gates above hold this host's pins to what the installed engine linked and say
+    nothing about whether that release is current — which is the question an adoption
     starts from. This asks it every time the uncached tier runs, and the only thing it
     asserts is that an answer was produced: being behind is news for a manager, not a
     failure of this tree, and an unreachable registry is a third answer rather than
     evidence that nothing newer exists.
     """
     installed = Release.parse(
-        importlib.metadata.version(ENGINE_DISTRIBUTION), f"the installed {ENGINE_DISTRIBUTION}"
+        npm_installed_version(ENGINE_DISTRIBUTION), f"the installed {ENGINE_DISTRIBUTION}"
     )
     published, unread = orderable_releases(ENGINE_DISTRIBUTION)
     reading = registry_reading(ENGINE_DISTRIBUTION, installed, published, unread)
@@ -1541,8 +1582,8 @@ def test_whether_the_installed_engine_wheel_is_behind_the_registry_is_read_and_r
 @pytest.mark.parametrize(
     ("published", "unread", "behind", "fragment"),
     (
-        (("0.17.5", "0.18.0"), None, True, "PyPI publishes 0.18.0"),
-        (("0.17.5",), None, False, "is the newest PyPI publishes"),
+        (("0.17.5", "0.18.0"), None, True, "npm publishes 0.18.0"),
+        (("0.17.5",), None, False, "is the newest npm publishes"),
         ((), "URLError: unreachable", False, "the registry could not be read"),
     ),
 )
@@ -1552,7 +1593,7 @@ def test_a_registry_answer_is_reported_in_every_shape_and_fails_nothing(
     """All three answers produce a reading, and none of them is a failure.
 
     Driven over a stated registry answer rather than the real one, because the answer
-    that matters most — the installed wheel being behind — is the one this host is not
+    that matters most — the installed engine being behind — is the one this host is not
     in today and cannot be put into. Reporting is asserted the way an operator meets
     it: the warning is raised and caught here, which is a failure of nothing.
     """

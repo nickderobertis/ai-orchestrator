@@ -55,7 +55,7 @@ __all__ = [
 RunId = NewType("RunId", str)
 
 #: The version of the document this reader reads.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 #: The JSON type of every field of each object the document carries, keyed by the name
 #: the schema gives the object (`RunReading` for the document itself). A type is a JSON
 #: type name, another object's name, or `array[<item type>]`. Every field is present
@@ -74,6 +74,14 @@ FIELD_TYPES: dict[str, dict[str, frozenset[str]]] = {
         "paused": frozenset({"Paused", "null"}),
         "unanswered": frozenset({"array[UnansweredEnvelope]"}),
         "inbox": frozenset({"array[InboxNote]"}),
+        "nodes": frozenset({"array[ReadingNode]"}),
+    },
+    "ReadingNode": {
+        "id": frozenset({"string"}),
+        "status": frozenset({"string"}),
+        "outcome": frozenset({"string", "null"}),
+        "detail": frozenset({"string", "null"}),
+        "awaiting": frozenset({"array", "null"}),
     },
     "Ending": {"kind": frozenset({"EndingKind"}), "nodes": frozenset({"array[EndedNode]"})},
     "EndedNode": {
@@ -99,6 +107,7 @@ OPTIONAL_FIELDS: dict[str, frozenset[str]] = {
     "RunReading": frozenset({"unanswered", "inbox"}),
     "UnansweredEnvelope": frozenset({"delivery"}),
     "InboxNote": frozenset(),
+    "ReadingNode": frozenset({"awaiting"}),
 }
 #: Every field the document always carries.
 READING_FIELDS = frozenset(FIELD_TYPES["RunReading"]) - OPTIONAL_FIELDS["RunReading"]
@@ -134,10 +143,15 @@ NODE_STATUSES = frozenset(
         "parked",
         "cancelled",
         "complete-but-draft",
+        "complete-but-held",
         "failed",
         "skipped",
     }
 )
+#: The fields every node of the run's graph carries, and the status words it can carry:
+#: an ending's, and `done`.
+READING_NODE_FIELDS = frozenset(FIELD_TYPES["ReadingNode"]) - OPTIONAL_FIELDS["ReadingNode"]
+READING_NODE_STATUSES = NODE_STATUSES | {"done"}
 #: The fields of a pause.
 PAUSE_FIELDS = frozenset(FIELD_TYPES["Paused"])
 #: The fields every envelope the run has claimed and not answered carries.
@@ -232,6 +246,23 @@ def _ending(value: object) -> None:
             raise Unreadable("a node of its ending has an outcome that is not a string")
 
 
+def _nodes(value: object) -> None:
+    """Check every node of the run's graph, which decides nothing but is the engine's own."""
+    if not isinstance(value, list):
+        raise Unreadable("its nodes are not a list")
+    types = FIELD_TYPES["ReadingNode"]
+    for listed in value:
+        node = _object(listed, READING_NODE_FIELDS, "a node", OPTIONAL_FIELDS["ReadingNode"])
+        _word(node["status"], READING_NODE_STATUSES, "the status of a node")
+        for field in ("id", "outcome", "detail"):
+            if not _is(node[field], types[field]):
+                raise Unreadable(
+                    f"a node has a {field} that is not {' or '.join(sorted(types[field]))}"
+                )
+        if not isinstance(node.get("awaiting"), list | None):
+            raise Unreadable("a node awaits releases that are not a list")
+
+
 def _unanswered(value: object) -> None:
     """Check the envelopes the run claimed and has not answered, which decide nothing."""
     if not isinstance(value, list):
@@ -323,6 +354,7 @@ def _checked(answer: str, run: RunId) -> dict[str, object]:
     _word(reading["liveness"], LIVENESS, "its liveness")
     if not _is(reading["driven"], FIELD_TYPES["RunReading"]["driven"]):
         raise Unreadable("its driven field is not true or false")
+    _nodes(reading["nodes"])
     if "unanswered" in reading:
         _unanswered(reading["unanswered"])
     if "inbox" in reading:

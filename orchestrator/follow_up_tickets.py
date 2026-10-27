@@ -93,7 +93,7 @@ from onetaskgraph_sdk._generated.task_detail import Comment as ShownComment
 from onetaskgraph_sdk._generated.task_detail import Task as ShownTask
 
 from orchestrator import follow_up_drafts as drafts
-from orchestrator import plan_store
+from orchestrator import npm_installs, plan_store
 from orchestrator.plan_budgets import BUDGETS_FILE, Direction
 from orchestrator.plan_store import RECORD_COMPONENT, QualifiedTaskId
 from orchestrator.project_store import TASKS_DIRECTORY, frontmatter, hosted_origin
@@ -4902,12 +4902,22 @@ def budgets_path(root: Path, run: str) -> Path:
 
 
 class Installs(NamedTuple):
-    """The locked installs of the checkout a launch runs from, which every read here uses."""
+    """The locked installs of the checkout a launch runs from, which every read here uses.
+
+    ``bin`` is that checkout's `.venv/bin`, where `uv.lock` installs every tool but the
+    engine, which `bun.lock` installs into the same checkout's `node_modules`: its platform
+    package's binary, which is what `orchestrator.npm_installs` says every caller runs.
+    """
 
     bin: Path
 
     def tool(self, name: str) -> str:
         return str(self.bin / name)
+
+    def engine(self) -> str:
+        return str(
+            npm_installs.platform_binary(node_modules=self.bin.parent.parent / "node_modules")
+        )
 
 
 def _ran(
@@ -4945,7 +4955,7 @@ def change_telemetry(run: str, runs_root: Path, installs: Installs) -> list[Mapp
     if not (runs_root / run).is_dir():
         return []
     environment = {**os.environ, "ONEPIPELINE_RUNS_DIR": str(runs_root)}
-    command = [installs.tool("onepipeline"), "telemetry", run, "--changes", "--json"]
+    command = [installs.engine(), "telemetry", run, "--changes", "--json"]
     done = _ran(command, env=environment)
     if done.returncode != 0:
         raise OSError(f"`{' '.join(command)}` exited {done.returncode}: {_said(done)}")
@@ -5042,7 +5052,12 @@ def budget_report(
         "ONEPIPELINE_RUN_ID": run,
         "ONEPIPELINE_NODE_ID": node,
         "ONEPIPELINE_RUNS_DIR": str(runs_root),
-        "PATH": f"{installs.bin}{os.pathsep}{os.environ.get('PATH', '')}",
+        # A budget's command may ask a bare `onepipeline`, as `docs/budgets.md` promises, so
+        # the launch's locked engine leads the search path beside its `.venv/bin`, ahead of
+        # any the inherited PATH offers.
+        "PATH": os.pathsep.join(
+            (str(installs.bin), str(Path(installs.engine()).parent), os.environ.get("PATH", ""))
+        ),
     }
     command = [installs.tool("onebudgetspec"), "check", BUDGETS_FILE]
     command += ["--label", BUDGET_LABEL, "--output", "json"]

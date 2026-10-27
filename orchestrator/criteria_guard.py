@@ -94,7 +94,6 @@ from __future__ import annotations
 
 import hashlib
 import re
-import shutil
 import sys
 from collections.abc import Iterator, Mapping, Sequence
 from functools import lru_cache
@@ -103,6 +102,7 @@ from typing import Any, NamedTuple
 
 from orchestrator import (
     adoption_guard,
+    npm_installs,
     plan_budgets,
     plan_review,
     plan_store,
@@ -267,19 +267,23 @@ PERSONA_WINDOW = 64 * 1024
 
 @lru_cache(maxsize=1)
 def _engine_bytes() -> bytes:
-    """The dispatching binary, whose linked `oneagentgraph` ships the roles."""
-    found = shutil.which(ENGINE)
+    """The dispatching binary, whose linked `oneagentgraph` ships the roles.
+
+    The prebuilt one this checkout's `bun.lock` installed, read from its platform
+    package: the launcher on the search path is a script that runs it.
+    """
+    found = npm_installs.platform_binary()
     # tests/test_criteria_guard.py covers this with substituted engine bytes, and no
-    # recipe journey can: `uv run` puts this checkout's `.venv/bin` on the child's
-    # PATH, so the engine the guard resolves is there whatever PATH a caller sets.
+    # recipe journey can: session setup refuses a checkout with no engine installed, so
+    # every recipe that reaches the guard runs in one that has it.
     # llmlint: ignore[changed_behavior_has_e2e] see the note above this line
-    if found is None:
+    if not found.is_file():
         raise CriteriaError(
-            f"cannot resolve any node's review bar: {ENGINE!r} is not on PATH, and its "
-            "linked `oneagentgraph` is what ships the role a `persona` name resolves to; "
-            "run `just bootstrap` and retry"
+            f"cannot resolve any node's review bar: no {ENGINE!r} is installed at {found}, "
+            "and its linked `oneagentgraph` is what ships the role a `persona` name "
+            "resolves to; run `just bootstrap` and retry"
         )
-    return Path(found).resolve().read_bytes()
+    return found.read_bytes()
 
 
 def builtin_persona(name: str) -> str | None:

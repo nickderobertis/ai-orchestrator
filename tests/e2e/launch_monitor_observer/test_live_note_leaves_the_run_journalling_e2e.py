@@ -12,8 +12,11 @@ run read as an abandoned one, which invites exactly the wrong intervention
 https://github.com/nickderobertis/onepipeline/pull/573 — delivers the note off that writer.
 `config/onepipeline.version` is what puts it in force here, so this drives it the way a
 manager meets it: a run launched by the real `just orchestrate`, a note sent by the real
-`just channel-reply`, and the run read back through the real `just status` and its own
-journal while the note waits.
+`just channel-reply`, and the run read back through the real `just status`, its own
+journal and its liveness file while the note waits. From onepipeline 0.95.0 a member's
+heartbeat is kept in `<run>/liveness.json` rather than journalled (its
+`docs/contract-divergences.md`, §142), so a beat is read there as the member's entry
+advancing.
 
 Everything between the recipes and the model is real — the engine, `oneagentgraph`, the
 onejudge conversation, the `oneharness` CLI and its stream. The paid model is
@@ -102,7 +105,7 @@ Event = dict[str, object]
 
 
 class Counted(NamedTuple):
-    """How many of one record the journal held at two moments."""
+    """How many of one record the run held at two moments."""
 
     #: When the note was sent.
     when_sent: int
@@ -193,6 +196,24 @@ def _count(journal: list[Event], kind: str) -> int:
         for event in journal
         if event.get("kind") == kind
         and cast(dict[str, object], event.get("labels", {})).get("node") == NODE_ID
+    )
+
+
+def _beats(root: Path) -> frozenset[str]:
+    """The latest heartbeat of each dispatch member of the node, off the run's liveness file.
+
+    The engine writes the file whole and atomically, one entry per member holding its last
+    beat, and drops an entry once its dispatch settles.
+    """
+    written = root / "runs" / RUN_NAME / "liveness.json"
+    if not written.exists():
+        return frozenset()
+    # `onepipeline` writes this file; its schema is the engine's, and the cast says so.
+    members = cast(list[dict[str, str]], json.loads(written.read_text(encoding="utf-8"))["members"])
+    return frozenset(
+        f"{member['member']}@{member['last_heartbeat_at']}"
+        for member in members
+        if member["node"] == NODE_ID
     )
 
 
@@ -290,7 +311,9 @@ def journey(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> It
             ),
         )
         sending.shutdown(wait=False)
-        heartbeats = _count(before, "member-heartbeat")
+        # Every beat seen so far, since the file holds only each member's latest.
+        beats = set(_beats(root))
+        heartbeats = len(beats)
         activity = _count(before, "turn-activity")
 
         def recorded_while_waiting() -> bool:
@@ -299,22 +322,21 @@ def journey(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> It
             # appends nothing until the turn ends, and then the held heartbeats and tool
             # calls arrive in one flush behind the note's own record.
             assert not _note_recorded(journal), (
-                "the note was recorded before the run journalled two more heartbeats and two "
-                "more tool calls: the run's journal took nothing while the note waited on the "
+                "the note was recorded before the run recorded two more heartbeats and two "
+                "more tool calls: the run took nothing while the note waited on the "
                 f"busy turn\n{[event.get('kind') for event in journal]}"
             )
-            return (
-                _count(journal, "member-heartbeat") >= heartbeats + 2
-                and _count(journal, "turn-activity") >= activity + 2
-            )
+            beats.update(_beats(root))
+            return len(beats) >= heartbeats + 2 and _count(journal, "turn-activity") >= activity + 2
 
         _until(
             "the run to go on recording heartbeats and turn activity", recorded_while_waiting, 60
         )
         status = just("status", RUN_NAME)
         during = _journal(root)
+        beats.update(_beats(root))
         waiting = WhileWaiting(
-            heartbeats=Counted(heartbeats, _count(during, "member-heartbeat")),
+            heartbeats=Counted(heartbeats, len(beats)),
             activity=Counted(activity, _count(during, "turn-activity")),
             status=(status.stdout.splitlines() or [""])[0],
         )
@@ -339,7 +361,7 @@ def journey(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> It
 
 
 @pytest.mark.xdist_group("live-note-busy-turn")
-def test_the_run_goes_on_journalling_heartbeats_and_turn_activity_while_the_note_waits(
+def test_the_run_goes_on_recording_heartbeats_and_turn_activity_while_the_note_waits(
     journey: Journey,
 ) -> None:
     """Both records the frozen writer used to hold back keep arriving during the wait."""

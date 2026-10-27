@@ -92,15 +92,10 @@ export_template_root onepipeline || exit "$?"
 # Only a launch starts harnesses; a read-only view must not create a directory or
 # refuse on an indirection it never uses. `launching` carries this arm's answer past the
 # design-approval gate below, so which verbs are a launch is decided here once.
-# `installed` says which verbs run the installed binary rather than `uv run`: every launch,
-# and `flow`, whose program launches runs of its own (the exec below says why).
 launching=false
-installed=false
-[ "${1:-}" != flow ] || installed=true
 case "${1:-}" in
     start | adopt)
         launching=true
-        installed=true
         # The credentials, every Claude identity's config directory and the alternate
         # Codex home, through the one definition of which resolvers establish them —
         # the same definition the dispatch-env hook named below re-runs before every
@@ -175,24 +170,29 @@ if [ "$launching" = true ]; then
     export_follow_up_drafts onepipeline || exit "$?"
 fi
 
-# Which `onepipeline` a launch — or a flow, whose program launches — runs, and it is not
-# `uv run`'s: `uv run` exports
-# `VIRTUAL_ENV` naming this checkout's `.venv` into the process it starts, which would put
-# back, after the construction above, the name that construction exists to take out. So a
-# launch execs the installed binary itself, and `scripts/dispatch-env.sh` puts this
-# checkout's `.venv/bin` on the PATH it builds — the part of `uv run` a dispatch needs. A
-# read-only view keeps `uv run onepipeline` below, like every other recipe here.
+# Which `onepipeline` every verb runs: the binary `bun.lock` installs from npmjs.com into
+# this checkout's `node_modules`, at the release `config/onepipeline.version` pins, by
+# absolute path — the platform package's own, never the npm launcher in front of it, for the
+# reason `scripts/npm-binary.sh` gives. Never a Python environment's: a launch's environment is built above so that no
+# checkout's `VIRTUAL_ENV` reaches a dispatch, and `scripts/dispatch-env.sh` puts this
+# checkout's `.venv/bin` and `node_modules/.bin` on the PATH it builds. A read-only view
+# gets the checkout's `.venv/bin` in front of its PATH here instead, so a CLI the engine
+# spawns — `oneagentgraph health` among them — is this checkout's pinned one. A `flow` is
+# left the PATH it was given, as a launch is: its program is a launcher that resolves its
+# own tools, and that PATH is the caller's to choose.
 #
-# Resolved *after* the design-approval gate above, because that gate is itself a `uv run`
-# and so is what heals a fresh worktree's environment before this reads it; an `adopt`,
-# which runs no gate, is the one shape that can reach the refusal below.
-if [ "$installed" = true ]; then
-    engine="${script_dir%/scripts}/.venv/bin/onepipeline"
-    if [ ! -x "$engine" ]; then
-        echo "onepipeline: this checkout has no executable engine at $engine, and a launch runs the installed binary rather than 'uv run' so that a dispatch does not inherit this checkout's Python environment; run 'just bootstrap' to install the pinned releases, then retry" >&2
-        exit 2
-    fi
+# Resolved *after* the design-approval gate above, so a launch that gate refuses is
+# refused for its plan rather than for the install; an `adopt`, which runs no gate, and
+# every view reach the refusal below directly.
+# shellcheck source=scripts/npm-binary.sh
+# llmlint: ignore[boundary_inputs_validated, robust_shell, tool_output_is_signal] A tracked sibling is a checkout invariant, not an input at a trust boundary: one that is missing or will not load is a broken checkout, and the shell says so on the line it fails the source at.
+. "$script_dir/npm-binary.sh"
+engine=$(npm_binary onepipeline-cli onepipeline) || exit 2
+if [ ! -x "$engine" ]; then
+    echo "onepipeline: this checkout has no executable engine at $engine; run 'just bootstrap' to install the pinned releases from bun.lock, then retry" >&2
+    exit 2
 fi
+[ "$launching" = true ] || [ "${1:-}" = flow ] || export PATH="${script_dir%/scripts}/.venv/bin${PATH:+:$PATH}"
 if [ "$launching" = true ]; then
     # The engine this launch requests and the one it is about to run, as one line on
     # stderr — stdout is what `monitor` prints and where an attached launch writes its
@@ -313,18 +313,15 @@ if [ "$plan_loading_words" -gt 0 ] && [ -z "${ONEPIPELINE_REQUIRE_RENDERED:-}" ]
     fi
 fi
 
-# A launch runs the binary the line above reported; a read-only view keeps `uv run`, the
-# way every other recipe here reaches a pinned CLI. The header says why the two differ.
+# Every verb runs the binary resolved above; a launch's line above reported it.
 # llmlint: ignore[tool_output_is_signal] This process is replaced by onepipeline, so what a run or a view reports is onepipeline's own to report; a line added here would corrupt the streams `monitor` and an attached launch are.
-if [ "$installed" = true ]; then
-    # `execfail` so that an engine the check above found executable and the kernel still
-    # refuses — a missing interpreter, a wrong architecture — is explained here rather
-    # than by the shell's bare error.
-    shopt -s execfail
-    exec_status=0
-    exec "$engine" "$@" || exec_status=$?
-    echo "onepipeline: $engine is executable but could not be run (status $exec_status); run 'just bootstrap' to reinstall the pinned releases, then retry" >&2
-    exit "$exec_status"
-fi
-# llmlint: ignore[tool_output_is_signal] see the note above: this process is replaced by onepipeline.
-exec uv run onepipeline "$@"
+# `execfail` so that an engine the check above found executable and the kernel still
+# refuses — a missing interpreter, a wrong architecture — is explained here rather than
+# by the shell's bare error. errexit is off for the one line, as `scripts/npm-binary.sh`
+# and `scripts/telemetry-server.sh` turn it off, so the line after the exec runs.
+shopt -s execfail
+set +e
+exec "$engine" "$@"
+exec_status=$?
+echo "onepipeline: $engine is executable but could not be run (status $exec_status); run 'just bootstrap' to reinstall the pinned releases from bun.lock, then retry" >&2
+exit "$exec_status"

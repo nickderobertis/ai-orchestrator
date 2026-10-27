@@ -15,7 +15,9 @@ whose modules import it.
 from __future__ import annotations
 
 import functools
+import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -56,6 +58,18 @@ def _shared_uv_cache() -> str | None:
     return located.stdout.strip() or None if located.returncode == 0 else None
 
 
+@functools.cache
+def _shared_bun_cache() -> str | None:
+    """This host's real Bun download cache, or `None` when Bun cannot name one."""
+    bun = shutil.which("bun")
+    if bun is None:  # pragma: no cover - the suite cannot run without bun on PATH
+        return None
+    located = subprocess.run(
+        [bun, "pm", "cache"], text=True, capture_output=True, check=False, cwd=REPO_ROOT
+    )
+    return located.stdout.strip() or None if located.returncode == 0 else None
+
+
 #: The scripts a fixture repository needs beside session setup's own for the workspace
 #: install it runs and the provisioning check its recipes depend on.
 PROVISIONING_SCRIPTS = (
@@ -66,6 +80,31 @@ PROVISIONING_SCRIPTS = (
 )
 #: A Bun manifest with no dependencies: the locked install over it needs no registry.
 EMPTY_MANIFEST = '{\n  "name": "fixture",\n  "private": true\n}\n'
+
+
+def engine_manifest_and_lock() -> tuple[str, str]:
+    """This repository's `dependencies` and the `bun.lock` entries resolving them, alone.
+
+    Session setup installs the engine and the read API from `bun.lock`, and a fixture
+    repository has to hold them for setup to verify them. The whole tracked lock would
+    install every development tool beside them, so a fixture carries the tracked
+    manifest's runtime `dependencies` — those two and the browser bundle — and exactly
+    the tracked lock's entries for them and their platform packages, unchanged: the
+    frozen install over them is the one the real lock would make for those packages.
+    """
+    manifest = json.loads((REPO_ROOT / "package.json").read_text(encoding="utf-8"))
+    dependencies: dict[str, str] = manifest["dependencies"]
+    # Bun writes its lock as JSON with trailing commas.
+    lock_text = (REPO_ROOT / "bun.lock").read_text(encoding="utf-8")
+    lock = json.loads(re.sub(r",(\s*[}\]])", r"\1", lock_text))
+    lock["workspaces"] = {"": {"name": "fixture", "dependencies": dependencies}}
+    lock["packages"] = {
+        name: entry
+        for name, entry in lock["packages"].items()
+        if any(name == package or name.startswith(f"{package}-") for package in dependencies)
+    }
+    fixture = {"name": "fixture", "private": True, "dependencies": dependencies}
+    return json.dumps(fixture, indent=2) + "\n", json.dumps(lock, indent=2) + "\n"
 
 
 def setup_repo(
@@ -122,11 +161,14 @@ def setup_repo(
     for name in ("repos-bootstrap.sh", "registered-checkouts.sh"):
         shutil.copy2(REPO_ROOT / "scripts" / name, scripts / name)
     # The workspace install setup runs once Bun is ready, with the lock and log helpers it
-    # sources, over a manifest declaring nothing, so the real Bun installs an empty tree
-    # offline; and the provisioning check the sweep recipe depends on.
+    # sources, over the engine's and the read API's manifest and lock entries, so the real
+    # Bun installs the two binaries setup verifies from npmjs.com; and the provisioning
+    # check the sweep recipe depends on.
     for name in PROVISIONING_SCRIPTS:
         shutil.copy2(REPO_ROOT / "scripts" / name, scripts / name)
-    (repo / "package.json").write_text(EMPTY_MANIFEST, encoding="utf-8")
+    manifest, lock = engine_manifest_and_lock()
+    (repo / "package.json").write_text(manifest, encoding="utf-8")
+    (repo / "bun.lock").write_text(lock, encoding="utf-8")
     shutil.copy2(REPO_ROOT / "config" / "onevcs.checkouts", config / "onevcs.checkouts")
     # Every adopted release is copied, so a further pinned tool needs no fixture edit;
     # the parameters below then restate only what a journey deliberately moves.
@@ -151,6 +193,7 @@ def run_setup(
         check=True,
     ).stdout.strip()
     shared_cache = _shared_uv_cache()
+    shared_bun_cache = _shared_bun_cache()
     _carry_asdf_versions(tmp_path)
     # The sweep session setup starts detached measures the host scratch root as well as the
     # families the two verbs own, so isolating `HOME` no longer isolates all of it:
@@ -190,6 +233,9 @@ def run_setup(
             # downloads and sharing files; it costs a fraction of one download.
             "UV_LINK_MODE": "copy",
             **({"UV_CACHE_DIR": shared_cache} if shared_cache else {}),
+            # Bun's download cache, shared for the reason uv's is: `HOME` would otherwise
+            # make every journey download the engine and the read API again.
+            **({"BUN_INSTALL_CACHE_DIR": shared_bun_cache} if shared_bun_cache else {}),
             # Named rather than inherited, so the host sweep's lock and log are this
             # journey's own even on a host that exports its own cache home.
             "XDG_CACHE_HOME": str(host_sweep_cache(tmp_path).parents[1]),
@@ -271,7 +317,7 @@ def _carry_asdf_versions(home: Path) -> None:
 def path_without_uv(tmp_path: Path) -> str:
     """A real PATH with `uv` genuinely absent — nothing here is a double.
 
-    Every executable this returns is the host's own: `bun` is a symlink to the
+    Every executable this returns is the host's own: `bun` and `node` are symlinks to the
     real binary `which` just resolved, and `/usr/bin:/bin` are the real system
     directories. What the narrowing removes is `uv`, because the journeys below
     prove what `session-setup.sh` does when `uv` is not installed, and the only
@@ -281,9 +327,11 @@ def path_without_uv(tmp_path: Path) -> str:
     crosses every real process boundary it would cross in a session, and still
     fails for the real reason rather than a simulated one.
     """
-    bun = shutil.which("bun")
-    assert bun is not None
     tools = tmp_path / "real-tools"
     tools.mkdir(exist_ok=True)
-    (tools / "bun").symlink_to(Path(bun).resolve())
+    # `node` beside `bun`: the engine's and the read API's npm launchers run under it.
+    for name in ("bun", "node"):
+        found = shutil.which(name)
+        assert found is not None
+        (tools / name).symlink_to(Path(found).resolve())
     return f"{tools}:/usr/bin:/bin"

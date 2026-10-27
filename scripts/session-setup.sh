@@ -18,15 +18,19 @@
 #      installed into this worktree's project venv by the same `uv sync` and
 #      verified as both a distribution and CLI.
 #   3. The published tools this repository is a configuration layer over —
-#      oneagentgraph, onevcs, onepipeline, onepipeline-ui, and onemessagebus — arrive from PyPI
-#      through that same `uv sync` at the versions adopted in `config/`, and are
-#      verified as both a distribution and a CLI (see PUBLISHED_TOOL_SPECS below).
+#      oneagentgraph, onevcs, onemessagebus, onetaskgraph, and onebudgetspec — arrive from
+#      PyPI through that same `uv sync` at the versions adopted in `config/`, and are
+#      verified as both a distribution and a CLI (see PUBLISHED_TOOL_SPECS below). The
+#      engine (`onepipeline`) and the read API (`onepipeline-api`) arrive from npmjs.com
+#      through step 6's locked Bun install instead, and are verified as CLIs at the pins
+#      `config/` adopts (see NPM_TOOL_SPECS below).
 #   4. `codex` (the fallback PRIMARY harness) is installed via npm. Auth is a
 #      one-time manual `codex login`. See docs/onejudge-integration.md.
 #   5. `bun` is installed via npm and verified so oneharness's `sdk-check` gate
 #      can run in dispatched worktrees.
-#   6. This checkout's `node_modules`, Nx among it, is installed from `bun.lock` by
-#      `scripts/workspace-install.sh`, which installs only what differs from the lock.
+#   6. This checkout's `node_modules`, Nx, the engine and the read API among it, is
+#      installed from `bun.lock` by `scripts/workspace-install.sh`, frozen, which installs
+#      only what differs from the lock and never rewrites it.
 #      Setup is the one place a worktree is provisioned (AGENTS.md, "The checks"):
 #      `scripts/nx.sh` installs nothing, so without this step no Nx target can run.
 #   7. Hands off to `setup-llmlint.sh` to install the llmlint LLM-judge tier.
@@ -64,18 +68,22 @@ readonly ONEHARNESS_VERSION_FILE="$REPO_ROOT/config/oneharness.version"
 # The published tools this repository is a configuration layer over, as
 # `<CLI binary>|<PyPI distribution>|<config version file>`. Each publishes a
 # binary wheel whose console script reports `<binary> <version>`, so one table
-# drives reading, validating, and verifying every one. `onepipeline-ui` is the
-# tool's name and `onepipeline-api-cli` the distribution PyPI carries it under;
-# its npm counterpart is out of scope here because this repo provisions its
-# Python-side tooling from PyPI.
+# drives reading, validating, and verifying every one.
 readonly PUBLISHED_TOOL_SPECS=(
   "oneagentgraph|oneagentgraph-cli|oneagentgraph.version"
   "onevcs|onevcs-cli|onevcs.version"
-  "onepipeline|onepipeline-cli|onepipeline.version"
-  "onepipeline-api|onepipeline-api-cli|onepipeline-ui.version"
   "onemessagebus|onemessagebus-cli|onemessagebus.version"
   "onetaskgraph|onetaskgraph-cli|onetaskgraph.version"
   "onebudgetspec|onebudgetspec-cli|onebudgetspec.version"
+)
+# The published tools installed from npmjs.com instead, through `bun.lock`, as
+# `<CLI binary>|<npm package>|<config version file>`: the engine, and the read API whose
+# release `config/onepipeline-ui.version` names. Each package's launcher lands in this
+# checkout's `node_modules/.bin` and reports `<binary> <version>` like a wheel's console
+# script, so they are verified the same way, at that path.
+readonly NPM_TOOL_SPECS=(
+  "onepipeline|onepipeline-cli|onepipeline.version"
+  "onepipeline-api|onepipeline-api-cli|onepipeline-ui.version"
 )
 declare -A PUBLISHED_TOOL_VERSIONS=()
 ADOPTED_ONEJUDGE_VERSION="$(tr -d '[:space:]' <"$ONEJUDGE_VERSION_FILE")"
@@ -90,6 +98,7 @@ readonly CARGO_BIN="$HOME/.cargo/bin"
 readonly JUST_MIN="1.42.4"
 readonly NODE_BIN="$HOME/.local/node/bin"   # npm global prefix (codex lands here)
 readonly PROJECT_VENV_BIN="$REPO_ROOT/.venv/bin"
+readonly NODE_MODULES_BIN="$REPO_ROOT/node_modules/.bin"
 export PATH="$PROJECT_VENV_BIN:$BIN_DIR:$CARGO_BIN:$NODE_BIN:$PATH"
 
 log() { printf 'session-setup: %s\n' "$*" >&2; }
@@ -108,7 +117,7 @@ if [[ ! $ADOPTED_ONEHARNESS_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   fi
   exit 1
 fi
-for published_tool_spec in "${PUBLISHED_TOOL_SPECS[@]}"; do
+for published_tool_spec in "${PUBLISHED_TOOL_SPECS[@]}" "${NPM_TOOL_SPECS[@]}"; do
   IFS='|' read -r published_tool_binary _ published_tool_version_file <<<"$published_tool_spec"
   published_tool_version_path="$REPO_ROOT/config/$published_tool_version_file"
   # An unreadable file answers empty, which the pattern below rejects by name
@@ -311,6 +320,51 @@ verify_published_tools() {
   return "$status"
 }
 
+verify_npm_tool() {
+  # One npm-installed tool: the launcher `bun.lock` put in this checkout's
+  # `node_modules/.bin` reports the adopted release. Its version answer is the platform
+  # binary's own, so it is the release a caller of that path runs.
+  local binary="$1" expected_version="$2"
+  local path actual
+  path="$NODE_MODULES_BIN/$binary"
+  if [ ! -x "$path" ]; then
+    log "$binary verification failed: expected '$binary $expected_version' at $path, installed from bun.lock"
+    return 1
+  fi
+  if ! actual="$("$path" --version 2>&1)"; then
+    log "$binary verification failed: $path could not report its version"
+    return 1
+  fi
+  if [[ $actual != "$binary $expected_version" ]]; then
+    log "$binary verification failed: expected '$binary $expected_version', got '$actual' from $path"
+    return 1
+  fi
+  return 0
+}
+
+verify_npm_tools() {
+  local spec binary status=0
+  for spec in "${NPM_TOOL_SPECS[@]}"; do
+    IFS='|' read -r binary _ _ <<<"$spec"
+    verify_npm_tool "$binary" "${PUBLISHED_TOOL_VERSIONS[$binary]}" || status=1
+  done
+  return "$status"
+}
+
+report_npm_tools() {
+  # The npm half of the published tools, verified once the locked install has run.
+  local spec binary
+  if verify_npm_tools; then
+    for spec in "${NPM_TOOL_SPECS[@]}"; do
+      IFS='|' read -r binary _ _ <<<"$spec"
+      log "ready ($binary: ${PUBLISHED_TOOL_VERSIONS[$binary]} at $NODE_MODULES_BIN/$binary)"
+    done
+    return 0
+  fi
+  log "the adopted onepipeline and onepipeline-ui releases are installed from bun.lock — 'just bootstrap' reinstalls them, and every recipe that runs the engine will fail until setup succeeds"
+  return 1
+}
+
 warm_schema_cache() {
   local errors report link outcome version reason
   errors="$(mktemp)"
@@ -474,7 +528,7 @@ fi
 # proven in onevcs's repository, and `tests/family_scans/test_upstream_workaround_rule.py` keeps
 # the retired lease from returning. A journey here would re-test a published CLI.
 # `--provision-only` is the checkout's own toolchain and nothing else: steps 0, 1-3, 5
-# and 6, verified, and the plan store's `local-md` roots its gate's budgets read, with no
+# and 6, verified — the npm-installed engine and read API after step 6 — and the plan store's `local-md` roots its gate's budgets read, with no
 # host sweep, sibling bootstrap, codex, llmlint or
 # session environment. It is what `.githooks/pre-push` runs in a publication worktree,
 # which no session start ever provisioned; the follow-up "onevcs provisions a session or
@@ -498,6 +552,7 @@ if [ "$provision_only" -eq 1 ]; then
   else
     toolchain_failed=1
   fi
+  report_npm_tools || toolchain_failed=1
   exit "$toolchain_failed"
 fi
 # The host sweep, detached (step 10 above): never waited on, and a report from it — the
@@ -538,9 +593,10 @@ if verify_published_tools; then
   done
   warm_schema_cache
 else
-  log "the adopted oneagentgraph, onevcs, onepipeline, and onepipeline-ui releases are required — 'just check' will fail until setup succeeds"
+  log "the adopted oneagentgraph, onevcs, onemessagebus, onetaskgraph, and onebudgetspec releases are required — 'just check' will fail until setup succeeds"
   toolchain_failed=1
 fi
+report_npm_tools || toolchain_failed=1
 if ! verify_bun; then
   log "bun is required — the oneharness sdk-check gate will fail until setup succeeds"
   toolchain_failed=1

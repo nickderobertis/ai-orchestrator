@@ -68,8 +68,19 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd) ||
     fail "the directory holding $0 cannot be entered, so the interpreter beside it cannot be found; make that checkout readable"
 python="$script_dir/../.venv/bin/python3"
 [ -x "$python" ] || fail "no interpreter is installed at $python to read the telemetry with; run 'just bootstrap' in that checkout"
+# The engine `bun.lock` installs: the platform package's binary, never the npm launcher, for
+# the reason `scripts/npm-binary.sh` gives, and never whichever `onepipeline` the caller's
+# search path offers first.
+resolver="$script_dir/npm-binary.sh"
+[ -f "$resolver" ] && [ -r "$resolver" ] ||
+    fail "the engine resolver $resolver is not a readable file; restore it with 'git checkout -- scripts/npm-binary.sh' in that checkout, then retry"
+# shellcheck source=scripts/npm-binary.sh
+. "$resolver" ||
+    fail "the engine resolver $resolver could not be loaded; restore it with 'git checkout -- scripts/npm-binary.sh' in that checkout, then retry"
+engine=$(npm_binary onepipeline-cli onepipeline) || exit 1
+[ -x "$engine" ] || fail "this checkout has no engine at $engine; run 'just bootstrap' in that checkout to install it from bun.lock"
 
-document=$(onepipeline telemetry "$run" --changes --json) ||
+document=$("$engine" telemetry "$run" --changes --json) ||
     fail "the engine could not report run $run's per-change telemetry (its diagnostic is above); read it with 'just status $run'"
 printf '%s' "$document" | "$python" -c "$PROGRAM" "$run" "$node" "$result" ||
     fail "no cycle of $node in run $run was written to $result (the reason is above); read 'onepipeline telemetry $run --changes --json' and repair the missing evidence before retrying"

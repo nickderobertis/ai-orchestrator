@@ -369,7 +369,7 @@ def test_a_dispatched_turn_reads_back_whole_from_its_history_file(
     assert all(json.dumps(RUN_COMMAND)[1:-1] in line for line in rendered_calls), rendered.stdout
 
     watched = subprocess.run(
-        [str(REPO_ROOT / ".venv" / "bin" / "onepipeline"), "watch", DISPATCHED_RUN]
+        [str(REPO_ROOT / "node_modules" / ".bin" / "onepipeline"), "watch", DISPATCHED_RUN]
         + ["--all", "--timeout", "0"],
         cwd=REPO_ROOT,
         env=dispatched,

@@ -507,7 +507,7 @@ def test_a_listed_plan_predating_budgets_is_documented_as_such_and_re_approved(
     resolved = _in(
         checkout,
         bench,
-        str(checkout / ".venv" / "bin" / "onepipeline"),
+        str(checkout / "node_modules" / ".bin" / "onepipeline"),
         "template",
         "resolve",
         "design-doc",

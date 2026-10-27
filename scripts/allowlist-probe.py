@@ -130,12 +130,13 @@ OBSERVED_OTHERWISE = ("cd", "echo", "kill")
 VARIABLE = re.compile(r"[A-Z_][A-Z0-9_]*")
 #: How a chain spells an identity: a harness, and a variant after a colon.
 IDENTITY = re.compile(r"[a-z0-9][a-z0-9-]*(?::[a-z0-9][a-z0-9-]*)?")
-#: This repository's scripts a row runs by path, each a recorder in the scratch project.
-SCRIPTS = "./scripts/"
+#: This repository's scripts, and the npm launchers `bun.lock` installs, that a row runs by
+#: path, each a recorder in the scratch project.
+SCRIPTS = ("./scripts/", "node_modules/.bin/")
 #: How a row id and a recipe are spelled, since each becomes a scratch path or a recipe line.
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*")
 #: How a script a row runs is spelled, since its recorder is written at that path.
-SCRIPT = re.compile(r"\./scripts/[a-z0-9][a-z0-9-]*\.sh")
+SCRIPT = re.compile(r"\./scripts/[a-z0-9][a-z0-9-]*\.sh|node_modules/\.bin/[a-z0-9][a-z0-9-]*")
 #: What a scratch path may be spelled with: every row is sent to a shell verbatim, so a
 #: path needing quoting would change the command a tool is asked to run.
 SAFE_PATH = re.compile(r"[A-Za-z0-9_./-]+")
@@ -356,7 +357,7 @@ def _recorder(path: Path, marks: Path, name: str, then: str | None = None) -> No
 
 
 def _scripts() -> set[str]:
-    """Every script of this repository a row runs by path."""
+    """Every script of this repository, or npm launcher it installs, a row runs by path."""
     return {
         invocation.command.split()[0]
         for invocation in INVOCATIONS

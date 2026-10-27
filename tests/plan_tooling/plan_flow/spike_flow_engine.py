@@ -1,11 +1,13 @@
 """The engine `just plan`'s spike journeys launch through: the real one, with `start` doubled.
 
-`tests/plan_tooling/plan_flow/test_plan_spike_flow_e2e.py` installs this at a copied checkout's
-`.venv/bin/onepipeline`, the path `scripts/onepipeline.sh` runs, with the real binary beside
-it. Every verb but `start` is handed to the real binary unchanged — `template resolve`, `plan
-check` and the rest are the engine's own. **`start` is the one boundary doubled**, because a
-real one dispatches the paid model and a real lifecycle session for every node; this does,
-with the real tools, what each of the flow's runs leaves behind when it settles:
+`tests/plan_tooling/plan_flow/test_plan_spike_flow_e2e.py` installs this, through
+`tests/e2e/nx_workspace.py`'s `double_the_engine`, over a copied checkout's platform binary —
+the one `orchestrator.npm_installs` resolves and `scripts/onepipeline.sh` runs — and names the
+real binary in `FAKE_ENGINE_REAL`. Every verb but `start` is handed to that
+binary unchanged — `template resolve`, `plan check` and the rest are the engine's own.
+**`start` is the one boundary doubled**, because a real one dispatches the paid model and a real
+lifecycle session for every node; this does, with the real tools, what each of the flow's runs
+leaves behind when it settles:
 
 * the **draft** planner's run writes the plan into the store — a project record, a task
   rendered from `plan-task`, its plan-level budget answers and description unless the plan

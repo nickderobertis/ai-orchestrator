@@ -40,7 +40,7 @@ import yaml
 from project_fixtures import budget_section, budgeted, designed, no_budgets, owning
 from published_tools import ONETASKGRAPH_BIN
 
-from orchestrator import design_approval, plan_budgets, plan_store, task_body
+from orchestrator import design_approval, npm_installs, plan_budgets, plan_store, task_body
 from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
 
@@ -1068,7 +1068,7 @@ def test_a_description_template_the_engine_cannot_resolve_is_refused_by_name(
     with pytest.raises(plan_budgets.BudgetsError, match="template resolve plan-description` re"):
         plan_budgets.render_description(ANSWERS)
 
-    monkeypatch.setattr(plan_budgets, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(npm_installs, "ENGINE", tmp_path / "no-engine-installed")
     with pytest.raises(plan_budgets.BudgetsError, match="the pinned engine could not be run"):
         plan_budgets.render_description(ANSWERS)
 
@@ -1140,7 +1140,12 @@ def test_a_design_document_rendered_under_a_template_taking_no_budgets_is_refuse
     pre_budgets = REPO_ROOT / "tests" / "fixtures" / "design_doc" / "pre-budgets-design-doc.md.j2"
     (root / "design-doc.md.j2").write_bytes(pre_budgets.read_bytes())
     resolved = subprocess.run(
-        [str(REPO_ROOT / ".venv" / "bin" / "onepipeline"), "template", "resolve", "design-doc"]
+        [
+            str(REPO_ROOT / "node_modules" / ".bin" / "onepipeline"),
+            "template",
+            "resolve",
+            "design-doc",
+        ]
         + ["--json", "--template-root", str(root)],
         cwd=REPO_ROOT,
         text=True,

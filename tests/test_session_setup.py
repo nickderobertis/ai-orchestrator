@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pytest
-from published_tools import PUBLISHED_TOOLS
+from published_tools import NPM_TOOLS, PUBLISHED_TOOLS, PYPI_TOOLS, PublishedTool
 
 from orchestrator.root import REPO_ROOT
 
@@ -23,7 +23,7 @@ ADOPTED_ONEHARNESS_VERSION = (
 #: setup now verifies every one of them as a distribution as well as a CLI.
 ADOPTED_DISTRIBUTION_VERSIONS = {
     "oneharness-cli": ADOPTED_ONEHARNESS_VERSION,
-    **{tool.distribution: tool.adopted_version for tool in PUBLISHED_TOOLS},
+    **{tool.distribution: tool.adopted_version for tool in PYPI_TOOLS},
 }
 
 
@@ -91,8 +91,8 @@ def _write_bun(path: Path, version: str = "1.2.3") -> None:
 
 
 def _write_published_tool_clis(bin_dir: Path) -> None:
-    """Install a stand-in for every published tool session setup verifies as a CLI."""
-    for tool in PUBLISHED_TOOLS:
+    """Install a stand-in for every PyPI tool session setup verifies as a CLI."""
+    for tool in PYPI_TOOLS:
         _write_executable(
             bin_dir / tool.binary,
             f"#!/bin/sh\nprintf '{tool.binary} {tool.adopted_version}\\n'\n",
@@ -225,6 +225,8 @@ def _run_full_setup_without_bun(
     declared: Mapping[str, str | None] | None = None,
     real_workspace_install: bool = False,
     args: Sequence[str] = (),
+    npm_reports: Mapping[str, str] | None = None,
+    npm_programs: Mapping[str, str | None] | None = None,
     **extra_env: str,
 ) -> subprocess.CompletedProcess[str]:
     """Run the whole script against a fixture host that has every tool but bun.
@@ -269,6 +271,16 @@ def _run_full_setup_without_bun(
     _write_sdk_python(test_repo / ".venv" / "bin" / "python", ADOPTED_ONEJUDGE_VERSION)
     _write_oneharness(test_repo / ".venv" / "bin" / "oneharness", ADOPTED_ONEHARNESS_VERSION)
     _write_published_tool_clis(test_repo / ".venv" / "bin")
+    # The engine and the read API, where the locked Bun install puts them; a journey
+    # restates one's version answer through `npm_reports`, or names its whole program —
+    # `None` for one the install never put there — through `npm_programs`.
+    for tool in NPM_TOOLS:
+        reported = (npm_reports or {}).get(tool.binary, tool.adopted_version)
+        program = (npm_programs or {}).get(
+            tool.binary, f"#!/bin/sh\nprintf '{tool.binary} {reported}\\n'\n"
+        )
+        if program is not None:
+            _write_executable(tool.executable(test_repo), program)
     return subprocess.run(
         ["bash", str(session_setup), *args],
         text=True,
@@ -474,6 +486,43 @@ def test_full_setup_reports_every_published_tool_it_verified(tmp_path: Path) -> 
     assert (tmp_path / "repo" / ".plans" / "projects").is_dir()
 
 
+@pytest.mark.parametrize("args", [(), ("--provision-only",)], ids=["session", "provision-only"])
+@pytest.mark.parametrize("stale", NPM_TOOLS, ids=[tool.binary for tool in NPM_TOOLS])
+def test_full_setup_refuses_an_npm_tool_reporting_another_release(
+    tmp_path: Path, stale: PublishedTool, args: Sequence[str]
+) -> None:
+    """The engine or read API the locked Bun install left is held to its pin by name."""
+    binary, adopted = stale.binary, stale.adopted_version
+
+    result = _run_full_setup_without_bun(tmp_path, args=args, npm_reports={binary: "99.99.99"})
+
+    assert result.returncode == 1
+    assert (
+        f"{binary} verification failed: expected '{binary} {adopted}', got '{binary} 99.99.99'"
+    ) in result.stderr, result.stderr
+    assert f"ready ({binary}:" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("program", "said"),
+    [(None, "installed from bun.lock"), ("#!/bin/sh\nexit 3\n", "could not report its version")],
+    ids=["absent", "version-fails"],
+)
+@pytest.mark.parametrize("broken", NPM_TOOLS, ids=[tool.binary for tool in NPM_TOOLS])
+def test_full_setup_refuses_an_npm_tool_it_cannot_ask_for_its_release(
+    tmp_path: Path, broken: PublishedTool, program: str | None, said: str
+) -> None:
+    """An engine or read API the install left absent, or that cannot answer, is refused by name."""
+    binary = broken.binary
+
+    result = _run_full_setup_without_bun(tmp_path, npm_programs={binary: program})
+
+    assert result.returncode == 1
+    assert f"{binary} verification failed: " in result.stderr, result.stderr
+    assert said in result.stderr, result.stderr
+    assert f"ready ({binary}:" not in result.stderr
+
+
 @pytest.mark.parametrize(
     ("adopted", "reported"),
     [("0.2\n", "0.2"), ("v0.2.2\n", "v0.2.2"), (None, "")],
@@ -606,7 +655,9 @@ def test_full_setup_reports_the_real_installers_failure_and_carries_on(tmp_path:
     assert "workspace-install: install locked workspace dependencies and retry" in proc.stderr
     assert "the locked workspace install failed — no Nx target can run" in proc.stderr
     assert "ready (onejudge: " in proc.stderr
-    assert not (tmp_path / "repo" / "node_modules").exists()
+    # Nothing but the fixture's own engine and read API stand-ins: the failed install
+    # wrote no package.
+    assert [path.name for path in (tmp_path / "repo" / "node_modules").iterdir()] == [".bin"]
 
 
 def _write_plan_store_document(repo: Path, absolute_root: Path) -> None:

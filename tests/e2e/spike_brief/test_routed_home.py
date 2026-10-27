@@ -16,7 +16,7 @@ from linear_board import linear_board
 from project_fixtures import FIXTURE_UNIT, budgeted, helper, no_budgets, reviewed
 from scratch_identity import seeded
 
-from orchestrator import plan_store, run_reading, spike_brief, spike_brief_flow
+from orchestrator import npm_installs, plan_store, run_reading, spike_brief, spike_brief_flow
 from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
 
@@ -114,7 +114,7 @@ def test_copy_plan_and_receipt_follow_the_resolved_home(
                 )
                 started = subprocess.run(
                     [
-                        str(REPO_ROOT / ".venv/bin/onepipeline"),
+                        str(npm_installs.ENGINE),
                         "start",
                         f"{plan_fixture_source.SOURCE}:{run}",
                         "--require-rendered",
@@ -151,7 +151,7 @@ def test_copy_plan_and_receipt_follow_the_resolved_home(
             while True:
                 status = subprocess.run(
                     [
-                        str(REPO_ROOT / ".venv/bin/onepipeline"),
+                        str(npm_installs.ENGINE),
                         "status",
                         "preview-spike-brief",
                         "--json",
@@ -210,7 +210,7 @@ def test_copy_plan_and_receipt_follow_the_resolved_home(
                     continue
                 stopped = subprocess.run(
                     [
-                        str(REPO_ROOT / ".venv/bin/onepipeline"),
+                        str(npm_installs.ENGINE),
                         "stop",
                         run,
                     ],

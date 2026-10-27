@@ -215,7 +215,7 @@ class Store:
         answers = self.drafts.parent / f"{drafted}.answers.json"
         answers.write_text(json.dumps(DESIGN), encoding="utf-8")
         resolved = subprocess.run(
-            [str(REPO_ROOT / ".venv" / "bin" / "onepipeline"), "template", "resolve"]
+            [str(REPO_ROOT / "node_modules" / ".bin" / "onepipeline"), "template", "resolve"]
             + ["design-doc", "--json", "--template-root", str(REPO_ROOT / "templates")],
             cwd=REPO_ROOT,
             text=True,

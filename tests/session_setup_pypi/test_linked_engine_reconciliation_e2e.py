@@ -6,17 +6,17 @@ through `oneagentgraph` and `onejudge`, `oneharness-core`, the crate
 that runs the turn itself and the one no `config/*.version` here can name. Every
 other reading of that question is a claim about it: a `Cargo.toml` requirement permits
 versions a build never resolved, a `Cargo.lock` describes what a release *would* link,
-and even the wheel's own SBOM is a statement the wheel makes about itself. The binary
-is the artifact that runs.
+and even the package's own SBOM is a statement the package makes about itself. The
+binary is the artifact that runs.
 
 So this journey provisions a worktree the way a session really does — the real
-`scripts/session-setup.sh`, a real `uv sync` from PyPI into a fresh venv — and then
-reads the engine it installed:
+`scripts/session-setup.sh`, a real frozen `bun install` from npmjs.com out of
+`bun.lock` — and then reads the engine it installed:
 
 * the executable's own bytes, which carry the registry path of every crate it was
   compiled against, exactly as `AGENTS.md`'s `strings | grep` procedure reads them;
-* the CycloneDX SBOM that wheel ships, which `tests/test_linked_libraries.py` gates the
-  pins against without a network or a clone;
+* the CycloneDX SBOM its npm platform package ships, which
+  `tests/test_linked_libraries.py` gates the pins against without a network or a clone;
 * the `config/*.version` pins the provisioning was driven from.
 
 All three have to agree on what is linked, crate for crate — including
@@ -24,16 +24,16 @@ All three have to agree on what is linked, crate for crate — including
 as a single value, so this journey says the same thing whether they agree on one
 release or split over several. The
 unit gate holds the last two together on this checkout; what only a journey can prove
-is that the wheel's declaration is true of the binary it shipped — which is the one
+is that the package's declaration is true of the binary it shipped — which is the one
 step where a rebuild, a repair, or an install from somewhere else parts a host from
 every lockfile describing it, and the step no document can check itself.
 
 llmlint: ignore-file[tests_mirror_real_usage] The subject here is what the installed engine
 binary links, and no command it offers reports that: the executable's own bytes and the
-SBOM its wheel ships are the only interface to the answer, and AGENTS.md's "The
+SBOM its platform package ships are the only interface to the answer, and AGENTS.md's "The
 installed binary decides" names that SBOM as where the answer is measured. What this
 journey drives for real is the provisioning a session runs — the real setup script and a
-real `uv sync` from PyPI.
+real frozen `bun install` from npmjs.com.
 """
 
 from __future__ import annotations
@@ -49,13 +49,13 @@ from test_linked_libraries import (
     LINKED_IN_BINARY,
     RECONCILED_PINS,
     UNRECONCILABLE_PIN,
+    npm_sbom,
 )
 
 from orchestrator.root import REPO_ROOT
 
-#: Where PEP 770 puts a wheel's SBOMs, and the engine distribution that ships one.
-ENGINE_DISTRIBUTION = "onepipeline_cli"
-SBOM_DIRECTORY = "sboms"
+#: The engine's npm package, whose platform package ships the binary and its SBOM.
+ENGINE_PACKAGE = "onepipeline-cli"
 
 
 def _linked_in_binary(executable: Path) -> dict[str, set[str]]:
@@ -66,18 +66,14 @@ def _linked_in_binary(executable: Path) -> dict[str, set[str]]:
     return carried
 
 
-def _declared_in_sbom(venv: Path) -> dict[str, set[str]]:
-    """Every crate release the installed engine wheel *declares* it links, as a set.
+def _declared_in_sbom(node_modules: Path) -> dict[str, set[str]]:
+    """Every crate release the installed engine package *declares* it links, as a set.
 
     Sets rather than one version each, because one crate here is legitimately linked
     twice and a reader that collapsed it would drop it silently — which is how
     `oneharness-core` stayed outside every reconciliation on this host.
     """
-    sboms = sorted(
-        venv.glob(f"lib/*/site-packages/{ENGINE_DISTRIBUTION}-*.dist-info/{SBOM_DIRECTORY}/*.json")
-    )
-    assert len(sboms) == 1, f"the provisioned engine must ship exactly one SBOM; found {sboms}"
-    document = json.loads(sboms[0].read_text("utf-8"))
+    document = json.loads(npm_sbom(ENGINE_PACKAGE, node_modules).read_text("utf-8"))
     declared: dict[str, set[str]] = {}
     for component in document["components"]:
         declared.setdefault(component["name"], set()).add(component["version"])
@@ -87,9 +83,9 @@ def _declared_in_sbom(venv: Path) -> dict[str, set[str]]:
 def test_the_engine_a_session_provisions_reconciles_against_this_hosts_pins(
     tmp_path: Path,
 ) -> None:
-    """The binary and the wheel agree on every linked crate, reconciled against `config/`.
+    """The binary and its package agree on every linked crate, reconciled against `config/`.
 
-    The binary and its own SBOM must agree outright: a wheel describing something the
+    The binary and its own SBOM must agree outright: a package describing something the
     executable it shipped does not carry is the case no lockfile can report. A pin is
     held to that same release *or* to a divergence already declared with both versions
     and its reason, which is why this reconciles rather than equates.
@@ -105,13 +101,16 @@ def test_the_engine_a_session_provisions_reconciles_against_this_hosts_pins(
     installed = run_setup(repo, tmp_path)
 
     assert installed.returncode == 0, installed.stderr
-    engine = repo / ".venv" / "bin" / "onepipeline"
+    engine = repo / "node_modules" / ".bin" / "onepipeline"
     adopted = (REPO_ROOT / "config" / "onepipeline.version").read_text("utf-8").strip()
     reported = subprocess.run([engine, "--version"], text=True, capture_output=True, check=True)
     assert reported.stdout.strip() == f"onepipeline {adopted}"
 
-    carried = _linked_in_binary(engine.resolve())
-    all_declared = _declared_in_sbom(repo / ".venv")
+    # The launcher `node_modules/.bin` names is a script; the binary it runs is the one
+    # the platform package ships beside its SBOM.
+    binary = npm_sbom(ENGINE_PACKAGE, repo / "node_modules").parent.parent / "bin" / "onepipeline"
+    carried = _linked_in_binary(binary)
+    all_declared = _declared_in_sbom(repo / "node_modules")
     declared = {
         crate: next(iter(versions))
         for crate, versions in all_declared.items()
@@ -119,7 +118,7 @@ def test_the_engine_a_session_provisions_reconciles_against_this_hosts_pins(
     }
 
     # The crate no pin can name, checked first because it is the one this reconciliation
-    # used to drop: whatever set of releases the wheel declares, the binary has to
+    # used to drop: whatever set of releases the package declares, the binary has to
     # carry exactly that set. `tests/test_linked_libraries.py` says which dependent
     # brings which; what only a provisioned binary can say is that they are really in
     # it. Compared as sets rather than as a count, which is what let this survive the
@@ -137,7 +136,7 @@ def test_the_engine_a_session_provisions_reconciles_against_this_hosts_pins(
         assert carried.get(crate) == {declared[crate]}, (
             f"the provisioned onepipeline {adopted} carries {crate} "
             f"{sorted(carried.get(crate, ()))} and its own SBOM declares {declared[crate]}. "
-            "The binary is what a dispatch runs, so the wheel's declaration — and every "
+            "The binary is what a dispatch runs, so the package's declaration — and every "
             "gate reading it — is describing something this host does not have"
         )
         pinned = (REPO_ROOT / "config" / version_file).read_text("utf-8").strip()

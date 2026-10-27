@@ -75,6 +75,7 @@ from itertools import count
 from pathlib import Path, PurePosixPath
 from typing import Literal, NoReturn, TypeGuard, get_args
 
+from orchestrator import npm_installs
 from orchestrator.plan_store import RECORD_COMPONENT
 from orchestrator.project_store import frontmatter, hosted_origin
 from orchestrator.run_reading import RunId, Unreadable, public_id
@@ -259,9 +260,8 @@ def checked_run(run: str) -> str:
 
 
 def _engine() -> str:
-    """The `onepipeline` installed beside this interpreter, else the one on `PATH`."""
-    beside = Path(sys.executable).parent / ENGINE
-    return str(beside) if beside.is_file() else ENGINE
+    """The `onepipeline` this checkout's `bun.lock` installs, never the one on `PATH`."""
+    return str(npm_installs.ENGINE)
 
 
 def follow_up_key(run: str, *, runs: Path | None = None) -> str:

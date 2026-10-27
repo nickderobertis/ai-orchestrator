@@ -44,6 +44,7 @@ from harness_indirections import established_indirections
 from project_fixtures import helper, project_from_plan
 from waits import timeout as e2e_timeout
 
+from orchestrator import npm_installs
 from orchestrator.root import REPO_ROOT
 
 #: The paid model's stand-ins, and the guard covering the identities neither reaches.
@@ -525,7 +526,7 @@ def test_a_worker_that_never_concludes_spends_the_budget_and_only_then_is_asked_
     assert "by hand" not in message, f"the decision asks for a hand merge: {message}"
 
     queue = subprocess.run(
-        ["uv", "run", "onepipeline", "channel", "queue", journey.run],
+        [str(npm_installs.ENGINE), "channel", "queue", journey.run],
         cwd=REPO_ROOT,
         env=journey.world.environment,
         text=True,

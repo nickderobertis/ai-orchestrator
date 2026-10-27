@@ -565,7 +565,7 @@ def _a_surface_raised_and_consumed(environment: dict[str, str]) -> bool:
     `False` until the run exists to raise on.
     """
     raised = subprocess.run(
-        [str(REPO_ROOT / ".venv" / "bin" / "onepipeline"), "surface", "--kind", "check-in"]
+        [str(REPO_ROOT / "node_modules" / ".bin" / "onepipeline"), "surface", "--kind", "check-in"]
         + [LAUNCHED_RUN],
         cwd=REPO_ROOT,
         env=environment,

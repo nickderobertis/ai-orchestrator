@@ -11,12 +11,16 @@ bootstrap under test, in an `isolated_python_root`.
 
 from __future__ import annotations
 
+import shlex
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import yaml
 
+from orchestrator import npm_installs
+from orchestrator.npm_installs import ENGINE, READ_API
 from orchestrator.root import REPO_ROOT
 
 #: The environment that keeps a copy's installers off every package index: uv answers
@@ -94,7 +98,10 @@ def read_a_plan_graph(checkout: Path, env: dict[str, str]) -> subprocess.Complet
 def share_this_checkouts_install(copy: Path) -> dict[str, str]:
     """Let a copy of this checkout run its recipes on this checkout's install, unwritten.
 
-    `copy/node_modules` is a symlink to this checkout's. `copy/.venv` is an overlay:
+    `copy/node_modules` is an overlay: one symlink per entry of this checkout's, but for
+    `.bin` and the platform packages of the engine and the read API, whose `bin/` is a real
+    directory of one symlink per binary, so a test doubling the engine replaces that link and
+    never writes this checkout's install. `copy/.venv` is an overlay:
     `pyvenv.cfg`, `lib/` (and `lib64/`, `include/` where present) symlink into this
     checkout's `.venv`, and `bin/` is a real directory of one symlink per entry of this
     checkout's `.venv/bin`, so a test doubling one binary replaces that link and never
@@ -112,7 +119,21 @@ def share_this_checkouts_install(copy: Path) -> dict[str, str]:
     there from syncing the overlay, which would write through its links.
     """
     source = REPO_ROOT / ".venv"
-    (copy / "node_modules").symlink_to(REPO_ROOT / "node_modules", target_is_directory=True)
+    modules = REPO_ROOT / "node_modules"
+    platform_packages = {binary.parent.parent.name for binary in (ENGINE, READ_API)}
+    (copy / "node_modules" / ".bin").mkdir(parents=True)
+    for entry in modules.iterdir():
+        if entry.name in platform_packages:
+            (copy / "node_modules" / entry.name / "bin").mkdir(parents=True)
+            for inner in entry.iterdir():
+                if inner.name != "bin":
+                    (copy / "node_modules" / entry.name / inner.name).symlink_to(inner)
+            for binary in (entry / "bin").iterdir():
+                (copy / "node_modules" / entry.name / "bin" / binary.name).symlink_to(binary)
+        elif entry.name != ".bin":
+            (copy / "node_modules" / entry.name).symlink_to(entry)
+    for entry in (modules / ".bin").iterdir():
+        (copy / "node_modules" / ".bin" / entry.name).symlink_to(entry)
     overlay = copy / ".venv"
     (overlay / "bin").mkdir(parents=True)
     for name in ("pyvenv.cfg", "lib", "lib64", "include"):
@@ -125,6 +146,33 @@ def share_this_checkouts_install(copy: Path) -> dict[str, str]:
             for records in ("tasks", "projects"):
                 (copy / root / records).mkdir(parents=True, exist_ok=True)
     return {"PYTHONPATH": str(copy), "UV_NO_SYNC": "1"}
+
+
+def double_the_engine(copy: Path, stand_in: Path) -> None:
+    """Replace a shared copy's engine with a wrapper running ``stand_in``.
+
+    The engine is the platform package's binary every caller runs
+    (`orchestrator.npm_installs.ENGINE`), whose link in the copy
+    `share_this_checkouts_install` made, so the double replaces the link and this checkout's
+    install stays unwritten. The wrapper hands every call to the stand-in on its second
+    line, followed by the real binary's bytes, which bash never reads: `just check-plan`
+    reads the roles a persona name resolves to out of the installed engine's own bytes.
+    """
+    engine = npm_installs.platform_binary(node_modules=copy / "node_modules")
+    engine.unlink()
+    # llmlint: ignore[e2e_not_mocked] The engine is the published CLI this suite doubles at its binary and nowhere above it, as tests/AGENTS.md permits: a real `start` dispatches the paid model, and each stand-in hands every verb it does not double to the real binary, so the recipe, wrappers and store around it run unchanged.  # noqa: E501 - a directive is one line
+    engine.write_bytes(
+        f"#!/usr/bin/env bash\nexec {shlex.quote(sys.executable)} "
+        f'{shlex.quote(str(stand_in))} "$@"\n'.encode()
+        + REAL_ENGINE.read_bytes()
+    )
+    engine.chmod(0o755)
+
+
+#: The engine binary a stand-in hands every verb it does not double to: this checkout's,
+#: which no copy doubles. Never a copy's engine or any launcher, which would reach the
+#: stand-in again and recurse.
+REAL_ENGINE = ENGINE
 
 
 def isolated_python_root(destination: Path) -> Path:

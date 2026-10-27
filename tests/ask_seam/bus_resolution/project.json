@@ -18,6 +18,7 @@
       "{workspaceRoot}/config/onemessagebus.yaml",
       "{workspaceRoot}/pyproject.toml",
       "{workspaceRoot}/scripts/ask-manager.sh",
+      "{workspaceRoot}/scripts/npm-binary.sh",
       "{workspaceRoot}/tests/ask_seam/bus_resolution/test_bus_resolution_e2e.py",
       "{workspaceRoot}/tests/fixtures/planner-channel.json",
       "{workspaceRoot}/uv.lock"

@@ -17,6 +17,7 @@
       "{workspaceRoot}/tests/e2e/project_fixtures.py",
       "{workspaceRoot}/orchestrator/design_approval.py",
       "{workspaceRoot}/orchestrator/design_chain.py",
+      "{workspaceRoot}/orchestrator/npm_installs.py",
       "{workspaceRoot}/orchestrator/plan_budgets.py",
       "{workspaceRoot}/orchestrator/plan_store.py",
       "{workspaceRoot}/orchestrator/plan_units.py",

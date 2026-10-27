@@ -70,7 +70,7 @@ PAID_PROVIDER_GUARD = helper("no-paid-provider")
 
 #: The pinned engine, whose own guidance a mixed brief is handed and whose `template
 #: resolve plan-task` every node task here is rendered through.
-ENGINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
+ENGINE = REPO_ROOT / "node_modules" / ".bin" / "onepipeline"
 
 #: The aliases `scripts/plan.sh` resolves this repository's identity through, seeded
 #: against a scratch registry so no launch reaches this host's own.

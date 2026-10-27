@@ -60,7 +60,7 @@ from orchestrator.root import REPO_ROOT
 FAKE_BACKEND = helper("fake_backend.py")
 
 #: The binary this checkout installed, which every turn's read has to have been.
-PINNED_ONEPIPELINE = (REPO_ROOT / ".venv" / "bin" / "onepipeline").resolve()
+PINNED_ONEPIPELINE = (REPO_ROOT / "node_modules" / ".bin" / "onepipeline").resolve()
 
 #: The plan the launch runs, and the run id `onepipeline` mints from its name. One node,
 #: held open long enough for the monitor to take every live turn this journey reads.

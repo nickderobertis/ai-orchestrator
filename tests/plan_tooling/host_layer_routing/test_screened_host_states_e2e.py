@@ -30,6 +30,7 @@ recipes, the store, its layer and `onevcs` are the real ones.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import subprocess
@@ -47,7 +48,7 @@ from project_fixtures import FIXTURE_UNIT, budgeted, designed, no_budgets, revie
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
-from orchestrator import plan_budgets
+from orchestrator import npm_installs, plan_budgets
 from orchestrator.criteria_guard import APPENDIX
 from orchestrator.project_store import write_plan_project
 from orchestrator.root import REPO_ROOT
@@ -89,9 +90,37 @@ class Host(NamedTuple):
     scratch: Path
 
 
+#: The binaries `bun.lock` installs that a decoy shadows on every journey's search path.
+DECOYED = ("onepipeline", "onepipeline-api")
+
+
+@contextlib.contextmanager
+def _decoys_ahead(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """An `onepipeline` and an `onepipeline-api` first on the search path every recipe here
+    inherits, each refusing and recording that it ran; and, once the journey is over, that
+    none ran — so every engine call the journey makes reached the locked npm install rather
+    than whichever binary of that name a host's PATH offers first."""
+    decoys, ran = tmp_path / "decoys", tmp_path / "decoys-ran.log"
+    decoys.mkdir()
+    for name in DECOYED:
+        decoy = decoys / name
+        decoy.write_text(
+            f'#!/bin/sh\necho "{name} $*" >> "{ran}"\n'
+            f'echo "decoy {name}: not the binary bun.lock installs" >&2\nexit 97\n',
+            encoding="utf-8",
+        )
+        decoy.chmod(0o755)
+    monkeypatch.setenv("PATH", os.pathsep.join((str(decoys), os.environ.get("PATH", ""))))
+    yield
+    assert not ran.exists(), f"a decoy ahead of the locked install ran: {ran.read_text()}"
+
+
 @pytest.fixture(params=list(HostState), ids=[state.value for state in HostState])
-def host(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Host:
-    """This test's process, and every one it starts, on one host state.
+def host(
+    request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[Host]:
+    """This test's process, and every one it starts, on one host state, with a decoy engine
+    and read API ahead of the locked ones on its search path (:func:`_decoys_ahead`).
 
     The `onevcs` state root answering the write policy registers every public repository the
     fixtures name, and the authoring root is the journey's own.
@@ -106,7 +135,8 @@ def host(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.Mon
     authoring = tmp_path / "authoring"
     authoring.mkdir()
     monkeypatch.setenv(AUTHORING_ROOT_ENV, str(authoring))
-    return Host(state, tmp_path)
+    with _decoys_ahead(tmp_path, monkeypatch):
+        yield Host(state, tmp_path)
 
 
 def _run(command: list[str], **stated: str) -> subprocess.CompletedProcess[str]:
@@ -310,7 +340,8 @@ class Written(NamedTuple):
 
 @pytest.fixture
 def organization(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Written]:
-    """The organization-private host, with `drafts` rooted at a folder of the journey's own."""
+    """The organization-private host, with `drafts` rooted at a folder of the journey's own
+    and a decoy engine and read API ahead of the locked ones (:func:`_decoys_ahead`)."""
     for name, value in host_state(HostState.ORGANIZATION_PRIVATE, tmp_path).items():
         if value is None:
             monkeypatch.delenv(name, raising=False)
@@ -324,7 +355,7 @@ def organization(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Wr
     drafts.mkdir()
     monkeypatch.setenv(AUTHORING_ROOT_ENV, str(authoring))
     monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{UNDECLARED.upper()}__CONFIG__ROOT", str(drafts))
-    with _serving_board() as remote:
+    with _serving_board() as remote, _decoys_ahead(tmp_path, monkeypatch):
         for name, value in remote.items():
             monkeypatch.setenv(name, value)
         yield Written(authoring, drafts)
@@ -382,11 +413,12 @@ DESTINATIONS = (AUTHORING_SOURCE, BOARD, UNDECLARED)
 
 
 def _rendered_document(source: str, project: str, template: str, answers: Path) -> list[str]:
-    """`onepipeline template resolve <template>` piped into `just plans document create`."""
+    """The locked engine's `onepipeline template resolve <template>` piped into `just plans
+    document create`."""
     return [
         "bash",
         "-c",
-        'set -euo pipefail; onepipeline template resolve "$1" --json | '
+        'set -euo pipefail; "$8" template resolve "$1" --json | '
         '"$6" "$7" document create "$2" --project "$3" --title "$4" '
         '--template-loader - --answers "$5" --no-interactive',
         "rendered",
@@ -396,6 +428,7 @@ def _rendered_document(source: str, project: str, template: str, answers: Path) 
         f"{template} for {project}",
         str(answers),
         *PLAN_STORE,
+        str(npm_installs.ENGINE),
     ]
 
 

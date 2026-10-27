@@ -47,9 +47,9 @@ from orchestrator.plan_store import NodeId
 from orchestrator.publication_guard import Workflow
 from orchestrator.root import REPO_ROOT
 
-#: The wheel this host installs from the engine's producer, as `host_installs` names it,
+#: The package this host installs from the engine's producer, as `host_installs` names it,
 #: and a crate the same producer declares that nothing here installs.
-WHEEL = ("pypi", "pypi:onepipeline-cli")
+NPM_CLI = ("npm", "npm:onepipeline-cli")
 CRATE = ("crate", "crate:onepipeline")
 
 #: The origin a made-here checkout stands in as this host's own repository under.
@@ -115,17 +115,17 @@ def test_a_consumed_target_the_producer_does_not_resolve_is_refused_listing_what
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A wait on a target the producer does not release is one no probe can answer."""
-    _onevcs(tmp_path, monkeypatch, releases={"library": _answer("id/library", WHEEL, CRATE)})
+    _onevcs(tmp_path, monkeypatch, releases={"library": _answer("id/library", NPM_CLI, CRATE)})
     plan = _plan(
         _producer(),
-        _consumer(consumes={"producer": "npm"}, merge_policy=Workflow.CHANGE_OPEN.value),
+        _consumer(consumes={"producer": "pypi"}, merge_policy=Workflow.CHANGE_OPEN.value),
     )
 
     (refused,) = refusals(plan)
 
     assert (refused.node, refused.field) == ("consumer", "consumes")
-    assert "'npm'" in refused.reason
-    assert "resolves: pypi, crate" in refused.reason
+    assert "'pypi'" in refused.reason
+    assert "resolves: npm, crate" in refused.reason
     assert "`consumes: {producer: <target>}`" in refused.reason
 
 
@@ -134,7 +134,7 @@ def test_a_consumed_target_on_a_producer_resolving_none_is_refused_whether_or_no
 ) -> None:
     """A producer with no declaration resolves nothing, and the entry names something."""
     _onevcs(tmp_path, monkeypatch, releases={"library": _answer("id/library")})
-    plan = _plan(_producer(), _consumer(consumes={"producer": "pypi"}))
+    plan = _plan(_producer(), _consumer(consumes={"producer": "npm"}))
 
     (refused,) = refusals(plan)
 
@@ -145,8 +145,8 @@ def test_a_consumed_target_on_a_producer_resolving_none_is_refused_whether_or_no
 def test_a_consumed_target_the_producer_resolves_is_not_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _onevcs(tmp_path, monkeypatch, releases={"library": _answer("id/library", WHEEL)})
-    plan = _plan(_producer(), _consumer(consumes={"producer": "pypi"}))
+    _onevcs(tmp_path, monkeypatch, releases={"library": _answer("id/library", NPM_CLI)})
+    plan = _plan(_producer(), _consumer(consumes={"producer": "npm"}))
 
     assert refusals(plan) == []
 
@@ -155,11 +155,9 @@ def test_a_consumed_target_the_producer_resolves_is_not_refused(
     ("consumes", "producer"),
     (
         pytest.param({"producer": 7}, _producer(), id="a value that is not a target name"),
-        pytest.param({"absent": "pypi"}, _producer(), id="a dependency the plan has no node for"),
-        pytest.param({"producer": "pypi"}, {"id": "producer"}, id="a dependency naming no repo"),
-        pytest.param(
-            {"producer": "pypi"}, _producer("elsewhere"), id="a repo onevcs cannot answer"
-        ),
+        pytest.param({"absent": "npm"}, _producer(), id="a dependency the plan has no node for"),
+        pytest.param({"producer": "npm"}, {"id": "producer"}, id="a dependency naming no repo"),
+        pytest.param({"producer": "npm"}, _producer("elsewhere"), id="a repo onevcs cannot answer"),
     ),
 )
 def test_a_consumes_entry_this_cannot_read_against_a_producer_is_passed_over(
@@ -169,7 +167,7 @@ def test_a_consumes_entry_this_cannot_read_against_a_producer_is_passed_over(
     producer: dict[str, Any],
 ) -> None:
     """The engine has already refused what it refuses about `consumes`; the rest is silence."""
-    _onevcs(tmp_path, monkeypatch, releases={"library": _answer("id/library", WHEEL)})
+    _onevcs(tmp_path, monkeypatch, releases={"library": _answer("id/library", NPM_CLI)})
 
     assert refusals(_plan(producer, _consumer(consumes=consumes))) == []
 
@@ -178,7 +176,7 @@ def test_a_published_node_behind_a_release_with_no_target_is_refused_as_held_for
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Not-answered never releases a hold, so the refusal names both remedies."""
-    _onevcs(tmp_path, monkeypatch, releases={"library": _answer("id/library", WHEEL)})
+    _onevcs(tmp_path, monkeypatch, releases={"library": _answer("id/library", NPM_CLI)})
     plan = _plan(_producer(), _consumer(adoption="published"))
 
     (refused,) = refusals(plan)
@@ -197,7 +195,7 @@ def test_the_published_rung_onevcs_answers_holds_a_node_stating_none(
         tmp_path,
         monkeypatch,
         releases={
-            "library": _answer("id/library", WHEEL),
+            "library": _answer("id/library", NPM_CLI),
             "service": _answer("id/service", adoption="published"),
         },
     )
@@ -211,15 +209,15 @@ def test_the_published_rung_onevcs_answers_holds_a_node_stating_none(
 @pytest.mark.parametrize(
     "correction",
     (
-        pytest.param({"consumes": {"producer": "pypi"}}, id="a named target"),
-        pytest.param({"consumes": {"producer": "npm"}}, id="a named target R2 refuses instead"),
+        pytest.param({"consumes": {"producer": "npm"}}, id="a named target"),
+        pytest.param({"consumes": {"producer": "pypi"}}, id="a named target R2 refuses instead"),
         pytest.param({"adoption": "fast", "merge_policy": "change-open"}, id="fast adoption"),
     ),
 )
 def test_a_published_node_that_names_its_target_or_adopts_fast_is_not_held(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, correction: dict[str, Any]
 ) -> None:
-    _onevcs(tmp_path, monkeypatch, releases={"library": _answer("id/library", WHEEL)})
+    _onevcs(tmp_path, monkeypatch, releases={"library": _answer("id/library", NPM_CLI)})
     plan = _plan(_producer(), _consumer(**{"adoption": "published"} | correction))
 
     assert "adoption" not in {one.field for one in refusals(plan)}
@@ -231,11 +229,11 @@ def test_a_producer_default_target_ends_the_hold(
     _onevcs(
         tmp_path,
         monkeypatch,
-        releases={"library": _answer("id/library", WHEEL, default="pypi")},
+        releases={"library": _answer("id/library", NPM_CLI, default="npm")},
         resolved={"service": ("/srv/service", Workflow.CHANGE_AUTO.value)},
     )
     _own_checkout(tmp_path, monkeypatch)
-    plan = _plan(_producer(), _consumer(adoption="published", consumes={"producer": "pypi"}))
+    plan = _plan(_producer(), _consumer(adoption="published", consumes={"producer": "npm"}))
 
     assert refusals(plan) == []
 
@@ -247,7 +245,7 @@ def test_a_fast_node_behind_a_release_on_a_local_direct_identity_is_refused(
     _onevcs(
         tmp_path,
         monkeypatch,
-        releases={"library": _answer("id/library", WHEEL)},
+        releases={"library": _answer("id/library", NPM_CLI)},
         resolved={"service": ("/srv/service", Workflow.LOCAL_DIRECT.value)},
     )
 
@@ -269,7 +267,7 @@ def test_the_policy_the_node_states_decides_over_its_repositorys(
     _onevcs(
         tmp_path,
         monkeypatch,
-        releases={"library": _answer("id/library", WHEEL)},
+        releases={"library": _answer("id/library", NPM_CLI)},
         resolved={"service": ("/srv/service", Workflow.CHANGE_AUTO.value)},
     )
 
@@ -289,7 +287,7 @@ def test_the_policy_the_node_states_decides_over_its_repositorys(
 def test_a_publication_this_cannot_read_decides_nothing_about_a_fast_node(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, why: dict[str, Any]
 ) -> None:
-    _onevcs(tmp_path, monkeypatch, releases={"library": _answer("id/library", WHEEL)})
+    _onevcs(tmp_path, monkeypatch, releases={"library": _answer("id/library", NPM_CLI)})
 
     assert refusals(_plan(_producer(), _consumer(**why))) == []
 
@@ -312,8 +310,8 @@ def test_a_dependency_that_releases_nothing_holds_and_refuses_nothing(
         tmp_path,
         monkeypatch,
         releases={
-            "service": _answer("id/service", WHEEL),
-            "also-service": _answer("id/service", WHEEL),
+            "service": _answer("id/service", NPM_CLI),
+            "also-service": _answer("id/service", NPM_CLI),
             "undeclared": _answer("id/undeclared"),
         },
         resolved={"service": ("/srv/service", Workflow.LOCAL_DIRECT.value)},
@@ -326,8 +324,8 @@ def test_a_dependency_that_releases_nothing_holds_and_refuses_nothing(
 def test_a_node_of_this_repository_consuming_a_crate_is_refused_naming_the_judged_tier(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A crate reaches this host only through the wheel, and the pin question is the judge's."""
-    _onevcs(tmp_path, monkeypatch, releases={"library": _answer("id/library", WHEEL, CRATE)})
+    """A crate reaches this host only through a package, and the pin question is the judge's."""
+    _onevcs(tmp_path, monkeypatch, releases={"library": _answer("id/library", NPM_CLI, CRATE)})
     _own_checkout(tmp_path, monkeypatch)
     plan = _plan(
         _producer(),
@@ -338,8 +336,8 @@ def test_a_node_of_this_repository_consuming_a_crate_is_refused_naming_the_judge
 
     assert (refused.node, refused.field) == ("consumer", "consumes")
     assert "`crate:onepipeline`" in refused.reason
-    assert "`pypi:onepipeline-cli`" in refused.reason
-    assert "engine wheel" in refused.reason
+    assert "`npm:onepipeline-cli`" in refused.reason
+    assert "engine's npm package" in refused.reason
     assert f"`{JUDGED_TIER}`'s question" in refused.reason
     assert "`config/<pin>.version`" in refused.reason
 
@@ -350,7 +348,7 @@ def test_a_crate_taken_as_the_producers_default_is_refused_the_same_way(
     _onevcs(
         tmp_path,
         monkeypatch,
-        releases={"library": _answer("id/library", WHEEL, CRATE, default="crate")},
+        releases={"library": _answer("id/library", NPM_CLI, CRATE, default="crate")},
     )
     _own_checkout(tmp_path, monkeypatch)
 
@@ -372,7 +370,7 @@ def test_a_node_of_this_repository_adopting_a_wheel_is_accepted_whatever_its_cri
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, task: str
 ) -> None:
     """No rule here reads a task's prose: the pin question belongs to the judged tier."""
-    _onevcs(tmp_path, monkeypatch, releases={"library": _answer("id/library", WHEEL, CRATE)})
+    _onevcs(tmp_path, monkeypatch, releases={"library": _answer("id/library", NPM_CLI, CRATE)})
     _own_checkout(tmp_path, monkeypatch)
     plan = _plan(
         _producer(),
@@ -380,7 +378,7 @@ def test_a_node_of_this_repository_adopting_a_wheel_is_accepted_whatever_its_cri
             repo=OWN,
             task=task,
             adoption="published",
-            consumes={"producer": "pypi"},
+            consumes={"producer": "npm"},
             merge_policy="change-open",
         ),
     )
@@ -399,7 +397,7 @@ def test_a_node_of_this_repository_with_nothing_to_wait_on_is_held_rather_than_u
     _onevcs(
         tmp_path,
         monkeypatch,
-        releases={"library": _answer("id/library", WHEEL), "quiet": _answer("id/quiet")},
+        releases={"library": _answer("id/library", NPM_CLI), "quiet": _answer("id/quiet")},
     )
     _own_checkout(tmp_path, monkeypatch)
     plan = _plan(
@@ -444,7 +442,7 @@ def test_a_checkout_with_no_origin_of_its_own_decides_nothing_about_its_own_node
     _onevcs(
         tmp_path,
         monkeypatch,
-        releases={"library": _answer(INSTALLED_PRODUCER, WHEEL, CRATE, default="crate")},
+        releases={"library": _answer(INSTALLED_PRODUCER, NPM_CLI, CRATE, default="crate")},
     )
     _own_checkout(tmp_path, monkeypatch, origin=None)
 
@@ -480,7 +478,7 @@ def test_a_node_elsewhere_taking_a_producers_default_target_is_refused_naming_co
     _onevcs(
         tmp_path,
         monkeypatch,
-        releases={"library": _answer(INSTALLED_PRODUCER, WHEEL, CRATE, default="pypi")},
+        releases={"library": _answer(INSTALLED_PRODUCER, NPM_CLI, CRATE, default="npm")},
         resolved={"service": ("/srv/service", Workflow.CHANGE_AUTO.value)},
     )
     _own_checkout(tmp_path, monkeypatch)
@@ -488,10 +486,10 @@ def test_a_node_elsewhere_taking_a_producers_default_target_is_refused_naming_co
     (refused,) = refusals(_plan(_producer(), _consumer(adoption="published")))
 
     assert (refused.node, refused.field) == ("consumer", "consumes")
-    assert "`default_target` ('pypi')" in refused.reason
+    assert "`default_target` ('npm')" in refused.reason
     assert f"{INSTALLED_PRODUCER} is a producer this host installs from" in refused.reason
     assert "`consumes: {producer: <target>}`" in refused.reason
-    assert "resolves: pypi, crate" in refused.reason
+    assert "resolves: npm, crate" in refused.reason
 
 
 def test_a_producer_awaiting_its_first_adoption_has_its_default_refused_the_same_way(
@@ -552,7 +550,7 @@ def test_a_hosted_repository_that_is_not_this_hosts_own_is_outside_it(
     _onevcs(
         tmp_path,
         monkeypatch,
-        releases={"library": _answer(INSTALLED_PRODUCER, WHEEL, default="pypi")},
+        releases={"library": _answer(INSTALLED_PRODUCER, NPM_CLI, default="npm")},
     )
     _own_checkout(tmp_path, monkeypatch)
     plan = _plan(_producer(), _consumer(repo="github.com/acme/service", adoption="published"))
@@ -577,7 +575,7 @@ def test_a_default_is_taken_only_by_a_published_node_that_names_nothing(
     _onevcs(
         tmp_path,
         monkeypatch,
-        releases={"library": _answer(INSTALLED_PRODUCER, WHEEL, CRATE, default="pypi")},
+        releases={"library": _answer(INSTALLED_PRODUCER, NPM_CLI, CRATE, default="npm")},
         resolved={"service": ("/srv/service", Workflow.CHANGE_AUTO.value)},
     )
     _own_checkout(tmp_path, monkeypatch)
@@ -626,17 +624,17 @@ def test_an_answer_omitting_the_optional_fields_resolves_them_as_absent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A missing `adoption` is `fast` and a missing `default_target` is no default."""
-    _onevcs(tmp_path, monkeypatch, releases={"library": _answer("id/library", WHEEL)})
+    _onevcs(tmp_path, monkeypatch, releases={"library": _answer("id/library", NPM_CLI)})
 
     answered = targets("library")
 
-    assert answered == Targets("id/library", Adoption.FAST, None, (Target(*WHEEL),))
+    assert answered == Targets("id/library", Adoption.FAST, None, (Target(*NPM_CLI),))
 
 
 def test_a_target_entry_or_declaration_row_this_cannot_read_is_dropped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    answer = _answer("id/library", WHEEL)
+    answer = _answer("id/library", NPM_CLI)
     answer["targets"].append({"style": "automated"})
     answer["targets"].append("pypi")
     answer["declaration"]["declared"]["target"].append({"name": "crate"})
@@ -647,7 +645,7 @@ def test_a_target_entry_or_declaration_row_this_cannot_read_is_dropped(
     answered = targets("library")
 
     assert answered is not None
-    assert answered.targets == (Target(*WHEEL),)
+    assert answered.targets == (Target(*NPM_CLI),)
     assert answered.default_target is None
 
 
@@ -659,7 +657,7 @@ def test_an_adoption_word_this_does_not_know_decides_nothing(
         tmp_path,
         monkeypatch,
         releases={
-            "library": _answer("id/library", WHEEL),
+            "library": _answer("id/library", NPM_CLI),
             "service": _answer("id/service", adoption="eventually"),
         },
         resolved={"service": ("/srv/service", Workflow.LOCAL_DIRECT.value)},
@@ -699,7 +697,7 @@ def test_each_verb_is_asked_once_per_repository_a_plan_names(
     log = _onevcs(
         tmp_path,
         monkeypatch,
-        releases={"library": _answer("id/library", WHEEL)},
+        releases={"library": _answer("id/library", NPM_CLI)},
         resolved={"service": ("/srv/service", Workflow.LOCAL_DIRECT.value)},
     )
     plan = _plan(
@@ -765,7 +763,7 @@ def test_a_dependency_is_placed_against_the_node_it_holds(
         tmp_path,
         monkeypatch,
         releases={
-            "library": _answer("id/library", WHEEL),
+            "library": _answer("id/library", NPM_CLI),
             "service": _answer("id/service"),
         },
     )
@@ -786,10 +784,10 @@ def test_the_raising_face_reports_the_first_refusal_with_its_field(
     _onevcs(
         tmp_path,
         monkeypatch,
-        releases={"library": _answer("id/library", WHEEL)},
+        releases={"library": _answer("id/library", NPM_CLI)},
         resolved={"service": ("/srv/service", Workflow.LOCAL_DIRECT.value)},
     )
-    plan = _plan(_producer(), _consumer(consumes={"producer": "npm"}), _consumer(id="held"))
+    plan = _plan(_producer(), _consumer(consumes={"producer": "pypi"}), _consumer(id="held"))
 
     with pytest.raises(AdoptionError) as raised:
         check_plan(plan)

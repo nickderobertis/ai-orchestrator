@@ -154,8 +154,8 @@ prefix_rule(pattern=["just", "follow-ups"], decision="allow")
 # allowed_tools: Bash(just follow-ups-answer-comments:*)
 prefix_rule(pattern=["just", "follow-ups-answer-comments"], decision="allow")
 
-# allowed_tools: Bash(uv run --no-sync onepipeline supersessions:*)
-prefix_rule(pattern=["uv", "run", "--no-sync", "onepipeline", "supersessions"], decision="allow")
+# allowed_tools: Bash(node_modules/.bin/onepipeline supersessions:*)
+prefix_rule(pattern=["node_modules/.bin/onepipeline", "supersessions"], decision="allow")
 
 # allowed_tools: Bash(uv run --no-sync python -m orchestrator.follow_up_tickets board-items:*)
 prefix_rule(pattern=["uv", "run", "--no-sync", "python", "-m", "orchestrator.follow_up_tickets", "board-items"], decision="allow")
@@ -169,8 +169,8 @@ prefix_rule(pattern=["uv", "run", "--no-sync", "python", "-m", "orchestrator.fol
 # allowed_tools: Bash(uv run --no-sync python -m orchestrator.follow_up_tickets check-gathering:*)
 prefix_rule(pattern=["uv", "run", "--no-sync", "python", "-m", "orchestrator.follow_up_tickets", "check-gathering"], decision="allow")
 
-# allowed_tools: Bash(uv run --no-sync onepipeline scratch discard:*)
-prefix_rule(pattern=["uv", "run", "--no-sync", "onepipeline", "scratch", "discard"], decision="allow")
+# allowed_tools: Bash(node_modules/.bin/onepipeline scratch discard:*)
+prefix_rule(pattern=["node_modules/.bin/onepipeline", "scratch", "discard"], decision="allow")
 
 # allowed_tools: Bash(git clone:*)
 prefix_rule(pattern=["git", "clone"], decision="allow")

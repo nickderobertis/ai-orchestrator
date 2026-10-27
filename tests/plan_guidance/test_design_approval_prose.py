@@ -90,7 +90,7 @@ def test_regenerating_a_shipped_example_keeps_its_body_and_approves_nothing(
     current = design_approval.assess(project).refusal is None
 
     resolve = subprocess.run(
-        [str(REPO_ROOT / ".venv" / "bin" / "onepipeline"), "template", "resolve"]
+        [str(REPO_ROOT / "node_modules" / ".bin" / "onepipeline"), "template", "resolve"]
         + [design_approval.TEMPLATE_NAME, *design_chain.resolve_arguments(repository), "--json"]
         + ["--template-root", str(design_approval.TEMPLATE_ROOT)],
         cwd=REPO_ROOT,

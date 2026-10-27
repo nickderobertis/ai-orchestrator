@@ -21,6 +21,7 @@
       "{workspaceRoot}/orchestrator/follow_up_comments.py",
       "{workspaceRoot}/orchestrator/follow_up_drafts.py",
       "{workspaceRoot}/orchestrator/follow_up_tickets.py",
+      "{workspaceRoot}/orchestrator/npm_installs.py",
       "{workspaceRoot}/orchestrator/plan_budgets.py",
       "{workspaceRoot}/orchestrator/plan_store.py",
       "{workspaceRoot}/orchestrator/plan_units.py",

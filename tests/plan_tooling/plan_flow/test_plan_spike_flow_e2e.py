@@ -5,7 +5,7 @@ helpers, `orchestrator/spike_flow.py`, the real `just review-plan`, `just check-
 unpublished --acknowledge`, `scripts/finish-plan.sh` and its copy and report, the launch
 gate in `scripts/onepipeline.sh`, the pinned plan store, the pinned `onevcs` over a scratch
 registry with a real Git origin, and `just approve-design`. **Only the engine's `start` is
-doubled**, at the copy's `.venv/bin/onepipeline`, by
+doubled**, over the copy's platform binary that `orchestrator.npm_installs` resolves, by
 `tests/plan_tooling/plan_flow/spike_flow_engine.py`: it does with those same real tools what
 each stage's run leaves behind — the plan and its spikes written into the store, each
 spike's branch cut, committed, preserved and released through `onevcs` and its report
@@ -14,7 +14,7 @@ the run's ledger record. The paid reviewer `just review-plan` spends a turn on i
 stand-in every journey here uses.
 
 It runs in a copy because the wrapper runs the engine at its checkout's own
-`.venv/bin/onepipeline` and nowhere else, and the copy's migration list names the one plan
+platform binary and nowhere else, and the copy's migration list names the one plan
 that predates budgets, which only a reviewed change to the tracked list could otherwise do.
 
 llmlint: ignore-file[e2e_not_mocked, tests_mirror_real_usage] The engine's `start` is
@@ -50,8 +50,10 @@ import pytest
 import short_state
 import yaml
 from nx_workspace import (
+    REAL_ENGINE,
     answering_this_checkouts_origin,
     copy_working_tree,
+    double_the_engine,
     share_this_checkouts_install,
 )
 from project_fixtures import no_budgets
@@ -157,18 +159,7 @@ def workspace(tmp_path_factory: pytest.TempPathFactory) -> Workspace:
     answering_this_checkouts_origin(checkout)
     shared = share_this_checkouts_install(checkout)
     # The copy's own link to the engine, replaced by the double; this checkout's is untouched.
-    engine = checkout / ".venv" / "bin" / "onepipeline"
-    real = engine.with_name("onepipeline-real")
-    engine.rename(real)
-    # A shell script that hands every call to the stand-in on its second line, followed by
-    # the real binary's bytes, which bash never reads: `just check-plan` reads the roles a
-    # persona name resolves to out of the installed engine's own bytes, so they stay there.
-    engine.write_bytes(
-        f"#!/usr/bin/env bash\nexec {shlex.quote(sys.executable)} "
-        f'{shlex.quote(str(STAND_IN))} "$@"\n'.encode()
-        + real.read_bytes()
-    )
-    engine.chmod(0o755)
+    double_the_engine(checkout, STAND_IN)
     migrated = PlanProject(f"{FIXTURE_SOURCE}:test-{os.getpid()}-migrated-plan")
     with (checkout / "config" / "budgets-migration.yaml").open("a", encoding="utf-8") as listed:
         listed.write(
@@ -226,7 +217,7 @@ def _flow(
         f"ONETASKGRAPH_SOURCES__{DESTINATION.upper()}__PLUGIN": "local-md",
         f"ONETASKGRAPH_SOURCES__{DESTINATION.upper()}__CONFIG__ROOT": str(destination),
         "ONETASKGRAPH_DEFAULT_SOURCES": f"authoring,{FIXTURE_SOURCE},{DESTINATION}",
-        "FAKE_ENGINE_REAL": str(bin_dir / "onepipeline-real"),
+        "FAKE_ENGINE_REAL": str(REAL_ENGINE),
         "FAKE_ENGINE_STORE": str(bin_dir / "onetaskgraph"),
         "FAKE_ENGINE_ONEVCS": str(bin_dir / "onevcs"),
         "FAKE_ENGINE_LOG": str(log),

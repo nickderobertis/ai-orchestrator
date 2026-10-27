@@ -2033,6 +2033,7 @@ def test_a_second_plan_launch_under_one_name_is_refused_rather_than_given_anothe
 #: refusal below is driven without touching this one.
 LAUNCH_SCRIPTS = (
     "onepipeline.sh",
+    "npm-binary.sh",
     "launcher-session.sh",
     "dispatch-env.sh",
     "template-env.sh",
@@ -2233,7 +2234,7 @@ def test_a_plan_launch_in_a_checkout_without_an_engine_is_refused_naming_it(
     The flow is what holds the manager's session for the launcher's whole life, so a
     launcher that went on in no flow would launch runs and ask questions nothing is woken
     for. Driven through the real recipe from a checkout holding every helper and the real
-    engine wrapper but no `.venv/bin/onepipeline`, so the refusal proved is the missing
+    engine wrapper but no installed engine platform binary, so the refusal proved is the missing
     engine's and nothing after it.
     """
     checkout = tmp_path / "checkout"

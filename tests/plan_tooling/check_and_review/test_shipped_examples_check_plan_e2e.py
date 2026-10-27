@@ -168,7 +168,7 @@ def _render_under(
             '"$1" template resolve plan-task --json | "$2" task render "$3" '
             "--template-loader - --no-interactive",
             "render-under",
-            str(REPO_ROOT / ".venv" / "bin" / "onepipeline"),
+            str(REPO_ROOT / "node_modules" / ".bin" / "onepipeline"),
             str(plan_store.locked_binary()),
             f"{project}/health",
         ],

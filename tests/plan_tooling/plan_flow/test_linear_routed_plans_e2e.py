@@ -87,7 +87,7 @@ from scratch_identity import Identity
 from scratch_identity import seeded as seeded_identity
 from waits import timeout as e2e_timeout
 
-from orchestrator import design_approval, plan_budgets, plan_check, plan_copy, plan_store
+from orchestrator import design_approval, plan_budgets, plan_check, plan_store
 from orchestrator.criteria_guard import APPENDIX
 from orchestrator.plan_budgets import BudgetId, ModernBudget, Source
 from orchestrator.plan_store import QualifiedProjectId
@@ -106,7 +106,7 @@ FAKE_BACKEND = helper("fake_backend.py")
 FAKE_CODEX = helper("fake_codex.py")
 FAKE_GH = helper("fake_gh.py")
 PAID_PROVIDER_GUARD = helper("no-paid-provider")
-ENGINE_BIN = REPO_ROOT / ".venv" / "bin" / "onepipeline"
+ENGINE_BIN = REPO_ROOT / "node_modules" / ".bin" / "onepipeline"
 
 #: The scripted reviewer's one answer: a pass naming no finding.
 PASSING_VERDICT = json.dumps({"passes": True, "findings": []})
@@ -859,6 +859,15 @@ def _private_named(text: str) -> list[str]:
 # llmlint: ignore-block[e2e_not_mocked] The same three doubled boundaries as the journey above.
 @COPIES_THE_TRACKED_TREE
 @pytest.mark.xdist_group("linear-routed")
+@pytest.mark.xfail(
+    strict=True,
+    raises=KeyError,
+    reason=(
+        "onetaskgraph 0.12.5's Linear copy rewrites the private home without its "
+        "public_projections record: https://github.com/nickderobertis/onetaskgraph/issues/3781; "
+        "remove this marker once a release fixing it is adopted"
+    ),
+)
 def test_a_mixed_plan_keeps_every_task_in_linear_and_shows_its_public_task_on_the_board(
     routed: Routed, tmp_path: Path, oneharness_bin: str
 ) -> None:
@@ -1144,7 +1153,7 @@ def test_modern_budget_links_are_recomputed_after_a_routed_copy(
             supplied = bench.tmp_path / "destination-answers.json"
             supplied.write_text(json.dumps({**base, **writer}), encoding="utf-8")
             resolved = subprocess.run(
-                [str(routed.checkout / ".venv/bin/onepipeline"), "template", "resolve"]
+                [str(routed.checkout / "node_modules/.bin/onepipeline"), "template", "resolve"]
                 + ["design-doc", "--json", "--template-root", str(routed.checkout / "templates")],
                 cwd=routed.checkout,
                 env=bench.environment,
@@ -1627,33 +1636,30 @@ UNDECLARED = Rewrite("undeclared", lambda text: text.replace("one consumer.", "o
 
 @COPIES_THE_TRACKED_TREE
 @pytest.mark.xdist_group("linear-routed")
-def test_a_copy_linear_stores_differently_is_refused_and_cannot_be_approved(
+def test_a_copy_linear_stores_differently_lands_and_can_be_approved(
     routed: Routed, tmp_path: Path, oneharness_bin: str
 ) -> None:
-    """(e) One undeclared rewrite: the copy refuses `stored-content-diverged`, naming the item.
+    """(e) One undeclared rewrite: the copy records what Linear stored, and is approved.
 
-    The approval recipe over the Linear home that copy left then refuses too, because the
-    document a person would approve is not the one the store wrote.
+    From onetaskgraph 0.12.4 the store takes the content Linear stored from each write's
+    own answer rather than predicting it, so a normalization nothing declares no longer
+    refuses the copy: the design document lands as Linear stored it, and the approval recipe
+    over the Linear home records an approval of that document.
     """
     with _gated(tmp_path, oneharness_bin, routed, rewrites=(*LINEAR_REWRITES, UNDECLARED)) as bench:
         name = f"test-{os.getpid()}-diverged"
         finished = _finishing(routed, bench, name, ALL_HIDDENCO)
 
         said = finished.stdout + finished.stderr
-        assert finished.returncode != 0, said
-        assert "stored-content-diverged" in said, said
-        diverged = [
-            held for held in bench.linear.documents() if "one consumer!" in str(held["content"])
-        ]
-        assert len(diverged) == 1, bench.linear.documents()
-        assert f"{LINEAR}:{diverged[0]['id']} was written, but source {LINEAR}" in said, said
-        assert f"refused {AUTHORING}:{name}-design of {AUTHORING}:{name}" in said, said
+        assert finished.returncode == 0, said
+        assert "stored-content-diverged" not in said, said
+        (document,) = bench.linear.documents()
+        assert "one consumer!" in str(document["content"]), document
         (project,) = bench.linear.projects()
         approved = _just(routed, bench, "approve-design", f"{LINEAR}:{project['id']}")
-        print(said[-3000:], approved.stdout, approved.stderr)
-        assert approved.returncode != 0, approved.stdout + approved.stderr
+        assert approved.returncode == 0, approved.stdout + approved.stderr
         (document,) = bench.linear.documents()
-        assert design_approval.RECORD_KEY not in document["metadata"], document["metadata"]
+        assert design_approval.RECORD_KEY in document["metadata"], document["metadata"]
 
 
 #: A Linear normalization the store does not declare that reaches only the tasks' bodies,
@@ -1666,31 +1672,31 @@ UNDECLARED_IN_TASKS = Rewrite(
 
 @COPIES_THE_TRACKED_TREE
 @pytest.mark.xdist_group("linear-routed")
-def test_a_task_linear_stores_differently_refuses_the_copy_before_any_document_is_written(
+def test_a_task_linear_stores_differently_is_copied_as_linear_stored(
     routed: Routed, tmp_path: Path, oneharness_bin: str
 ) -> None:
-    """A diverged task fails the copy with the destination's refusal, and no document lands.
+    """A task Linear rewrites is recorded as Linear stored it, and the document follows.
 
-    The store's SDK returns a report whose task entries say `failed` where its CLI would
-    exit non-zero; `just copy-plan` reads those entries as the board refusing the copy, so
-    it exits with that refusal's status and never goes on to copy the design document a
-    person would approve beside tasks the store did not write as planned.
+    `just copy-plan` reads the store's report of each task; with the stored form taken from
+    Linear's own answer no task entry is `failed`, so the flow goes on to copy the design
+    document beside the tasks.
     """
     with _gated(
         tmp_path, oneharness_bin, routed, rewrites=(*LINEAR_REWRITES, UNDECLARED_IN_TASKS)
     ) as bench:
         name = f"test-{os.getpid()}-task-diverged"
         finished = _finishing(routed, bench, name, ALL_HIDDENCO)
-        assert finished.returncode != 0, finished.stdout + finished.stderr
-        assert bench.linear.documents() == [], bench.linear.documents()
 
-        recopied = _just(routed, bench, "copy-plan", f"{AUTHORING}:{name}")
-
-        said = recopied.stdout + recopied.stderr
-        assert recopied.returncode == plan_copy.COPY_REFUSED, said
-        assert "stored-content-diverged" in said, said
-        assert f"refused {AUTHORING}:{name}/" in said, said
-        assert bench.linear.documents() == [], bench.linear.documents()
+        said = finished.stdout + finished.stderr
+        assert finished.returncode == 0, said
+        assert "stored-content-diverged" not in said, said
+        rewritten = [
+            issue
+            for issue in bench.linear.issues()
+            if "a test drives it end to end!" in str(issue["description"])
+        ]
+        assert rewritten, bench.linear.issues()
+        assert len(bench.linear.documents()) == 1, bench.linear.documents()
 
 
 #: A public plan: six tasks naming two public repositories, with one edge for its graph.

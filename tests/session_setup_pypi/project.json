@@ -20,6 +20,7 @@
       "!{workspaceRoot}/tests/session_setup_pypi/**/*.md",
       "{workspaceRoot}/tests/test_linked_libraries.py",
       "{workspaceRoot}/config/onepipeline.version",
+      "{workspaceRoot}/orchestrator/npm_installs.py",
       "{workspaceRoot}/orchestrator/root.py"
     ]
   },

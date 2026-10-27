@@ -19,7 +19,7 @@
       {
         "hooks": [
           {
-            "command": "\"$CLAUDE_PROJECT_DIR/.venv/bin/onepipeline\" stop-guard --wake-budget 2100 --format claude-code --unpublished --unpublished-acknowledgements \"${XDG_STATE_HOME:-$HOME/.local/state}/ai-orchestrator/stop-unfinished/acknowledged\" --unpublished-pr-author-graph \"$CLAUDE_PROJECT_DIR/graphs/pr-author.yaml\"",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/npm-binary.sh\" onepipeline-cli onepipeline stop-guard --wake-budget 2100 --format claude-code --unpublished --unpublished-acknowledgements \"${XDG_STATE_HOME:-$HOME/.local/state}/ai-orchestrator/stop-unfinished/acknowledged\" --unpublished-pr-author-graph \"$CLAUDE_PROJECT_DIR/graphs/pr-author.yaml\"",
             "timeout": 30,
             "type": "command"
           }
@@ -112,12 +112,12 @@
       "Bash(just follow-up:*)",
       "Bash(just follow-ups:*)",
       "Bash(just follow-ups-answer-comments:*)",
-      "Bash(uv run --no-sync onepipeline supersessions:*)",
+      "Bash(node_modules/.bin/onepipeline supersessions:*)",
       "Bash(uv run --no-sync python -m orchestrator.follow_up_tickets board-items:*)",
       "Bash(uv run --no-sync python -m orchestrator.follow_up_tickets check-dispositions:*)",
       "Bash(uv run --no-sync python -m orchestrator.follow_up_tickets check-responses:*)",
       "Bash(uv run --no-sync python -m orchestrator.follow_up_tickets check-gathering:*)",
-      "Bash(uv run --no-sync onepipeline scratch discard:*)",
+      "Bash(node_modules/.bin/onepipeline scratch discard:*)",
       "Bash(git status)",
       "Bash(git config core.bare)",
       "Bash(git clone:*)",

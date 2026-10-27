@@ -67,7 +67,7 @@ PAID_PROVIDER_GUARD = helper("no-paid-provider")
 
 #: The engine this checkout installs from its own pin, asked directly: the recipe is what
 #: launches, and what has to answer is the binary a manager's hook would ask.
-ONEPIPELINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
+ONEPIPELINE = REPO_ROOT / "node_modules" / ".bin" / "onepipeline"
 
 #: The status the verb answers when a run the session owns has nothing watching it.
 RUNS_UNWATCHED = 6

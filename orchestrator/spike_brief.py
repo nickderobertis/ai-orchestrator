@@ -22,8 +22,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, NewType, TypedDict, cast
 from urllib.parse import urlsplit
 
-from orchestrator import run_reading
-from orchestrator.root import REPO_ROOT
+from orchestrator import npm_installs, run_reading
 
 # Excluded from coverage because only a type checker runs this import: at runtime the store
 # SDK it loads stays out of `unfinished`, which reads receipts under the system interpreter.
@@ -341,7 +340,7 @@ def digest(content: str) -> Digest:
 
 
 def ended(run: str) -> bool:
-    binary = REPO_ROOT / ".venv/bin/onepipeline"
+    binary = npm_installs.ENGINE
     result = subprocess.run(
         [str(binary), "status", run, "--json"],
         capture_output=True,

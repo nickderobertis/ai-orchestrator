@@ -10,10 +10,11 @@ copied. A document that parts from the graph is refused with the document-refuse
 naming the first difference, and nothing reaches the destination.
 
 The journeys run in a copy of this checkout, because the wrapper runs the engine at its
-checkout's own `.venv/bin/onepipeline`. Everything there is real — `scripts/finish-plan.sh`,
-the review turn's recipe, the check, the graph verb, mermaid-cli and Chromium, the store at
-both ends, the template, the row module and `just approve-design` — except two seams. **The
-engine's `start` is doubled**, by `tests/plan_tooling/plan_flow/finish_plan_writer_engine.py`,
+checkout's own platform binary, the one `orchestrator.npm_installs` resolves. Everything there
+is real — `scripts/finish-plan.sh`, the review turn's recipe, the check, the graph verb,
+mermaid-cli and Chromium, the store at both ends, the template, the row module and `just
+approve-design` — except two seams. **The engine's `start` is doubled**, by
+`tests/plan_tooling/plan_flow/finish_plan_writer_engine.py`,
 which runs the commands the writer's turn runs, because the paid model is the one boundary
 these journeys may not reach; and for the two journeys about a graph read that fails, the copy's
 store is a wrapper that hands one form's read to the real verb **over a project id the store
@@ -41,7 +42,6 @@ import itertools
 import json
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -52,8 +52,10 @@ from typing import Any, NamedTuple, TypedDict
 import plan_root_variable
 import pytest
 from nx_workspace import (
+    REAL_ENGINE,
     answering_this_checkouts_origin,
     copy_working_tree,
+    double_the_engine,
     share_this_checkouts_install,
 )
 from project_fixtures import budgeted, no_budgets
@@ -125,9 +127,9 @@ _SEQUENCE = itertools.count()
 def _checkout(tmp_path: Path) -> Copy:
     """A copy of this checkout whose engine doubles `start` and whose store is wrapped.
 
-    The engine wrapper is a shell script handing every call to the stand-in on its second
-    line, followed by the real binary's bytes, which bash never reads: `just check-plan`
-    reads the roles a persona name resolves to out of the installed engine's own bytes.
+    The engine wrapper hands every call to the stand-in, which hands every verb but `start`
+    to the real platform binary; `just check-plan` reads the roles a
+    persona name resolves to out of that binary's own bytes.
     """
     checkout = tmp_path / "checkout"
     checkout.mkdir()
@@ -136,15 +138,7 @@ def _checkout(tmp_path: Path) -> Copy:
     shared = share_this_checkouts_install(checkout)
     # The copy's own links to the two tools, replaced by doubles; this checkout's stay.
     bins = checkout / ".venv" / "bin"
-    engine = bins / "onepipeline"
-    real = engine.with_name("onepipeline-real")
-    engine.rename(real)
-    engine.write_bytes(
-        f"#!/usr/bin/env bash\nexec {shlex.quote(sys.executable)} "
-        f'{shlex.quote(str(STAND_IN))} "$@"\n'.encode()
-        + real.read_bytes()
-    )
-    engine.chmod(0o755)
+    double_the_engine(checkout, STAND_IN)
     store = bins / "onetaskgraph"
     store.rename(store.with_name("onetaskgraph-real"))
     store.write_text(GRAPH_WRAPPER, encoding="utf-8")
@@ -314,7 +308,7 @@ def _finish(
                         "-c",
                         WRITER,
                         "store-the-document",
-                        str(bins / "onepipeline"),
+                        str(REAL_ENGINE),
                         str(bins / "onetaskgraph-real"),
                         source,
                         native,
@@ -335,7 +329,7 @@ def _finish(
     log = tmp_path / f"starts-{native}.jsonl"
     bench.environment.update(
         {
-            "FAKE_ENGINE_REAL": str(bins / "onepipeline-real"),
+            "FAKE_ENGINE_REAL": str(REAL_ENGINE),
             "FAKE_ENGINE_STORE": str(bins / "onetaskgraph-real"),
             "FAKE_ENGINE_WRITER_TURN": str(turn),
             "FAKE_ENGINE_LOG": str(log),

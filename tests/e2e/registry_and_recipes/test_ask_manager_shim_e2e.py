@@ -38,6 +38,7 @@ import pytest
 from probe_run_root import run_root
 from waits import timeout as e2e_timeout
 
+from orchestrator import npm_installs
 from orchestrator.root import REPO_ROOT
 
 #: The real adapter, and the configuration the run's channel is read back under.
@@ -108,7 +109,8 @@ def mirror(tmp_path: Path) -> Mirror:
     (checkout / "scripts").mkdir(parents=True)
     shim = checkout / "scripts" / SHIM.name
     shutil.copy2(SHIM, shim)
-    engine = checkout / ".venv" / "bin" / "onepipeline"
+    shutil.copy2(SHIM.with_name("npm-binary.sh"), checkout / "scripts")
+    engine = npm_installs.platform_binary(node_modules=checkout / "node_modules")
     engine.parent.mkdir(parents=True)
     # llmlint: ignore[e2e_not_mocked] The engine the adapter execs is the published CLI below this repository's wrapper, and what is under test is exactly what reaches it — argv, stdin — and that its answer comes back unchanged, which only a recording stand-in at the adapter's own locked path can observe. The real engine is driven by the last two journeys here and by tests/ask_seam/.  # noqa: E501 - a directive is one line
     engine.write_text(STUB.format(python=sys.executable), encoding="utf-8")
@@ -171,7 +173,7 @@ def _no_locked_engine(checkout: Path) -> None:
 
 def _locked_engine_that_cannot_be_run(checkout: Path) -> None:
     """A locked engine that exists with no execute bit: a half-finished install."""
-    engine = checkout / ".venv" / "bin" / "onepipeline"
+    engine = npm_installs.platform_binary(node_modules=checkout / "node_modules")
     engine.parent.mkdir(parents=True)
     # Same stand-in as the mirror's, so what stops it running is the mode and nothing else.
     engine.write_text(STUB.format(python=sys.executable), encoding="utf-8")
@@ -201,6 +203,7 @@ def test_a_checkout_whose_locked_engine_cannot_run_asks_the_one_on_path(
     (checkout / "scripts").mkdir(parents=True)
     shim = checkout / "scripts" / SHIM.name
     shutil.copy2(SHIM, shim)
+    shutil.copy2(SHIM.with_name("npm-binary.sh"), checkout / "scripts")
     locked_engine(checkout)
     on_path = tmp_path / "bin"
     on_path.mkdir()

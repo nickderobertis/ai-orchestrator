@@ -43,7 +43,7 @@ import plan_store_user_layer
 import pytest
 from published_tools import ONETASKGRAPH_BIN
 
-from orchestrator import plan_store
+from orchestrator import npm_installs, plan_store
 from orchestrator.root import REPO_ROOT
 
 #: The whole subject here is what *this checkout* resolves the `authoring` source to, and
@@ -456,7 +456,7 @@ def _report_from_another_repository(tmp_path: Path, **environment: str) -> Repor
             program,
             "report",
             str(ONETASKGRAPH_BIN),
-            str(REPO_ROOT / ".venv" / "bin" / "onepipeline"),
+            str(npm_installs.ENGINE),
             project,
             str(foreign),
             str(answers),

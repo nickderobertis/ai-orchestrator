@@ -12,12 +12,13 @@ for, or never fail at all:
   no change request**, is published as a draft carrying a reason when the release is not
   out — and ``local-direct`` refuses a draft by name, so the node fails at its last step
   after hours of correct work;
-* a node of this repository consuming a **crate or an npm launcher** waits on an artifact
-  nothing here installs: a dispatch runs the engine wheel, and a crate reaches this host
-  only through the wheel that links it;
+* a node of this repository consuming a **crate, or a package from a registry this host
+  does not install that producer from**, waits on an artifact nothing here installs: a
+  dispatch runs the engine's npm package, and a crate reaches this host only through the
+  package that links it;
 * a node outside this repository taking the ``default_target`` of a producer this host
   **installs from** — a row of :data:`orchestrator.host_installs.INSTALLED`, or one
-  awaiting its first adoption — has taken **this host's own wheel**, which says nothing
+  awaiting its first adoption — has taken **this host's own package**, which says nothing
   about what that node consumes. A producer whose default the override sets for
   consumers elsewhere (:data:`orchestrator.host_installs.CONSUMER_DEFAULTS`) is the
   default such a node is meant to take, and is not refused.
@@ -31,17 +32,17 @@ against repositories this checkout may never have seen.
 
 **What this module never reads is a task's prose.** Whether a plan *should* have
 adopted, and whether an adopting task's criteria name the ``config/<pin>.version`` the
-wheel governs — and the right one for the fix — are readings of meaning, and they are
+package governs — and the right one for the fix — are readings of meaning, and they are
 `just review-plan`'s judged question; every refusal here that borders that question says
 so, because two tiers refusing each other's required wording is the incident
 :mod:`orchestrator.criteria_guard`'s docstring records. A node of this repository
-adopting a wheel :mod:`orchestrator.host_installs` names is accepted here whatever its
+adopting a package :mod:`orchestrator.host_installs` names is accepted here whatever its
 criteria say.
 
-Two shapes are not re-implemented, because the engine's own loader refuses them and
-`just check-plan` runs that loader first: a ``consumes`` naming a node that is not one of
-the node's ``deps``, and a ``consumes`` on a node whose publication opens no change
-request.
+Two shapes are not re-implemented here: a ``consumes`` naming a node that is not one of
+the node's ``deps``, which the engine's own loader refuses and `just check-plan` runs that
+loader first, and a ``consumes`` on a node whose publication opens no change request,
+which :mod:`orchestrator.publication_guard` refuses.
 """
 
 from __future__ import annotations
@@ -111,7 +112,7 @@ class Target(NamedTuple):
     #: The short name a plan's `consumes` and the override's `default_target` use.
     name: str
     #: The registry-qualified artifact the producer's declaration gives that name
-    #: (``pypi:onepipeline-cli``), or ``None`` when the answer carried none.
+    #: (``npm:onepipeline-cli``), or ``None`` when the answer carried none.
     artifact: str | None
 
 
@@ -566,11 +567,11 @@ def _uninstalled_artifact_refusals(
                 f"target of its dependency {dependency!r}, which is the artifact "
                 f"`{target.artifact}` — and nothing a dispatch here runs installs it. This "
                 f"host installs exactly {installed}; a crate reaches it only through a "
-                f"wheel that carries it — an engine library's through the engine wheel, so "
-                f"the chain is an `onepipeline` node that links the crate and a node here "
-                f"that adopts that node's `pypi`. Name a wheel this host "
+                f"package that carries it — an engine library's through the engine's npm "
+                f"package, so the chain is an `onepipeline` node that links the crate and a "
+                f"node here that adopts that node's `npm`. Name a package this host "
                 f"installs in `consumes: {{{dependency}: <target>}}`, or restructure the "
-                f"plan through the wheel. Which `config/<pin>.version` that wheel governs, "
+                f"plan through the package. Which `config/<pin>.version` that package governs, "
                 f"and whether this node's criteria name it, is `{JUDGED_TIER}`'s question "
                 f"rather than this check's."
             ),
@@ -580,11 +581,11 @@ def _uninstalled_artifact_refusals(
 def _default_taken_refusals(
     node: Node, by_id: Mapping[NodeId, Node], host: Host, adoption: Adoption | None
 ) -> Iterator[Refusal]:
-    """R7: a node outside this repository taking a default that is this host's own wheel.
+    """R7: a node outside this repository taking a default that is this host's own package.
 
     Only a producer this host installs from is refused: one with a row of
     :data:`host_installs.INSTALLED`, or one in :data:`host_installs.AWAITING_FIRST_ADOPTION`,
-    whose default is the wheel a node of this repository adopts. A producer in
+    whose default is the package a node of this repository adopts. A producer in
     :data:`host_installs.CONSUMER_DEFAULTS` defaults to the artifact a consumer elsewhere
     waits on, so taking it is the point; and a producer in none of the sets is one this
     host cannot answer for, which this rule passes over, as every rule here does.
@@ -610,7 +611,7 @@ def _default_taken_refusals(
                 f"this node adopts `published` behind its dependency {dependency!r} and "
                 f"names no `consumes` entry for it, so it would wait on that producer's "
                 f"`default_target` ({answered.default_target!r}) — and {answered.identity} "
-                f"is a producer this host installs from, so that default names the wheel "
+                f"is a producer this host installs from, so that default names the package "
                 f"*this host* installs, which says nothing about what this node's "
                 f"repository ({node.repo}) consumes. Write `consumes: {{{dependency}: "
                 f"<target>}}` naming the target this node actually consumes; that "

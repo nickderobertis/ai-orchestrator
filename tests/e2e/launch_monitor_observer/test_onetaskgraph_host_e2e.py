@@ -98,7 +98,7 @@ from plan_store_pin import (
     held_below_the_pacing_floor,
 )
 from project_fixtures import budgeted, designed, graph_image, no_budgets, reviewed
-from published_tools import ONETASKGRAPH_BIN
+from published_tools import LOCKED_INSTALLS_PATH, ONETASKGRAPH_BIN
 from sibling_facts import registered_checkouts
 from test_orchestrate_launch_e2e import _environment as _launch_environment
 from waits import timeout as e2e_timeout
@@ -5283,7 +5283,7 @@ def _rendering_environment(root: Path) -> dict[str, str]:
     """
     environment = _plan_environment(root)
     environment.pop(plan_check.REQUIRE_RENDERED_ENV, None)
-    environment["PATH"] = f"{REPO_ROOT / '.venv' / 'bin'}{os.pathsep}{environment['PATH']}"
+    environment["PATH"] = f"{LOCKED_INSTALLS_PATH}{os.pathsep}{environment['PATH']}"
     environment["ONEPIPELINE_TEMPLATE_ROOT"] = str(REPO_ROOT / "templates")
     return environment
 

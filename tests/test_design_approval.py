@@ -36,7 +36,7 @@ import pytest
 from project_fixtures import ONEVCS_HOME, register_stand_in
 from registered_checkouts import discover_checkouts, sibling_git
 
-from orchestrator import design_approval, design_chain, plan_store
+from orchestrator import design_approval, design_chain, npm_installs, plan_store
 from orchestrator.plan_store import (
     NodeId,
     QualifiedDocumentId,
@@ -533,6 +533,9 @@ def test_an_unprovisioned_checkout_is_told_to_bootstrap_rather_than_keyed_on_not
 ) -> None:
     """A checkout with no pinned engine cannot say what the template resolves to."""
     monkeypatch.setattr(design_approval, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        npm_installs, "ENGINE", npm_installs.platform_binary(node_modules=tmp_path / "node_modules")
+    )
     with pytest.raises(OSError, match="`just bootstrap`"):
         design_approval.resolved_digest(tmp_path)
 
@@ -553,13 +556,16 @@ def test_a_resolve_that_states_no_digest_is_refused_rather_than_keyed_on(
     stated: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The engine is the published CLI this boundary delegates to, so it alone is doubled."""
-    engine = tmp_path / ".venv" / "bin" / "onepipeline"
+    engine = npm_installs.platform_binary(node_modules=tmp_path / "node_modules")
     engine.parent.mkdir(parents=True)
     # llmlint: ignore[e2e_not_mocked] Only the published engine this module spawns is doubled, to
     # state an answer the real one never gives.  # noqa: E501
     engine.write_text(f"#!/bin/sh\ncat <<'END'\n{stated}\nEND\n", encoding="utf-8")
     engine.chmod(0o755)
     monkeypatch.setattr(design_approval, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        npm_installs, "ENGINE", npm_installs.platform_binary(node_modules=tmp_path / "node_modules")
+    )
     with pytest.raises(OSError, match="stated no digest"):
         design_approval.resolved_digest(tmp_path)
 
@@ -586,13 +592,16 @@ def test_an_engine_that_cannot_state_the_digest_refuses_the_approval_and_the_lau
     holding one rendered document, with the published engine this module spawns doubled.
     """
     if engine is not None:
-        doubled = tmp_path / ".venv" / "bin" / "onepipeline"
+        doubled = npm_installs.platform_binary(node_modules=tmp_path / "node_modules")
         doubled.parent.mkdir(parents=True)
         # llmlint: ignore[e2e_not_mocked] Only the published engine this module spawns is
         # doubled, to fail the way the real one fails on a broken checkout.
         doubled.write_text(f"#!/bin/sh\n{engine}\n", encoding="utf-8")
         doubled.chmod(0o755)
     monkeypatch.setattr(design_approval, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        npm_installs, "ENGINE", npm_installs.platform_binary(node_modules=tmp_path / "node_modules")
+    )
     monkeypatch.setattr(
         design_approval, "configured_sources", lambda: frozenset({"authoring", "plans"})
     )
@@ -1327,7 +1336,7 @@ def _designed(root: Path, monkeypatch: pytest.MonkeyPatch, answers: Mapping[str,
         '---\ntitle: "demo"\nstatus: "todo"\n---\n\nThe plan.\n', encoding="utf-8"
     )
     resolve = subprocess.run(
-        [str(REPO_ROOT / ".venv" / "bin" / "onepipeline"), "template", "resolve"]
+        [str(REPO_ROOT / "node_modules" / ".bin" / "onepipeline"), "template", "resolve"]
         + [design_approval.TEMPLATE_NAME, "--json"]
         + ["--template-root", str(design_approval.TEMPLATE_ROOT)],
         cwd=REPO_ROOT,

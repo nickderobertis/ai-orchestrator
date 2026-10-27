@@ -89,8 +89,9 @@ def test_caller_rewrite_is_stored_and_read_by_the_cli(
             "--body-file",
             str(body),
         )
-        assert created.returncode != 0
-        assert json.loads(created.stdout)["failure"]["kind"] == "stored-content-diverged"
+        # From onetaskgraph 0.12.4 the store records what Linear answers it stored rather
+        # than refusing a write Linear rewrote, so the create succeeds on the stored form.
+        assert created.returncode == 0, created.stdout + created.stderr
         project = board.projects()[0]
         expected = "* one\n\ncaller-stored"
         assert project["content"] == expected

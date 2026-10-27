@@ -306,7 +306,7 @@ def test_reading_a_surface_leaves_the_surface_log_accounting_for_the_read(
     """
     raised = subprocess.run(
         [
-            str(REPO_ROOT / ".venv" / "bin" / "onepipeline"),
+            str(REPO_ROOT / "node_modules" / ".bin" / "onepipeline"),
             "surface",
             held.run,
             "--kind",

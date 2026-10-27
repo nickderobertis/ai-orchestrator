@@ -67,6 +67,7 @@ from fake_backend import PROMPT_LOG_ENV
 from project_fixtures import helper, project_from_plan
 from waits import timeout as e2e_timeout
 
+from orchestrator import npm_installs
 from orchestrator.root import REPO_ROOT
 
 #: The stand-in for the paid model, named to `oneagentgraph` as its harness.
@@ -421,41 +422,31 @@ def adopted(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Jo
 
 @pytest.fixture(scope="module")
 def prior_binary(tmp_path_factory: pytest.TempPathFactory) -> str:
-    """The last release whose lockfile resolves the pre-fix `onevcs`, from PyPI.
+    """The last release whose lockfile resolves the pre-fix `onevcs`, from npmjs.com.
 
-    Installed into a throwaway environment rather than the project's, which stays on the
+    Installed into a throwaway directory rather than this checkout, which stays on the
     adopted pin: the contrast needs both binaries at once, and the adopted one is what
-    every other journey in this suite runs against.
+    every other journey in this suite runs against. Installed the way this host installs
+    the adopted one — from the npm registry, by Bun.
     """
-    if shutil.which("uv") is None:
-        pytest.skip("uv is not installed")
+    bun = shutil.which("bun")
+    if bun is None:
+        pytest.skip("bun is not installed")
     environment = tmp_path_factory.mktemp("onepipeline-prior")
-    created = subprocess.run(
-        ["uv", "venv", str(environment / "venv")],
-        text=True,
-        capture_output=True,
-        timeout=e2e_timeout(180),
-        check=False,
-    )
-    assert created.returncode == 0, f"uv venv failed:\n{created.stdout}\n{created.stderr}"
+    (environment / "package.json").write_text('{"name": "prior", "private": true}\n')
     installed = subprocess.run(
-        [
-            "uv",
-            "pip",
-            "install",
-            "--python",
-            str(environment / "venv" / "bin" / "python"),
-            f"onepipeline-cli=={PRIOR_RELEASE}",
-        ],
+        [bun, "add", "--exact", f"onepipeline-cli@{PRIOR_RELEASE}"],
+        cwd=environment,
         text=True,
         capture_output=True,
         timeout=e2e_timeout(300),
         check=False,
     )
     assert installed.returncode == 0, (
-        f"onepipeline-cli=={PRIOR_RELEASE} did not install:\n{installed.stdout}\n{installed.stderr}"
+        f"onepipeline-cli@{PRIOR_RELEASE} did not install:\n{installed.stdout}\n{installed.stderr}"
     )
-    binary = environment / "venv" / "bin" / "onepipeline"
+    # The platform package's binary, as every caller here runs the engine, never the launcher.
+    binary = npm_installs.platform_binary(node_modules=environment / "node_modules")
     reported = subprocess.run(
         [str(binary), "--version"],
         text=True,

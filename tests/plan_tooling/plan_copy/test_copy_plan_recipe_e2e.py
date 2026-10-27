@@ -677,7 +677,7 @@ def _write_design_document_pointing_at(
         for node, where in sorted(located.items())
     ]
     resolved = subprocess.run(
-        [str(REPO_ROOT / ".venv" / "bin" / "onepipeline"), "template", "resolve"]
+        [str(REPO_ROOT / "node_modules" / ".bin" / "onepipeline"), "template", "resolve"]
         + ["design-doc", "--json", "--template-root", str(REPO_ROOT / "templates")],
         cwd=REPO_ROOT,
         text=True,
@@ -906,7 +906,7 @@ def test_each_budget_name_link_points_at_the_copied_task_after_a_local_copy(
     supplied.write_text(printed.stdout, encoding="utf-8")
     document = design_approval.design_document(project)
     resolved = subprocess.run(
-        [str(REPO_ROOT / ".venv" / "bin" / "onepipeline"), "template", "resolve"]
+        [str(REPO_ROOT / "node_modules" / ".bin" / "onepipeline"), "template", "resolve"]
         + ["design-doc", "--json", "--template-root", str(REPO_ROOT / "templates")],
         cwd=REPO_ROOT,
         text=True,

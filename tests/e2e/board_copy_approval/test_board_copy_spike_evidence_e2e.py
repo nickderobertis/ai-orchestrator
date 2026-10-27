@@ -37,6 +37,7 @@ from github_board import (
     _serving_board,
 )
 from project_fixtures import budgeted, designed, no_budgets, reviewed
+from published_tools import LOCKED_INSTALLS_PATH
 from test_board_copy_design_approval_e2e import _copied, _on_the_board, _recipe
 
 from orchestrator import design_approval, plan_store, spike_plan
@@ -79,7 +80,7 @@ LINKED = (
 def _environment(root: Path) -> dict[str, str]:
     """The environment a planner renders, reviews and copies the plan of ``root`` in."""
     environment = _plan_environment(root)
-    environment["PATH"] = f"{REPO_ROOT / '.venv' / 'bin'}{os.pathsep}{environment['PATH']}"
+    environment["PATH"] = f"{LOCKED_INSTALLS_PATH}{os.pathsep}{environment['PATH']}"
     environment["ONEPIPELINE_TEMPLATE_ROOT"] = str(REPO_ROOT / "templates")
     return environment
 

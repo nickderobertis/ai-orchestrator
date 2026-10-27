@@ -47,6 +47,7 @@ from probe_run_root import Probe, run_name, run_root
 from project_fixtures import helper
 from waits import timeout as e2e_timeout
 
+from orchestrator import npm_installs
 from orchestrator.root import REPO_ROOT
 
 # What the recipes these journeys run leave in the temporary directory, by design or
@@ -119,7 +120,7 @@ def _engine(verb: str, *arguments: str, runs_root: Path) -> subprocess.Completed
     environment = dict(os.environ)
     environment["ONEPIPELINE_RUNS_DIR"] = str(runs_root)
     return subprocess.run(
-        ["uv", "run", "onepipeline", verb, *arguments],
+        [str(npm_installs.ENGINE), verb, *arguments],
         cwd=REPO_ROOT,
         env=environment,
         capture_output=True,

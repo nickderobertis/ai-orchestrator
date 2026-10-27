@@ -32,7 +32,7 @@ from scratch_identity import PLANNING_FLOW_ORIGIN, seeded
 from waits import deadline as e2e_deadline
 from waits import timeout as e2e_timeout
 
-from orchestrator import run_reading, spike_brief
+from orchestrator import npm_installs, run_reading, spike_brief
 from orchestrator.root import REPO_ROOT
 
 # What the recipes these journeys run leave in the temporary directory, by design or
@@ -42,6 +42,13 @@ pytestmark = [
     pytest.mark.xdist_group("spike-brief-planning"),
     pytest.mark.usefixtures("module_tmpdir"),
 ]
+
+
+def _checkout_engine(environment: dict[str, str]) -> Path:
+    """The engine the fixture checkout holds, where its own callers resolve it."""
+    return npm_installs.platform_binary(
+        node_modules=Path(environment["BRIEF_CHECKOUT"]) / "node_modules"
+    )
 
 
 def wait(path: Path, process: subprocess.Popen[str], log: Path) -> None:
@@ -229,7 +236,7 @@ def prove_stop_guard_keeps_optional_approval_advisory(
     )
     answer = subprocess.run(
         [
-            str(Path(environment["BRIEF_CHECKOUT"]) / ".venv/bin/onepipeline"),
+            str(_checkout_engine(environment)),
             "reply",
             name + "-spikes",
             "--correlation",
@@ -296,7 +303,7 @@ def prove_stop_guard_keeps_optional_approval_advisory(
     with watch_log.open("w") as output:
         watcher = subprocess.Popen(
             [
-                str(Path(environment["BRIEF_CHECKOUT"]) / ".venv/bin/onepipeline"),
+                str(_checkout_engine(environment)),
                 "watch",
                 "--flow",
                 name,
@@ -523,7 +530,7 @@ def drive_flow(tmp_path: Path, early: bool, remote: dict[str, str], writers: Bar
             )
             assert refused.returncode == 2
             queue = subprocess.run(
-                [str(REPO_ROOT / ".venv/bin/onepipeline"), "channel", "queue", name],
+                [str(npm_installs.ENGINE), "channel", "queue", name],
                 env=environment,
                 capture_output=True,
                 text=True,
@@ -606,7 +613,7 @@ def drive_flow(tmp_path: Path, early: bool, remote: dict[str, str], writers: Bar
         ]:
             if (Path(environment["ONEPIPELINE_RUNS_DIR"]) / run / "launch.json").exists():
                 subprocess.run(
-                    [str(REPO_ROOT / ".venv/bin/onepipeline"), "stop", run],
+                    [str(npm_installs.ENGINE), "stop", run],
                     env=environment,
                     capture_output=True,
                     text=True,
@@ -633,7 +640,7 @@ def test_two_real_planning_flows_keep_stages_independent_and_use_ordinary_copy(
 
 def engine_command(environment: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [str(Path(environment["BRIEF_CHECKOUT"]) / ".venv/bin/onepipeline"), *args],
+        [str(_checkout_engine(environment)), *args],
         cwd=environment["BRIEF_CHECKOUT"],
         env=environment,
         capture_output=True,

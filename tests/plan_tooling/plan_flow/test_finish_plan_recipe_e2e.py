@@ -138,7 +138,7 @@ DESIGN_TASK_MARKER = "Write the design document a person reviews the plan"
 
 #: The pinned engine this checkout installs, which the doubled writer runs as a real agent
 #: would: its `template resolve` is what states the design-doc template it renders.
-ENGINE_BIN = REPO_ROOT / ".venv" / "bin" / "onepipeline"
+ENGINE_BIN = REPO_ROOT / "node_modules" / ".bin" / "onepipeline"
 
 #: The provenance key the plan store records a rendering under, and the references the
 #: writer's task and its document each record there.

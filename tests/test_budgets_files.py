@@ -36,6 +36,7 @@ import pytest
 import yaml
 from nx_inputs import BUDGET_HOST_SCOPED, BUDGET_SCOPED, project_declarations
 
+from orchestrator import npm_installs
 from orchestrator.plan_budgets import BUDGET_ID_PATTERN, BUDGETS_FILE, Direction
 from orchestrator.root import REPO_ROOT
 
@@ -219,6 +220,7 @@ def test_the_summary_command_reports_failure_without_leaving_scratch(
     script = root / "scripts" / "budget-design-doc-summary.sh"
     script.parent.mkdir(parents=True)
     shutil.copy2(REPO_ROOT / "scripts" / script.name, script)
+    shutil.copy2(REPO_ROOT / "scripts" / "npm-binary.sh", script.parent)
     shutil.copy2(REPO_ROOT / "onetaskgraph.yaml", root / "onetaskgraph.yaml")
     fixture = root / "tests" / "fixtures" / "budgets" / "issue-1568.json"
     fixture.parent.mkdir(parents=True)
@@ -232,8 +234,11 @@ def test_the_summary_command_reports_failure_without_leaving_scratch(
     installed = Path(sys.prefix)
     (binaries.parent / "pyvenv.cfg").symlink_to(installed / "pyvenv.cfg")
     (binaries.parent / "lib").symlink_to(installed / "lib", target_is_directory=True)
-    for name in ("python", "onepipeline", "onetaskgraph"):
+    for name in ("python", "onetaskgraph"):
         (binaries / name).symlink_to(Path(sys.executable).parent / name)
+    engine = npm_installs.platform_binary(node_modules=root / "node_modules")
+    engine.parent.mkdir(parents=True)
+    engine.symlink_to(npm_installs.ENGINE)
     scratch = tmp_path / "scratch"
     scratch.mkdir()
     result = tmp_path / "result.json"

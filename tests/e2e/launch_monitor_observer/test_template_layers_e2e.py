@@ -51,7 +51,7 @@ def test_repository_document_extends_host_and_recovers_from_missing_parent(tmp_p
         "ONEPIPELINE_TEMPLATE_ROOT": str(host),
     }
     command = [
-        str(REPO_ROOT / ".venv/bin/onepipeline"),
+        str(REPO_ROOT / "node_modules/.bin/onepipeline"),
         "template",
         "resolve",
         "journey",

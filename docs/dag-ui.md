@@ -21,8 +21,8 @@ action is taken on.
 
 ## The one published binary
 
-**The view and its data come out of one process.** The `onepipeline-api-cli` wheel,
-installed by session setup at the release `config/onepipeline-ui.version` declares,
+**The view and its data come out of one process.** The `onepipeline-api-cli` npm
+package, installed by session setup from npmjs.com through `bun.lock` at the release `config/onepipeline-ui.version` declares,
 provides one command, `onepipeline-api serve`. It wraps the onepipeline SDK and serves
 the `/api/v2/...` contract plus `/healthz`; with **`--ui`** it also serves the DAG
 Observatory **built into that same binary** — the view of its own release — at `/`,
@@ -208,7 +208,7 @@ own liveness *and* the `onepipeline` release it links:
 
 ```sh
 curl -s http://127.0.0.1:8765/healthz
-{"status":"ok","onepipeline_version":"0.93.0"}
+{"status":"ok","onepipeline_version":"0.95.1"}
 ```
 
 That release is the reader's own, and it is a **different adoption** from
@@ -224,7 +224,8 @@ before. The reader drives no run, so its pin governs no dispatch — what it dec
 whether the dispatching engine's records can be read — and the two are held level **not
 by an operator remembering to check**:
 `tests/test_linked_libraries.py::test_the_ui_api_links_the_pinned_engine`
-reads the engine out of the adopted read-API wheel's own bill of materials and fails
+reads the engine out of the bill of materials the adopted read API's npm platform
+package ships under its `sboms/`, and fails
 when it is not the release `config/onepipeline.version` names, so a bump that moves one
 alone fails on this host rather than in what the browser then reads.
 
@@ -253,7 +254,7 @@ serves another fails there instead of being noticed by a person.
 
 ### What the adopted view renders, and what it has nothing to render
 
-**`onepipeline-ui` 0.55.0**, the release `config/onepipeline-ui.version` pins, carries
+**`onepipeline-ui` 0.58.1**, the release `config/onepipeline-ui.version` pins, carries
 what makes this a supervising surface: the project sidebar grouped by each run's
 effective group with its kind filter, the run's **Channel** tab with its byte-for-byte
 reply composer and `attest`, the per-run **Stop** with the owner-naming refusal, and the
@@ -321,9 +322,9 @@ answer *with*, and that is a third pin: a run's turn transcripts are written by 
 `oneagentgraph` **`onepipeline` links**, not by the one
 `config/oneagentgraph.version` installs. onepipeline links it as a Rust library, so
 the version in force is whatever that release's own build resolved — and the
-installed wheel says which that is, without a network or a clone. `onepipeline-cli`
-ships a CycloneDX SBOM under its `dist-info/sboms/`, declaring one version per
-linked crate; on the adopted release that is **oneagentgraph 0.9.0**.
+installed engine says which that is, without a network or a clone: the npm platform
+package `onepipeline-cli` installs ships a CycloneDX SBOM under its `sboms/`, declaring
+one version per linked crate; on the adopted release that is **oneagentgraph 0.9.0**.
 
 The session-conversation producer landed in oneagentgraph 0.3.3, so what put it in
 force here was moving **`config/onepipeline.version`**, and installing a new

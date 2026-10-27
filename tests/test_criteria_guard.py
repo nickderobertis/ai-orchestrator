@@ -388,13 +388,15 @@ def test_a_name_no_role_claims_reads_as_absent_rather_than_as_an_error(
 
 
 def test_no_bar_can_be_resolved_without_the_engine_that_ships_the_roles(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """A missing `onepipeline` is named as the reason, not silently treated as no role."""
     criteria_guard._engine_bytes.cache_clear()
-    monkeypatch.setattr(criteria_guard.shutil, "which", lambda _: None)
+    monkeypatch.setattr(
+        criteria_guard.npm_installs, "platform_binary", lambda: tmp_path / "onepipeline"
+    )
     try:
-        with pytest.raises(CriteriaError, match="is not on PATH"):
+        with pytest.raises(CriteriaError, match=f"is installed at {tmp_path}"):
             criteria_guard._engine_bytes()
     finally:
         criteria_guard._engine_bytes.cache_clear()

@@ -2,9 +2,10 @@
 
 `scripts/plan.sh` and the other launchers re-execute themselves inside the engine's
 `onepipeline flow run` before they write anything, through the real `scripts/onepipeline.sh`,
-and refuse when the checkout has no engine at `.venv/bin/onepipeline`. A journey that copies
-a launcher into a checkout of its own, to drive a refusal the launcher makes *inside* its
-flow, needs that flow entered first. So this gives the copy the real wrapper and the helpers
+and refuse when the checkout has no engine at the platform package's binary its `node_modules`
+holds (`orchestrator.npm_installs.ENGINE`). A journey that copies a launcher into a checkout
+of its own, to drive a refusal the launcher makes *inside* its flow, needs that flow entered
+first. So this gives the copy the real wrapper and the helpers
 it sources, and puts a stand-in at the binary the wrapper execs — the published-CLI boundary
 the suite doubles — rather than the real engine, which would register a flow owned by
 whichever session the test process happens to run under.
@@ -20,11 +21,12 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+from orchestrator import npm_installs
 from orchestrator.root import REPO_ROOT
 
 #: The real wrapper a launcher enters its flow through, and every helper it sources for the
 #: `flow` verb.
-WRAPPER_SCRIPTS = ("onepipeline.sh", "launcher-session.sh", "template-env.sh")
+WRAPPER_SCRIPTS = ("onepipeline.sh", "npm-binary.sh", "launcher-session.sh", "template-env.sh")
 
 #: The status and the words the stand-in refuses every verb but `flow run` with, so a journey
 #: that stops at the first other verb its launcher reaches can say where it stopped.
@@ -51,7 +53,8 @@ exit {UNEXPECTED_VERB_EXIT}
 def give_flow_engine(checkout: Path) -> Path:
     """Give ``checkout`` the wrapper its launchers enter a flow through, and the stand-in.
 
-    Returns the stand-in's path, `.venv/bin/onepipeline` under the checkout.
+    Returns the stand-in's path, the platform package's binary under the checkout's
+    `node_modules`.
     """
     scripts = checkout / "scripts"
     scripts.mkdir(parents=True, exist_ok=True)
@@ -64,7 +67,7 @@ def give_flow_engine(checkout: Path) -> Path:
     templates = checkout / "templates"
     templates.mkdir(exist_ok=True)
     shutil.copy(REPO_ROOT / "templates" / "templates.yaml", templates)
-    engine = checkout / ".venv" / "bin" / "onepipeline"
+    engine = npm_installs.platform_binary(node_modules=checkout / "node_modules")
     engine.parent.mkdir(parents=True, exist_ok=True)
     engine.write_text(STAND_IN, encoding="utf-8")
     engine.chmod(0o755)

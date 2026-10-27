@@ -21,6 +21,7 @@ import re
 import shlex
 import shutil
 import socket
+import subprocess
 import sys
 import time
 from datetime import UTC, datetime, timedelta
@@ -30,6 +31,7 @@ from typing import Any, NamedTuple, get_type_hints
 import follow_up_boundary
 import follow_up_variables
 import pytest
+from published_tools import ONETASKGRAPH_BIN
 
 from orchestrator import follow_up_comments as comments
 from orchestrator import follow_up_drafts as drafts
@@ -2725,6 +2727,78 @@ def test_an_item_or_its_comments_answered_in_another_shape_are_refused_by_name()
     no_time = detail() | {"comments": [{"id": "c1", "body": "b", "updated_at": 3}]}
     with pytest.raises(OSError, match="reports no time"):
         comments.snapshot_issue(no_time, board_id, snapshot_id, None)
+
+
+def _store_copy_digest(tmp_path: Path) -> str:
+    """The `copied_version` the pinned store itself records for an item its source gave no
+    change token: a Markdown project's copy, as its `docs/metadata.md` states it does."""
+    work = tmp_path / "digest-source"
+    (work / "from").mkdir(parents=True)
+    (work / "to").mkdir()
+    (work / "onetaskgraph.yaml").write_text(
+        "sources:\n"
+        "  from: {plugin: local-md, visibility: private, config: {root: from}}\n"
+        "  to: {plugin: local-md, visibility: private, config: {root: to}}\n",
+        encoding="utf-8",
+    )
+    # llmlint: ignore-block[shell_test_tiers_stay_split] Not a new cost class for this
+    # project: every test in this module already drives the same locked `onetaskgraph` CLI
+    # over local-md sources, through `orchestrator/plan_store.py`'s `locked_binary`, so this
+    # probe runs the host tool the module's tier already runs, offline, and no other.
+    for command in (
+        ["project", "create", "from", "--id", "p", "--title", "p"],
+        ["project", "copy", "--to", "to", "from:p"],
+    ):
+        done = subprocess.run(  # noqa: S603 - this checkout's locked plan store
+            [str(ONETASKGRAPH_BIN), *command, "--no-interactive"],
+            cwd=work,
+            text=True,
+            capture_output=True,
+            timeout=120,
+            check=False,
+        )
+        assert done.returncode == 0, done.stdout + done.stderr
+    # llmlint: ignore-end[shell_test_tiers_stay_split]
+    (line,) = [
+        line
+        for line in (work / "to" / "projects" / "p.md").read_text(encoding="utf-8").splitlines()
+        if comments.COPIED_VERSION_KEY in line
+    ]
+    return line.partition(":")[2].strip()
+
+
+def test_a_copy_digest_reads_as_no_version_and_a_change_token_as_itself(
+    drafts_root: Path, board: Path, tmp_path: Path
+) -> None:
+    """A snapshot item holds the board's change token, which a write can `--expect`, as its
+    version; where the store recorded its own copy digest instead it holds none.
+
+    The digest is the pinned store's own, so a store that respells it fails here rather than
+    reading as a version no write can hold."""
+    digest = _store_copy_digest(tmp_path)
+    assert comments.COPY_DIGEST.fullmatch(digest), digest
+    issue = _filed(drafts_root, RUN, CAUSE)
+    directory = tmp_path / "snapshot"
+    (directory / comments.SNAPSHOT_ITEMS).mkdir(parents=True)
+    settings = comments.snapshot_settings(directory, BOARD)
+    held = comments.copy_into_snapshot(directory, BOARD, [issue], settings).held[issue]
+
+    def read() -> comments.Issue:
+        (detail,) = comments.shown_details([held], settings)
+        return comments.snapshot_issue(detail, issue, held, WRITABLE_PLUGIN)
+
+    token = read().version
+    assert token is not None and comments.COPY_DIGEST.fullmatch(token) is None, token
+    (copied,) = (directory / comments.SNAPSHOT_ITEMS).rglob("*.md")
+    text = copied.read_text(encoding="utf-8")
+    assert f"{comments.COPIED_VERSION_KEY}: {token}" in text, text
+    copied.write_text(
+        text.replace(
+            f"{comments.COPIED_VERSION_KEY}: {token}", f"{comments.COPIED_VERSION_KEY}: {digest}"
+        ),
+        encoding="utf-8",
+    )
+    assert read().version is None
 
 
 def test_an_intent_file_of_another_shape_is_refused_and_launches_nothing(

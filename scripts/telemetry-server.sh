@@ -21,9 +21,6 @@
 # same command with the published `--ui`, which serves the browser view built into the
 # binary at every path the API does not own.
 set -euo pipefail
-# Session setup provisions this checkout, so no `uv run` here syncs it, however it is run.
-export UV_NO_SYNC=1
-
 script_dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 # Who this server acts as, derived exactly as every `onepipeline` recipe derives it.
 launcher_session_helper="$script_dir/launcher-session.sh"
@@ -137,5 +134,25 @@ if [ "$bound" -eq 0 ]; then
     supplied+=(--bind "$default_address")
 fi
 
+# The read API `bun.lock` installs from npmjs.com, at the release
+# `config/onepipeline-ui.version` pins, by absolute path: the platform package's binary,
+# never the npm launcher, for the reason `scripts/npm-binary.sh` gives.
+# shellcheck source=scripts/npm-binary.sh
+# llmlint: ignore[boundary_inputs_validated, robust_shell, tool_output_is_signal] A tracked sibling is a checkout invariant, not an input at a trust boundary: one that is missing or will not load is a broken checkout, and the shell says so on the line it fails the source at.
+. "$script_dir/npm-binary.sh"
+api=$(npm_binary onepipeline-api-cli onepipeline-api) || exit 2
+if [ ! -x "$api" ]; then
+    echo "telemetry-server: this checkout has no executable read API at $api; run 'just bootstrap' to install the pinned releases from bun.lock, then retry" >&2
+    exit 2
+fi
 # llmlint: ignore[boundary_inputs_validated] Forwarded untouched by design: `onepipeline-api serve` owns these flags and refuses a value it will not take, naming it.
-exec uv run onepipeline-api serve "${supplied[@]+"${supplied[@]}"}" "$@"
+# `execfail` brings a binary the kernel refuses — a missing loader, another architecture —
+# back here to be explained rather than ending on the shell's own error.
+# errexit is off for the one line, because bash exits on a failed exec under `set -e` even
+# with `execfail`.
+shopt -s execfail
+set +e
+exec "$api" serve "${supplied[@]+"${supplied[@]}"}" "$@"
+status=$?
+echo "telemetry-server: $api is executable but could not be run (status $status); reinstall it with 'just bootstrap', then retry" >&2
+exit 126

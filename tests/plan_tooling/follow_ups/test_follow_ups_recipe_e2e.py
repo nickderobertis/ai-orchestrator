@@ -183,7 +183,7 @@ PERSONA = "../personas/follow-up.yaml"
 #: states it and checks the created task, the provenance key the store records a rendering
 #: under, and the reference a registered name records.
 TEMPLATE_NAME = "follow-up-task"
-ENGINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
+ENGINE = REPO_ROOT / "node_modules" / ".bin" / "onepipeline"
 PROVENANCE = "onetaskgraph.template"
 REFERENCE = f"onepipeline:{TEMPLATE_NAME}"
 
@@ -3351,7 +3351,9 @@ def _edited(bench: Bench, run: RunId, *commands: dict[str, object]) -> None:
 
 def _reading(bench: Bench, run: RunId) -> dict[str, object]:
     """The engine's own reading of ``run``, which is what the recipe decides from."""
-    read = _run([str(REPO_ROOT / ".venv" / "bin" / "onepipeline"), "status", run, "--json"], bench)
+    read = _run(
+        [str(REPO_ROOT / "node_modules" / ".bin" / "onepipeline"), "status", run, "--json"], bench
+    )
     assert read.returncode == 0, read.stdout + read.stderr
     reading: object = json.loads(read.stdout)
     assert isinstance(reading, dict), read.stdout
@@ -4110,7 +4112,7 @@ def _creates_tasks(checkout: Path) -> None:
         shutil.copy2(REPO_ROOT / relative, checkout / relative)
     shutil.copytree(REPO_ROOT / TEMPLATE_DIRECTORY, checkout / TEMPLATE_DIRECTORY)
     shutil.copy2(REPO_ROOT / "onetaskgraph.yaml", checkout / "onetaskgraph.yaml")
-    engine = checkout / ".venv" / "bin" / "onepipeline"
+    engine = Path(delegation_checkout.at(checkout, delegation_checkout.ENGINE))
     traced = engine.read_text(encoding="utf-8")
     engine.write_text(
         traced.replace(
@@ -4136,7 +4138,7 @@ def _flow_line(checkout: Path, name: str, *arguments: str) -> str:
 def _template_lines(checkout: Path, project: str) -> tuple[str, ...]:
     """The two engine calls the recipe makes before it launches, as the trace records them."""
     resolved = checkout.resolve()
-    engine = f"{resolved}/.venv/bin/onepipeline"
+    engine = delegation_checkout.at(checkout, delegation_checkout.ENGINE)
     return (
         f"{engine} template resolve {TEMPLATE_NAME} --repo {resolved} --json",
         f"{engine} template check {TEMPLATE_NAME} --repo {resolved} --item {project}",
@@ -4148,7 +4150,7 @@ def _template_lines(checkout: Path, project: str) -> tuple[str, ...]:
 WELL_FORMED = {
     "labels": {"onepipeline.project": "plans:1"},
     "group": "plans:1",
-    "schema_version": 2,
+    "schema_version": 3,
     "run_id": "run-1",
     "public_id": "run-0123456789ab",
     "word": "ENDED failed",
@@ -4156,6 +4158,7 @@ WELL_FORMED = {
     "driven": False,
     "ending": {"kind": "failed", "nodes": [{"id": "a", "status": "failed", "outcome": None}]},
     "paused": None,
+    "nodes": [{"id": "a", "status": "failed", "outcome": None, "detail": None}],
 }
 
 
@@ -4175,7 +4178,7 @@ FAILED_ENDING = {"kind": "failed", "nodes": [{"id": "a", "status": "failed", "ou
     [
         ("", 0, "the answer is not one JSON document"),
         ("ENDED failed", 0, "the answer is not one JSON document"),
-        (_malformed(schema_version=1), 0, "it is schema 1, not 2"),
+        (_malformed(schema_version=1), 0, "it is schema 1, not 3"),
         (_malformed(run_id="run-2"), 0, 'it reads run "run-2", not run-1'),
         (_malformed(word="FINISHED"), 0, 'its word is "FINISHED", which is not one the engine'),
         (_malformed(word=["SETTLED"]), 0, 'its word is ["SETTLED"], which is not one the engine'),
@@ -4217,7 +4220,7 @@ FAILED_ENDING = {"kind": "failed", "nodes": [{"id": "a", "status": "failed", "ou
         ),
         (_malformed(driven=True, liveness="ACTIVE"), 0, "it reads driven and yet ended or paused"),
         (_malformed(extra=1), 0, "the reading does not carry exactly"),
-        (_malformed(schema_version=True), 0, "it is schema true, not 2"),
+        (_malformed(schema_version=True), 0, "it is schema true, not 3"),
         (
             _malformed(
                 ending={**FAILED_ENDING, "nodes": [{"id": 1, "status": "failed", "outcome": None}]}
@@ -4370,7 +4373,7 @@ def test_a_status_answer_that_is_not_the_engines_reading_is_refused_as_unreadabl
         "run-1",
         env={
             delegation_checkout.STATUS_ANSWER_ENV: answer,
-            "FAKE_UV_EXIT": str(exit_status),
+            "FAKE_ENGINE_EXIT": str(exit_status),
         },
     )
 
@@ -4379,7 +4382,10 @@ def test_a_status_answer_that_is_not_the_engines_reading_is_refused_as_unreadabl
     assert said in refused.stderr, refused.stderr
     assert "read the run with 'just status run-1', then retry" in refused.stderr
     traced = trace.read_text(encoding="utf-8").splitlines()
-    assert "uv run onepipeline status run-1 --json" in traced, traced
+    assert (
+        f"{delegation_checkout.at(checkout, delegation_checkout.ENGINE)} status run-1 --json"
+        in traced
+    ), traced
     assert not any(" start " in line for line in traced), traced
 
 
@@ -4417,7 +4423,10 @@ def test_an_ended_reading_carrying_unanswered_envelopes_is_read_and_followed_up(
 
     assert "could not be read" not in followed.stderr, followed.stdout + followed.stderr
     traced = trace.read_text(encoding="utf-8").splitlines()
-    assert "uv run onepipeline status run-1 --json" in traced, traced
+    assert (
+        f"{delegation_checkout.at(checkout, delegation_checkout.ENGINE)} status run-1 --json"
+        in traced
+    ), traced
     # The landed changes' telemetry is read only past an `ended` decision.
     assert any(line.endswith("onepipeline telemetry run-1 --changes --json") for line in traced)
 
@@ -4496,7 +4505,10 @@ def test_a_reading_the_toolchain_cannot_check_is_refused_naming_bootstrap(
     assert "follow-ups: the reading of run 'run-1' could not be checked" in refused.stderr
     assert "restore the pinned toolchain with 'just bootstrap', then retry" in refused.stderr
     traced = trace.read_text(encoding="utf-8").splitlines()
-    assert "uv run onepipeline status run-1 --json" in traced, traced
+    assert (
+        f"{delegation_checkout.at(checkout, delegation_checkout.ENGINE)} status run-1 --json"
+        in traced
+    ), traced
     assert not any(" start " in line for line in traced), traced
 
 
@@ -4647,7 +4659,7 @@ def test_a_failed_detached_launch_keeps_its_closeout_hook_only_once_the_engine_r
     record = checkout / "runs" / "run-1-follow-ups" / "launch.json"
     # The engine boundary, doubled for `start` alone: it fails, having written the follow-up
     # run's launch record first when this case says the engine got that far.
-    engine = checkout / ".venv" / "bin" / "onepipeline"
+    engine = Path(delegation_checkout.at(checkout, delegation_checkout.ENGINE))
     doubled = engine.read_text(encoding="utf-8")
     engine.write_text(
         doubled.replace(
@@ -4829,7 +4841,7 @@ def test_a_task_the_store_cannot_create_launches_nothing_and_the_next_launch_rec
         ),
         encoding="utf-8",
     )
-    start = f"{checkout.resolve()}/.venv/bin/onepipeline start "
+    start = f"{delegation_checkout.at(checkout, delegation_checkout.ENGINE)} start "
 
     first = delegation_checkout.run_recipe(checkout, trace, "follow-ups", "run-1")
     assert first.returncode == 0, first.stderr
@@ -4939,7 +4951,7 @@ def _launch_follow_up_validation(
         ]
     )
     mutate = shlex.join([str(store), "task", "priority", "set", issue, "high", "--json"])
-    engine = checkout / ".venv/bin/onepipeline"
+    engine = Path(delegation_checkout.at(checkout, delegation_checkout.ENGINE))
     engine.write_text(
         engine.read_text(encoding="utf-8").replace(
             'exit "${FAKE_ENGINE_EXIT:-0}"',
@@ -5180,7 +5192,7 @@ def test_follow_ups_measures_each_repository_before_dispatch_and_refuses_an_unac
     telemetry.write_text(json.dumps({"schema_version": 1, "run_id": run, "changes": changes}))
     (checkout / "runs" / run).mkdir(parents=True)
     asked = tmp_path / "telemetry-asked.txt"
-    engine = bins / "onepipeline"
+    engine = Path(delegation_checkout.at(checkout, delegation_checkout.ENGINE))
     program = engine.read_text().replace(
         'if [ "${1:-}" = template ];',
         f'if [ "${{1:-}}" = telemetry ]; then printf "%s\\n" "$*" >> {shlex.quote(str(asked))}; '

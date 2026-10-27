@@ -7,7 +7,8 @@ holds the writer to every referenced image being an asset of the document, and h
 the brief's Why as source material to restate as impact rather than as what somebody wants.
 
 The journey runs in a copy of this checkout, because the wrapper runs the engine at its
-checkout's own `.venv/bin/onepipeline` and nowhere else. Everything there is real: the
+checkout's own platform binary, the one `orchestrator.npm_installs` resolves, and nowhere
+else. Everything there is real: the
 real `scripts/finish-plan.sh`, review turn, check, copy and report, the real plan store at
 both ends, the pinned engine's templates and checks, and the real `just render-diagram`
 over the locked mermaid-cli and Chromium. **Only the engine's `start` is doubled**, by
@@ -34,18 +35,18 @@ from __future__ import annotations
 
 import json
 import re
-import shlex
 import shutil
 import struct
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any, NamedTuple
 
 import pytest
 from nx_workspace import (
+    REAL_ENGINE,
     answering_this_checkouts_origin,
     copy_working_tree,
+    double_the_engine,
     share_this_checkouts_install,
 )
 from test_finish_plan_recipe_e2e import (
@@ -113,9 +114,9 @@ def _checkout(tmp_path: Path) -> Copy:
     """A copy of this checkout whose engine doubles `start` and nothing else.
 
 
-    The wrapper is a shell script handing every call to the stand-in on its second line,
-    followed by the real binary's bytes, which bash never reads: `just check-plan` reads the
-    roles a persona name resolves to out of the installed engine's own bytes.
+    The wrapper hands every call to the stand-in, which hands every verb but `start` to the
+    real platform binary; `just check-plan` reads the roles a persona name
+    resolves to out of that binary's own bytes.
     """
     checkout = tmp_path / "checkout"
     checkout.mkdir()
@@ -123,15 +124,7 @@ def _checkout(tmp_path: Path) -> Copy:
     answering_this_checkouts_origin(checkout)
     shared = share_this_checkouts_install(checkout)
     # The copy's own link to the engine, replaced by the double; this checkout's stays.
-    engine = checkout / ".venv" / "bin" / "onepipeline"
-    real = engine.with_name("onepipeline-real")
-    engine.rename(real)
-    engine.write_bytes(
-        f"#!/usr/bin/env bash\nexec {shlex.quote(sys.executable)} "
-        f'{shlex.quote(str(STAND_IN))} "$@"\n'.encode()
-        + real.read_bytes()
-    )
-    engine.chmod(0o755)
+    double_the_engine(checkout, STAND_IN)
     return Copy(checkout, shared)
 
 
@@ -172,7 +165,7 @@ def _writes_a_document_showing_a_diagram(bench: Bench, drafted: Drafted, checkou
                         ' --template-loader - --answers "$7" --no-interactive'
                         ' --asset "$9/architecture.png"',
                         "store-the-document-with-its-diagram",
-                        str(bin_dir / "onepipeline"),
+                        str(REAL_ENGINE),
                         str(bin_dir / "onetaskgraph"),
                         source,
                         project,
@@ -194,7 +187,7 @@ def _writes_a_document_showing_a_diagram(bench: Bench, drafted: Drafted, checkou
     )
     bench.environment.update(
         {
-            "FAKE_ENGINE_REAL": str(bin_dir / "onepipeline-real"),
+            "FAKE_ENGINE_REAL": str(REAL_ENGINE),
             "FAKE_ENGINE_STORE": str(bin_dir / "onetaskgraph"),
             "FAKE_ENGINE_WRITER_TURN": str(keyed),
             "FAKE_ENGINE_LOG": str(bench.tmp_path / "starts.jsonl"),

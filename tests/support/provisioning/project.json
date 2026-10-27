@@ -13,6 +13,8 @@
       "{workspaceRoot}/tests/e2e/provisioning.py",
       "{workspaceRoot}/pyproject.toml",
       "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/package.json",
+      "{workspaceRoot}/bun.lock",
       "{workspaceRoot}/justfile",
       "{workspaceRoot}/config/*.version",
       "{workspaceRoot}/config/onevcs.checkouts",

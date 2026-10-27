@@ -529,8 +529,11 @@ else
 fi
 
 # The engine that states the template and checks the task created from it: this checkout's
-# installed one, run directly as a launch runs it, under this host's template root.
-engine="$checkout/.venv/bin/onepipeline"
+# installed one, run directly as a launch runs it, under this host's template root: the
+# platform package's binary, never the npm launcher, for the reason `npm-binary.sh` gives.
+# shellcheck source=scripts/npm-binary.sh
+load npm-binary.sh
+engine=$(npm_binary onepipeline-cli onepipeline) || exit 2
 [ -x "$engine" ] || fail "this checkout has no engine at $engine to state the $TEMPLATE_NAME template with" \
     "provision this checkout with 'just bootstrap', then retry"
 # shellcheck source=scripts/template-env.sh

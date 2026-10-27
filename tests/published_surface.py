@@ -175,12 +175,14 @@ def _walk(binary: str, tool: str) -> Surface:
 def surface_of(tool: str) -> Surface:
     """The pinned `tool`'s surface, read once per session.
 
-    Resolved against this worktree's own `.venv`, which is where `just bootstrap`
-    installs the adopted release — the same binary every recipe reaches through
-    `uv run`. A tool found on the ambient PATH instead could be any version, and a
-    drift gate answering from the wrong one is worse than none.
+    Resolved against this worktree's own install — `node_modules/.bin` for a tool
+    `bun.lock` installs, `.venv/bin` for one `uv.lock` does — which is where `just
+    bootstrap` installs the adopted release, the same binary every recipe reaches. A
+    tool found on the ambient PATH instead could be any version, and a drift gate
+    answering from the wrong one is worse than none.
     """
-    binary = REPO_ROOT / ".venv" / "bin" / tool
+    npm = tool in {"onepipeline", "onepipeline-api"}
+    binary = REPO_ROOT / ("node_modules/.bin" if npm else ".venv/bin") / tool
     if not binary.is_file():
         pytest.fail(f"the pinned {tool} is not installed at {binary} — run 'just bootstrap'")
     return _walk(str(binary), tool)

@@ -39,8 +39,9 @@ paths, the source name and the lines it writes.
    gathering's own copy writes it: one `task copy --to snapshot --comments --no-link` per
    board, by the narrowed query unscoped, or by the ids an `--issue` or `--run` pass reads.
    Each item carries `onetaskgraph.origin` naming its board item and
-   `onetaskgraph.copied_version` naming the board version it holds, and each comment carries
-   the board comment's id as `origin.id`. Nothing writes it afterwards, so the cache
+   `onetaskgraph.copied_version` naming the board version it holds — or, for an item the board
+   gave no version, the copy's own digest (:data:`COPY_DIGEST`), read as none — and each
+   comment carries the board comment's id as `origin.id`. Nothing writes it afterwards, so the cache
    refreshing, this pass's own writes and `cache clear` cannot change it. Its status names are
    the family boards' own, read back through :func:`snapshot_status_names`.
 3. **`snapshot.json`** (:data:`SNAPSHOT_RECORD`, schema :data:`SNAPSHOT_SCHEMA`) is the
@@ -344,6 +345,12 @@ SNAPSHOT_ROOT_ENV = f"ONETASKGRAPH_SOURCES__{SNAPSHOT_SOURCE.upper()}__CONFIG__R
 
 #: The store's own keys an item copied into the snapshot carries.
 COPIED_VERSION_KEY = "onetaskgraph.copied_version"
+#: What the store records under that key where the board gave the item no change token — one
+#: changed within GitHub's settling minute: a digest of what the copy composed, which says what
+#: the item was and is no version a write can `--expect`, so the snapshot holds it at none
+#: (onetaskgraph's `docs/metadata.md`, from 0.12.5). `tests/test_follow_up_comments.py` holds
+#: this pattern to the digest the pinned store's own copy records.
+COPY_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 ORIGIN_KEY = plan_store.ORIGIN_KEY
 
 
@@ -1327,7 +1334,9 @@ def snapshot_issue(
         host=host if isinstance(host, str) else None,
         plugin=plugin,
         snapshot_id=snapshot_id,
-        version=version if isinstance(version, str) else None,
+        version=version
+        if isinstance(version, str) and COPY_DIGEST.fullmatch(version) is None
+        else None,
     )
 
 

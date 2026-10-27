@@ -37,11 +37,11 @@ import pytest
 from unpublished_registry import Registry, Session, seeded
 from waits import timeout as e2e_timeout
 
-from orchestrator import unfinished
+from orchestrator import npm_installs, unfinished
 from orchestrator.root import REPO_ROOT
 from orchestrator.unfinished import BOTH, NOTHING_OWED, UNANSWERED, UNPUBLISHED, UNWATCHED
 
-ENGINE = REPO_ROOT / ".venv" / "bin" / "onepipeline"
+ENGINE = npm_installs.ENGINE
 
 #: One manager session per status: a run unwatched and a branch counted, a branch
 #: alone, a run alone, and nothing.
@@ -267,7 +267,7 @@ def _engine_that(
         encoding="utf-8",
     )
     stand_in.chmod(stand_in.stat().st_mode | stat.S_IXUSR)
-    monkeypatch.setattr(unfinished, "_binary", lambda name: str(stand_in))
+    monkeypatch.setattr(npm_installs, "ENGINE", stand_in)
     return stand_in
 
 
@@ -369,18 +369,32 @@ def test_each_row_the_engine_writes_is_one_line_of_what_it_decided(
 def test_an_engine_that_is_missing_or_will_not_start_is_unanswered(
     at_world: World, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    # Installed and executable, but naming an interpreter the kernel cannot find.
     stand_in = _engine_that(tmp_path, monkeypatch, "exit 0")
-    stand_in.chmod(0o644)
+    stand_in.write_text("#!/no/such/interpreter\n", encoding="utf-8")
     status, _, err = _main("--session", OWES_NOTHING)
     assert status == UNANSWERED and "could not run" in err
-    monkeypatch.setattr(unfinished, "_binary", lambda name: None)
+    monkeypatch.setattr(npm_installs, "ENGINE", tmp_path / "no-engine-installed")
+    monkeypatch.setenv("PATH", str(tmp_path / "an-empty-search-path"))
     status, _, err = _main("--session", OWES_NOTHING)
     assert status == UNANSWERED and "found no `onepipeline`" in err
 
 
 def test_the_installed_engine_is_found_beside_this_checkout() -> None:
-    assert unfinished._binary("onepipeline") == str(ENGINE)
-    assert unfinished._binary("no-such-tool-anywhere") is None
+    assert unfinished._engine() == str(ENGINE)
+
+
+def test_an_engine_on_the_search_path_never_answers_for_the_installed_one(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    on_path = tmp_path / "bin"
+    on_path.mkdir()
+    (on_path / "onepipeline").symlink_to(ENGINE)
+    monkeypatch.setenv("PATH", str(on_path))
+    assert unfinished._engine() == str(ENGINE)
+    monkeypatch.setattr(npm_installs, "ENGINE", tmp_path / "no-engine-installed")
+    with pytest.raises(unfinished.Unanswered, match="found no `onepipeline` to ask at"):
+        unfinished._engine()
 
 
 def test_the_unwatched_status_is_the_installed_engines_own(world: World) -> None:

@@ -52,7 +52,7 @@ from typing import Any, ClassVar, NamedTuple, NewType, NotRequired, Protocol, Ty
 
 import yaml
 
-from orchestrator import design_approval, plan_store, task_body
+from orchestrator import design_approval, npm_installs, plan_store, task_body
 from orchestrator.plan_store import QualifiedProjectId, StoreTask
 from orchestrator.project_store import hosted_origin
 from orchestrator.root import REPO_ROOT
@@ -630,7 +630,7 @@ def _answers(record: object) -> dict[str, Any]:
 def _resolved_loader(name: str) -> str:
     """The loader document the pinned engine states for the host template ``name``."""
     command = [
-        str(REPO_ROOT / ".venv" / "bin" / "onepipeline"),
+        str(npm_installs.ENGINE),
         "template",
         "resolve",
         name,
