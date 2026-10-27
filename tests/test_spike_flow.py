@@ -629,7 +629,7 @@ def test_each_spike_stacked_on_another_is_answered_with_the_spikes_above_it_near
                 {"id": "spike-a", "repo": SERVICE, "deps": ["spike-b"]},
                 {"id": "spike-b", "repo": SERVICE, "deps": ["spike-a"]},
             ],
-            "records a dependency cycle through spike-a",
+            "spike-a, .*spike-b depend on each other in a cycle",
         ),
     ],
     ids=["unresolved-fan-in", "cycle"],
@@ -637,9 +637,10 @@ def test_each_spike_stacked_on_another_is_answered_with_the_spikes_above_it_near
 def test_spikes_on_no_one_stacking_chain_are_refused_rather_than_guessed_at(
     tasks: list[dict[str, object]], said: str
 ) -> None:
+    """A fan-in no chain holds is refused here, and a cycle by the store's read of the edges."""
     project = _stacked(*tasks)
 
-    with pytest.raises(ValueError, match=said):
+    with pytest.raises((ValueError, OSError), match=said):
         spike_flow.stacking_chains(project)
 
 

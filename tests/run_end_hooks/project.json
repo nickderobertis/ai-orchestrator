@@ -73,6 +73,7 @@
       "{workspaceRoot}/scripts/plan-brief.sh",
       "{workspaceRoot}/scripts/plan-root-env.sh",
       "{workspaceRoot}/scripts/plan-store.sh",
+      "{workspaceRoot}/scripts/require-provisioned.sh",
       "{workspaceRoot}/scripts/run-ended.sh",
       "{workspaceRoot}/scripts/session-setup.sh",
       "{workspaceRoot}/orchestrator/design_approval.py",

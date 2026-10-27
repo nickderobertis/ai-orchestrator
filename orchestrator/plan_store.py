@@ -362,10 +362,15 @@ def read_tasks(project: str, recorded: Mapping[str, object] | None = None) -> li
     """Every task of ``project``, as :func:`plan_listing` reads it, its dependencies resolved.
 
     ``recorded`` is the project's own record when the caller has read it already, so one
-    invocation asks the store for it once.
+    invocation asks the store for it once. The dependencies are the store's own `project
+    graph` of the home and of each member project its record names — one read per project
+    rather than one `task deps` per task, the graph reading each task's edges exactly as that
+    verb does — so a plan's tasks and their edges cost a fixed number of store invocations
+    however many tasks it holds.
     """
+    held_record = project_record(project) if recorded is None else recorded
     records = []
-    for held in plan_listing(project, recorded):
+    for held in plan_listing(project, held_record):
         held_id = held.id.model_dump()
         filed = None if held.item.project is None else held.item.project.model_dump()
         item, metadata = held.item, held.item.metadata
@@ -395,17 +400,14 @@ def read_tasks(project: str, recorded: Mapping[str, object] | None = None) -> li
     node_ids = {record.node_id for record in records}
     if len(ids) != len(records) or len(node_ids) != len(records):
         raise OSError("the store returned duplicate task or node identities")
+    prerequisites: dict[QualifiedTaskId, list[QualifiedTaskId]] = {}
+    for graphed in (project, *sorted(_named_members(project, held_record.get("metadata")))):
+        for edge in sdk(client().project_graph(graphed, complete=True)).edges:
+            dependent = QualifiedTaskId(edge.to.root)
+            prerequisites.setdefault(dependent, []).append(QualifiedTaskId(edge.from_.root))
     resolved = []
     for record in records:
-        targets = [
-            QualifiedTaskId(edge.to.id.model_dump())
-            for page in every_page(
-                f"the dependencies of {record.qualified_id}",
-                client().task_deps,
-                id=str(record.qualified_id),
-            )
-            for edge in page.items
-        ]
+        targets = prerequisites.get(record.qualified_id, [])
         unknown = [target for target in targets if target not in ids]
         if unknown:
             extra = (

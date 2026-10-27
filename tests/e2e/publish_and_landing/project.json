@@ -86,6 +86,7 @@
       "{workspaceRoot}/scripts/orchestrate.sh",
       "{workspaceRoot}/scripts/plan-brief.sh",
       "{workspaceRoot}/scripts/plan-store.sh",
+      "{workspaceRoot}/scripts/require-provisioned.sh",
       "{workspaceRoot}/scripts/recoverable.sh",
       "{workspaceRoot}/scripts/registered-checkouts.sh",
       "{workspaceRoot}/scripts/repos.sh",

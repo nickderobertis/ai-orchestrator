@@ -399,7 +399,19 @@ def test_plan_semantic_refusals_are_applied_after_sdk_validation(
         encoding="utf-8",
     )
     _source(monkeypatch, "unknown", unknown)
-    with pytest.raises(OSError, match="unknown dependency targets"):
+    # The store's own graph refuses a prerequisite its source does not hold at all.
+    with pytest.raises(OSError, match="no task with the id unknown:demo/missing"):
+        plan_store.read_tasks("unknown:demo")
+    # One it holds outside the plan is drawn, and refused here as no task of the plan.
+    write_plan_project(
+        unknown,
+        {"name": "other", "tasks": [PlanNode(id="missing", title="Missing", task="Body")]},
+    )
+    task.write_text(
+        task.read_text(encoding="utf-8").replace("demo/missing", "other/missing"),
+        encoding="utf-8",
+    )
+    with pytest.raises(OSError, match="unknown dependency targets for unknown:demo/task"):
         plan_store.read_tasks("unknown:demo")
 
     duplicate = tmp_path / "duplicate"

@@ -81,6 +81,7 @@
       "{workspaceRoot}/scripts/plan-brief.sh",
       "{workspaceRoot}/scripts/plan-root-env.sh",
       "{workspaceRoot}/scripts/plan-store.sh",
+      "{workspaceRoot}/scripts/require-provisioned.sh",
       "{workspaceRoot}/scripts/plan.sh",
       "{workspaceRoot}/scripts/run-ended.sh",
       "{workspaceRoot}/tests/ask_seam/launch/test_launch_ask_seam_e2e.py",

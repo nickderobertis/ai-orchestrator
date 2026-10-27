@@ -24,6 +24,7 @@
       "{workspaceRoot}/pyproject.toml",
       "{workspaceRoot}/scripts/credentials-env.sh",
       "{workspaceRoot}/scripts/plan-store.sh",
+      "{workspaceRoot}/scripts/require-provisioned.sh",
       "{workspaceRoot}/uv.lock",
       "{workspaceRoot}/tests/plan_tooling/comment_version/**/*"
     ]

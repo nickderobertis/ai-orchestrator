@@ -421,7 +421,12 @@ def resolved_loader(root: Path = TEMPLATE_ROOT, repository: str | None = None) -
     return done.stdout
 
 
-def body_digest(document: StoreDocument, digest: ChainDigest, repository: str | None = None) -> str:
+def body_digest(
+    document: StoreDocument,
+    digest: ChainDigest,
+    repository: str | None = None,
+    drafted: spike_plan.DraftedPlan | None = None,
+) -> str:
     """The body digest ``document`` records, once it is a rendering of the template in force.
 
     Three things make a document not one, each refused as :class:`Unrendered` naming the
@@ -437,6 +442,8 @@ def body_digest(document: StoreDocument, digest: ChainDigest, repository: str | 
     `orchestrator/design_chain.py` picked for the document's plan. A document rendered
     under an older template whose stored answers the template in force no longer takes is
     sent to the writer instead, because regenerating it in place would be refused.
+    ``drafted`` is the invocation's own record of what the drafting sources hold of the
+    document's plan, when the caller holds one.
     """
     resolve = design_chain.resolve_command(repository)
     regenerate = REGENERATE.replace(RESOLVE, resolve).replace("<id>", str(document.qualified_id))
@@ -469,7 +476,7 @@ def body_digest(document: StoreDocument, digest: ChainDigest, repository: str | 
             f"`{regenerate}` would lay its design-doc answers over that template's stored "
             f"ones, so replace it from them with `{replace}`"
         )
-    validate_document_content(document)
+    validate_document_content(document, drafted)
     if recorded != digest and not fits_in_place(document, repository):
         raise Unrendered(
             f"{document.qualified_id} was rendered from the {TEMPLATE_NAME} template at "
@@ -546,7 +553,10 @@ def fits_in_place(document: StoreDocument, repository: str | None = None) -> boo
 
 
 def approval_key(
-    document: StoreDocument, digest: ChainDigest, repository: str | None = None
+    document: StoreDocument,
+    digest: ChainDigest,
+    repository: str | None = None,
+    drafted: spike_plan.DraftedPlan | None = None,
 ) -> ApprovalKey:
     """The digest ``document`` hashes to as a rendering of the design-doc chain at ``digest``.
 
@@ -582,7 +592,7 @@ def approval_key(
     and it is unchanged.
     """
     authored: dict[str, object] = {
-        "body_digest": body_digest(document, digest, repository),
+        "body_digest": body_digest(document, digest, repository, drafted),
         "digest": digest,
         "title": document.title,
     }
@@ -918,11 +928,13 @@ def approve(project: str) -> Approved:
     """
     documents = plan_store.read_documents(project)
     document = one_document(project, documents)
-    # The project's record, read once by id and handed to every reader below that needs it.
+    # The project's record, read once by id, and what the drafting sources hold of it, read at
+    # most once, each handed to every reader below that needs it.
     record = plan_store.project_record(project)
-    unshown(project, document, documents, record)
+    drafted = spike_plan.DraftedPlan(project)
+    unshown(project, document, documents, record, drafted)
     repository = design_chain.plan_repository(project, record)
-    key = approval_key(document, resolved_digest(TEMPLATE_ROOT, repository), repository)
+    key = approval_key(document, resolved_digest(TEMPLATE_ROOT, repository), repository, drafted)
     # After the key, which refuses a document that is not a rendering of the chain in force:
     # only such a rendering's table is the one the template's shape is read against.
     ungraphed(project, document)
@@ -960,15 +972,17 @@ def unshown(
     document: StoreDocument,
     documents: Sequence[StoreDocument],
     record: Mapping[str, object] | None = None,
+    drafted: spike_plan.DraftedPlan | None = None,
 ) -> None:
     """Refuse a design whose rendered visual entries or image bytes differ from current evidence.
 
     Read the selected report and the design themselves, including copies with no stored
     answers. Nonvisual plans pass; invalid explicit selections refuse through the shared
-    resolver before any approval can be honored. ``record`` is the project's own record
-    when the caller has already read it.
+    resolver before any approval can be honored. ``record`` is the project's own record when
+    the caller has already read it, and ``drafted`` the invocation's own record of what the
+    drafting sources hold of the project, when it holds one.
     """
-    report = spike_plan.current_visual_report(project, documents, record)
+    report = spike_plan.current_visual_report(project, documents, record, drafted)
     if report is None:
         return
     expected = visual_evidence(report)
@@ -1110,9 +1124,12 @@ def assess(project: str) -> Assessment:
                 return Assessment(exemption=exemption(project, stamped.nodes, stamped.kind))
             note = lapsed(project, beyond, unheld, documents, stamped.kind)
         document = one_document(project, documents)
-        unshown(project, document, all_documents, record)
+        drafted = spike_plan.DraftedPlan(project)
+        unshown(project, document, all_documents, record, drafted)
         repository = design_chain.plan_repository(project, record)
-        key = approval_key(document, resolved_digest(TEMPLATE_ROOT, repository), repository)
+        key = approval_key(
+            document, resolved_digest(TEMPLATE_ROOT, repository), repository, drafted
+        )
     except OSError as exc:
         return Assessment(refusal=stated(str(exc), note))
     if recorded(document) == key:
@@ -1388,18 +1405,24 @@ def validate_content(answers: object) -> None:
                     raise Unrendered(f"{named}.text must be nonblank text")
 
 
-def validate_document_content(document: StoreDocument) -> None:
+def validate_document_content(
+    document: StoreDocument, drafted: spike_plan.DraftedPlan | None = None
+) -> None:
     """Read answers at their origin; copies without stored answers keep their provenance path.
 
     A copy is told by the `onetaskgraph.origin` it carries, or — copied out of the private
-    source plans are drafted in, which stamps none — by that source's own link naming it.
+    source plans are drafted in, which stamps none — by that source's own link naming it,
+    read through ``drafted``, the invocation's own record of what the drafting sources hold
+    of the document's plan, when the caller holds one.
     """
     origin = document.metadata.get(plan_store.ORIGIN_KEY)
     if isinstance(origin, str) and QUALIFIED.fullmatch(origin):
         return
     if document.project is not None:
         source = str(document.qualified_id).partition(":")[0]
-        if str(document.qualified_id) in spike_plan.drafted_ids(f"{source}:{document.project}"):
+        held = f"{source}:{document.project}"
+        linked = spike_plan.drafted_ids(held) if drafted is None else drafted.links()
+        if str(document.qualified_id) in linked:
             return
     answers = plan_store.sdk(plan_store.client().document_answers(str(document.qualified_id)))
     validate_content(answers.model_dump())

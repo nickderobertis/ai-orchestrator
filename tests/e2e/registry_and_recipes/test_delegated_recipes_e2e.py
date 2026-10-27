@@ -3129,3 +3129,38 @@ def test_a_launcher_names_its_flow_first_and_never_an_id_it_cannot_vouch_for(
         .splitlines()[0]
         .startswith(_at(checkout, f"{ENGINE} flow run "))
     ), trace.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("board", BOARD_RECIPES, ids=[board.recipe for board in BOARD_RECIPES])
+@pytest.mark.usefixtures("without_the_board_credential")
+def test_a_board_recipe_in_an_unprovisioned_checkout_is_refused_naming_session_setup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, board: BoardRecipe
+) -> None:
+    """`scripts/plan-store.sh` holds the checkout to being provisioned before it runs anything.
+
+    The check moved out of a `_provisioned` recipe step and into the wrapper every board
+    recipe shares, so the wrapper is now the only thing standing between an unprovisioned
+    checkout and a `uv run` that would create an empty environment and run whatever `PATH`
+    offers. A lockfile makes the checkout a Python project, and its `.venv` holds no
+    interpreter, so the refusal must name the recipe that provisions it, and the store
+    command must never be reached.
+    """
+    for provided in ("UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
+        monkeypatch.delenv(provided, raising=False)
+    checkout, trace = _board_checkout(tmp_path, f"{BOARD_CREDENTIAL}={PLANTED_CREDENTIAL}\n")
+    # The check reads only that a lockfile exists, so its content is not this journey's.
+    (checkout / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+    assert not (checkout / ".venv" / "bin" / "python").exists()
+
+    result = _run(checkout, trace, board.recipe, *board.arguments)
+
+    assert result.returncode != 0, result.stdout
+    assert "just session-setup" in result.stderr, (
+        f"`just {board.recipe}` in an unprovisioned checkout was not refused naming the "
+        f"recipe that provisions it:\n{result.stderr}"
+    )
+    assert str(checkout / ".venv") in result.stderr, result.stderr
+    assert not trace.exists(), (
+        f"`just {board.recipe}` reached the store command in an unprovisioned checkout:\n"
+        f"{trace.read_text(encoding='utf-8')}"
+    )

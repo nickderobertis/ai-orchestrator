@@ -158,21 +158,21 @@ def stacking_chains(project: QualifiedProjectId) -> dict[NodeId, tuple[NodeId, .
         str(held.qualified_id) for held in plan_store.read_projects(project.partition(":")[0])
     }:
         return {}
+    # The store's own read of the edges refuses a project whose tasks depend on each other in
+    # a cycle, naming them, so every chain below ends.
     tasks = {task.node_id: task for task in plan_store.read_tasks(project)}
     chains: dict[NodeId, tuple[NodeId, ...]] = {}
 
-    def chain(node: NodeId, seen: frozenset[NodeId]) -> tuple[NodeId, ...]:
+    def chain(node: NodeId) -> tuple[NodeId, ...]:
         if node in chains:
             return chains[node]
-        if node in seen:
-            raise ValueError(f"{project} records a dependency cycle through {node}")
         own = tasks[node]
         candidates = [
             dep for dep in own.deps if dep in tasks and _repository(tasks[dep]) == _repository(own)
         ]
         found: tuple[NodeId, ...] = ()
         for candidate in candidates:
-            above = (candidate, *chain(candidate, seen | {node}))
+            above = (candidate, *chain(candidate))
             if set(candidates) <= set(above):
                 found = above
                 break
@@ -185,7 +185,7 @@ def stacking_chains(project: QualifiedProjectId) -> dict[NodeId, tuple[NodeId, .
         return found
 
     for node in tasks:
-        chain(node, frozenset())
+        chain(node)
     return {node: above for node, above in chains.items() if above}
 
 

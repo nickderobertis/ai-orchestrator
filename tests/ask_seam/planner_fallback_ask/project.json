@@ -51,6 +51,7 @@
       "{workspaceRoot}/scripts/plan-brief.sh",
       "{workspaceRoot}/scripts/plan-root-env.sh",
       "{workspaceRoot}/scripts/plan-store.sh",
+      "{workspaceRoot}/scripts/require-provisioned.sh",
       "{workspaceRoot}/scripts/run-ended.sh",
       "{workspaceRoot}/tests/ask_seam/planner_fallback_ask/test_planner_fallback_ask_e2e.py",
       "{workspaceRoot}/tests/fixtures/planner-channel.json",

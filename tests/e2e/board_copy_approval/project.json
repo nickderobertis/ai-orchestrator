@@ -42,6 +42,7 @@
       "{workspaceRoot}/scripts/follow-up-env.sh",
       "{workspaceRoot}/scripts/plan-root-env.sh",
       "{workspaceRoot}/scripts/plan-store.sh",
+      "{workspaceRoot}/scripts/require-provisioned.sh",
       "{workspaceRoot}/scripts/review-plan.sh",
       "{workspaceRoot}/templates/design-doc.md.j2",
       "{workspaceRoot}/templates/dispatch-appendix.md",

@@ -126,7 +126,7 @@ def _the_working_directory_layer_answers(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(design_approval.design_chain, "plan_repository", lambda *_arguments: None)
     monkeypatch.setattr(design_approval, "fits_in_place", lambda *_arguments: True)
     # Key tests use fabricated document records; the real-store tests restore this reader.
-    monkeypatch.setattr(design_approval, "validate_document_content", lambda _document: None)
+    monkeypatch.setattr(design_approval, "validate_document_content", lambda *_arguments: None)
 
 
 @pytest.fixture

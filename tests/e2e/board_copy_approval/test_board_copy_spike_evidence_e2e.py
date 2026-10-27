@@ -29,7 +29,13 @@ from typing import NamedTuple
 
 import boundary_home
 import pytest
-from github_board import AUTHORING_ROOT_ENV, AUTHORING_SOURCE, _plan_environment, _serving_board
+from github_board import (
+    AUTHORING_ROOT_ENV,
+    AUTHORING_SOURCE,
+    _audit_follow_up_calls,
+    _plan_environment,
+    _serving_board,
+)
 from project_fixtures import budgeted, designed, no_budgets, reviewed
 from test_board_copy_design_approval_e2e import _copied, _on_the_board, _recipe
 
@@ -176,7 +182,8 @@ def test_a_finalized_plan_copied_onto_the_board_resolves_and_checks_each_tasks_r
 ) -> None:
     """Each report resolves on the board copy, by its origin or by the drafting source's link.
 
-    The plan's design document is copied beside them and approved on the board copy.
+    The plan's design document is copied beside them and approved on the board copy, the
+    approval reading the drafting source's links at most once.
     Drafted where the tracked document declares it, in the private `authoring`, the copy
     carries no `onetaskgraph.origin`: the store records the correspondence on the private
     side, as `onetaskgraph.copies`, and the report resolves through that link
@@ -203,7 +210,9 @@ def test_a_finalized_plan_copied_onto_the_board_resolves_and_checks_each_tasks_r
         assert copied.returncode == 0, copied.stdout + copied.stderr
         board = QualifiedProjectId(_copied(copied.stdout)[QUALIFIED])
         checked = _recipe(on_the_board, "check-plan", board)
-        approved = _recipe(on_the_board, "approve-design", board)
+        audited = dict(on_the_board)
+        trace = _audit_follow_up_calls(tmp_path, audited)
+        approved = _recipe(audited, "approve-design", board)
         _on_the_board(monkeypatch, remote)
         tasks = plan_store.read_tasks(board)
         documents = plan_store.read_documents(board)
@@ -215,6 +224,23 @@ def test_a_finalized_plan_copied_onto_the_board_resolves_and_checks_each_tasks_r
     )
     assert approved.returncode == 0, approved.stdout + approved.stderr
     assert "recorded the approval of" in approved.stdout, approved.stdout
+    # What the drafting source holds of the copy is read once for the design document, its
+    # reports and the plan's drafted id together: the drafted project always, since the
+    # visual report is named by it, and that project's documents only where a copy out of a
+    # private source left them without an origin.
+    store = [
+        entry["argv"][1:]
+        for entry in map(json.loads, trace.read_text(encoding="utf-8").splitlines())
+        if entry["kind"] == "store"
+    ]
+    verbs = [tuple(argv[:2]) for argv in store]
+    assert verbs.count(("config", "show")) == verbs.count(("project", "list")) == 1, store
+    drafted_documents = [
+        argv
+        for argv in store
+        if argv[:2] == ["document", "list"] and argv[argv.index("--source") + 1] == AUTHORING_SOURCE
+    ]
+    assert len(drafted_documents) == (1 if private else 0), store
     assert {task.node_id for task in tasks} == {one.node for one in LINKED}
     for task in tasks:
         expected = next(one for one in LINKED if one.node == task.node_id)

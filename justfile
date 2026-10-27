@@ -23,7 +23,8 @@ set tempdir := ".logs/just"
 _create_recipe_tempdir := `mkdir -p .logs/just 2>/dev/null || true`
 # No recipe's `uv run` syncs the environment on its way into a command: session setup is
 # the one place a checkout is provisioned (AGENTS.md, "The checks"), and every recipe
-# that runs `uv run` depends on `_provisioned`, which refuses a checkout it has not
+# that runs `uv run` depends on `_provisioned`, or runs it through a script sourcing
+# `scripts/require-provisioned.sh`, either of which refuses a checkout it has not
 # provisioned rather than letting uv run another checkout's tools.
 export UV_NO_SYNC := "1"
 
@@ -324,7 +325,7 @@ finish-plan *args:
 # `scripts/plan-store.sh` establishes this checkout's own board credential first; its
 # header is the one account of why.
 [doc('Refuse a plan whose node would be judged against a demand its task does not state.')]
-check-plan *args: _provisioned
+check-plan *args:
     @./scripts/plan-store.sh uv run orchestrator-check-plan "$@"
 
 # Spend the judged turn that clears a plan's authored content: `just review-plan
@@ -386,7 +387,7 @@ approve-spikes *args:
 
 [group("planning")]
 [doc("Record the user's approval of one plan project's design document.")]
-approve-design *args: _provisioned
+approve-design *args:
     @./scripts/plan-store.sh uv run orchestrator-approve-design "$@"
 
 # Render one Mermaid source to the PNG a design document references: `just render-diagram
@@ -441,7 +442,7 @@ render-diagram *args:
 # `scripts/plan-store.sh` establishes this checkout's own board credential first; its
 # header is the one account of why.
 [doc('Copy a reviewed plan project, and its tasks, onto the plan board this repository launches from.')]
-copy-plan *args: _provisioned
+copy-plan *args:
     @./scripts/plan-store.sh uv run orchestrator-copy-plan "$@"
 # llmlint: ignore-end[tool_output_is_signal]
 

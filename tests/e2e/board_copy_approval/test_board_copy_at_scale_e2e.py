@@ -24,10 +24,19 @@ project, and one metadata write guarded on the change token the document listing
 with every other store call they make reading only the local `authoring` source or the store's
 configuration, and sending the board nothing.
 
+Each recipe is also held to the exact store invocations it makes, by the test-only store-call
+audit: a copy reads the plan's record, its tasks, their edges and its documents once each and
+then copies it, and an approval reads its board copy once.
+
 `plan-approval-seconds` is the approval's real elapsed time plus the GitHub latency the
 copy-speed spike measured for each request the double logged (`REQUEST_LATENCY_MS`), recorded
-per store call by the journey the uncached `test-host` target runs alone, because a wall clock
-a cache replayed would be another moment's.
+per store call by the journey the uncached `test-host` target runs alone, because a wall clock a
+cache replayed would be another moment's; the same journey times and prints each copy the same
+way, whose seconds budgets the plan-store adoption that is to meet them registers. Beside the
+figure the journey records where its seconds went — each store invocation from launch to
+reaping, the store's start-up timed by a trivial invocation, the program outside the store, the
+recipe's steps outside the program, and the network round trips charged — and the CPU seconds
+of the recipe's whole process tree, which no wait on the board inflates.
 """
 
 from __future__ import annotations
@@ -36,6 +45,8 @@ import bisect
 import dataclasses
 import json
 import random
+import resource
+import statistics
 import struct
 import subprocess
 import time
@@ -258,6 +269,13 @@ class _Launch(NamedTuple):
     argv: list[str]
     #: When it was launched, on the audit's monotonic clock.
     at: float
+    #: When the interpreter that launched it reaped it, on the same clock.
+    ended: float
+
+    @property
+    def seconds(self) -> float:
+        """How long the invocation ran, from its launch to its reaping."""
+        return self.ended - self.at
 
 
 class _Run(NamedTuple):
@@ -270,15 +288,39 @@ class _Run(NamedTuple):
     requests: list[_GraphQLRequest]
     #: The recipe's real elapsed wall time, in seconds.
     seconds: float
+    #: How long the recipe's program ran: its interpreter's life, from the audit's first
+    #: record in it to its exit, in seconds.
+    program: float
+    #: How many Python interpreters the recipe started.
+    interpreters: int
+    #: The user and system CPU seconds the recipe's whole process tree spent.
+    cpu: float
+
+    @property
+    def outside_program(self) -> float:
+        """The recipe's seconds outside its program: `just`, its shell steps and `uv run`."""
+        return self.seconds - self.program
+
+    @property
+    def outside_store(self) -> float:
+        """The program's own seconds outside every store invocation it made."""
+        return self.program - sum(call.seconds for call in self.calls)
 
 
 def _run(root: Path, environment: Mapping[str, str], *command: str) -> _Run:
-    """Run ``command`` from this checkout under the store-call audit, with a fresh request log."""
+    """Run ``command`` from this checkout under the store-call audit, with a fresh request log.
+
+    The CPU seconds are the test process's reaped children's, read before and after: every
+    process of the recipe is a descendant its parent waits for, and nothing else this process
+    starts runs meanwhile, while the double answering the board is a thread of this process
+    and so counts none of its own.
+    """
     audit = root / f"audit-{len(list(root.glob('audit-*')))}"
     audit.mkdir()
     audited = dict(environment)
     trace = _audit_follow_up_calls(audit, audited)
     _GitHubFixture.requests.clear()
+    before = resource.getrusage(resource.RUSAGE_CHILDREN)
     started = time.monotonic()
     ran = subprocess.run(
         list(command),
@@ -290,15 +332,48 @@ def _run(root: Path, environment: Mapping[str, str], *command: str) -> _Run:
         check=False,
     )
     seconds = time.monotonic() - started
+    after = resource.getrusage(resource.RUSAGE_CHILDREN)
     requests = list(_GitHubFixture.requests)
     _GitHubFixture.requests.clear()
     lines = trace.read_text(encoding="utf-8").splitlines() if trace.exists() else []
-    calls = [
-        _Launch(list(entry["argv"][1:]), float(entry["at"]))
-        for entry in (json.loads(line) for line in lines)
-        if entry["kind"] == "store"
-    ]
-    return _Run(ran, calls, requests, seconds)
+    entries = [json.loads(line) for line in lines]
+    calls = _launches(entries)
+    started_at = {entry["pid"]: entry["at"] for entry in entries if entry["kind"] == "interpreter"}
+    exited_at = {
+        entry["pid"]: entry["at"] for entry in entries if entry["kind"] == "interpreter-exit"
+    }
+    # The program is the interpreter that launched the store; a recipe that launched none is
+    # timed by every interpreter it started.
+    launchers = {entry["pid"] for entry in entries if entry["kind"] == "store"} or set(started_at)
+    program = sum(exited_at[pid] - started_at[pid] for pid in launchers)
+    cpu = (after.ru_utime + after.ru_stime) - (before.ru_utime + before.ru_stime)
+    return _Run(ran, calls, requests, seconds, program, len(started_at), cpu)
+
+
+def _launches(entries: list[dict[str, object]]) -> list[_Launch]:
+    """Each store launch the audit recorded, paired with the reaping its interpreter recorded.
+
+    An interpreter runs one store process at a time, so its launches and its reapings pair in
+    order.
+    """
+    reaped: dict[object, list[float]] = {}
+    for entry in entries:
+        if entry["kind"] == "store-exit":
+            reaped.setdefault(entry["pid"], []).append(float(str(entry["at"])))
+    launched = [entry for entry in entries if entry["kind"] == "store"]
+    calls = []
+    for entry in launched:
+        argv = entry["argv"]
+        assert isinstance(argv, list), entry
+        calls.append(
+            _Launch(
+                [str(word) for word in argv[1:]],
+                float(str(entry["at"])),
+                reaped[entry["pid"]].pop(0),
+            )
+        )
+    assert all(not left for left in reaped.values()), reaped
+    return calls
 
 
 def _by_operation(requests: list[_GraphQLRequest]) -> Counter[str]:
@@ -571,9 +646,58 @@ def _the_approval_makes_only_its_four_calls(scaled: _Scaled) -> None:
     assert _flag(write, "--expect") == scaled.listed_version, (write, scaled.listed_version)
 
 
+#: Every store invocation an approval makes, in order, with the source each addresses: its
+#: four calls to the board, between which it reads, once, the store's configuration, the local
+#: `authoring` source's projects and the drafted plan's documents, to recognise the copy as one
+#: drafted privately.
+APPROVAL_INVOCATIONS = (
+    (("document", "list"), BOARD_SOURCE),
+    (("project", "show"), BOARD_SOURCE),
+    (("task", "list"), BOARD_SOURCE),
+    (("config", "show"), None),
+    (("project", "list"), AUTHORING_SOURCE),
+    (("document", "list"), AUTHORING_SOURCE),
+    (("document", "metadata"), BOARD_SOURCE),
+)
+
+
+def _the_approval_reads_the_plan_once(scaled: _Scaled) -> None:
+    """The approval makes exactly :data:`APPROVAL_INVOCATIONS`, reading the board copy once."""
+    calls = [call.argv for call in scaled.approval.calls]
+    assert [(tuple(argv[:2]), _source(argv)) for argv in calls] == list(APPROVAL_INVOCATIONS), calls
+
+
 #: The store calls a copy makes to the `plans` board, in order: the plan's project with its
 #: tasks, then its document — the calls the store's copy budgets measure.
 COPY_CALLS = (("project", "copy"), ("document", "copy"))
+
+#: Every store invocation a copy makes, in order: the plan read once — its project's record by
+#: id, its tasks listed by project, their dependency edges as the project's one graph, and its
+#: documents listed by project — then the two calls that copy it.
+COPY_INVOCATIONS = (
+    ("project", "show"),
+    ("task", "list"),
+    ("project", "graph"),
+    ("document", "list"),
+    *COPY_CALLS,
+)
+
+
+def _the_copy_reads_the_plan_once(copied: _Copied) -> None:
+    """The copy makes exactly :data:`COPY_INVOCATIONS`, each read naming the local plan.
+
+    One read of the project's record, its tasks, their edges and its documents serves the
+    review check, the size measurement and the copy alike.
+    """
+    calls = [call.argv for call in copied.run.calls]
+    assert [tuple(argv[:2]) for argv in calls] == list(COPY_INVOCATIONS), calls
+    shown, listed, graphed, documents = calls[:4]
+    assert shown[2] == graphed[2] == QUALIFIED, (shown, graphed)
+    for listing in (listed, documents):
+        assert (_flag(listing, "--project"), _flag(listing, "--source")) == (
+            PROJECT,
+            AUTHORING_SOURCE,
+        ), listing
 
 
 def _the_copy_makes_only_its_two_calls(copied: _Copied) -> None:
@@ -600,44 +724,105 @@ def _the_copy_makes_only_its_two_calls(copied: _Copied) -> None:
     assert sum(len(call.requests) for call in sent) == len(copied.run.requests)
 
 
-def _recorded_seconds(approval: _Run) -> None:
-    """Record `plan-approval-seconds`: the real elapsed time, each call's latency, and the table.
+STARTUP_SAMPLES = 5
 
-    The latency table is recorded beside the figure without counting toward it, so the
-    breakdown says what each request kind was charged.
+
+def _store_startup(root: Path, environment: Mapping[str, str]) -> float:
+    """The median seconds of a trivial store invocation, timed as a recipe's are.
+
+    `config show` of this checkout's configuration, launched from an audited interpreter and
+    timed from its launch to its reaping, so what it costs is the store's process start-up and
+    its loading of the configuration every invocation loads, and nothing a recipe asks of it.
     """
-    budget_telemetry.record(
-        "plan-approval-seconds", "real elapsed", approval.seconds, unit="seconds"
+    store = REPO_ROOT / ".venv" / "bin" / "onetaskgraph"
+    probe = (
+        "import subprocess, sys\n"
+        f"for _ in range({STARTUP_SAMPLES}):\n"
+        "    subprocess.run([sys.argv[1], 'config', 'show', '--json', '--no-interactive'],"
+        " stdout=subprocess.DEVNULL, check=True)\n"
     )
-    for call in _store_calls(approval):
+    timed = _run(
+        root, environment, str(REPO_ROOT / ".venv" / "bin" / "python"), "-c", probe, str(store)
+    )
+    assert timed.ran.returncode == 0, timed.ran.stdout + timed.ran.stderr
+    assert len(timed.calls) == STARTUP_SAMPLES, timed.calls
+    return statistics.median(call.seconds for call in timed.calls)
+
+
+def _recorded_seconds(budget: str, recipe: _Run, startup: float) -> None:
+    """Record ``budget`` for ``recipe``: the real elapsed time and each call's latency, and why.
+
+    The figure is the recipe's real elapsed time plus the GitHub latency charged for each
+    request the double logged, per store call. Beside it, counted toward nothing, is where
+    those seconds went: each store invocation's own seconds from launch to reaping; the store's
+    start-up and loading, as :func:`_store_startup` timed it, once per invocation; the network
+    round trips the latency table charges; the program's own seconds outside the store; the
+    recipe's steps outside its program; how many store invocations it made; the CPU seconds of
+    its whole process tree; and the latency table itself.
+    """
+    budget_telemetry.record(budget, "real elapsed", recipe.seconds, unit="seconds")
+    latencies = []
+    for call, launch in zip(_store_calls(recipe), recipe.calls, strict=True):
+        latency = sum(request_latency_ms(request) for request in call.requests) / 1000
+        latencies.append(latency)
         budget_telemetry.record(
-            "plan-approval-seconds",
+            budget,
             f"added latency of {call.label}",
-            sum(request_latency_ms(request) for request in call.requests) / 1000,
+            latency,
             unit="seconds",
             requests=len(call.requests),
         )
+        budget_telemetry.record(
+            budget,
+            f"seconds of {call.label}",
+            launch.seconds,
+            unit="seconds",
+            counted=False,
+            requests=len(call.requests),
+            latency=latency,
+        )
+    detail = {
+        "store start-up and loading": startup * len(recipe.calls),
+        "network round trips": sum(latencies),
+        "host program outside store invocations": recipe.outside_store,
+        "host recipe steps outside the program": recipe.outside_program,
+    }
+    for label, seconds in detail.items():
+        budget_telemetry.record(budget, label, seconds, unit="seconds", counted=False)
+    budget_telemetry.record(
+        budget, "store invocations", len(recipe.calls), unit="invocations", counted=False
+    )
+    budget_telemetry.record(
+        budget, "process-tree CPU", recipe.cpu, unit="CPU seconds", counted=False
+    )
+    budget_telemetry.record(
+        budget,
+        "requests and points",
+        len(recipe.requests),
+        unit="requests",
+        counted=False,
+        points=sum(_request_points(request) for request in recipe.requests),
+    )
     for kind, charged in REQUEST_LATENCY_MS.items():
         budget_telemetry.record(
-            "plan-approval-seconds",
-            f"latency table: {kind}",
-            charged,
-            unit="ms per request",
-            counted=False,
+            budget, f"latency table: {kind}", charged, unit="ms per request", counted=False
         )
 
 
 def _printed_cost(recipe: _Run, named: str) -> None:
-    """Print what ``recipe`` spent, per store call: requests, points and charged latency."""
+    """Print what ``recipe`` spent, per store call: seconds, requests, points and latency."""
     latency = sum(request_latency_ms(request) for request in recipe.requests) / 1000
     points = sum(_request_points(request) for request in recipe.requests)
     print(
         f"{named} at {PLANS_BOARD_SCALE} items: requests={len(recipe.requests)}, "
-        f"points={points}, real={recipe.seconds:.2f}s, latency added={latency:.2f}s"
+        f"points={points}, real={recipe.seconds:.2f}s, latency added={latency:.2f}s, "
+        f"cpu={recipe.cpu:.2f}s, invocations={len(recipe.calls)}, "
+        f"outside program={recipe.outside_program:.2f}s, "
+        f"program outside store={recipe.outside_store:.2f}s"
     )
-    for call in _store_calls(recipe):
+    for call, launch in zip(_store_calls(recipe), recipe.calls, strict=True):
         print(
-            f"  {call.label}: requests={len(call.requests)}, "
+            f"  {call.label}: seconds={launch.seconds:.3f}, requests={len(call.requests)}, "
             f"points={sum(_request_points(request) for request in call.requests)}, "
             f"latency={sum(request_latency_ms(request) for request in call.requests)}ms, "
             f"operations={[str(request.operation) for request in call.requests]}"
@@ -671,9 +856,11 @@ def test_copying_and_approving_a_plan_costs_the_same_requests_on_any_size_of_boa
         for copied in scaled[size].copies:
             _the_plan_landed_whole(copied, scaled[size])
             _the_copy_makes_only_its_two_calls(copied)
+            _the_copy_reads_the_plan_once(copied)
         _the_revisions_landed_in_place(scaled[size])
         _the_approval_admits_the_copy(scaled[size])
         _the_approval_makes_only_its_four_calls(scaled[size])
+        _the_approval_reads_the_plan_once(scaled[size])
         recipes = [copied.run for copied in scaled[size].copies] + [scaled[size].approval]
         for recipe in recipes:
             assert recipe.requests, recipe.ran.args
@@ -701,29 +888,55 @@ def test_copying_and_approving_a_plan_costs_the_same_requests_on_any_size_of_boa
 # target runs this journey alone and the `test` target deselects it, because the wall clock it
 # records for `plan-approval-seconds` has to be this run's rather than a cache's.
 # llmlint: ignore-block[e2e_not_mocked] The same one doubled boundary as the journey above.
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] The task timing these
+# recipes requires their seconds be recorded through the existing uncached
+# `board-copy-approval:test-host` target, which selects this one journey while the project's
+# cached `test` target deselects it; moving it to a project of its own would replace the target
+# that task names, so the split stays this project's until a task asks for that move.
 # llmlint: ignore-block[budgets_reuse_gate_telemetry] The task registering this budget
 # requires `plan-approval-seconds` to be recorded by the uncached `test-host` target, which
-# runs only this journey while `test` deselects it, so the wall clock is this run's and never
-# a cache's. The journey above cannot be that target's: it also copies, re-copies and approves
-# at 20,000 items, and its `test` target is cached. So this repeats the 2,000-item copy only as
-# setup for the one approval it times, and records nothing the journey above does.
+# runs only this journey while `test` deselects it, so its wall clock is this run's and never a
+# cache's. The journey above cannot be that target's: it also copies, re-copies and approves at
+# 20,000 items, and its `test` target is cached. So this repeats the 2,000-item copies and
+# approval to time them, and records nothing the journey above does.
+#: What each timed copy is printed as, in the order :func:`_copied_and_approved` makes them:
+#: the first copy, the re-copy after one task was regenerated, and the unchanged re-copy. Their
+#: seconds budgets are registered by the plan-store adoption that is to meet them, not here.
+COPY_RUNS = (
+    "copy-plan first",
+    "copy-plan changed",
+    "copy-plan unchanged",
+)
+
+
 def test_approving_a_plan_at_the_plans_boards_scale_records_the_time_a_person_waits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`just approve-design` at 2,000 items, timed for real, plus each request's GitHub latency.
+    """Every copy and the approval at 2,000 items, timed for real, plus each request's latency.
 
-    Nothing sleeps for the added latency: the double answers at once, so the recipe's real
+    Nothing sleeps for the added latency: the double answers at once, so each recipe's real
     elapsed time is its process starts, its own steps and any wait the store really sleeps,
-    and each request the double logged is charged the spike's latency for its kind.
+    and each request the double logged is charged the spike's latency for its kind. Each copy
+    lands the plan reading it once, and the approval admits it; where every second went is
+    recorded beside each figure, the store's start-up timed by a trivial invocation of it.
     """
-    scaled = _copied_and_approved(
-        tmp_path / str(PLANS_BOARD_SCALE), monkeypatch, PLANS_BOARD_SCALE, revise=False
-    )
+    root = tmp_path / str(PLANS_BOARD_SCALE)
+    scaled = _copied_and_approved(root, monkeypatch, PLANS_BOARD_SCALE)
+    for copied in scaled.copies:
+        _the_plan_landed_whole(copied, scaled)
+        _the_copy_reads_the_plan_once(copied)
+    _the_revisions_landed_in_place(scaled)
     _the_approval_admits_the_copy(scaled)
     _the_approval_makes_only_its_four_calls(scaled)
+    _the_approval_reads_the_plan_once(scaled)
 
-    _recorded_seconds(scaled.approval)
-    _printed_cost(scaled.approval, "approve-design")
+    startup = _store_startup(root, _rendering_environment(root / "authoring"))
+    print(f"store start-up and loading: {startup:.3f}s per invocation")
+    for named, copied in zip(COPY_RUNS, scaled.copies, strict=True):
+        _printed_cost(copied.run, named)
+    _recorded_seconds("plan-approval-seconds", scaled.approval, startup)
+    _printed_cost(scaled.approval, "plan-approval-seconds")
     # llmlint: ignore-end[budgets_reuse_gate_telemetry]
     # llmlint: ignore-end[e2e_not_mocked]
     # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+    # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]

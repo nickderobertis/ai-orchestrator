@@ -3206,18 +3206,50 @@ def _request_points(request: _GraphQLRequest) -> int:
 
 #: Python's audit hook records the real CLI subprocesses without replacing any command.
 #: sys.orig_argv also records validators started by the real attached recipe's shell.
+#: Each audited interpreter also records its own start and, at exit, its end, and each store
+#: process it launched records its end when that interpreter reaps it, so a journey can say
+#: how long every store invocation and the program around them lasted. The reaping hooks are
+#: installed at an interpreter's first store launch, once the module that reaps it is loaded,
+#: so an interpreter that launches no store imports nothing for them.
 STORE_CALL_AUDIT = """\
-import json, os, pathlib, sys, time
+import atexit, json, os, pathlib, sys, time
 trace = pathlib.Path(os.environ["FOLLOW_UP_BUDGET_TRACE"])
 def record(kind, argv):
     # The system-wide monotonic clock the board stand-in stamps each request with.
-    entry = {"kind": kind, "argv": argv, "at": time.monotonic()}
+    entry = {"kind": kind, "argv": argv, "at": time.monotonic(), "pid": os.getpid()}
     with trace.open("a", encoding="utf-8") as stream:
         stream.write(json.dumps(entry) + "\\n")
+record("interpreter", sys.orig_argv)
+atexit.register(record, "interpreter-exit", sys.orig_argv)
 if "orchestrator.follow_up_tickets" in sys.orig_argv:
     record("module", sys.orig_argv)
+def store(argv):
+    return pathlib.Path(argv[0]).name == "onetaskgraph"
+hooked = set()
+def hook_reaping():
+    subprocess = sys.modules["subprocess"]
+    if "subprocess" not in hooked:
+        hooked.add("subprocess")
+        reap = subprocess.Popen._handle_exitstatus
+        def handled(self, *args, **keywords):
+            first = self.returncode is None
+            answer = reap(self, *args, **keywords)
+            if first and store(list(self.args)):
+                record("store-exit", list(self.args))
+            return answer
+        subprocess.Popen._handle_exitstatus = handled
+    transports = sys.modules.get("asyncio.base_subprocess")
+    if transports is not None and "asyncio" not in hooked:
+        hooked.add("asyncio")
+        exited = transports.BaseSubprocessTransport._process_exited
+        def process_exited(self, returncode):
+            if store(list(self._proc.args)):
+                record("store-exit", list(self._proc.args))
+            return exited(self, returncode)
+        transports.BaseSubprocessTransport._process_exited = process_exited
 def audit(event, args):
     if event == "subprocess.Popen" and pathlib.Path(args[0]).name == "onetaskgraph":
+        hook_reaping()
         record("store", args[1])
 sys.addaudithook(audit)
 """

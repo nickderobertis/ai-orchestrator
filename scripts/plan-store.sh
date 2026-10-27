@@ -27,6 +27,18 @@ if [ "$#" -eq 0 ]; then
     exit 2
 fi
 
+# The checkout is held to being provisioned here rather than by a `just` dependency of each
+# recipe that runs this: every command it runs is this checkout's own install — a `uv run`
+# or `.venv/bin/onetaskgraph` — so one check in the one wrapper they share is the whole of
+# it, and a recipe step of its own would only start another shell to ask it again.
+provisioned_helper="$script_dir/require-provisioned.sh"
+if [ ! -f "$provisioned_helper" ] || [ ! -r "$provisioned_helper" ]; then
+    echo "plan-store: required helper is not a readable regular file: $provisioned_helper; restore it from the repository or run 'just bootstrap', then retry" >&2
+    exit 2
+fi
+# shellcheck source=scripts/require-provisioned.sh
+. "$provisioned_helper" || exit "$?"
+
 credentials_helper="$script_dir/credentials-env.sh"
 if [ ! -f "$credentials_helper" ] || [ ! -r "$credentials_helper" ]; then
     echo "plan-store: required helper is not a readable regular file: $credentials_helper; restore it from the repository or run 'just bootstrap', then retry" >&2

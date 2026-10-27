@@ -65,6 +65,7 @@
       "{workspaceRoot}/scripts/plan-brief.sh",
       "{workspaceRoot}/scripts/plan-root-env.sh",
       "{workspaceRoot}/scripts/plan-store.sh",
+      "{workspaceRoot}/scripts/require-provisioned.sh",
       "{workspaceRoot}/scripts/run-ended.sh",
       "{workspaceRoot}/tests/ask_seam/ask_manager/test_ask_manager_e2e.py",
       "{workspaceRoot}/tests/fixtures/planner-channel.json",

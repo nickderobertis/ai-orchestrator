@@ -79,6 +79,7 @@
       "{workspaceRoot}/scripts/plan-brief.sh",
       "{workspaceRoot}/scripts/plan-root-env.sh",
       "{workspaceRoot}/scripts/plan-store.sh",
+      "{workspaceRoot}/scripts/require-provisioned.sh",
       "{workspaceRoot}/scripts/plan.sh",
       "{workspaceRoot}/scripts/planner-surface.sh",
       "{workspaceRoot}/scripts/recoverable.sh",

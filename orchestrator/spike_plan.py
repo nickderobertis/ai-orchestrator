@@ -150,15 +150,16 @@ def visual_report_id(plan: str) -> ReportId:
     return report_id(plan, VISUAL_SPIKE)
 
 
-def plan_native(project: str) -> str:
+def plan_native(project: str, lookup: DraftedPlan | None = None) -> str:
     """The native id of the plan ``project`` was drafted as: its drafted project's.
 
     A copy's own native id is minted by its destination, so the drafted project whose
     `onetaskgraph.copies` link names ``project`` answers instead; a project no drafted one
-    links, or a source that cannot be read, answers with its own native id.
+    links, or a source that cannot be read, answers with its own native id. ``lookup`` is
+    the invocation's own :class:`DraftedPlan` of ``project``, when the caller holds one.
     """
     native = project.partition(":")[2]
-    drafted = drafted_project(project)
+    drafted = (DraftedPlan(project) if lookup is None else lookup).project()
     return native if drafted is None else str(drafted.qualified_id).partition(":")[2]
 
 
@@ -472,14 +473,47 @@ def drafted_ids(project: str) -> dict[str, str]:
     project is found or its documents cannot be read — a reader without them then finds a
     report by the origin a copy carries alone, as before.
     """
-    drafted = drafted_project(project)
-    if drafted is None:
-        return {}
-    try:
-        documents = plan_store.read_documents(str(drafted.qualified_id))
-    except OSError:
-        return {}
-    return {link: str(document.qualified_id) for document in documents for link in _links(document)}
+    return dict(DraftedPlan(project).links())
+
+
+class DraftedPlan:
+    """What the drafting sources record of the copy ``project``, read at most once, when asked.
+
+    One invocation asks it of several readers — a design document carrying no origin, reports
+    carrying none, the plan's drafted native id — so it is made once per invocation and handed
+    to each, and each part is read the first time one of them needs it: the drafted project
+    (:func:`drafted_project`), then that project's documents' links (:func:`drafted_ids`). It
+    is never kept beyond the invocation that made it.
+    """
+
+    def __init__(self, project: str) -> None:
+        self._copy = project
+        self._drafted: list[plan_store.StoreProject | None] = []
+        self._links: Drafted | None = None
+
+    def project(self) -> plan_store.StoreProject | None:
+        """:func:`drafted_project` of the copy, read the first time it is asked."""
+        if not self._drafted:
+            self._drafted.append(drafted_project(self._copy))
+        return self._drafted[0]
+
+    def links(self) -> Drafted:
+        """:func:`drafted_ids` of the copy, read the first time it is asked."""
+        if self._links is None:
+            self._links = self._read_links()
+        return self._links
+
+    def _read_links(self) -> Drafted:
+        drafted = self.project()
+        if drafted is None:
+            return {}
+        try:
+            documents = plan_store.read_documents(str(drafted.qualified_id))
+        except OSError:
+            return {}
+        return {
+            link: str(document.qualified_id) for document in documents for link in _links(document)
+        }
 
 
 def _links(document: plan_store.StoreDocument) -> list[str]:
@@ -489,13 +523,20 @@ def _links(document: plan_store.StoreDocument) -> list[str]:
     return [link for link in copies.values() if isinstance(link, str)]
 
 
-def _drafted_for(project: str, documents: Sequence[plan_store.StoreDocument]) -> Drafted:
-    """:func:`drafted_ids` for ``project``, read only when it holds a report carrying no origin."""
+def _drafted_for(
+    project: str,
+    documents: Sequence[plan_store.StoreDocument],
+    lookup: DraftedPlan | None = None,
+) -> Drafted:
+    """:func:`drafted_ids` for ``project``, read only when it holds a report carrying no origin.
+
+    Read through ``lookup``, the invocation's own :class:`DraftedPlan`, when given.
+    """
     if any(
         design_approval.is_spike_report(held) and plan_store.ORIGIN_KEY not in held.metadata
         for held in documents
     ):
-        return drafted_ids(project)
+        return (DraftedPlan(project) if lookup is None else lookup).links()
     return {}
 
 
@@ -573,22 +614,25 @@ def current_visual_report(
     project: str,
     documents: Sequence[plan_store.StoreDocument],
     record: Mapping[str, object] | None = None,
+    lookup: DraftedPlan | None = None,
 ) -> plan_store.StoreDocument | None:
     """Resolve current evidence by full id or copy origin, refusing explicit bad selections.
 
     Selections are opaque qualified document names, scoped to this project's documents.
     Null, non-string, blank, malformed, missing, wrong-kind, wrong-project and ambiguous
     selections fail closed; only an absent key delegates to :func:`visual_report`.
-    ``record`` is the project's own record when the caller has already read it.
+    ``record`` is the project's own record when the caller has already read it, and
+    ``lookup`` the invocation's own :class:`DraftedPlan` of ``project`` when it holds one.
     """
-    drafted = _drafted_for(project, documents)
+    lookup = DraftedPlan(project) if lookup is None else lookup
+    drafted = _drafted_for(project, documents, lookup)
     metadata = (plan_store.project_record(project) if record is None else record).get("metadata")
     if not isinstance(metadata, Mapping) or VISUAL_REPORT_KEY not in metadata:
         # A project holding no spike report has no visual one under any name, so the drafted
         # plan's native id — a listing of the authoring source — is not worth asking for.
         if not any(design_approval.is_spike_report(held) for held in documents):
             return None
-        return visual_report(plan_native(project), documents, drafted)
+        return visual_report(plan_native(project, lookup), documents, drafted)
     selected = metadata[VISUAL_REPORT_KEY]
     reason: str | None
     match selected:

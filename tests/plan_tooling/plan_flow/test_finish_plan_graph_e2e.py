@@ -88,19 +88,27 @@ pytestmark = [pytest.mark.reads_docs, pytest.mark.usefixtures("module_tmpdir")]
 #: The stand-in `start` the copied checkout's engine hands that one verb to.
 STAND_IN = Path(__file__).resolve().parent / "finish_plan_writer_engine.py"
 
-#: The copied store's wrapper: every call is the real verb's, and a graph read in the form
-#: `FAKE_GRAPH_ABSENT_FORMAT` names is handed to it over a project id the store does not hold.
+#: The copied store's wrapper: every call is the real verb's, and the flow's own grouped
+#: graph read in the form `FAKE_GRAPH_ABSENT_FORMAT` names is handed to it over a project id
+#: the store does not hold. An ungrouped graph read — the one a plan's task dependencies are
+#: read through — is the real verb's, so the refusal is the flow's read and nothing before it.
 GRAPH_WRAPPER = """#!/usr/bin/env bash
 real="$(dirname "$0")/onetaskgraph-real"
 if [ "${1:-} ${2:-}" = "project graph" ] && [ -n "${FAKE_GRAPH_ABSENT_FORMAT:-}" ]; then
     arguments=("$@")
+    grouped=no
+    absent=no
     for ((at = 0; at < ${#arguments[@]}; at++)); do
         named="${arguments[at + 1]:-}"
+        [ "${arguments[at]}" = --group-by ] && grouped=yes
         if [ "${arguments[at]}" = --format ] && [ "$named" = "$FAKE_GRAPH_ABSENT_FORMAT" ]; then
-            arguments[2]="${arguments[2]}-absent"
-            exec "$real" "${arguments[@]}"
+            absent=yes
         fi
     done
+    if [ "$grouped" = yes ] && [ "$absent" = yes ]; then
+        arguments[2]="${arguments[2]}-absent"
+        exec "$real" "${arguments[@]}"
+    fi
 fi
 exec "$real" "$@"
 """

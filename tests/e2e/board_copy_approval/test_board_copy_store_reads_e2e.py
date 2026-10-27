@@ -385,7 +385,7 @@ def test_the_launch_gate_reads_the_plans_one_record_and_still_refuses_a_changed_
 def test_copying_the_plan_reads_each_local_record_once_and_copies_it_as_before(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`just copy-plan` reads the plan's record, its tasks and its documents once each.
+    """`just copy-plan` reads the plan's record, its tasks, their edges and its documents once.
 
     Its pre-flight and the copy that follows share what was read, and the copy reports
     every record of the plan landing on the board as it always did.
@@ -414,8 +414,10 @@ def test_copying_the_plan_reads_each_local_record_once_and_copies_it_as_before(
         if _verb(call) in {("task", "list"), ("document", "list")}
     ]
     assert sorted(listed) == [("document", "list"), ("task", "list")], copied.calls
-    walked = [call[2] for call in before if _verb(call) == ("task", "deps")]
-    assert len(walked) == TASKS and len(set(walked)) == TASKS, before
+    # The tasks' edges are the project's one graph, never one dependency read per task.
+    graphed = [call[2] for call in before if _verb(call) == ("project", "graph")]
+    assert graphed == [QUALIFIED], before
+    assert not [call for call in copied.calls if _verb(call) == ("task", "deps")], copied.calls
     assert _listings(copied.calls) == [], copied.calls
 
 

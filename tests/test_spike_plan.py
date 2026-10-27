@@ -475,6 +475,42 @@ def test_the_visual_report_of_a_copy_out_of_private_authoring_is_found_through_i
     assert spike_plan.current_visual_report(board, [copied]) == copied
 
 
+def test_one_drafted_plan_reads_the_drafting_source_once_for_every_reader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The visual report, the plan's drafted id and a later link check share one read.
+
+    An approval asks what the drafting source holds of its copy for its reports, its plan's
+    drafted id and its design document; one :class:`spike_plan.DraftedPlan` handed to each
+    lists the drafting source's projects and the drafted plan's documents once, however often
+    it is asked, and an unasked one reads nothing.
+    """
+    board = "plans:I_created_0"
+    copied = _copied_report("plans:I_created_4", None, True)
+    drafted = _drafted_report(spike_plan.visual_report_id("p"), {"plans": "plans:I_created_4"})
+    read: list[str] = []
+
+    def projects(source: str) -> list[plan_store.StoreProject]:
+        read.append(f"projects of {source}")
+        return [_drafted_project("p", {"plans": board})]
+
+    def documents(project: str) -> list[plan_store.StoreDocument]:
+        read.append(f"documents of {project}")
+        return [drafted]
+
+    monkeypatch.setattr(plan_store, "read_projects", projects)
+    monkeypatch.setattr(plan_store, "read_documents", documents)
+    monkeypatch.setattr(plan_store, "project_record", lambda _project: {"metadata": {}})
+
+    spike_plan.DraftedPlan(board)
+    assert read == []
+    lookup = spike_plan.DraftedPlan(board)
+    assert spike_plan.current_visual_report(board, [copied], lookup=lookup) == copied
+    assert lookup.links() == {"plans:I_created_4": f"authoring:{spike_plan.visual_report_id('p')}"}
+    assert spike_plan.plan_native(board, lookup) == "p"
+    assert read == ["projects of authoring", "documents of authoring:p"], read
+
+
 @pytest.mark.parametrize(
     ("branch", "also_linked", "also_reported", "said"),
     [

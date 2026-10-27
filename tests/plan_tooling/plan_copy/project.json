@@ -45,6 +45,7 @@
       "{workspaceRoot}/scripts/onepipeline.sh",
       "{workspaceRoot}/scripts/plan-check.sh",
       "{workspaceRoot}/scripts/plan-store.sh",
+      "{workspaceRoot}/scripts/require-provisioned.sh",
       "{workspaceRoot}/scripts/review-plan.sh",
       "{workspaceRoot}/scripts/template-env.sh",
       "{workspaceRoot}/config/**/*",
