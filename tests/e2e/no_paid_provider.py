@@ -14,6 +14,12 @@ journey with the drafting turn live: unmodified it ran 10m25s against a real pro
 was heading into its own 720-second bound; with the provider substituted it passed in
 2m10s.
 
+And every binary the engine's provider health probe starts, which `just status`, `just
+host` and an observer's launch all run: `cursor-agent` beside the two families, though no
+chain here names it, because the probe asks every provider it knows. The real one writes
+`cursor-agent-logs-<uid>/` into `TMPDIR` on every call, which the pre-push gate's
+`gate-leftovers` budget counts against the push.
+
 Keep this deterministic and stdlib-only — this file *is* the provider binary.
 """
 

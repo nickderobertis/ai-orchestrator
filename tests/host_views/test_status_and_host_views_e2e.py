@@ -62,6 +62,11 @@ pytestmark = [pytest.mark.usefixtures("module_tmpdir")]
 #: spends it.
 FAKE_BACKEND = helper("fake_backend.py")
 
+#: The guard refusing every paid provider binary a view would otherwise start: the
+#: `providers:` block is `oneagentgraph health` starting each one it knows, `cursor-agent`
+#: among them, and a real one writes into the temporary directory on every call.
+PAID_PROVIDER_GUARD = helper("no-paid-provider")
+
 #: Where `just status`'s run-scoped lines stop and the host-wide provider report
 #: begins. `AGENTS.md` tells a supervisor to cut a watch here before matching words in
 #: what is above it, so a line below it is one no watch following that guidance sees.
@@ -97,6 +102,13 @@ def _environment(runs_root: Path) -> dict[str, str]:
     # variable a real manager session carries, and ownership is a comparison — a view
     # that did not identify itself matches no run.
     environment["CLAUDE_CODE_SESSION_ID"] = "status-and-host-views-e2e"
+    return _guarded(environment)
+
+
+def _guarded(environment: dict[str, str]) -> dict[str, str]:
+    """``environment`` with the provider guard first on `PATH`."""
+    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
+    environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
     return environment
 
 
@@ -122,7 +134,7 @@ def _engine(verb: str, *arguments: str, runs_root: Path) -> subprocess.Completed
     return subprocess.run(
         [str(npm_installs.ENGINE), verb, *arguments],
         cwd=REPO_ROOT,
-        env=environment,
+        env=_guarded(environment),
         capture_output=True,
         text=True,
         timeout=e2e_timeout(180),

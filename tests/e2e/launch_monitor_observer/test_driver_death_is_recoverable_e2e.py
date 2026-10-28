@@ -35,6 +35,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -43,6 +44,7 @@ from probe_run_root import Probe, run_name, run_root
 from project_fixtures import helper
 from waits import timeout as e2e_timeout
 
+from orchestrator.gate_impact import count_leftovers
 from orchestrator.root import REPO_ROOT
 
 # What the recipes these journeys run leave in the temporary directory, by design or
@@ -96,15 +98,29 @@ def undriven(tmp_path: Path) -> Iterator[Probe]:
         dispatch.wait(timeout=e2e_timeout(30))
 
 
-def _view(recipe: str, *arguments: str, runs_root: Path) -> subprocess.CompletedProcess[str]:
-    """One of the two views, through the real recipe."""
+def _view(
+    recipe: str,
+    *arguments: str,
+    runs_root: Path,
+    temporary: Path | None = None,
+    guarded: bool = True,
+    behind: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """One of the two views, through the real recipe.
+
+    Under ``temporary`` when one is named, and with the binaries in ``behind`` on `PATH`
+    after the guard — or, with ``guarded`` off, in its place.
+    """
     environment = dict(os.environ)
+    if temporary is not None:
+        environment.update(dict.fromkeys(("TMPDIR", "TMP", "TEMP"), str(temporary)))
     environment["ONEPIPELINE_RUNS_DIR"] = str(runs_root)
     environment["CLAUDE_CODE_SESSION_ID"] = "driver-death-e2e"
     # `status` reads every provider's health for its host report, which would start the
     # real provider binaries; the guard answers in their place.
+    first = ([PAID_PROVIDER_GUARD] if guarded else []) + ([behind] if behind else [])
     # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
-    environment["PATH"] = f"{PAID_PROVIDER_GUARD}{os.pathsep}{environment['PATH']}"
+    environment["PATH"] = os.pathsep.join([*map(str, first), environment["PATH"]])
     return subprocess.run(
         ["just", recipe, *arguments],
         cwd=REPO_ROOT,
@@ -169,3 +185,93 @@ def test_the_disk_reading_that_parts_a_crash_from_a_full_disk_is_on_both_views(
             f"'{SECTION}' sends a supervisor to the free-space line before diagnosing a dead "
             f"driver, and `just {view}` printed none: {rendered!r}"
         )
+
+
+#: The provider binaries the engine's health probe starts, which `PROVIDER_STAND_IN`
+#: answers for behind the guard.
+PROBED_PROVIDERS = ("claude", "codex", "cursor-agent")
+
+#: A provider binary that records each call by the name it was invoked as and leaves in
+#: `TMPDIR` what the real one does there on every call: `cursor-agent`'s log directory —
+#: a session log and the `latest.log` link to it — and claude-code's own directory.
+#: Exits 1, so it reads as an unhealthy provider and never as a turn.
+PROVIDER_STAND_IN = """import os, sys
+
+invoked = os.path.basename(sys.argv[0])
+with open(os.environ["PROVIDER_STAND_IN_CALLS"], "a", encoding="utf-8") as calls:
+    calls.write(invoked + "\\n")
+temporary = os.environ.get("TMPDIR") or "/tmp"
+if invoked == "cursor-agent":
+    logs = os.path.join(temporary, f"cursor-agent-logs-{os.getuid()}")
+    os.makedirs(logs, exist_ok=True)
+    session = os.path.join(logs, f"session-{os.getpid()}.log")
+    with open(session, "a", encoding="utf-8") as log:
+        log.write("about\\n")
+    latest = os.path.join(logs, "latest.log")
+    if os.path.lexists(latest):
+        os.remove(latest)
+    os.symlink(session, latest)
+elif invoked == "claude":
+    os.makedirs(os.path.join(temporary, f"claude-{os.getuid()}"), exist_ok=True)
+raise SystemExit(1)
+"""
+
+
+def _provider_stand_ins(directory: Path) -> Path:
+    """A directory holding `PROVIDER_STAND_IN` under every name in `PROBED_PROVIDERS`."""
+    directory.mkdir()
+    program = directory / "provider_stand_in.py"
+    program.write_text(f"#!{sys.executable}\n{PROVIDER_STAND_IN}", encoding="utf-8")
+    program.chmod(0o755)
+    for name in PROBED_PROVIDERS:
+        (directory / name).symlink_to(program.name)
+    return directory
+
+
+@pytest.mark.parametrize("guarded", [False, True], ids=["unguarded", "guarded"])
+def test_the_status_views_provider_probe_leaves_nothing_in_the_temporary_directory(
+    undriven: Probe, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, guarded: bool
+) -> None:
+    """The host report probes every provider binary, and the guard answers for each.
+
+    `just status` and `just host` start each binary the engine's provider health probe
+    knows, `cursor-agent` among them, and a real one writes into `TMPDIR` on every call:
+    that is what the pre-push gate's `gate-leftovers` budget refused a passing push for.
+    Stand-ins that record their calls and write what the real ones write sit on `PATH`
+    behind the guard. Unguarded, they prove the probe reaches `cursor-agent` and that the
+    gate's own count sees what it leaves; guarded, none may be reached and the directory
+    the views were handed must hold nothing, uv's environment lock excepted by the
+    budget's ruling.
+    """
+    stand_ins = _provider_stand_ins(tmp_path / "providers")
+    calls = tmp_path / "provider-calls"
+    calls.touch()
+    monkeypatch.setenv("PROVIDER_STAND_IN_CALLS", str(calls))
+    temporary = tmp_path / "views-tmp"
+    temporary.mkdir()
+
+    for recipe, arguments in (("status", (undriven.run,)), ("host", ())):
+        viewed = _view(
+            recipe,
+            *arguments,
+            runs_root=undriven.root,
+            temporary=temporary,
+            guarded=guarded,
+            behind=stand_ins,
+        )
+        assert viewed.returncode == 0, viewed.stderr
+
+    reached = set(calls.read_text(encoding="utf-8").split())
+    left = [entry.path for entry in count_leftovers(temporary, []).top]
+    if not guarded:
+        assert "cursor-agent" in reached, (
+            f"the views' provider probe no longer starts cursor-agent (it reached {reached}), "
+            "so the guarded case below proves nothing about it"
+        )
+        assert f"cursor-agent-logs-{os.getuid()}" in left, left
+        return
+    assert not reached, (
+        f"the views' provider probe reached {sorted(reached)} past the guard; give "
+        "`tests/e2e/no-paid-provider/` an entry for each"
+    )
+    assert not left, f"the views left {left} in TMPDIR"

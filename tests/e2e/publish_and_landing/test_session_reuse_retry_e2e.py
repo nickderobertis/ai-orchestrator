@@ -434,9 +434,16 @@ def prior_binary(tmp_path_factory: pytest.TempPathFactory) -> str:
         pytest.skip("bun is not installed")
     environment = tmp_path_factory.mktemp("onepipeline-prior")
     (environment / "package.json").write_text('{"name": "prior", "private": true}\n')
+    # Bun probes whether its temporary directory can rename into its package cache with
+    # an empty `.<hex>-00000000.hm`, and leaves that file behind when the two are on
+    # different filesystems — as the pre-push gate's root and this host's cache are — so
+    # the temporary directory it is handed is this install's own and goes with it.
+    temporary = environment / "tmp"
+    temporary.mkdir()
     installed = subprocess.run(
         [bun, "add", "--exact", f"onepipeline-cli@{PRIOR_RELEASE}"],
         cwd=environment,
+        env={**os.environ, **dict.fromkeys(("TMPDIR", "TMP", "TEMP"), str(temporary))},
         text=True,
         capture_output=True,
         timeout=e2e_timeout(300),

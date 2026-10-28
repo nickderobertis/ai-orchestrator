@@ -11,6 +11,7 @@
     "support-conftest",
     "support-example-records",
     "support-fake-backend",
+    "support-no-paid-provider",
     "support-probe-run-root",
     "support-project-fixtures",
     "support-short-state",
