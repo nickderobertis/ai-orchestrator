@@ -1,8 +1,8 @@
 r"""Stateful loopback Linear wire for real installed plan-store journeys.
 
-Rewrite evidence: onetaskgraph-linear's ``crates/onetaskgraph-linear/src/lib.rs``,
-"Ruling: what Linear does to an HTML comment, settled", and this host's incident
-where bullets, table delimiters and autolinks changed a copied design document.
+Rewrite evidence: the report and harness at onetaskgraph spike commit ``f2344284``
+(``spike-linear-stored-content``), including the earlier long-form observations.
+These are wire observations, independent of the store's retired prediction.
 Comments retain their bytes; issue descriptions, project and document content do not.
 
 
@@ -34,6 +34,7 @@ class Rewrite:
     apply: Callable[[str], str]
     written: str = ""
     stored: str = ""
+    multiline: bool = False
 
 
 def _autolink(text: str) -> str:
@@ -64,12 +65,71 @@ def _table(text: str) -> str:
     )
 
 
-# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This task explicitly
-# assigns comparison with real Linear to onetaskgraph's producer-owned live lane,
-# real_linear_applies_every_declared_capability_and_leaves_no_residue, rather than this
-# host's bar. The wire double deliberately restates those observations independently;
-# its example test holds the local statement to its behavior, not to a live workspace.
+# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This wire is explicitly
+# held to the historical spike at f2344284, not to Linear as it evolves. The task excludes
+# real-workspace writes here; the manager performs the real-Linear check after adoption.
+# These fixtures reproduce those measurements without importing a store prediction.
 LINEAR_REWRITES: tuple[Rewrite, ...] = (
+    Rewrite(
+        "lazy-ordered-item",
+        lambda s: re.sub(r"^([*\-] [^\n]+)\n(\d+)\. ", r"\1\n  \2\\. ", s, flags=re.M),
+        "- first\n3. continuation\n- next",
+        "* first\n  3\\. continuation\n* next",
+        multiline=True,
+    ),
+    Rewrite(
+        "list-after-line",
+        lambda s: re.sub(
+            r"^([^\n]+)\n(?=[*\-] )",
+            lambda m: m[0] if re.match(r"(?:\s|[*\-] |\d+\. )", m[1]) else m[1] + "\n\n",
+            s,
+            flags=re.M,
+        ),
+        "## Heading\n- first\n- next",
+        "## Heading\n\n* first\n* next",
+        multiline=True,
+    ),
+    Rewrite(
+        "bold-wrap",
+        lambda s: re.sub(
+            r"\*\*([^*]+)\*\*",
+            lambda m: "\n".join("**" + line + "**" for line in m[1].splitlines()),
+            s,
+        ),
+        "**bold text\nnext line**",
+        "**bold text**\n**next line**",
+        multiline=True,
+    ),
+    Rewrite(
+        "indented-code",
+        lambda s: re.sub(
+            r"(?:^    [^\n]*(?:\n|$))+",
+            lambda m: "```\n" + "\n".join(line[4:] for line in m[0].splitlines()) + "\n```\n",
+            s,
+            flags=re.M,
+        ),
+        "Before.\n\n    code\n    more\n\nAfter.",
+        "Before.\n\n```\ncode\nmore\n```\n\nAfter.",
+        multiline=True,
+    ),
+    Rewrite(
+        "code-span-wrap",
+        lambda s: re.sub(
+            r"(?<!`)(`+)([^`]+)\1(?!`)", lambda m: m[1] + " ".join(m[2].splitlines()) + m[1], s
+        ),
+        "See `code span\nwraps` here.",
+        "See `code span wraps` here.",
+        multiline=True,
+    ),
+    Rewrite(
+        "table-slot-separator",
+        lambda s: re.sub(
+            r"(^\|[^\n]+\|\n)\n+(?=<!-- onetaskgraph.metadata )", r"\1\n", s, flags=re.M
+        ),
+        "| one |\n\n\n<!-- onetaskgraph.metadata `{}` -->",
+        "| one |\n\n<!-- onetaskgraph.metadata `{}` -->",
+        multiline=True,
+    ),
     Rewrite("bullet", lambda s: re.sub(r"^(\s*)- ", r"\1* ", s, flags=re.M), "- one", "* one"),
     Rewrite("table", _table, "| --- |", "| -- |"),
     Rewrite("brackets", lambda s: re.sub(r"(?<!\\)([\[\]])", r"\\\1", s), "[x]", r"\[x\]"),
@@ -81,29 +141,24 @@ LINEAR_REWRITES: tuple[Rewrite, ...] = (
     Rewrite("autolink", _autolink, "example.com", "[example.com](<http://example.com>)"),
 )
 # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
-r"""Observed rules from onetaskgraph-linear's module documentation,
-"Ruling: what Linear does to an HTML comment, settled", and the host incident.
-
-Each rule carries its input (``written``) and exact stored example (``stored``),
-so callers can enumerate and exercise the complete list without a second table.
-Rules apply outside code spans/fences and existing Markdown links.
-
-LINEAR_REWRITES examples (JSON strings, written -> stored):
-bullet: "- one" -> "* one"
-table: "| --- |" -> "| -- |"
-brackets: "[x]" -> "\\[x\\]"
-tilde: "~5" -> "\\~5"
-emphasis: "_y_" -> "*y*"
-quote: "say \\\"hi\\\"" -> "say \"hi\""
-backslash: "a \\d" -> "a \\\\d"
-comment-close: "-->" -> "\\-->"
-autolink: "example.com" -> "[example.com](<http://example.com>)"
-URL: "https://example.com/a." -> "[https://example.com/a](<https://example.com/a>)."
-"""
 
 
 def stored_form(content: str, rewrites: Sequence[Rewrite]) -> str:
     """Apply wire rules while preserving code and already linked text."""
+    # Block rewrites see whole paragraphs, but never the contents of fenced code.
+    for rule in rewrites:
+        if not rule.multiline:
+            continue
+        chunks = re.split(
+            r"(^ {0,3}(`{3,}|~{3,})[^\n]*\n.*?^ {0,3}\2[^\n]*(?:\n|$))",
+            content,
+            flags=re.M | re.S,
+        )
+        # Each match contributes the full fenced block and its delimiter.
+        content = "".join(
+            rule.apply(chunk) if index % 3 == 0 else chunk if index % 3 == 1 else ""
+            for index, chunk in enumerate(chunks)
+        )
     protected = re.compile(r"(`+)[^\n]*?\1|!?\[[^\]\n]*\]\([^\n)]*\)|\\[\[\]~]")
     fence: tuple[str, int] | None = None
     result: list[str] = []
@@ -131,7 +186,8 @@ def stored_form(content: str, rewrites: Sequence[Rewrite]) -> str:
 
         rewritten = protected.sub(protect, line)
         for rule in rewrites:
-            rewritten = rule.apply(rewritten)
+            if not rule.multiline:
+                rewritten = rule.apply(rewritten)
 
         def restore(match: re.Match[str], held: list[str] = spans) -> str:
             return held[int(match[1])]

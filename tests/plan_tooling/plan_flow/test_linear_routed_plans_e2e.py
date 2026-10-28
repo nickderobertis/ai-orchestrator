@@ -26,7 +26,7 @@ These journeys drive that through the real recipes:
   receives nothing;
 * a person's edit to the approved Linear document refuses the next launch; a public task
   naming a private repository is refused before either board is written; and a Linear that
-  rewrites what it stores in a way the store does not declare is refused by name.
+  rewrites long forms accepts the stored content from each write answer.
 
 The launch reaches the Linear source's credential the one way a host's launch does: through
 the variable the user layer's `api_key_env` names, read out of the copy's gitignored `.env` by
@@ -1524,6 +1524,60 @@ def _writes_back(request: Mapping[str, object], names: Mapping[str, str]) -> str
     slot = re.search(r"<!-- onetaskgraph.metadata `(.+?)` -->", description, re.S)
     projected = json.loads(slot[1]).get("onepipeline.projected_status") if slot else None
     return str(projected) if projected else "metadata"
+
+
+@COPIES_THE_TRACKED_TREE
+@pytest.mark.xdist_group("linear-routed")
+def test_the_road_uses_write_answers_without_verification_reads(road: Road) -> None:
+    """Rewritten creates cost one follow-up write; the unchanged copy writes nothing.
+
+    An item's next request after a write may write it again, but cannot read it back
+    for verification. Later phases legitimately read the plan to approve and launch it.
+    """
+    first = road.requests[: road.marks["first copy"]]
+    recopied = road.requests[road.marks["first copy"] : road.marks["unchanged re-copy"]]
+    writes = [request for request in first if _writes_back(request, {}) is not None]
+    assert not [request for request in recopied if _writes_back(request, {}) is not None], recopied
+    items = {
+        str(item["title"]): str(item["id"])
+        for item in [
+            *road.bench.linear.projects(),
+            *road.bench.linear.issues(),
+            *road.bench.linear.documents(),
+        ]
+    }
+    expected: Counter[str] = Counter()
+    actual: Counter[str] = Counter()
+    for request in writes:
+        operation = str(request["operation"])
+        variables = request["variables"]
+        assert isinstance(variables, dict)
+        fields = variables.get("input", {})
+        match operation:
+            case "issueCreate" | "projectCreate" | "documentCreate":
+                native = items[str(fields.get("title") or fields["name"])]
+                content = str(fields.get("description") or fields.get("content") or "")
+                expected[native] = int(stored_form(content, LINEAR_REWRITES) != content)
+            case "issueUpdate" | "projectUpdate" | "documentUpdate":
+                actual[str(variables["id"])] += 1
+    assert expected and sum(expected.values()) >= len(ROAD), expected
+    assert +actual == +expected, (actual, expected, writes)
+    # Check each phase separately: approval and launch start with intentional fresh reads.
+    boundaries = [0, *road.marks.values(), len(road.requests)]
+    for start, end in zip(boundaries, boundaries[1:], strict=False):
+        previous_write: str | None = None
+        for request in road.requests[start:end]:
+            operation = str(request["operation"])
+            variables = request["variables"]
+            assert isinstance(variables, dict)
+            native = str(variables.get("id", ""))
+            if previous_write and native == previous_write:
+                assert _writes_back(request, {}) is not None, request
+            if _writes_back(request, {}) is not None:
+                fields = variables.get("input", {})
+                previous_write = native or items.get(str(fields.get("title", "")))
+            else:
+                previous_write = None
 
 
 @COPIES_THE_TRACKED_TREE

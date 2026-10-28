@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import ast
 import base64
 import copy
-import inspect
 import json
 import os
 import re
@@ -13,7 +11,6 @@ import subprocess
 import urllib.request
 from pathlib import Path
 
-import linear_board as wire
 import onetaskgraph_user_layer
 import plan_root_variable
 import pytest
@@ -25,23 +22,11 @@ from orchestrator.root import REPO_ROOT
 
 
 def test_each_documented_rewrite() -> None:
-    nodes = ast.parse(inspect.getsource(wire)).body
-    declaration = next(
-        i
-        for i, node in enumerate(nodes)
-        if isinstance(node, ast.AnnAssign)
-        and isinstance(node.target, ast.Name)
-        and node.target.id == "LINEAR_REWRITES"
-    )
-    documentation = ast.literal_eval(nodes[declaration + 1].value)
-    documented = re.findall(r'^[\w-]+: (".*") -> (".*")$', documentation, re.M)
-    assert len(documented) == len(LINEAR_REWRITES) + 1
-    for written, stored in documented:
-        assert stored_form(json.loads(written), LINEAR_REWRITES) == json.loads(stored)
     for rule in LINEAR_REWRITES:
         assert stored_form(rule.written, LINEAR_REWRITES) == rule.stored, rule.name
         assert stored_form(rule.stored, LINEAR_REWRITES) == rule.stored, rule.name
-        assert stored_form(f"`{rule.written}`", LINEAR_REWRITES) == f"`{rule.written}`"
+        if not rule.multiline:
+            assert stored_form(f"`{rule.written}`", LINEAR_REWRITES) == f"`{rule.written}`"
         fenced = f"```md\n{rule.written}\n```"
         assert stored_form(fenced, LINEAR_REWRITES) == fenced
     protected = "```md\n- [x] ~ _y_ example.com\n```\n`[x] example.com`"
@@ -50,6 +35,66 @@ def test_each_documented_rewrite() -> None:
         "`code`- inline\n[link](https://example.com)- inline\n`code`--> inline\ntext | --- | prose"
     )
     assert stored_form(inline, LINEAR_REWRITES) == inline
+
+
+@pytest.mark.parametrize(
+    "kind,field", [("issue", "description"), ("project", "content"), ("document", "content")]
+)
+def test_long_forms_match_the_spikes_stored_bytes(
+    kind: str, field: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each long-form wire answers the measured bytes on create and metadata update."""
+    monkeypatch.setenv(
+        "XDG_CONFIG_HOME",
+        str(
+            onetaskgraph_user_layer.installed(
+                tmp_path / "config", onetaskgraph_user_layer.example()
+            )
+        ),
+    )
+    written = (
+        "## Heading\n- first\n3. lazy continuation\n- next\n\n"
+        "Paragraph.\n- another\n\n"
+        "See `code span\nwraps` and **bold text\nnext line**.\n\n"
+        "    code\n    more\n\n"
+        "| Column |\n| --- |\n| value |\n"
+    )
+    # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] These are the historical
+    # spike f2344284 bytes this task requires the loopback to reproduce, not a claim about
+    # current Linear. This task excludes real-workspace writes and leaves that check to
+    # the manager after adoption; a service-drift gate here would violate that boundary.
+    expected = (
+        "## Heading\n\n* first\n  3\\. lazy continuation\n* next\n\n"
+        "Paragraph.\n\n* another\n\n"
+        "See `code span wraps` and **bold text**\n**next line**.\n\n"
+        "```\ncode\nmore\n```\n\n"
+        "| Column |\n| -- |\n| value |\n"
+    )
+    # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+    with linear_board() as board:
+        board.environment(onetaskgraph_user_layer.ORGANIZATION_PLANS)
+
+        def write(operation: str, content: str, native: str | None = None) -> dict[str, object]:
+            variables: dict[str, object] = {"input": {field: content, "title": "Measured"}}
+            if native:
+                variables["id"] = native
+            request = urllib.request.Request(
+                board.endpoint,
+                data=json.dumps(
+                    {"query": "mutation { " + operation + " { success } }", "variables": variables}
+                ).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return json.load(response)["data"][operation][kind]
+
+        created = write(kind + "Create", written)
+        assert created[field] == expected
+        slot = '<!-- onetaskgraph.metadata `{"approved":true}` -->'
+        updated = write(kind + "Update", str(created[field]) + "\n\n" + slot, str(created["id"]))
+        assert updated[field] == expected + "\n" + slot
+        repeated = write(kind + "Update", str(updated[field]), str(created["id"]))
+        assert repeated[field] == updated[field]
 
 
 def test_caller_rewrite_is_stored_and_read_by_the_cli(
@@ -139,7 +184,12 @@ def test_real_store_copy_and_person_edit(tmp_path: Path, monkeypatch: pytest.Mon
             return result.stdout
 
         body = tmp_path / "body.md"
-        content = "\n\n".join(rule.written for rule in LINEAR_REWRITES)
+        content = (
+            "\n\n".join(
+                rule.written for rule in LINEAR_REWRITES if rule.name != "table-slot-separator"
+            )
+            + "\n\n| Column |\n| --- |\n| value |\n"
+        )
         body.write_text(content)
         cli(
             "project",
@@ -191,10 +241,10 @@ def test_real_store_copy_and_person_edit(tmp_path: Path, monkeypatch: pytest.Mon
             assert item["metadata"]["onetaskgraph.origin"] == origin
             metadata = json.dumps(item["metadata"], sort_keys=True, separators=(",", ":"))
             assert item[field] == (
-                stored_form(content, LINEAR_REWRITES)
-                + "\n\n<!-- onetaskgraph.metadata `"
-                + metadata
-                + "` -->"
+                stored_form(
+                    content + "\n\n<!-- onetaskgraph.metadata `" + metadata + "` -->",
+                    LINEAR_REWRITES,
+                )
             )
         task = source + ":" + board.issues()[0]["id"]
         cli("task", "status", "set", task, "done")
