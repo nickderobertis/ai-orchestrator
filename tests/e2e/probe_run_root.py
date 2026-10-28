@@ -281,3 +281,223 @@ def record_supervision(directory: Path, *, pid: int, session: str) -> None:
         ),
         encoding="utf-8",
     )
+
+
+#: The plan a settled run root launches with. `flaky` fails and is retried as `flaky-r2`,
+#: so a reading has a superseded node beside its replacement; `broken` fails and is left
+#: failed, and `idle` is parked.
+SETTLED_PLAN = ("build", "flaky", "broken", "idle")
+
+#: The replacement a `retry` of `flaky` adds to the graph.
+REPLACEMENT = "flaky-r2"
+
+#: What each node's journal settles it at, as `node-settled` records it, in the order the
+#: settled run root dispatches them.
+SETTLED = {
+    "build": "done",
+    "flaky": "failed",
+    REPLACEMENT: "done",
+    "broken": "failed",
+    "idle": "cancelled",
+}
+
+#: Where the journal leaves each node. `flaky`'s last record is the `retry` that
+#: superseded it, which the engine records as `cancelled` — the state a superseded node
+#: is left in, with its work carried by `flaky-r2`.
+RECORDED = SETTLED | {"flaky": "cancelled"}
+
+#: The stream a settled run root journals its pipeline records under, and the
+#: `oneagentgraph` run its dispatches' members belong to.
+SETTLED_STREAM = "status-shapes-e2e"
+GRAPH_RUN = "node-scope-status-shapes-e2e"
+
+
+def _settled_task(node: str) -> dict[str, str]:
+    return {"id": node, "persona": "engineer", "task": f"## What\n\nSettle {node}.\n"}
+
+
+def settled_run_root(root: Path, run: str, *, heartbeats: int) -> Path:
+    """A run of `SETTLED_PLAN` whose journal settles every node as `SETTLED` records.
+
+    `flaky` is retried as `REPLACEMENT` by a journalled `edit-committed` carrying the
+    replacement's task. `heartbeats` worker `member-heartbeat` records are journalled per
+    dispatch, which is how every engine before onepipeline 0.95.0 relayed them; zero is
+    the adopted engine's shape, which keeps them in `liveness.json` instead.
+    """
+    directory = run_root(root, run)
+    plan = {
+        "schema_version": 3,
+        "goal": {"text": "settle every planned node"},
+        "name": run,
+        "concurrency": 1,
+        "tasks": [_settled_task(node) for node in SETTLED_PLAN],
+    }
+    (directory / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
+    records: list[dict[str, object]] = []
+
+    def append(
+        stream: str, source: str, kind: str, labels: dict[str, str], payload: object
+    ) -> None:
+        index = len(records)
+        records.append(
+            {
+                "v": 2,
+                "ts": f"2026-01-01T00:{index // 60:02d}:{index % 60:02d}.000Z",
+                "stream": stream,
+                "seq": sum(1 for record in records if record["stream"] == stream),
+                "source": source,
+                "kind": kind,
+                "labels": labels,
+                "payload": payload,
+            }
+        )
+
+    def pipeline(kind: str, payload: dict[str, object], node: str | None = None) -> None:
+        labels = {"run_id": run} | ({} if node is None else {"node": node})
+        append(SETTLED_STREAM, "pipeline", kind, labels, payload)
+
+    pipeline(
+        "run-started",
+        {"plan": plan, "graph": "off", "dir": str(directory), "heartbeat_interval": 1800},
+    )
+    for node, status in SETTLED.items():
+        if node == REPLACEMENT:
+            replacement = _settled_task(REPLACEMENT)
+            pipeline(
+                "edit-committed",
+                {
+                    "author": "planner",
+                    "command": {"op": "retry", "id": "flaky", "node": replacement},
+                    "operations": [
+                        {
+                            "kind": "retry-requested",
+                            "node": "flaky",
+                            "replacement": REPLACEMENT,
+                            "reset": [],
+                        },
+                        {"kind": "node-added", "node": replacement, "retry_of": "flaky"},
+                    ],
+                    "operation_kinds": ["retry-requested", "node-added"],
+                    "envelope": 0,
+                },
+            )
+        pipeline("node-dispatched", {"persona": "engineer", "attempt": 1}, node)
+        for _ in range(heartbeats):
+            labels = {
+                "run_id": GRAPH_RUN,
+                "node": node,
+                "persona": "engineer",
+                "member": "worker",
+                "onepipeline.run_id": run,
+                "onepipeline.node": node,
+            }
+            append(GRAPH_RUN, "agentgraph", "member-heartbeat", labels, {})
+        pipeline("node-settled", {"status": status}, node)
+    (directory / "events.jsonl").write_text(
+        "".join(f"{json.dumps(record)}\n" for record in records), encoding="utf-8"
+    )
+    return directory
+
+
+#: The schema `liveness.json` is written at, which the adopted engine reads and refuses
+#: any other.
+LIVENESS_SCHEMA = 1
+
+
+def record_liveness(directory: Path) -> None:
+    """Keep one member's latest heartbeat in `<run>/liveness.json`, as the adopted engine does."""
+    (directory / "liveness.json").write_text(
+        json.dumps(
+            {
+                "schema_version": LIVENESS_SCHEMA,
+                "members": [
+                    {
+                        "node": "idle",
+                        "graph_run": GRAPH_RUN,
+                        "member": "worker",
+                        "last_heartbeat_at": "2026-01-01T00:00:10.000Z",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+#: Every key of a fold checkpoint's `state` at schemas 12 and 13 whose value is an empty
+#: map in a settled run root's checkpoint.
+_EMPTY_STATE_MAPS = (
+    "outcomes",
+    "parks",
+    "branches",
+    "sessions",
+    "abandoned",
+    "change_urls",
+    "causes",
+    "heads",
+    "remotes",
+    "landing_commits",
+    "bases",
+    "landings",
+    "stated_change_urls",
+    "completed_steps",
+    "dispatched_at",
+    "settled_at",
+    "decisions_pending",
+    "holds",
+    "cross_dag_watches",
+    "cross_dag_baselines",
+    "pending_context",
+    "refusals",
+    "served",
+    "activity",
+)
+
+
+def record_old_checkpoint(directory: Path, schema: int) -> dict[str, object]:
+    """Leave the fold checkpoint an engine writing `schema` leaves over a settled run root.
+
+    Schema 12 is what onepipeline v0.75.0 writes and 13 what v0.77.0 to v0.88 wrote over
+    the same records; the adopted engine writes neither. Its keys are those of
+    onepipeline's own `tests/golden/checkpoint-v<schema>.json`, which
+    `tests/test_engine_contracts.py` holds them to, covering the whole journal and
+    recording each node where its journal leaves it.
+    """
+    journal = (directory / "events.jsonl").read_text(encoding="utf-8")
+    records = [json.loads(line) for line in journal.splitlines()]
+    streams = {str(record["stream"]): int(record["seq"]) for record in records}
+    checkpoint: dict[str, object] = {
+        "schema_version": schema,
+        "run_id": directory.name,
+        "coverage": {
+            "bytes": len(journal.encode("utf-8")),
+            "records": len(records),
+            "at": {"ts": records[-1]["ts"], "stream": records[-1]["stream"]},
+            "streams": streams,
+            "digest": "0" * 32,
+        },
+        "state": {
+            "graph": {
+                "concurrency": 1,
+                "nodes": [_settled_task(node) for node in RECORDED if node != "flaky"],
+            },
+            "run_node_sets": [],
+            "plan": None,
+            "recorded": {node: {"at": status} for node, status in RECORDED.items()},
+            **{key: {} for key in _EMPTY_STATE_MAPS},
+            "superseded": {"flaky": REPLACEMENT},
+            "retired_branches": [],
+            "attestations": [],
+            "completion_requests": [],
+            "surfaces_queued": 0,
+            "surfaces_read": 0,
+            "last_surface_at": None,
+            "last_write_at": 1767225600000,
+            "stop": "not-stopped",
+            "closure": {"owed_until_closed": True, "completion_requested": False},
+            "strict": True,
+            "cross_dag_reported": [],
+        },
+    }
+    (directory / "checkpoint.json").write_text(json.dumps(checkpoint), encoding="utf-8")
+    return checkpoint

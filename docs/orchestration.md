@@ -4533,8 +4533,8 @@ note is answered, so a receiver takes its notes in the order they were sent. Eve
 command naming that node — and every note to another node, every finding and every
 `complete` — commits at once, so nothing waits behind one busy receiver. While a note
 waits in an inbox, the run
-goes on recording: heartbeats and turn activity keep reaching the journal and `just
-status` keeps reporting the run live, and once a turn takes the note the run records
+goes on recording: each member's liveness advances in `<run>/liveness.json`, turn
+activity keeps reaching the journal, and `just status` keeps reporting the run live, and once a turn takes the note the run records
 its `edit-committed` and then its `note-shown`.
 `tests/e2e/launch_monitor_observer/test_live_note_leaves_the_run_journalling_e2e.py`
 drives a `live` note that waits on a turn that cannot be interrupted through `just

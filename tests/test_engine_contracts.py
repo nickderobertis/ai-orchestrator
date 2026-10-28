@@ -2698,10 +2698,15 @@ def test_the_built_run_root_writes_the_records_the_engine_declares(
     record the engine cannot read at all — loud where it is read, and gated here so a
     builder that dropped one cannot pass by nothing having read that record.
     """
+    _assert_the_builder_writes_what_the_engine_declares(record, built_run_root)
+
+
+def _assert_the_builder_writes_what_the_engine_declares(record: Record, root: Path) -> None:
+    """Both directions of one record a run-root builder wrote, against the engine's own."""
     declared = _declared_fields(record.engine, record.source, record.struct, record.flattened_from)
     names = {field.name for field in declared}
     required = {field.name for field in declared if not field.optional}
-    written = record.found(built_run_root)
+    written = record.found(root)
     assert written, (
         f"{PROBE_RUN_ROOT.name} no longer writes {record.label}, so this gate "
         "reconciles a record nothing composes; update it with the builder"
@@ -2720,6 +2725,247 @@ def test_the_built_run_root_writes_the_records_the_engine_declares(
             f"{record.engine.ref}'s `{record.struct}` requires, so the engine cannot "
             "read the run root these journeys drive the views over"
         )
+
+
+# llmlint: ignore-block[shell_test_tiers_stay_split,test_tiers_split_by_project_not_by_marker] Rows
+# and checks in this existing uncached producer drift gate, holding the settled run
+# root `tests/host_views/` reads status over to the adopted engine's records, which that
+# journey's fixtures need reconciled. They add no tier or suite: the module's
+# `reads_checkouts` mark already routes them to orchestrator:test-checkouts, because the
+# engine's source and goldens live in a registered checkout outside every cache key, and
+# moving the module to a project of its own is restructuring outside this adoption.
+def _labelled(record: Record) -> str:
+    return record.struct
+
+
+#: The records `probe_run_root.settled_run_root` composes beside the ones it shares with
+#: `run_root`: a journal carrying `member-heartbeat` records and a retry's committed edit,
+#: and the adopted engine's `liveness.json`.
+SETTLED_RECORDS = (
+    *(
+        record
+        for record in BUILT_RECORDS
+        if record.struct in {"LaunchRecord", "Plan", "Node", "Goal", "Envelope", "EditCommitted"}
+    ),
+    Record(
+        "each member's latest heartbeat",
+        ONEPIPELINE,
+        "heartbeat.rs",
+        "MemberBeat",
+        lambda root: json.loads((root / "liveness.json").read_text("utf-8"))["members"],
+    ),
+)
+
+
+@pytest.fixture(name="settled_run_root")
+def _settled_run_root(tmp_path: Path) -> Path:
+    """A settled run root with heartbeats journalled and liveness kept, every record on disk."""
+    root = probe_run_root.settled_run_root(tmp_path, probe_run_root.run_name(), heartbeats=1)
+    probe_run_root.record_liveness(root)
+    return root
+
+
+@pytest.mark.parametrize("record", SETTLED_RECORDS, ids=_labelled)
+def test_the_settled_run_root_writes_the_records_the_engine_declares(
+    record: Record, settled_run_root: Path
+) -> None:
+    """The settled run root `tests/host_views/` reads status over is the engine's shape.
+
+    For the reason `test_the_built_run_root_writes_the_records_the_engine_declares` gives.
+    """
+    _assert_the_builder_writes_what_the_engine_declares(record, settled_run_root)
+
+
+#: One field of a struct body, `pub` or not, on a line of its own. `SERDE_FIELD` reads
+#: only `pub` fields, and `Liveness` serializes a private `schema_version`.
+STRUCT_FIELD_LINE = re.compile(r"^[ \t]*(?:pub(?:\([^)]*\))? )?(\w+):", re.MULTILINE)
+
+
+def test_the_settled_run_root_s_liveness_file_carries_the_fields_the_engine_declares(
+    settled_run_root: Path,
+) -> None:
+    """`liveness.json` carries exactly the fields onepipeline's `Liveness` serializes.
+
+    `Liveness` denies unknown fields and refuses a schema it does not read, so a drifted
+    key is a file the engine reads as absent; held here by its own line-anchored reading
+    because its version field is private, which the shared field reader does not see.
+    """
+    body = re.search(
+        r"pub\(crate\) struct Liveness \{(.*?)\n\}",
+        _source(ONEPIPELINE, "heartbeat.rs"),
+        re.DOTALL,
+    )
+    assert body is not None, (
+        f"onepipeline {ONEPIPELINE.ref} no longer declares `Liveness` in heartbeat.rs, so "
+        f"{PROBE_RUN_ROOT.name}'s liveness file cannot be reconciled against it"
+    )
+    declared = set(STRUCT_FIELD_LINE.findall(body.group(1)))
+    composed = json.loads((settled_run_root / "liveness.json").read_text("utf-8"))
+    assert set(composed) == declared, (
+        f"{PROBE_RUN_ROOT.name} writes {sorted(composed)} into liveness.json while "
+        f"onepipeline {ONEPIPELINE.ref}'s `Liveness` declares {sorted(declared)}"
+    )
+    version = re.search(
+        r"const LIVENESS_SCHEMA_VERSION: u32 = (\d+);", _source(ONEPIPELINE, "heartbeat.rs")
+    )
+    assert version is not None, (
+        f"onepipeline {ONEPIPELINE.ref} no longer declares the liveness schema it reads"
+    )
+    assert composed["schema_version"] == probe_run_root.LIVENESS_SCHEMA == int(version.group(1)), (
+        f"{PROBE_RUN_ROOT.name} writes liveness.json at schema {composed['schema_version']} "
+        f"while onepipeline {ONEPIPELINE.ref} reads only {version.group(1)}, so it reads "
+        "the file as absent"
+    )
+
+
+#: Where onepipeline keeps the checked-in documents each checkpoint schema it has written
+#: is held to, at the adopted release.
+ONEPIPELINE_GOLDENS = Engine("onepipeline", _pinned_tag("onepipeline"), "tests/golden")
+
+
+@pytest.mark.parametrize("schema", (12, 13))
+def test_the_old_checkpoint_carries_the_keys_the_engine_s_golden_does(
+    schema: int, tmp_path: Path
+) -> None:
+    """The checkpoint an older engine left is held to onepipeline's own golden of that schema.
+
+    Every object with fixed keys is compared both ways, down to `state.graph` and its
+    `closure`; the maps keyed by node, branch or stream, which a golden and a settled run do
+    not share, are compared entry by entry against the golden's own entries — so a key the
+    golden adds, drops or renames fails here rather than leaving `tests/host_views/`
+    reading a document no engine ever wrote.
+    """
+    root = probe_run_root.settled_run_root(tmp_path, probe_run_root.run_name(), heartbeats=0)
+    composed = probe_run_root.record_old_checkpoint(root, schema)
+    golden = json.loads(_source(ONEPIPELINE_GOLDENS, f"checkpoint-v{schema}.json"))
+    state, golden_state = composed["state"], golden["state"]
+    assert isinstance(state, dict) and isinstance(golden_state, dict)
+    # The maps keyed by node: each entry is held to the golden's one entry of each shape.
+    for nested, entries in (("recorded", "values"), ("graph", "nodes")):
+        ours_map, theirs_map = state[nested], golden_state[nested]
+        ours_entries = list(ours_map.values()) if entries == "values" else ours_map["nodes"]
+        theirs_entries = list(theirs_map.values()) if entries == "values" else theirs_map["nodes"]
+        assert theirs_entries, f"the golden checkpoint-v{schema}.json has no {nested} entry"
+        golden_keys = set().union(*(set(entry) for entry in theirs_entries))
+        for entry in ours_entries:
+            assert set(entry) <= golden_keys, (
+                f"{PROBE_RUN_ROOT.name}'s schema-{schema} checkpoint writes a {nested} entry "
+                f"{sorted(entry)} while the golden's carry {sorted(golden_keys)}"
+            )
+    for path in (
+        (),
+        ("coverage",),
+        ("coverage", "at"),
+        ("state",),
+        ("state", "closure"),
+        ("state", "graph"),
+    ):
+        ours: object = composed
+        theirs: object = golden
+        for key in path:
+            assert isinstance(ours, dict) and isinstance(theirs, dict)
+            ours, theirs = ours[key], theirs[key]
+        assert isinstance(ours, dict) and isinstance(theirs, dict)
+        optional = {"reopened_at"} if path == ("state", "closure") else set()
+        assert set(ours) <= set(theirs) and set(theirs) - optional <= set(ours), (
+            f"{PROBE_RUN_ROOT.name}'s schema-{schema} checkpoint carries "
+            f"{sorted(ours)} at {'.'.join(path) or 'its top level'} while onepipeline "
+            f"{ONEPIPELINE.ref}'s golden checkpoint-v{schema}.json carries {sorted(theirs)}"
+        )
+
+
+#: The engine-owned label keys onepipeline declares, each as a `*_LABEL` constant.
+ENGINE_LABEL = re.compile(r'pub const \w+_LABEL: &str = "([^"]+)";')
+
+
+def _operation_fields() -> dict[str, set[str]]:
+    """Each journalled edit operation's wire kind, and the fields its variant declares."""
+    edits = _source(ONEPIPELINE, "edits.rs")
+    enum = re.search(r"pub enum Operation \{(.*?)\n\}", edits, re.DOTALL)
+    assert enum is not None, f"onepipeline {ONEPIPELINE.ref} no longer declares `Operation`"
+    variants: dict[str, set[str]] = {}
+    for found in re.finditer(
+        r"^    (\w+) \{(.*?)^    \},?$", enum.group(1), re.DOTALL | re.MULTILINE
+    ):
+        kind = re.sub(r"(?<!^)(?=[A-Z])", "-", found.group(1)).lower()
+        variants[kind] = set(re.findall(r"^        (\w+):", found.group(2), re.MULTILINE))
+    return variants
+
+
+def test_the_settled_run_root_journals_values_the_engine_schemas_admit(
+    settled_run_root: Path,
+) -> None:
+    """Every record the settled run root journals is one the engine's published schemas admit.
+
+    The field gate above reads each record's top-level keys; this reads its values: each
+    envelope's labels against `agent.labels`, with every key past the reserved ones an
+    engine-owned `*_LABEL` the engine declares; each pipeline payload against the schema
+    `schemas/events.json` declares for its kind; and the retry's committed edit — its
+    command against the reply envelope's `Command`, and each operation against the
+    `Operation` variant its kind names, both directions.
+    """
+    events = _published_schema("events.json")
+    entries = events["schemas"]
+    assert isinstance(entries, list)
+
+    def schema_of(prefix: str) -> dict[str, object]:
+        found = [entry for entry in entries if str(entry["id"]).startswith(f"{prefix}@")]
+        assert found, f"onepipeline {ONEPIPELINE.ref} publishes no {prefix} schema"
+        latest = max(found, key=lambda entry: int(str(entry["id"]).rsplit("@", 1)[1]))
+        schema = latest["schema"]
+        assert isinstance(schema, dict)
+        return schema
+
+    labels_schema = schema_of("agent.labels")
+    properties = labels_schema["properties"]
+    assert isinstance(properties, dict)
+    reserved = set(properties)
+    engine_labels = set(ENGINE_LABEL.findall(_source(ONEPIPELINE, "agents.rs")))
+    reply = _published_schema("reply-envelope-v3.schema.json")
+    command_schema = {"$ref": "#/$defs/Command", "$defs": reply["$defs"]}
+    operations = _operation_fields()
+    envelopes = _built_envelopes(settled_run_root)
+    assert {envelope["kind"] for envelope in envelopes} >= {
+        "member-heartbeat",
+        "edit-committed",
+        "node-dispatched",
+        "node-settled",
+    }
+    for envelope in envelopes:
+        labels = envelope["labels"]
+        assert isinstance(labels, dict)
+        jsonschema.validate(labels, labels_schema)
+        extras = set(labels) - reserved
+        assert extras <= engine_labels, (
+            f"{PROBE_RUN_ROOT.name} stamps {sorted(extras - engine_labels)} on a "
+            f"{envelope['kind']!r} envelope, which onepipeline {ONEPIPELINE.ref} declares "
+            f"no `*_LABEL` for; it declares {sorted(engine_labels)}"
+        )
+        if envelope["source"] != "pipeline":
+            continue
+        jsonschema.validate(envelope["payload"], schema_of(f"agent.pipeline.{envelope['kind']}"))
+    (committed,) = _journalled_payloads(settled_run_root, "edit-committed")
+    jsonschema.validate(committed["command"], command_schema)
+    composed_operations = committed["operations"]
+    assert isinstance(composed_operations, list)
+    assert committed["operation_kinds"] == [operation["kind"] for operation in composed_operations]
+    for operation in composed_operations:
+        declared = operations.get(operation["kind"])
+        assert declared is not None, (
+            f"{PROBE_RUN_ROOT.name} journals a {operation['kind']!r} operation, which "
+            f"onepipeline {ONEPIPELINE.ref}'s `Operation` does not declare"
+        )
+        assert set(operation) - {"kind"} == declared, (
+            f"{PROBE_RUN_ROOT.name}'s {operation['kind']!r} operation carries "
+            f"{sorted(set(operation) - {'kind'})} while onepipeline {ONEPIPELINE.ref} "
+            f"declares {sorted(declared)}"
+        )
+        if isinstance(operation.get("node"), dict):
+            names = {field.name for field in _declared_fields(ONEPIPELINE, "plan.rs", "Node")}
+            assert set(operation["node"]) <= names
+
+
+# llmlint: ignore-end[shell_test_tiers_stay_split, test_tiers_split_by_project_not_by_marker]
 
 
 # llmlint: ignore-block[shell_test_tiers_stay_split] This helper and the test it serves
