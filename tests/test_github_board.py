@@ -19,6 +19,7 @@ from github_board import (
     COPY_BATCHES,
     COPY_ORIGIN_SLOTS,
     COPY_WIDE_SLOTS,
+    COPY_WRITE_SLOTS,
     MEASURED_PLACEMENT_SECONDS,
     REPOSITORY_NODE_IDS,
     REQUEST_KINDS,
@@ -35,6 +36,7 @@ from github_board import (
     copy_batch_drift,
     copy_read_drift,
     request_latency_ms,
+    unanswered_selections,
 )
 
 
@@ -295,3 +297,120 @@ def test_a_project_member_listing_is_charged_as_one_items_read_and_a_batched_rea
         _Operation.ORIGIN_LOOKUPS_WITH_MEMBERS,
         _Operation.CREATED_BOARD_ITEMS,
     }
+
+
+def test_a_selection_the_answer_omits_is_named_by_its_path() -> None:
+    """Each field a document selects is owed, through fragments, aliases and lists.
+
+    A spread, an inline fragment on the answered type and an aliased field are each walked; a
+    field answered `null` is answered; a selection its `@include` or `@skip` leaves out, or an
+    inline fragment on another type, is not owed.
+    """
+    document = (
+        "query($id:ID!,$more:Boolean!){node(id:$id){__typename ...Held "
+        '... on Issue{edges:blockedBy(first:5,after:"a{b"){nodes{id}} '
+        "extra @include(if:$more) gone @skip(if:true)} ... on DraftIssue{draft}}} "
+        "fragment Held on Issue{id title}"
+    )
+    whole = {
+        "node": {
+            "__typename": "Issue",
+            "id": "I_1",
+            "title": None,
+            "edges": {"nodes": [{"id": "I_2"}, {"id": "I_3"}]},
+        }
+    }
+
+    assert unanswered_selections(document, {"more": False}, whole) == []
+    assert unanswered_selections(document, {"more": True}, whole) == ["node.extra"]
+    no_edge = {"node": {**whole["node"], "edges": {"nodes": [{"id": "I_2"}, {}]}}}
+    assert unanswered_selections(document, {"more": False}, no_edge) == ["node.edges.nodes[1].id"]
+    no_spread = {"node": {key: value for key, value in whole["node"].items() if key != "title"}}
+    assert unanswered_selections(document, {"more": False}, no_spread) == ["node.title"]
+    # A union's member names no `__typename`: it owes the fragment whose fields it answers.
+    union = "query{values{nodes{... on Text{text field{id}} ... on Select{name field{id}}}}}"
+    answered = {"values": {"nodes": [{"text": "t", "field": {"id": "F"}}, {"name": "n"}]}}
+    assert unanswered_selections(union, {}, answered) == ["values.nodes[1].field"]
+
+
+def _at(answered: object, *path: str) -> object:
+    """What ``answered`` holds at ``path``, each step narrowed to the object it reads."""
+    for step in path:
+        assert isinstance(answered, dict), (step, answered)
+        answered = answered[step]
+    return answered
+
+
+def _created(board: _Board, title: str, parent: str | None = None) -> str:
+    """The node id of an issue created on ``board``, filed under ``parent`` when one is named."""
+    payload: dict[str, object] = {
+        "repositoryId": REPOSITORY_NODE_IDS[CONFIGURED_REPOSITORY],
+        "title": title,
+        "body": "",
+    }
+    if parent is not None:
+        payload["parentIssueId"] = parent
+    return str(_at(board.create_issue({"input": payload}), "data", "createIssue", "issue", "id"))
+
+
+def test_a_members_listing_answers_the_project_and_each_member_with_what_blocks_it() -> None:
+    """The board answers a listing's project issue and every member whole, `blockedBy` too."""
+    board = _Board()
+    project_id = _created(board, "p")
+    first, second = (_created(board, title, project_id) for title in ("a", "b"))
+    board.add_blocked_by({"input": {"issueId": second, "blockingIssueId": first}})
+    document = (
+        "query($id:ID!){node(id:$id){__typename ...Held ... on Issue{"
+        "blockedBy(first:5){nodes{id}pageInfo{hasNextPage endCursor}} "
+        "subIssues(first:23){pageInfo{hasNextPage endCursor} nodes{__typename ...Held "
+        "... on Issue{blockedBy(first:5){nodes{id}pageInfo{hasNextPage endCursor}}}}}}}} "
+        "fragment Held on Issue{id title body parent{id} subIssuesSummary{total}}"
+    )
+    data = _at(board.sub_issues_response(project_id), "data")
+
+    assert unanswered_selections(document, {"id": project_id}, data) == []
+    assert _at(data, "node", "id") == project_id
+    members = _at(data, "node", "subIssues", "nodes")
+    assert isinstance(members, list)
+    blockers = {_at(member, "id"): _at(member, "blockedBy", "nodes") for member in members}
+    assert blockers == {first: [], second: [board._issue(first).content()]}
+    # The answer the double gave before it answered the listing whole is named, field by field.
+    listing = _at(data, "node", "subIssues")
+    assert isinstance(listing, dict)
+    bare = {"node": {"__typename": "Issue", "subIssues": listing | {"nodes": []}}}
+    assert "node.id" in unanswered_selections(document, {"id": project_id}, bare)
+    assert "node.blockedBy" in unanswered_selections(document, {"id": project_id}, bare)
+
+
+def test_a_re_copys_aliased_issue_updates_apply_each_sent_slot_as_one_write() -> None:
+    """The store's `update<n>` batch is its own operation, and each sent slot one issue update."""
+    slots = "".join(
+        f" update{n}:updateIssue(input:$update{n}) @include(if:$send{n}){{issue{{id}}}}"
+        for n in range(COPY_WRITE_SLOTS)
+    )
+    document = f"mutation{{{slots}}}"
+    request = _GraphQLRequest(document, {}, 0.0)
+    assert request.operation is _Operation.UPDATE_ISSUES
+    assert copy_batch_drift(_Operation.UPDATE_ISSUES, document) == []
+
+    board = _Board()
+    ids = [_created(board, title) for title in ("a", "b", "c")]
+    variables: dict[str, object] = {
+        f"update{n}": {"id": ids[min(n, 1)], "body": f"body {n}"} for n in range(COPY_WRITE_SLOTS)
+    }
+    variables |= {f"send{n}": n < 2 for n in range(COPY_WRITE_SLOTS)}
+    answered = board.write_batch(
+        COPY_BATCHES[_Operation.UPDATE_ISSUES], {_Operation.UPDATE_ISSUE: board.update_issue}
+    )(variables)
+
+    assert answered == {
+        "data": {
+            "update0": {"issue": {"id": ids[0]}},
+            "update1": {"issue": {"id": ids[1]}},
+        }
+    }
+    assert [board._issue(issue).body for issue in ids] == ["body 0", "body 1", ""]
+    assert (
+        request_latency_ms(_GraphQLRequest(document, variables, 0.0))
+        == (REQUEST_LATENCY_MS[RequestKind.ALIASED_MUTATIONS])
+    )

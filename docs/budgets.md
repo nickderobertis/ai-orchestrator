@@ -40,9 +40,9 @@ for the file's shape. This page restates none of it beyond the keys a plan's bud
   states. **A time target is enforced only in CI, where measurement is consistent**, and
   this repository has no CI, so on this host a seconds budget is labelled `host-variable`:
   still measured on every check and reported with its actual, budget, headroom and host
-  conditions, and over it warns rather than refuses. `plan-approval-seconds` and `gate-time`
-  carry it; `own-sessions-read-seconds` predates the rule and is strict until it is
-  relabelled. The hook reads the label on the
+  conditions, and over it warns rather than refuses. `plan-approval-seconds`, the three
+  `plan-copy-seconds-*` budgets and `gate-time` carry it; `own-sessions-read-seconds`
+  predates the rule and is strict until it is relabelled. The hook reads the label on the
   root file; a project's uncached `budgets-host` target (`scripts/budgets-host.sh`) reads it
   on the project's `host` budgets, where an errored measurement still fails, and a
   `host-variable` budget is always labelled `host` too, so the cached `budgets` target never

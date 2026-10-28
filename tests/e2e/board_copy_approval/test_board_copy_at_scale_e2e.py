@@ -28,11 +28,20 @@ Each recipe is also held to the exact store invocations it makes, by the test-on
 audit: a copy reads the plan's record, its tasks, their edges and its documents once each and
 then copies it, and an approval reads its board copy once.
 
+The copies run under this checkout's own store declarations — the plan drafted in the
+`authoring` source declared `visibility: private`, copied onto `plans` with its cache on and
+every public write screened — and by the double's request log each holds the adopted store's
+copy fixes: the first copy asks every origin in one batched read-ahead and none alone, no
+`document copy` lists its project's members, neither re-copy re-reads a member's edges or
+details its members listing carried, and the changed copy's two issue updates go out as one
+aliased mutation. Every members listing is held to answering each field the store's query, as
+sent, selects.
+
 `plan-approval-seconds` is the approval's real elapsed time plus the GitHub latency the
 copy-speed spike measured for each request the double logged (`REQUEST_LATENCY_MS`), recorded
 per store call by the journey the uncached `test-host` target runs alone, because a wall clock a
-cache replayed would be another moment's; the same journey times and prints each copy the same
-way, whose seconds budgets the plan-store adoption that is to meet them registers. Beside the
+cache replayed would be another moment's; the same journey records each copy's seconds the same
+way, under `plan-copy-seconds-first`, `-changed` and `-unchanged`. Beside the
 figure the journey records where its seconds went — each store invocation from launch to
 reaping, the store's start-up timed by a trivial invocation, the program outside the store, the
 recipe's steps outside the program, and the network round trips charged — and the CPU seconds
@@ -62,6 +71,7 @@ from github_board import (
     AUTHORING_ROOT_ENV,
     AUTHORING_SOURCE,
     BOARD,
+    COPY_BATCHES,
     MEASURED_PLACEMENT_SECONDS,
     PLANS_BOARD_SCALE,
     REQUEST_LATENCY_MS,
@@ -70,10 +80,13 @@ from github_board import (
     _GitHubFixture,
     _GraphQLRequest,
     _Issue,
+    _Operation,
     _request_points,
     _serving_board,
+    _write_inputs,
     populate,
     request_latency_ms,
+    unanswered_selections,
 )
 from project_fixtures import GraphImage, designed, reviewed
 from test_board_copy_design_approval_e2e import (
@@ -504,6 +517,7 @@ def _copied_and_approved(
     drafted = _drafted(root, monkeypatch)
     with _serving_board(placement=MEASURED_PLACEMENT_SECONDS) as remote:
         on_the_board = {**drafted.environment, **remote}
+        _the_store_reads_the_hosts_own_declarations(on_the_board)
         populate(BOARD, size)
         assert len(BOARD.issues) == size, len(BOARD.issues)
         copies = [_copy(root, on_the_board)]
@@ -724,6 +738,131 @@ def _the_copy_makes_only_its_two_calls(copied: _Copied) -> None:
     assert sum(len(call.requests) for call in sent) == len(copied.run.requests)
 
 
+def _store_calls_of(copied: _Copied, verb: tuple[str, str]) -> list[_GraphQLRequest]:
+    """Every request the copy's store call ``verb`` sent the board."""
+    sent = [
+        call.requests
+        for call, launch in zip(_store_calls(copied.run), copied.run.calls, strict=True)
+        if tuple(launch.argv[:2]) == verb
+    ]
+    assert len(sent) == 1, (verb, [call.argv for call in copied.run.calls])
+    return sent[0]
+
+
+def _the_store_reads_the_hosts_own_declarations(environment: Mapping[str, str]) -> None:
+    """The copies run under this checkout's real declarations, as the store resolves them.
+
+    The plan is drafted in the `authoring` source this host declares `visibility: private`, and
+    copied onto `plans` with that board's cache on and every public write screened — the shape
+    onetaskgraph's own scenario mirrors, read here off the store rather than restated.
+    """
+    shown = subprocess.run(
+        [str(REPO_ROOT / ".venv" / "bin" / "onetaskgraph"), "config", "show", "--json"],
+        cwd=REPO_ROOT,
+        env={**environment, "ONETASKGRAPH_INTERACTIVE": "false"},
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+    assert shown.returncode == 0, shown.stdout + shown.stderr
+    settings = {str(entry["key"]): entry for entry in json.loads(shown.stdout)["settings"]}
+    declared = REPO_ROOT / "onetaskgraph.yaml"
+    for key, value in (
+        (f"sources.{AUTHORING_SOURCE}.visibility", "private"),
+        (f"sources.{BOARD_SOURCE}.visibility", "public"),
+        (f"sources.{BOARD_SOURCE}.cache.enabled", True),
+        (
+            "write_policy.check_command",
+            ["onevcs", "boundary", "check", "--destination", "public", "--input", "-"],
+        ),
+    ):
+        assert settings[key]["value"] == value, settings.get(key)
+        assert settings[key]["origin"] == {"layer": "file", "path": str(declared)}, settings[key]
+
+
+def _the_first_copy_reads_origins_ahead(first: _Copied) -> None:
+    """The first copy asks every origin in the batched read-ahead, and none of them alone.
+
+    Its `project copy` opens with one batched origin read; no single origin lookup follows it
+    in either store call, so not one origin that read answered is asked again.
+    """
+    project = _store_calls_of(first, ("project", "copy"))
+    assert project and project[0].operation is _Operation.ORIGIN_LOOKUPS, _by_operation(project)
+    single = [r for r in first.run.requests if r.operation is _Operation.ORIGIN_LOOKUP]
+    assert single == [], _by_operation(first.run.requests)
+
+
+def _the_document_copy_pins_no_members(copied: _Copied) -> None:
+    """A `document copy` sends no members listing of its project, on any copy."""
+    document = _store_calls_of(copied, ("document", "copy"))
+    assert document, _by_operation(copied.run.requests)
+    assert [r for r in document if r.operation is _Operation.SUB_ISSUES] == [], _by_operation(
+        document
+    )
+
+
+#: What a re-copy never sends once its members listing carried every member: a read of one
+#: member's edges (the store's `ISSUE_DEPENDS_ON` or `ISSUE_DEPENDENCIES`, both answered here as
+#: one operation) or a batched re-read of the members' details.
+RE_READS = {_Operation.DEPENDENCIES, _Operation.ISSUE_COPY_DETAILS}
+
+
+def _the_recopy_trusts_its_listing(copied: _Copied) -> None:
+    """A re-copy lists its project's members once, and re-reads no member it listed."""
+    sent = _by_operation(copied.run.requests)
+    assert sent[str(_Operation.SUB_ISSUES)] == 1, sent
+    assert not RE_READS & {r.operation for r in copied.run.requests}, sent
+
+
+def _the_changed_copy_batches_its_updates(changed: _Copied, unchanged: _Copied) -> None:
+    """The changed copy's two issue updates go out as one aliased mutation; unchanged, none.
+
+    One `update<n>` batch sending two slots — the regenerated task's body and its project's
+    review record — and no single issue update beside it.
+    """
+    updates = [r for r in changed.run.requests if r.is_mutation]
+    assert [r.operation for r in updates] == [_Operation.UPDATE_ISSUES], _by_operation(updates)
+    (part,) = COPY_BATCHES[_Operation.UPDATE_ISSUES]
+    assert len(part.sent(updates[0].variables)) == 2, updates[0].variables
+    # Each aliased update is one issue write, as a single update would have been.
+    written = _write_inputs(_Operation.UPDATE_ISSUE, changed.run.requests)
+    assert len(written) == 2, written
+    assert changed.landed[REVISED.title].content_id in {update["id"] for update in written}
+    assert [r for r in unchanged.run.requests if r.is_mutation] == [], _by_operation(
+        unchanged.run.requests
+    )
+
+
+def _the_listings_answer_what_they_select(recipes: list[_Run]) -> None:
+    """Every members listing the double answered answers each field the store's query selects.
+
+    Read off the query the installed store sent, so a release selecting a field the double
+    leaves out fails here naming it, rather than reading to the store as members to re-read.
+    """
+    listings = [r for run in recipes for r in run.requests if r.operation is _Operation.SUB_ISSUES]
+    assert listings, "no members listing reached the board to check"
+    for listing in listings:
+        assert isinstance(listing.answered.data, dict), listing.answered
+        assert listing.answered.data.get("node"), listing.variables
+        omitted = unanswered_selections(listing.query, listing.variables, listing.answered.data)
+        assert omitted == [], omitted
+
+
+def _the_copies_send_only_what_the_store_needs(scaled: _Scaled) -> None:
+    """The request-log claims the adopted store's copy fixes make, on this host's double."""
+    first, changed, unchanged = scaled.copies
+    _the_listings_answer_what_they_select(
+        [copied.run for copied in scaled.copies] + [scaled.approval]
+    )
+    _the_first_copy_reads_origins_ahead(first)
+    for copied in scaled.copies:
+        _the_document_copy_pins_no_members(copied)
+    for copied in (changed, unchanged):
+        _the_recopy_trusts_its_listing(copied)
+    _the_changed_copy_batches_its_updates(changed, unchanged)
+
+
 STARTUP_SAMPLES = 5
 
 
@@ -858,6 +997,7 @@ def test_copying_and_approving_a_plan_costs_the_same_requests_on_any_size_of_boa
             _the_copy_makes_only_its_two_calls(copied)
             _the_copy_reads_the_plan_once(copied)
         _the_revisions_landed_in_place(scaled[size])
+        _the_copies_send_only_what_the_store_needs(scaled[size])
         _the_approval_admits_the_copy(scaled[size])
         _the_approval_makes_only_its_four_calls(scaled[size])
         _the_approval_reads_the_plan_once(scaled[size])
@@ -899,14 +1039,14 @@ def test_copying_and_approving_a_plan_costs_the_same_requests_on_any_size_of_boa
 # cache's. The journey above cannot be that target's: it also copies, re-copies and approves at
 # 20,000 items, and its `test` target is cached. So this repeats the 2,000-item copies and
 # approval to time them, and records nothing the journey above does.
-#: What each timed copy is printed as, in the order :func:`_copied_and_approved` makes them:
-#: the first copy, the re-copy after one task was regenerated, and the unchanged re-copy. Their
-#: seconds budgets are registered by the plan-store adoption that is to meet them, not here.
-COPY_RUNS = (
-    "copy-plan first",
-    "copy-plan changed",
-    "copy-plan unchanged",
-)
+#: What each timed copy is printed as, and the seconds budget it is recorded under, in the order
+#: :func:`_copied_and_approved` makes them: the first copy, the re-copy after one task was
+#: regenerated, and the unchanged re-copy.
+COPY_RUNS = {
+    "copy-plan first": "plan-copy-seconds-first",
+    "copy-plan changed": "plan-copy-seconds-changed",
+    "copy-plan unchanged": "plan-copy-seconds-unchanged",
+}
 
 
 def test_approving_a_plan_at_the_plans_boards_scale_records_the_time_a_person_waits(
@@ -926,13 +1066,15 @@ def test_approving_a_plan_at_the_plans_boards_scale_records_the_time_a_person_wa
         _the_plan_landed_whole(copied, scaled)
         _the_copy_reads_the_plan_once(copied)
     _the_revisions_landed_in_place(scaled)
+    _the_copies_send_only_what_the_store_needs(scaled)
     _the_approval_admits_the_copy(scaled)
     _the_approval_makes_only_its_four_calls(scaled)
     _the_approval_reads_the_plan_once(scaled)
 
     startup = _store_startup(root, _rendering_environment(root / "authoring"))
     print(f"store start-up and loading: {startup:.3f}s per invocation")
-    for named, copied in zip(COPY_RUNS, scaled.copies, strict=True):
+    for (named, budget), copied in zip(COPY_RUNS.items(), scaled.copies, strict=True):
+        _recorded_seconds(budget, copied.run, startup)
         _printed_cost(copied.run, named)
     _recorded_seconds("plan-approval-seconds", scaled.approval, startup)
     _printed_cost(scaled.approval, "plan-approval-seconds")

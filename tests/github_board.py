@@ -617,7 +617,7 @@ class _Issue:
                         "fieldValues": self.field_values(),
                     }
                 ],
-                "pageInfo": {"hasNextPage": False},
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
             }
         }
 
@@ -1006,16 +1006,12 @@ class _Board:
             if issue.content_id == node_id:
                 board = issue.held_by
                 project = {"id": board.node_id, "number": board.number, "fields": board._fields()}
-                blockers = [self._issue(held).content() for held in issue.blocked_by]
                 return {
                     "data": {
                         "node": issue.board_issue()
                         | {
                             "boards": {"nodes": [{"project": project}]},
-                            "blockedBy": {
-                                "nodes": blockers,
-                                "pageInfo": {"hasNextPage": False, "endCursor": None},
-                            },
+                            "blockedBy": self._blockers(issue),
                         }
                     }
                 }
@@ -1092,23 +1088,40 @@ class _Board:
         return {"data": data, **({"errors": errors} if errors else {})}
 
     def sub_issues_response(self, node_id: object) -> dict[str, object]:
-        """One issue's sub-issues, which is how this board reports a project's tasks."""
+        """One issue's sub-issues, which is how this board reports a project's tasks.
+
+        Answered as GitHub answers the store's members listing: the project issue's own fields
+        and what blocks it, beside each member with its own fields and what blocks it, every
+        one of which the store's query selects. A listing answered without them reads to the
+        store as members it has to read again, one by one.
+        """
         for issue in self.issues:
             if issue.content_id != node_id:
                 continue
             children = [held for held in self.issues if held.parent_id == issue.content_id]
             return {
                 "data": {
-                    "node": {
-                        "__typename": "Issue",
+                    "node": issue.board_issue()
+                    | {
+                        "blockedBy": self._blockers(issue),
                         "subIssues": {
                             "pageInfo": {"hasNextPage": False, "endCursor": None},
-                            "nodes": [child.board_issue() for child in children],
+                            "nodes": [
+                                child.board_issue() | {"blockedBy": self._blockers(child)}
+                                for child in children
+                            ],
                         },
                     }
                 }
             }
         return {"data": {"node": None}}
+
+    def _blockers(self, issue: _Issue) -> dict[str, object]:
+        """The one page of what blocks ``issue``, as a `blockedBy` connection answers it."""
+        return {
+            "nodes": [self._issue(held).content() for held in issue.blocked_by],
+            "pageInfo": {"hasNextPage": False, "endCursor": None},
+        }
 
     def dependencies_response(self, node_id: object) -> dict[str, object]:
         """One issue's dependency edges, both ways, as the copy wrote them."""
@@ -1439,11 +1452,7 @@ class _Board:
         for n in slots:
             detail = self._detail(variables[f"id{n}"], comments=True)
             if detail is not None:
-                blockers = self._issue(detail["id"]).blocked_by
-                detail["blockedBy"] = {
-                    "nodes": [self._issue(held).content() for held in blockers],
-                    "pageInfo": {"hasNextPage": False, "endCursor": None},
-                }
+                detail["blockedBy"] = self._blockers(self._issue(detail["id"]))
             answer[f"i{n}"] = detail
         # Which issues the project `$project` holds, read in the same request while
         # `$children` asks: what a project copy's orphan check is answered by.
@@ -1695,6 +1704,231 @@ class _Answered:
     #: For a search, how many issues matched in all, which is what says whether the page
     #: it asked for was wider than the answer needed; `None` for anything else.
     matched: int | None = None
+    #: The document's `data`, as the fixture sent it; `None` until it answers, or when it
+    #: answered with no data.
+    data: object = None
+
+
+#: One GraphQL token: a quoted string, a spread, a name or variable, or one punctuator.
+_GRAPHQL_TOKEN = re.compile(
+    r'"(?:[^"\\]|\\.)*"|\.\.\.|\$?[_A-Za-z][_0-9A-Za-z]*|-?\d[\d.]*|[{}():@!=\[\],]'
+)
+
+
+class _Directive(StrEnum):
+    """The two directives that decide whether a selection is answered at all."""
+
+    INCLUDE = "include"
+    SKIP = "skip"
+
+
+@dataclass(frozen=True)
+class _Condition:
+    """An `@include` or `@skip` on a selection, and the `if` argument it reads."""
+
+    directive: _Directive
+    #: A variable, spelled `$<name>`, or a literal `true` or `false`.
+    argument: str
+
+    def holds(self, variables: Mapping[str, object]) -> bool:
+        """Whether the selection it sits on is selected under ``variables``."""
+        if self.argument.startswith("$"):
+            value = bool(variables.get(self.argument[1:]))
+        else:
+            value = self.argument == "true"
+        return value if self.directive is _Directive.INCLUDE else not value
+
+
+@dataclass(frozen=True)
+class _Field:
+    """A field, answered under ``key`` — its alias or its name — with its own selection set."""
+
+    key: str
+    condition: _Condition | None
+    children: tuple[_Selection, ...]
+
+
+@dataclass(frozen=True)
+class _Spread:
+    """A named fragment spread, `...Name`."""
+
+    fragment: str
+    condition: _Condition | None
+
+
+@dataclass(frozen=True)
+class _Inline:
+    """An inline fragment, applying on the type ``on`` names or, naming none, on any."""
+
+    on: str | None
+    condition: _Condition | None
+    children: tuple[_Selection, ...]
+
+
+#: One selection of a GraphQL selection set, as :func:`unanswered_selections` walks it.
+type _Selection = _Field | _Spread | _Inline
+
+
+class _SelectionParser:
+    """Reads a GraphQL document's operation and its fragments into selection trees.
+
+    Arguments are read past rather than kept, because what a selection answers under does not
+    depend on them; a directive is kept only as `@include` or `@skip`, the two that decide
+    whether a selection is answered at all.
+    """
+
+    def __init__(self, document: str) -> None:
+        self.tokens = _GRAPHQL_TOKEN.findall(document)
+        self.at = 0
+
+    def peek(self) -> str | None:
+        return self.tokens[self.at] if self.at < len(self.tokens) else None
+
+    def take(self, expected: str | None = None) -> str:
+        token = self.peek()
+        if token is None or (expected is not None and token != expected):
+            raise ValueError(f"GraphQL document: expected {expected!r}, read {token!r}")
+        self.at += 1
+        return token
+
+    def past_balanced(self, opening: str, closing: str) -> list[str]:
+        """Read past one balanced group opening at ``opening``, answering its inner tokens."""
+        self.take(opening)
+        inner: list[str] = []
+        depth = 1
+        while depth:
+            token = self.take()
+            depth += {opening: 1, closing: -1}.get(token, 0)
+            if depth:
+                inner.append(token)
+        return inner
+
+    def document(self) -> tuple[tuple[_Selection, ...], dict[str, tuple[_Selection, ...]]]:
+        """The operation's selection set and each fragment's, by fragment name."""
+        operation: tuple[_Selection, ...] | None = None
+        fragments: dict[str, tuple[_Selection, ...]] = {}
+        while (token := self.peek()) is not None:
+            match token:
+                case "fragment":
+                    self.take()
+                    name = self.take()
+                    self.take("on")
+                    self.take()
+                    fragments[name] = self.selections()
+                case "query" | "mutation" | "subscription":
+                    self.take()
+                    while self.peek() not in ("{", "(", None):
+                        self.take()
+                    if self.peek() == "(":
+                        self.past_balanced("(", ")")
+                    operation = self.selections()
+                case _:
+                    operation = self.selections()
+        if operation is None:
+            raise ValueError("GraphQL document carries no operation")
+        return operation, fragments
+
+    def condition(self) -> _Condition | None:
+        """Read past the directives here, answering the `@include` or `@skip` among them."""
+        decided: _Condition | None = None
+        while self.peek() == "@":
+            self.take()
+            name = self.take()
+            arguments = self.past_balanced("(", ")") if self.peek() == "(" else []
+            match name, arguments:
+                case (("include" | "skip"), ["if", ":", argument]):
+                    decided = _Condition(_Directive(name), argument)
+        return decided
+
+    def selections(self) -> tuple[_Selection, ...]:
+        self.take("{")
+        selected: list[_Selection] = []
+        while (token := self.take()) != "}":
+            match token, self.peek():
+                case "...", "on":
+                    self.take()
+                    on = self.take()
+                    condition = self.condition()
+                    selected.append(_Inline(on, condition, self.selections()))
+                case "...", "{" | "@":
+                    condition = self.condition()
+                    selected.append(_Inline(None, condition, self.selections()))
+                case "...", _:
+                    selected.append(_Spread(self.take(), self.condition()))
+                case _:
+                    key = token
+                    if self.peek() == ":":
+                        self.take()
+                        self.take()
+                    if self.peek() == "(":
+                        self.past_balanced("(", ")")
+                    condition = self.condition()
+                    children = self.selections() if self.peek() == "{" else ()
+                    selected.append(_Field(key, condition, children))
+        return tuple(selected)
+
+
+def _keys(selection: _Inline) -> set[str]:
+    """The response keys ``selection``'s own selection set names directly."""
+    return {child.key for child in selection.children if isinstance(child, _Field)}
+
+
+def unanswered_selections(query: str, variables: Mapping[str, object], data: object) -> list[str]:
+    """Each field ``query`` selects that ``data`` does not answer, as a dotted path.
+
+    Read off the document the store sent rather than off a list kept here, so a release whose
+    query selects one field more is a path named here the moment a journey meets it. A field
+    answered `null` is answered; a list is walked element by element; an inline fragment
+    applies where the object answers its `__typename` as that type, or, naming none, answers a
+    field that fragment alone among its siblings selects — a union's member, such as one board
+    field value, answers only the fragment its type matches; and a selection its `@include` or
+    `@skip` leaves out is not owed.
+    """
+    operation, fragments = _SelectionParser(query).document()
+    missing: list[str] = []
+
+    def applies(
+        inline: _Inline, siblings: tuple[_Selection, ...], answered: dict[str, object]
+    ) -> bool:
+        typename = answered.get("__typename")
+        if inline.on is None or typename == inline.on:
+            return True
+        others = {
+            key
+            for sibling in siblings
+            if isinstance(sibling, _Inline) and sibling is not inline and sibling.on is not None
+            for key in _keys(sibling)
+        }
+        return typename is None and bool((_keys(inline) - others) & answered.keys())
+
+    def walk(selections: tuple[_Selection, ...], answered: object, path: str) -> None:
+        match answered:
+            case None:
+                return
+            case list():
+                for index, element in enumerate(answered):
+                    walk(selections, element, f"{path}[{index}]")
+                return
+            case dict():
+                pass
+            case _:
+                missing.append(f"{path} (answered {answered!r}, not an object)")
+                return
+        for selection in selections:
+            if selection.condition is not None and not selection.condition.holds(variables):
+                continue
+            match selection:
+                case _Spread(fragment=fragment):
+                    walk(fragments[fragment], answered, path)
+                case _Inline(children=children) if applies(selection, selections, answered):
+                    walk(children, answered, path)
+                case _Field(key=key) if key not in answered:
+                    missing.append(f"{path}.{key}".lstrip("."))
+                case _Field(key=key, children=children) if children:
+                    walk(children, answered[key], f"{path}.{key}")
+
+    walk(operation, data, "")
+    return missing
 
 
 @dataclass(frozen=True)
@@ -1829,6 +2063,7 @@ class _Operation(StrEnum):
     CREATE_ISSUES = "createIssues"
     WRITE_FIELD_VALUES = "writeFieldValues"
     CLOSE_ISSUES = "closeIssues"
+    UPDATE_ISSUES = "updateIssues"
     ADD_BLOCKED_BYS = "addBlockedBys"
     WRITE_FIELDS_AND_EDGES = "writeFieldsAndEdges"
     DELETE_ISSUES = "deleteIssues"
@@ -1859,6 +2094,7 @@ _OPERATIONS: dict[str, _Operation] = {
     "$sendField0": _Operation.WRITE_FIELDS_AND_EDGES,
     "field0:updateProjectV2ItemFieldValue(": _Operation.WRITE_FIELD_VALUES,
     "close0:updateIssue(": _Operation.CLOSE_ISSUES,
+    "update0:updateIssue(": _Operation.UPDATE_ISSUES,
     "block0:addBlockedBy(": _Operation.ADD_BLOCKED_BYS,
     "delete0:deleteIssue(": _Operation.DELETE_ISSUES,
     # Before the sub-issue listing's marker and the item read's, both of which it carries: a
@@ -2045,6 +2281,11 @@ COPY_BATCHES: dict[_Operation, tuple[_BatchPart, ...]] = {
     _Operation.WRITE_FIELD_VALUES: (_FIELD_PART,),
     _Operation.CLOSE_ISSUES: (
         _BatchPart("close", "send", "updateIssue", _Operation.UPDATE_ISSUE, COPY_WRITE_SLOTS),
+    ),
+    # A re-copy's rewrites of the issues it already holds, each the input its own single
+    # update would have sent.
+    _Operation.UPDATE_ISSUES: (
+        _BatchPart("update", "send", "updateIssue", _Operation.UPDATE_ISSUE, COPY_WRITE_SLOTS),
     ),
     _Operation.ADD_BLOCKED_BYS: (_BLOCK_PART,),
     _Operation.WRITE_FIELDS_AND_EDGES: (
@@ -2238,7 +2479,9 @@ class _GitHubFixture(BaseHTTPRequestHandler):
             # before it reached the board for `before`.
             self.close_connection = True
             return
-        self._send(200, self._answer(request))
+        answer = self._answer(request)
+        request.answered.data = answer.get("data")
+        self._send(200, answer)
 
     def _send(self, status: int, payload: dict[str, object]) -> None:
         body = json.dumps(payload).encode()
@@ -3052,6 +3295,7 @@ REQUEST_PRICES: dict[_Operation, DocumentPrice] = {
     _Operation.CREATE_ISSUES: DocumentPrice("CREATE_ISSUES", 1),
     _Operation.WRITE_FIELD_VALUES: DocumentPrice("WRITE_FIELD_VALUES", 1),
     _Operation.CLOSE_ISSUES: DocumentPrice("CLOSE_ISSUES", 1),
+    _Operation.UPDATE_ISSUES: DocumentPrice("UPDATE_ISSUES", 1),
     _Operation.ADD_BLOCKED_BYS: DocumentPrice("ADD_BLOCKED_BYS", 1),
     _Operation.WRITE_FIELDS_AND_EDGES: DocumentPrice("WRITE_FIELDS_AND_EDGES", 1),
     _Operation.DELETE_ISSUES: DocumentPrice("DELETE_ISSUES", 1),
@@ -3120,6 +3364,7 @@ REQUEST_KINDS: dict[_Operation, RequestKind] = {
     _Operation.CREATE_ISSUES: RequestKind.ALIASED_MUTATIONS,
     _Operation.WRITE_FIELD_VALUES: RequestKind.ALIASED_MUTATIONS,
     _Operation.CLOSE_ISSUES: RequestKind.ALIASED_MUTATIONS,
+    _Operation.UPDATE_ISSUES: RequestKind.ALIASED_MUTATIONS,
     _Operation.ADD_BLOCKED_BYS: RequestKind.ALIASED_MUTATIONS,
     _Operation.WRITE_FIELDS_AND_EDGES: RequestKind.ALIASED_MUTATIONS,
     _Operation.DELETE_ISSUES: RequestKind.ALIASED_MUTATIONS,

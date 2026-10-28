@@ -5,10 +5,13 @@ through the plan store's own calls — the copy its `project copy` and `document
 approval its `project show`, `task list`, `document list` and guarded `document metadata set`
 — and the store measures exactly those calls in its own suite, with write screening on under a
 synthetic policy. So this host registers no copy points or writes budget and no approval
-points budget of its own: `tests/e2e/board_copy_approval/budgets.yaml` names the store's.
+points budget of its own: `tests/e2e/board_copy_approval/budgets.yaml` names the store's. The
+store also budgets the simulated seconds of the same three copies, which this host's own
+seconds budgets re-take on its real recipes, and its Python SDK's import CPU, which every
+`orchestrator` module importing the SDK pays.
 
 That hand-over holds only while the release this host adopts carries those budgets. These
-checks read the store's budget file at the tag `config/onetaskgraph.version` names, from the
+checks read the store's budget files at the tag `config/onetaskgraph.version` names, from the
 registered onetaskgraph checkout and fetching nothing, and fail on a pin naming a release that
 lacks any of them, registers one at another threshold, or accepts an overrun of it. The same
 checkout carries the measured placement delays its loopback board replays, which the host's
@@ -33,6 +36,8 @@ from orchestrator.root import REPO_ROOT
 ONETASKGRAPH = "github.com/nickderobertis/onetaskgraph"
 #: Where the store registers its GitHub board journeys' budgets.
 STORE_BUDGETS = "crates/onetaskgraph-github-projects-e2e/budgets.yaml"
+#: Where the store registers its Python SDK's budgets.
+SDK_BUDGETS = "sdks/python/budgets.yaml"
 #: Where the store's loopback board keeps the placement delays it replays.
 STORE_FIXTURES = "crates/onetaskgraph-e2e-support/src/fixtures.rs"
 #: The host's budgets file for the board-copy journeys, which names the store's budgets.
@@ -45,23 +50,44 @@ class Handed(NamedTuple):
     id: str
     threshold: float
     unit: str
+    #: The store's budgets file that registers it, at the pinned tag.
+    path: str = STORE_BUDGETS
+
+    @property
+    def quota(self) -> bool:
+        """Whether it budgets the board token's allowance, which this host budgets nowhere."""
+        return self.unit in ("points", "writes")
 
 
-#: The store's budgets for what these recipes spend, at the quota bars this host was promised:
-#: a first copy, a re-copy after one task's body changed and an unchanged re-copy of the
-#: 10-item plan, in GraphQL points; a first copy's content creations; and an approval's points.
+#: The store's budgets for what these recipes spend, at the bars this host was promised: a
+#: first copy, a re-copy after one task's body changed and an unchanged re-copy of the 10-item
+#: plan, in GraphQL points and in simulated seconds; a first copy's content creations; an
+#: approval's points; and the CPU seconds importing the store's Python SDK costs.
 HANDED_OVER = (
     Handed("github-plan-copy-points-first", 12, "points"),
     Handed("github-plan-copy-points-changed", 4, "points"),
     Handed("github-plan-copy-points-unchanged", 3, "points"),
     Handed("github-plan-copy-content-creations", 40, "writes"),
     Handed("github-approval-calls-points", 5, "points"),
+    Handed("github-plan-copy-seconds-first", 32, "seconds"),
+    Handed("github-plan-copy-seconds-changed", 8, "seconds"),
+    Handed("github-plan-copy-seconds-unchanged", 7, "seconds"),
+    Handed("sdk-import-cpu-seconds", 0.35, "seconds", SDK_BUDGETS),
 )
 
+#: The seconds budgets this host registers for the same recipes' real elapsed time.
+HOST_REGISTERED = [
+    "plan-approval-seconds",
+    "plan-copy-seconds-first",
+    "plan-copy-seconds-changed",
+    "plan-copy-seconds-unchanged",
+]
 
-def _at_the_pin(checkout: Path, path: str) -> str:
-    """``path`` as the release `config/onetaskgraph.version` names carries it."""
-    pin = (REPO_ROOT / "config" / "onetaskgraph.version").read_text(encoding="utf-8").strip()
+
+def _at_the_pin(checkout: Path, path: str, pin: str | None = None) -> str:
+    """``path`` as the release ``pin`` names carries it: by default, the adopted one."""
+    if pin is None:
+        pin = (REPO_ROOT / "config" / "onetaskgraph.version").read_text(encoding="utf-8").strip()
     shown = subprocess.run(
         ["git", "-C", str(checkout), "show", f"v{pin}:{path}"],
         capture_output=True,
@@ -83,8 +109,9 @@ def _store_checkout() -> Path:
     return checkouts[ONETASKGRAPH]
 
 
-def handover_gaps(registered: str) -> list[str]:
-    """What the store's budget file ``registered`` lacks of :data:`HANDED_OVER`, by budget."""
+def handover_gaps(registered: str, path: str = STORE_BUDGETS) -> list[str]:
+    """What the store's budget file ``path``, reading ``registered``, lacks of its share of
+    :data:`HANDED_OVER`, by budget."""
     document = yaml.safe_load(registered)
     entries = {
         entry["id"]: entry
@@ -92,7 +119,7 @@ def handover_gaps(registered: str) -> list[str]:
         if isinstance(entry, dict) and "id" in entry
     }
     gaps: list[str] = []
-    for handed in HANDED_OVER:
+    for handed in (handed for handed in HANDED_OVER if handed.path == path):
         entry = entries.get(handed.id)
         if entry is None:
             gaps.append(f"{handed.id} is not registered")
@@ -109,14 +136,40 @@ def handover_gaps(registered: str) -> list[str]:
     return gaps
 
 
+def _release_gaps(checkout: Path, pin: str | None = None) -> list[str]:
+    """What the release ``pin`` names lacks of :data:`HANDED_OVER`, across its budget files.
+
+    A file the release does not carry at all lacks every budget it was to register.
+    """
+    gaps: list[str] = []
+    for path in dict.fromkeys(handed.path for handed in HANDED_OVER):
+        try:
+            registered = _at_the_pin(checkout, path, pin)
+        except AssertionError:
+            registered = ""
+        gaps += [f"{path}: {gap}" for gap in handover_gaps(registered, path)]
+    return gaps
+
+
 @pytest.mark.reads_checkouts
 def test_the_adopted_store_registers_the_budgets_this_host_handed_its_quota_to() -> None:
-    """The pinned release budgets the copy's and the approval's quota at the promised bars."""
-    gaps = handover_gaps(_at_the_pin(_store_checkout(), STORE_BUDGETS))
+    """The pinned release budgets the copies, the approval and the SDK's import at the bars."""
+    gaps = _release_gaps(_store_checkout())
     assert gaps == [], (
         "this host registers no copy points, writes or approval points budget because the "
-        f"adopted onetaskgraph does, and its {STORE_BUDGETS} does not: {gaps}"
+        f"adopted onetaskgraph does, and the release lacks what it was handed: {gaps}"
     )
+
+
+#: A release of the store before its SDK registered `sdk-import-cpu-seconds`.
+BEFORE_THE_SDK_BUDGET = "0.12.5"
+
+
+@pytest.mark.reads_checkouts
+def test_the_registration_check_refuses_a_release_missing_a_handed_budget() -> None:
+    """A pin naming a release that lacks one of the budgets fails, naming it."""
+    gaps = _release_gaps(_store_checkout(), BEFORE_THE_SDK_BUDGET)
+    assert f"{SDK_BUDGETS}: sdk-import-cpu-seconds is not registered" in gaps, gaps
 
 
 def test_the_handover_check_refuses_a_release_missing_or_loosening_a_budget() -> None:
@@ -141,12 +194,17 @@ def test_the_handover_check_refuses_a_release_missing_or_loosening_a_budget() ->
 
 
 def test_the_host_budgets_file_names_the_store_budgets_and_registers_none_of_its_own() -> None:
-    """No host budget measures the copy's or the approval's quota; the header names the store's."""
+    """No host budget measures the copy's or the approval's quota; the header names the store's.
+
+    The host registers its recipes' seconds alone, each `host` and `host-variable`.
+    """
     text = HOST_BUDGETS.read_text(encoding="utf-8")
-    registered = [entry["id"] for entry in yaml.safe_load(text)["budgets"]]
-    assert registered == ["plan-approval-seconds"], registered
+    entries = yaml.safe_load(text)["budgets"]
+    assert [entry["id"] for entry in entries] == HOST_REGISTERED, entries
+    assert all(entry["labels"] == ["host", "host-variable"] for entry in entries), entries
     header = "".join(line for line in text.splitlines(keepends=True) if line.startswith("#"))
-    assert [handed.id for handed in HANDED_OVER if handed.id not in header] == [], header
+    quota = [handed.id for handed in HANDED_OVER if handed.quota]
+    assert [handed for handed in quota if handed not in header] == [], header
 
 
 @pytest.mark.reads_checkouts
