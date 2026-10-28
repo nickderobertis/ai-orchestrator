@@ -159,7 +159,11 @@ def copied(project: str, destination: str) -> plan_store.StoreProject:
             f"copied from {project}, so it is not this plan's copy and there is nothing "
             f"there to point a reviewer at"
         )
-    matched = stamped_copies(project, sources)
+    # A source the store withholds the stamp from can hold no stamped copy, and asking it for
+    # one would send that destination the private plan's own id, so it is never asked.
+    matched = stamped_copies(
+        project, [source for source in sources if not _origin_withheld(project, source)]
+    )
     if len(matched) > 1:
         named = ", ".join(sorted(str(held.qualified_id) for held in matched))
         raise OSError(

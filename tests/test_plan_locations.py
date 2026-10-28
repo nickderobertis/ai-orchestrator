@@ -220,6 +220,9 @@ def test_a_destination_holding_two_copies_of_one_plan_is_refused_and_names_both(
     every side afterwards.
     """
     _holds(monkeypatch, [_project("board:42"), _project("board:88")], link="board:42")
+    # Copies the store stamps with their origin: out of a source no visibility is declared
+    # for, as every copy was before the boundary, so the destination is asked for them.
+    monkeypatch.setattr(plan_store, "configured_settings", lambda: {})
 
     assert plan_locations.main([DRAFTED, "--in", "board"]) == plan_locations.UNREADABLE
     refusal = capsys.readouterr().err
@@ -288,6 +291,46 @@ def test_a_copy_out_of_a_private_source_is_found_by_its_link_alone(
     else:
         assert answered == plan_locations.UNREADABLE, printed.out
         assert f"does not record as copied from {DRAFTED}" in printed.err, printed.err
+
+
+def test_a_source_the_stamp_is_withheld_from_is_never_asked_for_a_stamped_copy(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The two-copy check asks no source for a copy stamped with a private plan's own id.
+
+    A copy out of a source declared private into one that is not carries no stamp, so that
+    source can hold no stamped copy, and the question would hand it the private plan's id: a
+    search naming it is what a public board would receive. A private destination is still
+    asked. The journey is `tests/e2e/screened_export/test_screened_export_e2e.py`, whose
+    public board receives no request naming the private plan.
+    """
+    _holds(
+        monkeypatch,
+        [_project("board:42", origin=None, location={"url": "https://example.invalid/42"})],
+        [_document("board:57", {"url": "https://example.invalid/57"})],
+        link="board:42",
+    )
+    monkeypatch.setattr(plan_store, "routed_sources", lambda _source: ("vault",))
+    monkeypatch.setattr(
+        plan_store,
+        "configured_settings",
+        lambda: {
+            "sources.authoring.visibility": "private",
+            "sources.board.visibility": "public",
+            "sources.vault.visibility": "private",
+        },
+    )
+    asked: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        plan_store,
+        "project_copies",
+        lambda source, origin: asked.append((source, origin)) or [],
+    )
+
+    answered = plan_locations.main([DRAFTED, "--in", "board"])
+
+    assert answered == plan_locations.OK, capsys.readouterr().err
+    assert asked == [("vault", DRAFTED)], asked
 
 
 def test_a_link_naming_a_project_the_store_cannot_show_is_refused_naming_the_plan(

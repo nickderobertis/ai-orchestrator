@@ -527,11 +527,12 @@ mkdir -p "$plan_directory" || fail "the plan directory $plan_directory could not
 # same default and override `plan_run_is_free` reads.
 runs_root=${!PLAN_RUNS_ROOT_ENV:-$PLAN_DEFAULT_RUNS_ROOT}
 
-#: What a planner of a mixed plan is told around the engine's guidance: the two decisions
-#: the engine's text leaves to this host — how a task here carries the engine's mixed
-#: context, and that the plan's own text goes where anyone can read it. The guidance itself
-#: is the engine's, printed by `onepipeline boundary guidance` and quoted whole, never
-#: restated here; `@GUIDANCE@` is where it goes.
+#: What a planner of a mixed plan is told around the engine's guidance: the three decisions
+#: the engine's text leaves to this host — which source the one private coordinating plan is
+#: written in, how a task here carries the engine's mixed context, and which of the plan's
+#: text reaches destinations anyone can read. The guidance itself is the engine's, printed by
+#: `onepipeline boundary guidance` and quoted whole, never restated here; `@GUIDANCE@` is
+#: where it goes.
 BOUNDARY_NOTE_TEMPLATE=$(
     cat <<'NOTE'
 ## Repository boundary
@@ -545,16 +546,23 @@ node any other way than the one below. This is the engine's own guidance, as
 
 How a plan of this host carries it:
 
+- Write the whole plan as one project in the `authoring` source, which is declared private:
+  every private and public task, the export edge, and the plan's own description and
+  documents. Create that project with `--classification private`, because the store files no
+  private task under a project it holds public; each task's own visibility stays its own. Its
+  board copy keeps that project as the plan's private home and files each
+  public task's neutral public view where its repository routes, so nothing is split into a
+  second plan and nothing on the plan sets a visibility.
 - Render every task of a node that names a repository with the engine's mixed context as
   its `boundary` answer: `--var 'boundary={"mixed": true, "clearance": "public"}'` for a
   public node, `"private"` for a private one. A node is public only when every repository
   it names answers `public` to `onevcs boundary inspect`. That context is what gives a
   public node's task its no-private-reference criterion and its appendix the boundary
   note.
-- Name the export directory, every public node's id, title and task, and the plan's own
-  description and documents in neutral, generic words. They are copied to destinations
-  anyone can read, so they name no private repository, project, path, identifier or
-  content — and no inventory of the repositories you inspected.
+- Name the export directory and every public node's id, title and task in neutral, generic
+  words. They reach destinations anyone can read, so they name no private repository,
+  project, path, identifier or content — and no inventory of the repositories you
+  inspected.
 NOTE
 )
 

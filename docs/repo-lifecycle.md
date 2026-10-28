@@ -45,7 +45,7 @@ host declares and check a Linear item's stored content against what the store wr
 the store to 0.11.1 and the `oneharness` CLI to 0.26.1. Plan copies preserve existing destination workflow decisions;
 launches omit withdrawn tasks and refuse dependencies on them; adoption can revise
 the per-item write-back budget. A live node addition copies only its member, without
-reading or rewriting the board project. The engine links onevcs 0.56.10,
+reading or rewriting the board project. The engine links onevcs 0.56.11,
 oneagentgraph 0.8.0 and onejudge 0.21.0, so their CLI pins follow it. The read API
 links that same engine and serves telemetry schema 26, reading every turn whole through
 the engine's transcript resolver, and timeline schema 14, describing each turn event.

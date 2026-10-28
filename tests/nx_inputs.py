@@ -873,6 +873,7 @@ class JourneyProject(NamedTuple):
 #: target keyed on the whole workspace, which only `workspace-copies` declares.
 E2E_JOURNEYS: tuple[JourneyProject, ...] = (
     JourneyProject("spike-brief", f"{E2E_ROOT}/spike_brief", "spikeBriefWorkspace"),
+    JourneyProject("screened-export", f"{E2E_ROOT}/screened_export", "screenedExportWorkspace"),
     JourneyProject("review-drafting", f"{E2E_ROOT}/review_drafting", "reviewDraftingWorkspace"),
     JourneyProject(
         "publish-and-landing", f"{E2E_ROOT}/publish_and_landing", "publishAndLandingWorkspace"

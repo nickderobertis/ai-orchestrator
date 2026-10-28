@@ -89,6 +89,7 @@
       "!{workspaceRoot}/tests/e2e/host_local_registration/test_*.py",
       "!{workspaceRoot}/tests/e2e/checks_wait/test_*.py",
       "!{workspaceRoot}/tests/e2e/spike_brief/test_*.py",
+      "!{workspaceRoot}/tests/e2e/screened_export/test_*.py",
       "!{workspaceRoot}/tests/e2e/review_drafting/test_*.py",
       "!{workspaceRoot}/tests/e2e/workspace_copies/test_*.py",
       "!{workspaceRoot}/tests/e2e/launch_monitor_observer/oneharness_resolved/**/*"

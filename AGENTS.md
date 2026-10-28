@@ -616,10 +616,10 @@ follow-up ticket records, say — goes in the host's phrase list,
 writes and `just repos-apply` does not install. Never list the term itself, and never edit a
 private repository's own declarations to the same end. Where a plan's home lands is the store's to decide from the repositories its tasks and
 its project name (`docs/orchestration.md`, *The public write boundary*), never yours. A plan
-naming any private repository has its home, its documents and every task in the private
-Linear source the host declares, each public-repository task seen on `plans` only as the
-store's neutral view under a `Public work` project; a task naming no repository never decides
-the home, and a copy that would
+naming any private repository is one private coordinating plan: its home holds every task, its
+documents and its export edge in the private source the host declares, each task keeps its own
+visibility with nothing set on the plan, and a public-repository task reaches `plans` only as a
+neutral view the store mirrors its status to; a task naming no repository never decides the home, and a copy that would
 put a private plan's content on a public destination is refused with nothing written, so a
 plan meant to keep its home on `plans` names a public repository. Approve and launch the home
 id `just finish-plan` reports, wherever it landed — for a Linear home `just approve-design

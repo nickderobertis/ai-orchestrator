@@ -34,6 +34,7 @@
     "planGuidanceWorkspace": [
       "{workspaceRoot}/pyproject.toml",
       "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/bun.lock",
       "{workspaceRoot}/AGENTS.md",
       "{workspaceRoot}/budgets.yaml",
       "{workspaceRoot}/justfile",

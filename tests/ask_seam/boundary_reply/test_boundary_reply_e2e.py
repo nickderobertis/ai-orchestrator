@@ -18,12 +18,14 @@ joined by an export edge, behind a human gate nobody attests, so nothing is disp
 reply is the run's single writer. Only the paid model is stood in, at the provider boundary,
 exactly as `tests/ask_seam/channel_reply/test_channel_reply_e2e.py` stands it in.
 
-This one journey uses a checkout-local plan-store configuration with write screening off.
-The screened store currently classifies every member of a private project as private, so
-its public export consumer cannot launch. The engine's reply boundary derives its terms
-from private nodes in the plan; a public-only plan cannot exercise these refusals. Moving
-this mixed journey onto the screened configuration belongs to the separate export plan.
-No tracked configuration is changed by this fixture.
+The plan is stored as the boundary guidance prescribes it: one private coordinating project
+in a source declared private, under the tracked configuration's write screening, holding a
+private producer and a public consumer that each keep their own visibility — no mode, setting
+or metadata key makes the consumer public. The journey runs in a sparse checkout of its own
+declared inputs so that its configuration is its own, and holds that configuration to being
+screened, with the fixture source declared private, before it authors anything.
+`tests/e2e/screened_export/` executes the same shape to completion; this journey holds the
+run at its gate, because the reply seam is what it proves.
 
 llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] This *is* the edge: the
 journey spends a real launch and is behind its own Nx project, keyed on `askSeamBoundaryReply`
@@ -191,8 +193,6 @@ def mixed(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Mixed]:
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
     tmp_path = tmp_path_factory.mktemp("boundary-reply")
-    # The manager keeps this reply-seam journey on its original mixed plan until the
-    # separate export plan makes that shape representable in a screened store.
     global REPO_ROOT  # noqa: PLW0603 - this module's recipe checkout, owned by its fixture
     REPO_ROOT = tmp_path / "checkout"
     REPO_ROOT.mkdir()
@@ -226,12 +226,12 @@ def mixed(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Mixed]:
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(original, target)
     install = share_this_checkouts_install(REPO_ROOT)
-    document = REPO_ROOT / "onetaskgraph.yaml"
-    configuration = yaml.safe_load(document.read_text(encoding="utf-8"))
-    del configuration["write_policy"]
-    for source in configuration["sources"].values():
-        source.pop("visibility", None)
-    document.write_text(yaml.safe_dump(configuration), encoding="utf-8")
+    # The journey's configuration is the tracked one, screened, and the source its project is
+    # authored in is declared private; a copy that lost either would prove nothing about the
+    # screened store this journey stands on.
+    configuration = yaml.safe_load((REPO_ROOT / "onetaskgraph.yaml").read_text(encoding="utf-8"))
+    assert configuration["write_policy"]["check_command"][:3] == ["onevcs", "boundary", "check"]
+    assert configuration["sources"]["test-fixtures"]["visibility"] == "private"
     environment = {**_environment(tmp_path), **install}
     run = f"boundary-reply-{SUITE}"
     plan = tmp_path / f"{run}.plan.json"
@@ -273,8 +273,7 @@ def mixed(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Mixed]:
         ),
         encoding="utf-8",
     )
-    # Author through the same unscreened store too: private-source writes persist
-    # classification on the project, which would otherwise survive this local config.
+    # Authored through this checkout's own screened store, into its private fixture source.
     environment["PYTHONPATH"] = os.pathsep.join(
         [str(REPO_ROOT), str(TRACKED_ROOT / "tests"), str(TRACKED_ROOT / "tests/e2e")]
     )

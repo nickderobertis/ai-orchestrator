@@ -175,12 +175,21 @@ on an existing node. A reference the copy cannot classify is still refused as
 public board stand-in: an added node created and then settled by one targeted update, and an
 added node delivering a ticket its source does not hold.
 
-The mixed export plan in `tests/ask_seam/boundary_reply/test_boundary_reply_e2e.py` cannot be
-stored with screening on: a private project makes its public consumer private too. That one
-journey keeps its original private producer, export edge and reply assertions in an isolated
-checkout with store screening off, including while authoring its fixtures. It proves the
-engine's note, reply and amendment boundary; moving it onto screened storage belongs to the
-separate export plan. The tracked configuration remains screened.
+**Private work reaches a public repository inside one private coordinating plan.** The plan
+holding a private `publish: "preserve"` producer, its export edge and the public consumer is one
+project, drafted in `authoring` and copied to a private home, and each task keeps its own
+visibility: the adopted store classifies a task by its own declaration and its own
+repositories, never by the project it is filed under, and the engine reads that classification
+and adds none. There is no mode, setting or metadata key to add, and a task already recorded or
+copied private stays private. The engine's own words for the shape are `onepipeline boundary
+guidance`, which `just plan` hands a mixed brief's planner whole and every boundary refusal of
+`just check-plan` carries; this host restates none of it.
+`tests/e2e/screened_export/test_screened_export_e2e.py` drives that plan from the planner's
+draft through review, its design document, the board copy, approval, the launch, the export and
+the public consumer's landing, and reads every public destination for private context;
+`tests/ask_seam/boundary_reply/test_boundary_reply_e2e.py` holds the same screened shape at a
+human gate to prove the reply boundary, and
+`tests/plan_tooling/plan_flow/test_check_plan_boundary_e2e.py` the plan check over it.
 
 **Where a plan's home goes is the store's rule, and this host states it rather than holding
 its own.** A plan's home is placed by its **voters**: every task naming a repository, and the
@@ -196,22 +205,25 @@ document, never vote, so a task naming no repository never decides the home; the
   voters that disagree leave the home on `plans`**, with each routed task in a member project
   of its routed source, a record a reader still meets on a board.
 - **With the boundary on, as it is here, a plan naming any private repository is private.** Its
-  home, its design document and every task go to the private source its private tasks route
-  to, the organization's Linear source the host declares. A task owns its classification, so
-  one naming only public repositories stays public inside that private plan, and is seen on
-  `plans` only as the store's neutral **view** of it, filed under a project titled `Public
-  work`, its write screened like any other. The private home alone records which view is which
-  task's, and the engine runs and writes back the canonical tasks, never a view. A copy that
-  would put any of the private plan's content on a public destination — a view carrying it,
-  say, or raw HTML the store cannot classify — is refused before anything is written, so
-  nothing reaches `plans` naming the private plan. A public task's budgets travel on its view,
-  because `templates/plan-task-budgets.md.j2` renders each under a plain Markdown heading and
-  no raw HTML. onetaskgraph's README, under *Public projections of a private plan*, is the
-  authority on the views.
+  home holds the whole plan canonically — every task, the export edge, its description and
+  its design document — in the private source its private tasks route to, the organization's
+  Linear source or private board the host declares. A task owns its classification, so one
+  naming only public repositories stays public inside that private plan, with nothing set on
+  the plan, and is seen on `plans` only as the store's neutral **view** of it, filed under a
+  project titled `Public work`: its own screened title, task and status, mirrored from the
+  canonical task, with no private dependency, backlink, member list or name of the plan. The
+  private home alone records which view is which task's, and the engine runs and writes back
+  the canonical tasks, never a view. A copy that would put any of the private plan's content
+  on a public destination — a view carrying it, say, or raw HTML the store cannot classify —
+  is refused before anything is written, so nothing reaches `plans` naming the private plan.
+  A public task's budgets travel on its view, because `templates/plan-task-budgets.md.j2`
+  renders each under a plain Markdown heading and no raw HTML. onetaskgraph's README, under
+  *Public projections of a private plan*, is the authority on the views.
 - **Such a plan is approved and launched where it lives**: `just approve-design
-  <source>:<project>` records the approval on its Linear design document, and `just orchestrate
-  <source>:<project>` runs the home with its members as one run, each settlement written back to
-  its task's own Linear item. A person's edit to the approved document is a change the launch
+  <source>:<project>` records the approval on its private design document, and `just orchestrate
+  <source>:<project>` runs the canonical graph as one run, each settlement written back to its
+  task's own private item and mirrored to a public task's view; the view is never a node. A
+  person's edit to the approved document is a change the launch
   gate refuses by naming the document.
 - **Personal private work has no route onto a public board at all.** A source's
   classification routes are tried before its repository routes for a private item, and routes
@@ -233,7 +245,7 @@ organization's root cause reaches its tracker by that route.
 the end of [the public write boundary](#the-public-write-boundary). Where that leaves a plan
 split, its home keeps its design document and the tasks that went with it, and each task placed
 elsewhere goes into one member project in that source (never a private plan's public tasks,
-which are the views above), tied to the home by
+which stay canonical in its home and reach `plans` only as the views above), tied to the home by
 `onetaskgraph.members` on the home and `onetaskgraph.member_of` on the member. `just
 finish-plan` reports the home's qualified id wherever it landed; `just approve-design <home>`
 records the approval on the design document wherever it is, and `just orchestrate <home>` runs

@@ -1,16 +1,16 @@
 """`just check-plan` over a plan mixing private and public work, with the boundary on.
 
 The engine's boundary guidance — what a planner of a mixed brief is handed — prescribes one
-plan: a private `publish: "preserve"` producer, an export edge, and a public consumer whose task
-carries the no-private-reference criterion. With the tracked `onetaskgraph.yaml` switching the
-store's public boundary on, a plan holding private work is private, so it is stored only in a
-source declared private — `authoring`, which the suite's fixture source stands in for here,
-declared private as it is. The pinned store gives each task its own classification, which the
-private project it is filed under never tightens, so the export consumer stays the public node
-the engine requires and `just check-plan` passes the plan. The same two nodes authored as two
-plans — the private producer's in the private source, the public consumer's in a public one —
-each pass too; but an export edge names nodes of its own plan, so the public plan cannot carry
-one from the private plan's producer.
+private coordinating plan: a private `publish: "preserve"` producer, an export edge, and a
+public consumer whose task carries the no-private-reference criterion, each task keeping its
+own visibility with nothing set on the plan. With the tracked `onetaskgraph.yaml` switching the
+store's public boundary on, a plan holding private work is stored only in a source declared
+private — `authoring`, which the suite's fixture source stands in for here, declared private
+as it is — and the adopted store classifies each task by its own repositories rather than by
+its project, so the consumer stays the public node the engine requires and `just check-plan`
+accepts the plan. What the check enforces is the engine's: the same plan whose public consumer
+names a private term is refused in the engine's words, and an export edge naming a node of
+another plan is refused, so the generalized work crosses only inside its one plan.
 
 The two repositories are synthetic and the scratch registry's rules make one public and one
 private. Only the paid model is stood in, for the reviews the plans need.
@@ -109,10 +109,11 @@ def renders(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
-def test_the_guidance_s_one_plan_shape_passes_its_consumer_public(
+def test_the_guidance_s_one_plan_shape_passes_with_each_task_keeping_its_own_visibility(
     renders: Path, registry: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The producer, the edge and the consumer in one plan, drafted privately: it passes."""
+    """The producer, the edge and the consumer in one plan, drafted privately: accepted, the
+    consumer public by its own repository and owing the no-private-reference criterion."""
     for name, value in DRAFTED_PRIVATE.items():
         monkeypatch.setenv(name, value)
     tasks = [_producer(renders), _consumer(renders, deps=[PRODUCER])]
@@ -122,38 +123,48 @@ def test_the_guidance_s_one_plan_shape_passes_its_consumer_public(
     checked = _run("just", "check-plan", project, environment={**registry, **DRAFTED_PRIVATE})
 
     said = checked.stdout + checked.stderr
-    assert checked.returncode == 0, f"the one-plan shape was refused:\n{said}"
-    assert "an export consumer must be a public lifecycle node" not in said, said
-    tasks = {task["id"]: task for task in read_project_plan(project)["tasks"]}
-    assert NO_PRIVATE_REFERENCE in tasks[CONSUMER]["task"]
+    assert checked.returncode == 0, f"the guidance's one-plan shape was refused:\n{said}"
+    assert _summary() not in said
+    stored = read_project_plan(project)
+    # Nothing on the plan sets a visibility: no mode, setting or metadata key.
+    for word in ("visibility", "mode", "onepipeline.classification"):
+        assert word not in json.dumps(stored.get("metadata", {})), stored
+    held = {task["id"]: task for task in stored["tasks"]}
+    assert NO_PRIVATE_REFERENCE in held[CONSUMER]["task"]
+    assert NO_PRIVATE_REFERENCE not in held[PRODUCER]["task"]
 
 
-def test_the_same_nodes_as_two_plans_each_pass_and_no_edge_crosses_them(
+def test_a_public_task_carrying_a_private_term_is_refused_in_the_engine_s_words(
     renders: Path, registry: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The private producer's plan and the public consumer's plan each pass on their own; an
-    export edge naming the other plan's producer is refused."""
+    """The one plan with its public consumer's title naming the private repository: refused,
+    carrying the engine's own guidance rather than any wording of this host's."""
     for name, value in DRAFTED_PRIVATE.items():
         monkeypatch.setenv(name, value)
-    producer = project_from_plan(_written(renders, "producer-plan", [_producer(renders)]))
-    reviewed(producer)
-    produced = _run("just", "check-plan", producer, environment={**registry, **DRAFTED_PRIVATE})
-    for name in DRAFTED_PRIVATE:
-        monkeypatch.delenv(name)
-    consumer = project_from_plan(_written(renders, "consumer-plan", [_consumer(renders, deps=[])]))
-    reviewed(consumer)
-    consumed = _run("just", "check-plan", consumer, environment=registry)
+    consumer = _consumer(renders, deps=[PRODUCER])
+    consumer["title"] = f"feat: page the listing as {PRIVATE_REPOSITORIES[0].split('/', 1)[1]} does"
+    tasks = [_producer(renders), consumer]
+    project = project_from_plan(_written(renders, "named-plan", tasks, export_edges=[EDGE]))
+    reviewed(project)
+
+    checked = _run("just", "check-plan", project, environment={**registry, **DRAFTED_PRIVATE})
+
+    said = checked.stdout + checked.stderr
+    assert checked.returncode != 0, f"a public task naming a private term was accepted:\n{said}"
+    assert _summary() in said, said
+
+
+def test_an_export_edge_from_another_plan_s_node_is_refused(
+    renders: Path, registry: dict[str, str]
+) -> None:
+    """A public plan carrying an edge from a producer it does not hold: refused, because an
+    export edge names nodes of its own plan."""
     crossing = project_from_plan(
         _written(renders, "crossing-plan", [_consumer(renders, deps=[])], export_edges=[EDGE])
     )
     reviewed(crossing)
     crossed = _run("just", "check-plan", crossing, environment=registry)
 
-    assert produced.returncode == 0, produced.stdout + produced.stderr
-    assert consumed.returncode == 0, consumed.stdout + consumed.stderr
-    assert _summary() not in consumed.stdout + consumed.stderr
-    tasks = {task["id"]: task for task in read_project_plan(consumer)["tasks"]}
-    assert NO_PRIVATE_REFERENCE in tasks[CONSUMER]["task"]
     assert crossed.returncode != 0, f"an edge from another plan was accepted:\n{crossed.stdout}"
     said = crossed.stdout + crossed.stderr
     assert "its `from` names no node of this plan" in said, said

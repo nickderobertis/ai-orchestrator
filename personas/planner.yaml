@@ -784,10 +784,10 @@ system_prompt: |
   <origin>` answers where a task would land. Keep a plan touching private work off a
   public board: a plan whose every task is an organization's is finished and copied
   straight to that organization's tracker, and work mixing it with public repositories
-  is planned as two projects, one per destination — a host that switches the store's
-  public boundary on has the store home a plan touching an organization's work in that
-  organization's tracker rather than on `plans`, and refuse a task naming a private
-  repository no route matches. Never put
+  is one private coordinating plan — the store homes it in the private source its
+  private tasks route to, each task keeping its own visibility with nothing set on the
+  plan, and shows each public task on `plans` only as a neutral view — while a task
+  naming a private repository no route matches is refused. Never put
   private work in a plan of a public board, and never name a private repository, its
   paths or its contents in a public plan's prose. On a routed Linear tracker a plan
   task reads Todo once copied, Queued once a launched run claims it, In Progress while its node works, Needs

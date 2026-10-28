@@ -506,10 +506,12 @@ def test_the_plan_location_step_finds_the_copy_by_its_link_and_lists_only_for_a_
 ) -> None:
     """After a real copy, the step names the board copy as the home, read by the store's link.
 
-    On a board at the `plans` board's scale, the plan's own record is read for the link, the
-    copy's record is read by id, and the only project listings are the two-copy check's,
-    one for the board and one for the source its route names, each narrowed to the plan's
-    origin, so no request pages the board.
+    On a board at the `plans` board's scale, the plan's own record is read for the link and
+    the copy's record is read by id. The plan is drafted in the private `authoring` source and
+    both the board and the source its route names are public, so the store stamps no origin on
+    either copy and the two-copy check asks neither of them for one: a listing narrowed to the
+    plan's origin would hand a public destination the private plan's own id. So nothing is
+    listed, and no request pages the board.
     """
     environment = _drafted(tmp_path, monkeypatch)
     with _serving_board() as remote:
@@ -537,9 +539,11 @@ def test_the_plan_location_step_finds_the_copy_by_its_link_and_lists_only_for_a_
     assert "its tasks routed to" not in reported, reported
     assert _shown(located.calls, QUALIFIED) == 1, located.calls
     assert _shown(located.calls, board_project) >= 1, located.calls
-    listed = sorted(source for call in _listings(located.calls) for source in _sources(call))
-    assert listed == sorted([BOARD_SOURCE, ROUTED_STAND_IN]), located.calls
-    assert all(len(_sources(call)) == 1 for call in _listings(located.calls)), located.calls
+    assert _listings(located.calls) == [], located.calls
+    asked = [json.dumps([request.query, request.variables]) for request in located.requests]
+    assert not [request for request in asked if QUALIFIED in request], (
+        "a request to the public board named the private plan"
+    )
     _narrowed_to_the_plan(located)
 
 
