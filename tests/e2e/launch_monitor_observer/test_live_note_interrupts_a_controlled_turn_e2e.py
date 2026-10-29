@@ -9,9 +9,10 @@ here (onepipeline#1048), so this drives them the way a manager meets them: a run
 by the real `just orchestrate`, the note sent by the real `just channel-reply`, the run read
 by the real `just status`, and each disposition read back off the run's own journal. The
 receipt the reply recipe prints answers before either turn takes the note — `queued` in the
-worker's inbox, from onepipeline 0.86.0 — so it records no disposition. The third
-delivery — a `live` note to a turn that cannot be interrupted, which waits for its end — is
-`tests/e2e/launch_monitor_observer/test_live_note_leaves_the_run_journalling_e2e.py`'s.
+worker's inbox, from onepipeline 0.86.0 — so it records no disposition. A `turn-end` note
+waiting through a busy turn on the shared Codex app-server, with the run still journalling
+while it waits, is
+`tests/e2e/launch_monitor_observer/test_turn_end_note_leaves_the_run_journalling_e2e.py`'s.
 
 Everything between the recipes and the model is real — the engine, `oneagentgraph`, the
 onejudge conversation and the `oneharness` CLI that opens the control socket and serves the

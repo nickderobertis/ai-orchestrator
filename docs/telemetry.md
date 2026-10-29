@@ -301,8 +301,8 @@ between `oneharness-core-v0.24.0` and `oneharness-core-v0.24.1`, the core `oneha
 links 0.24.1 for itself, onejudge 0.17.1 and oneagentgraph 0.5.5, read off each wheel's own
 SBOM.
 The oneharness half then moved to 0.22.0, the first move across which `domain/usage.rs`
-is **not** byte-identical: `oneharness-cli` 0.22.0 is compiled against `oneharness-core`
-0.25.0, read off its wheel's own SBOM, and between `oneharness-core-v0.24.1` and
+is **not** byte-identical: `oneharness-cli` 0.22.0 was compiled against `oneharness-core`
+0.25.0, read off its wheel's own SBOM then, and between `oneharness-core-v0.24.1` and
 `oneharness-core-v0.25.0` that file changes in one commit
 ([oneharness#1437](https://github.com/nickderobertis/oneharness/pull/1437)), adding a
 `reset_credits` field to each identity of the `oneharness usage` subscription-headroom

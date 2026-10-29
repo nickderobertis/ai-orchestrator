@@ -534,7 +534,7 @@ GRAPHQL_WRITEBACK_QUOTA_LANDINGS = (
 #: The three engine-side nodes of the plan adopting the live-note, re-dispatch-tip and
 #: copy-id fixes. `op-live-note` was delivered by its retry, `op-live-note-r5`, and is
 #: recorded under the node id for the reason `Landing.node` gives.
-#: `tests/e2e/launch_monitor_observer/test_live_note_leaves_the_run_journalling_e2e.py` and
+#: `tests/e2e/launch_monitor_observer/test_turn_end_note_leaves_the_run_journalling_e2e.py` and
 #: `tests/e2e/publish_and_landing/test_redispatch_names_the_published_tip_e2e.py` drive the
 #: first two through `just orchestrate`, and
 #: `tests/plan_tooling/plan_copy/test_plan_copy_destination_ids_e2e.py` the copy the third
@@ -897,7 +897,7 @@ PUBLICATION_REPAIRS_LANDINGS = (
 #: note interrupting the addressed party's turn, a `turn-end` delivery, a delivery deadline
 #: and the `turn` on a delivered note; and the withdrawal of a live note no turn has taken.
 #: `tests/ask_seam/channel_reply/test_channel_reply_e2e.py` and
-#: `tests/e2e/launch_monitor_observer/test_live_note_leaves_the_run_journalling_e2e.py`
+#: `tests/e2e/launch_monitor_observer/test_turn_end_note_leaves_the_run_journalling_e2e.py`
 #: drive them through the recipes on this host.
 INTERRUPTING_NOTES_LANDINGS = (
     Landing(

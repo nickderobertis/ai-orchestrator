@@ -6,11 +6,17 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
-from typing import TYPE_CHECKING, Any, cast
+import tempfile
+from pathlib import Path
+from types import ModuleType
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    import fake_backend as backend
+    import fake_codex
     from fake_backend import BusyTurn, ControlledTurn
 
 
@@ -22,40 +28,85 @@ def answer(
     activity: BusyTurn | None = None,
     controlled: ControlledTurn | None = None,
 ) -> int:
-    environment = {**os.environ, "FAKE_CODEX_ANSWERS": json.dumps([text])}
     if lost or activity is not None or controlled is not None:
         raise ValueError("this brief fixture scripts complete Codex turns only")
-    failure = environment.get("FAKE_BRIEF_FAILURE_MARKER")
-    if failure and failure in backend._prompt(argv)[1]:
-        environment["FAKE_CODEX_FAIL_AFTER_TURN"] = "1"
+    environment = dict(os.environ)
+    failed = bool(failure := environment.get("FAKE_BRIEF_FAILURE_MARKER", "")) and (
+        failure in backend._prompt(argv)[1]
+    )
     configs = [argv[index + 1] for index, flag in enumerate(argv[:-1]) if flag == "--config"]
     config = configs[-1] if configs else ""
-    selection = [] if "/spike-brief-" in config else ["--harness", "codex"]
-    # A `--control` codex turn runs on the shared codex app-server, and the codex this
-    # fixture stands in speaks `codex exec` alone, so the server it would start exits
-    # before listening. These journeys script whole turns and interrupt none, so each
-    # turn runs uncontrolled: the paid words are still the fixture's and nothing else is.
-    # llmlint: ignore-block[e2e_not_mocked, tests_mirror_real_usage] `fake_codex.py` serves
-    # no codex app-server, which oneharness 0.26.1 runs every controlled codex turn on, and
-    # these journeys interrupt nothing; the gap is drafted upstream as a follow-up.
-    forwarded = [argument for argument in argv[1:] if argument != "--control"]
-    # llmlint: ignore-end[e2e_not_mocked, tests_mirror_real_usage]
-    return subprocess.run(
-        [environment["REAL_ONEHARNESS_BIN"], argv[0], *selection, *forwarded],
-        env=environment,
-        stdin=subprocess.DEVNULL,
-        check=False,
-    ).returncode
+    # A brief's own configs keep their chain, so its history names the identity it chose.
+    selection = [] if "/spike-brief-" in config else ["--harness", backend.MOCK_HARNESS]
+    if backend.CONTROL_FLAG not in argv:
+        # An exec-road turn — the judge's evaluation — runs on the codex stand-in, which
+        # bills `TURN_USAGE` in its own stream: oneharness 0.25.9 under `--mock-harness`
+        # writes that road's history pointer but no record behind it.
+        environment["FAKE_CODEX_ANSWERS"] = json.dumps([text])
+        if failed:
+            environment["FAKE_CODEX_FAIL_AFTER_TURN"] = "1"
+        return subprocess.run(
+            [environment[backend.REAL_BINARY_ENV], argv[0], *selection, *argv[1:]],
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            check=False,
+        ).returncode
+    environment[backend.MOCK_STDOUT_ENV] = "".join(
+        json.dumps(event) + "\n"
+        for event in [
+            {"type": "thread.started", "thread_id": "brief-thread"},
+            {
+                "type": "item.completed",
+                "item": {"id": "reply", "type": "agent_message", "text": text},
+            },
+            # The codex stand-in's own figure, which the mock provider's shared app-server
+            # reports on `thread/tokenUsage/updated`, so the brief's model-token budget reads
+            # one measured figure on both roads.
+            {"type": "turn.completed", "usage": fake_codex.TURN_USAGE},
+        ]
+    )
+    counted: Path | None = None
+    if failed:
+        # The controlled turn fails as the shared app-server answering it reports a
+        # failed one, on every retry.
+        counted = Path(tempfile.mkdtemp(prefix="brief-backend-failed-"))
+        environment["MOCK_CODEX_OVERLOAD_ATTEMPTS"] = str(backend.LOST_TURN_ATTEMPTS)
+        environment["MOCK_ATTEMPT_FILE"] = str(counted / "attempts")
+    try:
+        # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
+        return subprocess.run(
+            [
+                environment[backend.REAL_BINARY_ENV],
+                argv[0],
+                *selection,
+                "--mock-harness",
+                backend.MOCK_HARNESS,
+                *argv[1:],
+            ],
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            check=False,
+        ).returncode
+    finally:
+        if counted is not None:
+            shutil.rmtree(counted, ignore_errors=True)
+
+
+def _load(name: str, source: Path) -> ModuleType:
+    spec = importlib.util.spec_from_file_location(name, source)
+    if spec is None or spec.loader is None:
+        raise ValueError(f"shared paid-provider double {source} cannot be loaded")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 if __name__ == "__main__":
-    spec = importlib.util.spec_from_file_location("fake_backend", os.environ["FAKE_BACKEND_SOURCE"])
-    if spec is None or spec.loader is None:
-        raise ValueError("shared paid-provider double cannot be loaded")
-    backend = cast(Any, importlib.util.module_from_spec(spec))
-    sys.modules[spec.name] = backend
-    spec.loader.exec_module(backend)
-    # answer runs the real harness, retaining the shared Codex double's usage events.
+    shared = Path(os.environ["FAKE_BACKEND_SOURCE"])
+    if not TYPE_CHECKING:
+        backend = _load("fake_backend", shared)
+        fake_codex = _load("fake_codex", shared.with_name("fake_codex.py"))
     # llmlint: ignore[e2e_not_mocked] Replace only the shared adapter's paid words.
     backend._answer = answer
     raise SystemExit(backend.main(sys.argv[1:]))

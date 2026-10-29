@@ -144,6 +144,23 @@ def test_each_capability_the_page_names_is_a_route_the_reader_declares(
     )
 
 
+def test_the_page_and_contract_keep_browser_driving_removed() -> None:
+    """The removal remains documented beside the surviving browser controls."""
+    document = " ".join(_source(UI_API, CONTRACT).split())
+    assert "The binary no longer drives runs" in document
+    assert "404 removed_route" in document
+    page = _page()
+    assert (
+        "Watching, adopting and shutting down one run or one session's runs are not the "
+        "browser's" in page
+    )
+    assert "The browser adopts nothing" in page
+    assert "The browser holds no watch on any run" in page
+    assert "every other scope" in page and "`400 removed_shutdown_scope`" in page
+    for route in ("/adopt", "/watch", "/runs/{run}/shutdown"):
+        assert route not in _routes()
+
+
 def test_every_route_the_page_spells_in_full_is_one_the_reader_declares() -> None:
     """A path written out on the page is a path a reader will type, so it has to exist."""
     routes = _routes()

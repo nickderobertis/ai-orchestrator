@@ -57,27 +57,17 @@ RATE_LIMITS = {
     },
 }
 
-#: The argv the adopted oneharness spawns its rate-limit probe with: the stdio app-server,
-#: with plugins, apps and analytics disabled as the release's codex defaults resolve them.
-PROBE_ARGV = [
-    "app-server",
-    "--disable",
-    "plugins",
-    "--disable",
-    "apps",
-    "-c",
-    "analytics.enabled=false",
-    "--stdio",
-]
-
-#: Answers by JSON-RPC id, like `codex app-server`, and refuses any other argv so a
-#: probe that stopped speaking app-server cannot read as an answer.
+#: Answers by JSON-RPC id, like `codex app-server`, and refuses any argv that is not an
+#: `app-server … --stdio` launch, so a probe that stopped speaking app-server cannot read
+#: as an answer. What sits between the two is the probe's own feature settings — from
+#: oneharness 0.23.0 `--disable plugins`, among others — which
+#: `test_codex_plugins_off_e2e.py` reads rather than this journey.
 # llmlint: ignore-block[e2e_not_mocked] Codex is the paid provider, the one boundary AGENTS.md's realistic-tests invariant doubles: a real account cannot be made to answer with a fixed credit list on demand, and the subject — the installed `oneharness` CLI's probe, parser and both renderers — runs for real.  # noqa: E501 - a directive is one line
 STAND_IN = f"""#!{sys.executable}
 import json, sys
 
 RATE_LIMITS = json.loads({json.dumps(json.dumps(RATE_LIMITS))})
-if sys.argv[1:] != {PROBE_ARGV!r}:
+if sys.argv[1:2] != ["app-server"] or sys.argv[-1:] != ["--stdio"]:
     sys.exit(f"stand-in codex: unexpected argv {{sys.argv[1:]}}")
 for line in sys.stdin:
     request = json.loads(line)

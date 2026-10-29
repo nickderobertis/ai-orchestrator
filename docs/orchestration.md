@@ -4438,9 +4438,11 @@ note's `turn`:
 - `turn: turn-end` — the note reached the party when its turn ended.
 
 `turn` sits beside `reached` on the `note-delivered` operation of the note's
-`edit-committed` record, and on the note's result in the envelope's outcome on the
-channel's `command-outcomes` queue, exactly where the note reached the `worker` or the
+`edit-committed` record, exactly where the note reached the `worker` or the
 `supervisor`; a record written by an engine before 0.80.0 carries none.
+The envelope is answered at inbox handoff: its result on `command-outcomes` is
+`queued`, with no `turn`. That acknowledgement does not say a turn has taken it;
+the later journal operation records actual delivery.
 
 **When a note waits instead.** Three ways, each chosen by the sender or the turn:
 
@@ -4497,7 +4499,7 @@ note carried beside it staying. The withdrawn note's envelope is answered again,
 the withdrawal's reason — a withdrawal is a later command rather than the receiver's
 answer — and no turn is presented with it; the run records the `note-withdrawn` operation on the
 withdrawal's `edit-committed`, `from: live` or `from: carried`. A note **already taken,
-answered, or composed into a dispatch cannot be withdrawn**: the withdrawal is refused
+or composed into a dispatch cannot be withdrawn**: the withdrawal is refused
 naming the note's disposition, and so is one already withdrawn, a blank `reason`, and an
 envelope or note that does not exist.
 
@@ -4548,7 +4550,7 @@ waits in an inbox, the run
 goes on recording: each member's liveness advances in `<run>/liveness.json`, turn
 activity keeps reaching the journal, and `just status` keeps reporting the run live, and once a turn takes the note the run records
 its `edit-committed` and then its `note-shown`.
-`tests/e2e/launch_monitor_observer/test_live_note_leaves_the_run_journalling_e2e.py`
+`tests/e2e/launch_monitor_observer/test_turn_end_note_leaves_the_run_journalling_e2e.py`
 drives a `live` note that waits on a turn that cannot be interrupted through `just
 channel-reply` and `just status`, and
 `tests/e2e/launch_monitor_observer/test_live_note_interrupts_a_controlled_turn_e2e.py`

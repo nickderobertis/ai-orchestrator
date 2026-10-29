@@ -76,6 +76,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import NamedTuple, TypedDict
@@ -259,6 +260,9 @@ OBSERVER_MEMBER_ENV = "FAKE_BACKEND_OBSERVER_MEMBER"
 #: report. Nothing here writes what a lost turn looks like.
 OBSERVER_LOSES_ENV = "FAKE_BACKEND_OBSERVER_LOSES"
 MOCK_EXIT_ENV = "MOCK_EXIT"
+#: How many turns on the shared app-server a lost member fails: more than any one turn
+#: retries, so every one of them is lost.
+LOST_TURN_ATTEMPTS = 1_000_000
 
 #: Optionally have the dispatched agent turn WRITE the files a real one would.
 #:
@@ -448,13 +452,15 @@ AGENT_DELAY_ENV = "FAKE_BACKEND_AGENT_DELAY_SECONDS"
 #: prompt carries `AGENT_ACTIVITY_MARKER_ENV`'s text: this many tool calls, each reported
 #: through the real `oneharness` as the provider's own event line,
 #: `AGENT_ACTIVITY_INTERVAL_ENV` milliseconds apart. What it gives a journey is a turn that
-#: is visibly busy — its tool calls reaching the run as they happen — and not finished.
-#: That turn is the shipped mock's one-shot codex `exec`, which the pinned oneharness CLI
-#: opens no in-flight turn for under `--control` (an interrupt is answered
-#: `no_active_turn`), so it is the turn **that cannot be interrupted**: a note to it waits
-#: for its end. The pacing is the shipped mock
-#: provider's own `MOCK_STREAM_DELAY_MS`, so the lines cross the real oneharness stream one
-#: at a time rather than being written here on a clock. Keyed on a marker rather than on
+#: is visibly busy — its tool calls reaching the run as they happen — and not finished,
+#: which is the window a note sent `deliver: "turn-end"` waits in. On the shared Codex
+#: app-server the pinned oneharness can interrupt that turn, so a `live` note ends it
+#: instead. The pacing is the shipped mock
+#: provider's own: `MOCK_STREAM_DELAY_MS` for a turn run as `codex exec`, whose lines cross
+#: the real oneharness stream one at a time, and for a controlled turn on the shared Codex
+#: app-server — the default road — `MOCK_CODEX_HOLD_UNTIL` and `MOCK_CODEX_TICK_MS`, which
+#: hold the turn open with an agent message every interval until the hold file exists,
+#: which this process creates once the turn's calls are spent. Keyed on a marker rather than on
 #: the turn's number because a later turn of the same conversation opens on its new
 #: message alone — a delivered note, say — so a task's marker is on its first turn only.
 AGENT_ACTIVITY_ENV = "FAKE_BACKEND_AGENT_ACTIVITY_CALLS"
@@ -759,9 +765,10 @@ def _answer(
 
     `lost` has the provider process fail instead, which is how a turn is lost. `activity`
     has the provider report that
-    many tool calls before its answer, in codex's own event lines, streamed one at a time.
-    `controlled` has the provider serve the turn in claude-code's control shape instead,
-    which the real CLI can interrupt; the mock answers each of its turns itself.
+    many tool calls before its answer, in codex's own event lines, streamed one at a time,
+    or — on the shared app-server — hold the turn open as long, an agent message each
+    interval. `controlled` has the provider serve the turn in claude-code's control shape
+    instead; the mock answers each of its turns itself.
     """
     real = os.environ.get(REAL_BINARY_ENV)
     if not real:
@@ -806,21 +813,22 @@ def _answer(
         ]
         environment[MOCK_STDOUT_ENV] = "".join(json.dumps(line) + "\n" for line in lines)
         environment["MOCK_STREAM_DELAY_MS"] = str(activity.interval_ms)
+        held = Path(tempfile.mkdtemp(prefix="fake-backend-busy-"))
+        _HELD.append(held)
+        release = held / "released"
+        environment["MOCK_CODEX_HOLD_UNTIL"] = str(release)
+        environment["MOCK_CODEX_TICK_MS"] = str(activity.interval_ms)
+        released = threading.Timer(activity.calls * activity.interval_ms / 1000, release.touch)
+        released.daemon = True
+        released.start()
     if lost:
         environment[MOCK_EXIT_ENV] = "1"
-    if lost or activity is not None:
-        # A `--control` codex turn runs on the shared mock app-server, which answers
-        # `MOCK_STDOUT`'s text alone — no `MOCK_EXIT`, and none of the codex exec event
-        # lines a busy turn streams (oneharness#1506) — so a lost or busy turn is run
-        # uncontrolled: its provider process is what fails, or what streams the calls. A
-        # busy turn is the one that cannot be interrupted, which is what it stands for.
-        # llmlint: ignore-block[e2e_not_mocked, tests_mirror_real_usage] The mock app-server
-        # oneharness 0.26.1 runs a controlled codex turn on offers no knob that fails one turn
-        # or streams several scripted calls, so the journeys scripting a lost or
-        # uninterruptible busy turn run it as the exec turn they were written against; the
-        # gap is drafted upstream as a follow-up.
-        argv = [argument for argument in argv if argument != CONTROL_FLAG]
-        # llmlint: ignore-end[e2e_not_mocked, tests_mirror_real_usage]
+        # A controlled turn on the shared app-server never sees a provider exit, so there
+        # the turn fails as the server answering it reports a failed one.
+        counted = Path(tempfile.mkdtemp(prefix="fake-backend-lost-"))
+        _HELD.append(counted)
+        environment["MOCK_CODEX_OVERLOAD_ATTEMPTS"] = str(LOST_TURN_ATTEMPTS)
+        environment["MOCK_ATTEMPT_FILE"] = str(counted / "attempts")
     # `--mock-harness ID` replaces the selected harness's *provider process* and
     # nothing above it — this repository's one sanctioned fake, under a different
     # name. Proof: under `--mock-harness codex`
@@ -830,13 +838,18 @@ def _answer(
     # identity selection, the fallback chain, the history record and the report are
     # the real ones. It is the seam `tests/e2e/mock_oneharness.py` and
     # `tests/e2e/launch_monitor_observer/test_quota_fallthrough_e2e.py` already fake at.
-    # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
-    completed = subprocess.run(
-        [real, argv[0], "--harness", harness, "--mock-harness", mocked, *argv[1:]],
-        env=environment,
-        stdin=subprocess.DEVNULL,
-        check=False,
-    )
+    try:
+        # llmlint: ignore[e2e_not_mocked] Only the paid provider process is substituted.
+        completed = subprocess.run(
+            [real, argv[0], "--harness", harness, "--mock-harness", mocked, *argv[1:]],
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            check=False,
+        )
+    finally:
+        # The turn has ended, so nothing reads its hold files again.
+        for held in _HELD:
+            shutil.rmtree(held, ignore_errors=True)
     return completed.returncode
 
 
@@ -904,12 +917,16 @@ def _passed_through(argv: list[str]) -> int:
 
 #: The prompt this turn spilled, for `_stopped` to remove.
 _SPILLED: list[Path] = []
+#: The directory a busy turn's hold file is made in, for `_stopped` to remove.
+_HELD: list[Path] = []
 
 
 def _stopped(number: int, _frame: object) -> None:
     """Remove the spilled prompt, then end exactly as the signal would have."""
     for spilled in _SPILLED:
         spilled.unlink(missing_ok=True)
+    for held in _HELD:
+        shutil.rmtree(held, ignore_errors=True)
     signal.signal(number, signal.SIG_DFL)
     os.kill(os.getpid(), number)
 

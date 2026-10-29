@@ -392,7 +392,28 @@ wheel** (a manylinux build) is the one that both runs on the host's glibc and
 carries `init`, so `scripts/session-setup.sh` installs the exact
 `config/oneharness.version` release and rejects a stale binary. Version 0.26.1 is
 the adopted release. What the releases since 0.17.0 change is how a reader meets the
-CLI, and none of it moves what this host's configs select. The newest, 0.22.0, has
+CLI and what a Codex process it starts downloads, and none of it moves what this host's
+configs select. 0.23.0 launches every Codex run and usage probe with plugins off
+(`-c features.plugins=false`) unless a config's typed `plugins = true` opts in
+([oneharness#1457](https://github.com/nickderobertis/oneharness/pull/1457)), which
+`tests/e2e/launch_monitor_observer/test_codex_plugins_off_e2e.py` reads off the argv
+`scripts/oneharness-usage.sh` hands a recording `codex`; 0.24.0 shares one Codex model
+catalog per home and keeps Codex analytics off
+([oneharness#1464](https://github.com/nickderobertis/oneharness/pull/1464)); 0.25.0
+shares one pooled `codex app-server` across concurrent Codex dispatches
+([oneharness#1467](https://github.com/nickderobertis/oneharness/pull/1467)), and the
+patch releases to 0.25.5 fix that server and its tests; 0.25.6 hands a Codex turn the
+signed-in account may not run under its model on to the next candidate rather than
+stopping the chain
+([oneharness#1493](https://github.com/nickderobertis/oneharness/pull/1493)); 0.25.7 runs a
+controlled mock-harness Codex turn on that shared server
+([oneharness#1506](https://github.com/nickderobertis/oneharness/pull/1506)); 0.25.8 records
+the token usage a controlled app-server turn reports, a mock one's included
+([oneharness#1509](https://github.com/nickderobertis/oneharness/pull/1509)); 0.25.9 changes
+only how its own npm release is verified
+([oneharness#1512](https://github.com/nickderobertis/oneharness/pull/1512)); 0.25.10 keeps a pooled server’s sweeper alive with its server
+when the dispatch that started it exits
+([oneharness#1520](https://github.com/nickderobertis/oneharness/pull/1520)). 0.22.0 has
 `oneharness usage` report each Codex identity's banked rate-limit reset credits — how
 many are available and, when the listed credits cover that count, the soonest expiry —
 as `reset_credits` in its JSON and a `reset credits:` line in its text
@@ -1656,7 +1677,7 @@ the adopted release through the variant-to-base fallback every override layer ma
 candidates through `PATH`, where `tests/e2e/no-paid-provider/` hands a variant on to the
 very binary this variable names and refuses anything named outside this repository's
 tests. The two
-do not collide: re-measured against the adopted oneharness 0.22.0, a harness selected
+do not collide: re-measured against the adopted oneharness 0.25.10, a harness selected
 with `--mock-harness` keeps the mock binary and ignores `ONEHARNESS_BIN_<ID>` — the flag
 layer outranks the environment layer, and on this release a base-id `--mock-harness`
 covers a variant too — so the

@@ -910,6 +910,7 @@ def test_a_mixed_plan_keeps_every_task_in_linear_and_shows_its_public_task_on_th
         ], [issue.title for issue in BOARD_FIXTURE.created]
         for issue in BOARD_FIXTURE.created:
             assert _private_named(f"{issue.title}\n{issue.body}") == [], issue
+            assert name not in f"{issue.title}\n{issue.body}", issue
 
         recopied = _just(routed, bench, "copy-plan", f"{AUTHORING}:{name}", "--to", LINEAR)
         assert recopied.returncode == 0, recopied.stdout + recopied.stderr

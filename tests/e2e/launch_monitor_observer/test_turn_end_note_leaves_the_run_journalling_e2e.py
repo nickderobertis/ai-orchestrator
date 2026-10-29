@@ -1,10 +1,11 @@
-"""A live note waiting on a turn that cannot be interrupted leaves the run recording.
+"""A note waiting on a busy turn's end leaves the run recording.
 
 A `live` note — the default — interrupts the addressed party's running turn where that
 turn can be interrupted (`test_live_note_interrupts_a_controlled_turn_e2e.py` drives that),
-and waits for the turn to end where it cannot, which the run records as `turn: turn-end`.
-This is the second case: the worker's turn here is one the pinned oneharness opens no
-in-flight turn for, so the note waits through all of it. The engine used
+and a note waits for the turn to end where it cannot or where it is sent `deliver:
+"turn-end"`, which the run records as `turn: turn-end`. The pinned oneharness runs every
+Codex turn on the shared app-server, which it can interrupt, so this sends the note
+`turn-end` and it waits through all of the busy turn. The engine used
 to wait on that answer on the run's single writer, so for as long as the turn ran the
 run's journal took nothing: no heartbeat, no turn activity, no checkpoint — and a healthy
 run read as an abandoned one, which invites exactly the wrong intervention
@@ -20,9 +21,10 @@ advancing.
 
 Everything between the recipes and the model is real — the engine, `oneagentgraph`, the
 onejudge conversation, the `oneharness` CLI and its stream. The paid model is
-`tests/e2e/fake_backend.py`, whose worker turn here reports a tool call every
-`ACTIVITY_INTERVAL_MS` for `ACTIVITY_CALLS` calls before answering, through the real
-oneharness stream, and cannot be interrupted, so it takes a note only when that turn ends;
+`tests/e2e/fake_backend.py`, whose worker turn here is held open on the shared Codex
+app-server for `ACTIVITY_CALLS` intervals of `ACTIVITY_INTERVAL_MS`, an agent message each
+interval through the real oneharness stream, before answering, and takes the `turn-end`
+note only when that turn ends;
 `tests/e2e/fake_codex.py`
 stands in at the provider binary for the members that reach one there.
 
@@ -73,10 +75,10 @@ FAKE_BACKEND = helper("fake_backend.py")
 FAKE_CODEX = helper("fake_codex.py")
 PAID_PROVIDER_GUARD = helper("no-paid-provider")
 INDIRECTION_CALLER = (
-    "tests/e2e/launch_monitor_observer/test_live_note_leaves_the_run_journalling_e2e.py"
+    "tests/e2e/launch_monitor_observer/test_turn_end_note_leaves_the_run_journalling_e2e.py"
 )
 
-RUN_NAME = "live-note-busy-turn"
+RUN_NAME = "turn-end-note-busy-turn"
 NODE_ID = "build"
 TASK_MARKER = "Keep working until the turn is done."
 NOTE = "the fixture this node reads moved"
@@ -134,7 +136,7 @@ def _environment(root: Path, oneharness_bin: str) -> dict[str, str]:
     environment = dict(os.environ)
     for name in LAUNCHER_ENVIRONMENT:
         environment.pop(name, None)
-    environment["CLAUDE_CODE_SESSION_ID"] = "e2e-live-note-busy-turn"
+    environment["CLAUDE_CODE_SESSION_ID"] = "e2e-turn-end-note-busy-turn"
     environment["ONEPIPELINE_RUNS_DIR"] = str(root / "runs")
     environment["XDG_STATE_HOME"] = str(short_state.state_home(root))
     environment["ONEAGENTGRAPH_HEARTBEAT_TIMEOUT"] = HEARTBEAT_BOUND_SECONDS
@@ -268,7 +270,7 @@ def _until(what: str, condition: Callable[[], bool], seconds: float) -> None:
 def journey(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Iterator[Journey]:
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
-    root = tmp_path_factory.mktemp("live-note-busy-turn")
+    root = tmp_path_factory.mktemp("turn-end-note-busy-turn")
     environment = _environment(root, oneharness_bin)
 
     def just(*arguments: str, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
@@ -305,7 +307,13 @@ def journey(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> It
                     "version": 3,
                     "author": "planner",
                     "commands": [
-                        {"op": "note", "id": NODE_ID, "addressee": "worker", "text": NOTE}
+                        {
+                            "op": "note",
+                            "id": NODE_ID,
+                            "addressee": "worker",
+                            "text": NOTE,
+                            "deliver": "turn-end",
+                        }
                     ],
                 }
             ),
@@ -360,7 +368,7 @@ def journey(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> It
         just("stop", RUN_NAME)
 
 
-@pytest.mark.xdist_group("live-note-busy-turn")
+@pytest.mark.xdist_group("turn-end-note-busy-turn")
 def test_the_run_goes_on_recording_heartbeats_and_turn_activity_while_the_note_waits(
     journey: Journey,
 ) -> None:
@@ -369,14 +377,14 @@ def test_the_run_goes_on_recording_heartbeats_and_turn_activity_while_the_note_w
         assert counted.while_waiting >= counted.when_sent + 2, journey.waiting
 
 
-@pytest.mark.xdist_group("live-note-busy-turn")
+@pytest.mark.xdist_group("turn-end-note-busy-turn")
 def test_the_status_view_reports_the_run_live_while_the_note_waits(journey: Journey) -> None:
     """A manager reading the run while the note waits sees it driven, not abandoned."""
     assert RUN_NAME in journey.waiting.status, journey.waiting.status
     assert "ACTIVE" in journey.waiting.status.split(), journey.waiting.status
 
 
-@pytest.mark.xdist_group("live-note-busy-turn")
+@pytest.mark.xdist_group("turn-end-note-busy-turn")
 def test_the_note_is_delivered_when_the_turn_ends_and_then_shown(journey: Journey) -> None:
     """Once the busy turn ends, the delivery is recorded, and then its presentation."""
     kinds = [event.get("kind") for event in journey.journal]
@@ -394,8 +402,8 @@ def test_the_note_is_delivered_when_the_turn_ends_and_then_shown(journey: Journe
     assert operations[0]["kind"] == "note-delivered", payload
     assert operations[0]["text"] == NOTE, payload
     assert operations[0]["reached"] == "worker", payload
-    # A live note to a turn that cannot be interrupted is recorded as reaching its end,
-    # never as interrupting it.
+    # A note sent to wait for the turn's end is recorded as reaching its end,
+    # never as interrupting it. The channel acknowledges the earlier inbox handoff.
     assert operations[0]["turn"] == "turn-end", payload
     # The reply is answered as soon as the note is queued in the worker's inbox, however
     # long the busy turn runs on, and that answer is never rewritten by what the turn makes

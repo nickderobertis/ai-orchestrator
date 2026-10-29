@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import itertools
+import os
 import shutil
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 
+import pooled_server_state
 import pytest
 
 from orchestrator.gate_impact import register_scratch
@@ -64,12 +66,20 @@ def short_state_base() -> Iterator[Path]:
     # address leaves no room to nest it there, so it is registered with that recorder:
     # counted as the gate's scratch, and removed by it once counted.
     register_scratch(_base)
+    previous = os.environ.get("XDG_STATE_HOME")
+    os.environ["XDG_STATE_HOME"] = str(state_home(_base))
     try:
         yield _base
     finally:
-        base, _base = _base, None
-        _homes.clear()
-        shutil.rmtree(base, ignore_errors=True)
+        try:
+            pooled_server_state.release(_base)
+        finally:
+            if previous is None:
+                os.environ.pop("XDG_STATE_HOME", None)
+            else:
+                os.environ["XDG_STATE_HOME"] = previous
+            _homes.clear()
+            _base = None
 
 
 def state_home(owner: Path) -> Path:

@@ -231,6 +231,11 @@ HELD_PUBLICATION_ONEVCS_FLOOR = Release(0, 40, 2)
 #: marked an error normalizes to `ToolCallStatus::Failed`, and the text stream draws one
 #: `✗ <tool>  failed` line for it.
 FAILED_TOOL_CALL_CORE_FLOOR = Release(0, 24, 1)
+#: oneharness#1457 first shipped in core 0.26.0 (CLI 0.23.0): Codex launches with
+#: plugins off unless the configuration opts in. Both the engine's linked core and the
+#: CLI wheel's core need this floor to cover both launch roads; their recorded argv is
+#: proved in `tests/e2e/launch_monitor_observer/test_codex_plugins_off_e2e.py`.
+PLUGINS_OFF_CORE_FLOOR = Release(0, 26, 0)
 
 
 #: The three sibling releases carrying https://github.com/nickderobertis/ai-orchestrator/issues/1004's
@@ -937,8 +942,8 @@ def test_the_engine_links_the_store_that_maps_statuses_per_item_kind() -> None:
 UI_API_DISTRIBUTION = "onepipeline-api-cli"
 
 #: The read API's engine held apart from `config/onepipeline.version`, which is nothing:
-#: the adopted read-API release links the adopted engine, so the browser reads a run with
-#: the engine that wrote it. Kept as a named `None` rather
+#: the adopted read-API release links the adopted engine, so its views read the same
+#: run records the engine writes. Kept as a named `None` rather
 #: than deleted so the gate below states its own escape hatch is shut — a `Divergence`
 #: written here fails that gate rather than excusing a pair measured apart.
 DECLARED_UI_ENGINE_DIVERGENCE: Divergence | None = None
@@ -1014,7 +1019,7 @@ def _sbom_crates(distribution: str) -> set[str]:
 
 
 @pytest.mark.parametrize("distribution", [ENGINE_DISTRIBUTION, UI_API_DISTRIBUTION])
-def test_no_engine_this_host_installs_links_the_retired_bus_agent_crate(
+def test_no_linked_engine_uses_the_retired_bus_agent_crate(
     distribution: str,
 ) -> None:
     """Re-adopting a release that still links `onemessagebus-agent` fails here.
@@ -1333,6 +1338,11 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
             FAILED_TOOL_CALL_CORE_FLOOR,
             "marks a failed Claude tool call `failed` in its normalized status",
         ),
+        (
+            UNRECONCILABLE_PIN.crate,
+            PLUGINS_OFF_CORE_FLOOR,
+            "launches Codex with plugins off unless a config opts in",
+        ),
     ],
     ids=(
         "onevcs",
@@ -1341,6 +1351,7 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
         UNRECONCILABLE_PIN.crate,
         "onevcs-held-publication",
         f"{UNRECONCILABLE_PIN.crate}-failed-tool-call",
+        f"{UNRECONCILABLE_PIN.crate}-plugins-off",
     ),
 )
 def test_the_linked_sibling_carries_this_plans_change_to_it(
@@ -1418,6 +1429,24 @@ def test_the_installed_oneharness_cli_is_built_from_a_core_carrying_the_chain_cl
         f"below the {CHAIN_CLASSIFICATION_CORE_FLOOR} that decides and attributes what an "
         "unclassified fallback failure stops; a wrapper-spawned turn's stopped chain would "
         "read as it did before"
+    )
+
+
+def test_the_installed_oneharness_cli_is_built_from_a_core_launching_codex_with_plugins_off() -> (
+    None
+):
+    """The CLI's own core is held to the plugins-off floor the engine's linked core is.
+
+    The engine's linked core answers for a dispatch's in-process turns only; the usage
+    probes, the wrapper scripts and onejudge's spawning seam start Codex through the
+    `oneharness-cli` wheel this pin names, so that road is held on that wheel's SBOM.
+    """
+    built_from = Release.parse(_sibling_core("oneharness-cli"), "oneharness-cli's SBOM")
+
+    assert built_from >= PLUGINS_OFF_CORE_FLOOR, (
+        f"the installed oneharness-cli is built from {UNRECONCILABLE_PIN.crate} {built_from}, "
+        f"below the {PLUGINS_OFF_CORE_FLOOR} that launches Codex with plugins off; every "
+        "usage probe and wrapper-spawned Codex turn downloads the plugin catalog on start"
     )
 
 

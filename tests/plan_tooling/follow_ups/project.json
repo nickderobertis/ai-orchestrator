@@ -115,6 +115,7 @@
             "support-pytest-temp-root",
             "support-registered-checkouts",
             "support-run-task-store-instruction",
+            "support-pooled-server-state",
             "support-short-state",
             "support-waits"
           ]

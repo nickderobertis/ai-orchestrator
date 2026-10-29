@@ -872,6 +872,9 @@ class JourneyProject(NamedTuple):
 #: `reads_docs` one — a journey that copies this checkout — in its project's `test-docs`
 #: target keyed on the whole workspace, which only `workspace-copies` declares.
 E2E_JOURNEYS: tuple[JourneyProject, ...] = (
+    JourneyProject(
+        "pooled-server-session", f"{E2E_ROOT}/pooled_server_session", "pooledServerSessionWorkspace"
+    ),
     JourneyProject("spike-brief", f"{E2E_ROOT}/spike_brief", "spikeBriefWorkspace"),
     JourneyProject("screened-export", f"{E2E_ROOT}/screened_export", "screenedExportWorkspace"),
     JourneyProject("review-drafting", f"{E2E_ROOT}/review_drafting", "reviewDraftingWorkspace"),

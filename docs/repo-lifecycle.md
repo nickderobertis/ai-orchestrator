@@ -99,7 +99,7 @@ they link moved, so no other pin follows, and the onevcs store schema is unchang
 The run-settlement write marks a plan's home `Done` by closing its issue as completed,
 and a home card follows its issue's closure by a landing or the on-demand reconcile;
 `tests/e2e/publish_and_landing/test_landing_closes_board_cards_e2e.py` drives both.
-From onepipeline 0.79.0, onepipeline-ui 0.41.0,
+Earlier, from onepipeline 0.79.0, onepipeline-ui 0.41.0,
 onemessagebus 0.9.1, oneagentgraph 0.5.14, onejudge 0.19.5 and onetaskgraph 0.8.0: the
 engine 0.80.1 links onevcs 0.56.3 — the release the manager's CLI already ran — whose
 publication keeps one holder record per publication, resumes an unchanged green change at
@@ -116,8 +116,13 @@ note by interrupting the addressed party's turn, adds the `turn-end` delivery an
 as well as a carried one. It links oneagentgraph 0.7.0, onejudge 0.20.0, onemessagebus
 0.9.3 and the onetaskgraph 0.9.0 store crates — the store that moves to `Done` the items, on
 every source `onetaskgraph.yaml` declares, whose issues a landing the engine performs or
-relays closes — so those four CLI pins follow it. The read API 0.43.0 links that engine. The
-onevcs store schema is unchanged, so nothing migrates.
+relays closes — so those four CLI pins follow it. The read API 0.43.0 links that engine.
+The engine’s linked core and the pinned oneharness CLI both launch Codex with plugins
+off; `tests/test_linked_libraries.py` holds both wheels to that floor. The CLI also
+marks the shared app-server it spawns for a mock Codex and records token usage for a
+controlled app-server turn. It also keeps the pooled server’s
+sweeper alive until its server exits, so dispatch cleanup leaves no orphan server.
+The onevcs store schema is unchanged, so nothing migrates.
 From onepipeline 0.75.0, onepipeline-ui 0.39.0,
 onevcs 0.52.0, oneagentgraph 0.5.13 and onetaskgraph 0.7.1: the engine 0.79.0 carries the
 review-feedback loop — a draft placed on the unlanded

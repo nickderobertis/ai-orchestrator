@@ -88,6 +88,7 @@
       "!{workspaceRoot}/tests/e2e/repos_apply_credentials/test_*.py",
       "!{workspaceRoot}/tests/e2e/host_local_registration/test_*.py",
       "!{workspaceRoot}/tests/e2e/checks_wait/test_*.py",
+      "!{workspaceRoot}/tests/e2e/pooled_server_session/test_*.py",
       "!{workspaceRoot}/tests/e2e/spike_brief/test_*.py",
       "!{workspaceRoot}/tests/e2e/screened_export/test_*.py",
       "!{workspaceRoot}/tests/e2e/review_drafting/test_*.py",
@@ -198,6 +199,7 @@
             "support-plan-store-user-layer",
             "support-pytest-temp-root",
             "support-registered-checkouts",
+            "support-pooled-server-state",
             "support-short-state",
             "support-waits"
           ]

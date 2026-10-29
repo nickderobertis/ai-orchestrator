@@ -142,6 +142,7 @@
             "support-published-tools",
             "support-pytest-temp-root",
             "support-registered-checkouts",
+            "support-pooled-server-state",
             "support-short-state",
             "support-sibling-facts",
             "support-waits"
@@ -198,6 +199,7 @@
             "support-published-tools",
             "support-pytest-temp-root",
             "support-registered-checkouts",
+            "support-pooled-server-state",
             "support-short-state",
             "support-sibling-facts",
             "support-waits"

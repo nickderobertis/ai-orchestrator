@@ -111,11 +111,14 @@ def page_width() -> int:
     return int(found.group(1))
 
 
-def run(command: list[str], repair: str, env: Mapping[str, str] | None = None) -> str:
+def run(
+    command: list[str],
+    repair: str,
+    env: Mapping[str, str] | None = None,
+    cwd: Path = REPO_ROOT,
+) -> str:
     """``command``'s output, or :class:`Unmeasured` naming its failure and ``repair``."""
-    done = subprocess.run(
-        command, cwd=REPO_ROOT, env=env, text=True, capture_output=True, check=False
-    )
+    done = subprocess.run(command, cwd=cwd, env=env, text=True, capture_output=True, check=False)
     if done.returncode != 0:
         raise Unmeasured(
             f"{' '.join(command[:4])} exited {done.returncode}: {done.stderr.strip()}; {repair}"
@@ -277,8 +280,11 @@ def measure(mode: str, shapes: Mapping[int, Shape], fixtures: Path) -> tuple[flo
             read = [str(REPO_ROOT / ".venv" / "bin" / "onetaskgraph"), "project", "graph"]
             read += [project, "--direction", "auto", "--group-by", plan_units.UNIT_KEY]
             mermaid = work / f"plan-{tasks}.mmd"
-            mermaid.write_text(run([*read, "--format", "mermaid"], provision, env), "utf-8")
-            graph = json.loads(run([*read, "--format", "json"], provision, env))
+            # Read from the scratch directory, which holds no `onetaskgraph.yaml`: a graph
+            # read asks every configured source, and the checkout's gitignored `local-md`
+            # roots are absent from a publication worktree, which the store refuses.
+            mermaid.write_text(run([*read, "--format", "mermaid"], provision, env, work), "utf-8")
+            graph = json.loads(run([*read, "--format", "json"], provision, env, work))
             read_graph = planned_tasks.parse_graph(graph)
             svg = work / f"plan-{tasks}.svg"
             run(

@@ -5,7 +5,9 @@
   "tags": [
     "type:test-support"
   ],
-  "implicitDependencies": [],
+  "implicitDependencies": [
+    "support-pooled-server-state"
+  ],
   "namedInputs": {
     "testSupport": [
       "{workspaceRoot}/tests/short_state.py",

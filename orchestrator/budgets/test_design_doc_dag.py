@@ -118,6 +118,23 @@ def test_two_fixtures_measure_through_the_real_render_as_their_minimum_and_maxim
     assert "plan-4: " in shown and "3 units" in shown and "6 units" in shown, shown
 
 
+def test_a_checkout_source_whose_root_is_absent_leaves_the_measurement_standing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A publication worktree holds none of `onetaskgraph.yaml`'s gitignored roots, and a
+    `local-md` source refuses a root it cannot canonicalize for every graph read; the
+    measurement reads its scratch store alone, so the checkout's sources never answer it."""
+    monkeypatch.setenv(
+        "ONETASKGRAPH_SOURCES__FOLLOW_UP_RUNS__CONFIG__ROOT", str(tmp_path / "absent")
+    )
+
+    width, shown = design_doc_dag.measure(
+        "natural-width", {4: SMALL}, _fixtures(tmp_path / "fixtures")
+    )
+
+    assert width > 0 and shown.startswith("plan-4: "), shown
+
+
 def _chromium_entries() -> set[str]:
     """What Chromium and Puppeteer name at the top of the temporary directory."""
     return {

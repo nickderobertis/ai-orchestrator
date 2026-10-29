@@ -274,9 +274,12 @@ def _held_launch(tmp_path: Path, oneharness_bin: str, token: str) -> Generator[L
 
     The observer is left on — this journey does not pass `--dag-graph off` — because the
     monitor it runs is the process the defect left behind, and a run without one would
-    prove the teardown against a smaller tree than an operator's.
+    prove the teardown against a smaller tree than an operator's. The run is named by
+    `token`, because the run id is what every member's scratch carries as its
+    `onepipeline.run_id` label: from oneagentgraph 0.8.0 a turn record points at the
+    transcript instead of copying the task, so the task's own text names no scratch.
     """
-    run = RunId("teardown-reaps-e2e")
+    run = RunId(token)
     environment = _environment(tmp_path, oneharness_bin)
     environment[AGENT_DELAY_ENV] = str(HELD_SECONDS)
     plan = tmp_path / f"{run}.plan.json"

@@ -911,7 +911,7 @@ note `queued`, an answer what a turn later makes of it never rewrites — and on
 note to the same receiver waits behind one; `just status` names each note still in an
 inbox, and an envelope left with no outcome is the run's next driver's to answer.
 `tests/e2e/launch_monitor_observer/test_live_note_interrupts_a_controlled_turn_e2e.py`,
-`tests/e2e/launch_monitor_observer/test_live_note_leaves_the_run_journalling_e2e.py` and
+`tests/e2e/launch_monitor_observer/test_turn_end_note_leaves_the_run_journalling_e2e.py` and
 `tests/ask_seam/channel_reply/test_channel_reply_e2e.py` drive all of it.
 <!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 `amend` binds the stored bar: it replaces the node's binding amendment for its

@@ -721,6 +721,7 @@ def _paced_launch(tmp_path: Path, oneharness_bin: str) -> Paced:
                 timeout=e2e_timeout(60),
                 check=False,
             )
+    print(f"observer stop returned at {datetime.now(UTC).isoformat()}")
     ending = _ending(environment)
     return Paced(
         events=_graph_events(state),

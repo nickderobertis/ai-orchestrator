@@ -121,6 +121,11 @@ class Usage(TypedDict):
     output_tokens: int
 
 
+#: What every billed turn of this provider bills; `tests/e2e/spike_brief/backend.py` bills its
+#: controlled turns the same figures by reading this one.
+TURN_USAGE = Usage(input_tokens=4, cached_input_tokens=0, output_tokens=1)
+
+
 class TurnEvent(TypedDict):
     """One line of the codex event stream, as this provider emits it.
 
@@ -191,7 +196,7 @@ def turn_events(text: str, *, billed: bool) -> tuple[TurnEvent, ...]:
     """
     completed = TurnEvent(type="turn.completed")
     if billed:
-        completed["usage"] = Usage(input_tokens=4, cached_input_tokens=0, output_tokens=1)
+        completed["usage"] = TURN_USAGE
     return (
         TurnEvent(type="turn.started"),
         TurnEvent(type="thread.started", thread_id="fake-codex-thread"),
@@ -496,7 +501,7 @@ def llmlint_verdict(batch: Batch) -> str:
 
 def main() -> int:
     if sys.argv[1:] == ["--version"]:
-        # The oneharness-core the 0.5.13 oneagentgraph links probes the binary's version
+        # The oneharness-core the 0.5.14 oneagentgraph links probes the binary's version
         # before a turn. A probe is not a launch: counting it would shift every scripted
         # answer and `FAKE_CODEX_UNAVAILABLE_ATTEMPTS` onto the wrong turn.
         print("codex-cli 0.0.0 (fake_codex)")

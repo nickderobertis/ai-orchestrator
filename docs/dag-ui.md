@@ -113,6 +113,10 @@ from the unwatched route, and the one **host-wide shutdown**
 its per-run **Stop**, its channel's **Next**, reply, raised surface and `attest`, and the
 host by its one host-wide shutdown; every other route the view calls reads. Every read
 lives in the project sidebar, the run's three tabs, **Run details** and **Host**.
+**Watching, adopting and shutting down one run or one session's runs are not the
+browser's**: onepipeline-ui 0.45.0 removed them, because a person at a tab cannot tell how
+they would affect another manager already watching or driving the run, and each removed
+route answers `404 removed_route`.
 What the browser never does is launch: a plan is authored and launched from a terminal, and
 everything here is *post*-launch. Which is also why **a planning run's channel is
 answerable from the browser like any other** — `just plan`'s two launches are
@@ -144,8 +148,9 @@ launcher — because the refusal on its own is equally satisfied by a server wit
 session at all. Each of those is a `POST` to the same origin the view was served from,
 which is the arrangement an operator acts through.
 
-**No dispatch runs under the engine the reader links.** The binary drives no run, hidden
-CLI verbs included, so `config/onepipeline-ui.version` governs nothing a dispatch does;
+**The browser adopts nothing, so no dispatch runs under the engine the reader links.**
+The binary drives no run, hidden CLI verbs included, so `config/onepipeline-ui.version`
+governs nothing a dispatch does;
 `tests/e2e/launch_monitor_observer/test_extends_chain_dispatch_e2e.py` holds that a run
 offered to it stays undriven. The suite still holds the two pins to linking one engine,
 for read compatibility — see [Which release is answering](#which-release-is-answering)
@@ -158,9 +163,7 @@ The view can shut down the host it serves, through **the same verb `just shutdow
 seam as the acting session above, and nothing about the interrupt, the wait, the kill or
 the push exists in the view or in this repository.
 <!-- llmlint: ignore[no_redundant_instruction_pointers] The task that added this section requires pointing a reader at the supervision guidance for what a soft shutdown does rather than restating it here, and this page is not auto-loaded: a reader who opened it for the browser control has not read that guidance. -->
-What a soft shutdown does to a run —
-and why it is not a stop — is `AGENTS.md`'s supervision guidance under `just
-shutdown`; `just shutdown` is the terminal form of the same three scopes.
+What a soft shutdown does is `AGENTS.md`'s supervision guidance under `just shutdown`.
 
 **Shut down the entire host** is the one shutdown the view has, on the **Host** page,
 and is `POST /api/v2/shutdown` with `scope` `host`; every other scope — the run and the

@@ -134,6 +134,7 @@
             "support-pytest-temp-root",
             "support-registered-checkouts",
             "support-scratch-identity",
+            "support-pooled-server-state",
             "support-short-state",
             "support-waits"
           ]
