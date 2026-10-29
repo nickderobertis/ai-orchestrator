@@ -1,6 +1,6 @@
 """The plan store this host locks carries a document's images through a copy.
 
-A visual plan's spike report and design document reference before-and-after screenshots
+A visual plan's spike report and design document reference paired and single screenshots
 as `![alt](./<name>)`, are written into the drafting source with each image as an
 `--asset`, and are copied onward from there. This drives that sequence through the locked
 `.venv/bin/onetaskgraph` every plan-store read here runs, run from this checkout as
@@ -121,25 +121,30 @@ def _shown(environment: Mapping[str, str], qualified: str) -> ShownDocument:
     return ShownDocument(content=content, assets=assets)
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The plan-store-assets
+# leaf owns this real-store journey. Its support-conftest dependency supplies shared pytest
+# isolation; consumers of that support do not depend on this leaf or run its subprocesses.
 def test_a_documents_images_survive_its_copy_into_a_second_source(tmp_path: Path) -> None:
     """Each image is listed on both copies with one sha256 and the original bytes on disk.
 
-    The document is created with two `--asset` images its content references, copied into
+    The document is created with four `--asset` images its content references, copied into
     the second source, and read back from each with `document show --json`: both list the
-    two assets in the order the content references them, each with the sha256 of the bytes
+    four assets in the order the content references them, each with the sha256 of the bytes
     generated here and a `path` holding exactly those bytes, and the copy's content is the
     content written.
     """
     images = tmp_path / "screenshots"
     images.mkdir()
     generated = {
-        name: _png(images / name, seed) for seed, name in enumerate(("before.png", "after.png"))
+        name: _png(images / name, seed)
+        for seed, name in enumerate(("before.png", "after.png", "variant.png", "compact.png"))
     }
-    assert len({hashlib.sha256(image).hexdigest() for image in generated.values()}) == 2
+    assert len({hashlib.sha256(image).hexdigest() for image in generated.values()}) == 4
     content = (
         "# Spike report\n\n"
         "![The settings page before](./before.png)\n\n"
-        "![The settings page after](./after.png)\n"
+        "![The settings page after](./after.png)\n\n"
+        "![New variant](./variant.png)\n\n![Compact variant](./compact.png)\n"
     )
     body = tmp_path / "report.md"
     body.write_text(content, encoding="utf-8")
@@ -167,4 +172,7 @@ def test_a_documents_images_survive_its_copy_into_a_second_source(tmp_path: Path
             assert asset.content_type == "image/png", (qualified, asset)
             assert asset.path.read_bytes() == image, (qualified, asset)
             paths.add(asset.path)
-    assert len(paths) == 4, f"each source holds its own copy of each image: {paths}"
+    assert len(paths) == 8, f"each source holds its own copy of each image: {paths}"
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

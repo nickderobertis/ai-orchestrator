@@ -45,7 +45,7 @@ plan's main run succeeds:
   dependency edge on a spike.
 * a plan is **visual** — it changes what a user sees — exactly when its spikes project holds
   the initial node :data:`VISUAL_SPIKE`, whose canonical report :func:`visual_report_id`
-  answers ``visual_changes`` with each expected change's before-and-after screenshots as
+  answers ``visual_changes`` with each expected change's paired or single images as
   assets of the report; the design document restates that answer, `scripts/finish-plan.sh`
   quotes it to the document's writer, and :mod:`orchestrator.design_approval` refuses to
   approve a document that differs from its current evidence, selected through

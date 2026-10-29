@@ -86,3 +86,17 @@ def test_the_writer_is_told_visual_changes_is_quoted_by_its_task_and_never_compo
     assert "The budget answers and `visual_changes` are the parts you do not compose" in role
     assert "task quotes `visual_changes` from the plan's visual spike report" in role, role
     assert "giving each image with `--asset`" in role, role
+
+
+def test_choice_guidance_is_authoritative_and_baselines_are_only_for_pairs() -> None:
+    guidance = _flat(_spikes_guidance())
+    assert (
+        guidance.count(
+            "Use pairs for changed existing views and singles for new views and variants."
+        )
+        == 1
+    )
+    assert (
+        "The planner can brief a choice; otherwise the spike agent decides per change." in guidance
+    )
+    assert 'For paired entries only, the "before"' in guidance

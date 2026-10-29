@@ -1071,3 +1071,64 @@ def test_the_guidance_says_the_flow_generates_the_graph_and_only_for_an_edged_pl
     section = _guidance("planned_tasks_guidance")
     assert "authors only `delivers`" in section, section
     assert 'answers `dag_image` with `""` and shows none' in section, section
+
+
+@pytest.mark.parametrize("template", ["spike-report", "design-doc"])
+def test_mixed_visual_entries_share_requirements_and_render_modes(
+    template: str, tmp_path: Path
+) -> None:
+    """Both real renderers preserve pairs and show singles without comparison labels."""
+    resolved = _run([str(WRAPPER), "template", "resolve", template, "--json"])
+    assert resolved.returncode == 0, resolved.stderr
+    changes = [
+        *VISUAL_CHANGES[:1],
+        {"name": "New view", "description": "A new view.", "after": "new.png"},
+        {"name": "Variant", "description": "A compact view.", "after": "compact.png"},
+    ]
+    answers = (
+        ANSWERS
+        if template == "design-doc"
+        else {
+            "spike": "spike-visual",
+            "branch": "visual",
+            "harness": "capture",
+            "method": "fixture data",
+            "candidates": [],
+            "findings": [],
+        }
+    )
+    body = _render(resolved.stdout, {**answers, "visual_changes": changes}, tmp_path)
+    assert [body.index(f"### {change['name']}\n") for change in changes] == sorted(
+        body.index(f"### {change['name']}\n") for change in changes
+    )
+    for change in changes:
+        section = body.split(f"### {change['name']}\n", 1)[1].split("\n#", 1)[0]
+        assert change["description"] in section
+        if "before" in change:
+            assert f"**Before**\n\n![Before: {change['name']}](./{change['before']})" in section
+            assert f"**After**\n\n![After: {change['name']}](./{change['after']})" in section
+        else:
+            assert f"![{change['name']}](./{change['after']})" in section
+            assert "**Before**" not in section and "**After**" not in section
+    description = _front_matter(REPO_ROOT / "templates" / f"{template}.md.j2")["variables"][
+        "visual_changes"
+    ]["description"]
+    assert "required non-empty string keys" in description
+    assert "`after` and optional `before`" in description
+    assert "Only absence of `before`" in description
+
+
+def test_nonvisual_spike_omitted_and_empty_evidence_render_identically(tmp_path: Path) -> None:
+    resolved = _run([str(WRAPPER), "template", "resolve", "spike-report", "--json"])
+    assert resolved.returncode == 0, resolved.stderr
+    answers = {
+        "spike": "spike-cost",
+        "branch": "cost",
+        "harness": "measure",
+        "method": "measurement",
+        "candidates": [],
+        "findings": [],
+    }
+    absent = _render(resolved.stdout, answers, tmp_path)
+    assert _render(resolved.stdout, {**answers, "visual_changes": []}, tmp_path) == absent
+    assert "## Visual changes" not in absent

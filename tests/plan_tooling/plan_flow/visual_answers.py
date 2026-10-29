@@ -46,7 +46,7 @@ def main(argv: list[str]) -> int:
         }
     report_digests = {asset["name"]: asset["sha256"] for asset in assets}
     for change in changes:
-        for side in ("before", "after"):
+        for side in (key for key in ("before", "after") if key in change):
             name = change[side]
             if existing.get(name) != report_digests[name]:
                 print(held[name])

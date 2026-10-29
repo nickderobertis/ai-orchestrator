@@ -1,7 +1,7 @@
-"""`just finish-plan` quotes a visual plan's before-and-after screenshots to its writer.
+"""`just finish-plan` quotes a visual plan's paired and single screenshots to its writer.
 
 A plan whose project holds its visual spike's report, `<plan>-spike-visual-report`, changes what a
-user sees, and the design document a person approves it as shows each change as a pair of
+user sees, and the design document a person approves it as shows each change with paired or single
 images. The writer does not compose that answer: the tail's task quotes the report's
 `visual_changes` and, for each image, where the store holds it, and holds the document to
 restating the one and holding the other as its own assets.
@@ -77,7 +77,7 @@ pytestmark = [
 #: The stand-in writer's step that restates the report into its answers.
 RESTATES_THE_REPORT = Path(__file__).resolve().parent / "visual_answers.py"
 
-#: The two changes the visual spike reported, each a pair of images the report holds.
+#: The visual spike reports one pair and two single-image variants.
 CHANGES = [
     {
         "name": "Node listing",
@@ -88,9 +88,9 @@ CHANGES = [
     {
         "name": "Run status line",
         "description": "The CLI's status line names the run instead of its id.",
-        "before": "status-before.png",
         "after": "status-after.png",
     },
+    {"name": "Status variant", "description": "A compact status view.", "after": "variant.png"},
 ]
 
 
@@ -174,7 +174,7 @@ def _images(tmp_path: Path) -> dict[str, bytes]:
     images = {
         name: write_noise_png(tmp_path / name, seed, LARGE if seed == 0 else (220, 210 + seed))
         for seed, name in enumerate(
-            side for change in CHANGES for side in (change["before"], change["after"])
+            change[key] for change in CHANGES for key in ("before", "after") if key in change
         )
     }
     # llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] The bounds are this journey's
@@ -257,6 +257,7 @@ class Visual(NamedTuple):
     report_assets: dict[str, str]
     design_task: StoredTask
     copied: dict[str, Any]
+    answers: dict[str, Any]
 
 
 RUN = RunId("finish-plan-visual-e2e")
@@ -264,7 +265,7 @@ RUN = RunId("finish-plan-visual-e2e")
 
 @pytest.fixture(scope="module")
 def visual(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Visual:
-    """Drive the tail once over a plan holding its visual spike's report with two changes."""
+    """Drive the tail once over a plan holding its visual spike's report with mixed evidence."""
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
     tmp_path = tmp_path_factory.mktemp("finish-plan-visual")
@@ -293,7 +294,19 @@ def visual(tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str) -> Vis
         (design,) = [one for one in documents if str(one["id"]).endswith(drafted.document)]
         copied = _store(bench, "document", "show", str(design["id"]))
         return Visual(
-            finish, drafted, report, images, report_assets, _design_task(bench, RUN), copied
+            finish,
+            drafted,
+            report,
+            images,
+            report_assets,
+            _design_task(bench, RUN),
+            copied,
+            _store(
+                bench,
+                "document",
+                "answers",
+                f"{drafted.qualified.partition(':')[0]}:{drafted.document}",
+            ),
         )
     finally:
         _stop(bench, f"{RUN}{DESIGN_RUN_SUFFIX}")
@@ -322,12 +335,20 @@ def test_the_document_on_the_destination_shows_each_pair_and_holds_its_images(
     visual: Visual,
 ) -> None:
     """The writer did what its task quoted: the copy carries the section and the four images."""
+    assert visual.answers["visual_changes"] == CHANGES
     (item,) = visual.copied["items"]
     content = item["item"]["content"]
     assert "\n## Visual changes\n" in content, content
+    positions = [content.index(f"### {change['name']}\n") for change in CHANGES]
+    assert positions == sorted(positions)
     for change in CHANGES:
-        assert f"![Before: {change['name']}](./{change['before']})" in content, content
-        assert f"![After: {change['name']}](./{change['after']})" in content, content
+        section = content.split(f"### {change['name']}\n", 1)[1].split("\n#", 1)[0]
+        if "before" in change:
+            assert f"![Before: {change['name']}](./{change['before']})" in section
+            assert f"![After: {change['name']}](./{change['after']})" in section
+        else:
+            assert f"![{change['name']}](./{change['after']})" in section
+            assert "**Before**" not in section and "**After**" not in section
     held = {str(asset["name"]): asset for asset in visual.copied["assets"]}
     assert set(held) == set(visual.images), held
     for name, image in visual.images.items():
@@ -688,3 +709,75 @@ def test_plans_in_one_source_each_quote_their_own_visual_report_and_an_old_id_on
     assert f"`{old_report}`" in content, content
     approved = _just("approve-design", _landed(bench, old), environment=bench.environment)
     assert approved.returncode == OK, approved.stdout + approved.stderr
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("after", None),
+        ("after", ""),
+        ("after", 7),
+        ("after", "unheld.png"),
+        ("before", None),
+        ("before", ""),
+        ("before", 7),
+        ("before", "unheld.png"),
+        ("after", "MISSING"),
+    ],
+)
+def test_malformed_visual_evidence_is_refused_at_store_or_finish(
+    tmp_path: Path, oneharness_bin: str, field: str, value: Any
+) -> None:
+    """The real store or shell refuses bad evidence before launching the writer."""
+    bench = _bench(tmp_path, oneharness_bin, PASSES)
+    drafted = _draft("finish-malformed-visual")
+    images = _images(tmp_path / "images")
+    changes = [dict(CHANGES[0])]
+    if value == "MISSING":
+        del changes[0][field]
+    else:
+        changes[0][field] = value
+    answers = tmp_path / "malformed.json"
+    answers.write_text(json.dumps(_report_answers(drafted.project, changes)), encoding="utf-8")
+    referenced = [name for name in images if name in changes[0].values()]
+    stored = subprocess.run(
+        [
+            str(ONETASKGRAPH_BIN),
+            "document",
+            "create",
+            drafted.qualified.partition(":")[0],
+            "--project",
+            drafted.project,
+            "--title",
+            "Malformed visual report",
+            "--id",
+            spike_plan.visual_report_id(drafted.project),
+            "--answers",
+            str(answers),
+            "--template-loader",
+            "-",
+            "--no-interactive",
+            "--json",
+            *(flag for name in referenced for flag in ("--asset", str(tmp_path / "images" / name))),
+        ],
+        cwd=REPO_ROOT,
+        env=bench.environment,
+        input=_loader("spike-report"),
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+        check=False,
+    )
+    if stored.returncode:
+        failure = json.loads(stored.stdout)["failure"]
+        assert failure["class"] == "refused", stored.stderr
+        assert any(word in stored.stderr.lower() for word in ("image", "asset", "undefined"))
+        return
+    run = RunId("finish-malformed-visual")
+    brief = _brief(tmp_path, drafted, "malformed")
+    finished = _just(
+        "finish-plan", str(brief), "--name", run, "--to", DESTINATION, environment=bench.environment
+    )
+    assert finished.returncode == UNRUNNABLE, finished.stdout + finished.stderr
+    assert "answers visual_changes" in finished.stderr
+    assert not (bench.runs / f"{run}{DESIGN_RUN_SUFFIX}").exists()

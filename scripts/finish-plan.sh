@@ -231,7 +231,7 @@ budget_criterion = (
 # each image it holds quoted here, and every other plan has the one criterion that it is `[]`.
 visual_task = ""
 if visual_report:
-    keys = ("name", "description", "before", "after")
+    keys = ("name", "description", "after")
     answered, shown = json.loads(visual_answers), json.loads(visual_shown)
     changes = answered.get("visual_changes") if isinstance(answered, dict) else None
     if not isinstance(changes, list) or not changes:
@@ -242,21 +242,21 @@ if visual_report:
         for asset in (assets if isinstance(assets, list) else [])
         if isinstance(asset, dict) and isinstance(asset.get("name"), str) and isinstance(asset.get("path"), str)
     }
-    named = [change.get(side) for change in changes if isinstance(change, dict) for side in ("before", "after")]
-    # llmlint: ignore[changed_behavior_has_e2e] Unreachable through the store as it stands: rendering the spike-report template refuses an entry missing one of the four keys (`a value there is undefined`) and a document referencing an image it is not given, so a stored report always passes this; it guards the quotation against a store that ever accepts one.
-    if any(not isinstance(change, dict) or not all(isinstance(change.get(key), str) and change[key] for key in keys) for change in changes) or any(name not in held for name in named):
-        sys.exit(f"{visual_report} answers visual_changes that are not each a name, description, before and after naming images it holds; regenerate the report from the spike-report template")
+    named = [change.get(side) for change in changes if isinstance(change, dict) for side in ("before", "after") if side in change]
+    if any(not isinstance(change, dict) or not all(isinstance(change.get(key), str) and change[key] for key in (*keys, *(("before",) if "before" in change else ()))) for change in changes) or any(not isinstance(name, str) or name not in held or name != pathlib.PurePath(name).name for name in named):
+        sys.exit(f"{visual_report} answers visual_changes that are not each non-empty name, description, required after and optional before naming bare image filenames it holds; regenerate the report from the spike-report template")
     images = "\n".join(f"- `{name}`: `{held[name]}`" for name in named)
-    # In the order the templates declare the four keys, rather than the sorted order the store answers in.
-    quoted = json.dumps([{key: change.get(key) for key in keys} for change in changes], ensure_ascii=False, indent=2)
+    # Keep absent optional keys absent, in the declaration order.
+    quoted = json.dumps([{key: change[key] for key in ("name", "description", "before", "after") if key in change} for change in changes], ensure_ascii=False, indent=2)
     visual_task = (
         f"The plan\u2019s visual spike reported what the plan changes that a user sees in "
         f"`{visual_report}`. Answer `visual_changes` with exactly its entries, in its order:"
         f"\n\n```json\n{quoted}\n```\n\n"
-        f"Each `before` and `after` there names an image that report holds; the store keeps "
+        f"Preserve descriptions and absent keys exactly; never insert `before: null`. "
+        f"Each required `after` and present `before` there names an image that report holds; the store keeps "
         f"each at the path beside its name below. Give every one of them to the command that "
         f"stores the document as `--asset <path>`, so each image is an asset of the design "
-        f"document itself:\n\n{images}\n\n"
+        f"document itself, with its bytes unchanged:\n\n{images}\n\n"
     )
     visual_criterion = (
         f"The document\u2019s `visual_changes` answer restates the `visual_changes` answer of "

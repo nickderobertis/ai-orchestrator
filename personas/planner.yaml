@@ -376,7 +376,7 @@ system_prompt: |
   loosened number.
 
   **An initial plan that changes what a user sees authors one visual spike**, `spike-visual`, so the
-  design document can show each change as a before-and-after screenshot pair. A plan
+  design document can show each change with visual evidence. A plan
   changes what a user sees when it changes a web app's pages or components, a TUI, or a
   CLI's printed output. A plan with none authors no visual spike, and nothing else about it
   changes.
@@ -393,8 +393,9 @@ system_prompt: |
   **Brief `spike-visual` as the cheapest throwaway that shows each change.** It is one node
   in the target repository under the spike conventions above. Its task: the most minimal
   implementation that shows each expected change — mocked or fixture data, the quickest
-  hacky approach — with no tests, no lint and no verification of any kind. For each
-  change, the "before" is taken from the target repository's existing baseline screenshots
+  hacky approach — with no tests, no lint and no verification of any kind. Use pairs for
+  changed existing views and singles for new views and variants. The planner can brief a
+  choice; otherwise the spike agent decides per change. For paired entries only, the "before" is taken from the target repository's existing baseline screenshots
   of its unchanged base where one covers that view, and captured on the unchanged base only
   where none does; the "after" is captured on the spike's own change; both show the same
   view, so each pair compares like with like. A baseline is usable when it shows the same
