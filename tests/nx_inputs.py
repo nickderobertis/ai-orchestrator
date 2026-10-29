@@ -903,6 +903,12 @@ E2E_JOURNEYS: tuple[JourneyProject, ...] = (
         "hostLocalRegistrationWorkspace",
     ),
     JourneyProject("checks-wait", f"{E2E_ROOT}/checks_wait", "checksWaitWorkspace"),
+    # The installer journeys drive the real `scripts/setup-llmlint.sh` and `uv tool install`
+    # against a throwaway tool directory, so they sit behind an edge of their own, keyed on
+    # the script, the pin it reads and the lock that decides which `uv` resolves.
+    JourneyProject(
+        "llmlint-installer", f"{E2E_ROOT}/llmlint_installer", "llmlintInstallerWorkspace"
+    ),
     # The journey modules left directly under `tests/e2e/`, which the families above leave
     # alone: today the registry installer's, kept at its path because the rules file
     # `config/onevcs.rules.yml` names it there, and a change to that file is one a sibling's

@@ -1,0 +1,40 @@
+{
+  "name": "llmlint-installer",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "tests/e2e/llmlint_installer",
+  "tags": [
+    "scope:llmlint-installer",
+    "type:tests"
+  ],
+  "implicitDependencies": [
+    "support-conftest",
+    "support-llmlint-install"
+  ],
+  "namedInputs": {
+    "llmlintInstallerWorkspace": [
+      "{workspaceRoot}/config/oneharness.version",
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/orchestrator/root.py",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/scripts/setup-llmlint.sh",
+      "{workspaceRoot}/uv.lock",
+      "{projectRoot}/**/*"
+    ]
+  },
+  "targets": {
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest tests/e2e/llmlint_installer -n 4 --dist loadgroup --no-cov",
+      "options": {
+        "cwd": "."
+      },
+      "inputs": [
+        "llmlintInstallerWorkspace",
+        {
+          "input": "testSupport",
+          "dependencies": true
+        }
+      ]
+    }
+  }
+}

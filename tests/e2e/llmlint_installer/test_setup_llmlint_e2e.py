@@ -14,6 +14,7 @@ Everything above it is real — the script, the `uv tool install` it runs and it
 resolver, the tool directory and shim it installs — and that directory is a throwaway
 one `uv`'s own `UV_TOOL_DIR` / `UV_TOOL_BIN_DIR` name, so the host's install is never
 touched.
+
 """
 
 from __future__ import annotations
@@ -343,3 +344,147 @@ def test_the_installer_installs_nothing_when_the_pin_is_not_a_release(
     assert installed_llmlint(tool_home.tool_dir) is None
     assert not (tool_home.tool_dir / LLMLINT_DISTRIBUTION).exists()
     assert f"{ENTRY_POINT} not installed" in completed.stderr, completed.stderr
+
+
+@dataclass(frozen=True)
+class PathStamp:
+    """What a removal and recreation of one path changes: its inode and its mtime."""
+
+    inode: int
+    mtime_ns: int
+
+
+def _install_fingerprint(home: ToolHome) -> dict[Path, PathStamp]:
+    """Every path of the llmlint link and tool environment, stamped.
+
+    `uv tool install --upgrade` removes and recreates both even when the release does
+    not change, so a run that leaves them alone leaves every stamp here as it was.
+    """
+    environment = home.tool_dir / LLMLINT_DISTRIBUTION
+    paths = [home.bin_dir / ENTRY_POINT, environment, *environment.rglob("*")]
+    return {
+        path: PathStamp(stat.st_ino, stat.st_mtime_ns)
+        for path, stat in ((path, path.lstat()) for path in paths)
+    }
+
+
+@dataclass(frozen=True)
+class WatchedRun:
+    """One installer run, and how often the link was polled and found missing during it."""
+
+    completed: subprocess.CompletedProcess[str]
+    polls: int
+    misses: int
+
+
+def _run_watching_the_link(script: Path, env: dict[str, str], link: Path) -> WatchedRun:
+    """Run the installer while polling `link` for as long as the run lasts."""
+    process = subprocess.Popen(
+        ["bash", str(script)], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
+    )
+    polls = misses = 0
+    while process.poll() is None:
+        polls += 1
+        if not os.path.lexists(link):
+            misses += 1
+    stdout, stderr = process.communicate()
+    return WatchedRun(
+        subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr),
+        polls,
+        misses,
+    )
+
+
+def _uv_tool_install(env: dict[str, str], *arguments: str) -> None:
+    """Arrange the starting install through uv rather than by writing files.
+
+    The installer judges an install current from the receipt line `uv tool list
+    --show-with` prints, so only a receipt uv wrote is one the installer reads as a host
+    would; a hand-built tool directory would test a layout uv never produces.
+    """
+    subprocess.run(
+        ["uv", "tool", "install", *arguments], text=True, capture_output=True, check=True, env=env
+    )
+
+
+@pytest.mark.skipif(shutil.which("uv") is None, reason="the installer runs `uv tool install`")
+def test_the_installer_replaces_a_stale_release_and_leaves_a_current_one_alone(
+    tmp_path: Path, tool_home: ToolHome
+) -> None:
+    """A run over a stale install installs the selected release; a second leaves it be.
+
+    The second run is the one every session start makes on a current host: it must not
+    remove and recreate the `llmlint` link, because a gate running in another checkout
+    at that moment finds no `llmlint` command.
+    """
+    pin = pinned_oneharness()
+    env = tool_home.environment(_index(tmp_path / "index", _offer(pin)))
+    _uv_tool_install(
+        env, f"{LLMLINT_DISTRIBUTION}=={FLOOR}", "--with", f"{ONEHARNESS_DISTRIBUTION}=={pin}"
+    )
+    link = tool_home.bin_dir / ENTRY_POINT
+
+    first = _run_installer(INSTALLER, env)
+
+    assert first.returncode == 0, first.stderr
+    installed = installed_llmlint(tool_home.tool_dir)
+    assert installed is not None and installed.version == str(ADMISSIBLE), first.stderr
+    assert "already installed" not in first.stderr, first.stderr
+    before = _install_fingerprint(tool_home)
+
+    second = _run_watching_the_link(INSTALLER, env, link)
+
+    log = second.completed.stderr
+    assert second.completed.returncode == 0, log
+    assert second.polls > 0
+    assert second.misses == 0, (
+        f"{link} was missing on {second.misses} of {second.polls} polls:\n{log}"
+    )
+    assert _install_fingerprint(tool_home) == before, log
+    assert (
+        f"{LLMLINT_DISTRIBUTION} {ADMISSIBLE} under {ONEHARNESS_DISTRIBUTION} {pin} is "
+        "already installed; leaving it as it is"
+    ) in log, log
+    assert f"ready ({ENTRY_POINT}: {ENTRY_POINT} {ADMISSIBLE})" in log, log
+    print(f"first run:\n{first.stderr}\nsecond run ({second.polls} polls):\n{log}")
+
+
+@pytest.mark.skipif(shutil.which("uv") is None, reason="the installer runs `uv tool install`")
+@pytest.mark.parametrize("broken", ["link-missing", "pin-not-constrained"])
+def test_the_installer_repairs_a_selected_release_that_is_not_installed_as_the_rule_says(
+    tmp_path: Path, tool_home: ToolHome, broken: str
+) -> None:
+    """The selected release is in place but its link is gone, or it carries no pin: reinstall.
+
+    Either is an install the rule did not produce, so leaving it alone would leave a host
+    with no `llmlint` command, or one whose `oneharness` is not the pinned release.
+    """
+    pin = pinned_oneharness()
+    env = tool_home.environment(_index(tmp_path / "index", _offer(pin)))
+    link = tool_home.bin_dir / ENTRY_POINT
+    if broken == "link-missing":
+        _uv_tool_install(
+            env,
+            f"{LLMLINT_DISTRIBUTION}=={ADMISSIBLE}",
+            "--with",
+            f"{ONEHARNESS_DISTRIBUTION}=={pin}",
+        )
+        link.unlink()
+    else:
+        _uv_tool_install(env, f"{LLMLINT_DISTRIBUTION}=={ADMISSIBLE}")
+
+    completed = _run_installer(INSTALLER, env)
+
+    assert completed.returncode == 0, completed.stderr
+    assert "already installed" not in completed.stderr, completed.stderr
+    assert link.exists(), completed.stderr
+    listed = subprocess.run(
+        ["uv", "tool", "list", "--show-with"], text=True, capture_output=True, check=True, env=env
+    )
+    assert (
+        f"{LLMLINT_DISTRIBUTION} v{ADMISSIBLE} [with: {ONEHARNESS_DISTRIBUTION}=={pin}]"
+        in listed.stdout.splitlines()
+    ), listed.stdout
+    assert f"ready ({ENTRY_POINT}: {ENTRY_POINT} {ADMISSIBLE})" in completed.stderr, (
+        completed.stderr
+    )

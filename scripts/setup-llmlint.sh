@@ -47,7 +47,7 @@ set -uo pipefail
 # breaking: positional `FILES` are intersected with the configured file globs rather
 # than replacing them. Nothing here passes positional files — `just lint-llm-diff` scopes
 # by `--diff` — so this host is unaffected by that half.
-# llmlint: ignore[changed_behavior_has_e2e] declarative dependency floor only; the installer's selection is driven by tests/e2e/registry_and_recipes/test_setup_llmlint_e2e.py.
+# llmlint: ignore[changed_behavior_has_e2e] declarative dependency floor only; the installer's selection is driven by tests/e2e/llmlint_installer/test_setup_llmlint_e2e.py.
 readonly LLMLINT_MIN="0.4.11"
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(dirname -- "$script_dir")
@@ -77,13 +77,39 @@ read_oneharness_pin() {
   printf '%s\n' "$pin"
 }
 
+# The `llmlint-cli` release the rule selects under the pin, as uv's resolver answers
+# without installing anything; empty when nothing resolves.
+selected_llmlint() {
+  printf '%s\n' "llmlint-cli>=$LLMLINT_MIN" "oneharness-cli==$1" \
+    | uv pip compile - --no-header --no-annotate --quiet 2>/dev/null \
+    | sed -n 's/^llmlint-cli==//p'
+}
+
+# Whether the installed tool already is the selected release, installed with the pin,
+# with its link in place. `uv tool install --upgrade` rewrites the receipt and removes
+# and recreates the link even when nothing changes, so for a moment no `llmlint` exists
+# — a moment that lands inside other checkouts' gate runs when many sessions start; a
+# current install is therefore never handed to it.
+install_is_current() {
+  local pin=$1 selected=$2
+  [ -n "$selected" ] || return 1
+  [ -x "$BIN_DIR/llmlint" ] || return 1
+  uv tool list --show-with 2>/dev/null \
+    | grep -qxF "llmlint-cli v$selected [with: oneharness-cli==$pin]"
+}
+
 ensure_toolchain() {
-  local pin
+  local pin selected
   if ! command -v uv >/dev/null 2>&1; then
     log "uv not found; cannot install llmlint (install uv: https://docs.astral.sh/uv/)"
     return 0
   fi
   pin=$(read_oneharness_pin) || return 0
+  selected=$(selected_llmlint "$pin")
+  if install_is_current "$pin" "$selected"; then
+    log "llmlint-cli $selected under oneharness-cli $pin is already installed; leaving it as it is"
+    return 0
+  fi
   log "installing the highest llmlint-cli >= $LLMLINT_MIN that runs under oneharness-cli $pin (the release config/oneharness.version pins) via uv tool"
   uv tool install --upgrade "llmlint-cli>=$LLMLINT_MIN" --with "oneharness-cli==$pin" >&2 \
     || log "no llmlint-cli >= $LLMLINT_MIN resolved under oneharness-cli $pin, or the install failed (uv's report is above); leaving the installed llmlint as it is"
