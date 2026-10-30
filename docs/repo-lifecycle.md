@@ -103,7 +103,11 @@ turn the observer graph's own shutdown cancels is no longer put to its judge sid
 so a run's settlement raises no `monitor-failed` surface for a turn that was not. The
 engine links oneagentgraph 0.9.1, onevcs 0.57.4 and the store crates at 0.12.11, so those
 CLI pins follow it, and from 0.96.0 its `Node` accepts an optional `human_item`. The read
-API moves to 0.61.0, which links that engine.
+API moves to 0.62.0, which links that engine — 0.96.2, which links only a newer plan store,
+is held until a read API linking it ships. That onevcs never refuses a removal at the public
+boundary check, a merge's removal against either parent included, while every addition —
+text a branch adds and later removes among them — is still refused; so a branch that merged
+a base which had already scrubbed a private name lands rather than being recut.
 From onepipeline 0.80.2, onepipeline-ui 0.43.0 and
 onetaskgraph 0.9.0: the engine 0.81.0 and the read API 0.44.0 that links it carry the
 onetaskgraph 0.9.2 store crates, which copy a plan and list it without reading the whole

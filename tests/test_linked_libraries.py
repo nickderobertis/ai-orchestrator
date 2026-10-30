@@ -245,6 +245,18 @@ PLUGINS_OFF_CORE_FLOOR = Release(0, 26, 0)
 #: roads; `tests/e2e/launch_monitor_observer/test_codex_shared_app_server_e2e.py` drives
 #: the CLI road under this repository's worker config.
 SHARED_APP_SERVER_CORE_FLOOR = Release(0, 28, 0)
+#: onevcs https://github.com/nickderobertis/onevcs/pull/579 (`c350858`), first cut as
+#: 0.57.4 and linked by onepipeline https://github.com/nickderobertis/onepipeline/pull/1301
+#: (`f07b3a2`), first cut as 0.96.0 and adopted here as 0.96.1: the publication screen,
+#: `crates/onevcs/src/boundary/screen.rs`, no longer reads a commit's removal side, so a
+#: removed line, a deleted path and a merge's removal against either parent never refuse,
+#: while every addition — text a branch adds and later removes included — still does.
+#: Below it a branch that merged a base which had scrubbed a private name is refused as "a
+#: removal its public destination does not already carry".
+#: `tests/e2e/publish_and_landing/test_publish_boundary_removals_e2e.py` drives it through
+#: `just publish-branch`. Held on the linked copy because every dispatched publication,
+#: and every manager landing verb, publishes through it.
+REMOVALS_PASS_ONEVCS_FLOOR = Release(0, 57, 4)
 
 
 #: The three sibling releases carrying https://github.com/nickderobertis/ai-orchestrator/issues/1004's
@@ -1357,6 +1369,11 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
             SHARED_APP_SERVER_CORE_FLOOR,
             "shares one pooled Codex app-server across concurrent dispatches",
         ),
+        (
+            "onevcs",
+            REMOVALS_PASS_ONEVCS_FLOOR,
+            "never refuses a removal at the public boundary check",
+        ),
     ],
     ids=(
         "onevcs",
@@ -1367,6 +1384,7 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
         f"{UNRECONCILABLE_PIN.crate}-failed-tool-call",
         f"{UNRECONCILABLE_PIN.crate}-plugins-off",
         f"{UNRECONCILABLE_PIN.crate}-shared-app-server",
+        "onevcs-removals-pass",
     ),
 )
 def test_the_linked_sibling_carries_this_plans_change_to_it(

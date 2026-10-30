@@ -466,7 +466,7 @@ served them.
    `just telemetry-server` — or by `just dag-ui`, which is the same published server
    with the browser view built into it answering on the same origin) is the structured
    view. Measured against real runs on
-   **`onepipeline-api` 0.61.0**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.62.0**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
    what re-opens this paragraph: `telemetry_schema_version` 27 on the envelope, where
    0.55.0, 0.52.0 and 0.51.0 served 26 and
@@ -476,7 +476,7 @@ served them.
    resolver, and marks the turn's transcript unavailable where that file cannot be read, and
    27 serves a node's `complete-but-draft` and `complete-but-held` statuses as themselves and
    gives a node's result the `awaiting` releases its settlement still awaits;
-   `timeline_schema_version` 14, as 0.61.0, 0.59.1, 0.59.0, 0.58.1, 0.58.0, 0.52.0 and 0.51.0 served, where 0.48.1 served 13, 0.44.0 served 12, 0.41.0 served
+   `timeline_schema_version` 14, as 0.62.0, 0.61.0, 0.60.0, 0.59.1, 0.59.0, 0.58.1, 0.58.0, 0.52.0 and 0.51.0 served, where 0.48.1 served 13, 0.44.0 served 12, 0.41.0 served
    11 and 0.21.1 served 10 — 14 gives every `turn-started`, `turn-message` and
    `turn-activity` event a one-line `description` the engine's resolver writes, 13 counts a
    journal record relayed again under one `(stream, seq)` once, and bounds each session lane

@@ -41,6 +41,7 @@ from onevcs_stand_in import install_three_verb_stand_in, release_answer
 
 from orchestrator import adoption_guard, criteria_guard, envelope_review, plan_review, plan_store
 from orchestrator.criteria_guard import (
+    AMENDMENT_HEADING,
     CRITERIA_HEADING,
     Bar,
     CriteriaError,
@@ -49,7 +50,6 @@ from orchestrator.criteria_guard import (
 )
 from orchestrator.envelope_review import (
     ADDITIONAL_INFO_HEADING,
-    AMENDMENT_HEADING,
     AMENDMENT_PRECEDENCE,
     BAR_FINGERPRINT_FLAG,
     REFUSED,
@@ -1381,3 +1381,25 @@ def test_folding_includes_a_classified_node_and_omits_one_with_an_unknown_field(
     )
     assert graph == {"classified": node}
     assert resulting == ["classified"]
+
+
+def test_folding_includes_a_human_node_carrying_its_human_item_metadata() -> None:
+    """A `kind: human` node stating the engine's optional `human_item` is folded in whole."""
+    node = {
+        "id": "sign-off",
+        "kind": "human",
+        "human_item": {
+            "kind": "task",
+            "priority": "high",
+            "title": "Sign off the release",
+            "body": "Confirm the release notes before it ships.",
+        },
+    }
+    graph, resulting = stated_graph(
+        _envelope(
+            {"op": "add", "node": node},
+            {"op": "add", "node": {"id": "misspelled", "kind": "human", "human_items": {}}},
+        )
+    )
+    assert graph == {"sign-off": node}
+    assert resulting == ["sign-off"]

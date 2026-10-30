@@ -72,6 +72,7 @@ CAPABILITIES = (
     Capability("`host`", "/api/v2/host"),
     Capability("**Host** is a page of its own", "/api/v2/host"),
     Capability("**Shut down the entire host**", " /api/v2/shutdown "),
+    Capability("**Action items** is another page", " /api/human-items "),
 )
 
 #: The page's statement that the controls it lists are all the view acts through.
@@ -82,8 +83,12 @@ CONTROLS = {
     "POST /api/v2/runs/{run}/channel/next": "its channel's **Next**",
     "POST /api/v2/runs/{run}/channel/reply": "reply,",
     "POST /api/v2/runs/{run}/channel/surface": "raised surface",
-    "POST /api/v2/runs/{run}/attest": "and `attest`, and the host",
+    "POST /api/v2/runs/{run}/attest": "raised surface and `attest`, a human",
     "POST /api/v2/shutdown": "the host by its one host-wide shutdown",
+    "POST /api/human-items": "a human item by its raise,",
+    "POST /api/human-items/{id}/answer": "answer,",
+    "POST /api/human-items/{id}/complete": "completion",
+    "POST /api/human-items/{id}/dismiss": "and dismissal",
 }
 #: The write routes a tab reads its state through, which act on no run and no host.
 SUBSCRIPTION_ROUTES = {
@@ -159,6 +164,20 @@ def test_the_page_and_contract_keep_browser_driving_removed() -> None:
     assert "every other scope" in page and "`400 removed_shutdown_scope`" in page
     for route in ("/adopt", "/watch", "/runs/{run}/shutdown"):
         assert route not in _routes()
+
+
+def test_the_page_says_human_items_are_unavailable_without_a_sample() -> None:
+    """The page tells an operator the **Action items** page is empty here, and why.
+
+    The contract serves those routes only over `--human-items-sample`, which this host
+    never passes, so the page's claim is held to the contract still saying so.
+    """
+    document = " ".join(_source(UI_API, CONTRACT).split())
+    assert "--human-items-sample" in document
+    assert "`503 human_items_unavailable`" in document
+    page = _page()
+    assert "`--human-items-sample`" in page
+    assert "`503 human_items_unavailable`" in page
 
 
 def test_every_route_the_page_spells_in_full_is_one_the_reader_declares() -> None:
