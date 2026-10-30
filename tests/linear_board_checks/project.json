@@ -18,7 +18,11 @@
       "{projectRoot}/**/*",
       "{workspaceRoot}/pyproject.toml",
       "{workspaceRoot}/uv.lock",
-      "{workspaceRoot}/config/onetaskgraph.version"
+      "{workspaceRoot}/config/onetaskgraph.version",
+      "{workspaceRoot}/orchestrator/follow_up_comments.py",
+      "{workspaceRoot}/orchestrator/follow_up_drafts.py",
+      "{workspaceRoot}/orchestrator/follow_up_tickets.py",
+      "{workspaceRoot}/orchestrator/run_reading.py"
     ]
   },
   "targets": {

@@ -1,17 +1,23 @@
 r"""Stateful loopback Linear wire for real installed plan-store journeys.
 
-Rewrite evidence: onetaskgraph-linear's ``crates/onetaskgraph-linear/src/lib.rs``,
-"Ruling: what Linear does to an HTML comment, settled", and this host's incident
-where bullets, table delimiters and autolinks changed a copied design document.
-Comments retain their bytes; issue descriptions, project and document content do not.
+Issue descriptions, project content and document content are stored the way real Linear
+stored them in onetaskgraph's spike `spike-linear-stored-content` (harness commit
+``f2344284``, report `linear-stored-content-verification-spike-linear-stored-content-report`):
+each write answers the long form as Linear keeps it, which can differ from what was sent.
+The plan store predicts none of it; it takes the stored form from each write's own answer.
+Comments, titles and every other field keep their bytes.
 
-
+`MEASURED_REWRITES` lists each change with an example of what is sent and what is kept,
+and `linear_stored` applies them; a consumer may add its own `Rewrite` to model one more.
+Every request is logged with the items it returned and the item it wrote, and whether
+that write was stored other than as sent, so a journey reads its cost off the wire.
 """
 
 from __future__ import annotations
 
 import copy
 import json
+import os
 import re
 import threading
 import time
@@ -21,6 +27,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any, NewType
 
 from orchestrator import plan_store
@@ -28,12 +35,18 @@ from orchestrator import plan_store
 
 @dataclass(frozen=True)
 class Rewrite:
-    """A named wire normalization, independently extensible by a consumer."""
+    """One change Linear makes to a long form it stores, with an example of it.
+
+    ``written`` is what a write sends and ``stored`` what Linear keeps of it. A ``block``
+    rewrite reads whole stretches of text between fenced code blocks; any other reads one
+    line at a time, outside code spans, fenced code and Markdown links.
+    """
 
     name: str
     apply: Callable[[str], str]
     written: str = ""
     stored: str = ""
+    block: bool = False
 
 
 def _autolink(text: str) -> str:
@@ -64,12 +77,104 @@ def _table(text: str) -> str:
     )
 
 
-# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This task explicitly
-# assigns comparison with real Linear to onetaskgraph's producer-owned live lane,
-# real_linear_applies_every_declared_capability_and_leaves_no_residue, rather than this
-# host's bar. The wire double deliberately restates those observations independently;
-# its example test holds the local statement to its behavior, not to a live workspace.
-LINEAR_REWRITES: tuple[Rewrite, ...] = (
+#: Inline text of one paragraph: anything but a backtick, and no blank line.
+_SPAN = r"(?:[^`\n]|\n(?!\s*\n))+"
+#: A list item's marker, bulleted or ordered, after any indentation.
+_ITEM = r"\s*(?:[*\-+] |\d+[.)] )"
+
+
+def _list_after_line(text: str) -> str:
+    """A blank line between a heading or paragraph line and a bullet list directly after it."""
+
+    def spaced(match: re.Match[str]) -> str:
+        line = match[1]
+        joined = not line.strip() or re.match(_ITEM, line) or line.startswith((" ", "\t", "|"))
+        return match[0] if joined else line + "\n\n"
+
+    return re.sub(r"^([^\n]*)\n(?=[*\-] )", spaced, text, flags=re.M)
+
+
+def _bold_wrap(text: str) -> str:
+    """A `**bold**` run spanning a line break, split into one run per line.
+
+    Delimiters pair left to right within a paragraph, so a run's closing `**` never pairs
+    with the next run's opening one.
+    """
+
+    def split(match: re.Match[str]) -> str:
+        return "\n".join("**" + line + "**" for line in match[1].split("\n"))
+
+    return re.sub(r"\*\*((?:(?!\n[ \t]*\n)[^*])+?)\*\*", split, text)
+
+
+def _indented_code(text: str) -> str:
+    """An indented code block after a blank line, fenced, its indentation dropped."""
+
+    def fenced(match: re.Match[str]) -> str:
+        lines = [line[4:] for line in match[2].splitlines()]
+        return match[1] + "```\n" + "\n".join(lines) + "\n```\n"
+
+    return re.sub(
+        r"((?:\A|\n)[ \t]*\n)((?:    (?!" + _ITEM.removeprefix(r"\s*") + r")[^\n]*(?:\n|\Z))+)",
+        fenced,
+        text,
+    )
+
+
+# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Each example is what the
+# spike `spike-linear-stored-content` measured real Linear storing (harness f2344284), or the
+# earlier long-form observation it re-took. This wire is held to that measurement, not to
+# Linear as it evolves: the task writes to no real workspace, and the manager's copy of a
+# real plan after adoption is the real-Linear check.
+MEASURED_REWRITES: tuple[Rewrite, ...] = (
+    Rewrite(
+        "lazy-ordered-item",
+        lambda s: re.sub(r"^([*\-] [^\n]+)\n(\d+)\. ", r"\1\n  \2\\. ", s, flags=re.M),
+        "- first\n3. continuation\n- next",
+        "* first\n  3\\. continuation\n* next",
+        block=True,
+    ),
+    Rewrite(
+        "list-after-line",
+        _list_after_line,
+        "## Heading\n- first\n- next\n\nParagraph.\n- another",
+        "## Heading\n\n* first\n* next\n\nParagraph.\n\n* another",
+        block=True,
+    ),
+    Rewrite(
+        "bold-wrap",
+        _bold_wrap,
+        "**Closed.** A run\nthat wraps **bold text\nnext line** here.",
+        "**Closed.** A run\nthat wraps **bold text**\n**next line** here.",
+        block=True,
+    ),
+    Rewrite(
+        "indented-code",
+        _indented_code,
+        "Before.\n\n    code\n    more\n\nAfter.",
+        "Before.\n\n```\ncode\nmore\n```\n\nAfter.",
+        block=True,
+    ),
+    Rewrite(
+        "code-span-wrap",
+        lambda s: re.sub(
+            r"(?<!`)(`+)(" + _SPAN + r")\1(?!`)",
+            lambda m: m[1] + " ".join(m[2].splitlines()) + m[1],
+            s,
+        ),
+        "See `code span\nwraps` here.",
+        "See `code span wraps` here.",
+        block=True,
+    ),
+    Rewrite(
+        "table-slot-separator",
+        lambda s: re.sub(
+            r"(^\|[^\n]+\|\n)\n+(?=<!-- onetaskgraph.metadata )", r"\1\n", s, flags=re.M
+        ),
+        "| one |\n\n\n<!-- onetaskgraph.metadata `{}` -->",
+        "| one |\n\n<!-- onetaskgraph.metadata `{}` -->",
+        block=True,
+    ),
     Rewrite("bullet", lambda s: re.sub(r"^(\s*)- ", r"\1* ", s, flags=re.M), "- one", "* one"),
     Rewrite("table", _table, "| --- |", "| -- |"),
     Rewrite("brackets", lambda s: re.sub(r"(?<!\\)([\[\]])", r"\\\1", s), "[x]", r"\[x\]"),
@@ -81,29 +186,22 @@ LINEAR_REWRITES: tuple[Rewrite, ...] = (
     Rewrite("autolink", _autolink, "example.com", "[example.com](<http://example.com>)"),
 )
 # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
-r"""Observed rules from onetaskgraph-linear's module documentation,
-"Ruling: what Linear does to an HTML comment, settled", and the host incident.
 
-Each rule carries its input (``written``) and exact stored example (``stored``),
-so callers can enumerate and exercise the complete list without a second table.
-Rules apply outside code spans/fences and existing Markdown links.
-
-LINEAR_REWRITES examples (JSON strings, written -> stored):
-bullet: "- one" -> "* one"
-table: "| --- |" -> "| -- |"
-brackets: "[x]" -> "\\[x\\]"
-tilde: "~5" -> "\\~5"
-emphasis: "_y_" -> "*y*"
-quote: "say \\\"hi\\\"" -> "say \"hi\""
-backslash: "a \\d" -> "a \\\\d"
-comment-close: "-->" -> "\\-->"
-autolink: "example.com" -> "[example.com](<http://example.com>)"
-URL: "https://example.com/a." -> "[https://example.com/a](<https://example.com/a>)."
-"""
+#: A fenced code block whole, from its opening fence to the matching closing one.
+_FENCED = re.compile(r"(^ {0,3}(`{3,}|~{3,})[^\n]*\n.*?^ {0,3}\2[^\n]*(?:\n|$))", re.M | re.S)
 
 
-def stored_form(content: str, rewrites: Sequence[Rewrite]) -> str:
-    """Apply wire rules while preserving code and already linked text."""
+def linear_stored(content: str, rewrites: Sequence[Rewrite]) -> str:
+    """What Linear keeps of a long form ``content`` written to it, under ``rewrites``."""
+    for rule in rewrites:
+        if not rule.block:
+            continue
+        # The split alternates text, a fenced block, and that block's fence characters.
+        chunks = _FENCED.split(content)
+        content = "".join(
+            rule.apply(chunk) if index % 3 == 0 else chunk if index % 3 == 1 else ""
+            for index, chunk in enumerate(chunks)
+        )
     protected = re.compile(r"(`+)[^\n]*?\1|!?\[[^\]\n]*\]\([^\n)]*\)|\\[\[\]~]")
     fence: tuple[str, int] | None = None
     result: list[str] = []
@@ -131,7 +229,8 @@ def stored_form(content: str, rewrites: Sequence[Rewrite]) -> str:
 
         rewritten = protected.sub(protect, line)
         for rule in rewrites:
-            rewritten = rule.apply(rewritten)
+            if not rule.block:
+                rewritten = rule.apply(rewritten)
 
         def restore(match: re.Match[str], held: list[str] = spans) -> str:
             return held[int(match[1])]
@@ -165,10 +264,22 @@ class State:
     position: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class Request:
+    """One request as the wire answered it.
+
+    ``read`` names every issue, project and document its answer carried, ``written`` the
+    one it created or updated, and ``rewritten`` whether a long form that write sent was
+    stored other than as sent. ``client`` is the process that sent it, where the host
+    names one, so a journey can tell one command's requests from the next command's.
+    """
+
     operation: str
     variables: dict[str, Any]
+    client: int | None = None
+    read: list[str] = field(default_factory=list)
+    written: str | None = None
+    rewritten: bool = False
 
 
 def _now() -> str:
@@ -235,6 +346,8 @@ class LinearBoard:
 
     def __init__(self, rewrites: Sequence[Rewrite]) -> None:
         self.endpoint = ""
+        #: The loopback port the wire answers on, once it is serving.
+        self.port = 0
         self.rewrites = tuple(rewrites)
         self._issues: dict[NativeId, Issue] = {}
         self._projects: dict[NativeId, Project] = {}
@@ -243,6 +356,8 @@ class LinearBoard:
         self._issue_relations: dict[NativeId, Relation] = {}
         self._project_relations: dict[NativeId, Relation] = {}
         self._requests: list[Request] = []
+        #: The request `dispatch` is answering, which a write it makes is logged on.
+        self._answering: Request | None = None
         self._assets: dict[str, bytes] = {}
         self._states: list[State] = []
         self._statuses: list[State] = []
@@ -444,9 +559,9 @@ class LinearBoard:
                 raise KeyError(native_id)
             match item:
                 case Issue():
-                    item.description = stored_form(content, self.rewrites)
+                    item.description = linear_stored(content, self.rewrites)
                 case Project() | Document():
-                    item.content = stored_form(content, self.rewrites)
+                    item.content = linear_stored(content, self.rewrites)
             item.updatedAt = _now()
 
     def _collection(self, kind: str) -> Mapping[NativeId, Record]:
@@ -466,6 +581,13 @@ class LinearBoard:
             case _:
                 raise ValueError("unsupported operation " + kind)
 
+    def _long_form(self, sent: str) -> str:
+        """What Linear keeps of a long form, noting on this request when it is not ``sent``."""
+        stored = linear_stored(sent, self.rewrites)
+        if self._answering is not None and stored != sent:
+            self._answering.rewritten = True
+        return stored
+
     def _write(self, kind: str, native: NativeId, fields: dict[str, Any]) -> Record:
         match kind:
             case "issue":
@@ -480,7 +602,7 @@ class LinearBoard:
                 if "title" in fields:
                     issue.title = _text(fields, "title")
                 if "description" in fields:
-                    issue.description = stored_form(_text(fields, "description"), self.rewrites)
+                    issue.description = self._long_form(_text(fields, "description"))
                 if "stateId" in fields:
                     issue.state = next(s for s in self._states if s.id == fields["stateId"])
                 if "projectId" in fields:
@@ -500,7 +622,7 @@ class LinearBoard:
                 if "name" in fields:
                     project.name = _text(fields, "name")
                 if "content" in fields:
-                    project.content = stored_form(_text(fields, "content"), self.rewrites)
+                    project.content = self._long_form(_text(fields, "content"))
                 if "statusId" in fields:
                     project.status = next(s for s in self._statuses if s.id == fields["statusId"])
                 item = project
@@ -509,7 +631,7 @@ class LinearBoard:
                 if "title" in fields:
                     document.title = _text(fields, "title")
                 if "content" in fields:
-                    document.content = stored_form(_text(fields, "content"), self.rewrites)
+                    document.content = self._long_form(_text(fields, "content"))
                 if "projectId" in fields:
                     document.project_id = (
                         NativeId(_text(fields, "projectId")) if fields["projectId"] else None
@@ -540,7 +662,11 @@ class LinearBoard:
         return item
 
     def dispatch(
-        self, query: str, variables: dict[str, Any], operation_name: str | None
+        self,
+        query: str,
+        variables: dict[str, Any],
+        operation_name: str | None,
+        client: int | None = None,
     ) -> dict[str, Any]:
         """Resolve exactly one supported root operation; unknown roots are errors."""
         match = re.search(r"\{\s*(\w+)", query)
@@ -550,105 +676,180 @@ class LinearBoard:
         declaration = re.match(r"\s*(?:query|mutation)\s+([A-Za-z_]\w*)", query)
         named = operation_name or (declaration[1] if declaration else operation)
         with self._lock:
-            self._requests.append(Request(named, copy.deepcopy(variables)))
-            resolution = {
-                "organization": {"id": "synthetic-workspace"},
-                "teams": _connection(
-                    [
-                        {
-                            "id": "synthetic-team",
-                            "states": _connection([asdict(state) for state in self._states]),
-                        }
-                    ]
-                ),
-                "projectStatuses": _connection([asdict(status) for status in self._statuses]),
-            }
-            match operation:
-                case "organization":
-                    return resolution
-                case "originIssues":
-                    # onetaskgraph 0.12.5's batched read ahead of a copy's lookups by origin:
-                    # the `issues` and `projects` connections, aliased, beside the resolution
-                    # read, in one request. Narrowed as each connection is below.
-                    return {
-                        "originIssues": _page(
-                            [
-                                node
-                                for node in (self._wire(item) for item in self._issues.values())
-                                if _matches(node, variables.get("issuesFilter"))
-                            ],
-                            variables.get("issuesFirst"),
-                        ),
-                        "originProjects": _connection(
-                            [self._wire(item) for item in self._projects.values()]
-                        ),
-                        **resolution,
+            logged = Request(named, copy.deepcopy(variables), client=client)
+            self._requests.append(logged)
+            self._answering = logged
+            try:
+                answer = self._resolve(operation, named, variables)
+            finally:
+                self._answering = None
+            written = {logged.written} if logged.written else set()
+            logged.read = sorted(_carried(answer) - written)
+            return answer
+
+    def _resolve(self, operation: str, named: str, variables: dict[str, Any]) -> dict[str, Any]:
+        """Answer one root ``operation``, under the lock `dispatch` holds."""
+        resolution = {
+            "organization": {"id": "synthetic-workspace"},
+            "teams": _connection(
+                [
+                    {
+                        "id": "synthetic-team",
+                        "states": _connection([asdict(state) for state in self._states]),
                     }
-                case "viewer":
-                    return {operation: {"id": "synthetic-user"}}
-                case "issueLabels" | "projectLabels":
-                    return {operation: _connection([])}
-                case "fileUpload":
-                    url = self.endpoint.removesuffix("/graphql") + "/assets/" + str(uuid.uuid4())
+                ]
+            ),
+            "projectStatuses": _connection([asdict(status) for status in self._statuses]),
+        }
+        match operation:
+            case "organization":
+                return resolution
+            case "originIssues":
+                # onetaskgraph 0.12.5's batched read ahead of a copy's lookups by origin:
+                # the `issues` and `projects` connections, aliased, beside the resolution
+                # read, in one request. Narrowed as each connection is below.
+                return {
+                    "originIssues": _page(
+                        [
+                            node
+                            for node in (self._wire(item) for item in self._issues.values())
+                            if _matches(node, variables.get("issuesFilter"))
+                        ],
+                        variables.get("issuesFirst"),
+                    ),
+                    "originProjects": _connection(
+                        [self._wire(item) for item in self._projects.values()]
+                    ),
+                    **resolution,
+                }
+            case "viewer":
+                return {operation: {"id": "synthetic-user"}}
+            case "issueLabels" | "projectLabels":
+                return {operation: _connection([])}
+            case "fileUpload":
+                url = self.endpoint.removesuffix("/graphql") + "/assets/" + str(uuid.uuid4())
+                return {
+                    operation: {
+                        "success": True,
+                        "uploadFile": {
+                            "uploadUrl": url,
+                            "assetUrl": url,
+                            "headers": [],
+                        },
+                    }
+                }
+        for kind in (
+            "issue",
+            "project",
+            "document",
+            "comment",
+            "issueRelation",
+            "projectRelation",
+        ):
+            items = self._collection(kind)
+            match operation:
+                case requested if requested == kind:
+                    item = items.get(NativeId(_text(variables, "id")))
+                    return {operation: self._wire(item) if item else None}
+                case requested if requested == kind + "s":
+                    nodes = [self._wire(item) for item in items.values()]
+                    return {operation: _connection(_in_project(nodes, variables.get("filter")))}
+                case requested if requested == kind + "Delete":
+                    native = NativeId(_text(variables, "id"))
+                    match kind:
+                        case "issue":
+                            self._issues.pop(native, None)
+                        case "project":
+                            self._projects.pop(native, None)
+                        case "document":
+                            self._documents.pop(native, None)
+                        case "comment":
+                            self._comments.pop(native, None)
+                        case "issueRelation":
+                            self._issue_relations.pop(native, None)
+                        case "projectRelation":
+                            self._project_relations.pop(native, None)
+                    return {operation: {"success": True}}
+                case requested if requested in (kind + "Create", kind + "Update"):
+                    fields = variables["input"]
+                    if not isinstance(fields, dict):
+                        raise ValueError(f"{operation}: input must be an object")
+                    raw_native = variables.get("id") or fields.get("id") or str(uuid.uuid4())
+                    if not isinstance(raw_native, str):
+                        raise ValueError(f"{operation}: id must be a string")
+                    native = NativeId(raw_native)
+                    if operation.endswith("Update") and native not in items:
+                        raise ValueError(f"{operation}: unknown id {native}")
+                    if kind in ("issue", "project", "document") and self._answering:
+                        self._answering.written = native
                     return {
                         operation: {
                             "success": True,
-                            "uploadFile": {
-                                "uploadUrl": url,
-                                "assetUrl": url,
-                                "headers": [],
-                            },
+                            kind: self._wire(self._write(kind, native, fields)),
                         }
                     }
-            for kind in (
-                "issue",
-                "project",
-                "document",
-                "comment",
-                "issueRelation",
-                "projectRelation",
+        raise ValueError("unsupported operation " + named)
+
+
+def _client(port: int, served: int) -> int | None:
+    """The process holding the loopback connection from ``port`` to this wire's ``served`` port.
+
+    Read off Linux's own socket tables while the request is open: the socket whose local
+    port is ``port`` and remote port ``served``, then the process with that socket among
+    its descriptors. ``None`` where the host keeps no such table or no process is found.
+    """
+    inode = None
+    for table in (Path("/proc/net/tcp"), Path("/proc/net/tcp6")):
+        if not table.is_file():
+            continue
+        for line in table.read_text(encoding="ascii").splitlines()[1:]:
+            fields = line.split()
+            local, remote = (int(end.rpartition(":")[2], 16) for end in fields[1:3])
+            if (local, remote) == (port, served):
+                inode = fields[9]
+    if inode is None:
+        return None
+    held = f"socket:[{inode}]"
+    for pid in filter(str.isdigit, os.listdir("/proc")):
+        try:
+            descriptors = os.listdir(f"/proc/{pid}/fd")
+        except OSError:
+            continue
+        for descriptor in descriptors:
+            # A descriptor another process closes while it is read is skipped alone.
+            try:
+                if os.readlink(f"/proc/{pid}/fd/{descriptor}") == held:
+                    return int(pid)
+            except OSError:
+                continue
+    return None
+
+
+def _carried(answer: Any) -> set[str]:
+    """The id of every issue, project and document an answer carries, at any depth.
+
+    Read off the fields only such an item carries — an issue's `identifier`, a project's
+    `name`, a document's `title` beside its `content` — so a reference, a state or a
+    comment is not counted as a read of its item.
+    """
+    found: set[str] = set()
+    match answer:
+        case dict():
+            native = answer.get("id")
+            if isinstance(native, str) and (
+                "identifier" in answer
+                or "name" in answer
+                and "content" in answer
+                or "title" in answer
+                and "content" in answer
             ):
-                items = self._collection(kind)
-                match operation:
-                    case requested if requested == kind:
-                        item = items.get(NativeId(_text(variables, "id")))
-                        return {operation: self._wire(item) if item else None}
-                    case requested if requested == kind + "s":
-                        nodes = [self._wire(item) for item in items.values()]
-                        return {operation: _connection(_in_project(nodes, variables.get("filter")))}
-                    case requested if requested == kind + "Delete":
-                        native = NativeId(_text(variables, "id"))
-                        match kind:
-                            case "issue":
-                                self._issues.pop(native, None)
-                            case "project":
-                                self._projects.pop(native, None)
-                            case "document":
-                                self._documents.pop(native, None)
-                            case "comment":
-                                self._comments.pop(native, None)
-                            case "issueRelation":
-                                self._issue_relations.pop(native, None)
-                            case "projectRelation":
-                                self._project_relations.pop(native, None)
-                        return {operation: {"success": True}}
-                    case requested if requested in (kind + "Create", kind + "Update"):
-                        fields = variables["input"]
-                        if not isinstance(fields, dict):
-                            raise ValueError(f"{operation}: input must be an object")
-                        raw_native = variables.get("id") or fields.get("id") or str(uuid.uuid4())
-                        if not isinstance(raw_native, str):
-                            raise ValueError(f"{operation}: id must be a string")
-                        native = NativeId(raw_native)
-                        if operation.endswith("Update") and native not in items:
-                            raise ValueError(f"{operation}: unknown id {native}")
-                        return {
-                            operation: {
-                                "success": True,
-                                kind: self._wire(self._write(kind, native, fields)),
-                            }
-                        }
-            raise ValueError("unsupported operation " + named)
+                found.add(native)
+            for value in answer.values():
+                found |= _carried(value)
+        case list():
+            for value in answer:
+                found |= _carried(value)
+    return found
 
 
 def _matches(node: dict[str, Any], query_filter: Any) -> bool:
@@ -703,7 +904,7 @@ def _in_project(nodes: list[dict[str, Any]], query_filter: Any) -> list[dict[str
 
 
 @contextmanager
-def linear_board(*, rewrites: Sequence[Rewrite] = LINEAR_REWRITES) -> Iterator[LinearBoard]:
+def linear_board(*, rewrites: Sequence[Rewrite] = MEASURED_REWRITES) -> Iterator[LinearBoard]:
     """Serve only loopback, and close the socket and server thread with the context."""
     board = LinearBoard(rewrites)
 
@@ -739,6 +940,7 @@ def linear_board(*, rewrites: Sequence[Rewrite] = LINEAR_REWRITES) -> Iterator[L
                         payload["query"],
                         payload.get("variables") or {},
                         payload.get("operationName"),
+                        _client(int(self.client_address[1]), board.port),
                     )
                 }
             except (ValueError, KeyError, StopIteration) as exc:
@@ -768,7 +970,8 @@ def linear_board(*, rewrites: Sequence[Rewrite] = LINEAR_REWRITES) -> Iterator[L
                 self.wfile.write(body)
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    board.endpoint = f"http://127.0.0.1:{server.server_port}/graphql"
+    board.port = server.server_port
+    board.endpoint = f"http://127.0.0.1:{board.port}/graphql"
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:

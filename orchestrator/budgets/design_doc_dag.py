@@ -261,8 +261,11 @@ def measure(mode: str, shapes: Mapping[int, Shape], fixtures: Path) -> tuple[flo
     with scratch() as work:
         store = work / "store"
         store.mkdir()
+        # The scratch source is the only default, so a host's `ONETASKGRAPH_DEFAULT_SOURCES`
+        # naming sources this directory does not configure cannot refuse the read.
         env = {
             **os.environ,
+            "ONETASKGRAPH_DEFAULT_SOURCES": SOURCE,
             f"ONETASKGRAPH_SOURCES__{SOURCE.upper()}__PLUGIN": "local-md",
             f"ONETASKGRAPH_SOURCES__{SOURCE.upper()}__CONFIG__ROOT": str(store),
         }
