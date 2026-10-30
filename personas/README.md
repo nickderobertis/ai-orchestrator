@@ -85,7 +85,7 @@ Three consequences. The first two were read by launching a plan whose two nodes 
 `engineer` and `reviewer` and reading the completion criterion each dispatch's supervisor
 was handed, on an earlier engine; that hand launch has not been repeated, so the
 `reviewer` quotation below is its reading. On the adopted release they are re-measured
-against onepipeline 0.96.0 and the oneagentgraph it links by the two journeys named
+against onepipeline 0.96.1 and the oneagentgraph it links by the two journeys named
 below, on the suite's real launch of an `engineer` node: the shipped set, and the
 shared bar in the criterion that node's supervisor was handed. Do **not** argue one of them forward from a source file that stayed
 byte-identical: the accounts that did named `src/agentgraph.rs` and `src/graph.rs`,
@@ -196,7 +196,7 @@ authoritative spec for all of it.
 Two different ones, and what they have to agree on is the persona **shape**.
 `just validate-personas` runs the oneagentgraph **CLI** that
 `config/oneagentgraph.version` pins; what reads a persona at **dispatch** is the
-oneagentgraph `onepipeline` links, which is `0.9.0` at onepipeline v0.96.0. Read that
+oneagentgraph `onepipeline` links, which is `0.9.1` at onepipeline v0.96.1. Read that
 from what the release *resolved*, never from its `Cargo.toml` requirement — that
 requirement is a caret one and permits versions the build did not resolve, so it is
 not evidence of what a dispatch reads. The installed binary is the source and
@@ -205,7 +205,7 @@ not evidence of what a dispatch reads. The installed binary is the source and
 its `sboms/` declaring one version per linked crate,
 and that gate reconciles this sentence against it on every gate run. So the two
 numbers agree today and do not have to: the pin names the same release, and the linked reader is
-0.9.0. They have not always. In an earlier cycle they read 0.3.3 and 0.3.4, and what
+0.9.1. They have not always. In an earlier cycle they read 0.3.3 and 0.3.4, and what
 separated them is how long a cancelled process tree is left before Windows ends its
 job, that a member whose tree cannot be found is not a member proven idle, and — in
 0.3.3 — the conversation label and the oneharness-session pointer a member's turns
@@ -242,7 +242,7 @@ does. That pair has been confused once already.
 That agreement is why the shape here moved in one change rather than two. The
 previous spelling put the role in a top-level `agent:` block, and 0.2.18 refused
 today's shape exactly as hard as the reverse: there is no alias, no flag, and no
-deprecation period in either direction. The pinned oneagentgraph 0.9.0 refuses the
+deprecation period in either direction. The pinned oneagentgraph 0.9.1 refuses the
 previous shape outright, naming the field to write instead:
 
 ```
