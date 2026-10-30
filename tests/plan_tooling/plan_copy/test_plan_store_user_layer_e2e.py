@@ -262,6 +262,44 @@ def test_a_source_setting_the_host_states_in_the_environment_reaches_no_test(
     assert root["origin"]["layer"] == "file", root
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This spawns one local
+# `onetaskgraph config show` — no network, no model, under a second — to hold the same
+# `plan_store_user_layer.isolate()` boundary the tests beside it hold in this project; no
+# existing edge is narrower, and a project for one such call would split one boundary's tests.
+def test_default_sources_the_host_states_in_the_environment_reach_no_test(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A host's default sources naming a source only its user layer declares are unset.
+
+    This host's checkout `.env` states such a list; with the user layer held back, the store
+    refused every read for the missing source. Read back through the installed store, which
+    then answers from the tracked document's `default_sources`.
+    """
+    monkeypatch.setenv(plan_store_user_layer.DEFAULT_SOURCES_ENV, "authoring,private-plans")
+    monkeypatch.delenv(plan_store_user_layer.HOST_CONFIG_HOME_ENV, raising=False)
+
+    plan_store_user_layer.isolate()
+
+    assert plan_store_user_layer.DEFAULT_SOURCES_ENV not in os.environ
+    shown = subprocess.run(
+        [str(ONETASKGRAPH), "config", "show", "--json"],
+        cwd=REPO_ROOT,
+        env=dict(os.environ),
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(60),
+        check=False,
+    )
+    assert shown.returncode == 0, shown.stderr
+    settings = {setting["key"]: setting for setting in json.loads(shown.stdout)["settings"]}
+    defaults = settings["default_sources"]
+    assert "private-plans" not in str(defaults["value"]), defaults
+    assert defaults["origin"]["layer"] == "file", defaults
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
 @pytest.mark.parametrize(
     ("xdg", "home"),
     [("config", "home"), ("", "home"), (None, "home"), (None, None)],

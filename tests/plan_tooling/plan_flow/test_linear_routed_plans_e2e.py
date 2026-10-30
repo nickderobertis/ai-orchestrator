@@ -26,7 +26,7 @@ These journeys drive that through the real recipes:
   receives nothing;
 * a person's edit to the approved Linear document refuses the next launch; a public task
   naming a private repository is refused before either board is written; and a Linear that
-  rewrites what it stores in a way the store does not declare is refused by name.
+  rewrites long forms accepts the stored content from each write answer.
 
 The launch reaches the Linear source's credential the one way a host's launch does: through
 the variable the user layer's `api_key_env` names, read out of the copy's gitignored `.env` by
@@ -75,7 +75,7 @@ from fake_backend import (
 )
 from github_board import BOARD as BOARD_FIXTURE
 from github_board import SIBLING_REPOSITORY, _GitHubFixture, _serving_board
-from linear_board import LINEAR_REWRITES, LinearBoard, Rewrite, linear_board, stored_form
+from linear_board import MEASURED_REWRITES, LinearBoard, Rewrite, linear_board, linear_stored
 from nx_workspace import (
     answering_this_checkouts_origin,
     copy_working_tree,
@@ -745,7 +745,7 @@ def _gated(
     routed: Routed,
     *,
     public: Sequence[str] = (),
-    rewrites: Sequence[Rewrite] = LINEAR_REWRITES,
+    rewrites: Sequence[Rewrite] = MEASURED_REWRITES,
 ) -> Iterator[Bench]:
     """A served loopback `plans` board and Linear, and one journey's bench over both."""
     with _serving_board() as remote, linear_board(rewrites=rewrites) as linear:
@@ -1052,7 +1052,9 @@ def test_a_mixed_plan_whose_public_task_carries_a_budget_copies_it_to_both_desti
         canonical = _items(routed, bench, home)[library.id]
         assert str(canonical["id"]).startswith(f"{LINEAR}:"), canonical["id"]
         # As Linear stores Markdown, which the double rewrites the way Linear does.
-        section = stored_form(plan_budgets.render_section([budget]).strip("\n"), LINEAR_REWRITES)
+        section = linear_stored(
+            plan_budgets.render_section([budget]).strip("\n"), MEASURED_REWRITES
+        )
         content = str(canonical["item"]["content"])
         assert section in content, content
     # llmlint: ignore-end[e2e_not_mocked]
@@ -1520,6 +1522,68 @@ def _writes_back(request: Mapping[str, object], names: Mapping[str, str]) -> str
 
 @COPIES_THE_TRACKED_TREE
 @pytest.mark.xdist_group("linear-routed")
+def test_the_roads_copies_take_what_linear_stored_from_each_writes_own_answer(road: Road) -> None:
+    """(4) Rendered tasks and document, copied on a rewriting wire with no read after a write.
+
+    Every task's body is this host's `plan-task` rendering, carrying the dispatch appendix,
+    and the document is its `design-doc` rendering; the loopback stores each as the spike
+    measured real Linear storing it. The first copy sends one follow-up write for each item
+    the wire stored other than as sent and none for any other, and the unchanged re-copy
+    sends no write at all. No command of the copies or the approval reads an item after it
+    wrote it: each answer is taken as what Linear stored. The run's settlement write-backs
+    are not that read's subject; each reads its item before projecting a status onto it.
+    """
+    marks = road.marks
+    first = road.requests[: marks["first copy"]]
+    recopied = road.requests[marks["first copy"] : marks["unchanged re-copy"]]
+    # The appendix's own heading, which no rewrite changes and no task writes by hand.
+    appendix = "### Operational notes for this host"
+    assert appendix in (REPO_ROOT / APPENDIX).read_text(encoding="utf-8")
+    tasks = [
+        held
+        for held in road.bench.linear.issues()
+        if held["metadata"].get("onepipeline.kind") != "human"
+    ]
+    assert tasks and all(appendix in str(held["description"]) for held in tasks), tasks
+    (document,) = [
+        held for held in road.bench.linear.documents() if str(held["id"]) == road.document
+    ]
+    assert "design-doc" in str(document["metadata"]["onetaskgraph.template"]), document
+
+    created = {
+        str(request["written"]): bool(request["rewritten"])
+        for request in first
+        if str(request["operation"]).endswith("Create") and request["written"]
+    }
+    rewritten = {native for native, changed in created.items() if changed}
+    assert {str(held["id"]) for held in tasks} | {road.document} <= rewritten, created
+    follow_ups = Counter(
+        str(request["written"])
+        for request in first
+        if str(request["operation"]).endswith("Update") and request["written"]
+    )
+    assert follow_ups == Counter(dict.fromkeys(rewritten, 1)), (follow_ups, created)
+    assert [_writes_back(request, {}) for request in recopied if _writes_back(request, {})] == []
+
+    # Each command is one process, so a read after a write is one by the process that wrote.
+    copied = [
+        request
+        for request in road.requests[: marks["approval"]]
+        if request["operation"] not in ("PUT", "GET")
+    ]
+    assert all(request["client"] for request in copied), copied
+    written: dict[object, set[str]] = {}
+    for request in copied:
+        held = written.setdefault(request["client"], set())
+        read_back = held & set(request["read"])
+        assert not read_back, (request["operation"], sorted(read_back))
+        if request["written"]:
+            held.add(str(request["written"]))
+    assert len(written) > 1, written
+
+
+@COPIES_THE_TRACKED_TREE
+@pytest.mark.xdist_group("linear-routed")
 def test_the_roads_linear_requests_are_recorded_by_phase_node_and_status(road: Road) -> None:
     """Every request Linear logged from the first copy to the last settlement write-back.
 
@@ -1638,7 +1702,9 @@ def test_a_copy_linear_stores_differently_lands_and_can_be_approved(
     refuses the copy: the design document lands as Linear stored it, and the approval recipe
     over the Linear home records an approval of that document.
     """
-    with _gated(tmp_path, oneharness_bin, routed, rewrites=(*LINEAR_REWRITES, UNDECLARED)) as bench:
+    with _gated(
+        tmp_path, oneharness_bin, routed, rewrites=(*MEASURED_REWRITES, UNDECLARED)
+    ) as bench:
         name = f"test-{os.getpid()}-diverged"
         finished = _finishing(routed, bench, name, ALL_HIDDENCO)
 
@@ -1674,7 +1740,7 @@ def test_a_task_linear_stores_differently_is_copied_as_linear_stored(
     document beside the tasks.
     """
     with _gated(
-        tmp_path, oneharness_bin, routed, rewrites=(*LINEAR_REWRITES, UNDECLARED_IN_TASKS)
+        tmp_path, oneharness_bin, routed, rewrites=(*MEASURED_REWRITES, UNDECLARED_IN_TASKS)
     ) as bench:
         name = f"test-{os.getpid()}-task-diverged"
         finished = _finishing(routed, bench, name, ALL_HIDDENCO)

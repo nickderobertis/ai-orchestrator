@@ -41,7 +41,11 @@ source the tracked document defines — which the store reads above every docume
 host's choices would reach a test that way. `isolate()` unsets each inherited
 `ONETASKGRAPH_SOURCES__…` setting before the suite states the roots it isolates
 (`tests/conftest.py`), so a test reads only the sources the tracked document and the test
-itself state.
+itself state. It unsets an inherited `ONETASKGRAPH_DEFAULT_SOURCES` for the same reason: a
+host's list — this host's checkout `.env` states one — may name a source only its user layer
+declares, and with that layer held back every store a test started refused every read for a
+default source it no longer had, so the tracked `default_sources` stands unless a test states
+its own.
 
 The invoking user's configuration home is recorded in `HOST_CONFIG_HOME_ENV`, so a pytest
 process this one starts — an xdist worker, or a suite a test runs — links the same host
@@ -76,6 +80,8 @@ ORCHESTRATOR_DIRECTORY = "ai-orchestrator"
 HOST_LAYERS = ("onevcs.checkouts", "onevcs.rules.yml")
 #: The prefix of every setting the store reads for one source from the environment.
 SOURCE_SETTING_PREFIX = "ONETASKGRAPH_SOURCES__"
+#: The setting the store reads its default sources from above every document.
+DEFAULT_SOURCES_ENV = "ONETASKGRAPH_DEFAULT_SOURCES"
 #: The variable Bun reads its install cache from before any configuration file.
 BUN_CACHE_ENV = "BUN_INSTALL_CACHE_DIR"
 #: A directory holding a `package.json`, which `bun pm cache` needs to answer at all.
@@ -126,8 +132,8 @@ def isolate() -> Path:
     """Export a configuration home linking the host's, with no plan-store or checkout layer.
 
     Bun's cache is stated first, where Bun finds it now, because the move would change it,
-    and every plan-store source setting the environment carries is unset, because it is the
-    host's.
+    and every plan-store source setting the environment carries, and its default sources, are
+    unset, because they are the host's.
     Lives under `TMPDIR` rather than pytest's basetemp because it is taken at import, before
     any fixture exists, and is removed when the process ends; removing it unlinks the links
     and never follows one.
@@ -152,6 +158,7 @@ def isolate() -> Path:
     os.environ[CONFIG_HOME_ENV] = str(sandbox)
     for name in [name for name in os.environ if name.startswith(SOURCE_SETTING_PREFIX)]:
         del os.environ[name]
+    os.environ.pop(DEFAULT_SOURCES_ENV, None)
     return sandbox
 
 

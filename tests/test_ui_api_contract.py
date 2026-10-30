@@ -294,3 +294,28 @@ def test_the_shutdown_the_page_describes_is_the_one_the_contract_promises() -> N
     ):
         assert claim in page, f"docs/dag-ui.md no longer says {claim!r} about the shutdown"
     assert "**Shutdown incomplete**" in page, "docs/dag-ui.md no longer names the incomplete report"
+
+
+#: What the page says of the action items view's availability, against the contract's words.
+ACTION_ITEMS_AVAILABILITY = {
+    "ships no live human-item adapter": "ships no live human-item adapter",
+    "`503 human_items_unavailable`": "`503 human_items_unavailable`",
+}
+
+
+def test_the_action_items_view_is_said_to_answer_only_in_sample_mode_as_the_release_says() -> None:
+    """The page's account of when the action items view answers is the pinned release's.
+
+    The release's contract states its engine ships no live action-item store, so every
+    human-item route answers `503 human_items_unavailable` without a sample bundle; the
+    page says the same, and a release that grows a live store fails here until the page is
+    corrected with it.
+    """
+    page = " ".join(_page().split())
+    contract = " ".join(_source(UI_API, CONTRACT).split())
+    for said, stated in ACTION_ITEMS_AVAILABILITY.items():
+        assert said in page, f"docs/dag-ui.md no longer says {said!r}"
+        assert stated in contract, (
+            f"{UI_API.crate} {UI_API.ref}'s contract no longer says {stated!r}; re-read when "
+            "its action items view answers and correct docs/dag-ui.md in the same change"
+        )

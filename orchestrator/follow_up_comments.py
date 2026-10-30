@@ -2746,6 +2746,19 @@ def write_pending(root: Path, entries: Sequence[PendingEntry]) -> None:
     staged.replace(path)
 
 
+def _store_holds(key: str, written: object) -> bool:
+    """Whether the store's own answer to a plain write vouches that the task holds ``key``.
+
+    A body is the one field a tracker answers in its own spelling — Linear rewrites Markdown
+    as it stores it — so the store, not this module, says whether the body sent was stored:
+    its `task update` answer names `content` in `written` when it wrote the body, the task it
+    answers being what the tracker stored of it. A field missing from `written` says nothing
+    either way, since a write that never carried the body answers the same as one the store
+    found already holding it.
+    """
+    return key == "content" and isinstance(written, list) and "content" in written
+
+
 def _holds(key: str, shown: object, requested: object) -> bool:
     """Whether a write's answer shows ``requested`` for ``key``: a body by the Markdown it
     means, since a tracker answers in its own spelling of what it stored, any other field
@@ -2845,9 +2858,10 @@ def outcome(
 
     Every part `landed`, covering the part each of the ``requested`` fields rides on
     (:data:`FIELD_PARTS`), is a write that landed — and a write sent with no `--expect`, which
-    answers with the task it wrote, landed when that task holds every ``requested`` value; a
-    part `unknown`, a part the response does not describe, a success naming no part, or no
-    response this can read is `unknown`; some parts landed beside one rejected, or beside a
+    answers with the task it wrote, landed when that task holds every ``requested`` value —
+    its body by the store's own word (:func:`_store_holds`); a part `unknown`, a part the
+    response does not describe, a success naming no part, or no response this can read is
+    `unknown`; some parts landed beside one rejected, or beside a
     requested part the response does not report, is `partial`, as is such a task holding only
     some of the values; anything else `failed`.
     """
@@ -2911,11 +2925,13 @@ def outcome(
                 )
             except OSError as exc:
                 return Outcome("unknown", version, parts, str(exc), reason)
+            said = held.get("written")
             unshown = [
-                key for key, value in requested.items() if not _holds(key, shown.get(key), value)
+                key
+                for key, value in requested.items()
+                if not _store_holds(key, said) and not _holds(key, shown.get(key), value)
             ]
             if unshown:
-                said = held.get("written")
                 state: State = "partial" if len(unshown) < len(requested) or said else "failed"
                 error = f"the task it answered does not hold the requested {', '.join(unshown)}"
                 return Outcome(state, version, parts, error, reason)
