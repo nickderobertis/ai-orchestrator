@@ -3554,16 +3554,21 @@ def _bounded_step(
     trace: Path | None = None,
     writes: bool = False,
     invocations: Path | None = None,
+    origin_lookups: int = 0,
 ) -> RequestCost:
     """What the step just taken spent, holding it to one read per item and connection.
 
-    Each comment connection is read once, and so is each item a read-only step resolves. A
-    write step runs several store processes (a read, then each write), each resolving the
-    item it writes again, so it is held to one resolution per item within each invocation,
-    which its ``trace`` of store launches tells apart; ``invocations`` names a launch trace
-    to group by alone, when the step's trace also holds launches earlier steps made. With
-    ``bound`` the step sends no board search or origin lookup, and no step walks the board
-    or asks for a page wider than its answer. What it spent is returned for the journey to
+    Each comment connection is read once, and so is each item a step resolves within one
+    store process. Every follow-up command first asks the store where the ticket lands —
+    `task locate`, which follows the store's link to the item by id — and then reads it once
+    for what it decides from, and a write step runs a process for each write besides, each
+    resolving the item it writes again; so where its ``trace`` of store launches tells the
+    invocations apart, a step is held to one resolution per item within each invocation.
+    ``invocations`` names a launch trace to group by alone, when the step's trace also holds
+    launches earlier steps made. With
+    ``bound`` the step sends no board search, and no origin lookup but the ``origin_lookups``
+    of the tickets it asks about that carry no link to an item, one each; and no step walks
+    the board or asks for a page wider than its answer. What it spent is returned for the journey to
     record, never held to a ceiling here.
     """
     launch_trace = invocations or trace
@@ -3578,7 +3583,7 @@ def _bounded_step(
     for operation in (_Operation.ISSUE, _Operation.COMMENTS):
         scopes = (
             _per_invocation(requests, launches)
-            if writes and launches is not None and operation is _Operation.ISSUE
+            if launches is not None and operation is _Operation.ISSUE
             else [requests]
         )
         for scope in scopes:
@@ -3597,7 +3602,7 @@ def _bounded_step(
             assert set(identifiers) <= allowed_comments, (label, identifiers, allowed_comments)
     if bound:
         assert not _sent(_Operation.SEARCH, requests), label
-        assert not _sent(_Operation.ORIGIN_LOOKUP, requests), label
+        assert len(_sent(_Operation.ORIGIN_LOOKUP, requests)) == origin_lookups, label
     assert _board_cost(requests) == ([], []), label
     assert _wide_pages(requests) == [], (label, "a search asked for a page wider than its answer")
     _GitHubFixture.requests.clear()

@@ -54,7 +54,7 @@ def recorded_project(
         or candidate.startswith("authoring:")
         or (
             not candidate.startswith("plans:")
-            and candidate.split(":", 1)[0] not in plan_store.routed_sources("plans")
+            and candidate.split(":", 1)[0] not in plan_store.reachable("plans")
         )
         or candidate != expected
     ):

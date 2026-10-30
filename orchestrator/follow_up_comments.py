@@ -104,13 +104,15 @@ What is read
   ids whole when one id names an item it no longer holds, so a scoped pass bound to a deleted
   item is refused naming it.
 * **`--issue QUALIFIED-ID`** copies that one item by id and lists nothing. Its comments go to
-  the run under this drafts root whose ticket's `board_item` binding
-  (:data:`follow_up_tickets.BINDING_FIELD`) names it, found by one narrowed listing of the local
-  drafts store; an item no run of this host owns — none bound, several bound, or the board's
+  the run whose ticket the item's own `onetaskgraph.origin` names — the ticket it was copied
+  from, which names its run — read once by id, when that ticket is under this drafts root; an
+  item no run of this host owns — one naming no ticket, or a ticket not here, or the board's
   record naming another creator or host — is refused with why, and nothing is launched.
-* **`--run RUN-ID`** copies, the same way, each item that run's local tickets are bound to, and
-  lists no board.
-* **Unscoped**, every board of the family `--to` roots (:func:`follow_up_tickets.boards`) is
+* **`--run RUN-ID`** copies, the same way, the item each of that run's local tickets is placed
+  on — the counterpart the store's `task locate` answers for it (:func:`follow_up_tickets.locate`)
+  — and lists no board.
+* **Unscoped**, every board of the family `--to` roots — the sources `sources route` answers it
+  can reach (:func:`orchestrator.plan_store.reachable`) — is
   copied by the query the store narrows to this host's items, `--commented-since <its since>
   --metadata <record>/host=<this hostname>` (:func:`host_query`).
   The store keeps an item when one of its comments was created or last edited at or after the
@@ -648,7 +650,7 @@ def snapshot_status_names(board: str) -> dict[str, str]:
     names = _local_md_defaults()
     claimed: dict[str, tuple[str, str]] = {}
     categories = frozenset(names.values())
-    for one in tickets.boards(board):
+    for one in plan_store.reachable(board):
         for name, category in _status_mapping(settings, one, categories).items():
             if name in claimed and claimed[name][1] != category:
                 raise OSError(
@@ -1351,22 +1353,25 @@ def snapshot_issues(snapshot: Snapshot) -> list[Issue]:
 
 
 class Binding(NamedTuple):
-    """One local ticket of a run here, and the board item its record is bound to, if any."""
+    """One local ticket of a run here, and the board item the store places it on, if any."""
 
     run: tickets.RunId
     ticket: str
-    #: The bound item qualified to the board of the family the ticket is filed on.
+    #: The item the store's `task locate` answers as the ticket's counterpart, qualified to the
+    #: board of the family it places the ticket on.
     item: QualifiedTaskId | None
 
 
-def bindings(root: Path, board: str, query: str) -> list[Binding]:
-    """Every local ticket under ``root`` the drafts store's ``query`` selects, and its binding.
+def run_bindings(root: Path, board: str, run: tickets.RunId) -> list[Binding]:
+    """Every ticket ``run`` filed under ``root``, and the item the store places each on.
 
-    One narrowed listing of the drafts source, never of a board: ``query`` is a `--metadata`
-    value. A ticket the store read from anywhere but a run's tickets directory under ``root``
-    is not this root's, and the item a binding names is qualified to the board of ``board``'s
-    family the ticket's `repositories` route it to, which is where it was copied.
+    One narrowed listing of the drafts source, never of a board, selects the run's tickets; a
+    ticket the store read from anywhere but the run's tickets directory under ``root`` is not
+    this root's. Each ticket's item is then the counterpart one `task locate` through ``board``
+    answers for it (:func:`follow_up_tickets.locate`) — through `--target-native` for a record
+    still carrying the retired binding — so it is the item the store's copy writes.
     """
+    query = f"{tickets.KEY}/created_by_run={run}"
     pages = plan_store.every_page(
         f"the tickets under {root} selected by {query}",
         plan_store.client().task_list,
@@ -1375,53 +1380,51 @@ def bindings(root: Path, board: str, query: str) -> list[Binding]:
     )
     found = []
     for held in (one for page in pages for one in page.items):
-        item = held.item.model_dump(mode="python")
         location = held.item.location.model_dump(mode="python") if held.item.location else {}
         located = Path(str(location.get("path", "")))
-        if located.parent.parent.parent != root / TASKS_DIRECTORY or (
-            located.parent.name != tickets.TICKETS
-        ):
+        if located.parent != root / TASKS_DIRECTORY / run / tickets.TICKETS:
             continue
-        run = tickets.RunId(located.parent.parent.name)
-        native = _record(item).get(tickets.BINDING_FIELD)
-        if native is None:
-            found.append(Binding(run, located.stem, None))
-            continue
-        if not tickets.is_item_id(native):
-            raise OSError(
-                f"run {run}'s ticket {located.stem} records `{tickets.BINDING_FIELD}` {native!r}, "
-                "which is not a board item's native id; run `board-status` on it to bind it again"
-            )
-        listed = item.get("repositories")
-        repositories = [one for one in listed if isinstance(one, str)] if listed else []
-        routed = tickets.ticket_board(board, repositories)
-        found.append(Binding(run, located.stem, QualifiedTaskId(f"{routed}:{native}")))
-    return sorted(found, key=lambda one: (one.run, one.ticket))
+        bound = tickets.legacy_binding(_record(held.item.model_dump(mode="python")))
+        item = tickets.locate(located, board, bound=bound, established=False).counterpart
+        found.append(Binding(run, located.stem, item))
+    return sorted(found, key=lambda one: one.ticket)
 
 
-def run_bindings(root: Path, board: str, run: tickets.RunId) -> list[Binding]:
-    """Every ticket ``run`` filed under ``root``, and the item each is bound to."""
-    query = f"{tickets.KEY}/created_by_run={run}"
-    return [one for one in bindings(root, board, query) if one.run == run]
+def issue_binding(root: Path, issue: QualifiedTaskId) -> tickets.RunId:
+    """The run under ``root`` whose ticket ``issue`` was copied from; :class:`Unowned` else.
 
-
-def issue_binding(root: Path, board: str, issue: QualifiedTaskId) -> tickets.RunId:
-    """The one run under ``root`` whose ticket is bound to ``issue``; :class:`Unowned` else."""
-    native = str(issue).partition(":")[2]
-    query = f"{tickets.KEY}/{tickets.BINDING_FIELD}={native}"
-    runs = sorted({one.run for one in bindings(root, board, query) if one.item == issue})
-    if not runs:
+    Read off the item's own `onetaskgraph.origin`, by one read of it by id: the store writes
+    the ticket a copy came from there, and the ticket's id names its run. The ticket must be
+    one this drafts root holds, since a run of this host is one whose tickets are here.
+    """
+    try:
+        metadata = plan_store.task_record(issue, no_comments=True).get("metadata")
+    except OSError as exc:
+        raise OSError(f"--issue {issue}: the store could not read it: {exc}") from exc
+    origin = metadata.get(plan_store.ORIGIN_KEY) if isinstance(metadata, Mapping) else None
+    matched = tickets.QUALIFIED_ID.fullmatch(origin) if isinstance(origin, str) else None
+    parts = (
+        matched["native"].split("/")
+        if matched is not None and matched["source"] == tickets.SOURCE
+        else []
+    )
+    if (
+        len(parts) != 3  # noqa: PLR2004 - a ticket's id is `<run>/<tickets>/<root cause>`
+        or not RECORD_COMPONENT.fullmatch(parts[0])
+        or parts[1] != tickets.TICKETS
+        or not tickets.SLUG.fullmatch(parts[2])
+    ):
         raise Unowned(
-            f"--issue {issue}: no run of this host owns it, because no ticket under {root} is "
-            f"bound to it (no record's `{tickets.BINDING_FIELD}` names it on that board), so no "
-            "run here answers its comments"
+            f"--issue {issue}: no run of this host owns it, because its `{plan_store.ORIGIN_KEY}` "
+            f"names {origin!r}, which is no follow-up ticket, so no run here answers its comments"
         )
-    if len(runs) > 1:
+    run, _, cause = parts
+    if not tickets.ticket_path(root, run, cause).is_file():
         raise Unowned(
-            f"--issue {issue}: the tickets of runs {', '.join(runs)} under {root} are all bound "
-            "to it, so no one run owns its comments; settle the bindings with `board-status`"
+            f"--issue {issue}: no run of this host owns it, because the ticket {origin} it was "
+            f"copied from is not under {root}, so no run here answers its comments"
         )
-    return runs[0]
+    return tickets.RunId(run)
 
 
 def tickets_last_written(root: Path, run: str) -> datetime | None:
@@ -1970,17 +1973,17 @@ def _plugin(settings: Mapping[str, object], source: str) -> str | None:
 
 
 def _unowned(issue: Issue, run: tickets.RunId, host: str) -> str | None:
-    """Why ``run``, whose ticket here is bound to ``issue``, does not own it on the board.
+    """Why ``run``, whose ticket here ``issue`` was copied from, does not own it on the board.
 
     ``None`` when it does: the item names ``run`` as its creator and this host as where its
-    ticket was verified. ``run`` has records here, since its ticket is what bound it.
+    ticket was verified. ``run`` has records here, since its ticket is what the item names.
     """
     if issue.owner is None:
         return "the item carries no follow-up record naming the run that created it"
     if issue.owner != run:
         return (
-            f"the item names run {issue.owner} as its creator, where run {run}'s ticket is "
-            "bound to it"
+            f"the item names run {issue.owner} as its creator, where it was copied from run "
+            f"{run}'s ticket"
         )
     if issue.host != host:
         return f"its ticket was verified on host {issue.host or '(none recorded)'}, not {host}"
@@ -2049,7 +2052,7 @@ def gather(  # noqa: PLR0913, PLR0915 - each is one flag of the command
     ``None`` on a host no comment can be owed on. Writes nothing but the snapshot.
     :class:`Unbounded`, :class:`Unowned` or :class:`OSError` refuse before anything is written.
     """
-    family = tickets.boards(board)
+    family = plan_store.reachable(board)
     host = host or socket.gethostname()
     issue_run: tickets.RunId | None = None
     if issue is not None:
@@ -2058,7 +2061,7 @@ def gather(  # noqa: PLR0913, PLR0915 - each is one flag of the command
                 f"--issue {issue}: no run of this host owns it, because it is no item of "
                 f"{board!r} or a board it routes to ({', '.join(family)})"
             )
-        issue_run = scope = issue_binding(root, board, issue)
+        issue_run = scope = issue_binding(root, issue)
     starts: dict[str, Start] = {}
     if scope is None:
         found = _starts(root, family, since, say, board)
@@ -2102,7 +2105,7 @@ def gather(  # noqa: PLR0913, PLR0915 - each is one flag of the command
             for binding in bound:
                 if binding.item is None:
                     say(
-                        f"run {scope}'s ticket {binding.ticket} is bound to no board item; "
+                        f"run {scope}'s ticket {binding.ticket} is placed on no board item; "
                         "nothing read"
                     )
                     continue
@@ -2113,7 +2116,7 @@ def gather(  # noqa: PLR0913, PLR0915 - each is one flag of the command
             for one in ids:
                 say(
                     f"read {one} and its comments directly, the item run {scope}'s ticket is "
-                    "bound to"
+                    "placed on"
                 )
         details = shown_details(list(held.values()), snapshot_settings_now)
         issues = [
@@ -2121,7 +2124,7 @@ def gather(  # noqa: PLR0913, PLR0915 - each is one flag of the command
             for (source, destination), detail in zip(held.items(), details, strict=True)
         ]
         # An item at a status no comment is answered at was read for its status alone, so its
-        # record is unread: the local binding that scoped the pass is all its ownership says.
+        # record is unread: the origin that scoped the pass is all its ownership says.
         if issue_run is not None and str(issue) not in skipped:
             problem = (
                 _unowned(issues[0], issue_run, host)
@@ -2277,7 +2280,7 @@ def _store_line(snapshot: Snapshot) -> str:
     if snapshot.scope is not None:
         return (
             f"plan store: {snapshot.store}; read {len(snapshot.items)} item(s) run "
-            f"{snapshot.scope}'s tickets are bound to, each directly, and listed none"
+            f"{snapshot.scope}'s tickets are placed on, each directly, and listed none"
         )
     since = min((one.since for one in snapshot.starts.values()), default=snapshot.queried_at)
     return (
@@ -3037,10 +3040,11 @@ def _update_words(item: str, fields: Mapping[str, object], scratch: Path) -> lis
 
 
 def _copy_words(run: str, issue: str, item: Mapping[str, object]) -> list[str]:
-    """`task copy` of ``run``'s ticket of ``issue`` onto the item the store links it to.
+    """`task copy` of ``run``'s ticket of ``issue`` onto ``issue`` and nowhere else.
 
     The one write that sets an item's `repositories`, which `task update` cannot; ``item`` is
-    the read of ``issue`` naming the ticket's root cause.
+    the read of ``issue`` naming the ticket's root cause. It names ``issue`` as `--target-task`,
+    which the store reads by id and verifies by origin, so the copy looks nothing up.
     """
     cause = _record(item).get("root_cause")
     if (
@@ -3049,7 +3053,15 @@ def _copy_words(run: str, issue: str, item: Mapping[str, object]) -> list[str]:
         or (tickets.issue_owner(item) != run)
     ):
         raise OSError(f"{issue} carries no root cause of a ticket of run {run}'s to copy")
-    return ["task", "copy", tickets.qualified_id(run, cause), "--to", issue.partition(":")[0]]
+    return [
+        "task",
+        "copy",
+        tickets.qualified_id(run, cause),
+        "--to",
+        issue.partition(":")[0],
+        "--target-task",
+        issue,
+    ]
 
 
 def _snapshot_projection(entry: PendingEntry) -> Projected | None:
@@ -3315,8 +3327,8 @@ def _settle_ticket(  # noqa: PLR0913 - the pass, the issue, and what decides its
             "repositories": list(decided.repositories),
         }
     )
-    # The ticket's binding to its item is the ticket's own: the item a first copy created holds
-    # none until a later copy, which is no reason to write it.
+    # A record from before the binding retired carries its item's id, which the item a first
+    # copy created holds none of until a later copy: no reason to write it.
     changes = {
         key: wanted[key]
         for key in ("title", "content", "priority", "record", "repositories")
@@ -3366,7 +3378,7 @@ def _settle_ticket(  # noqa: PLR0913 - the pass, the issue, and what decides its
 
 
 def _comparable(key: str, value: object) -> object:
-    """``value`` of field ``key`` as a change to it is judged: a record less its binding."""
+    """``value`` of field ``key`` as a change to it is judged: a record less a retired binding."""
     if key == "record" and isinstance(value, Mapping):
         return {name: held for name, held in value.items() if name != tickets.BINDING_FIELD}
     return value

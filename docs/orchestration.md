@@ -2404,20 +2404,29 @@ similar fix, or supplying a dependency this ticket needs, each as one linked bul
 one explanatory sentence. Mere shared area or a broader problem is insufficient. Omit the
 section when empty and never mention rejected irrelevant candidates anywhere, even in
 Evidence. Schema 12 rejects the retired search heading and carries no query or candidate
-log; disposition accounts, bindings and marked comments remain the duplicate-prevention proof.
-A ticket's `repositories` lists every repository its fix changes. A ticket listing one has
-its issue created in that repository, as an item of the one board; it must be under the
-board's owner, and `board-status` refuses a ticket naming a repository outside that owner
-before anything is asked of the board, so it is reported rather than filed. The one
-exception is a repository the board's route sends elsewhere: a route a host declares on
+log; disposition accounts, the store's placements and marked comments remain the
+duplicate-prevention proof. A ticket's `repositories` lists every repository its fix changes,
+and the store places it by them, their visibility included: a route a host declares on
 `followups` in its user layer (*Host-local sources and routes*) files an organization's root
-cause in that organization's own tracker, where its team triages it. A ticket listing several is filed
-exactly as the store files a parentless task naming several: in the board's configured
-repository, which its record's `repository` names, and routed only when every repository it
-lists matches a route. Every command a follow-up run
-runs takes `followups` as the root of those boards and acts on each ticket at the board
-its repositories route it to, as the store's own `sources route` answers it, and the
-comment gathering reads every one of them, from a watermark of its own.
+cause in that organization's own tracker, where its team triages it, and an owner's private
+work on a board declared private. Every command a follow-up run runs takes `followups` as the
+root of those boards and asks the store's `task locate` once per ticket where it lands — the
+destination, its item there by the store's link or the destination's origin query, every item
+carrying its origin, and the repository a create files its issue in — through the very path
+the store's copy writes by, so nothing here derives a route, a counterpart or a filing
+repository. Its issue is created in that repository, which its record's `repository` names:
+the one it lists, or for several the destination's configured one. It must be under the owner
+the destination files under, and `board-status` refuses a ticket whose issue would be created
+outside it before anything is written, so it is reported rather than filed. The agent writes
+a ticket's record before searching for its duplicate, with `board-items --ticket <its path>`,
+which asks the destination `task locate --no-counterpart` answers, and removes a record it
+then does not file. Where two items carry a ticket's origin, the run's own open one beside
+withdrawn ones is chosen, each duplicate noted once, and the copy steered there by
+`--target-task`. A record from before schema 13 may still carry the retired `board_item`,
+which every command hands the store as `--target-native` until the ticket's next `copy` brings
+the record forward without it. The comment gathering reads every board `sources route` answers
+`followups` can reach, from a watermark of its own, and gives a comment to the run whose ticket
+its issue's own `onetaskgraph.origin` names.
 `orchestrator/follow_up_tickets.py` is the one source of the ticket's shape and of
 ownership on that board: a run changes only the issues its own tickets created and the
 comments whose marker names it — its evidence on another run's issue, and its replies to
@@ -2465,8 +2474,9 @@ fields`. A new ticket lands on the board in `Proposal`, and the user
 moving it to `Todo` is what accepts it, so a later agent sent to work on accepted
 follow-ups selects them by the board's status alone. The board is therefore the record of
 that decision and no copy undoes it: before every copy the follow-up agent runs the
-module's `board-status` command, and a ticket the board already holds is copied carrying
-the status the board holds it at. Withdrawing a ticket closes a proposal as not planned,
+module's `board-status` command, and every copy but a withdrawal is made under the store's
+`--status-policy preserve-destination`, so a ticket the board already holds keeps the status
+the board holds it at. Withdrawing a ticket closes a proposal as not planned,
 and a run never withdraws a ticket the board shows as accepted: it copies nothing, leaves
 its own ticket as it is, and reports what it would have withdrawn and why. The statuses,
 the record's keys and the board's options are stated in `orchestrator/follow_up_tickets.py`

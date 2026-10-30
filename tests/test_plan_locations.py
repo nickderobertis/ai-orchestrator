@@ -117,7 +117,7 @@ def _holds(
     source = projects[0].qualified_id.partition(":")[0] if projects else "board"
     _linked(monkeypatch, {source: projects}, {} if named is None else {source: named})
     monkeypatch.setattr(plan_store, "read_documents", lambda _project: list(documents or []))
-    monkeypatch.setattr(plan_store, "routed_sources", lambda _source: ())
+    monkeypatch.setattr(plan_store, "reachable", lambda source: (source,))
     monkeypatch.setattr(plan_store, "members", lambda _project: frozenset())
 
 
@@ -310,7 +310,7 @@ def test_a_source_the_stamp_is_withheld_from_is_never_asked_for_a_stamped_copy(
         [_document("board:57", {"url": "https://example.invalid/57"})],
         link="board:42",
     )
-    monkeypatch.setattr(plan_store, "routed_sources", lambda _source: ("vault",))
+    monkeypatch.setattr(plan_store, "reachable", lambda source: (source, "vault"))
     monkeypatch.setattr(
         plan_store,
         "configured_settings",
@@ -359,7 +359,7 @@ def test_a_link_naming_no_project_of_the_source_it_is_kept_under_is_refused_unre
         {"board": [], "elsewhere": [_project("elsewhere:9")]},
         {"board": link},
     )
-    monkeypatch.setattr(plan_store, "routed_sources", lambda _source: ())
+    monkeypatch.setattr(plan_store, "reachable", lambda source: (source,))
 
     assert plan_locations.main([DRAFTED, "--in", "board"]) == plan_locations.UNREADABLE
     refusal = capsys.readouterr().err
@@ -381,7 +381,7 @@ def test_a_destination_whose_store_cannot_be_read_is_the_same_refusal_as_a_missi
         raise OSError("the board answered nothing")
 
     monkeypatch.setattr(plan_store, "project_record", refuses)
-    monkeypatch.setattr(plan_store, "routed_sources", lambda _source: ())
+    monkeypatch.setattr(plan_store, "reachable", lambda source: (source,))
 
     assert plan_locations.main([DRAFTED, "--in", "board"]) == plan_locations.UNREADABLE
     refusal = capsys.readouterr().err
@@ -465,7 +465,7 @@ def test_a_home_the_store_routed_away_is_found_there_and_names_its_id_and_member
         ],
     }
     _linked(monkeypatch, held, {"linear": "linear:abc"})
-    monkeypatch.setattr(plan_store, "routed_sources", lambda _source: ("linear",))
+    monkeypatch.setattr(plan_store, "reachable", lambda source: (source, "linear"))
     monkeypatch.setattr(
         plan_store, "members", lambda _project: frozenset({QualifiedProjectId("board:77")})
     )

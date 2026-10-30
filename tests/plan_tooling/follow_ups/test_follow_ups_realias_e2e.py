@@ -154,9 +154,20 @@ def _filed(  # noqa: PLR0913 - every part of one ticket the run filed
     for verb in ("board-status", "copy"):
         done = _module(bench, verb, "--board", BOARD, str(path))
         assert done.returncode == 0, done.stdout + done.stderr
-    held = tickets.read_ticket(path)
-    assert held.board_item is not None, held
-    return f"{tickets.ticket_board(BOARD, held.repositories)}:{held.board_item}"
+    # Where the store placed it: a routed ticket's private board records no link back.
+    placed = _module(
+        bench,
+        "board-items",
+        "--board",
+        BOARD,
+        "--ticket",
+        str(path),
+        "--origin",
+        tickets.qualified_id(RUN, cause),
+    )
+    assert placed.returncode == 0, placed.stdout + placed.stderr
+    (item,) = json.loads(placed.stdout)["items"]
+    return str(item["id"])
 
 
 def _other_issue(bench: Bench, run: str, cause: str) -> str:
@@ -176,7 +187,7 @@ def _other_issue(bench: Bench, run: str, cause: str) -> str:
     for verb in ("board-status", "copy"):
         done = _module(bench, verb, "--board", BOARD, str(path))
         assert done.returncode == 0, done.stdout + done.stderr
-    return f"{BOARD}:{tickets.read_ticket(path).board_item}"
+    return f"{BOARD}:{tickets.read_ticket(path).link(BOARD)}"
 
 
 def _evidence(bench: Bench, issue: str, run: str, cause: str, evidence: str) -> str:

@@ -116,7 +116,7 @@ def copied(project: str, destination: str) -> plan_store.StoreProject:
     would send a reviewer to whichever the link happened to name.
     """
     plan_store.qualified(project)
-    sources = (destination, *plan_store.routed_sources(destination))
+    sources = plan_store.reachable(destination)
     links = plan_store.project_record(project).get("metadata")
     recorded = links.get(plan_store.COPIES_KEY) if isinstance(links, Mapping) else None
     keyed = next(

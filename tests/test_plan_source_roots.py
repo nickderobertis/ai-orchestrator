@@ -542,8 +542,8 @@ def test_the_tracked_document_declares_no_private_tracker_and_no_route() -> None
         for source, visibility in DECLARED_VISIBILITY.items()
         if visibility == "private"
     ), private
-    assert plan_store.routed_sources("plans") == ()
-    assert plan_store.routed_sources("followups") == ()
+    assert plan_store.reachable("plans") == ("plans",)
+    assert plan_store.reachable("followups") == ("followups",)
     configured = set(read_plan_sources(_configuration()))
     assert set(read_default_sources(_configuration())) <= configured
 
@@ -607,12 +607,18 @@ ORGANIZATION_FOLLOWUPS = {
     "api_key_env": "HIDDENCO_LINEAR_API_KEY",
     "project": "0f3c9d2a-5b1e-4c7a-9e21-6d8b4a1f2c03",
 }
-#: Where the layer's `followups` route sends a ticket whose root cause is the organization's.
+#: Where the layer's `followups` routes send a ticket: the mixed owner's private work to the
+#: host's private board, and an organization's root cause to its own tracker.
 FOLLOWUPS_ROUTES = [
+    {
+        "repositories": ["github.com/sample-owner/*"],
+        "classification": "private",
+        "to": onetaskgraph_user_layer.PRIVATE_FOLLOWUPS,
+    },
     {
         "repositories": [onetaskgraph_user_layer.ORGANIZATION_REPOSITORIES],
         "to": onetaskgraph_user_layer.ORGANIZATION_FOLLOWUPS,
-    }
+    },
 ]
 #: Each Linear source the example declares, with the values it is declared with.
 LINEAR_SOURCES = {
@@ -703,7 +709,7 @@ def test_the_example_layer_adds_destinations_and_loosens_nothing(
         for entry in value
         if isinstance(entry, dict)
     }
-    assert targets == {*LINEAR_SOURCES, onetaskgraph_user_layer.PRIVATE_PLANS}, targets
+    assert targets == {*LINEAR_SOURCES, *PRIVATE_STORES}, targets
 
 
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
@@ -762,8 +768,8 @@ def test_the_example_linear_sources_resolve_their_states_endpoint_and_routes(
     Read through the CLI's own resolution for the reason the board mappings above are, with
     the example installed as the user layer. The endpoint is held to the schema's default and
     to no setting of the layer's, so the source reaches Linear itself and never a fixture
-    address left behind. `plan_store.routed_sources` is read under the same layer, because it
-    is how a copy's home is looked for among the routed sources.
+    address left behind. `plan_store.reachable` is read under the same layer, because it is
+    how a copy's home is looked for among the routed sources and a ticket's family is read.
     """
     properties = _linear_schema()["properties"]
     assert isinstance(properties, dict)
@@ -790,11 +796,14 @@ def test_the_example_linear_sources_resolve_their_states_endpoint_and_routes(
         monkeypatch.delenv(name)
     home = onetaskgraph_user_layer.installed(tmp_path_factory.mktemp("routed-layer"))
     monkeypatch.setenv(onetaskgraph_user_layer.XDG_CONFIG_HOME, str(home))
-    assert plan_store.routed_sources("plans") == (
+    assert plan_store.reachable("plans") == (
+        "plans",
         onetaskgraph_user_layer.PRIVATE_PLANS,
         onetaskgraph_user_layer.ORGANIZATION_PLANS,
     )
-    assert plan_store.routed_sources("followups") == (
+    assert plan_store.reachable("followups") == (
+        "followups",
+        onetaskgraph_user_layer.PRIVATE_FOLLOWUPS,
         onetaskgraph_user_layer.ORGANIZATION_FOLLOWUPS,
     )
 

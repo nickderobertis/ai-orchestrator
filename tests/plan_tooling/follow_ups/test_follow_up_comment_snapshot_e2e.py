@@ -146,9 +146,10 @@ def _filed(loopback: Loopback, cause: str = remote.PROPOSED_CAUSE, **facts: obje
     for verb in ("board-status", "copy"):
         assert tickets.main([verb, "--board", BOARD, str(path)]) == tickets.SOUND
     os.utime(path, (0, 0))
-    record = tickets.read_ticket(path, pending=True)
-    assert record.board_item is not None
-    return f"{BOARD}:{record.board_item}"
+    # The store records its link to the item its copy created on the ticket.
+    linked = tickets.read_ticket(path, pending=True).link(BOARD)
+    assert linked is not None
+    return f"{BOARD}:{linked}"
 
 
 def _said(loopback: Loopback, issue: str, body: str) -> str:
@@ -358,6 +359,47 @@ class _Batched:
 
 
 BATCHED_READ = _Batched()
+
+
+#: A repository of the organization the loopback's `followups` route sends to its folder, which
+#: no registry entry makes public, so the store places its ticket there.
+ROUTED_REPOSITORY = remote._Repository("hiddenco", "qh-api")
+
+
+@pytest.mark.parametrize("routed", [False, True], ids=["on-followups", "on-a-routed-board"])
+def test_an_issue_scoped_pass_gives_its_comments_to_the_run_its_items_origin_names(
+    loopback: Loopback, routed: bool
+) -> None:
+    """`--issue` reads which run owns the item off its own `onetaskgraph.origin`.
+
+    The item records the ticket it was copied from, and so its run, wherever the store placed
+    it: on `followups`, or on the board its route sends the organization's work to. The pass
+    copies that one item and gives the person's comment on it to that run.
+    """
+    ticket = remote._follow_up_ticket(
+        ROUTED_REPOSITORY if routed else remote.SIBLING_REPOSITORY,
+        cause="intake-drops-a-field" if routed else remote.PROPOSED_CAUSE,
+        verified_on=HOST,
+    )
+    path = remote._written_ticket(loopback.root, ticket)
+    for verb in ("board-status", "copy"):
+        assert tickets.main([verb, "--board", BOARD, str(path)]) == tickets.SOUND
+    os.utime(path, (0, 0))
+    issue = tickets.locate(path, BOARD).counterpart
+    assert issue is not None
+    assert issue.startswith("routedfollowups:" if routed else f"{BOARD}:"), issue
+    shown = loopback.store("task", "show", issue)["items"]
+    assert isinstance(shown, list)
+    metadata = shown[0]["item"]["metadata"]
+    assert metadata[tickets.ORIGIN_KEY] == tickets.qualified_id(RUN, ticket.root_cause)
+    asked = _said(loopback, issue, "Does this still happen after the restart?\n")
+
+    held = _gathered(loopback, "--to", BOARD, "--issue", issue)
+
+    assert held.snapshot is not None and held.plan is not None
+    assert [one.id for one in held.snapshot.items] == [issue]
+    assert [run for run, _ in held.plan.runs] == [RUN]
+    assert [one.comment for one in held.snapshot.selection[tickets.RunId(RUN)]] == [asked]
 
 
 def test_a_dry_run_launched_with_from_answers_exactly_what_it_showed_and_reads_the_board_once(

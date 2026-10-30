@@ -106,8 +106,8 @@ pytestmark = [pytest.mark.xdist_group("follow-ups-comment-answers")]
 #: `## Duplicate search`; and 10, whose `## Root cause` is its
 #: invariant and contributing locations and which closes with `## Duplicate search` rather than
 #: `## Evidence`; and 11, whose plain root cause and fix locations close with the historical
-#: search log then Evidence. Schemas 7–11 stay readable and advance when their own run
-#: rewrites them.
+#: search log then Evidence; and 12, the last whose record could carry the retired item binding,
+#: in today's shape. Schemas 7–12 stay readable and advance when their own run rewrites them.
 PROPOSED_CAUSE = "listing-cursor-skips-last-page"
 UNSURE_CAUSE = "lock-file-left-after-crash"
 DEFERRED_CAUSE = "sweep-trailer-omits-a-family"
@@ -128,6 +128,7 @@ OLDER_CAUSES = dict(
             "feed-skips-a-retried-entry",
             "queue-drops-a-late-job",
             "download-skips-a-chunk",
+            "timer-fires-twice",
         ),
         strict=True,
     )
@@ -365,6 +366,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from orchestrator import follow_up_comments as comments
 from orchestrator import follow_up_tickets as tickets
+from orchestrator import plan_store
 
 root, board, run, issues = sys.argv[1:5]
 issues = json.loads(issues)
@@ -387,7 +389,7 @@ chosen = tuple(
 )
 snapshot = comments.publish_snapshot(staged, comments.Snapshot(
     directory=staged, queried_at=datetime.now(UTC), board=board,
-    boards=tickets.boards(board), named_board=False, scope=run, issue=None, starts={},
+    boards=plan_store.reachable(board), named_board=False, scope=run, issue=None, starts={},
     store=comments.store_version(), dry_run=True,
     items=tuple(
         comments.SnapshotItem(str(one.id), str(one.snapshot_id), one.version, one.title,
@@ -535,7 +537,9 @@ def _older(ticket: tickets.Ticket, schema: int) -> str:
     ticket = dataclasses.replace(
         ticket,
         body=(
-            before_schema_12(ticket.body)
+            ticket.body
+            if schema >= tickets.SEARCH_RETIRED_AT
+            else before_schema_12(ticket.body)
             if schema >= tickets.PLAIN_AT
             else before_schema_11(ticket.body)
             if schema >= tickets.INVARIANT_AT
@@ -1097,7 +1101,7 @@ def test_from_its_launch_to_settle_the_dispatch_sends_the_board_nothing_but_its_
         + [read, field, issue]
         + [read, fields, issue]
         + [read, field, issue] * 6
-        + [read, issue] * 4
+        + [read, issue] * 5
         + [read, field]
         + [read, issue]
     ), answered.operations

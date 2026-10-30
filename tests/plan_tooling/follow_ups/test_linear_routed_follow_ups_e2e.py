@@ -14,7 +14,12 @@ recipes:
 * **filing** — `just follow-ups` over a run whose drafts name a hiddenco root cause and a
   nickderobertis one files the first in Linear at `Proposed` and the second on the board at
   `Proposal`, and its attached closeout's board check across both destinations is green;
-* **re-dispatch** — the same run re-dispatched binds both tickets and files no duplicate;
+* **re-dispatch** — the same run re-dispatched finds both tickets where the store places them,
+  binds neither, and files no duplicate;
+* **each command's requests** — against the Linear destination, `board-status`, `copy` and the
+  dispositions check each ask the store's `task locate` once and the destination's origin
+  query at most once per ticket, a ticket still carrying the retired `board_item` none at all,
+  until its migration copy brings it forward;
 * **the seeded search** — a later run whose root causes another run already filed on each
   destination finds each ticket through `board-items`' search by root cause, asking no
   question that lists the board or the scoped project, and comments its evidence there;
@@ -26,12 +31,12 @@ recipes:
 * **delivery** — a plan node delivering the Linear ticket at `Todo` moves it to `Queued`
   before any worker turn and to `Done` when the node settles.
 
-**The binding survives both destinations.** A copy onto the public board records the store's
-link from the ticket to its item, as before. A copy onto the private tracker records the
-ticket's origin on the item, which the origin query reads, but no link from the `drafts`
-ticket, a source not declared private, to the private item; the copy binds the ticket and points
-its own `onetaskgraph.origin` at the item instead, which every later copy follows by the store's
-origin rule — so the re-dispatch phase updates both items and files no duplicate.
+**The store places a ticket on both destinations, and nothing binds it.** A copy onto the
+public board records the store's link from the ticket to its item, which every later `task
+locate` follows by id. A copy onto the private tracker records the ticket's origin on the item,
+which the destination's origin query reads, but no link from the `drafts` ticket, a source not
+declared private, to the private item; every later `task locate` asks that query once and
+answers the item — so the re-dispatch phase updates both items and files no duplicate.
 
 **Linear is the loopback wire `tests/linear_board.py` serves**, one team behind both of the
 example's Linear sources, `hiddenco-followups` and `hiddenco-plans`, its endpoint handed to
@@ -468,13 +473,87 @@ def _module(bench: Bench) -> str:
     return f"{shlex.quote(bench.python)} -m orchestrator.follow_up_tickets"
 
 
-def _searched(bench: Bench, repository: _Repository, cause: str, witness: Path) -> list[str]:
-    """The task's search by root cause, on the board the ticket's repository routes it to."""
+def _searched(bench: Bench, ticket: Path, cause: str, witness: Path) -> list[str]:
+    """The task's search by root cause, on the board the store places the ticket record on."""
     return _in_checkout(
         bench,
-        f"{_module(bench)} board-items --board {BOARD} --repository "
-        f"{_hosted(repository)} --metadata {tickets.root_cause_query(cause)} "
-        f"> {shlex.quote(str(witness))}",
+        f"{_module(bench)} board-items --board {BOARD} --ticket {shlex.quote(str(ticket))} "
+        f"--metadata {tickets.root_cause_query(cause)} > {shlex.quote(str(witness))}",
+    )
+
+
+def _put(bench: Bench, staged: Path, ticket: Path) -> list[str]:
+    """Write a ticket's record in place, which says which board its searches ask."""
+    return _in_checkout(
+        bench,
+        f"mkdir -p {shlex.quote(str(ticket.parent))}\n"
+        f"cp {shlex.quote(str(staged))} {shlex.quote(str(ticket))}\n",
+    )
+
+
+def _placed_item(bench: Bench, ticket: Path) -> str:
+    """The item the store places ``ticket`` on, as the agent's own origin query answers it."""
+    run, cause = tickets.located_path(ticket)
+    found = _run(
+        bench,
+        bench.python,
+        "-m",
+        "orchestrator.follow_up_tickets",
+        "board-items",
+        "--board",
+        BOARD,
+        "--ticket",
+        str(ticket),
+        "--origin",
+        tickets.qualified_id(run, cause),
+    )
+    assert found.returncode == 0, found.stdout + found.stderr
+    (item,) = json.loads(found.stdout)["items"]
+    return str(item["id"])
+
+
+class Counted(NamedTuple):
+    """One follow-up command's requests against the Linear destination and the plan store.
+
+    ``origin_queries`` are the destination's listings of its scoped project, which is how the
+    loopback answers a query by origin; ``by_id`` its reads of one issue by id, and
+    ``comments`` its reads of an issue's comments; ``locates`` the store's `task locate` the
+    command asked, and ``shows`` its `task show` of a destination's item, the local ticket's
+    own read aside; ``writes`` its creates and updates.
+    """
+
+    status: int
+    origin_queries: int
+    by_id: int
+    comments: int
+    writes: int
+    locates: int
+    shows: int
+
+
+def _counted(bench: Bench, *arguments: str) -> Counted:
+    """Run one follow-up command in the copy and count what it asked of Linear and the store."""
+    before = len(bench.linear.requests())
+    bench.record.write_text("", encoding="utf-8")
+    ran = _run(bench, bench.python, "-m", "orchestrator.follow_up_tickets", *arguments)
+    sent = bench.linear.requests()[before:]
+    calls = _store_calls(bench)
+    return Counted(
+        status=ran.returncode,
+        origin_queries=sum(1 for one in sent if one["operation"] == "issues"),
+        by_id=sum(
+            1 for one in sent if one["operation"] == "issue" and set(one["variables"]) == {"id"}
+        ),
+        comments=sum(
+            1 for one in sent if one["operation"] == "issue" and "last" in one["variables"]
+        ),
+        writes=sum(1 for one in sent if one["operation"].endswith(("Create", "Update"))),
+        locates=sum(1 for call in calls if call[:2] == ["task", "locate"]),
+        shows=sum(
+            1
+            for call in calls
+            if call[:2] == ["task", "show"] and not call[2].startswith(f"{tickets.SOURCE}:")
+        ),
     )
 
 
@@ -598,7 +677,11 @@ class Life(NamedTuple):
     rewritten_bodies: list[Rewrite]
     linear_files_after_redispatch: list[str]
     board_issues_after_redispatch: int
-    bindings: dict[str, tickets.Ticket]
+    placements: dict[str, tickets.Ticket]
+    per_command: dict[str, Counted]
+    migrated: tickets.Ticket
+    migrated_text: str
+    linear_files_after_commands: list[str]
     seeded_linear_item: str
     seeded_board_item: str
     later: subprocess.CompletedProcess[str]
@@ -718,21 +801,16 @@ def life(routed: Routed, oneharness_bin: str) -> Iterator[Life]:  # noqa: PLR091
         board_path = tickets.ticket_path(bench.drafts_root, FILER, FILED_BOARD)
         linear_ticket = _ticket(FILER, FILED_LINEAR, HIDDENCO, (linear_draft,))
         board_ticket = _ticket(FILER, FILED_BOARD, LIBRARY, (board_draft,))
+        staged_linear = _staged(bench, "linear.md", tickets.render(linear_ticket))
+        staged_board = _staged(bench, "board.md", tickets.render(board_ticket))
         filing = [
-            _searched(bench, HIDDENCO, FILED_LINEAR, tmp / "filer-search-linear.json"),
-            _searched(bench, LIBRARY, FILED_BOARD, tmp / "filer-search-board.json"),
-            _placed_and_copied(
-                bench,
-                _staged(bench, "linear.md", tickets.render(linear_ticket)),
-                linear_path,
-                linear_draft,
-            ),
-            _placed_and_copied(
-                bench,
-                _staged(bench, "board.md", tickets.render(board_ticket)),
-                board_path,
-                board_draft,
-            ),
+            # Each record is written before its search, since it names the board asked.
+            _put(bench, staged_linear, linear_path),
+            _put(bench, staged_board, board_path),
+            _searched(bench, linear_path, FILED_LINEAR, tmp / "filer-search-linear.json"),
+            _searched(bench, board_path, FILED_BOARD, tmp / "filer-search-board.json"),
+            _placed_and_copied(bench, staged_linear, linear_path, linear_draft),
+            _placed_and_copied(bench, staged_board, board_path, board_draft),
         ]
         account = [
             _filed(linear_draft, FILED_LINEAR, "Copied onto its Linear issue."),
@@ -741,8 +819,8 @@ def life(routed: Routed, oneharness_bin: str) -> Iterator[Life]:  # noqa: PLR091
         _scripted(bench, FILER, [*filing, _accounting(bench, FILER, account)])
         filed = _run(bench, "just", "follow-ups", FILER)
         assert filed.returncode == 0, filed.stdout + filed.stderr + _ran(bench)
-        filed_linear_item = f"{LINEAR}:{tickets.read_ticket(linear_path).board_item}"
-        filed_board_item = f"{BOARD}:{tickets.read_ticket(board_path).board_item}"
+        filed_linear_item = _placed_item(bench, linear_path)
+        filed_board_item = _placed_item(bench, board_path)
         linear_after_filing = _item(bench, filed_linear_item)
         board_after_filing = _item(bench, filed_board_item)
         linear_files_after_filing = _linear_items(bench)
@@ -819,10 +897,33 @@ def life(routed: Routed, oneharness_bin: str) -> Iterator[Life]:  # noqa: PLR091
         ]
         linear_files_after_redispatch = _linear_items(bench)
         board_issues_after_redispatch = _board_issues()
-        bindings = {
+        placements = {
             FILED_LINEAR: tickets.read_ticket(linear_path),
             FILED_BOARD: tickets.read_ticket(board_path),
         }
+
+        # Each command's requests against Linear: first a record from before the binding
+        # retired, bound to the item its first copy created, then that record brought forward.
+        linear_native = filed_linear_item.partition(":")[2]
+        legacy = dataclasses.replace(
+            placements[FILED_LINEAR], retired=((tickets.BINDING_FIELD, linear_native),)
+        )
+        linear_path.write_text(tickets.render(legacy), encoding="utf-8")
+        per_command: dict[str, Counted] = {}
+        for label, arguments in (
+            ("legacy board-status", ("board-status", "--board", BOARD, str(linear_path))),
+            ("legacy copy", ("copy", "--board", BOARD, str(linear_path))),
+            ("board-status", ("board-status", "--board", BOARD, str(linear_path))),
+            ("copy", ("copy", "--board", BOARD, str(linear_path))),
+        ):
+            per_command[label] = _counted(bench, *arguments)
+            if label == "legacy copy":
+                migrated = tickets.read_ticket(linear_path)
+                migrated_text = linear_path.read_text(encoding="utf-8")
+        per_command["check-dispositions"] = _counted(
+            bench, "check-dispositions", "--root", str(bench.drafts_root), "--board", BOARD, FILER
+        )
+        linear_files_after_commands = _linear_items(bench)
 
         # The seeded search: an earlier run already filed both of the later run's root causes,
         # and one more run left evidence on the Linear one.
@@ -843,13 +944,14 @@ def life(routed: Routed, oneharness_bin: str) -> Iterator[Life]:  # noqa: PLR091
             (SEEDED_LINEAR, HIDDENCO, seeded_linear_item),
             (SEEDED_BOARD, LIBRARY, seeded_board_item),
         ):
-            later_commands.append(_searched(bench, repository, cause, tmp / f"later-{cause}.json"))
             local = tickets.ticket_path(bench.drafts_root, LATER, cause)
             staged = _staged(
                 bench,
                 f"later-{cause}.md",
                 tickets.render(_ticket(LATER, cause, repository, (later_drafts[cause],))),
             )
+            later_commands.append(_put(bench, staged, local))
+            later_commands.append(_searched(bench, local, cause, tmp / f"later-{cause}.json"))
             evidence = _staged(
                 bench,
                 f"evidence-{cause}.md",
@@ -998,7 +1100,11 @@ def life(routed: Routed, oneharness_bin: str) -> Iterator[Life]:  # noqa: PLR091
             rewritten_bodies=rewritten_bodies,
             linear_files_after_redispatch=linear_files_after_redispatch,
             board_issues_after_redispatch=board_issues_after_redispatch,
-            bindings=bindings,
+            placements=placements,
+            per_command=per_command,
+            migrated=migrated,
+            migrated_text=migrated_text,
+            linear_files_after_commands=linear_files_after_commands,
             seeded_linear_item=seeded_linear_item,
             seeded_board_item=seeded_board_item,
             later=later,
@@ -1168,14 +1274,15 @@ def test_the_closeouts_board_check_across_both_destinations_is_green(life: Life)
     assert "accounts for every draft this dispatch was given" in life.board_check.stdout
 
 
-def test_a_re_dispatch_binds_both_tickets_and_files_no_duplicate(life: Life) -> None:
-    """Both tickets stay bound, each to the item its first copy created, by what each copy kept.
+def test_a_re_dispatch_finds_both_tickets_binds_neither_and_files_no_duplicate(
+    life: Life,
+) -> None:
+    """Both tickets are updated on the item their first copy created, and no record binds it.
 
-    The public board's item is followed by the store's link; the private tracker's, for which
-    the store records no link on the `drafts` ticket, by the ticket's own origin naming it. Both
-    items record the ticket they were copied from as their origin.
+    The public board's item is the store's link; the private tracker's, for which the store
+    records no link on the `drafts` ticket, its origin query's answer. Both items record the
+    ticket they were copied from as their origin, and neither ticket carries `board_item`.
     """
-    linear_native = life.filed_linear_item.partition(":")[2]
     board_native = life.filed_board_item.partition(":")[2]
     assert [copy["destination"] for copy in life.redispatch_copies] == [
         life.filed_linear_item,
@@ -1184,15 +1291,15 @@ def test_a_re_dispatch_binds_both_tickets_and_files_no_duplicate(life: Life) -> 
     assert {copy["action"] for copy in life.redispatch_copies} <= {"updated", "unchanged"}
     assert life.linear_files_after_redispatch == life.linear_files_after_filing
     assert life.board_issues_after_redispatch == life.board_issues_after_filing == 1
-    linear, board = life.bindings[FILED_LINEAR], life.bindings[FILED_BOARD]
+    linear, board = life.placements[FILED_LINEAR], life.placements[FILED_BOARD]
     assert (linear.board_item, linear.link(LINEAR), linear.link(BOARD), linear.origin) == (
-        linear_native,
         None,
         None,
-        life.filed_linear_item,
+        None,
+        None,
     )
     assert (board.board_item, board.link(BOARD), board.link(LINEAR), board.origin) == (
-        board_native,
+        None,
         board_native,
         None,
         None,
@@ -1204,6 +1311,51 @@ def test_a_re_dispatch_binds_both_tickets_and_files_no_duplicate(life: Life) -> 
         metadata = item["metadata"]
         assert isinstance(metadata, Mapping)
         assert metadata[tickets.ORIGIN_KEY] == tickets.qualified_id(FILER, cause)
+        assert tickets.BINDING_FIELD not in metadata[tickets.KEY]
+
+
+def test_each_command_asks_linear_once_by_origin_and_a_legacy_binding_not_at_all(
+    life: Life,
+) -> None:
+    """Per command against the Linear destination: one `task locate`, at most one origin query.
+
+    Brought forward, `board-status` and the dispositions check each ask the store's `task
+    locate` once — the destination's origin query once, since the private tracker keeps no
+    link — and read the located item once for its status, record and comments; `copy` asks the
+    same locate, its one origin query, reads no status of its own, since every copy but a
+    withdrawal keeps the status the destination holds, and the store's `--target-task` reads
+    the item once before writing it. A record
+    still carrying the retired `board_item` is read through `--target-native` by id, so neither
+    of its commands asks the origin query at all; its copy is the migration that rewrites it
+    without the key. No command files a second Linear issue.
+    """
+    counted = life.per_command
+    for label, one in counted.items():
+        assert one.status == tickets.SOUND, (label, one)
+    # One ticket each, but the dispositions check reads both of the run's tickets: the board's
+    # and Linear's, each located once and its item read once.
+    for label in ("legacy board-status", "legacy copy", "board-status", "copy"):
+        assert counted[label].locates == 1, (label, counted[label])
+    checked = counted["check-dispositions"]
+    assert (checked.locates, checked.shows) == (2, 2), checked
+    for label in ("legacy board-status", "legacy copy"):
+        assert counted[label].origin_queries == 0, (label, counted[label])
+    for label in ("board-status", "check-dispositions", "copy"):
+        assert counted[label].origin_queries == 1, (label, counted[label])
+    assert counted["board-status"].shows == 1, counted["board-status"]
+    for label in ("board-status", "check-dispositions"):
+        assert counted[label].by_id <= 1, (label, counted[label])
+        assert counted[label].writes == 0, (label, counted[label])
+    # The copy reads no status of its own: the store's own `--target-task` read is its one read
+    # of the item, before the write.
+    assert (counted["copy"].shows, counted["copy"].by_id, counted["copy"].comments) == (0, 1, 0)
+    assert counted["copy"].writes >= 1, counted["copy"]
+    # The migration copy: the `--target-native` read, then the store's `--target-task` read.
+    assert (counted["legacy copy"].by_id, counted["legacy copy"].comments) == (2, 0)
+    assert life.migrated.board_item is None
+    assert f'"schema": {tickets.SCHEMA}' in life.migrated_text
+    assert tickets.BINDING_FIELD not in life.migrated_text
+    assert life.linear_files_after_commands == life.linear_files_after_filing
 
 
 def test_a_later_run_finds_each_destinations_open_ticket_by_root_cause_and_lists_nothing(
@@ -1315,7 +1467,7 @@ def test_new_and_rewritten_historical_bodies_publish_without_search_logs_on_both
     )
     for item in bodies:
         body = str(item["content"])
-        assert _record(item)["schema"] == 12
+        assert _record(item)["schema"] == tickets.SCHEMA == 13
         assert "Duplicate search" not in body and "Queries:" not in body
         assert "Related tickets" not in body
         assert "Irrelevant old candidate" not in body and "/issues/999" not in body

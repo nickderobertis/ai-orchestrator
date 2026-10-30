@@ -1957,8 +1957,10 @@ def test_a_ticket_whose_fix_changes_several_repositories_is_filed_in_the_boards_
     assert _estimate_record(shown)["repository"] == filed_in
     assert shown["repositories"] == list(listed)
     assert local["repositories"] == list(listed)
-    bound = _estimate_record(local)[follow_up_tickets.BINDING_FIELD]
-    assert destination == f"{follow_up_tickets.BOARD}:{bound}"
+    metadata = local["metadata"]
+    assert isinstance(metadata, dict), local
+    assert metadata[follow_up_tickets.COPIES_KEY] == {follow_up_tickets.BOARD: destination}
+    assert follow_up_tickets.BINDING_FIELD not in _estimate_record(local)
     assert not any((tmp_path / "routed").rglob("*.md")), "the route took a ticket it never matched"
 
 
@@ -1986,15 +1988,21 @@ def test_a_ticket_whose_fix_changes_only_routed_repositories_is_filed_where_the_
 
 
 def test_a_ticket_whose_fix_changes_several_repositories_is_refused_naming_where_it_is_filed(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A record naming one of the listed repositories, not the default, is refused before a copy.
+    """A record naming one of the listed repositories, not where the store creates the issue, is
+    refused before a copy.
 
-    `board-status` is the agent's first command on a ticket, so it is where the refusal is
-    met; the copy after it is refused too, and nothing reaches the board.
+    The store's `task locate` answers the repository it creates the issue in — the board's
+    configured one — and `board-status`, the agent's first command on a ticket, is where the
+    refusal is met; the copy after it is refused too, and nothing reaches the board.
     """
-    environment, drafts_root = _followups_environment(tmp_path)
     sibling = _hosted(SIBLING_REPOSITORY)
+    # The listed repositories are public, so the store places the ticket on `followups`.
+    boundary_home.answering(
+        monkeypatch, public=(*boundary_home.FIXTURE_REPOSITORIES, sibling, HIDDENCO_API)
+    )
+    environment, drafts_root = _followups_environment(tmp_path)
     ticket = _written_ticket(drafts_root, _spanning_ticket(sibling, sibling, HIDDENCO_API))
     routed = _routing_hiddenco_to_a_folder(environment, tmp_path / "routed")
 
@@ -2682,27 +2690,21 @@ def _local_ticket(environment: dict[str, str]) -> dict[str, object]:
     return item
 
 
-@pytest.mark.parametrize(
-    "bound",
-    ["unbound", "bound-by-origin-to-the-withdrawn", "linked-to-the-withdrawn", "both-open"],
-)
+@pytest.mark.parametrize("carriers", ["withdrawn-beside-open", "both-open"])
 def test_two_carriers_of_one_ticket_are_resolved_by_the_native_origin_query_alone(
-    tmp_path: Path, bound: str
+    tmp_path: Path, carriers: str
 ) -> None:
     """Two board items carry one ticket's origin; `board-status` settles them without a board walk.
 
     One carrier the adopted store wrote, by copying the ticket, and then withdrew; the other
     reached the board before the adoption, its origin in the board's field alone, and is the
-    run's open item. `board-status` finds both with the store's native origin query — the
-    board's own field filter finds the older one — whether the ticket is unbound, or bound to
-    the withdrawn one by its own origin, as a ticket was steered before the store kept a link:
-    it binds the ticket to the open carrier, points the ticket's origin there — the store's link
-    is the store's alone to write — and leaves the withdrawn one the duplicate comment; `copy`
-    then follows that origin onto the open carrier. A ticket whose store link names the
-    withdrawn carrier is rebound the same way, but that link is what the store follows first,
-    so `copy` refuses it as `MISBOUND` and writes nothing. With both carriers open, which one
-    survives is a person's decision, so `board-status` refuses as `MISBOUND`. None of it walks
-    the board's items or sends an unnarrowed search.
+    run's open item. The ticket carries no link, so its `task locate` asks the store's native
+    origin query once — the board's own field filter finds the older one — and answers both as
+    carriers: `board-status` picks the run's open one, writes nothing to the ticket to hold it,
+    and leaves the withdrawn one the duplicate comment; `copy` then steers the store's copy to
+    the open carrier with `--target-task`, which records the store's link to it. With both
+    carriers open, which one survives is a person's decision, so `board-status` refuses as
+    `MISBOUND`. None of it walks the board's items or sends an unnarrowed search.
     """
     environment, drafts_root = _followups_environment(tmp_path)
     ticket = _follow_up_ticket(SIBLING_REPOSITORY)
@@ -2715,7 +2717,7 @@ def test_two_carriers_of_one_ticket_are_resolved_by_the_native_origin_query_alon
         assert f'"{follow_up_tickets.ORIGIN_KEY}":"{PROPOSED_ID}"' in adopted.body, (
             "the premise: the adopted store keeps the origin in the item's body as well"
         )
-        if bound != "both-open":
+        if carriers != "both-open":
             withdrawn = _followups_command(
                 environment,
                 [str(ONETASKGRAPH_BIN), "task", "status", "set"]
@@ -2739,21 +2741,14 @@ def test_two_carriers_of_one_ticket_are_resolved_by_the_native_origin_query_alon
                 origin=f"drafts:another-run/tickets/another-cause-{at}",
                 origin_in_body=True,
             )
-        adopted_id = f"{follow_up_tickets.BOARD}:{adopted.content_id}"
         earlier_id = f"{follow_up_tickets.BOARD}:{earlier.content_id}"
-        to_adopted = replace(ticket, board_item=follow_up_tickets.BoardItemId(adopted.content_id))
-        staged = {
-            "bound-by-origin-to-the-withdrawn": replace(to_adopted, origin=adopted_id),
-            "linked-to-the-withdrawn": replace(
-                to_adopted, links=((follow_up_tickets.BOARD, adopted_id),)
-            ),
-        }.get(bound, ticket)
-        path.write_text(follow_up_tickets.render(staged), encoding="utf-8")
+        # Written whole, carrying no link: the store's own copy would follow its origin query.
+        path.write_text(follow_up_tickets.render(ticket), encoding="utf-8")
         _GitHubFixture.requests.clear()
 
         decided = _board_status(environment, path)
 
-        if bound == "both-open":
+        if carriers == "both-open":
             assert decided.returncode == follow_up_tickets.MISBOUND, decided.stdout + decided.stderr
             flat = " ".join(decided.stderr.split())
             assert "2 items of 'followups' carry this ticket's origin" in flat, flat
@@ -2763,15 +2758,9 @@ def test_two_carriers_of_one_ticket_are_resolved_by_the_native_origin_query_alon
             assert (decided.returncode, decided.stdout) == (0, "backlog\n"), decided.stderr
             held = _local_ticket(environment)["metadata"]
             assert isinstance(held, dict)
-            assert held[follow_up_tickets.KEY][follow_up_tickets.BINDING_FIELD] == (
-                earlier.content_id
-            )
-            assert held[follow_up_tickets.ORIGIN_KEY] == earlier_id
-            assert held.get(follow_up_tickets.COPIES_KEY) == (
-                {follow_up_tickets.BOARD: adopted_id}
-                if bound == "linked-to-the-withdrawn"
-                else None
-            ), "the store's link was hand-written"
+            assert follow_up_tickets.BINDING_FIELD not in held[follow_up_tickets.KEY]
+            assert follow_up_tickets.ORIGIN_KEY not in held, "the ticket's origin was re-pointed"
+            assert held.get(follow_up_tickets.COPIES_KEY) is None, "a link was hand-written"
             (notice,) = adopted.comments
             assert (
                 str(notice["body"])
@@ -2785,19 +2774,13 @@ def test_two_carriers_of_one_ticket_are_resolved_by_the_native_origin_query_alon
 
             edited = path.read_text(encoding="utf-8").replace("(Examples).", "(Examples, again).")
             path.write_text(edited, encoding="utf-8")
-            if bound == "linked-to-the-withdrawn":
-                refused = _follow_up_step(
-                    environment, "copy", "--board", follow_up_tickets.BOARD, str(path)
-                )
-                assert refused.returncode == follow_up_tickets.MISBOUND, refused.stderr
-                flat = " ".join(refused.stderr.split())
-                assert f"link names {adopted_id}" in flat and f"is {earlier_id}" in flat, flat
-                assert "(Examples, again)." not in earlier.body + adopted.body
-            else:
-                answered = _validated_and_copied(environment, path)
-                assert answered == {"action": "updated", "destination": earlier_id}, answered
-                assert "(Examples, again)." in earlier.body
+            answered = _validated_and_copied(environment, path)
+            assert answered == {"action": "updated", "destination": earlier_id}, answered
+            assert "(Examples, again)." in earlier.body
             assert "(Examples, again)." not in adopted.body, "the withdrawn carrier was written"
+            linked = _local_ticket(environment)["metadata"]
+            assert isinstance(linked, dict)
+            assert linked[follow_up_tickets.COPIES_KEY] == {follow_up_tickets.BOARD: earlier_id}
             assert len(adopted.comments) == 1, "the duplicate was noted twice"
         walked, unnarrowed = _board_cost(_GitHubFixture.requests)
         assert (walked, unnarrowed) == ([], []), (
@@ -3053,7 +3036,15 @@ def test_follow_up_commands_and_account_check_read_only_their_items_once(tmp_pat
         )
         _per_step(
             "account board check",
-            _bounded_step("account board check", bound=True, allowed_comments=allowed, trace=trace),
+            _bounded_step(
+                "account board check",
+                bound=True,
+                allowed_comments=allowed,
+                trace=trace,
+                # The shared cause's ticket was never copied: its evidence is on another run's
+                # item, so its `task locate` asks the origin query once.
+                origin_lookups=1,
+            ),
         )
 
 
@@ -3535,7 +3526,15 @@ def test_a_realistic_follow_up_run_reads_and_writes_only_the_items_it_is_about( 
         )
         # One read per item and per comment connection, no search for a bound item: the
         # phase's cost is recorded below with the whole run's breakdown.
-        _bounded_step("realistic board check", bound=True, allowed_comments=allowed, trace=trace)
+        _bounded_step(
+            "realistic board check",
+            bound=True,
+            allowed_comments=allowed,
+            trace=trace,
+            # Each evidence ticket was never copied, so its `task locate` asks the origin
+            # query once; every ticket the run copied is found by the store's link.
+            origin_lookups=len(carriers),
+        )
 
     for phase in _RunPhase:
         budget_telemetry.record(
@@ -4185,13 +4184,16 @@ def test_a_follow_up_ticket_naming_a_repository_the_token_cannot_see_is_refused_
     assert not BOARD.created
 
 
-def test_board_status_refuses_a_ticket_outside_the_boards_owner_before_asking_the_board(
+def test_board_status_refuses_a_ticket_outside_the_boards_owner_before_writing_anything(
     tmp_path: Path,
 ) -> None:
-    """Exit 5 naming the repository and the owner `config show` reports, and no request sent.
+    """Exit 5 naming the repository and the owner `config show` reports, and nothing written.
 
-    The same board answers a ticket about a sibling of that owner with the status it is
-    copied with, so the refusal is the owner rule and not a board that answers nothing.
+    The store's `task locate` places the ticket on `followups` and answers the repository it
+    would create the issue in — the ticket's own, a third party's — asking the board no more
+    than its one origin query, and the refusal is decided before any write. The same board
+    answers a ticket about a sibling of that owner with the status it is copied with, so the
+    refusal is the owner rule and not a board that answers nothing.
     """
     environment, drafts_root = _followups_environment(tmp_path)
     shown = _followups_command(environment, [str(ONETASKGRAPH_BIN), "config", "show", "--json"])
@@ -4212,8 +4214,12 @@ def test_board_status_refuses_a_ticket_outside_the_boards_owner_before_asking_th
     assert refused.returncode == follow_up_tickets.OUTSIDE_OWNER == 5, refused.stderr
     assert refused.stdout == ""
     assert f"'{_hosted(FOREIGN_REPOSITORY)}'" in refused.stderr, refused.stderr
-    assert f"the board's owner {owner!r}" in refused.stderr, refused.stderr
-    assert asked == [], f"a refused ticket asked the board {[one.operation for one in asked]}"
+    assert f"which is not a repository of the owner {owner!r}" in " ".join(
+        refused.stderr.split()
+    ), refused.stderr
+    assert [one.operation for one in asked] == [_Operation.ORIGIN_LOOKUP], (
+        f"a refused ticket asked the board {[one.operation for one in asked]}"
+    )
     assert (sibling.returncode, sibling.stdout) == (0, "backlog\n"), sibling.stderr
 
 

@@ -78,7 +78,7 @@ from waits import until
 from orchestrator import follow_up_tickets as tickets
 from orchestrator import plan_check
 from orchestrator.plan_budgets import Direction
-from orchestrator.plan_store import WRITABLE_PLUGIN, NodeId, QualifiedTaskId
+from orchestrator.plan_store import WRITABLE_PLUGIN, NodeId
 from orchestrator.project_store import frontmatter, write_plan_project
 from orchestrator.root import REPO_ROOT
 from orchestrator.run_reading import RunId
@@ -165,7 +165,7 @@ RECIPE_PYTHON = str(REPO_ROOT / "scripts" / ".." / ".venv" / "bin" / "python3")
 #: the store's environment layer as well as onto `--to`.
 BOARD = "standin"
 #: What every search the task spells names, so it asks the board the ticket is filed on.
-ON_ITS_BOARD = "--repository <each repository the ticket lists>"
+ON_ITS_BOARD = "--ticket <path of the ticket>"
 #: How many items one page of the stand-in holds, set through the store's own environment
 #: layer for the setting: small enough that the board spans pages before the first pass
 #: runs, so a listing that read one page would read it as smaller than it is — the shape
@@ -1445,6 +1445,10 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                     "--witness",
                     STORE_INSTRUCTION_WITNESS,
                 ],
+                # The shared ticket, written under the slug its draft's file suggested: its
+                # record is what names the board each search below asks.
+                ["mkdir", "-p", str(new_ticket.parent)],
+                _placed(_staged(bench, "invented.md", tickets.render(invented)), invented_ticket),
                 [
                     "sh",
                     "-c",
@@ -1456,17 +1460,14 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                             "board-items",
                             "--board",
                             BOARD,
-                            "--repository",
-                            REPOSITORY,
+                            "--ticket",
+                            str(invented_ticket),
                             "--search",
                             "Relation probe",
                         ]
                     )
                     + " > relation-candidates.json",
                 ],
-                # The shared ticket, written under the slug its draft's file suggested.
-                ["mkdir", "-p", str(new_ticket.parent)],
-                _placed(_staged(bench, "invented.md", tickets.render(invented)), invented_ticket),
                 # The first duplicate search for it, in the invariant's words, as the task
                 # spells it: it answers the earlier run's item under that item's own slug,
                 # which the ticket then takes in place of the one it was written under.
@@ -1479,16 +1480,15 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                     BOARD,
                     "--search",
                     INVARIANT_SEARCH,
-                    "--repository",
-                    REPOSITORY,
+                    "--ticket",
+                    str(invented_ticket),
                     "--checkout",
                     str(REPO_ROOT),
                     "--witness",
                     INVARIANT_WITNESS,
                 ],
-                ["rm", str(invented_ticket)],
                 # A further search for the shared root cause, in its symptom's words, as the
-                # task spells it.
+                # task spells it, while the record still names the board it asks.
                 [
                     python,
                     str(RUN_TASK_STORE_INSTRUCTION),
@@ -1498,13 +1498,16 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                     BOARD,
                     "--search",
                     SEARCHED_TEXT,
-                    "--repository",
-                    REPOSITORY,
+                    "--ticket",
+                    str(invented_ticket),
                     "--checkout",
                     str(REPO_ROOT),
                     "--witness",
                     SEARCH_WITNESS,
                 ],
+                # The ticket takes the found item's slug, so the record it was first written
+                # under is removed.
+                ["rm", str(invented_ticket)],
                 _placed(_staged(bench, "new.md", tickets.render(first_ticket)), new_ticket),
                 _placed(_staged(bench, "shared.md", tickets.render(shared)), shared_ticket),
                 _placed(_staged(bench, "related.md", tickets.render(related)), related_ticket),
@@ -1654,17 +1657,13 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
 
         # The manager's feedback, re-dispatched over the same run: this run's issue is edited
         # by copying its ticket again, and its comment on the earlier run's issue is edited.
-        # The ticket is staged bound to the withdrawn duplicate, its own origin naming it there
-        # too, so the store's own copy would follow it; the ticket has to be rebound to the
-        # live item.
+        # The ticket is rewritten whole, carrying no link to its item, so the store's origin
+        # query answers both carriers with the withdrawn duplicate first, and its own copy
+        # would follow that one; the run's own open carrier has to be chosen among them.
         edited = _ticket(
             main, NEW_CAUSE, first_ticket.drafts, title, "Verified, examples tightened"
         )
-        misbound = dataclasses.replace(
-            edited,
-            board_item=tickets.BoardItemId(duplicate_issue.removeprefix(f"{BOARD}:")),
-            origin=QualifiedTaskId(duplicate_issue),
-        )
+        unlinked = dataclasses.replace(edited, links=(), origin=None)
         edited_comment = tickets.render_comment(
             main, SHARED_CAUSE, "This run hit it at `scripts/sweep.sh:12` and `:40`."
         )
@@ -1696,7 +1695,7 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Followed:  # noqa: PLR
                 # Re-derived against the board as it now is: no entry, no assumption, and
                 # staged as the proposal it was first written as; the board decides.
                 _placed(
-                    _staged(bench, "new-edited.md", tickets.render(misbound)),
+                    _staged(bench, "new-edited.md", tickets.render(unlinked)),
                     new_ticket,
                 ),
                 # The related ticket, evaporated by the newly accepted fix: withdrawn.
@@ -2369,7 +2368,7 @@ def test_a_filed_account_with_only_a_local_ticket_is_refused_after_the_dispatch(
     refused = _run(["just", "follow-ups", run, "--to", BOARD], bench)
 
     assert refused.returncode != OK
-    assert f"filed root cause {cause} has a local ticket but no bound item" in refused.stderr
+    assert f"filed root cause {cause} has a local ticket but no item" in refused.stderr
     assert ticket.is_file()
 
 
@@ -3204,7 +3203,7 @@ def test_a_feedback_re_dispatch_brings_a_schema_4_ticket_to_one_fix_updating_its
         assert shown["repositories"] == [REPOSITORY] == [ticket.repository]
         metadata = shown["metadata"]
         assert isinstance(metadata, dict)
-        assert metadata[tickets.KEY]["schema"] == tickets.SCHEMA == 12
+        assert metadata[tickets.KEY]["schema"] == tickets.SCHEMA == 13
         assert _category(shown) == accepted, "bringing a ticket to the current shape undid it"
     metadata_after = after["metadata"]
     assert isinstance(metadata_after, dict)
@@ -3660,8 +3659,8 @@ def test_the_task_searches_the_board_by_the_invariant_first_and_finds_an_item_of
         "board-items",
         "--board",
         BOARD,
-        "--repository",
-        REPOSITORY,
+        "--ticket",
+        str(tickets.ticket_path(followed.bench.drafts_root, followed.main, INVENTED_SHARED_CAUSE)),
         "--search",
         INVARIANT_SEARCH,
     ], probe["command"]
@@ -3720,8 +3719,8 @@ def test_the_duplicate_search_finds_the_open_item_past_the_stores_first_page(
         "board-items",
         "--board",
         BOARD,
-        "--repository",
-        REPOSITORY,
+        "--ticket",
+        str(tickets.ticket_path(bench.drafts_root, followed.main, INVENTED_SHARED_CAUSE)),
         "--search",
         SEARCHED_TEXT,
     ], probe["command"]
@@ -3890,16 +3889,17 @@ def test_the_three_forbidden_shapes_are_refused_naming_each_problem_and_reach_no
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
-def test_a_re_copy_past_a_withdrawn_duplicate_reaches_the_live_item_and_binds_the_ticket_to_it(
+def test_a_re_copy_past_a_withdrawn_duplicate_reaches_the_live_item_and_binds_nothing(
     followed: Followed,
 ) -> None:
     """Two items carry one ticket's origin; the re-dispatch's copy reaches the open one alone.
 
-    The duplicate the store lists first was withdrawn, and the re-dispatch's ticket was
-    staged bound to it — the correspondence the store's own copy followed when it updated a
-    closed duplicate and left the live issue stale. The task's `board-status` and `copy`,
-    run as the turn ran them, rebind the ticket to the run's open item, leave the duplicate
-    one comment naming that item, and copy the edit there: the duplicate keeps the body it
+    The duplicate the store lists first was withdrawn, and the re-dispatch's ticket carries no
+    link — the state in which the store's own copy updated a closed duplicate and left the
+    live issue stale. The task's `board-status` and `copy`, run as the turn ran them, read both
+    carriers off the store's `task locate`, pick the run's open item, write nothing to the
+    ticket to hold it, leave the duplicate one comment naming that item, and copy the edit
+    there with `--target-task`, which records the store's link: the duplicate keeps the body it
     was withdrawn with.
     """
     main, duplicate = followed.main, followed.duplicate_issue
@@ -3917,9 +3917,10 @@ def test_a_re_copy_past_a_withdrawn_duplicate_reaches_the_live_item_and_binds_th
     assert followed.new_after_second["content"] != after["content"]
     metadata = local["metadata"]
     assert isinstance(metadata, dict), local
-    assert metadata[tickets.KEY][tickets.BINDING_FIELD] == new_issue.removeprefix(f"{BOARD}:")
-    assert metadata[tickets.ORIGIN_KEY] == new_issue
-    assert tickets.COPIES_KEY not in metadata, "the store's link was hand-written"
+    assert tickets.BINDING_FIELD not in metadata[tickets.KEY]
+    assert metadata[tickets.KEY]["schema"] == tickets.SCHEMA
+    assert tickets.ORIGIN_KEY not in metadata, "the ticket's own origin was pointed at its item"
+    assert metadata[tickets.COPIES_KEY] == {BOARD: new_issue}, "the copy recorded no link"
     assert duplicate not in followed.new_ticket_after_second
 
     (notice,) = followed.duplicate_comments_after_second
@@ -3950,8 +3951,8 @@ def test_a_re_dispatch_is_refused_on_an_un_accepted_item_and_re_derives_the_tick
     assert "re-derive it against the board as it now is" in witness
     (task,) = followed.second.prompts
     assert (
-        "are re-derived from step 7 for unbound tickets and from dependency items read by id "
-        "for bound tickets"
+        "are re-derived from step 7 for tickets with no item yet and from dependency items read "
+        "by id for placed tickets"
     ) in " ".join(task.split())
 
     assert followed.new_deps_after_first != []

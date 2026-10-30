@@ -147,10 +147,10 @@ def test_budget_evidence_is_read_back_from_the_loopback_board(
             )
             path = _write(root, earlier)
             assert tickets.main(["copy", "--board", "followups", str(path)]) == tickets.SOUND
-            # The module's copy binds the stored record to the board's native item.
+            # The store records its link to the item its copy created on the ticket.
             read = tickets.read_ticket(path)
-            assert read.board_item is not None
-            item = f"followups:{read.board_item}"
+            assert read.board_item is None and read.link("followups") is not None
+            item = f"followups:{read.link('followups')}"
             if word == "budget-question":
                 plan_store.sdk(plan_store.client().task_status_set(item, tickets.Status.WITHDRAWN))
             else:
@@ -192,7 +192,7 @@ def test_relatedness_contract_and_current_example_agree_in_both_modes(feedback: 
 
 def test_candidate_locations_follow_the_plain_schema_boundary_without_repurposing_it() -> None:
     task = _flat(_task())
-    assert tickets.PLAIN_AT == 11 and tickets.SCHEMA == 12
+    assert tickets.PLAIN_AT == 11 and tickets.SCHEMA == 13
     assert (
         "under `## Suggested fix`'s `**Contributing locations.**` on a schema-11 or later "
         "ticket, under `## Root cause`'s `**Contributing locations.**` on a schema-10 ticket"
