@@ -98,16 +98,21 @@ The store 0.12.9 also preserves a private plan home's record of its public task 
 when it copies a mixed public and private Linear plan, and the engine and the read API run
 through the commands their npm packages install, which replace themselves with the
 platform binary on Linux.
-The adoption after that moves the engine to 0.96.1, the read API to 0.62.0, which links it,
-the store and its SDK to 0.12.11, the release of the store crates that engine links, onevcs to
-the 0.57.4 it links, whose public boundary check never refuses a removal, and oneagentgraph and
-onejudge to the 0.9.1 and 0.22.1 it links, the onejudge that keeps a stopped observer's turn
-from reading as lost. On a GitHub Projects source declared private that store creates a new
-issue whose item names one repository that does not read private in the repository of the
-project issue it is filed under, while the item still names that repository, so a private
-board can hold a mixed plan's public-repository tasks; it reads the board's `public` field and
-each repository's visibility once per store invocation, before that invocation's first write.
-The engine's `Node` gains the optional `human_item`.
+The adoption after that moves the engine to 0.96.1, which links onejudge 0.22.1: a monitor
+turn the observer graph's own shutdown cancels is no longer put to its judge side as lost,
+so a run's settlement raises no `monitor-failed` surface for a turn that was not. The
+engine links oneagentgraph 0.9.1, onevcs 0.57.4 and the store crates at 0.12.11, so those
+CLI pins follow it, and from 0.96.0 its `Node` accepts an optional `human_item`. The read
+API moves to 0.62.0, which links that engine — 0.96.2, which links only a newer plan store,
+is held until a read API linking it ships. That onevcs never refuses a removal at the public
+boundary check, a merge's removal against either parent included, while every addition —
+text a branch adds and later removes among them — is still refused; so a branch that merged
+a base which had already scrubbed a private name lands rather than being recut.
+On a GitHub Projects source declared private that store creates a new issue whose item
+names one repository that does not read private in the repository of the project issue it is
+filed under, while the item still names that repository, so a private board can hold a mixed
+plan's public-repository tasks; it reads the board's `public` field and each repository's
+visibility once per store invocation, before that invocation's first write.
 From onepipeline 0.80.2, onepipeline-ui 0.43.0 and
 onetaskgraph 0.9.0: the engine 0.81.0 and the read API 0.44.0 that links it carry the
 onetaskgraph 0.9.2 store crates, which copy a plan and list it without reading the whole

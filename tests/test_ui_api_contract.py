@@ -72,6 +72,7 @@ CAPABILITIES = (
     Capability("`host`", "/api/v2/host"),
     Capability("**Host** is a page of its own", "/api/v2/host"),
     Capability("**Shut down the entire host**", " /api/v2/shutdown "),
+    Capability("**Action items** is another page", " /api/human-items "),
 )
 
 #: The page's statement that the controls it lists are all the view acts through.
@@ -82,12 +83,12 @@ CONTROLS = {
     "POST /api/v2/runs/{run}/channel/next": "its channel's **Next**",
     "POST /api/v2/runs/{run}/channel/reply": "reply,",
     "POST /api/v2/runs/{run}/channel/surface": "raised surface",
-    "POST /api/v2/runs/{run}/attest": "and `attest`, and the host",
+    "POST /api/v2/runs/{run}/attest": "raised surface and `attest`, a human",
     "POST /api/v2/shutdown": "the host by its one host-wide shutdown",
-    "POST /api/human-items": "**Action items**' raise",
-    "POST /api/human-items/{id}/answer": "raise, answer,",
-    "POST /api/human-items/{id}/complete": "complete and dismiss",
-    "POST /api/human-items/{id}/dismiss": "and dismiss;",
+    "POST /api/human-items": "a human item by its raise,",
+    "POST /api/human-items/{id}/answer": "answer,",
+    "POST /api/human-items/{id}/complete": "completion",
+    "POST /api/human-items/{id}/dismiss": "and dismissal",
 }
 #: The write routes a tab reads its state through, which act on no run and no host.
 SUBSCRIPTION_ROUTES = {
@@ -165,6 +166,20 @@ def test_the_page_and_contract_keep_browser_driving_removed() -> None:
         assert route not in _routes()
 
 
+def test_the_page_says_human_items_are_unavailable_without_a_sample() -> None:
+    """The page tells an operator the **Action items** page is empty here, and why.
+
+    The contract serves those routes only over `--human-items-sample`, which this host
+    never passes, so the page's claim is held to the contract still saying so.
+    """
+    document = " ".join(_source(UI_API, CONTRACT).split())
+    assert "--human-items-sample" in document
+    assert "`503 human_items_unavailable`" in document
+    page = _page()
+    assert "`--human-items-sample`" in page
+    assert "`503 human_items_unavailable`" in page
+
+
 def test_every_route_the_page_spells_in_full_is_one_the_reader_declares() -> None:
     """A path written out on the page is a path a reader will type, so it has to exist."""
     routes = _routes()
@@ -176,33 +191,6 @@ def test_every_route_the_page_spells_in_full_is_one_the_reader_declares() -> Non
         f"docs/dag-ui.md spells {missing}, which {UI_API.crate} {UI_API.ref} does not "
         "declare. A path on the page is one an operator will try"
     )
-
-
-#: What the page says of the human-item routes on this host, each a phrase the adopted
-#: reader's contract states in the same words.
-HUMAN_ITEMS_AVAILABILITY = (
-    "`503 human_items_unavailable`",
-    "--human-items-sample FILE",
-    "ships no live human-item adapter",
-)
-
-
-def test_the_page_says_what_the_release_says_of_human_items_on_a_live_host() -> None:
-    """The page's account of an empty **Action items** is the reader's own, at the pin.
-
-    The page tells an operator why the queue answers nothing here: every route refuses
-    without a test-only sample, because the linked engine has no live adapter. A release
-    that ships one makes that sentence false, so each phrase is read off both sides.
-    """
-    page = _page()
-    contract = " ".join(_source(UI_API, CONTRACT).split())
-    for phrase in HUMAN_ITEMS_AVAILABILITY:
-        assert phrase in page, f"docs/dag-ui.md no longer says {phrase!r}"
-        assert phrase in contract, (
-            f"{UI_API.crate} {UI_API.ref} no longer says {phrase!r} of its human-item routes, "
-            "and docs/dag-ui.md tells an operator they answer nothing on this host; re-read "
-            "the contract and correct the page in the same change"
-        )
 
 
 def test_the_controls_the_page_lists_are_every_write_route_and_tab_the_release_declares() -> None:

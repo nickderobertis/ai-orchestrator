@@ -107,18 +107,18 @@ raises a surface of its own. The rendered reads (`status`, `results`, `goals`,
 and **Host**, rather than in a tab of their own. **Host** is a page of its own: the
 host's resources, provider health, dispatches and runs, the acting session's report
 from the unwatched route, and the one **host-wide shutdown**
-([below](#shutting-the-host-down-from-the-browser)). **Action items**, from 0.62.0, is a
-page of its own too: the host's queue of human tasks and questions, through which a person
-raises an item and answers, completes or dismisses one. Its routes answer `503
-human_items_unavailable` unless the server was started with the test-only
-`--human-items-sample FILE`, because the engine this host links ships no live human-item
-adapter, so on this host every one of them answers that.
+([below](#shutting-the-host-down-from-the-browser)). **Action items** is another page
+of its own: the acting session's queue of human tasks and questions from
+`/api/human-items`, where an item is raised, answered, completed or dismissed. The
+linked engine ships no live human-item adapter, so on this host, which never passes
+`--human-items-sample`, every one of those routes answers `503 human_items_unavailable`
+and the page shows no items.
 
 **Those controls are the whole of what the view acts through.** A run is acted on by
-its per-run **Stop**, its channel's **Next**, reply, raised surface and `attest`, and the
-host by its one host-wide shutdown, and a human item by **Action items**' raise, answer,
-complete and dismiss; every other route the view calls reads. Every read lives in the
-project sidebar, the run's three tabs, **Run details**, **Host** and **Action items**.
+its per-run **Stop**, its channel's **Next**, reply, raised surface and `attest`, a human
+item by its raise, answer, completion and dismissal, and the host by its one host-wide
+shutdown; every other route the view calls reads. Every read lives in the project
+sidebar, the run's three tabs, **Run details**, **Host** and **Action items**.
 **Watching, adopting and shutting down one run or one session's runs are not the
 browser's**: onepipeline-ui 0.45.0 removed them, because a person at a tab cannot tell how
 they would affect another manager already watching or driving the run, and each removed

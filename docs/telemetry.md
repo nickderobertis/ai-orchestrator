@@ -320,7 +320,7 @@ turns onejudge 0.19.0 ran through
 `oneharness.judge.toml` and `oneharness.design-doc-judge.toml`, two on Codex and two on
 Claude Code: each record's `usage` block is the same five keys and nothing else.
 It moved again to 0.19.5 with the engine 0.75.0, to 0.20.0 with the engine 0.80.2 and to
-0.21.0 with the engine 0.89.2, to 0.22.0 with the engine 0.93.0 and to 0.22.1 with the engine 0.96.1, and both files are unchanged between `onejudge-v0.19.0` and
+0.21.0 with the engine 0.89.2 and to 0.22.0 with the engine 0.93.0 and to 0.22.1 with the engine 0.96.1, and both files are unchanged between `onejudge-v0.19.0` and
 `onejudge-v0.22.1` too, and the
 engine links `oneharness-core` 0.29.1 for itself, onejudge 0.22.1 and oneagentgraph 0.9.1, read off the
 SBOM its npm platform package ships. Between `oneharness-core-v0.24.2` and `oneharness-core-v0.28.2`, `domain/usage.rs`
@@ -476,7 +476,7 @@ served them.
    resolver, and marks the turn's transcript unavailable where that file cannot be read, and
    27 serves a node's `complete-but-draft` and `complete-but-held` statuses as themselves and
    gives a node's result the `awaiting` releases its settlement still awaits;
-   `timeline_schema_version` 14, as 0.62.0, 0.61.0, 0.59.1, 0.59.0, 0.58.1, 0.58.0, 0.52.0 and 0.51.0 served, where 0.48.1 served 13, 0.44.0 served 12, 0.41.0 served
+   `timeline_schema_version` 14, as 0.62.0, 0.61.0, 0.60.0, 0.59.1, 0.59.0, 0.58.1, 0.58.0, 0.52.0 and 0.51.0 served, where 0.48.1 served 13, 0.44.0 served 12, 0.41.0 served
    11 and 0.21.1 served 10 — 14 gives every `turn-started`, `turn-message` and
    `turn-activity` event a one-line `description` the engine's resolver writes, 13 counts a
    journal record relayed again under one `(stream, seq)` once, and bounds each session lane
