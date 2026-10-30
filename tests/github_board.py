@@ -271,10 +271,37 @@ DEFERRED = _StatusOption(id=_FieldOptionId("OPT_deferred"), name="Deferred")
 # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
 
+#: A synthetic owner whose repositories are private, as the example user layer's
+#: `private-plans` source names it: the repository that source's issues are created in, and a
+#: second one a private task names. Synthetic, so no journey names a real private repository.
+PRIVATE_OWNER = "sample-owner"
+PRIVATE_STORE_REPOSITORY = _Repository(owner=PRIVATE_OWNER, name="private-store")
+PRIVATE_LIBRARY_REPOSITORY = _Repository(owner=PRIVATE_OWNER, name="hidden-library")
+#: A synthetic public repository of the configured owner, which a public task names: under
+#: that owner so a `plans` view of it is filed in it beneath the configured repository's
+#: project issue, as GitHub files a sub-issue only in a repository of its parent's owner.
+PUBLIC_SAMPLE_REPOSITORY = _Repository(owner=CONFIGURED_REPOSITORY.owner, name="open-sample")
+
+
 REPOSITORY_NODE_IDS: dict[_Repository, _RepositoryNodeId] = {
     CONFIGURED_REPOSITORY: _RepositoryNodeId("R_ai_orchestrator"),
     SIBLING_REPOSITORY: _RepositoryNodeId("R_oneharness"),
+    PRIVATE_STORE_REPOSITORY: _RepositoryNodeId("R_private_store"),
+    PRIVATE_LIBRARY_REPOSITORY: _RepositoryNodeId("R_hidden_library"),
+    PUBLIC_SAMPLE_REPOSITORY: _RepositoryNodeId("R_open_sample"),
 }
+
+
+#: The repositories GitHub answers `"visibility": "private"` for; every other repository the
+#: stand-in knows answers `"public"`, as this repository and its sibling are.
+PRIVATE_REPOSITORIES: frozenset[_Repository] = frozenset(
+    {PRIVATE_STORE_REPOSITORY, PRIVATE_LIBRARY_REPOSITORY}
+)
+
+
+def repository_visibility(repository: _Repository) -> Literal["public", "private"]:
+    """What GitHub's REST repository endpoint answers as ``repository``'s `visibility`."""
+    return "private" if repository in PRIVATE_REPOSITORIES else "public"
 
 
 def _repository_of(node_id: object) -> _Repository:
@@ -741,6 +768,9 @@ class _Board:
 
     node_id: ClassVar[_BoardNodeId] = _BoardNodeId("PVT_fixture")
     title: ClassVar[str] = "AI Orchestrator"
+    #: What a created issue's node ids start from, so two boards served at once never answer
+    #: one id for two issues.
+    created_prefix: ClassVar[str] = "created"
 
     def __init__(self) -> None:
         self.reset()
@@ -797,6 +827,9 @@ class _Board:
         self.placement_delays: tuple[float, ...] = ()
         #: How many placement delays this board has handed out, which picks the next one.
         self.placements = 0
+        #: Whether the Project is public, which is what GitHub answers as its `public` field:
+        #: the `plans` board is, and a host's private board is not.
+        self.public = True
 
     def issues_created_and_kept(self) -> list[_Issue]:
         return [issue for issue in self.created if issue in self.issues]
@@ -859,6 +892,29 @@ class _Board:
             ],
             "pageInfo": {"hasNextPage": False},
         }
+
+    def project_visibility_response(self, variables: Mapping[str, object]) -> dict[str, object]:
+        """Whether the Project is public, as GitHub answers its `ProjectV2.public` field.
+
+        A number this board is not served under is a Project GitHub cannot find: a null
+        `projectV2` and an error naming it, as GitHub answers one.
+        """
+        # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The read is the
+        # installed plan store's own `PROJECT_VISIBILITY`, reconciled on every journey: an
+        # answer under any other root is a board it reports as unreadable.
+        if variables.get("number") != self.number:
+            return {
+                "data": {"visibility": {"projectV2": None}},
+                "errors": [
+                    {
+                        "type": "NOT_FOUND",
+                        "message": f"Could not resolve to a ProjectV2 with the number "
+                        f"{variables.get('number')}.",
+                    }
+                ],
+            }
+        return {"data": {"visibility": {"projectV2": {"public": self.public}}}}
+        # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
     def board_response(self) -> dict[str, object]:
         return {
@@ -1176,8 +1232,8 @@ class _Board:
         if not isinstance(title, str) or not isinstance(body, str):
             raise ValueError("createIssue requires a title and a body")
         created = _Issue(
-            item_id=_BoardItemId(f"PVTI_created_{len(self.created)}"),
-            content_id=_IssueNodeId(f"I_created_{len(self.created)}"),
+            item_id=_BoardItemId(f"PVTI_{self.created_prefix}_{len(self.created)}"),
+            content_id=_IssueNodeId(f"I_{self.created_prefix}_{len(self.created)}"),
             number=3 + len(self.created),
             title=title,
             body=body,
@@ -1707,6 +1763,9 @@ class _Answered:
     #: The document's `data`, as the fixture sent it; `None` until it answers, or when it
     #: answered with no data.
     data: object = None
+    #: When the fixture answered, on the monotonic clock requests are stamped with; `None`
+    #: until it answers.
+    at: float | None = None
 
 
 #: One GraphQL token: a quoted string, a spread, a name or variable, or one punctuator.
@@ -2025,6 +2084,7 @@ class _GraphQLRequest:
 
 class _Operation(StrEnum):
     BOARD = "board"
+    PROJECT_VISIBILITY = "projectVisibility"
     BOARD_FIELDS = "boardFields"
     CREATION_CONTEXT = "creationContext"
     FIELD_SNAPSHOT = "fieldSnapshot"
@@ -2120,6 +2180,9 @@ _OPERATIONS: dict[str, _Operation] = {
     "repository(owner:$repositoryOwner": _Operation.CREATION_CONTEXT,
     # Before the board read's own marker, which this aliased root also contains.
     "boardFields:repositoryOwner": _Operation.BOARD_FIELDS,
+    # Before the board read's own marker, which this aliased root also contains: whether the
+    # Project is public, read once per copy before a write to a source declared private.
+    "visibility:repositoryOwner(": _Operation.PROJECT_VISIBILITY,
     "optionId field{": _Operation.FIELD_SNAPSHOT,
     "createProjectV2Field(": _Operation.CREATE_FIELD,
     # Before the board read's own marker, which this root also carries: the adopted store's
@@ -2240,6 +2303,12 @@ class RestRequest:
     path: str
     authorization: str | None
     body: dict[str, object]
+    #: When the loopback took it, on the monotonic clock the GraphQL log stamps, so a journey
+    #: can order a REST read against the GraphQL writes around it.
+    received: float = field(default_factory=time.monotonic, compare=False)
+    #: When the loopback answered a read, as the moment its answer was composed; `None` for a
+    #: request logged before its answer.
+    answered_at: float | None = field(default=None, compare=False)
 
 
 class _BatchPart(NamedTuple):
@@ -2432,10 +2501,19 @@ class _GitHubFixture(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - stdlib callback name
         named = self.REPOSITORIES.match(self.path)
         if named is not None:
-            known = list(REPOSITORY_NODE_IDS).index(
-                _Repository(owner=named["owner"], name=named["name"])
+            received = time.monotonic()
+            answer = self._repository_rest(_Repository(owner=named["owner"], name=named["name"]))
+            self.rest_requests.append(
+                RestRequest(
+                    "GET",
+                    self.path,
+                    self.headers.get("Authorization"),
+                    {},
+                    received=received,
+                    answered_at=time.monotonic(),
+                )
             )
-            self._send(200, {"id": known + 1})
+            self._send(*answer)
             return
         held = self.board.attachments.get(self.path)
         if held is None:
@@ -2481,6 +2559,7 @@ class _GitHubFixture(BaseHTTPRequestHandler):
             return
         answer = self._answer(request)
         request.answered.data = answer.get("data")
+        request.answered.at = time.monotonic()
         self._send(200, answer)
 
     def _send(self, status: int, payload: dict[str, object]) -> None:
@@ -2531,6 +2610,8 @@ class _GitHubFixture(BaseHTTPRequestHandler):
                 return self.board.closed_items_response(request.variables)
             case _Operation.BOARD_FIELDS:
                 return self.board.board_fields_response()
+            case _Operation.PROJECT_VISIBILITY:
+                return self.board.project_visibility_response(request.variables)
             case _Operation.CREATION_CONTEXT:
                 fields = self.board.board_fields_response()["data"]
                 answered = self._repository(request.repository)["data"]
@@ -2695,6 +2776,21 @@ class _GitHubFixture(BaseHTTPRequestHandler):
         return {"data": answer}
 
     @staticmethod
+    def _repository_rest(named: _Repository) -> tuple[int, dict[str, object]]:
+        """What GitHub's REST repository endpoint answers about ``named``: its numeric id and
+        its `visibility`, with the older `private` flag beside it, or a 404 for a repository
+        it does not know or the token cannot see, as GitHub answers one."""
+        if named not in REPOSITORY_NODE_IDS:
+            return 404, {"message": "Not Found"}
+        visibility = repository_visibility(named)
+        return 200, {
+            "id": list(REPOSITORY_NODE_IDS).index(named) + 1,
+            "full_name": str(named),
+            "visibility": visibility,
+            "private": visibility != "public",
+        }
+
+    @staticmethod
     def _repository(named: _Repository) -> dict[str, object]:
         """What GitHub answers about one repository, and about one it will not show.
 
@@ -2841,6 +2937,40 @@ def _serving_both_boards() -> Iterator[dict[str, str]]:
 
 
 # llmlint: ignore-end[e2e_not_mocked]
+
+
+class _PrivateBoard(_Board):
+    """A host's private Projects board: its Project not public, and holding nothing until a
+    copy files something on it, since a private board shares no item with `plans`."""
+
+    node_id: ClassVar[_BoardNodeId] = _BoardNodeId("PVT_private_fixture")
+    title: ClassVar[str] = "Private plans"
+    created_prefix: ClassVar[str] = "private"
+
+    def reset(self) -> None:
+        super().reset()
+        self.issues = []
+        self.public = False
+
+
+class _PrivateBoardFixture(_GitHubFixture):
+    """The private board, served beside `plans` with its own board and its own request logs,
+    for the reason :class:`_FollowUpsFixture` is: each board's traffic is read apart."""
+
+    requests: ClassVar[list[_GraphQLRequest]] = []
+    rest_requests: ClassVar[list[RestRequest]] = []
+
+
+#: The board a host's private GitHub Projects source reaches when it is served.
+PRIVATE_BOARD = _PrivateBoard()
+
+
+@contextmanager
+def _serving_private_board(number: int) -> Iterator[str]:
+    """Serve :data:`PRIVATE_BOARD` under the project ``number`` its source is configured
+    with, yielding the endpoint that source is pointed at."""
+    with _served(_PrivateBoardFixture, PRIVATE_BOARD, STATUS_OPTIONS, number) as endpoint:
+        yield endpoint
 
 
 def _prepare_plan_sources(root: Path) -> dict[str, str]:
@@ -3261,6 +3391,7 @@ REQUEST_PRICES: dict[_Operation, DocumentPrice] = {
     _Operation.BOARD: DocumentPrice("BOARD", 2),
     _Operation.ORIGIN_LOOKUP: DocumentPrice("ORIGIN_LOOKUP", 1),
     _Operation.BOARD_FIELDS: DocumentPrice("BOARD_FIELDS", 1),
+    _Operation.PROJECT_VISIBILITY: DocumentPrice("PROJECT_VISIBILITY", 1),
     _Operation.CREATION_CONTEXT: DocumentPrice("CREATION_CONTEXT", 1),
     _Operation.ISSUE_DETAIL: DocumentPrice("ISSUE_DETAIL", 1),
     _Operation.ISSUE_DETAILS: DocumentPrice("ISSUE_DETAILS", 1),
@@ -3360,6 +3491,7 @@ REQUEST_KINDS: dict[_Operation, RequestKind] = {
     _Operation.DEPENDENCIES: RequestKind.ITEM_READ,
     _Operation.REPOSITORY: RequestKind.ITEM_READ,
     _Operation.BOARD_FIELDS: RequestKind.ITEM_READ,
+    _Operation.PROJECT_VISIBILITY: RequestKind.ITEM_READ,
     _Operation.CREATION_CONTEXT: RequestKind.ITEM_READ,
     _Operation.CREATE_ISSUES: RequestKind.ALIASED_MUTATIONS,
     _Operation.WRITE_FIELD_VALUES: RequestKind.ALIASED_MUTATIONS,

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import time
+import urllib.error
+import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 
@@ -21,6 +23,9 @@ from github_board import (
     COPY_WIDE_SLOTS,
     COPY_WRITE_SLOTS,
     MEASURED_PLACEMENT_SECONDS,
+    PRIVATE_LIBRARY_REPOSITORY,
+    PRIVATE_STORE_REPOSITORY,
+    PUBLIC_SAMPLE_REPOSITORY,
     REPOSITORY_NODE_IDS,
     REQUEST_KINDS,
     REQUEST_LATENCY_MS,
@@ -31,7 +36,10 @@ from github_board import (
     _GitHubFixture,
     _GraphQLRequest,
     _Operation,
+    _PrivateBoardFixture,
     _request_points,
+    _serving_board,
+    _serving_private_board,
     batched_slot_drift,
     copy_batch_drift,
     copy_read_drift,
@@ -414,3 +422,116 @@ def test_a_re_copys_aliased_issue_updates_apply_each_sent_slot_as_one_write() ->
         request_latency_ms(_GraphQLRequest(document, variables, 0.0))
         == (REQUEST_LATENCY_MS[RequestKind.ALIASED_MUTATIONS])
     )
+
+
+#: The adopted store's read of whether a board's Project is public, as its
+#: `graphql::PROJECT_VISIBILITY` sends it; the journeys reconcile it against the store itself.
+PROJECT_VISIBILITY = (
+    "query($owner:String!,$number:Int!){visibility:repositoryOwner(login:$owner)"
+    "{... on ProjectV2Owner{projectV2(number:$number){public}}}}"
+)
+#: The project number the private board is served under in these tests.
+PRIVATE_NUMBER = 41
+
+
+def _graphql(endpoint: str, query: str, variables: dict[str, object]) -> dict[str, object]:
+    """``query`` sent to the loopback ``endpoint`` as the store sends it, and its answer."""
+    request = urllib.request.Request(  # noqa: S310 - the loopback's own http:// endpoint
+        endpoint,
+        data=json.dumps({"query": query, "variables": variables}).encode(),
+        headers={"Authorization": "Bearer fixture-token", "Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=30) as answer:  # noqa: S310 - as above
+        loaded = json.loads(answer.read())
+    assert isinstance(loaded, dict)
+    return loaded
+
+
+def _repository_read(endpoint: str, owner: str, name: str) -> tuple[int, dict[str, object]]:
+    """GitHub's REST read of one repository, sent to the loopback beside ``endpoint``."""
+    request = urllib.request.Request(  # noqa: S310 - the loopback's own http:// endpoint
+        f"{endpoint.removesuffix('/graphql')}/repos/{owner}/{name}",
+        headers={"Authorization": "Bearer fixture-token"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as answer:  # noqa: S310 - as above
+            return answer.status, json.loads(answer.read())
+    except urllib.error.HTTPError as refused:
+        return refused.code, json.loads(refused.read())
+
+
+def test_each_board_answers_whether_its_project_is_public_as_github_does() -> None:
+    """`plans` answers `public: true`, a private board `public: false`, and a number neither
+    is served under a null `projectV2` and GitHub's not-found error, over the wire."""
+    with _serving_board() as remote, _serving_private_board(PRIVATE_NUMBER) as private:
+        public_endpoint = remote["ONETASKGRAPH_SOURCES__PLANS__CONFIG__ENDPOINT"]
+        owner = CONFIGURED_REPOSITORY.owner
+        assert _GraphQLRequest(PROJECT_VISIBILITY, {}, 0.0).operation is (
+            _Operation.PROJECT_VISIBILITY
+        )
+        number = _GitHubFixture.board.number
+        plans = _graphql(public_endpoint, PROJECT_VISIBILITY, {"owner": owner, "number": number})
+        hidden = _graphql(
+            private, PROJECT_VISIBILITY, {"owner": "sample-owner", "number": PRIVATE_NUMBER}
+        )
+        missing = _graphql(
+            private, PROJECT_VISIBILITY, {"owner": "sample-owner", "number": PRIVATE_NUMBER + 1}
+        )
+
+        assert plans == {"data": {"visibility": {"projectV2": {"public": True}}}}
+        assert hidden == {"data": {"visibility": {"projectV2": {"public": False}}}}
+        assert missing["data"] == {"visibility": {"projectV2": None}}
+        assert isinstance(missing["errors"], list) and missing["errors"][0]["type"] == "NOT_FOUND"
+        # Each board logs its own reads, so a journey reads one board's traffic apart.
+        assert [request.operation for request in _PrivateBoardFixture.requests] == [
+            _Operation.PROJECT_VISIBILITY,
+            _Operation.PROJECT_VISIBILITY,
+        ]
+        assert _request_points(_PrivateBoardFixture.requests[0]) == 1
+        assert (
+            request_latency_ms(_PrivateBoardFixture.requests[0])
+            == (REQUEST_LATENCY_MS[RequestKind.ITEM_READ])
+        )
+
+
+def test_a_repository_read_answers_its_visibility_and_is_logged_when_it_arrives() -> None:
+    """GitHub's REST repository read answers `visibility` and the `private` flag beside it —
+    private for the synthetic private owner's repositories, public for the rest — and 404 for
+    one it does not know; each read is logged, stamped, by the board it reached."""
+    with _serving_board() as remote, _serving_private_board(PRIVATE_NUMBER) as private:
+        public_endpoint = remote["ONETASKGRAPH_SOURCES__PLANS__CONFIG__ENDPOINT"]
+        before = time.monotonic()
+        answers = {
+            repository: _repository_read(private, repository.owner, repository.name)
+            for repository in (
+                PRIVATE_STORE_REPOSITORY,
+                PRIVATE_LIBRARY_REPOSITORY,
+                PUBLIC_SAMPLE_REPOSITORY,
+                CONFIGURED_REPOSITORY,
+            )
+        }
+        unknown = _repository_read(private, "sample-owner", "no-such-repository")
+        on_plans = _repository_read(public_endpoint, "sample-owner", "hidden-library")
+
+        assert {repository: answer[1]["visibility"] for repository, answer in answers.items()} == {
+            PRIVATE_STORE_REPOSITORY: "private",
+            PRIVATE_LIBRARY_REPOSITORY: "private",
+            PUBLIC_SAMPLE_REPOSITORY: "public",
+            CONFIGURED_REPOSITORY: "public",
+        }
+        assert all(status == 200 for status, _ in answers.values()), answers
+        assert answers[PRIVATE_LIBRARY_REPOSITORY][1]["private"] is True
+        assert answers[PUBLIC_SAMPLE_REPOSITORY][1]["private"] is False
+        assert answers[CONFIGURED_REPOSITORY][1]["id"] == 1
+        assert unknown == (404, {"message": "Not Found"})
+        assert on_plans[1]["visibility"] == "private"
+        assert {read.method for read in _PrivateBoardFixture.rest_requests} == {"GET"}
+        assert [read.path for read in _PrivateBoardFixture.rest_requests] == [
+            *(f"/repos/{repository}" for repository in answers),
+            "/repos/sample-owner/no-such-repository",
+        ]
+        assert [read.path for read in _GitHubFixture.rest_requests] == [
+            "/repos/sample-owner/hidden-library"
+        ]
+        assert all(read.received >= before for read in _PrivateBoardFixture.rest_requests)
