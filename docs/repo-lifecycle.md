@@ -94,7 +94,7 @@ locate` answers where an item lands; onejudge and oneagentgraph stay at the 0.22
 reuses oneharness's shared model catalog and launches with analytics off — oneharness-core
 0.28.0 onward, which the engine and the `oneharness` CLI 0.26.1 both carry — while each
 dispatch's commands still see only its own environment.
-The adoption after that moves the engine to 0.96.1, the read API to 0.61.0, which links it,
+The adoption after that moves the engine to 0.96.1, the read API to 0.62.0, which links it,
 the store and its SDK to 0.12.11, the release of the store crates that engine links, onevcs to
 the 0.57.4 it links, whose public boundary check never refuses a removal, and oneagentgraph and
 onejudge to the 0.9.1 and 0.22.1 it links, the onejudge that keeps a stopped observer's turn

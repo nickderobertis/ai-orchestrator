@@ -107,12 +107,18 @@ raises a surface of its own. The rendered reads (`status`, `results`, `goals`,
 and **Host**, rather than in a tab of their own. **Host** is a page of its own: the
 host's resources, provider health, dispatches and runs, the acting session's report
 from the unwatched route, and the one **host-wide shutdown**
-([below](#shutting-the-host-down-from-the-browser)).
+([below](#shutting-the-host-down-from-the-browser)). **Action items**, from 0.62.0, is a
+page of its own too: the host's queue of human tasks and questions, through which a person
+raises an item and answers, completes or dismisses one. Its routes answer `503
+human_items_unavailable` unless the server was started with the test-only
+`--human-items-sample FILE`, because the engine this host links ships no live human-item
+adapter, so on this host every one of them answers that.
 
 **Those controls are the whole of what the view acts through.** A run is acted on by
 its per-run **Stop**, its channel's **Next**, reply, raised surface and `attest`, and the
-host by its one host-wide shutdown; every other route the view calls reads. Every read
-lives in the project sidebar, the run's three tabs, **Run details** and **Host**.
+host by its one host-wide shutdown, and a human item by **Action items**' raise, answer,
+complete and dismiss; every other route the view calls reads. Every read lives in the
+project sidebar, the run's three tabs, **Run details**, **Host** and **Action items**.
 **Watching, adopting and shutting down one run or one session's runs are not the
 browser's**: onepipeline-ui 0.45.0 removed them, because a person at a tab cannot tell how
 they would affect another manager already watching or driving the run, and each removed
@@ -257,7 +263,7 @@ serves another fails there instead of being noticed by a person.
 
 ### What the adopted view renders, and what it has nothing to render
 
-**`onepipeline-ui` 0.61.0**, the release `config/onepipeline-ui.version` pins, carries
+**`onepipeline-ui` 0.62.0**, the release `config/onepipeline-ui.version` pins, carries
 what makes this a supervising surface: the project sidebar grouped by each run's
 effective group with its kind filter, the run's **Channel** tab with its byte-for-byte
 reply composer and `attest`, the per-run **Stop** with the owner-naming refusal, and the
