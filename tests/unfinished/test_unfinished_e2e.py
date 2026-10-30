@@ -845,7 +845,7 @@ def _scratch_checkout(root: Path, helper: str | None = None, *, engine: bool = T
     and the empty string leaves it out.
     """
     if engine:
-        locked = npm_installs.platform_binary(node_modules=root / "node_modules")
+        locked = npm_installs.installed_command(node_modules=root / "node_modules")
         locked.parent.mkdir(parents=True)
         locked.symlink_to(ONEPIPELINE)
     (root / "scripts").mkdir(parents=True)
@@ -887,11 +887,15 @@ def _search_path(root: Path, *, python: bool = True) -> Path:
 
     The installed `onevcs`, a decoy `onepipeline` that refuses every verb — so a journey
     answering at all proves the view asked the checkout's locked engine instead — `python3`
-    unless ``python`` is false, and what the wrapper and `onevcs` spawn.
+    unless ``python`` is false, Node.js for the npm command, and what the wrapper and
+    `onevcs` spawn.
     """
     tools = root / "bin"
     tools.mkdir(parents=True)
     (tools / "onevcs").symlink_to(ONEVCS)
+    node = shutil.which("node")
+    assert node is not None, "the installed npm command requires Node.js"
+    (tools / "node").symlink_to(node)
     decoy = tools / "onepipeline"
     decoy.write_text(f"#!/bin/sh\necho '{DECOY}' >&2\nexit 97\n", encoding="utf-8")
     decoy.chmod(0o755)
@@ -948,7 +952,7 @@ def test_an_engine_that_cannot_answer_is_never_nothing_owed(
     unpublished half that did answer is still shown."""
     script = _scratch_checkout(tmp_path / "checkout", engine=False)
     tools = _search_path(tmp_path)
-    stand_in = npm_installs.platform_binary(node_modules=tmp_path / "checkout" / "node_modules")
+    stand_in = npm_installs.installed_command(node_modules=tmp_path / "checkout" / "node_modules")
     stand_in.parent.mkdir(parents=True)
     stand_in.write_text(
         f'#!/bin/sh\nif [ "$1" = unwatched ]; then {engine}; fi\nexec {ONEPIPELINE} "$@"\n',

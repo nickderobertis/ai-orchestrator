@@ -94,6 +94,10 @@ locate` answers where an item lands; onejudge and oneagentgraph stay at the 0.22
 reuses oneharness's shared model catalog and launches with analytics off — oneharness-core
 0.28.0 onward, which the engine and the `oneharness` CLI 0.26.1 both carry — while each
 dispatch's commands still see only its own environment.
+The store 0.12.9 also preserves a private plan home's record of its public task projections
+when it copies a mixed public and private Linear plan, and the engine and the read API run
+through the commands their npm packages install, which replace themselves with the
+platform binary on Linux.
 From onepipeline 0.80.2, onepipeline-ui 0.43.0 and
 onetaskgraph 0.9.0: the engine 0.81.0 and the read API 0.44.0 that links it carry the
 onetaskgraph 0.9.2 store crates, which copy a plan and list it without reading the whole

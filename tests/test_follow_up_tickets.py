@@ -7758,12 +7758,12 @@ def budget_launch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path
     captured = _cycle_document()
     fixture = tmp_path / "telemetry.json"
     fixture.write_text(json.dumps(captured))
-    engine = npm_installs.platform_binary(node_modules=launch / "node_modules")
+    engine = npm_installs.installed_command(node_modules=launch / "node_modules")
     _executable(engine, f"import sys\nsys.stdout.write(open({str(fixture)!r}).read())\n")
-    # The budget's script, its engine resolver and an interpreter sit in the launch, the
+    # The budget's script and an interpreter sit in the launch, the
     # checkout whose locked engine the script resolves beside itself.
     (launch / "scripts").mkdir()
-    for name in ("budget-cycle-time.sh", "npm-binary.sh"):
+    for name in ("budget-cycle-time.sh",):
         shutil.copy2(REPO_ROOT / "scripts" / name, launch / "scripts" / name)
     (installs / "python3").symlink_to(sys.executable)
     decoys = tmp_path / "decoys"
@@ -7794,7 +7794,7 @@ print(json.dumps({{"publication_checkout": mapping[sys.argv[-1]]}}))
 def _budget_path(launch: Path) -> str:
     """The search path `budget_report` hands a budget's command: the launch's locked installs
     ahead of the inherited one, whose decoy engine leads it."""
-    engine = npm_installs.platform_binary(node_modules=launch / "node_modules")
+    engine = npm_installs.installed_command(node_modules=launch / "node_modules")
     return os.pathsep.join((str(launch / ".venv/bin"), str(engine.parent), os.environ["PATH"]))
 
 
@@ -8194,7 +8194,7 @@ def test_budget_account_refuses_an_unreadable_engine_or_registry_boundary(
 ) -> None:
     launch, _, runs = budget_launch
     doubled = (
-        npm_installs.platform_binary(node_modules=launch / "node_modules")
+        npm_installs.installed_command(node_modules=launch / "node_modules")
         if tool == "onepipeline"
         else launch / ".venv/bin" / tool
     )
@@ -8227,7 +8227,7 @@ def test_budget_account_refuses_an_existing_foreign_account_and_a_missing_instal
     assert tickets.main(arguments) == tickets.UNRUNNABLE
     assert "not this run's budget account" in capsys.readouterr().err
     path.unlink()
-    (npm_installs.platform_binary(node_modules=launch / "node_modules")).unlink()
+    (npm_installs.installed_command(node_modules=launch / "node_modules")).unlink()
     assert tickets.main(arguments) == tickets.UNRUNNABLE
     assert "did not run" in capsys.readouterr().err
     assert (
@@ -8580,7 +8580,6 @@ def test_budget_entry_model_matches_the_serialized_key_contract() -> None:
         ("no-interpreter", "no interpreter is installed"),
         ("engine-failed", "engine could not report"),
         ("no-engine", "has no engine at"),
-        ("no-resolver", "engine resolver"),
         ("unwritable-result", "no cycle of"),
         ("invalid-cycle", "was not measured"),
         ("empty-landing", "has not landed"),
@@ -8605,7 +8604,7 @@ def test_cycle_script_refuses_each_broken_boundary_with_a_remediation(
     match case:
         case "invalid-json":
             _executable(
-                npm_installs.platform_binary(node_modules=launch / "node_modules"),
+                npm_installs.installed_command(node_modules=launch / "node_modules"),
                 "print('invalid JSON')\n",
             )
         case "wrong-run":
@@ -8632,20 +8631,13 @@ def test_cycle_script_refuses_each_broken_boundary_with_a_remediation(
             shutil.copy2(REPO_ROOT / "scripts/budget-cycle-time.sh", script)
         case "engine-failed":
             _executable(
-                npm_installs.platform_binary(node_modules=launch / "node_modules"),
+                npm_installs.installed_command(node_modules=launch / "node_modules"),
                 "import sys\nsys.stderr.write('broken telemetry')\nsys.exit(4)\n",
             )
-        case "no-resolver":
-            bare = launch / "bare"
-            script = bare / "scripts/budget-cycle-time.sh"
-            script.parent.mkdir(parents=True)
-            shutil.copy2(REPO_ROOT / "scripts/budget-cycle-time.sh", script)
-            (bare / ".venv/bin").mkdir(parents=True)
-            (bare / ".venv/bin/python3").symlink_to(sys.executable)
         case "no-engine":
             # The decoy still leads the search path: an absent locked engine is refused,
             # never answered by whichever `onepipeline` that path offers.
-            npm_installs.platform_binary(node_modules=launch / "node_modules").unlink()
+            npm_installs.installed_command(node_modules=launch / "node_modules").unlink()
         case "unwritable-result":
             result.mkdir()
         case "invalid-cycle":
@@ -8697,7 +8689,7 @@ def test_budget_account_reports_a_real_subprocess_timeout_as_unrunnable(
 ) -> None:
     launch, _, runs = budget_launch
     _executable(
-        npm_installs.platform_binary(node_modules=launch / "node_modules"),
+        npm_installs.installed_command(node_modules=launch / "node_modules"),
         "import time\ntime.sleep(1)\n",
     )
     monkeypatch.setattr(tickets, "BUDGET_TIMEOUT_SECONDS", 0.02)

@@ -18,7 +18,6 @@
       "{workspaceRoot}/config/plan-checklist.llmlint.yml",
       "{workspaceRoot}/scripts/require-provisioned.sh",
       "{workspaceRoot}/scripts/planner-surface.sh",
-      "{workspaceRoot}/scripts/npm-binary.sh",
       "{workspaceRoot}/scripts/new-persona.sh",
       "{workspaceRoot}/scripts/telemetry-server.sh",
       "{workspaceRoot}/scripts/smoke.sh",

@@ -38,7 +38,6 @@
       "{workspaceRoot}/tests/test_linked_libraries.py",
       "{workspaceRoot}/tests/e2e/unpublished_view/**/*",
       "{workspaceRoot}/scripts/onepipeline.sh",
-      "{workspaceRoot}/scripts/npm-binary.sh",
       "{workspaceRoot}/scripts/template-env.sh",
       "{workspaceRoot}/graphs/pr-author.yaml",
       "{workspaceRoot}/graphs/review-reply.yaml",

@@ -1,7 +1,7 @@
 """The engine `just finish-plan`'s diagram journey launches through: the real one, `start` doubled.
 
 `tests/plan_tooling/plan_flow/test_finish_plan_diagram_e2e.py` installs this, through
-`tests/e2e/nx_workspace.py`'s `double_the_engine`, over a copied checkout's platform binary —
+`tests/e2e/nx_workspace.py`'s `double_the_engine`, over a copied checkout's installed command —
 the one `orchestrator.npm_installs` resolves and `scripts/onepipeline.sh` runs — and names the
 real binary in `FAKE_ENGINE_REAL`. Every verb but `start` is handed to that
 binary unchanged — `template resolve`, `template check`, `plan check` and the rest are the

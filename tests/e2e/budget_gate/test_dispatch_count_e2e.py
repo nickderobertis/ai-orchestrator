@@ -136,7 +136,6 @@ def test_consumer_refuses_incompatible_or_failed_producer(
     for name in (
         "budget-dispatches.sh",
         "onepipeline.sh",
-        "npm-binary.sh",
         "launcher-session.sh",
         "template-env.sh",
     ):
@@ -152,7 +151,7 @@ def test_consumer_refuses_incompatible_or_failed_producer(
     (tmp_path / "reading").write_text(reading or "", encoding="utf-8")
     (binaries.parent / "pyvenv.cfg").symlink_to(Path(sys.prefix) / "pyvenv.cfg")
     (binaries.parent / "lib").symlink_to(Path(sys.prefix) / "lib", target_is_directory=True)
-    engine = npm_installs.platform_binary(node_modules=tmp_path / "node_modules")
+    engine = npm_installs.installed_command(node_modules=tmp_path / "node_modules")
     engine.parent.mkdir(parents=True)
     # llmlint: ignore-block[e2e_not_mocked,tests_mirror_real_usage] The typed engine
     # cannot emit missing/retyped JSON fields or an unknown schema/proof word. Only

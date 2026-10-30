@@ -53,6 +53,7 @@ from nx_workspace import (
 )
 from project_fixtures import older_engine as _older_engine
 from project_fixtures import project_from_plan, reviewed
+from published_tools import node_interpreter
 from scratch_identity import GIT_IDENTITY, registered, rules_for_hosted, seeded
 from waits import timeout as e2e_timeout
 
@@ -3586,8 +3587,8 @@ def test_a_destination_this_host_cannot_answer_for_refuses_nothing(
 #: ``None`` is a PATH holding the system's tools, the installed engine — which the check
 #: needs, to read the review bar out of — the installed plan store — which it needs, to
 #: read the plan-level review record from — and the installed llmlint — which it needs, to
-#: read the plan checklist that record is keyed on — and no `onevcs`, so the CLI's absence
-#: is the one thing tested.
+#: read the plan checklist that record is keyed on — the `node` the engine's launcher runs
+#: under, and no `onevcs`, so the CLI's absence is the one thing tested.
 UNANSWERABLE_ADOPTION = (
     ("no onevcs on PATH", None),
     ("a verb that exits non-zero", "import sys\n\nsys.exit(3)\n"),
@@ -3632,6 +3633,8 @@ def test_a_release_this_host_cannot_ask_about_refuses_nothing(
             "the installed llmlint is what the check reads the checklist through"
         )
         (binary / "llmlint").symlink_to(checklist)
+        # The interpreter the engine's npm launcher names on its `#!` line.
+        (binary / "node").symlink_to(node_interpreter())
         path = f"{binary}{os.pathsep}/usr/bin:/bin"
     plan = _publishing_plan(
         tmp_path,

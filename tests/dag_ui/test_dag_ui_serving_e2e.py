@@ -26,8 +26,10 @@ import json
 import os
 import re
 import shutil
+import signal
 import socket
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -1095,7 +1097,7 @@ def _linked_onepipeline_release() -> str:
     under its `sboms/` and which moves with every release: a literal here would have to
     be hand-edited on each bump, which is exactly the drift this journey is about.
     """
-    package = npm_installs.READ_API.parent.parent
+    package = npm_installs.platform_binary("onepipeline-api-cli", "onepipeline-api").parent.parent
     boms = sorted((package / "sboms").glob("*")) if (package / "sboms").is_dir() else []
     if len(boms) != 1:
         pytest.fail(
@@ -1236,3 +1238,50 @@ def test_the_read_api_address_has_one_source_both_recipes_read() -> None:
     assert "read-api.address" in text, f"{script} must read the address from its one source"
     assert address not in text, f"{script} restates the read API address"
     # llmlint: ignore-end[tests_mirror_real_usage]
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux exposes process executables in /proc")
+@pytest.mark.parametrize(
+    "package,binary",
+    [("onepipeline-cli", "onepipeline"), ("onepipeline-api-cli", "onepipeline-api")],
+)
+def test_installed_command_becomes_the_native_process(
+    tmp_path: Path, package: str, binary: str
+) -> None:
+    """The PID a caller starts is native after startup, and an invalid call can recover."""
+    command = npm_installs.installed_command(package, binary)
+    refused = subprocess.run(
+        [str(command), "--not-an-option"], capture_output=True, text=True, check=False
+    )
+    assert refused.returncode != 0
+    assert "unexpected argument" in refused.stderr
+    native = npm_installs.platform_binary(package, binary).resolve()
+    if binary == "onepipeline":
+        ready = tmp_path / "ready"
+        program = tmp_path / "hold.sh"
+        program.write_text(f'#!/bin/sh\ntouch "{ready}"\nexec sleep 60\n')
+        program.chmod(0o755)
+        args = ["flow", "run", "--", str(program)]
+    else:
+        port = _free_port()
+        args = ["serve", "--runs-root", str(tmp_path), "--bind", f"127.0.0.1:{port}"]
+    with subprocess.Popen(
+        [str(command), *args],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    ) as process:
+        try:
+            if binary == "onepipeline":
+                until = time.monotonic() + 30
+                while not ready.exists():
+                    assert process.poll() is None, process.communicate()
+                    assert time.monotonic() < until, "the flow program never started"
+                    time.sleep(0.01)
+            else:
+                _await_ready(f"http://127.0.0.1:{port}/healthz", process, "the read API")
+            assert Path(f"/proc/{process.pid}/exe").resolve() == native
+        finally:
+            os.killpg(process.pid, signal.SIGTERM)
+            process.wait(timeout=30)

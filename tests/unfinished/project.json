@@ -37,7 +37,6 @@
       "{workspaceRoot}/tests/unfinished/project.json",
       "{workspaceRoot}/tests/unfinished/test_unfinished_e2e.py",
       "{workspaceRoot}/scripts/onepipeline.sh",
-      "{workspaceRoot}/scripts/npm-binary.sh",
       "{workspaceRoot}/scripts/template-env.sh",
       "{workspaceRoot}/scripts/host-sweep.sh",
       "{workspaceRoot}/graphs/pr-author.yaml",

@@ -4905,8 +4905,8 @@ class Installs(NamedTuple):
     """The locked installs of the checkout a launch runs from, which every read here uses.
 
     ``bin`` is that checkout's `.venv/bin`, where `uv.lock` installs every tool but the
-    engine, which `bun.lock` installs into the same checkout's `node_modules`: its platform
-    package's binary, which is what `orchestrator.npm_installs` says every caller runs.
+    engine, which `bun.lock` installs into the same checkout's `node_modules`: its command
+    under `node_modules/.bin`.
     """
 
     bin: Path
@@ -4916,7 +4916,7 @@ class Installs(NamedTuple):
 
     def engine(self) -> str:
         return str(
-            npm_installs.platform_binary(node_modules=self.bin.parent.parent / "node_modules")
+            npm_installs.installed_command(node_modules=self.bin.parent.parent / "node_modules")
         )
 
 

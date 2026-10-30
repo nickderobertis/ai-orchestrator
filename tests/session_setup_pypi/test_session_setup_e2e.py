@@ -30,8 +30,6 @@ from provisioning import (
 )
 from published_tools import NPM_TOOLS, PUBLISHED_TOOLS, PublishedTool
 
-from orchestrator import npm_installs
-
 
 def test_session_setup_syncs_real_pinned_clis_and_then_needs_no_uv(tmp_path: Path) -> None:
     repo = setup_repo(tmp_path)
@@ -85,8 +83,7 @@ def test_session_setup_installs_every_published_tool_from_its_registry(tmp_path:
     read API from npmjs.com out of `bun.lock` — leaving the lock as it found it — and
     the CLI each lands reports the version `config/<tool>.version` adopted. A version
     nobody published, a git ref, or a vendored copy cannot survive it. Each npm tool's
-    platform binary, the one `orchestrator.npm_installs` resolves and every caller here
-    runs, answers as the npm launcher beside it does.
+    installed command answers its adopted version.
     """
     repo = setup_repo(tmp_path)
     lock = (repo / "bun.lock").read_bytes()
@@ -102,12 +99,6 @@ def test_session_setup_installs_every_published_tool_from_its_registry(tmp_path:
             [executable, "--version"], text=True, capture_output=True, check=True
         )
         assert reported.stdout.strip() == f"{tool.binary} {tool.adopted_version}"
-    for tool in NPM_TOOLS:
-        binary = npm_installs.platform_binary(
-            tool.distribution, tool.binary, node_modules=repo / "node_modules"
-        )
-        direct = subprocess.run([binary, "--version"], text=True, capture_output=True, check=True)
-        assert direct.stdout.strip() == f"{tool.binary} {tool.adopted_version}"
 
 
 def test_session_setup_fails_when_a_published_tool_misses_its_adopted_version(

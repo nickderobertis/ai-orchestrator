@@ -416,6 +416,11 @@ moving any other one moves nothing a dispatch does — reading the wrong pin has
 a wrong diagnosis here twice, both times with every pin looking current while a real
 run came out empty.
 
+**Execution uses the installed npm commands.** Engine and read API callers run
+`node_modules/.bin/onepipeline` and `node_modules/.bin/onepipeline-api`; on Linux these
+become the native binary's own process. Platform package paths are for reading binary
+bytes and the SBOM only.
+
 **The installed binary decides, and measuring it is the answer.** The npm platform
 package `onepipeline-cli` installs through `bun.lock` ships a CycloneDX SBOM under its
 `sboms/` declaring one version per linked crate, and

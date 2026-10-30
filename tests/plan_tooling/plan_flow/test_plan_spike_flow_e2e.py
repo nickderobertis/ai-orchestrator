@@ -5,7 +5,7 @@ helpers, `orchestrator/spike_flow.py`, the real `just review-plan`, `just check-
 unpublished --acknowledge`, `scripts/finish-plan.sh` and its copy and report, the launch
 gate in `scripts/onepipeline.sh`, the pinned plan store, the pinned `onevcs` over a scratch
 registry with a real Git origin, and `just approve-design`. **Only the engine's `start` is
-doubled**, over the copy's platform binary that `orchestrator.npm_installs` resolves, by
+doubled**, over the copy's installed command that `orchestrator.npm_installs` resolves, by
 `tests/plan_tooling/plan_flow/spike_flow_engine.py`: it does with those same real tools what
 each stage's run leaves behind — the plan and its spikes written into the store, each
 spike's branch cut, committed, preserved and released through `onevcs` and its report
@@ -14,7 +14,7 @@ the run's ledger record. The paid reviewer `just review-plan` spends a turn on i
 stand-in every journey here uses.
 
 It runs in a copy because the wrapper runs the engine at its checkout's own
-platform binary and nowhere else, and the copy's migration list names the one plan
+installed command and nowhere else, and the copy's migration list names the one plan
 that predates budgets, which only a reviewed change to the tracked list could otherwise do.
 
 llmlint: ignore-file[e2e_not_mocked, tests_mirror_real_usage] The engine's `start` is

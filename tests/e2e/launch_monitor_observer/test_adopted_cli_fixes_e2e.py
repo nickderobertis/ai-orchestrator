@@ -195,7 +195,7 @@ class SettleEnvelope(TypedDict):
 def _installed(binary: str, pin: str) -> Path:
     """The installed `binary`, failing unless it reports the release `config/<pin>.version` pins.
 
-    The engine is the platform binary `bun.lock` installs; every other CLI is `uv.lock`'s.
+    The engine is the installed command `bun.lock` installs; every other CLI is `uv.lock`'s.
     """
     path = npm_installs.ENGINE if binary == "onepipeline" else INSTALLED / binary
     adopted = (REPO_ROOT / "config" / f"{pin}.version").read_text(encoding="utf-8").strip()

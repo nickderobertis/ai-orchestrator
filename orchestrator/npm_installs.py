@@ -1,13 +1,4 @@
-"""Where this checkout's `bun.lock` installs the engine and the read API from npmjs.com.
-
-`onepipeline-cli` and `onepipeline-api-cli` are npm packages whose launcher, in
-`node_modules/.bin`, is a node script that resolves and runs the prebuilt binary the
-platform package npm installed for this host — `onepipeline-cli-linux-x64` on this one —
-and that platform package ships the release's CycloneDX SBOM under `sboms/` beside it.
-
-Every caller here runs that binary itself, never the launcher, for the reason
-`scripts/npm-binary.sh` gives, and the two retire together.
-"""
+"""Installed npm commands and platform artifacts for binary and SBOM inspection."""
 
 from __future__ import annotations
 
@@ -16,7 +7,14 @@ from pathlib import Path
 
 from orchestrator.root import REPO_ROOT
 
-__all__ = ["ENGINE", "NODE_MODULES", "PLATFORMS", "READ_API", "platform_binary"]
+__all__ = [
+    "ENGINE",
+    "NODE_MODULES",
+    "PLATFORMS",
+    "READ_API",
+    "platform_binary",
+    "installed_command",
+]
 
 #: Where `bun.lock` installs this checkout's npm packages.
 NODE_MODULES = REPO_ROOT / "node_modules"
@@ -52,7 +50,17 @@ def platform_binary(
     return node_modules / f"{package}-{PLATFORMS[named]}" / "bin" / binary
 
 
-#: The engine's binary every module here runs.
-ENGINE = platform_binary()
+def installed_command(
+    package: str = "onepipeline-cli",
+    binary: str = "onepipeline",
+    *,
+    node_modules: Path = NODE_MODULES,
+) -> Path:
+    """The command installed by the npm package, relative to its checkout."""
+    return node_modules / ".bin" / binary
+
+
+#: The engine command every module here runs.
+ENGINE = installed_command()
 #: The read API's binary, which `just dag-ui` and `just telemetry-server` run.
-READ_API = platform_binary("onepipeline-api-cli", "onepipeline-api")
+READ_API = installed_command("onepipeline-api-cli", "onepipeline-api")

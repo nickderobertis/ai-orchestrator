@@ -11,7 +11,7 @@ One journey drives that end to end: the real `.claude/settings.json` Stop entry,
 harness runs it; the real `just plan`, `just watch` and `just unwatched` recipes; and the
 installed engine registering the flow, recording each run's `flow`, watching and judging.
 **Only the engine's `start` is doubled**, by
-`tests/plan_tooling/plan_flow/spike_flow_engine.py` over a copy's platform binary that
+`tests/plan_tooling/plan_flow/spike_flow_engine.py` over a copy's installed command that
 `orchestrator.npm_installs` resolves, as `just plan`'s own spike journeys double it: it writes
 what each stage's run leaves behind with the real store, and the launch record a real `start`
 writes, `flow` included. The paid reviewer is the stand-in every planning journey uses, held in
@@ -24,7 +24,7 @@ of the wake budget, with its ending and the deadline its terms record configured
 journey asserts no time; whether the figure is within the threshold is the budget check's.
 
 It runs in a copy because the wrapper runs the engine at its checkout's own
-platform binary and nowhere else. The copy holds the tracked files of the trees a
+installed command and nowhere else. The copy holds the tracked files of the trees a
 planning flow reads and nothing more, every one of them in `unwatchedWorkspace`, so this
 journey stays in the project's cached `test` target, keyed on what it reads.
 
@@ -103,7 +103,6 @@ COPIED_SCRIPTS = (
     "launcher-session.sh",
     "setup-llmlint.sh",
     "lock-timeout.sh",
-    "npm-binary.sh",
     "onepipeline.sh",
     "orchestrate.sh",
     "plan-brief.sh",

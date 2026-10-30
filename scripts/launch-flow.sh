@@ -69,13 +69,7 @@ run_in_launch_flow() {
     # a checkout with no installed engine can neither enter one nor launch the runs it
     # would hold, so the launcher is refused here, naming the engine, rather than going on
     # in no flow with nothing holding the session.
-    # shellcheck source=scripts/npm-binary.sh
-    if ! . "$here/npm-binary.sh"; then
-        echo "$caller: the engine resolver $here/npm-binary.sh could not be loaded; restore it from the repository or run 'just bootstrap', then retry" >&2
-        return 2
-    fi
-    local engine
-    engine=$(npm_binary onepipeline-cli onepipeline) || return 2
+    local engine="${here%/scripts}/node_modules/.bin/onepipeline"
     if [ ! -x "$engine" ]; then
         echo "$caller: this checkout has no engine at $engine, so no launch flow can hold a session for this launch; run 'just bootstrap' to install the pinned engine, then retry" >&2
         return 2

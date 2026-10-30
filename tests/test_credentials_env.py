@@ -17,7 +17,6 @@ ONEPIPELINE = REPO_ROOT / "scripts" / "onepipeline.sh"
 #: it their subject is a missing file rather than the credential loading they assert on.
 LAUNCHER_SESSION = REPO_ROOT / "scripts" / "launcher-session.sh"
 TEMPLATE_ENV = REPO_ROOT / "scripts" / "template-env.sh"
-NPM_BINARY = REPO_ROOT / "scripts" / "npm-binary.sh"
 TEMPLATE_REGISTRATION = REPO_ROOT / "templates" / "templates.yaml"
 PRESERVED_LOG = REPO_ROOT / "scripts" / "preserved-log.sh"
 
@@ -141,7 +140,6 @@ def test_read_only_onepipeline_view_does_not_load_a_malformed_file(tmp_path: Pat
         LAUNCHER_SESSION.read_text(encoding="utf-8"), encoding="utf-8"
     )
     (scripts / HELPER.name).write_text(HELPER.read_text(encoding="utf-8"), encoding="utf-8")
-    (scripts / NPM_BINARY.name).write_text(NPM_BINARY.read_text(encoding="utf-8"), encoding="utf-8")
     # Every verb names this checkout's template root, and a root without its registration
     # is refused before the view runs.
     (scripts / TEMPLATE_ENV.name).write_text(
@@ -155,7 +153,7 @@ def test_read_only_onepipeline_view_does_not_load_a_malformed_file(tmp_path: Pat
     binaries = tmp_path / "bin"
     binaries.mkdir()
     # The published engine the view execs, doubled to say what it was asked.
-    engine = npm_installs.platform_binary(node_modules=tmp_path / "node_modules")
+    engine = npm_installs.installed_command(node_modules=tmp_path / "node_modules")
     engine.parent.mkdir(parents=True)
     engine.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\"\n", encoding="utf-8")
     engine.chmod(0o755)

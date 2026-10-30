@@ -270,7 +270,7 @@ def _engine_bytes() -> bytes:
     """The dispatching binary, whose linked `oneagentgraph` ships the roles.
 
     The prebuilt one this checkout's `bun.lock` installed, read from its platform
-    package: the launcher on the search path is a script that runs it.
+    package for byte inspection. Execution uses the installed command.
     """
     found = npm_installs.platform_binary()
     # tests/test_criteria_guard.py covers this with substituted engine bytes, and no

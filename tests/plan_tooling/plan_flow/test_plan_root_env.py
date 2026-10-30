@@ -41,7 +41,7 @@ import plan_root_variable
 import plan_store_cache
 import plan_store_user_layer
 import pytest
-from published_tools import ONETASKGRAPH_BIN
+from published_tools import ONETASKGRAPH_BIN, interpreter_directory
 
 from orchestrator import npm_installs, plan_store
 from orchestrator.root import REPO_ROOT
@@ -464,7 +464,15 @@ def _report_from_another_repository(tmp_path: Path, **environment: str) -> Repor
         ],
         cwd=REPO_ROOT,
         env={
-            "PATH": f"{REPO_ROOT / '.venv' / 'bin'}:/usr/bin:/bin",
+            # The engine's npm launcher is run by the `node` it names on its `#!` line.
+            "PATH": os.pathsep.join(
+                (
+                    str(REPO_ROOT / ".venv" / "bin"),
+                    str(interpreter_directory(tmp_path)),
+                    "/usr/bin",
+                    "/bin",
+                )
+            ),
             "HOME": str(Path.home()),
             **_configuration_home(),
             **plan_store_cache.handed(),

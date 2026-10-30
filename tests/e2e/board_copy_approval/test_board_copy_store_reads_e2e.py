@@ -432,9 +432,16 @@ def test_recopy_preserves_board_workflow_and_creates_new_tasks_from_source(
         assert first.returncode == 0, first.stdout + first.stderr
         destinations = _copied(first.stdout)
         settled = next(issue for issue in BOARD.issues if issue.title == NODES[0].title)
-        finished = _through_the_template(
-            environment, "update", f"plans:{settled.content_id}", "--status", "done"
-        )
+        finished = _audited(
+            tmp_path,
+            environment,
+            "onetaskgraph",
+            "task",
+            "update",
+            f"plans:{settled.content_id}",
+            "--status",
+            "done",
+        ).ran
         assert finished.returncode == 0, finished.stdout + finished.stderr
         project = next(
             issue

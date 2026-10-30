@@ -36,14 +36,12 @@ SETTINGS = REPO_ROOT / ".claude" / "settings.json"
 #: The `Stop` hook's command: the engine's stop guard in its own docs page's
 #: Claude Code wiring, run out of this checkout's locked install — through
 #: `$CLAUDE_PROJECT_DIR`, which is what makes one registration work from every worktree of
-#: this repository — by `scripts/npm-binary.sh`, which replaces itself with the platform
-#: package's binary this host installed, so nothing of this repository's stays between the
-#: harness and the verb.
+#: this repository — through the command installed by the pinned npm package.
 #: `--unpublished` has the verb ask, in its own process, whether the session owes a
 #: preserved branch, under this host's acknowledgement directory and drafter graph; no
 #: `--source` is declared.
 STOP_HOOK = (
-    'bash "$CLAUDE_PROJECT_DIR/scripts/npm-binary.sh" onepipeline-cli onepipeline stop-guard '
+    '"$CLAUDE_PROJECT_DIR/node_modules/.bin/onepipeline" stop-guard '
     "--wake-budget 2100 --format claude-code --unpublished "
     '--unpublished-acknowledgements "${XDG_STATE_HOME:-$HOME/.local/state}/'
     'ai-orchestrator/stop-unfinished/acknowledged" '
