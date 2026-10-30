@@ -236,6 +236,15 @@ FAILED_TOOL_CALL_CORE_FLOOR = Release(0, 24, 1)
 #: CLI wheel's core need this floor to cover both launch roads; their recorded argv is
 #: proved in `tests/e2e/launch_monitor_observer/test_codex_plugins_off_e2e.py`.
 PLUGINS_OFF_CORE_FLOOR = Release(0, 26, 0)
+#: oneharness https://github.com/nickderobertis/oneharness/pull/1467 (`e3d8cc3`), first cut
+#: as `oneharness-core` 0.28.0 (CLI 0.25.3): concurrent Codex dispatches of one
+#: configuration share one pooled app-server, each thread carrying its own dispatch's
+#: environment, and Codex launches reuse oneharness's shared model catalog with
+#: analytics off. Below it every Codex dispatch starts a server of its own. Held on the
+#: engine's linked core and the CLI wheel's core alike, because those are the two launch
+#: roads; `tests/e2e/launch_monitor_observer/test_codex_shared_app_server_e2e.py` drives
+#: the CLI road under this repository's worker config.
+SHARED_APP_SERVER_CORE_FLOOR = Release(0, 28, 0)
 
 
 #: The three sibling releases carrying https://github.com/nickderobertis/ai-orchestrator/issues/1004's
@@ -762,7 +771,7 @@ class LinkedCore(NamedTuple):
 #: packages: `config/oneharness.version` reads 0.26.1 and names the `oneharness-cli`
 #: wheel, whose own CycloneDX SBOM declares the `oneharness-core` it is compiled
 #: against as 0.29.1 (`tests/test_engine_history_vocabulary.py` re-reads that pairing
-#: off the wheel for `docs/telemetry.md`); on the adopted onepipeline 0.95.3 the
+#: off the wheel for `docs/telemetry.md`); on the adopted onepipeline 0.95.5 the
 #: engine links 0.29.1 for every dependent — while the sibling `oneagentgraph-cli`
 #: wheel declares 0.29.1 and `onejudge-cli` 0.29.0, which is the pairing
 #: `test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs`
@@ -785,7 +794,7 @@ UNRECONCILABLE_PIN = UnreconcilablePin(pin="oneharness", crate="oneharness-core"
 LINKED_HARNESS_CORES = (
     LinkedCore(dependent="oneagentgraph", dependent_version="0.9.0", core="0.29.1"),
     LinkedCore(dependent="onejudge", dependent_version="0.22.0", core="0.29.1"),
-    LinkedCore(dependent="onepipeline", dependent_version="0.95.3", core="0.29.1"),
+    LinkedCore(dependent="onepipeline", dependent_version="0.95.5", core="0.29.1"),
 )
 
 #: How a crate names itself in a compiled binary: cargo embeds the registry source
@@ -809,7 +818,7 @@ LINKED_IN_BINARY = re.compile(
 #: installable from PyPI at all, or where this host's own verbs must run a later release
 #: than any engine links — never as a convenience, and never as "not yet looked at",
 #: because both read identically from here a release cycle later. Empty, and kept: the
-#: adopted engine 0.95.3 links the onevcs 0.57.0 the manager's verbs run, so the last
+#: adopted engine 0.95.5 links the onevcs 0.57.0 the manager's verbs run, so the last
 #: declared pair closed with it.
 DECLARED_DIVERGENCES: dict[str, Divergence] = {}
 
@@ -1343,6 +1352,11 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
             PLUGINS_OFF_CORE_FLOOR,
             "launches Codex with plugins off unless a config opts in",
         ),
+        (
+            UNRECONCILABLE_PIN.crate,
+            SHARED_APP_SERVER_CORE_FLOOR,
+            "shares one pooled Codex app-server across concurrent dispatches",
+        ),
     ],
     ids=(
         "onevcs",
@@ -1352,6 +1366,7 @@ def test_a_siblings_own_cli_wheel_is_not_evidence_about_what_a_dispatch_runs() -
         "onevcs-held-publication",
         f"{UNRECONCILABLE_PIN.crate}-failed-tool-call",
         f"{UNRECONCILABLE_PIN.crate}-plugins-off",
+        f"{UNRECONCILABLE_PIN.crate}-shared-app-server",
     ),
 )
 def test_the_linked_sibling_carries_this_plans_change_to_it(
@@ -1447,6 +1462,22 @@ def test_the_installed_oneharness_cli_is_built_from_a_core_launching_codex_with_
         f"the installed oneharness-cli is built from {UNRECONCILABLE_PIN.crate} {built_from}, "
         f"below the {PLUGINS_OFF_CORE_FLOOR} that launches Codex with plugins off; every "
         "usage probe and wrapper-spawned Codex turn downloads the plugin catalog on start"
+    )
+
+
+def test_the_installed_oneharness_cli_is_built_from_a_core_sharing_one_codex_app_server() -> None:
+    """The CLI's own core is held to the shared app-server floor the engine's linked core is.
+
+    onejudge's spawning seam and the wrapper scripts start Codex through this wheel, so
+    below the floor each of those turns would start an app-server of its own while a
+    dispatch's in-process turns shared one.
+    """
+    built_from = Release.parse(_sibling_core("oneharness-cli"), "oneharness-cli's SBOM")
+
+    assert built_from >= SHARED_APP_SERVER_CORE_FLOOR, (
+        f"the installed oneharness-cli is built from {UNRECONCILABLE_PIN.crate} {built_from}, "
+        f"below the {SHARED_APP_SERVER_CORE_FLOOR} that shares one Codex app-server across "
+        "concurrent dispatches; every wrapper-spawned Codex turn would start its own server"
     )
 
 

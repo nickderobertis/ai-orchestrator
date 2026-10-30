@@ -859,15 +859,6 @@ def _private_named(text: str) -> list[str]:
 # llmlint: ignore-block[e2e_not_mocked] The same three doubled boundaries as the journey above.
 @COPIES_THE_TRACKED_TREE
 @pytest.mark.xdist_group("linear-routed")
-@pytest.mark.xfail(
-    strict=True,
-    raises=KeyError,
-    reason=(
-        "onetaskgraph 0.12.5's Linear copy rewrites the private home without its "
-        "public_projections record: https://github.com/nickderobertis/onetaskgraph/issues/3781; "
-        "remove this marker once a release fixing it is adopted"
-    ),
-)
 def test_a_mixed_plan_keeps_every_task_in_linear_and_shows_its_public_task_on_the_board(
     routed: Routed, tmp_path: Path, oneharness_bin: str
 ) -> None:

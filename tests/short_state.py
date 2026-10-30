@@ -82,6 +82,21 @@ def short_state_base() -> Iterator[Path]:
             _base = None
 
 
+@pytest.fixture(autouse=True)
+def release_test_servers(short_state_base: Path) -> Iterator[None]:
+    """Wait, at each test's own teardown, for the shared servers that test started.
+
+    A shared Codex server outlives the turn that started it by its linger, so the
+    session's release alone left one alive past the test that started it — into the
+    next test, and, for the last test of a session that release missed, past the gate.
+    Teardown runs whether the test passed or failed, and only a test that started a
+    server waits; `tests/e2e/pooled_server_session` drives both.
+    """
+    before = pooled_server_state.snapshot(short_state_base)
+    yield
+    pooled_server_state.await_started(short_state_base, before)
+
+
 def state_home(owner: Path) -> Path:
     """The short state root belonging to ``owner``, created on first ask.
 
