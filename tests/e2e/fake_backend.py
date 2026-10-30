@@ -260,6 +260,21 @@ OBSERVER_MEMBER_ENV = "FAKE_BACKEND_OBSERVER_MEMBER"
 #: report. Nothing here writes what a lost turn looks like.
 OBSERVER_LOSES_ENV = "FAKE_BACKEND_OBSERVER_LOSES"
 MOCK_EXIT_ENV = "MOCK_EXIT"
+
+#: Optionally answer only THAT member's first this-many agent turns, and hold every turn
+#: after them open, unanswered, until whatever is running it stops it.
+#:
+#: What it gives a journey is a turn still in flight when its run settles, so the run's
+#: own end is what cancels it — the timing a whole real run reaches about one time in two
+#: on its own. The model's answer is the one thing withheld; the cancellation, and what
+#: onejudge then tells the judge side, are the real ones. A turn's number is counted in
+#: `OBSERVER_TURNS_ENV`'s directory, one file per turn, because each turn is a fresh
+#: process of this stand-in.
+OBSERVER_HOLD_AFTER_ENV = "FAKE_BACKEND_OBSERVER_HOLD_AFTER_TURNS"
+OBSERVER_TURNS_ENV = "FAKE_BACKEND_OBSERVER_TURNS_DIR"
+#: How long a held turn waits before giving up, so a journey whose run never stopped its
+#: observer ends instead of leaving a turn parked for ever.
+OBSERVER_HOLD_CEILING_SECONDS = 600
 #: How many turns on the shared app-server a lost member fails: more than any one turn
 #: retries, so every one of them is lost.
 LOST_TURN_ATTEMPTS = 1_000_000
@@ -876,6 +891,29 @@ def _await_turn_gate(config: str | None) -> None:
         time.sleep(0.05)
 
 
+def _hold_past_the_answered_turns() -> None:
+    """Hold an observed member's turn past `OBSERVER_HOLD_AFTER_ENV`'s count until stopped."""
+    answered = os.environ.get(OBSERVER_HOLD_AFTER_ENV)
+    turns = os.environ.get(OBSERVER_TURNS_ENV)
+    if not answered or not turns:
+        return
+    directory = Path(turns)
+    directory.mkdir(parents=True, exist_ok=True)
+    taken = 1
+    while True:
+        try:
+            (directory / str(taken)).open("x").close()
+            break
+        except FileExistsError:
+            taken += 1
+    if taken <= int(answered):
+        return
+    deadline = time.monotonic() + OBSERVER_HOLD_CEILING_SECONDS
+    while time.monotonic() < deadline:
+        time.sleep(0.05)
+    raise SystemExit("fake_backend: the held observer turn was never stopped")
+
+
 def _marked_worker_turn(config: str | None, prompt: str) -> bool:
     """Whether this is a dispatched worker turn carrying `AGENT_ACTIVITY_MARKER_ENV`'s text."""
     marker = os.environ.get(AGENT_ACTIVITY_MARKER_ENV)
@@ -1009,6 +1047,7 @@ def _turn(original: list[str], argv: list[str], prompt: str) -> int:
     # recording the script, so a journey asserting on the log passed while the model said
     # something else entirely.
     if scripted_answer is not None or loses:
+        _hold_past_the_answered_turns()
         return _answer(argv, scripted_answer or "", lost=loses)
     # Before the single-sided branch for the same reason as the scripted answer above.
     read = _read_the_stream(original, config, system, _flag(argv, CWD_FLAG))

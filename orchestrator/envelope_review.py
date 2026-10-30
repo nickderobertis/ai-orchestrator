@@ -201,6 +201,7 @@ NODE_FIELDS = frozenset(
         "overflow",
         "task_record",
         "assets_from",
+        "human_item",
     }
 )
 

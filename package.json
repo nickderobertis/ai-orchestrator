@@ -3,9 +3,9 @@
   "private": true,
   "packageManager": "bun@1.3.14",
   "dependencies": {
-    "onepipeline-api-cli": "0.59.1",
-    "onepipeline-cli": "0.95.5",
-    "onepipeline-ui": "0.59.1"
+    "onepipeline-api-cli": "0.61.0",
+    "onepipeline-cli": "0.96.1",
+    "onepipeline-ui": "0.61.0"
   },
   "devDependencies": {
     "@expo-google-fonts/noto-sans": "0.4.2",

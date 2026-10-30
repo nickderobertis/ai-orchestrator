@@ -22,7 +22,7 @@ that names one active launch. Naming a run is the request, so it is reported
 whether or not it has settled; omitting it covers every run.
 
 **The view is run-scoped, and it has no per-node rows.** Everything below was
-re-measured against `onepipeline` v0.95.5 on this host's own runs root; the per-node
+re-measured against `onepipeline` v0.96.1 on this host's own runs root; the per-node
 table, session timeline, turn histogram, and llmlint retry-rate cohort this document
 used to describe belonged to the pre-extraction implementation and are not in the
 adopted crate.
@@ -161,14 +161,14 @@ a schema version, not a field to discover.
 omitted rather than zeroed when it was never measured.
 Everything said here about those fields was measured on records this host wrote
 under the 0.22.0 CLI and onejudge 0.19, and read off the tags as unchanged through
-the 0.22.0/0.20.0 upgrade, the 0.26.1/0.21.0 upgrade and the 0.26.1/0.22.0 upgrade (`config/oneharness.version` and
+the 0.22.0/0.20.0 upgrade, the 0.26.1/0.21.0 upgrade, the 0.26.1/0.22.0 upgrade and the 0.26.1/0.22.1 upgrade (`config/oneharness.version` and
 `config/onejudge.version`); the pair before it is the boundary the older per-party
 accounting sat behind. What a run recorded *before* that pair reports is **not established
 here** — re-measure rather than assuming the shape carries backwards, and re-check
 this paragraph whenever either pin moves, which
 `tests/release_pins/test_onejudge_version.py::test_telemetry_upgrade_boundary_matches_authoritative_versions`
 forces by failing on the boundary sentence above until the pair it names is the adopted
-one. That re-check has now been made seventeen times
+one. That re-check has now been made eighteen times
 without the shape moving. For the 0.10.3/0.5.1 upgrade, one turn spent on each binary
 with everything else held differed by exactly two added keys — `results[].work` and
 `fallback.stopped_without_work`, both of which say something about a failure nothing
@@ -320,9 +320,9 @@ turns onejudge 0.19.0 ran through
 `oneharness.judge.toml` and `oneharness.design-doc-judge.toml`, two on Codex and two on
 Claude Code: each record's `usage` block is the same five keys and nothing else.
 It moved again to 0.19.5 with the engine 0.75.0, to 0.20.0 with the engine 0.80.2 and to
-0.21.0 with the engine 0.89.2 and to 0.22.0 with the engine 0.93.0, and both files are unchanged between `onejudge-v0.19.0` and
-`onejudge-v0.22.0` too, and the
-engine links `oneharness-core` 0.29.1 for itself, onejudge 0.22.0 and oneagentgraph 0.9.0, read off the
+0.21.0 with the engine 0.89.2 and to 0.22.0 with the engine 0.93.0 and to 0.22.1 with the engine 0.96.1, and both files are unchanged between `onejudge-v0.19.0` and
+`onejudge-v0.22.1` too, and the
+engine links `oneharness-core` 0.29.1 for itself, onejudge 0.22.1 and oneagentgraph 0.9.1, read off the
 SBOM its npm platform package ships. Between `oneharness-core-v0.24.2` and `oneharness-core-v0.28.2`, `domain/usage.rs`
 gains the reset-credit report above and a millisecond RFC 3339 reader
 ([oneharness#1464](https://github.com/nickderobertis/oneharness/pull/1464)), touching
@@ -466,7 +466,7 @@ served them.
    `just telemetry-server` — or by `just dag-ui`, which is the same published server
    with the browser view built into it answering on the same origin) is the structured
    view. Measured against real runs on
-   **`onepipeline-api` 0.59.1**, the release `config/onepipeline-ui.version` pins —
+   **`onepipeline-api` 0.61.0**, the release `config/onepipeline-ui.version` pins —
    a measurement rather than a reading, because its CLI dumps no schema, so a bump is
    what re-opens this paragraph: `telemetry_schema_version` 27 on the envelope, where
    0.55.0, 0.52.0 and 0.51.0 served 26 and
@@ -476,7 +476,7 @@ served them.
    resolver, and marks the turn's transcript unavailable where that file cannot be read, and
    27 serves a node's `complete-but-draft` and `complete-but-held` statuses as themselves and
    gives a node's result the `awaiting` releases its settlement still awaits;
-   `timeline_schema_version` 14, as 0.59.1, 0.59.0, 0.58.1, 0.58.0, 0.52.0 and 0.51.0 served, where 0.48.1 served 13, 0.44.0 served 12, 0.41.0 served
+   `timeline_schema_version` 14, as 0.61.0, 0.59.1, 0.59.0, 0.58.1, 0.58.0, 0.52.0 and 0.51.0 served, where 0.48.1 served 13, 0.44.0 served 12, 0.41.0 served
    11 and 0.21.1 served 10 — 14 gives every `turn-started`, `turn-message` and
    `turn-activity` event a one-line `description` the engine's resolver writes, 13 counts a
    journal record relayed again under one `(stream, seq)` once, and bounds each session lane

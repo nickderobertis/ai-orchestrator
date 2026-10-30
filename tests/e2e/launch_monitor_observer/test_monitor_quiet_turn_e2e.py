@@ -48,8 +48,10 @@ import pytest
 from fake_backend import (
     AGENT_DELAY_ENV,
     OBSERVER_ANSWER_ENV,
+    OBSERVER_HOLD_AFTER_ENV,
     OBSERVER_LOSES_ENV,
     OBSERVER_MEMBER_ENV,
+    OBSERVER_TURNS_ENV,
     PACEMAKER_REPORT,
     PROMPT_LOG_ENV,
 )
@@ -685,6 +687,10 @@ LAUNCHED_RUN = "monitor-quiet-turn"
 HELD_NODE = "held"
 HELD_SECONDS = 25
 
+#: The run a monitor whose last turn is still running when the run settles watches, held
+#: the same way: the timing that run reaches about one time in two on its own, forced.
+CANCELLED_RUN = "monitor-cancelled-turn"
+
 #: The run a monitor whose every turn is lost watches, held the same way.
 LOST_RUN = "monitor-lost-turn"
 
@@ -1011,8 +1017,13 @@ def _launch_to_settlement(environment: dict[str, str], run: str, tmp_path: Path)
 # llmlint: ignore-block[shell_test_tiers_stay_split] Same site, same reason; and this is
 # a pytest journey over the real recipe, not a shell test suite.
 @pytest.mark.xdist_group("monitor-quiet-turn")
+@pytest.mark.parametrize(
+    ("run", "turn_in_flight_at_settlement"),
+    [(LAUNCHED_RUN, False), (CANCELLED_RUN, True)],
+    ids=["as-it-falls", "turn-in-flight-at-settlement"],
+)
 def test_a_monitor_taking_quiet_turns_survives_a_whole_real_run(
-    tmp_path: Path, oneharness_bin: str
+    tmp_path: Path, oneharness_bin: str, run: str, *, turn_in_flight_at_settlement: bool
 ) -> None:
     """The incident, reproduced and then not reproduced, at the scale it happened.
 
@@ -1029,11 +1040,21 @@ def test_a_monitor_taking_quiet_turns_survives_a_whole_real_run(
     driven against the same run's channel afterwards, which is what makes "nothing was
     queued" a statement about the monitor rather than about a run whose channel nothing
     could reach.
+
+    Whether the monitor's last turn is still running when the run settles is a race the
+    run decides on its own, so the second case forces it: every turn after the ones the
+    survival is measured on is held open until the run's own end cancels it. That turn
+    ended because the observer was stopped, not because it was lost, so it raises no
+    `monitor-failed` surface and every assertion below holds of it unchanged.
     """
     if shutil.which("just") is None:
         pytest.skip("just is not installed")
     environment = _launch_environment(tmp_path, oneharness_bin, SAID_ON_A_QUIET_TURN)
-    printed = _launch_to_settlement(environment, LAUNCHED_RUN, tmp_path)
+    if turn_in_flight_at_settlement:
+        # llmlint: ignore[e2e_not_mocked] Only the paid model's answer is withheld.
+        environment[OBSERVER_HOLD_AFTER_ENV] = str(TURNS_PROVING_IT_KEPT_WATCHING)
+        environment[OBSERVER_TURNS_ENV] = str(tmp_path / "monitor-turns")
+    printed = _launch_to_settlement(environment, run, tmp_path)
 
     events = _graph_events(Path(environment[GRAPH_STATE_ENV]))
     assert events, (
@@ -1064,7 +1085,14 @@ def test_a_monitor_taking_quiet_turns_survives_a_whole_real_run(
         f"on — a member that never took a second turn is not one that kept watching:\n"
         f"{printed}"
     )
-    said_by_the_monitor = _what_the_monitor_said(environment, LAUNCHED_RUN)
+    # A held turn is never answered, so one having opened at all is one the run's end
+    # found still running.
+    assert not turn_in_flight_at_settlement or len(turns) > TURNS_PROVING_IT_KEPT_WATCHING, (
+        f"the `{MONITOR_MEMBER}` member took {len(turns)} agent turn(s), none of them held, "
+        "so no turn was in flight when the run settled and the forced timing was never "
+        f"reached:\n{printed}"
+    )
+    said_by_the_monitor = _what_the_monitor_said(environment, run)
     assert len(said_by_the_monitor) >= TURNS_PROVING_IT_KEPT_WATCHING, (
         f"the monitor produced {len(said_by_the_monitor)} message(s), so this run cannot "
         f"show that a quiet turn was answered at all: {said_by_the_monitor}"
@@ -1085,7 +1113,7 @@ def test_a_monitor_taking_quiet_turns_survives_a_whole_real_run(
         "the monitor's judge side did not answer every quiet turn with a next instruction, "
         f"which is the non-completion that keeps a member watching: {decided}"
     )
-    queued = _surfaces(environment, LAUNCHED_RUN)
+    queued = _surfaces(environment, run)
     # By the monitor's own WORDS rather than by kind: `monitor` is also what the engine
     # queues a single-sided member's proposal under, so a kind filter would fail on a
     # surface the monitor had nothing to do with.
@@ -1104,7 +1132,7 @@ def test_a_monitor_taking_quiet_turns_survives_a_whole_real_run(
     # `tests/e2e/launch_monitor_observer/test_supervisory_prompt_discipline_e2e.py` is what
     # reads the turn.
     kind = _pacemaker_surface_kind()
-    raised = _raised_by_the_pacemakers_own_verb(environment, LAUNCHED_RUN, kind)
+    raised = _raised_by_the_pacemakers_own_verb(environment, run, kind)
     assert raised.returncode == 0, (
         f"the `{PACEMAKER_MEMBER}` member's own verb was refused on a run whose monitor "
         f"prose raised nothing: {raised.stderr}"
@@ -1116,7 +1144,7 @@ def test_a_monitor_taking_quiet_turns_survives_a_whole_real_run(
     # prose, and now that a settled driver lets go promptly it arrives in some runs.
     paced = [
         one
-        for one in _surfaces(environment, LAUNCHED_RUN)
+        for one in _surfaces(environment, run)
         if one.get("kind") != SURFACE_KIND_OF_A_COMPLETION_SCORE
     ]
     assert [one for one in paced if one.get("message", "").strip() == PACEMAKER_REPORT] == paced, (
