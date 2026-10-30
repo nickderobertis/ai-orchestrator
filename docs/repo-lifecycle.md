@@ -107,6 +107,11 @@ API moves to 0.62.0, which links that engine. That onevcs never refuses a remova
 public boundary check, a merge's removal against either parent included, while every
 addition — text a branch adds and later removes among them — is still refused; so a branch
 that merged a base which had already scrubbed a private name lands rather than being recut.
+On a GitHub Projects source declared private that store creates a new issue whose item
+names one repository that does not read private in the repository of the project issue it is
+filed under, while the item still names that repository, so a private board can hold a mixed
+plan's public-repository tasks; it reads the board's `public` field and each repository's
+visibility once per store invocation, before that invocation's first write.
 The adoption after that moves the engine to 0.96.2 and the store crates and CLI to
 0.12.12, which take what Linear stores from each write's own answer instead of predicting
 it: a first copy into a Linear source reads nothing back after a write and sends one
@@ -1629,8 +1634,8 @@ checkouts to that order. The `Node` schema is
 `merge_policy`, `base_branch`, `branch`, `title`, `body`, `draft`, `publish`,
 `execution_checkout`, `steps`, `resume`, `adoption`, `consumes`, `delivers`, `pool`,
 `overflow`, `task_record`, `assets_from`, `human_item` — and
-anything else is refused while the plan loads. `human_item`, from onepipeline 0.96.0, is an
-optional description of a human-attention item, and a node without one schedules as before. `assets_from`, from onepipeline 0.86.0, is the
+anything else is refused while the plan loads. `human_item`, from onepipeline 0.96.0, is a
+node's optional human-item description, and a node without one schedules exactly as before. `assets_from`, from onepipeline 0.86.0, is the
 qualified task an `add` or a `retry` replacement takes its held images from, and a node a
 plan loads never states it, as it never states `task_record`. `pool` and `overflow` arrived with
 onepipeline 0.40.0 and are the worktree pool's half of the schema, copied onto the

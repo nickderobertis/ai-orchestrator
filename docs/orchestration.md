@@ -211,11 +211,11 @@ document, never vote, so a task naming no repository never decides the home; the
   of its routed source, a record a reader still meets on a board.
 - **With the boundary on, as it is here, a plan naming any private repository is private.** Its
   home holds the whole plan canonically — every task, the export edge, its description and
-  its design document — in the private source its private tasks route to, the organization's
-  Linear source or private board the host declares. A task owns its classification, so one
-  naming only public repositories stays public inside that private plan, with nothing set on
-  the plan, and is seen on `plans` only as the store's neutral **view** of it, filed under a
-  project titled `Public work`: its own screened title, task and status, mirrored from the
+  its design document — in the private source its private tasks route to, the private source
+  the host declares: a Linear team or a private GitHub Projects board. A task owns its
+  classification, so one naming only public repositories stays public inside that private
+  plan, with nothing set on the plan, and is seen on `plans` only as the store's neutral
+  **view** of it either way, filed under a project titled `Public work`: its own screened title, task and status, mirrored from the
   canonical task, with no private dependency, backlink, member list or name of the plan. The
   private home alone records which view is which task's, and the engine runs and writes back
   the canonical tasks, never a view. A copy that would put any of the private plan's content
@@ -223,7 +223,14 @@ document, never vote, so a task naming no repository never decides the home; the
   is refused before anything is written, so nothing reaches `plans` naming the private plan.
   A public task's budgets travel on its view, because `templates/plan-task-budgets.md.j2`
   renders each under a plain Markdown heading and no raw HTML. onetaskgraph's README, under
-  *Public projections of a private plan*, is the authority on the views.
+  *Public projections of a private plan*, is the authority on the views. On a private GitHub
+  Projects board the canonical public task's issue is created in the repository of the project
+  issue it is filed under — a private one — while its item still names its public repository,
+  because the store reads the board's `public` field and each named repository's visibility,
+  once per store invocation and before that invocation's first write, and creates no issue a
+  public repository would expose; an existing issue is never moved.
+  `tests/plan_tooling/plan_flow/test_private_github_home_e2e.py` drives that copy, its re-copy,
+  its approval and the refusal of the same task with its route removed, over synthetic names.
 - **Such a plan is approved and launched where it lives**: `just approve-design
   <source>:<project>` records the approval on its private design document, and `just orchestrate
   <source>:<project>` runs the canonical graph as one run, each settlement written back to its
