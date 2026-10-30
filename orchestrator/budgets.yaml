@@ -20,7 +20,16 @@ budgets:
     command: ["uv", "run", "--directory", "..", "python", "-m", "tests.budget_telemetry"]
     unit: points
     direction: max
-    threshold: 160
+    # Raised from 160 when every follow-up command began asking the store's `task locate`
+    # where a ticket lands: locate follows the store's link with one read by id but answers no
+    # item status, priority, record or comments, so `board-status` and the dispositions check
+    # each read the located item once more per ticket than the retired binding's one read, and
+    # the check asks the origin query once for each ticket never copied. Every copy but a
+    # withdrawal then keeps the board's status under the store's `preserve-destination`
+    # policy, so it no longer steers by what its `board-status` decided: its one locate is the
+    # full one, and the store's own counterpart verification on the copy reads the item again.
+    # The planned store change returning the located item retires that read. Measured at 184.
+    threshold: 185
   - id: comment-answer-pass-points
     description: >-
       Modelled GitHub GraphQL points one realistic comment-answer pass, the
@@ -42,7 +51,11 @@ budgets:
     command: ["uv", "run", "--directory", "..", "python", "-m", "tests.budget_telemetry"]
     unit: points
     direction: max
-    threshold: 23
+    # Raised from 23 when every copy but a withdrawal began keeping the board's status under the
+    # store's `preserve-destination` policy: its one locate is the full one, followed by the
+    # store's own counterpart verification on the copy, so filing and re-copy each read once
+    # more. The planned store change returning the located item retires that read. Measured at 25.
+    threshold: 25
   - id: lost-turn-surface-chars
     description: >-
       Characters of the planner surface a lost monitor turn raises, the largest the journeys

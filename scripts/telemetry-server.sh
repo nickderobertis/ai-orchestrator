@@ -135,12 +135,8 @@ if [ "$bound" -eq 0 ]; then
 fi
 
 # The read API `bun.lock` installs from npmjs.com, at the release
-# `config/onepipeline-ui.version` pins, by absolute path: the platform package's binary,
-# never the npm launcher, for the reason `scripts/npm-binary.sh` gives.
-# shellcheck source=scripts/npm-binary.sh
-# llmlint: ignore[boundary_inputs_validated, robust_shell, tool_output_is_signal] A tracked sibling is a checkout invariant, not an input at a trust boundary: one that is missing or will not load is a broken checkout, and the shell says so on the line it fails the source at.
-. "$script_dir/npm-binary.sh"
-api=$(npm_binary onepipeline-api-cli onepipeline-api) || exit 2
+# `config/onepipeline-ui.version` pins, through its installed command.
+api="${script_dir%/scripts}/node_modules/.bin/onepipeline-api"
 if [ ! -x "$api" ]; then
     echo "telemetry-server: this checkout has no executable read API at $api; run 'just bootstrap' to install the pinned releases from bun.lock, then retry" >&2
     exit 2

@@ -132,7 +132,7 @@ ONEVCS = ("uv", "run", "onevcs")
 #: from npmjs.com carries for this host.
 ENGINE = npm_installs.ENGINE
 #: How the recipes reach the read API, which is the view half's own artifact: the
-#: platform binary `scripts/telemetry-server.sh` execs, so this measures the copy an
+#: installed command `scripts/telemetry-server.sh` execs, so this measures the copy an
 #: operator would serve rather than whatever else is on PATH.
 READ_API = (str(npm_installs.READ_API),)
 
@@ -585,7 +585,7 @@ def test_the_engine_a_dispatch_runs_links_an_onevcs_that_can_resolve_a_release()
     # `strings | grep`; and `tests/session_setup_pypi/test_linked_engine_reconciliation_e2e.py` —
     # whose expression this reuses rather than restates — reads them the same way.
     # llmlint: ignore[tests_mirror_real_usage] The binary is the only thing that answers.
-    found = LINKED_IN_BINARY.findall(ENGINE.resolve().read_bytes())
+    found = LINKED_IN_BINARY.findall(npm_installs.platform_binary().read_bytes())
     linked = {crate.decode(): version.decode() for crate, version in found}
     carried = linked.get("onevcs")
     assert carried is not None, "the engine binary carries no onevcs registry path"

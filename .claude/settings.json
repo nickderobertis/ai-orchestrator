@@ -19,7 +19,7 @@
       {
         "hooks": [
           {
-            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/npm-binary.sh\" onepipeline-cli onepipeline stop-guard --wake-budget 2100 --format claude-code --unpublished --unpublished-acknowledgements \"${XDG_STATE_HOME:-$HOME/.local/state}/ai-orchestrator/stop-unfinished/acknowledged\" --unpublished-pr-author-graph \"$CLAUDE_PROJECT_DIR/graphs/pr-author.yaml\"",
+            "command": "\"$CLAUDE_PROJECT_DIR/node_modules/.bin/onepipeline\" stop-guard --wake-budget 2100 --format claude-code --unpublished --unpublished-acknowledgements \"${XDG_STATE_HOME:-$HOME/.local/state}/ai-orchestrator/stop-unfinished/acknowledged\" --unpublished-pr-author-graph \"$CLAUDE_PROJECT_DIR/graphs/pr-author.yaml\"",
             "timeout": 30,
             "type": "command"
           }

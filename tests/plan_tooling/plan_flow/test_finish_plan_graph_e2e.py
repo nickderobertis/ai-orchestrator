@@ -10,7 +10,7 @@ copied. A document that parts from the graph is refused with the document-refuse
 naming the first difference, and nothing reaches the destination.
 
 The journeys run in a copy of this checkout, because the wrapper runs the engine at its
-checkout's own platform binary, the one `orchestrator.npm_installs` resolves. Everything there
+checkout's own installed command, the one `orchestrator.npm_installs` resolves. Everything there
 is real — `scripts/finish-plan.sh`, the review turn's recipe, the check, the graph verb,
 mermaid-cli and Chromium, the store at both ends, the template, the row module and `just
 approve-design` — except two seams. **The engine's `start` is doubled**, by
@@ -128,7 +128,7 @@ def _checkout(tmp_path: Path) -> Copy:
     """A copy of this checkout whose engine doubles `start` and whose store is wrapped.
 
     The engine wrapper hands every call to the stand-in, which hands every verb but `start`
-    to the real platform binary; `just check-plan` reads the roles a
+    to the real installed command; `just check-plan` reads the roles a
     persona name resolves to out of that binary's own bytes.
     """
     checkout = tmp_path / "checkout"

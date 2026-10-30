@@ -36,6 +36,7 @@ from waits import timeout as e2e_timeout
 
 from orchestrator import follow_up_comments as comments
 from orchestrator import follow_up_tickets as tickets
+from orchestrator import plan_store
 from orchestrator.plan_store import WRITABLE_PLUGIN
 from orchestrator.root import REPO_ROOT
 
@@ -154,8 +155,8 @@ def _filed(bench: Bench, run: str) -> str:
         assert done.returncode == 0, done.stdout + done.stderr
     items = _store(bench, "task", "show", tickets.qualified_id(run, CAUSE))["items"]
     assert isinstance(items, list), items
-    record = items[0]["item"]["metadata"][tickets.KEY]
-    return f"{BOARD}:{record[tickets.BINDING_FIELD]}"
+    # The store records its link to the item its copy created on the ticket.
+    return str(items[0]["item"]["metadata"][plan_store.COPIES_KEY][BOARD])
 
 
 def _reply(bench: Bench, run: str, issue: str, answers: str) -> str:

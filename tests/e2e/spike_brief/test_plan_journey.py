@@ -46,7 +46,7 @@ pytestmark = [
 
 def _checkout_engine(environment: dict[str, str]) -> Path:
     """The engine the fixture checkout holds, where its own callers resolve it."""
-    return npm_installs.platform_binary(
+    return npm_installs.installed_command(
         node_modules=Path(environment["BRIEF_CHECKOUT"]) / "node_modules"
     )
 

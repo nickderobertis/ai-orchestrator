@@ -452,8 +452,8 @@ def prior_binary(tmp_path_factory: pytest.TempPathFactory) -> str:
     assert installed.returncode == 0, (
         f"onepipeline-cli@{PRIOR_RELEASE} did not install:\n{installed.stdout}\n{installed.stderr}"
     )
-    # The platform package's binary, as every caller here runs the engine, never the launcher.
-    binary = npm_installs.platform_binary(node_modules=environment / "node_modules")
+    # Use the package's installed command, as every engine caller here does.
+    binary = npm_installs.installed_command(node_modules=environment / "node_modules")
     reported = subprocess.run(
         [str(binary), "--version"],
         text=True,

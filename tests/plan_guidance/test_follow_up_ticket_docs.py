@@ -148,17 +148,26 @@ def test_each_follow_up_section_describes_the_host_and_the_proposal(
 def test_each_follow_up_section_files_a_tickets_issue_where_the_store_files_its_repositories(
     document: str, heading: str
 ) -> None:
-    """Each section says where a ticket's issue is created, for one repository and for several."""
+    """Each section says the store's `task locate` answers where a ticket's issue is created,
+    for one repository and for several, and that it must be under the owner its board files
+    under."""
     flat = " ".join(section(document, heading).split())
 
     for described in (
         "lists every repository its fix changes",
-        "under the board's owner",
-        "as an item of the one board",
-        "in the board's configured repository",
-        "routed only when every repository it lists matches",
+        "the store places it by them, their visibility included",
+        "`task locate`",
+        "the one repository it lists, or for several the destination's configured repository"
+        if document == "AGENTS.md"
+        else "the one it lists, or for several the destination's configured one",
+        "under the owner",
+        "an owner's private work on a board declared private",
     ):
         assert described in flat, f"{document}'s section {heading!r} does not say {described!r}"
+    for retired in ("routed only when every repository it lists matches", "`sources route"):
+        if retired == "`sources route" and document == "docs/orchestration.md":
+            continue
+        assert retired not in flat, f"{document}'s section {heading!r} still says {retired!r}"
     assert "board's own repository" not in flat, (
         f"{document}'s section {heading!r} still says a ticket is filed in the board's own "
         "repository"
@@ -361,17 +370,28 @@ def test_the_manager_document_says_accepted_means_todo_and_names_the_command() -
         "written seconds ago — and one naming none is refused; nothing in the task lists the "
         "board",
         "reads the accepted tickets its searches for a ticket returned for other root causes",
-        "The store records its own link to that item and follows it on the next copy, so no "
-        f"copy searches the board, and `{tickets.BINDING_FIELD}` is held to that link",
-        "**A ticket is copied onto the board item it is bound to, and nowhere else.** Its "
-        f"record's `{tickets.BINDING_FIELD}` key holds that item's native id, and `python -m "
-        "orchestrator.follow_up_tickets board-status` and its `copy` are what write it",
-        f"finds two items carrying its `{tickets.ORIGIN_KEY}`, binds the run's own open "
-        "item and leaves each withdrawn duplicate a comment naming that item",
-        "Both refuse, naming both ids, a link, or a destination the store reports, that differs "
-        "from the binding, and every copy the task prescribes goes through `copy`",
+        "**A ticket is copied onto the item the store places it on, and nowhere else.** Where it "
+        "lands, which item is its own and where its issue is created are the store's `task "
+        "locate` answers, which every follow-up command asks once per ticket; nothing on the "
+        "ticket binds it.",
+        "which refuses a copy landing anywhere but that item or a new one: a bare `task copy` "
+        "updates whichever carrier the store lists first",
+        f"**A record from before schema {tickets.BINDING_RETIRED_AT} may still carry "
+        f"`{tickets.BINDING_FIELD}`**: leave it as it stands, since the store reads that item "
+        "until the ticket's next `copy` brings the record forward without it; a "
+        f"schema-{tickets.SCHEMA} record carrying it is refused.",
+        "asks with `--ticket <its path>`, which searches the destination the store's `task "
+        "locate --no-counterpart` answers for that record",
+        "Its issue is created where the store's `task locate` answers it creates one",
     ):
         assert said in flat, said
+    for retired in (
+        "`board-items --repository`",
+        "ticket_board",
+        f"`{tickets.BINDING_FIELD}` key holds",
+        "binds the run's own open item",
+    ):
+        assert retired not in flat, retired
 
 
 @pytest.mark.parametrize(("document", "heading"), SECTIONS.items())
@@ -379,7 +399,7 @@ def test_follow_up_prose_keeps_only_qualifying_related_work_before_evidence(
     document: str, heading: str
 ) -> None:
     prose = " ".join(section(document, heading).split()).lower()
-    assert tickets.SCHEMA == 12 and tickets.PLAIN_AT == 11
+    assert tickets.SCHEMA == 13 and tickets.PLAIN_AT == 11
     assert "`## duplicate search`" not in prose
     assert "optional `## related tickets` directly before" in prose
     for required in (

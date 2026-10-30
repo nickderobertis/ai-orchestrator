@@ -1512,7 +1512,7 @@ def _a_checkout_of_its_own(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
     # `scripts/plan.sh` takes its interpreter from the tree it runs in and falls back to
     # whatever `python3` is on PATH, which need not be the pinned one.
     (checkout / ".venv").symlink_to(REPO_ROOT / ".venv", target_is_directory=True)
-    # The engine the launch runs is the platform binary `bun.lock` installed under the
+    # The engine the launch runs is the installed command `bun.lock` installed under the
     # tree's own `node_modules`; nothing here doubles it, so this checkout's install serves.
     (checkout / "node_modules").symlink_to(REPO_ROOT / "node_modules", target_is_directory=True)
     # Each source's own configured root, under the copy: read from the store rather than

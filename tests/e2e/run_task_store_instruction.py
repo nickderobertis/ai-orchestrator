@@ -74,7 +74,7 @@ def instruction(
     run: str | None = None,
     board: str | None = None,
     search: str | None = None,
-    repository: str | None = None,
+    ticket: str | None = None,
 ) -> str | None:
     """A query the task spells, as it spells it: ``run``'s drafts, or one of the board's searches.
 
@@ -85,12 +85,12 @@ def instruction(
     alike. The board search is the task's other spelled argv, through the module's own
     `board-items` command, which reads every page the store answers: with ``search``, the
     duplicate search by text, whose `<text>` the task leaves to the agent — the invariant's
-    words first, the failing file last — this fills it in, and the ticket's ``repository``
-    that names the board the search asks. Running it as spelled is how a journey reads what
-    that step selects.
+    words first, the failing file last — this fills it in, and the path of the ``ticket``
+    record whose placement names the board the search asks. Running it as spelled is how a
+    journey reads what that step selects.
     """
     named = re.escape(board or "")
-    routed = re.escape(" --repository <each repository the ticket lists>")
+    routed = re.escape(" --ticket <path of the ticket>")
     if run is not None:
         found = re.search(
             rf"`([^`\n]*?task list --source drafts --project {re.escape(run)} --json)`", task
@@ -99,13 +99,13 @@ def instruction(
         found = re.search(
             rf"`([^`\n]*?board-items --board {named}){routed}( --search) <text>`", task
         )
-        return f"{_routed(found, repository)} {shlex.quote(str(search))}" if found else None
+        return f"{_routed(found, ticket)} {shlex.quote(str(search))}" if found else None
     return found[1] if found else None
 
 
-def _routed(found: re.Match[str], repository: str | None) -> str:
-    """A spelled search with the ticket's repository filled in where the task leaves it."""
-    return f"{found[1]} --repository {shlex.quote(str(repository))}{found[2]}"
+def _routed(found: re.Match[str], ticket: str | None) -> str:
+    """A spelled search with the ticket record's path filled in where the task leaves it."""
+    return f"{found[1]} --ticket {shlex.quote(str(ticket))}{found[2]}"
 
 
 def _paged(
@@ -157,7 +157,7 @@ def main() -> int:
     which.add_argument("--board", help="run this board's duplicate search")
     parsed.add_argument("--search", help="with --board: run the board's search for this text")
     parsed.add_argument(
-        "--repository", help="with --board: the ticket's repository, naming the board asked"
+        "--ticket", help="with --board: the ticket record's path, whose placement names the board"
     )
     parsed.add_argument("--checkout", type=Path, required=True)
     parsed.add_argument("--witness", type=Path, required=True)
@@ -182,7 +182,7 @@ def main() -> int:
             run=arguments.run,
             board=arguments.board,
             search=arguments.search,
-            repository=arguments.repository,
+            ticket=arguments.ticket,
         )
         if prompts
         else None
@@ -195,7 +195,7 @@ def main() -> int:
         else:
             wanted = (
                 f"<board-items> --board {arguments.board} "
-                "--repository <each repository the ticket lists> "
+                "--ticket <path of the ticket> "
                 "--search <text>"
             )
         record = _unanswered(f"the task names no `{wanted}` instruction")

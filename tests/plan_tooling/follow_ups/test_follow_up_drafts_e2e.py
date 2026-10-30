@@ -34,7 +34,7 @@ import plan_store_cache
 import plan_store_user_layer
 import pytest
 from onetaskgraph_sdk import TaskDetail
-from published_tools import LOCKED_INSTALLS_PATH, ONETASKGRAPH_BIN
+from published_tools import LOCKED_INSTALLS_PATH, ONETASKGRAPH_BIN, interpreter_directory
 
 from orchestrator import follow_up_drafts as drafts
 from orchestrator import plan_store
@@ -194,8 +194,13 @@ def _draft(
 
 
 def _drafting(tmp_path: Path, **stated: str) -> dict[str, str]:
-    """The environment of a dispatch that can draft: a root, a run, and a runs root."""
+    """The environment of a dispatch that can draft: a root, a run, and a runs root.
+
+    Its search path holds the `node` the engine's npm launcher names on its `#!` line, as a
+    dispatch's does, because drafting reads a run through the engine.
+    """
     return {
+        "PATH": _path(str(interpreter_directory(tmp_path))),
         follow_up_variables.root_name(): str(tmp_path / "drafts"),
         drafts.RUN_ID_ENV: "journey-run",
         drafts.RUNS_ROOT_ENV: str(tmp_path / "runs"),
@@ -409,7 +414,7 @@ def test_a_member_drafts_transcript_reads_that_members_turns_off_the_installed_e
     read = subprocess.run(  # noqa: S603 - the stored read, run as a reader runs it
         ["bash", "-c", draft.transcript],  # noqa: S607
         cwd=tmp_path,
-        env=_environment(**{drafts.RUNS_ROOT_ENV: str(runs)}),
+        env=_environment(PATH=stated["PATH"], **{drafts.RUNS_ROOT_ENV: str(runs)}),
         text=True,
         capture_output=True,
         check=False,
@@ -761,11 +766,11 @@ def test_a_checkout_that_cannot_run_the_command_says_how_to_provision_it(
         [str(command), "--title", TITLE, "--repository", REPOSITORY],
         cwd=tmp_path,
         env={
-            "PATH": path,
             "HOME": str(Path.home()),
             **plan_store_cache.handed(),
             **plan_store_user_layer.handed(),
             **_drafting(tmp_path),
+            "PATH": path,
         },
         input=BODY,
         text=True,

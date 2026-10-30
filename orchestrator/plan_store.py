@@ -22,6 +22,10 @@ from onetaskgraph_sdk import (
     QueryResponseOfQualifiedTask,
     QueryResponseOfSearchHit,
 )
+
+# `task locate`'s per-task answer, unexported beside its `LocateReport` root for the reason
+# `QualifiedTask` is, and retired by the same follow-up as that model.
+from onetaskgraph_sdk._generated.locate_report import Located
 from onetaskgraph_sdk._generated.query_response_of_qualified_task import QualifiedTask
 
 from orchestrator.project_store import (
@@ -594,25 +598,63 @@ def declared_private(source: str) -> bool:
     return configured_settings().get(f"sources.{source}.visibility") == "private"
 
 
-def routed_sources(source: str) -> tuple[str, ...]:
-    """The sources ``source``'s `routes` send an item to, in the order its entries name them.
+def reachable(source: str) -> tuple[str, ...]:
+    """Every source an item written to ``source`` could land in: the store's own answer.
 
-    Read off the store's own resolution of every layer, which prints a document's list as
-    one setting and an environment or flag layer's entries one setting per field: a plan
-    copied into ``source`` may have its home in any of these, and in no other.
+    `sources route`'s `reachable`, which reads configuration alone: ``source`` itself first,
+    then each source its routes name as `to`, each once, whatever an item's repositories and
+    classification — the set a routed copy reads ahead from, so a plan copied into ``source``
+    may have its home in any of these and in no other, and a follow-up ticket filed through
+    ``source`` lands on one of them.
     """
-    values = configured_settings()
-    listed = values.get(f"sources.{source}.routes")
-    entries = listed if isinstance(listed, list) else []
-    named = [entry.get("to") for entry in entries if isinstance(entry, dict)]
-    field = re.compile(rf"sources\.{re.escape(source)}\.routes\.(\d+)\.to")
-    indexed = sorted(
-        (int(matched.group(1)), value)
-        for key, value in values.items()
-        if (matched := field.fullmatch(key)) is not None
-    )
-    named.extend(value for _, value in indexed)
-    return tuple(dict.fromkeys(to for to in named if isinstance(to, str) and to))
+    return tuple(name.root for name in sdk(client().sources_route(source)).reachable)
+
+
+#: The refusals `task locate --target-native` answers for an item that is gone, or that no
+#: longer carries the task's origin — `task copy --target-task`'s own error kinds.
+TARGET_REFUSALS = frozenset({"target-task-missing", "target-task-origin"})
+
+
+class TargetRefused(OSError):
+    """`task locate --target-native` refused the item it was named, as gone or not the task's."""
+
+
+def task_locate(
+    task: str, to: str, *, counterpart: bool = True, target_native: str | None = None
+) -> Located:
+    """Where `task copy --to <to>` would put ``task``: the store's `task locate`, writing nothing.
+
+    The store reads the task, classifies it as a write does and places it through the copy's
+    own placement path, answering its destination, its counterpart there by the copy's own
+    lookup, every item carrying its origin, and the repository a create would file it in.
+    ``counterpart`` false is `--no-counterpart`, which makes no lookup at the destination;
+    ``target_native`` is `--target-native`, the counterpart the caller already knows, read by
+    id and verified by its origin naming the task back. :class:`TargetRefused` when the store
+    refuses that item as gone or not carrying the task's origin, and :class:`OSError` for every
+    other refusal.
+    """
+    try:
+        answer = asyncio.run(
+            client().task_locate(
+                [task],
+                to=to,
+                no_counterpart=None if counterpart else True,
+                target_native=target_native,
+            )
+        )
+    except OnetaskgraphError as exc:
+        kind = None if exc.failure is None else exc.failure.kind
+        if target_native is not None and kind in TARGET_REFUSALS:
+            raise TargetRefused(str(exc)) from exc
+        raise OSError(str(exc)) from exc
+    # llmlint: ignore-block[changed_behavior_has_e2e] A trust-boundary guard no conforming store
+    # reaches: `task locate` answers one entry per id named, in order, so a real store cannot be
+    # made to answer another count or task; `tests/test_plan_store_sdk.py` drives the refusal
+    # over the SDK's own typed `LocateReport`, substituting only the answer.
+    if len(answer.items) != 1 or answer.items[0].source.root != task:
+        raise OSError(f"task locate for {task!r} answered {len(answer.items)} other items")
+    # llmlint: ignore-end[changed_behavior_has_e2e]
+    return answer.items[0]
 
 
 def source_root(source: str) -> Path:

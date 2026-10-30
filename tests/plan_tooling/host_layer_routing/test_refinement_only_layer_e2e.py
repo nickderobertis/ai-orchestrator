@@ -60,16 +60,15 @@ def test_the_example_layer_refines_each_tracked_board_with_its_routes_alone() ->
             "repositories": ["github.com/hiddenco/*"],
             "to": f"hiddenco-{board}",
         }
-        expected = [organization]
-        if board == "plans":
-            expected.insert(
-                0,
-                {
-                    "repositories": ["github.com/sample-owner/*"],
-                    "classification": "private",
-                    "to": "private-plans",
-                },
-            )
+        # The mixed owner's private work, ahead of the organization's, on both boards.
+        expected = [
+            {
+                "repositories": ["github.com/sample-owner/*"],
+                "classification": "private",
+                "to": f"private-{board}",
+            },
+            organization,
+        ]
         assert sources[board]["routes"] == expected
 
 

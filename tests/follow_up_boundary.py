@@ -38,6 +38,8 @@ PUBLIC_IDENTITIES = (
     "github.com/nickderobertis/oneharness",
     "github.com/nickderobertis/somewhere-else",
     "github.com/nickderobertis-fork/some-service",
+    # A third party's public repository, whose ticket is refused as outside the owner.
+    "github.com/contoso/work",
     "github.com/o/s",
     "github.com/o/some-service",
     "github.com/o/other",

@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
+import subprocess
+from functools import cache
 from pathlib import Path
 from typing import Literal, NamedTuple
 
@@ -94,6 +97,42 @@ ENGINE_BIN = REPO_ROOT / "node_modules" / ".bin" / "onepipeline"
 LOCKED_INSTALLS_PATH = os.pathsep.join(
     (str(REPO_ROOT / ".venv" / "bin"), str(npm_installs.ENGINE.parent))
 )
+
+
+@cache
+def node_interpreter() -> Path:
+    """The `node` executable this suite's own search path resolves, symlinks and shims followed.
+
+    Asked of node itself, so an asdf shim or a symlink answers with the interpreter it runs.
+    """
+    found = shutil.which("node")
+    if found is None:
+        pytest.fail(
+            "no `node` is on this suite's PATH, and the engine and read API commands "
+            "`bun.lock` installs are launchers node runs"
+        )
+    answered = subprocess.run(  # noqa: S603 - the node the suite's own PATH resolves
+        [found, "-p", "process.execPath"], capture_output=True, text=True, check=True
+    )
+    return Path(answered.stdout.strip())
+
+
+def interpreter_directory(root: Path) -> Path:
+    """A directory under ``root`` holding the `node` interpreter and nothing else.
+
+    `node_modules/.bin/onepipeline` and `onepipeline-api` name `node` on their
+    `#!/usr/bin/env node` line, then replace themselves with the platform binary, so a
+    journey that narrows PATH to leave a tool out keeps this directory on it — never the
+    directory node is installed in, which holds other tools such a journey may be leaving
+    out.
+    """
+    directory = root / "interpreter"
+    directory.mkdir(parents=True, exist_ok=True)
+    node = directory / "node"
+    if not node.exists():
+        node.symlink_to(node_interpreter())
+    return directory
+
 
 #: Where this checkout's own provisioning installs the standalone `onetaskgraph` CLI,
 #: and the one place the suite reads it from. It is per checkout rather than a

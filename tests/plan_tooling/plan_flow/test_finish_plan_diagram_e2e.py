@@ -7,7 +7,7 @@ holds the writer to every referenced image being an asset of the document, and h
 the brief's Why as source material to restate as impact rather than as what somebody wants.
 
 The journey runs in a copy of this checkout, because the wrapper runs the engine at its
-checkout's own platform binary, the one `orchestrator.npm_installs` resolves, and nowhere
+checkout's own installed command, the one `orchestrator.npm_installs` resolves, and nowhere
 else. Everything there is real: the
 real `scripts/finish-plan.sh`, review turn, check, copy and report, the real plan store at
 both ends, the pinned engine's templates and checks, and the real `just render-diagram`
@@ -115,7 +115,7 @@ def _checkout(tmp_path: Path) -> Copy:
 
 
     The wrapper hands every call to the stand-in, which hands every verb but `start` to the
-    real platform binary; `just check-plan` reads the roles a persona name
+    real installed command; `just check-plan` reads the roles a persona name
     resolves to out of that binary's own bytes.
     """
     checkout = tmp_path / "checkout"

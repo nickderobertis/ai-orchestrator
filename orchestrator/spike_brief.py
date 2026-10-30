@@ -137,9 +137,7 @@ def validate(value: object) -> Receipt:
         if board_source != "plans":
             from orchestrator import plan_store
 
-            if board_source == "authoring" or board_source not in plan_store.routed_sources(
-                "plans"
-            ):
+            if board_source == "authoring" or board_source not in plan_store.reachable("plans"):
                 raise ValueError("board_project must belong to plans or one of its routed sources")
     for field in ("parent_run", "spikes_run", "writer_run"):
         matched(value[field], field, RUN_ID)

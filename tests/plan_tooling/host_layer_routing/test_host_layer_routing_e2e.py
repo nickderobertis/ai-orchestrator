@@ -21,7 +21,14 @@ and the pinned `onevcs`, answering from a registry this module writes through `o
   in that tracker, its public task alone reaching the board and nothing private with it;
   private work under an unmatched owner is refused at the board; the mixed owner's private
   work routes to private-plans while its public work stays public; and
-  a public-only plan copies onto `plans` exactly as before.
+  a public-only plan copies onto `plans` exactly as before;
+* **the follow-up commands**, `board-status`, `board-items --ticket` and `copy` as the
+  follow-up task has the agent run them: the mixed owner's private ticket is placed, searched
+  and copied on `private-followups` alone by `followups`' combined route, its public one on
+  `followups`, and the organization's on its own tracker; a ticket listing several
+  repositories is held to the repository the store's `task locate` answers it creates the
+  issue in, and created there; and a third party's is refused as outside the owner before
+  anything is written.
 
 GitHub's Projects API is the loopback board `tests/github_board.py` serves, and the
 organization's two Linear trackers and the host's private plans board are folders of Markdown
@@ -31,20 +38,34 @@ check may reach a live private board or Linear workspace.
 
 from __future__ import annotations
 
+import dataclasses
+import json
 import subprocess
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import NamedTuple
 
 import boundary_home
+import follow_up_variables
 import github_board
 import onetaskgraph_user_layer
 import pytest
 import yaml
-from github_board import BOARD, _plan_environment, _serving_board
+from github_board import (
+    BOARD,
+    CONFIGURED_PROJECT_NUMBER,
+    FOLLOWUPS_OPTIONS,
+    _follow_up_ticket,
+    _plan_environment,
+    _Repository,
+    _serving_board,
+    _written_ticket,
+)
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
 
+from orchestrator import follow_up_tickets as tickets
+from orchestrator.plan_store import WRITABLE_PLUGIN
 from orchestrator.project_store import PlanNode, write_plan_project
 from orchestrator.root import REPO_ROOT
 
@@ -56,6 +77,8 @@ ORGANIZATION = "github.com/hiddenco/qh-api"
 PERSONAL = "github.com/unrouted-owner/pebblecraft"
 OWNER_PRIVATE = "github.com/sample-owner/hidden-library"
 OWNER_PUBLIC = "github.com/sample-owner/public-library"
+#: A third party's public repository, outside every owner a board of the layer files under.
+THIRD_PARTY = "github.com/contoso/work"
 #: The term `onevcs boundary check` derives from that repository's registered name.
 PERSONAL_TERM = "pebblecraft"
 
@@ -78,6 +101,7 @@ class Layer(NamedTuple):
     environment: dict[str, str]
     authoring: Path
     folders: Mapping[str, Path]
+    drafts_root: Path
 
 
 @pytest.fixture
@@ -91,7 +115,7 @@ def layer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Layer]:
     )
     home = boundary_home.registered_home(
         tmp_path / "registry",
-        public=[PUBLIC, OWNER_PUBLIC],
+        public=[PUBLIC, OWNER_PUBLIC, THIRD_PARTY],
         private=[ORGANIZATION, PERSONAL, OWNER_PRIVATE],
     )
     folders = {
@@ -100,25 +124,32 @@ def layer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Layer]:
             onetaskgraph_user_layer.ORGANIZATION_PLANS,
             onetaskgraph_user_layer.ORGANIZATION_FOLLOWUPS,
             onetaskgraph_user_layer.PRIVATE_PLANS,
+            onetaskgraph_user_layer.PRIVATE_FOLLOWUPS,
             PUBLIC_STAND_IN,
             PRIVATE_STAND_IN,
         )
     }
+    # A follow-up ticket is copied carrying `backlog`, which the tracker reads as its own word.
     stood_in = {
-        name: onetaskgraph_user_layer.stand_in(name, folders[name], tmp_path)
+        name: onetaskgraph_user_layer.stand_in(
+            name, folders[name], tmp_path, copied=(tickets.Status.PROPOSED.value,)
+        )
         for name in (
             onetaskgraph_user_layer.ORGANIZATION_PLANS,
             onetaskgraph_user_layer.ORGANIZATION_FOLLOWUPS,
         )
     }
     document = onetaskgraph_user_layer.with_stand_ins(stood_in)
-    document["sources"].pop(onetaskgraph_user_layer.PRIVATE_FOLLOWUPS)
-    folders[onetaskgraph_user_layer.PRIVATE_PLANS].mkdir()
-    document["sources"][onetaskgraph_user_layer.PRIVATE_PLANS] = {
-        "plugin": "local-md",
-        "visibility": "private",
-        "config": {"root": str(folders[onetaskgraph_user_layer.PRIVATE_PLANS])},
-    }
+    for private in (
+        onetaskgraph_user_layer.PRIVATE_PLANS,
+        onetaskgraph_user_layer.PRIVATE_FOLLOWUPS,
+    ):
+        folders[private].mkdir()
+        document["sources"][private] = {
+            "plugin": "local-md",
+            "visibility": "private",
+            "config": {"root": str(folders[private])},
+        }
     for name, visibility in ((PUBLIC_STAND_IN, "public"), (PRIVATE_STAND_IN, "private")):
         folders[name].mkdir()
         document["sources"][name] = {
@@ -131,9 +162,15 @@ def layer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Layer]:
     authoring.mkdir()
     environment = boundary_home.environment(_plan_environment(authoring), home)
     environment[onetaskgraph_user_layer.XDG_CONFIG_HOME] = str(config_home)
-    with _serving_board() as remote:
+    drafts_root = tmp_path / "follow-ups"
+    environment[follow_up_variables.root_name()] = str(drafts_root)
+    environment[follow_up_variables.plugin_name()] = WRITABLE_PLUGIN
+    # The follow-up options beside the plans board's own, so one loopback serves both.
+    with _serving_board(options=FOLLOWUPS_OPTIONS) as remote:
         environment.update(remote)
-        yield Layer(environment=environment, authoring=authoring, folders=folders)
+        yield Layer(
+            environment=environment, authoring=authoring, folders=folders, drafts_root=drafts_root
+        )
 
 
 def _run(layer: Layer, command: list[str]) -> subprocess.CompletedProcess[str]:
@@ -519,6 +556,215 @@ def test_overlapping_routes_follow_kind_precedence_and_written_order(
     assert _held(layer.folders[PRIVATE_STAND_IN]) == ["tasks/overlapping/task-0.md"]
     assert _held(layer.folders[onetaskgraph_user_layer.PRIVATE_PLANS]) == []
     assert BOARD.created == []
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+#: The machine every follow-up fixture's ticket is verified on.
+HOST = "verifier-01.build.example"
+
+
+def _follow_ups(layer: Layer, *arguments: str) -> subprocess.CompletedProcess[str]:
+    """One follow-up command, as the follow-up task has the agent run it from this checkout."""
+    return _run(
+        layer,
+        [str(REPO_ROOT / ".venv" / "bin" / "python"), "-m", "orchestrator.follow_up_tickets"]
+        + list(arguments),
+    )
+
+
+def _owned_followups(layer: Layer) -> None:
+    """`followups` filed under the mixed owner, with its configured repository the owner's own.
+
+    The tracked board files under this repository's owner; a host doing the mixed owner's work
+    files under that owner, which is what makes its public repository a repository of the
+    board's owner. The loopback serves `followups` under the number it answers.
+    """
+    layer.environment["ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__OWNER"] = "sample-owner"
+    layer.environment["ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__REPOSITORY"] = (
+        "sample-owner/public-library"
+    )
+    layer.environment["ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__PROJECT_NUMBER"] = str(
+        CONFIGURED_PROJECT_NUMBER
+    )
+    layer.environment[
+        "ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__PACING__MIN_MUTATION_INTERVAL_MS"
+    ] = "0"
+    # Its fields set up the way the operator sets up the live board, which the copy refuses
+    # to write a priority without.
+    fields = _run(layer, ["just", "plans", "sources", "fields", "followups", "--apply"])
+    assert fields.returncode == 0, fields.stdout + fields.stderr
+
+
+def _ticket(layer: Layer, repository: str, cause: str) -> Path:
+    """A sound follow-up ticket about ``repository``, written under the layer's drafts root."""
+    owner, name = repository.removeprefix("github.com/").split("/")
+    return _written_ticket(
+        layer.drafts_root,
+        _follow_up_ticket(_Repository(owner, name), cause=cause, verified_on=HOST),
+    )
+
+
+def _filed(layer: Layer, ticket: Path) -> str:
+    """`board-status`, the word it prints written, then `copy`, as the task sequences them;
+    the destination the copy printed."""
+    decided = _follow_ups(layer, "board-status", "--board", "followups", str(ticket))
+    assert decided.returncode == 0, decided.stdout + decided.stderr
+    assert decided.stdout.strip() == tickets.Status.PROPOSED.value, decided.stdout
+    copied = _follow_ups(layer, "copy", "--board", "followups", str(ticket))
+    assert copied.returncode == 0, copied.stdout + copied.stderr
+    return str(json.loads(copied.stdout)["destination"])
+
+
+def _searched(layer: Layer, ticket: Path) -> list[str]:
+    """`board-items --ticket`, by the ticket's own origin: the ids it answered."""
+    run, cause = tickets.located_path(ticket)
+    found = _follow_ups(
+        layer,
+        "board-items",
+        "--board",
+        "followups",
+        "--ticket",
+        str(ticket),
+        "--origin",
+        tickets.qualified_id(run, cause),
+    )
+    assert found.returncode == 0, found.stdout + found.stderr
+    return [str(one["id"]) for one in json.loads(found.stdout)["items"]]
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The task that added these
+# follow-up journeys names this module as where `board-status`, `board-items --ticket` and `copy`
+# are driven over the example layer's combined `followups` route, which this module's fixture
+# installs; the project's one input set is the one the block above states, and the follow-up
+# commands they drive read no input outside it.
+def test_the_mixed_owners_private_ticket_is_placed_searched_and_copied_on_its_private_board(
+    layer: Layer,
+) -> None:
+    """`followups`' combined route sends the mixed owner's private ticket to private-followups.
+
+    The store's `task locate`, which every follow-up command asks first, places it there: its
+    search asks that board, its copy lands there and nowhere else, and its next search there
+    finds the item it created. Nothing reaches the public board.
+    """
+    _owned_followups(layer)
+    ticket = _ticket(layer, OWNER_PRIVATE, "hidden-library-drops-a-row")
+    private = layer.folders[onetaskgraph_user_layer.PRIVATE_FOLLOWUPS]
+
+    assert _searched(layer, ticket) == []
+    destination = _filed(layer, ticket)
+
+    assert destination.startswith(f"{onetaskgraph_user_layer.PRIVATE_FOLLOWUPS}:"), destination
+    assert _held(private) == [f"tasks/{destination.partition(':')[2]}.md"]
+    assert _searched(layer, ticket) == [destination]
+    assert BOARD.created == [], [issue.title for issue in BOARD.created]
+    assert "hidden-library" not in _board_text()
+    assert tickets.BINDING_FIELD not in ticket.read_text(encoding="utf-8")
+
+
+def test_the_mixed_owners_public_ticket_is_placed_and_copied_on_followups(layer: Layer) -> None:
+    """The owner's public repository matches no private route: the ticket lands on `followups`,
+    its issue created in that repository, and private-followups holds nothing."""
+    _owned_followups(layer)
+    ticket = _ticket(layer, OWNER_PUBLIC, "public-library-loses-a-tag")
+
+    destination = _filed(layer, ticket)
+
+    assert destination.startswith("followups:"), destination
+    (issue,) = BOARD.created
+    assert str(issue.repository) == OWNER_PUBLIC.removeprefix("github.com/")
+    assert _searched(layer, ticket) == [destination]
+    assert _held(layer.folders[onetaskgraph_user_layer.PRIVATE_FOLLOWUPS]) == []
+
+
+def test_the_all_private_organizations_ticket_still_reaches_its_own_tracker(layer: Layer) -> None:
+    """The organization's repository-only route still sends its ticket to its tracker."""
+    _owned_followups(layer)
+    ticket = _ticket(layer, ORGANIZATION, "intake-drops-a-field")
+    tracker = layer.folders[onetaskgraph_user_layer.ORGANIZATION_FOLLOWUPS]
+
+    destination = _filed(layer, ticket)
+
+    assert destination.startswith(f"{onetaskgraph_user_layer.ORGANIZATION_FOLLOWUPS}:")
+    assert _held(tracker) == [f"tasks/{destination.partition(':')[2]}.md"]
+    assert _searched(layer, ticket) == [destination]
+    assert BOARD.created == []
+    assert _held(layer.folders[onetaskgraph_user_layer.PRIVATE_FOLLOWUPS]) == []
+
+
+def test_a_ticket_listing_several_repositories_is_held_to_where_the_store_creates_its_issue(
+    layer: Layer,
+) -> None:
+    """`validate` holds the record's `repository` to the store's `creates_in`, and the issue is
+    created there: the board's configured repository, not either of those the ticket lists."""
+    _owned_followups(layer)
+    listed = (OWNER_PUBLIC, PUBLIC)
+    configured = "github.com/sample-owner/public-library"
+    spanning = dataclasses.replace(
+        _follow_up_ticket(
+            _Repository("sample-owner", "public-library"),
+            cause="two-libraries-disagree-on-a-tag",
+            verified_on=HOST,
+        ),
+        changes=tuple(tickets.Origin(one) for one in listed),
+        repository=tickets.Origin(PUBLIC),
+        title="ai-orchestrator: two libraries disagree on a tag",
+        basis=tuple(
+            sorted(tickets.Basis(tickets.Origin(one), tickets.Commit("0" * 40)) for one in listed)
+        ),
+    )
+    ticket = _written_ticket(layer.drafts_root, spanning)
+
+    refused = _follow_ups(layer, "validate", "--pending", str(ticket))
+    assert refused.returncode == tickets.UNSOUND, refused.stdout + refused.stderr
+    assert (
+        f"in {configured!r}, as its `task locate` answers for a ticket listing "
+        f"{OWNER_PUBLIC}, {PUBLIC}; its record's `repository` names {configured!r}, not "
+        f"{PUBLIC!r}"
+    ) in " ".join(refused.stderr.split()), refused.stderr
+
+    held_to = dataclasses.replace(
+        spanning,
+        repository=tickets.Origin(configured),
+        title="public-library: two libraries disagree on a tag",
+    )
+    _written_ticket(layer.drafts_root, held_to)
+    validated = _follow_ups(layer, "validate", "--pending", str(ticket))
+    assert validated.returncode == tickets.SOUND, validated.stdout + validated.stderr
+    destination = _filed(layer, ticket)
+
+    assert destination.startswith("followups:"), destination
+    (issue,) = BOARD.created
+    assert str(issue.repository) == configured.removeprefix("github.com/")
+
+
+def test_a_third_partys_ticket_is_refused_as_outside_the_owner_before_anything_is_written(
+    layer: Layer,
+) -> None:
+    """A third party's public repository is placed on `followups` and its issue would be
+    created in that repository, outside the owner `followups` files under: `board-status` and
+    `copy` each refuse it, and neither the ticket nor any board is written."""
+    _owned_followups(layer)
+    ticket = _ticket(layer, THIRD_PARTY, "work-drops-a-page")
+    before = ticket.read_text(encoding="utf-8")
+
+    refused = _follow_ups(layer, "board-status", "--board", "followups", str(ticket))
+    assert refused.returncode == tickets.OUTSIDE_OWNER, refused.stderr
+    assert (f"{THIRD_PARTY!r}, which is not a repository of the owner 'sample-owner'") in " ".join(
+        refused.stderr.split()
+    ), refused.stderr
+    # Its copy refuses too: `board-status` refused it before writing its estimate.
+    copied = _follow_ups(layer, "copy", "--board", "followups", str(ticket))
+    assert copied.returncode != tickets.SOUND, copied.stdout
+
+    assert ticket.read_text(encoding="utf-8") == before
+    assert BOARD.created == []
+    for name in (
+        onetaskgraph_user_layer.PRIVATE_FOLLOWUPS,
+        onetaskgraph_user_layer.ORGANIZATION_FOLLOWUPS,
+    ):
+        assert _held(layer.folders[name]) == [], name
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

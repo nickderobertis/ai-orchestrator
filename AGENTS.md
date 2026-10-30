@@ -416,6 +416,11 @@ moving any other one moves nothing a dispatch does — reading the wrong pin has
 a wrong diagnosis here twice, both times with every pin looking current while a real
 run came out empty.
 
+**Execution uses the installed npm commands.** Engine and read API callers run
+`node_modules/.bin/onepipeline` and `node_modules/.bin/onepipeline-api`; on Linux these
+become the native binary's own process. Platform package paths are for reading binary
+bytes and the SBOM only.
+
 **The installed binary decides, and measuring it is the answer.** The npm platform
 package `onepipeline-cli` installs through `bun.lock` ships a CycloneDX SBOM under its
 `sboms/` declaring one version per linked crate, and
@@ -1247,43 +1252,38 @@ takes.
 **The board is searched, never listed: every query of it is `python -m
 orchestrator.follow_up_tickets board-items`.** Reading every item of the board spends a share
 of GitHub's hourly allowance that grows with the board and that every session here shares,
-so an open bound ticket carrying its origin makes no duplicate or origin search, including
-on re-dispatch. An
-unbound ticket's `board-status` asks once by origin; the agent asks first by text in the
-invariant's words, then once per further distinct text question, the failing file last, and
-by root-cause slug only for a budget overrun, whose slug is derived — reusing answers already
-obtained in the dispatch. Each
-query names one of the store's native narrowing questions — by root cause, by origin,
-or GitHub's own token-matched issue search, which may not yet list an item written seconds
-ago — and one naming none is refused; nothing in the task lists the board. A bare `task
-list` answers one page and a cursor, so a search over it reads the board as smaller than it
-is.
+so a ticket the store already places on its item makes no duplicate or origin search,
+including on re-dispatch. A ticket with no item yet has its `board-status` ask the origin
+query once, and the agent asks with `--ticket <its path>`, which searches the destination the
+store's `task locate --no-counterpart` answers for that record — so an owner's private ticket
+is searched on the private board it lands on — first by text in the invariant's words, then
+once per further distinct text question, the failing file last, and by root-cause slug only
+for a budget overrun, whose slug is derived. Each query names one of the store's native
+narrowing questions — by root cause, by origin, or GitHub's own token-matched issue search,
+which may not yet list an item written seconds ago — and one naming none is refused; nothing
+in the task lists the board. A bare `task list` answers one page and a cursor, so a search
+over it reads the board as smaller than it is.
 
-**A ticket is copied onto the board item it is bound to, and nowhere else.** Its record's
-`board_item` key holds that item's native id, and
-`python -m orchestrator.follow_up_tickets board-status` and its `copy` are what write it —
-when the run creates its item or first reaches it. An unbound ticket whose origin query
-finds two items carrying its `onetaskgraph.origin`, binds the run's own open item and leaves
-each withdrawn duplicate a comment naming that item. The store records its own link to that item and
-follows it on the next copy, so no copy searches the board, and `board_item` is held to that
-link; a ticket bound to an item already on the board that the link does not name is steered
-by its own `onetaskgraph.origin` naming the item, which `board-status` writes. An open
-binding carrying the ticket is read directly. Closed, missing or mismatched items use
-origin discovery to recover; new evidence-only dispositions name `followups:<id>` in
-`detail` for a direct read, while older accounts naming no carrier retain metadata discovery. Both refuse, naming both ids, a link, or a destination the store reports, that differs
-from the binding, and every copy the task prescribes goes through `copy`: a bare `task copy`
-updates whichever carrier the store lists first.
+**A ticket is copied onto the item the store places it on, and nowhere else.** Where it
+lands, which item is its own and where its issue is created are the store's `task locate`
+answers, which every follow-up command asks once per ticket; nothing on the ticket binds it.
+Every copy the task prescribes goes through `python -m orchestrator.follow_up_tickets copy`,
+which refuses a copy landing anywhere but that item or a new one: a bare `task copy` updates
+whichever carrier the store lists first. **A record from before schema 13 may still carry
+`board_item`**: leave it as it stands, since the store reads that item until the ticket's
+next `copy` brings the record forward without it; a schema-13 record carrying it is refused.
 <!-- llmlint: ignore-end[instruction_layer_localized] -->
 
 <!-- llmlint: ignore-block[instruction_layer_localized] This paragraph is the manager's own loop rather than an `orchestrator/` implementation constraint: the manager reads it to know which board and repository a follow-up run files each ticket in, and so which links to relay and who accepts each item, and no nested instruction file is one the manager reads; `tests/plan_guidance/test_follow_up_ticket_docs.py` holds the commands it names to `orchestrator/follow_up_tickets.py`. -->
 **The `followups` board is the user's decision.** A ticket lists every repository its fix
-changes. One whose fix changes one repository has its issue created in it, which must be
-under the board's owner, as an item of the one board; a ticket naming a repository outside
-that owner is refused and reported, never filed — unless the board's route sends it
-elsewhere: a route the host declares in its user layer files an organization's root cause
-in that organization's own tracker, where its team triages it under the same contract. One listing several is filed as the store files a task naming
-several — in the board's configured repository, and routed only when every repository it
-lists matches the route. A ticket's record's `host` names the
+changes, and the store places it by them, their visibility included: routes the host declares
+in its user layer file an organization's root cause in that organization's own tracker, where
+its team triages it under the same contract, and an owner's private work on a board declared
+private. Its issue is created where the store's `task locate` answers it creates one — the
+one repository it lists, or for several the destination's configured repository — which its
+record's `repository` names; that repository must be under the owner the destination files
+under, and a ticket whose issue would be created outside it is refused and reported, never
+filed. A ticket's record's `host` names the
 machine its verification ran on, and its evidence states the same host. The `followups`
 source projects it onto the board's `Host` text field, which filters like a ticket's origin.
 That field is created through the plan-store verb, like every board field (see where a plan

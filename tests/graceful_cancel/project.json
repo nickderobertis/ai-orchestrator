@@ -55,7 +55,6 @@
       "{workspaceRoot}/scripts/launcher-session.sh",
       "{workspaceRoot}/scripts/lock-timeout.sh",
       "{workspaceRoot}/scripts/onepipeline.sh",
-      "{workspaceRoot}/scripts/npm-binary.sh",
       "{workspaceRoot}/scripts/plan-brief.sh",
       "{workspaceRoot}/scripts/plan-root-env.sh",
       "{workspaceRoot}/scripts/run-ended.sh",

@@ -15,7 +15,6 @@ from pathlib import Path
 
 from waits import timeout as e2e_timeout
 
-from orchestrator import npm_installs
 from orchestrator.root import REPO_ROOT
 
 
@@ -41,16 +40,8 @@ def checkout(destination: Path) -> Path:
             if key not in {"VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "UV_NO_SYNC"}
         },
     )
-    # The engine and the read API `bun.lock` installs from npmjs.com, as this checkout's own
-    # platform packages: the copy holds them where every caller resolves them.
-    for package, binary in (
-        ("onepipeline-cli", "onepipeline"),
-        ("onepipeline-api-cli", "onepipeline-api"),
-    ):
-        installed = npm_installs.platform_binary(package, binary).parent.parent
-        linked = destination / "node_modules" / installed.name
-        linked.parent.mkdir(parents=True, exist_ok=True)
-        linked.symlink_to(installed, target_is_directory=True)
+    # The command symlinks resolve through this checkout's published npm install.
+    (destination / "node_modules").symlink_to(REPO_ROOT / "node_modules", target_is_directory=True)
     installed_lint = shutil.which("llmlint")
     assert installed_lint is not None, "provision the published llmlint before this journey"
     shutil.copy2(installed_lint, destination / ".venv/bin/llmlint")

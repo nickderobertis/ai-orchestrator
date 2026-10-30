@@ -408,7 +408,8 @@ def _filed(
         assert done.returncode == 0, done.stdout + done.stderr
     record = _item(bench, tickets.qualified_id(run, cause))["metadata"]
     assert isinstance(record, dict), record
-    return QualifiedTaskId(f"{BOARD}:{record[tickets.KEY][tickets.BINDING_FIELD]}")
+    # The store records its link to the item its copy created on the ticket.
+    return QualifiedTaskId(str(record[plan_store.COPIES_KEY][BOARD]))
 
 
 def _reply(bench: Bench, run: str, issue: str, answers: str, cause: str) -> str:
@@ -1312,7 +1313,7 @@ def test_a_run_scoped_gathering_launches_only_that_run_and_leaves_the_watermark(
     assert life.urls[life.ids[LATER_B]] not in scoped.report
     assert life.watermark_after_scoped == life.watermark_after_again
     assert f"the gathering was scoped to run {runs['A']}'s comments" in scoped.report
-    # Each item run A's tickets are bound to, copied by id: the board is searched nowhere.
+    # Each item run A's tickets are placed on, copied by id: the board is searched nowhere.
     assert _searches(scoped) == []
     snapshot = scoped.snapshot
     assert snapshot is not None
@@ -1358,7 +1359,7 @@ def test_an_issue_scoped_dry_run_reads_and_selects_only_that_issue(life: Life) -
     assert snapshot is not None and [one.id for one in snapshot.items] == [own]
     assert "wrote run" not in issue_dry.report
     assert issue_dry.report.splitlines()[-2].endswith(
-        f"read 1 item(s) run {life.runs['A']}'s tickets are bound to, each directly, and listed "
+        f"read 1 item(s) run {life.runs['A']}'s tickets are placed on, each directly, and listed "
         "none"
     ), issue_dry.report
 

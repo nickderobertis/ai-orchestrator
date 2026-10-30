@@ -1027,7 +1027,7 @@ def test_a_plan_the_store_routed_across_sources_is_read_as_one_with_its_members(
     read = {task.node_id: task for task in plan_store.read_tasks(home)}
 
     assert home.startswith("home:"), home
-    assert plan_store.routed_sources("home") == ("member",)
+    assert plan_store.reachable("home") == ("home", "member")
     assert plan_store.members(home) == {f"member:{home.partition(':')[2]}"}
     assert {node: task.qualified_id.partition(":")[0] for node, task in read.items()} == {
         "library": "home",
@@ -1195,23 +1195,99 @@ def test_a_home_naming_its_members_in_any_other_shape_is_refused_by_name(
         plan_store.members("home:odd")
 
 
-def test_the_routes_of_a_source_are_read_in_every_shape_the_store_resolves_them(
+def test_a_sources_reachable_family_is_the_stores_own_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`sources route`'s `reachable`: the source first, then each route's target once, in order."""
+    for name in ("home", "member", "other"):
+        (tmp_path / name).mkdir()
+        _source(monkeypatch, name, tmp_path / name, "private" if name != "home" else None)
+    for index, (to, matched) in enumerate(
+        (("member", "github.com/a/*"), ("other", "github.com/b/*"), ("member", "github.com/c/*"))
+    ):
+        monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__HOME__ROUTES__{index}__TO", to)
+        monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__HOME__ROUTES__{index}__REPOSITORIES", matched)
+
+    assert plan_store.reachable("home") == ("home", "member", "other")
+    assert plan_store.reachable("other") == ("other",)
+    with pytest.raises(OSError, match="nowhere"):
+        plan_store.reachable("nowhere")
+
+
+def test_task_locate_answers_the_copys_placement_and_refuses_a_target_by_its_kind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The store's `task locate`, writing nothing: its counterpart, and `--target-native`.
+
+    A named item the store verifies is answered `target-task`; one gone, or one carrying
+    another task's origin, is :class:`plan_store.TargetRefused`, the store's own kinds for
+    them, while every other refusal stays a plain :class:`OSError`.
+    """
+    _routed_sources(monkeypatch, tmp_path, home="public")
+    home = _copied_home(
+        "located",
+        [
+            PlanNode(id="one", task="One task.", repo=HOME_REPOSITORY),
+            PlanNode(id="two", task="Another task.", repo=HOME_REPOSITORY),
+        ],
+        tmp_path,
+    )
+    copies = {task.node_id: str(task.qualified_id) for task in plan_store.read_tasks(home)}
+    drafted = {
+        task.node_id: str(task.qualified_id) for task in plan_store.read_tasks("draft:located")
+    }
+    source = drafted["one"]
+    before = sorted((tmp_path / "home").rglob("*.md"))
+
+    found = plan_store.task_locate(source, "home")
+    assert found.destination.root == "home"
+    assert found.counterpart is not None and found.counterpart.id.root == copies["one"]
+    bare = plan_store.task_locate(source, "home", counterpart=False)
+    assert (bare.destination.root, bare.counterpart, bare.carriers) == ("home", None, None)
+    named = plan_store.task_locate(source, "home", target_native=copies["one"].partition(":")[2])
+    assert named.counterpart is not None
+    assert (named.counterpart.id.root, str(named.counterpart.via)) == (
+        copies["one"],
+        "target-task",
+    )
+    with pytest.raises(plan_store.TargetRefused, match="does not exist"):
+        plan_store.task_locate(source, "home", target_native="not-on-the-board")
+    with pytest.raises(plan_store.TargetRefused, match="has no origin naming"):
+        plan_store.task_locate(source, "home", target_native=copies["two"].partition(":")[2])
+    assert sorted((tmp_path / "home").rglob("*.md")) == before, "locating wrote to the board"
+    with pytest.raises(OSError) as unconfigured:
+        plan_store.task_locate(source, "nowhere")
+    assert not isinstance(unconfigured.value, plan_store.TargetRefused)
+
+
+def test_task_locate_refuses_an_answer_about_another_task_or_count(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A document's list and an environment layer's per-field entries both name a route."""
-    monkeypatch.setattr(
-        plan_store,
-        "configured_settings",
-        lambda: {
-            "sources.plans.routes": [{"repositories": ["github.com/a/*"], "to": "linear"}, 3],
-            "sources.plans.routes.1.to": "other",
-            "sources.plans.routes.0.to": "linear",
-            "sources.elsewhere.routes.0.to": "unrelated",
-        },
-    )
+    """A trust-boundary guard: an answer of another count, or about another task, is refused.
 
-    assert plan_store.routed_sources("plans") == ("linear", "other")
-    assert plan_store.routed_sources("followups") == ()
+    A conforming store answers one entry per id named, in order, so no real store reaches
+    this; the answer is the SDK's own typed `LocateReport`, and only it is substituted.
+    """
+    located = {
+        "source": "drafts:run/tickets/cause",
+        "classification": "public",
+        "destination": "board",
+        "counterpart": None,
+        "carriers": [],
+        "creates_in": None,
+    }
+    for items, refused in (
+        ([], "answered 0 other items"),
+        ([located, located], "answered 2 other items"),
+        ([located | {"source": "drafts:run/tickets/another"}], "answered 1 other items"),
+    ):
+
+        async def answered(*_ids: object, items: object = items, **_options: object) -> object:
+            return onetaskgraph_sdk.LocateReport.model_validate({"items": items})
+
+        monkeypatch.setattr(plan_store, "client", lambda: SimpleNamespace(task_locate=answered))
+        with pytest.raises(OSError, match=refused):
+            plan_store.task_locate("drafts:run/tickets/cause", "board")
 
 
 def test_project_copies_lists_only_projects_stamped_with_the_requested_origin(

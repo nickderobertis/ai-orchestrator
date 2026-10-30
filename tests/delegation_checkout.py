@@ -42,10 +42,8 @@ WRAPPER_SCRIPTS = (
     # The trust probe's two JSON steps, which `smoke.sh` runs.
     "smoke-probe.py",
     # Every `onepipeline` recipe goes through this one, which is where the planner's
-    # identity and a launch's harness environment are established, and it and every other
-    # script reaching the engine or the read API resolves the binary through the second.
+    # identity and a launch's harness environment are established.
     "onepipeline.sh",
-    "npm-binary.sh",
     # The acting-session ladder both that one and `telemetry-server.sh` source, so a
     # copied checkout can run either of them at all — and so the `--session` the read
     # API is handed is derived the way a real invocation derives it rather than by a
@@ -148,11 +146,7 @@ def at(checkout: Path, line: str) -> str:
     return line.replace(CHECKOUT, str(checkout.resolve()))
 
 
-#: How every recipe reaches the engine: the platform package's binary this checkout's
-#: `bun.lock` installs into its own `node_modules`, by absolute path, never the npm
-#: launcher in front of it (`scripts/npm-binary.sh` says why). No Python environment
-#: carries it, so no `uv run` is in front of it, and a launch hands no checkout's
-#: `VIRTUAL_ENV` to the dispatches under it (ai-orchestrator#1162).
+#: Every recipe reaches the command installed under this checkout's `node_modules/.bin`.
 ENGINE = f"{CHECKOUT}/node_modules/{npm_installs.ENGINE.relative_to(npm_installs.NODE_MODULES)}"
 #: And the read API `scripts/telemetry-server.sh` execs, from the same install.
 READ_API = f"{CHECKOUT}/node_modules/{npm_installs.READ_API.relative_to(npm_installs.NODE_MODULES)}"

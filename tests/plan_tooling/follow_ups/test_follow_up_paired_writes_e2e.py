@@ -1,21 +1,21 @@
 """No follow-up ticket write lands half done: every way to create, close or withdraw one.
 
 A ticket reaches the board through `board-status`, which decides the status it is copied with
-from the board, and `copy`, whose store write sets that status beside the issue's closure. Each
-other way the follow-up task's tools give an agent to create, close or withdraw a ticket is
-driven here against the loopback GitHub board (`tests/github_board.py`), read and written by the
-locked plan store through its real `github-projects` plugin:
+from the board, and `copy`, which every write but a withdrawal makes under the store's
+`preserve-destination` status policy, so an item the board holds keeps its Status and its
+issue's state and a new one takes the ticket's proposal. Each other way the follow-up task's
+tools give an agent to create, close or withdraw a ticket is driven here against the loopback
+GitHub board (`tests/github_board.py`), read and written by the locked plan store through its
+real `github-projects` plugin:
 
 * **`copy` of a status `board-status` did not decide** — a new ticket written at a status other
-  than a proposal's, a bound one written as a withdrawal of an item a person accepted, a
-  proposal written as finished, and a stale proposal over an item the engine closed as done.
-  `copy` refuses each before it writes, and the item's Status and its issue's state stand.
-* **A copy that is not its own `board-status`'s pairing** — the decision `board-status` leaves
-  for the copy it directs stands in for the item's read only straight after it, for the same
-  item and binding: a copy following its own `board-status` reads the item no second time, and
-  one whose decision has outlived its pairing, names another item, or whose ticket changed
-  since, reads the item's live status and neither withdraws nor moves an item a person has
-  since moved.
+  than a proposal's, and a withdrawal of an item a person accepted, are refused before anything
+  is written; a proposal written as finished, and a stale proposal over an item the engine
+  closed as done, are copied with the item's Status and its issue's state left as they stand.
+* **A copy after a person moved the item** — whenever `board-status` last ran, a copy reads no
+  status of its own to write: one that is not a withdrawal keeps what the person chose, and a
+  withdrawal reads the item's live status and refuses one a person accepted or deferred. A copy
+  reads nothing beyond its one `task locate` and the store's own `--target-task` verification.
 * **A raw issue write with the board credential the agent holds** — an issue closed as not
   planned with no Status write beside it — which nothing in this repository can refuse as it is
   made: the rendered task forbids it (`tests/test_follow_up_tickets.py`), and
@@ -46,7 +46,6 @@ from __future__ import annotations
 import json
 import os
 from collections import Counter
-from collections.abc import Callable
 from pathlib import Path
 from typing import NamedTuple
 
@@ -100,7 +99,8 @@ def _filed(loopback: Loopback, cause: str, capsys: pytest.CaptureFixture[str]) -
     _decided(path, capsys)
     status, said = _copy(path, capsys)
     assert status == tickets.SOUND, said
-    item = tickets.read_ticket(path, pending=True).board_item
+    # The store records its link to the item its copy created on the ticket.
+    item = tickets.read_ticket(path, pending=True).link(BOARD)
     assert item is not None
     return path, f"{BOARD}:{item}"
 
@@ -162,7 +162,22 @@ def test_a_new_ticket_copied_at_a_status_board_status_did_not_decide_creates_not
     assert "carries the status `todo`, where the board holds no item for it" in said, said
     assert "`board-status` decides `backlog`" in said, said
     assert len(remote.BOARD.issues) == issues, "a refused copy created an issue"
-    assert tickets.read_ticket(path, pending=True).board_item is None
+    assert tickets.read_ticket(path, pending=True).link(BOARD) is None
+
+
+def test_a_ticket_withdrawn_before_any_copy_is_created_closed_as_not_planned(
+    loopback: Loopback, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A withdrawal reaching no item reads no status and creates one closed as not planned."""
+    path = _written(loopback, "withdrawn-before-it-was-filed")
+    assert _decided(path, capsys, withdraw=True) == tickets.Status.WITHDRAWN.value
+
+    status, said = _copy(path, capsys)
+
+    assert status == tickets.SOUND, said
+    item = tickets.read_ticket(path, pending=True).link(BOARD)
+    assert item is not None
+    assert _card(f"{BOARD}:{item}") == ("Cancelled", "CLOSED", "NOT_PLANNED")
 
 
 def test_a_withdrawal_board_status_did_not_decide_leaves_an_accepted_item_open_at_todo(
@@ -191,8 +206,7 @@ def test_a_ticket_written_as_done_leaves_its_proposal_open(
 
     status, said = _copy(path, capsys)
 
-    assert status == tickets.UNDECIDED, said
-    assert f"where the board holds {issue} at `backlog`" in said, said
+    assert status == tickets.SOUND, said
     assert _card(issue) == before
 
 
@@ -208,24 +222,20 @@ def test_a_stale_proposal_never_reopens_an_item_the_engine_closed_as_done(
 
     status, said = _copy(path, capsys)
 
-    assert status == tickets.UNDECIDED, said
-    assert f"where the board holds {issue} at `done`" in said, said
-    assert _card(issue) == before
-    # Decided again from the board, the ticket carries `done`, and its copy leaves it there.
-    assert _decided(path, capsys) == tickets.Status.FINISHED.value
-    status, said = _copy(path, capsys)
     assert status == tickets.SOUND, said
     assert _card(issue) == before
 
 
-def test_a_copy_onto_an_item_at_a_status_no_ticket_carries_writes_nothing(
+def test_a_withdrawal_onto_an_item_at_a_status_no_ticket_carries_writes_nothing(
     loopback: Loopback, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A person moved the item to an option the store places at no ticket status: no write."""
+    """A person moved the item to an option the store places at no ticket status: a withdrawal,
+    which reads the item's status to know it may close it, writes nothing."""
     path, issue = _filed(loopback, "moved-to-an-unmapped-option", capsys)
     # A person's move on github.com, to an option the `followups` mapping names for nothing.
     _row(issue).status = remote.NEEDS_ATTENTION.name
     before = _card(issue)
+    _status_written(path, tickets.Status.WITHDRAWN.value)
     writes = len(remote._GitHubFixture.requests)
 
     status, said = _copy(path, capsys)
@@ -243,138 +253,63 @@ def _operations(since: int) -> Counter[str]:
     return Counter(str(request.operation) for request in remote._GitHubFixture.requests[since:])
 
 
-def _reads(operations: Counter[str]) -> Counter[str]:
-    """``operations`` without the writes among them."""
-    return Counter(
-        {
-            name: count
-            for name, count in operations.items()
-            if not remote._Operation(name).name.startswith(WRITE_PREFIXES)
-        }
-    )
-
-
-#: The loopback operations that write, by the verb their names open with.
-WRITE_PREFIXES = ("UPDATE_", "CREATE_", "ADD_", "CLEAR_", "DELETE_", "CLOSE_", "WRITE_")
-
-
-def test_a_copy_following_its_own_board_status_reads_its_item_no_second_time(
+def test_a_copy_reads_its_item_only_through_its_locate_and_the_stores_verification(
     loopback: Loopback, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The copy straight after `board-status` takes that command's decision and sends exactly
-    the store's copy; the same copy with no decision left reads the item once more by id."""
+    """A copy straight after its `board-status` and one long after it read alike: its `task
+    locate` follows the store's link by id, and the store's `--target-task` verification reads
+    the item once more, and no status of the item is read for the copy to write."""
     path, issue = _filed(loopback, "re-copied-after-its-board-status", capsys)
     _decided(path, capsys)
-    assert tickets.decision_path(path).is_file()
     paired = len(remote._GitHubFixture.requests)
     assert _copy(path, capsys)[0] == tickets.SOUND
-    with_decision = _operations(paired)
-    assert not tickets.decision_path(path).exists(), "the copy left the decision it took"
+    assert _operations(paired)["issue"] == 2, _operations(paired)
 
     unpaired = len(remote._GitHubFixture.requests)
     assert _copy(path, capsys)[0] == tickets.SOUND
-    without_decision = _operations(unpaired)
-
-    # Reads alone: the first copy carries the estimate `board-status` wrote into the record,
-    # which the adopted store writes, and the second finds the item already in line and writes
-    # nothing — a difference in what each had to write, not in what each read.
-    reads_with, reads_without = _reads(with_decision), _reads(without_decision)
-    assert reads_without - reads_with == Counter({"issue": 1}), (reads_with, reads_without)
-    assert not reads_with - reads_without, (reads_with, reads_without)
+    assert _operations(unpaired)["issue"] == 2, _operations(unpaired)
     assert _card(issue)[:2] == ("Proposal", "OPEN")
 
 
 @pytest.mark.parametrize(
-    "left",
-    ["not a decision", "[]", '{"item": 1, "status": "backlog", "ticket": "", "at": 0.0}'],
-    ids=["unreadable", "not-a-record", "not-a-decision"],
-)
-def test_a_decision_copy_cannot_read_leaves_it_reading_the_item(
-    loopback: Loopback, capsys: pytest.CaptureFixture[str], left: str
-) -> None:
-    """Whatever stands where `board-status` leaves its decision, unless it is one, the copy reads
-    the item's live status by id and removes it."""
-    path, issue = _filed(loopback, f"decision-left-{len(left)}", capsys)
-    _decided(path, capsys)
-    tickets.decision_path(path).write_text(left, encoding="utf-8")
-    reads = len(remote._GitHubFixture.requests)
-
-    assert _copy(path, capsys)[0] == tickets.SOUND
-
-    assert _operations(reads)["issue"] == 2, _operations(reads)
-    assert not tickets.decision_path(path).exists()
-    assert _card(issue)[:2] == ("Proposal", "OPEN")
-
-
-def _aged(path: Path) -> None:
-    """The decision `board-status` left, as it reads once its pairing's moment has passed."""
-    held = tickets.decision_path(path)
-    decision = json.loads(held.read_text(encoding="utf-8"))
-    decision["at"] -= tickets.DECISION_FRESH_FOR + 1
-    held.write_text(json.dumps(decision), encoding="utf-8")
-
-
-def _for_another_item(path: Path) -> None:
-    """The decision `board-status` left, as it reads naming an item this ticket is not bound to."""
-    held = tickets.decision_path(path)
-    decision = json.loads(held.read_text(encoding="utf-8"))
-    assert isinstance(decision["item"], str), decision
-    decision["item"] = f"{BOARD}:PVTI_another"
-    held.write_text(json.dumps(decision), encoding="utf-8")
-
-
-def _rewritten(path: Path) -> None:
-    """The ticket rewritten after its `board-status`, so the decision is not this copy's."""
-    text = path.read_text(encoding="utf-8")
-    assert "(Examples)." in text, text
-    path.write_text(text.replace("(Examples).", "(Examples, rewritten)."), encoding="utf-8")
-
-
-@pytest.mark.parametrize(
-    ("moved_to", "shown", "outlived", "withdraw"),
+    ("moved_to", "shown", "withdraw"),
     [
-        (tickets.Status.ACCEPTED, "Todo", _aged, True),
-        (tickets.Status.DEFERRED, "Deferred", _rewritten, True),
-        (tickets.Status.ACCEPTED, "Todo", _rewritten, False),
-        (tickets.Status.DEFERRED, "Deferred", _aged, False),
-        (tickets.Status.ACCEPTED, "Todo", _for_another_item, True),
-        (tickets.Status.DEFERRED, "Deferred", _for_another_item, False),
+        (tickets.Status.ACCEPTED, "Todo", True),
+        (tickets.Status.DEFERRED, "Deferred", True),
+        (tickets.Status.ACCEPTED, "Todo", False),
+        (tickets.Status.DEFERRED, "Deferred", False),
     ],
-    ids=[
-        "todo-aged-withdrawal",
-        "deferred-rewritten-withdrawal",
-        "todo-rewritten",
-        "deferred-aged",
-        "todo-another-item-withdrawal",
-        "deferred-another-item",
-    ],
+    ids=["todo-withdrawal", "deferred-withdrawal", "todo", "deferred"],
 )
-def test_a_decision_outliving_its_pairing_never_stands_in_for_an_item_a_person_moved(  # noqa: PLR0913 - the fixtures and the four facts of each case
+def test_a_copy_after_a_person_moved_the_item_keeps_what_they_chose(
     loopback: Loopback,
     capsys: pytest.CaptureFixture[str],
     moved_to: tickets.Status,
     shown: str,
-    outlived: Callable[[Path], None],
     withdraw: bool,
 ) -> None:
-    """`board-status` decides at `Proposal`; a person then moves the item; the decision outlives
-    its pairing; the copy reads the live status and refuses, the card as the person left it."""
+    """`board-status` decides at `Proposal`; a person then moves the item; the copy that follows
+    keeps the person's status under `preserve-destination`, and a withdrawal reads the item's
+    live status and refuses, writing nothing: the card stays as the person left it either way."""
     path, issue = _filed(loopback, f"moved-after-{moved_to.value}-{withdraw}".lower(), capsys)
     decided = _decided(path, capsys, withdraw=withdraw)
     assert decided == (tickets.Status.WITHDRAWN if withdraw else tickets.Status.PROPOSED).value
     loopback.store("task", "status", "set", issue, moved_to.value)
     before = _card(issue)
     assert before == (shown, "OPEN", None), before
-    outlived(path)
     reads = len(remote._GitHubFixture.requests)
 
     status, said = _copy(path, capsys)
 
-    assert status == (tickets.PROTECTED if withdraw else tickets.UNDECIDED), said
-    assert _operations(reads)["issue"] == 1, "the copy did not read the item's live status"
-    assert not [
-        request for request in remote._GitHubFixture.requests[reads:] if request.is_mutation
-    ], "a refused copy wrote to the board"
+    if withdraw:
+        assert status == tickets.PROTECTED, said
+        # Its `task locate` follows the store's link by id, then it reads the live status once.
+        assert _operations(reads)["issue"] == 2, "the copy did not read the item's live status"
+        assert not [
+            request for request in remote._GitHubFixture.requests[reads:] if request.is_mutation
+        ], "a refused copy wrote to the board"
+    else:
+        assert status == tickets.SOUND, said
     assert _card(issue) == before
 
 
@@ -397,7 +332,7 @@ def test_check_dispositions_accepts_items_in_line_and_refuses_a_raw_close_naming
     assert _copy(withdrawn, capsys)[0] == tickets.SOUND
     _decided(withdrawn, capsys, withdraw=True)
     assert _copy(withdrawn, capsys)[0] == tickets.SOUND
-    withdrawn_item = f"{BOARD}:{tickets.read_ticket(withdrawn, pending=True).board_item}"
+    withdrawn_item = f"{BOARD}:{tickets.read_ticket(withdrawn, pending=True).link(BOARD)}"
     assert _card(withdrawn_item) == ("Cancelled", "CLOSED", "NOT_PLANNED")
     _accounted(loopback, ["a-proposal-left-open", "a-duplicate-withdrawn"])
 

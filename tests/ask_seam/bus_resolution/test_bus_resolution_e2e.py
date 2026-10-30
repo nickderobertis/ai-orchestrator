@@ -1,7 +1,7 @@
 """`scripts/ask-manager.sh` asks through its own checkout's engine, whatever PATH offers first.
 
 The adapter execs the engine's `onepipeline ask`, and the engine is the one this checkout's
-`bun.lock` installed in its `node_modules` — the platform binary `scripts/npm-binary.sh`
+`bun.lock` installed in its `node_modules` — the installed command
 resolves from the script's location — because the engine links the bus a run's channel is
 written by and a different release on the caller's PATH is a different bus. `AGENTS.md` states
 the same rule for the plan-store CLI;

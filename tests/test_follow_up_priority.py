@@ -140,7 +140,7 @@ def _older(ticket: tickets.Ticket, schema: int) -> str:
     record["schema"] = schema
     body = (
         ticket.body
-        if schema >= tickets.SCHEMA
+        if schema >= tickets.SEARCH_RETIRED_AT
         else before_schema_12(ticket.body)
         if schema >= tickets.PLAIN_AT
         else before_schema_11(ticket.body)
@@ -695,6 +695,34 @@ def test_the_approved_625_facts_estimate_medium_and_a_persons_priority_stands(
     assert _held(issue)[tickets.ESTIMATE_FIELD] == "medium"
 
 
+def test_a_copy_without_board_status_first_overwrites_a_priority_a_person_set(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The hazard: `board-status` must precede every `copy`, or a person's priority is lost.
+
+    A person sets the item's priority, then `copy` runs alone. The store's
+    `preserve-destination` policy keeps the board's status and nothing else, so the copy
+    writes the ticket's own priority over the person's. Only `board-status`, which hands the
+    board's priority back to the ticket while it differs from the stored estimate, keeps it
+    (:func:`test_the_approved_625_facts_estimate_medium_and_a_persons_priority_stands`). This
+    holds today's behaviour until the store's copy can leave such a priority alone.
+    """
+    path = _write(drafts_root, _rubric_ticket(Severity.HIGH, Severity.LOW, Frequency.CONSISTENT))
+    issue = _copied(path, capsys)
+    assert _shown(issue)["priority"] == tickets.read_ticket(path).priority == "medium"
+    _person_sets(issue, Priority.URGENT)
+    record_before = path.read_text(encoding="utf-8")
+
+    status = tickets.main(["copy", "--board", BOARD, str(path)])
+
+    captured = capsys.readouterr()
+    assert status == tickets.SOUND, captured.err
+    assert json.loads(captured.out)["destination"] == issue
+    assert path.read_text(encoding="utf-8") == record_before, "copy rewrote the ticket"
+    assert _shown(issue)["priority"] == "medium", "the copy kept the person's priority"
+    assert _held(issue)[tickets.ESTIMATE_FIELD] == "medium"
+
+
 @pytest.mark.parametrize(
     ("with_workaround", "frequency", "others", "expected", "why"),
     [
@@ -949,14 +977,14 @@ def test_re_estimate_refuses_an_item_not_copied_from_the_ticket_its_record_descr
             plan_store.client().task_metadata_set(issue, tickets.KEY, json.dumps(record))
         )
     elif origin == "an-item-naming-itself":
-        # An origin naming the item its own record is bound to reads as a ticket's own origin,
-        # which is sound on a ticket and never on the board item copied from one.
+        # An origin naming the item a record from before the binding retired is bound to reads
+        # as a ticket's own origin, which is sound on such a ticket and never on the board item
+        # copied from one.
         record = _held(issue)
         native = issue.removeprefix(f"{BOARD}:")
+        legacy = record | {"schema": tickets.BINDING_LAST_AT, tickets.BINDING_FIELD: native}
         plan_store.sdk(
-            plan_store.client().task_metadata_set(
-                issue, tickets.KEY, json.dumps(record | {tickets.BINDING_FIELD: native})
-            )
+            plan_store.client().task_metadata_set(issue, tickets.KEY, json.dumps(legacy))
         )
         ticket = tickets.qualified_id(str(record["created_by_run"]), str(record["root_cause"]))
         (copied,) = [path for path in board.rglob("*.md") if ticket in path.read_text()]
@@ -989,14 +1017,15 @@ def test_re_estimate_refuses_an_item_it_cannot_estimate(
     board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     issue = _owned_elsewhere(drafts_root, capsys)
-    elsewhere = tickets.main(["re-estimate", "--board", "another-board", issue])
+    # `drafts` is a configured source whose `sources route` reaches no other: not this item's.
+    elsewhere = tickets.main(["re-estimate", "--board", tickets.SOURCE, issue])
     assert elsewhere == tickets.UNSOUND
-    assert "is not an item of the board 'another-board'" in capsys.readouterr().err
+    assert f"is not an item of the board {tickets.SOURCE!r}" in capsys.readouterr().err
     held = json.dumps(_held(issue))
     plan_store.sdk(plan_store.client().task_metadata_set(issue, tickets.KEY, '{"schema": 5}'))
     assert tickets.main(["re-estimate", "--board", BOARD, issue]) == tickets.UNSOUND
     refused = " ".join(capsys.readouterr().err.split())
-    assert "record of schema 5, and this reads schema 6, 7, 8, 9, 10, 11 or 12" in refused
+    assert "record of schema 5, and this reads schema 6, 7, 8, 9, 10, 11, 12 or 13" in refused
     plan_store.sdk(plan_store.client().task_metadata_set(issue, tickets.KEY, '{"schema": 7}'))
     assert tickets.main(["re-estimate", "--board", BOARD, issue]) == tickets.UNSOUND
     assert "no follow-up ticket this can estimate" in capsys.readouterr().err
@@ -1100,7 +1129,9 @@ def test_board_status_refuses_a_bound_items_record_of_no_schema_it_reads(
     assert f"record of schema {schema!r}, which no follow-up tool reads" in refused
     assert tickets.main(["re-estimate", "--board", BOARD, issue]) == tickets.UNSOUND
     refused = " ".join(capsys.readouterr().err.split())
-    assert f"record of schema {schema!r}, and this reads schema 6, 7, 8, 9, 10, 11 or 12" in refused
+    assert (
+        f"record of schema {schema!r}, and this reads schema 6, 7, 8, 9, 10, 11, 12 or 13"
+    ) in refused
     assert _shown(issue)["priority"] == "low"
 
 

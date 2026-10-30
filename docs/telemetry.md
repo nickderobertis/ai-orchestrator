@@ -168,7 +168,7 @@ here** — re-measure rather than assuming the shape carries backwards, and re-c
 this paragraph whenever either pin moves, which
 `tests/release_pins/test_onejudge_version.py::test_telemetry_upgrade_boundary_matches_authoritative_versions`
 forces by failing on the boundary sentence above until the pair it names is the adopted
-one. That re-check has now been made seventeen times
+one. That re-check has now been made eighteen times
 without the shape moving. For the 0.10.3/0.5.1 upgrade, one turn spent on each binary
 with everything else held differed by exactly two added keys — `results[].work` and
 `fallback.stopped_without_work`, both of which say something about a failure nothing

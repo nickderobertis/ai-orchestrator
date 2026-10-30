@@ -65,6 +65,7 @@ from test_follow_ups_recipe_e2e import (
 
 from orchestrator import follow_up_drafts as drafts
 from orchestrator import follow_up_tickets as tickets
+from orchestrator import plan_store
 from orchestrator.root import REPO_ROOT
 from orchestrator.run_reading import RunId
 
@@ -365,7 +366,9 @@ def followed(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Followed]:
         forged = _run(["just", "follow-ups", forged_key, "--to", BOARD], bench)
         launched_after = sorted(path.name for path in bench.runs.glob(f"{private_run}{SUFFIX}*"))
 
-        own_issue = f"{BOARD}:{_record(bench, public_id)[tickets.BINDING_FIELD]}"
+        linked = _item(bench, tickets.qualified_id(public_id, OWN_CAUSE))["metadata"]
+        assert isinstance(linked, dict), linked
+        own_issue = str(linked[plan_store.COPIES_KEY][BOARD])
         _commented(bench, own_issue, "Does this also hit the admin login?", "a-person")
         routed = _run(["just", "follow-ups-answer-comments", "--dry-run"], bench)
         named = [

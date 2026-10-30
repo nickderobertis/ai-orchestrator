@@ -30,9 +30,9 @@
   <reported> (<binary>)`. Nothing installs, restores, or refuses a mismatched pair — which
   pair is expected is the manager's call. By hand, from the checkout root:
   1. `bun add --exact --no-save onepipeline-cli@<version>`, which installs it into this
-     checkout's `node_modules` without rewriting `package.json` or `bun.lock`.
-  2. Launch: `scripts/onepipeline.sh` runs the platform binary that install put under
-     `node_modules`, which nothing before `start` reinstalls.
+     checkout's `node_modules/.bin` without rewriting `package.json` or `bun.lock`.
+  2. Launch: `scripts/onepipeline.sh` runs the command that install put under
+     `node_modules/.bin`, which nothing before `start` reinstalls.
   3. `about to run` differing from `requested` is the proof on the installed release; the
      two agreeing means the install did not survive and the verdict says nothing about it.
   4. `just bootstrap` afterwards puts the pin back.

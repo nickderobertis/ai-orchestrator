@@ -2069,60 +2069,70 @@ def _driven(
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
-@pytest.fixture(scope="module")
-def graph_with_a_settled_node(
-    tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str
-) -> Iterator[LiveRun]:
-    """A driven run whose `research` node settled at once, beside a worker still running."""
-    yield from _driven(
-        tmp_path_factory.mktemp("settled-node"),
-        oneharness_bin,
-        RunId("monitor-ops-e2e"),
-        [
-            {
-                "id": "research",
-                "task": "Report.\n\n## Acceptance criteria\n- Reported.",
-                "expects_no_diff": True,
-            },
-            _node(id="held"),
-        ],
-    )
-
-
 # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This journey already
 # spent its run in this tier; this change only reads the engine's reply receipt where it
 # read the bus's, adding no launch and moving none. Re-homing `tests/e2e` into an Nx
 # project of its own is enforcement configuration this change may not move to pass.
 @pytest.mark.xdist_group("monitor-ops")
-@pytest.mark.parametrize(
-    "refused_on_the_graph", MONITOR_OPS_ON_A_SETTLED_NODE, ids=lambda row: str(row.command["op"])
-)
-def test_an_op_inside_the_monitor_allowlist_is_judged_on_the_graph_not_the_author(
-    graph_with_a_settled_node: LiveRun, refused_on_the_graph: RefusedOnTheGraph
-) -> None:
-    """The allowed ops reach the graph, and are answered by what the graph is.
+class TestAnOpOnASettledNode:
+    """The journeys that read one run whose `research` node settled beside a held worker.
 
-    The other half of the allowlist, and the half a refusal-only test would leave
-    unproven: an in-allowlist op must not be refused for *who asked*. Each of these three
-    names a node that has already settled, so each is refused for what the node now is —
-    and the refusal wording is the distinction, because an authority refusal and a state
-    refusal read alike to a monitor that only checks the exit status. Sent to a run whose
-    driver is reading its channel, and read back off the engine's own outcome for that
-    envelope, since the send itself only says where the envelope went.
+    A class so the run lives exactly as long as these journeys. Module-scoped, it lived
+    until the module's last test on the same worker: its held worker's turn ended inside
+    whichever later journey was running, the judge's turn after it started shared Codex
+    servers there, and that journey's teardown waited on servers it never started.
     """
-    live = graph_with_a_settled_node
-    outcome = _decided(
-        live.environment,
-        live.run,
-        {"version": 2, "author": "monitor", "commands": [refused_on_the_graph.command]},
-    )
 
-    assert outcome["applied"] is False, outcome
-    reported = outcome.get("reason", "")
-    assert "is not an op the monitor may issue" not in reported, (
-        f"an in-allowlist op was refused for who asked rather than for the graph:\n{outcome}"
+    @pytest.fixture(scope="class")
+    def graph_with_a_settled_node(
+        self, tmp_path_factory: pytest.TempPathFactory, oneharness_bin: str
+    ) -> Iterator[LiveRun]:
+        """A driven run whose `research` node settled at once, beside a worker still running."""
+        yield from _driven(
+            tmp_path_factory.mktemp("settled-node"),
+            oneharness_bin,
+            RunId("monitor-ops-e2e"),
+            [
+                {
+                    "id": "research",
+                    "task": "Report.\n\n## Acceptance criteria\n- Reported.",
+                    "expects_no_diff": True,
+                },
+                _node(id="held"),
+            ],
+        )
+
+    @pytest.mark.parametrize(
+        "refused_on_the_graph",
+        MONITOR_OPS_ON_A_SETTLED_NODE,
+        ids=lambda row: str(row.command["op"]),
     )
-    assert refused_on_the_graph.refusal in reported, outcome
+    def test_an_op_inside_the_monitor_allowlist_is_judged_on_the_graph_not_the_author(
+        self, graph_with_a_settled_node: LiveRun, refused_on_the_graph: RefusedOnTheGraph
+    ) -> None:
+        """The allowed ops reach the graph, and are answered by what the graph is.
+
+        The other half of the allowlist, and the half a refusal-only test would leave
+        unproven: an in-allowlist op must not be refused for *who asked*. Each of these
+        three names a node that has already settled, so each is refused for what the node
+        now is — and the refusal wording is the distinction, because an authority refusal
+        and a state refusal read alike to a monitor that only checks the exit status. Sent
+        to a run whose driver is reading its channel, and read back off the engine's own
+        outcome for that envelope, since the send itself only says where the envelope went.
+        """
+        live = graph_with_a_settled_node
+        outcome = _decided(
+            live.environment,
+            live.run,
+            {"version": 2, "author": "monitor", "commands": [refused_on_the_graph.command]},
+        )
+
+        assert outcome["applied"] is False, outcome
+        reported = outcome.get("reason", "")
+        assert "is not an op the monitor may issue" not in reported, (
+            f"an in-allowlist op was refused for who asked rather than for the graph:\n{outcome}"
+        )
+        assert refused_on_the_graph.refusal in reported, outcome
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

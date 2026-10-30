@@ -172,8 +172,7 @@ fi
 
 # Which `onepipeline` every verb runs: the binary `bun.lock` installs from npmjs.com into
 # this checkout's `node_modules`, at the release `config/onepipeline.version` pins, by
-# absolute path — the platform package's own, never the npm launcher in front of it, for the
-# reason `scripts/npm-binary.sh` gives. Never a Python environment's: a launch's environment is built above so that no
+# absolute path through its installed command. Its environment is built above so that no
 # checkout's `VIRTUAL_ENV` reaches a dispatch, and `scripts/dispatch-env.sh` puts this
 # checkout's `.venv/bin` and `node_modules/.bin` on the PATH it builds. A read-only view
 # gets the checkout's `.venv/bin` in front of its PATH here instead, so a CLI the engine
@@ -184,10 +183,7 @@ fi
 # Resolved *after* the design-approval gate above, so a launch that gate refuses is
 # refused for its plan rather than for the install; an `adopt`, which runs no gate, and
 # every view reach the refusal below directly.
-# shellcheck source=scripts/npm-binary.sh
-# llmlint: ignore[boundary_inputs_validated, robust_shell, tool_output_is_signal] A tracked sibling is a checkout invariant, not an input at a trust boundary: one that is missing or will not load is a broken checkout, and the shell says so on the line it fails the source at.
-. "$script_dir/npm-binary.sh"
-engine=$(npm_binary onepipeline-cli onepipeline) || exit 2
+engine="${script_dir%/scripts}/node_modules/.bin/onepipeline"
 if [ ! -x "$engine" ]; then
     echo "onepipeline: this checkout has no executable engine at $engine; run 'just bootstrap' to install the pinned releases from bun.lock, then retry" >&2
     exit 2
@@ -317,8 +313,7 @@ fi
 # llmlint: ignore[tool_output_is_signal] This process is replaced by onepipeline, so what a run or a view reports is onepipeline's own to report; a line added here would corrupt the streams `monitor` and an attached launch are.
 # `execfail` so that an engine the check above found executable and the kernel still
 # refuses — a missing interpreter, a wrong architecture — is explained here rather than
-# by the shell's bare error. errexit is off for the one line, as `scripts/npm-binary.sh`
-# and `scripts/telemetry-server.sh` turn it off, so the line after the exec runs.
+# by the shell's bare error. errexit is off so the line after a failed exec runs.
 shopt -s execfail
 set +e
 exec "$engine" "$@"
