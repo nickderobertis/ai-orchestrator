@@ -98,6 +98,7 @@ PUBLIC_WORK = "Public work"
 CREATES = frozenset({_Operation.CREATE_ISSUE, _Operation.CREATE_ISSUES})
 
 
+# llmlint: ignore[suppressions_justified] A user layer is the store's open YAML document.
 def _layer(*, routed: bool) -> dict[str, Any]:
     """The host's user layer: the example's `private-plans` source and, if ``routed``, the
     example's route sending the private owner's private work from `plans` to it.
@@ -106,6 +107,7 @@ def _layer(*, routed: bool) -> dict[str, Any]:
     its routes name and the organization's Linear trackers are not this journey's subject.
     """
     example = onetaskgraph_user_layer.example()
+    # llmlint: ignore[suppressions_justified] Each value is one source's open configuration.
     sources: dict[str, Any] = {PRIVATE_PLANS: copy.deepcopy(example["sources"][PRIVATE_PLANS])}
     if routed:
         sources[PLANS] = {
@@ -247,7 +249,9 @@ def _run(bench: Bench, *command: str, seconds: float = 300) -> subprocess.Comple
     )
 
 
+# llmlint: ignore[suppressions_justified] The store CLI owns this open JSON schema.
 def _json(completed: subprocess.CompletedProcess[str]) -> Any:
+    """What a successful store read printed, as the CLI's JSON document."""
     assert completed.returncode == 0, completed.stdout + completed.stderr
     return json.loads(completed.stdout)
 
