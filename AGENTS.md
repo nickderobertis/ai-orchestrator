@@ -601,12 +601,15 @@ source, the board every session's verified follow-up tickets accumulate on, are 
 repointed either, because a later run comments on an earlier run's issue there.
 
 <!-- llmlint: ignore-block[agents_md_durable_and_terse] This node's acceptance criteria require the manager's own document to state where a plan's home and members land and what each Linear state means for a plan task, because a manager reads a routed plan's Linear items from here; docs/orchestration.md keeps the fuller table, and tests/plan_guidance/test_plan_store_guidance.py holds this paragraph's state names to the mapping `config/onetaskgraph.user-layer.example.yaml` declares. -->
-**An organization's repositories land in that organization's own tracker by a route the
+**An organization's work lands by repositories and classification through a route the
 host declares, never by choice** — in onetaskgraph's user layer, outside every checkout,
 so no tracked file names the organization or where its work goes (`docs/orchestration.md`,
 *Host-local sources and routes*). A follow-up ticket whose repositories all match such a
-route is filed there; read where one lands with `just plans sources route plans --repository
-<origin>`. **The store's public boundary is on**: every write to a source not declared private
+route is filed there. A combined private route on `plans` sends an owner's private work
+to a declared-private store while public work stays on the board.
+`just plans sources route <source> --repository <origin>` answers for a public item;
+`just plans task locate <id> --to <source>` answers where a given item lands.
+**The store's public boundary is on**: every write to a source not declared private
 is screened, plans are drafted in the private `authoring` source, and **a host doing an
 organization's work declares that organization's sources `visibility: private` in its user
 layer before it adopts this change**, since an undeclared tracker refuses every task routed
@@ -614,8 +617,8 @@ to it. **An exact public phrase that carries a private repository's term** — a
 follow-up ticket records, say — goes in the host's phrase list,
 `$ONEVCS_HOME/public-phrases.yml`: host state outside every checkout, which nothing tracked
 writes and `just repos-apply` does not install. Never list the term itself, and never edit a
-private repository's own declarations to the same end. Where a plan's home lands is the store's to decide from the repositories its tasks and
-its project name (`docs/orchestration.md`, *The public write boundary*), never yours. A plan
+private repository's own declarations to the same end. Where a plan's home lands is the
+store's to decide from the repositories and classification of its tasks and its project (`docs/orchestration.md`, *The public write boundary*), never yours. A plan
 naming any private repository is one private coordinating plan: its home holds every task, its
 documents and its export edge in the private source the host declares, each task keeps its own
 visibility with nothing set on the plan, and a public-repository task reaches `plans` only as a

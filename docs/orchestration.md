@@ -65,8 +65,9 @@ it.** Three files under the host's configuration home, `${XDG_CONFIG_HOME:-$HOME
 carry it, each read beneath or in place of a tracked one:
 
 - `onetaskgraph/config.yaml`, onetaskgraph's **user layer**, read beneath this repository's
-  `onetaskgraph.yaml`: an organization's own sources and the repository routes that send its
-  work to them from `plans` and `followups`, and this host's own private stores.
+  `onetaskgraph.yaml`: an organization's own sources and routes by organization and privacy for its
+  plan work, repository-only routes for all-private organizations on `plans` and
+  `followups`, and this host's own private stores.
   `config/onetaskgraph.user-layer.example.yaml` is its shape over synthetic names;
 - `ai-orchestrator/onevcs.checkouts`, a **complete** checkout list that `just repos-apply` and
   `just repos-bootstrap` — session setup's call included — read in place of the tracked
@@ -95,6 +96,10 @@ Session setup creates every private folder, because an absent root fails a depen
 asks it. Which sources a read asks is the store's to state — onetaskgraph's `docs/metadata.md`,
 under "Which sources a dependency read asks" — and how the engine holds and re-reads a node one
 of them leaves unanswered is onepipeline's `docs/contract-divergences.md`, section 131.
+
+A combined private route is refused at load unless its destination is declared private.
+An owner's private plan work can therefore route by organization and privacy together,
+without naming every private repository separately (see [Where a plan's tasks land](#where-a-plans-tasks-land-the-board-or-a-routed-organizations-tracker)).
 
 **A host doing an organization's work declares that organization's sources `visibility:
 private` in its own user layer before it adopts this**, as `config/onetaskgraph.user-layer.example.yaml`
@@ -225,21 +230,28 @@ document, never vote, so a task naming no repository never decides the home; the
   task's own private item and mirrored to a public task's view; the view is never a node. A
   person's edit to the approved document is a change the launch
   gate refuses by naming the document.
-- **Personal private work has no route onto a public board at all.** A source's
-  classification routes are tried before its repository routes for a private item, and routes
-  never chain, so a `{classification: private}` route on `plans` would send an organization's
-  work to the personal store too; a user layer declares none, a plan or task naming a private
-  repository no route matches is refused at `plans`, and a person writes it to a private store
-  by naming that store.
+- **Private work needs a private destination.** A combined route on `plans` can send an
+  owner's private plan work to its private store by organization and privacy, while an
+  all-private organization's repository-only route still reaches its own tracker. A plan or
+  task naming a private repository under an unmatched owner is refused whole at `plans`;
+  a person can write it directly to a declared-private store. Routes never chain.
 
 ### Where a plan's tasks land: the board, or a routed organization's tracker
 
-**A task's destination follows its repository, through the store's routes, and nobody
-chooses it.** A route a host declares on `plans` or `followups` in its user layer sends a
-task whose `repositories` all match it to the routed source — an organization's own tracker
-— and every other task stays on the board; `just plans sources route plans --repository
-<origin>` answers where one would land. A follow-up ticket is copied as a task, so an
-organization's root cause reaches its tracker by that route.
+**A task's destination follows its repositories and classification through routes the host
+declares in its user layer.** An all-private organization's repository-only entry sends
+its work to its tracker. A mixed-visibility owner's combined entry on `plans` names its
+repository pattern and `classification: private`, sending private plan work to a source
+declared private while public work stays on the board. After the unchanged safety filter,
+combined entries are tried before classification-only entries, then repository-only entries,
+in written order within each kind. Every repository must match a pattern in the entry.
+To send one private repository elsewhere, put a combined entry naming it above the
+owner-wide entry; for a public repository, use a repository-only entry.
+`just plans sources route <source> --repository <origin>` answers for a public item;
+`just plans task locate <id> --to <source>` answers where a given item lands.
+The matching combined route on `followups` waits until follow-up tooling asks `task locate`,
+since it would otherwise look for a private ticket on the public board. All-private
+organizations keep their repository-only routes on both sources.
 
 **A plan's home goes where its repository-naming work routes**, by the rule stated once at
 the end of [the public write boundary](#the-public-write-boundary). Where that leaves a plan

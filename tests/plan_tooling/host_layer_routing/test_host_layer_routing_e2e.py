@@ -19,12 +19,14 @@ and the pinned `onevcs`, answering from a registry this module writes through `o
   route; an organization's plan is copied straight to its tracker, and a copy of it onto
   `plans` homes it there whole; a plan mixing it with public work homes with its private work
   in that tracker, its public task alone reaching the board and nothing private with it;
-  personal private work — alone or beside a public repository — is refused at the board; and
+  private work under an unmatched owner is refused at the board; the mixed owner's private
+  work routes to private-plans while its public work stays public; and
   a public-only plan copies onto `plans` exactly as before.
 
 GitHub's Projects API is the loopback board `tests/github_board.py` serves, and the
-organization's two Linear trackers are folders of Markdown declared private, as the real ones
-are (`tests/onetaskgraph_user_layer.py`), because no check may reach a Linear workspace.
+organization's two Linear trackers and the host's private plans board are folders of Markdown
+declared private, as the real sources are (`tests/onetaskgraph_user_layer.py`), because no
+check may reach a live private board or Linear workspace.
 """
 
 from __future__ import annotations
@@ -35,8 +37,10 @@ from pathlib import Path
 from typing import NamedTuple
 
 import boundary_home
+import github_board
 import onetaskgraph_user_layer
 import pytest
+import yaml
 from github_board import BOARD, _plan_environment, _serving_board
 from published_tools import ONETASKGRAPH_BIN
 from waits import timeout as e2e_timeout
@@ -49,7 +53,9 @@ PUBLIC = boundary_home.THIS_REPOSITORY
 #: An organization's repository, registered private and matched by the layer's routes.
 ORGANIZATION = "github.com/hiddenco/qh-api"
 #: A personal private repository under a public owner, which no route matches.
-PERSONAL = "github.com/sample-owner/pebblecraft"
+PERSONAL = "github.com/unrouted-owner/pebblecraft"
+OWNER_PRIVATE = "github.com/sample-owner/hidden-library"
+OWNER_PUBLIC = "github.com/sample-owner/public-library"
 #: The term `onevcs boundary check` derives from that repository's registered name.
 PERSONAL_TERM = "pebblecraft"
 
@@ -75,17 +81,25 @@ class Layer(NamedTuple):
 
 
 @pytest.fixture
-def layer(tmp_path: Path) -> Iterator[Layer]:
+def layer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Layer]:
     """The example layer switching the boundary on, its trackers stood in, over a registry and
     the loopback board."""
+    monkeypatch.setitem(
+        github_board.REPOSITORY_NODE_IDS,
+        github_board._Repository.parse("sample-owner/public-library", "owner fixture"),
+        github_board._RepositoryNodeId("R_owner_public"),
+    )
     home = boundary_home.registered_home(
-        tmp_path / "registry", public=[PUBLIC], private=[ORGANIZATION, PERSONAL]
+        tmp_path / "registry",
+        public=[PUBLIC, OWNER_PUBLIC],
+        private=[ORGANIZATION, PERSONAL, OWNER_PRIVATE],
     )
     folders = {
         name: tmp_path / name
         for name in (
             onetaskgraph_user_layer.ORGANIZATION_PLANS,
             onetaskgraph_user_layer.ORGANIZATION_FOLLOWUPS,
+            onetaskgraph_user_layer.PRIVATE_PLANS,
             PUBLIC_STAND_IN,
             PRIVATE_STAND_IN,
         )
@@ -97,9 +111,14 @@ def layer(tmp_path: Path) -> Iterator[Layer]:
             onetaskgraph_user_layer.ORGANIZATION_FOLLOWUPS,
         )
     }
-    document = onetaskgraph_user_layer.without_private_stores(
-        onetaskgraph_user_layer.with_stand_ins(stood_in)
-    )
+    document = onetaskgraph_user_layer.with_stand_ins(stood_in)
+    document["sources"].pop(onetaskgraph_user_layer.PRIVATE_FOLLOWUPS)
+    folders[onetaskgraph_user_layer.PRIVATE_PLANS].mkdir()
+    document["sources"][onetaskgraph_user_layer.PRIVATE_PLANS] = {
+        "plugin": "local-md",
+        "visibility": "private",
+        "config": {"root": str(folders[onetaskgraph_user_layer.PRIVATE_PLANS])},
+    }
     for name, visibility in ((PUBLIC_STAND_IN, "public"), (PRIVATE_STAND_IN, "private")):
         folders[name].mkdir()
         document["sources"][name] = {
@@ -154,10 +173,10 @@ def _plan(layer: Layer, name: str, repositories: list[str]) -> str:
     return f"authoring:{name}"
 
 
-# llmlint: ignore-block[e2e_not_mocked] GitHub's Projects API is the one boundary doubled
-# (`tests/github_board.py`), and the example layer's Linear trackers are folders, because no
-# check may reach a Linear workspace; the store, its write policy, `onevcs` and the recipes
-# are the real ones.
+# llmlint: ignore-block[e2e_not_mocked] The public GitHub Projects wire is loopback
+# (`tests/github_board.py`); the example's Linear trackers and private plans board are
+# private folders, because no check may reach a live private board or Linear workspace.
+# The store's routing, write policy, `onevcs` and recipes are real.
 def test_the_host_resolved_write_policy_permits_neutral_writes_and_refuses_private_ones(
     layer: Layer, tmp_path: Path
 ) -> None:
@@ -398,6 +417,111 @@ def test_a_public_only_plan_copies_onto_the_board_as_before(layer: Layer) -> Non
     assert copied.returncode == 0, copied.stdout + copied.stderr
     assert [issue.title for issue in BOARD.created] == ["public", "Task 0", "Task 1"]
     assert _held(layer.folders[onetaskgraph_user_layer.ORGANIZATION_PLANS]) == []
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The task that added these
+# journeys requires them in this module, which installs the example layer, and this project's
+# one input set is what its sibling module `test_screened_host_states_e2e.py` really reads
+# through `just check-plan` and `just copy-plan`, whose imports reach `plan_review.py`,
+# `design_approval.py`, `spike_plan.py` and `publication_guard.py`; narrowing it would fail
+# the undeclared-read guard in `tests/conftest.py`, and splitting the project is drafted as a
+# follow-up rather than done in this change.
+@pytest.mark.parametrize("repositories", [[OWNER_PRIVATE], [OWNER_PUBLIC, OWNER_PRIVATE]])
+def test_owner_private_work_routes_and_locates_at_its_private_home(
+    layer: Layer, repositories: list[str]
+) -> None:
+    """Locate predicts the private home; copying keeps private content off the board."""
+    layer.environment["ONETASKGRAPH_SOURCES__PLANS__CONFIG__REPOSITORY"] = (
+        "sample-owner/public-library"
+    )
+    plan = _plan(layer, "owner-work", repositories)
+    private_index = repositories.index(OWNER_PRIVATE)
+    located = _run(
+        layer, ["just", "plans", "task", "locate", f"{plan}/task-{private_index}", "--to", "plans"]
+    )
+    assert located.returncode == 0, located.stdout + located.stderr
+    assert "private-plans" in located.stdout, located.stdout
+    copied = _run(layer, ["just", "plans", "project", "copy", plan, "--to", "plans"])
+    assert copied.returncode == 0, copied.stdout + copied.stderr
+    assert "private-plans:owner-work" in copied.stdout, copied.stdout
+    assert _held(layer.folders[onetaskgraph_user_layer.PRIVATE_PLANS]) == sorted(
+        [
+            "projects/owner-work.md",
+            *(f"tasks/owner-work/task-{index}.md" for index in range(len(repositories))),
+        ]
+    )
+    assert [issue.title for issue in BOARD.created] == (
+        ["Public work", "Task 0"] if OWNER_PUBLIC in repositories else []
+    )
+    for term in ("hidden-library", "private-plans", "owner-work", f"task-{private_index}"):
+        assert term not in _board_text(), _board_text()
+
+
+def test_owner_public_work_stays_on_the_public_board(layer: Layer) -> None:
+    """The owner's public repository does not match its private combined route."""
+    layer.environment["ONETASKGRAPH_SOURCES__PLANS__CONFIG__REPOSITORY"] = (
+        "sample-owner/public-library"
+    )
+    plan = _plan(layer, "owner-public", [OWNER_PUBLIC])
+    copied = _run(layer, ["just", "plans", "project", "copy", plan, "--to", "plans"])
+    assert copied.returncode == 0, copied.stdout + copied.stderr
+    assert [issue.title for issue in BOARD.created] == ["owner-public", "Task 0"]
+    assert _held(layer.folders[onetaskgraph_user_layer.PRIVATE_PLANS]) == []
+
+
+@pytest.mark.parametrize(
+    ("kinds", "repository"),
+    [
+        (["repository", "classification", "combined", "combined"], OWNER_PRIVATE),
+        (["repository", "classification", "classification"], OWNER_PRIVATE),
+        (["repository", "repository"], OWNER_PUBLIC),
+    ],
+)
+def test_overlapping_routes_follow_kind_precedence_and_written_order(
+    layer: Layer, kinds: list[str], repository: str
+) -> None:
+    """Locate and copy choose the first entry of the highest-priority matching kind.
+
+    Lower-priority entries deliberately precede the winning kind, and each winning kind
+    has two matching entries with different destinations. This distinguishes both kind
+    precedence and written order within all three kinds described by the example layer.
+    """
+    config = (
+        Path(layer.environment[onetaskgraph_user_layer.XDG_CONFIG_HOME])
+        / "onetaskgraph"
+        / "config.yaml"
+    )
+    document = yaml.safe_load(config.read_text(encoding="utf-8"))
+    winning_kind = kinds[-1]
+    winner_index = kinds.index(winning_kind)
+    routes = []
+    for index, kind in enumerate(kinds):
+        route = {
+            "to": (
+                PRIVATE_STAND_IN if index == winner_index else onetaskgraph_user_layer.PRIVATE_PLANS
+            )
+        }
+        if kind in ("repository", "combined"):
+            route["repositories"] = ["github.com/sample-owner/*"]
+        if kind in ("classification", "combined"):
+            route["classification"] = "private"
+        routes.append(route)
+    document["sources"]["plans"]["routes"] = routes
+    config.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+    plan = _plan(layer, "overlapping", [repository])
+
+    located = _run(layer, ["just", "plans", "task", "locate", f"{plan}/task-0", "--to", "plans"])
+    assert located.returncode == 0, located.stdout + located.stderr
+    assert PRIVATE_STAND_IN in located.stdout, located.stdout
+    copied = _run(layer, ["just", "plans", "task", "copy", f"{plan}/task-0", "--to", "plans"])
+    assert copied.returncode == 0, copied.stdout + copied.stderr
+    assert f"{PRIVATE_STAND_IN}:overlapping/task-0" in copied.stdout, copied.stdout
+    assert _held(layer.folders[PRIVATE_STAND_IN]) == ["tasks/overlapping/task-0.md"]
+    assert _held(layer.folders[onetaskgraph_user_layer.PRIVATE_PLANS]) == []
+    assert BOARD.created == []
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 # llmlint: ignore-end[e2e_not_mocked]

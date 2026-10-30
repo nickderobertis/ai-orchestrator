@@ -9,13 +9,18 @@
 #
 # What a host puts here and nowhere tracked:
 #
-#   - an organization's own sources — its tracker for plans and for follow-up tickets — and
-#     the repository routes that send that organization's work to them from `plans` and
-#     `followups`;
-#   - this host's own private stores, which a person writes to by naming them. No
-#     classification route reaches them from `plans` or `followups`: under the adopted store a
-#     classification route is tried before every repository route and routes never chain, so
-#     one there would capture the organization's work too.
+#   - an all-private organization's repository-only routes on plans and followups;
+#   - a mixed-visibility owner's plans routed by organization and privacy together, so
+#     private work reaches private-plans while public work stays on plans.
+#
+# After the safety filter, combined repository-and-classification entries are tried first,
+# then classification-only entries, then repository-only entries, in written order within
+# each kind, exercised with overlapping entries by
+# tests/plan_tooling/host_layer_routing/test_host_layer_routing_e2e.py.
+# A private repository goes elsewhere through a combined entry naming it above
+# the owner-wide entry. A public repository goes elsewhere through a repository-only entry.
+# The matching combined followups route waits until follow-up tooling uses task locate;
+# until then it would look for a private ticket on the public board.
 #
 # Every source here declares `visibility: private`. The tracked document switches the store's
 # public boundary on, screening every write to a source not declared private, so a host doing an
@@ -27,6 +32,9 @@
 sources:
   plans:
     routes:
+      - repositories: ["github.com/sample-owner/*"]
+        classification: private
+        to: private-plans
       - repositories: ["github.com/hiddenco/*"]
         to: hiddenco-plans
   followups:

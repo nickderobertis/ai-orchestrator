@@ -87,12 +87,13 @@ trusts the members listing rather than re-reading each member's edges and detail
 a re-copy's issue updates as one aliased mutation, and whose SDK loads its models lazily. The
 read API links that engine and serves the same telemetry and timeline schemas.
 The adoption after that moves the engine to 0.95.5, the read API to 0.59.1, which links it,
-and the store and its SDK to 0.12.9, the release of the store crates that engine links;
-onejudge and oneagentgraph stay at the 0.22.0 and 0.9.0 it links. Every Codex dispatch of
-one configuration now shares one pooled app-server, reuses oneharness's shared model
-catalog and launches with analytics off — oneharness-core 0.28.0 onward, which the engine
-and the `oneharness` CLI 0.26.1 both carry — while each dispatch's commands still see only
-its own environment.
+and the store and its SDK to 0.12.9, the release of the store crates that engine links,
+whose routes match an item by its repositories and classification together and whose `task
+locate` answers where an item lands; onejudge and oneagentgraph stay at the 0.22.0 and
+0.9.0 it links. Every Codex dispatch of one configuration now shares one pooled app-server,
+reuses oneharness's shared model catalog and launches with analytics off — oneharness-core
+0.28.0 onward, which the engine and the `oneharness` CLI 0.26.1 both carry — while each
+dispatch's commands still see only its own environment.
 From onepipeline 0.80.2, onepipeline-ui 0.43.0 and
 onetaskgraph 0.9.0: the engine 0.81.0 and the read API 0.44.0 that links it carry the
 onetaskgraph 0.9.2 store crates, which copy a plan and list it without reading the whole

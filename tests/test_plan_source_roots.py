@@ -590,9 +590,14 @@ ORGANIZATION_MAPPING = {
 #: Where the layer's `plans` route sends a task whose repositories are all the organization's.
 PLANS_ROUTES = [
     {
+        "repositories": ["github.com/sample-owner/*"],
+        "classification": "private",
+        "to": onetaskgraph_user_layer.PRIVATE_PLANS,
+    },
+    {
         "repositories": [onetaskgraph_user_layer.ORGANIZATION_REPOSITORIES],
         "to": onetaskgraph_user_layer.ORGANIZATION_PLANS,
-    }
+    },
 ]
 #: The organization's follow-up tracker: one project of the same team, every read and create
 #: scoped to it.
@@ -652,6 +657,10 @@ def test_the_example_layer_declares_each_linear_source_as_a_host_writes_it(
     )
 
 
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_checkouts` is this
+# repository's tier mechanism rather than a shortcut around one: it routes a test to the
+# uncached target `orchestrator:test-checkouts`, because its subject,
+# the plan-store CLI installed under `.venv`, is outside every key over this workspace.
 @pytest.mark.reads_checkouts
 def test_the_example_layer_adds_destinations_and_loosens_nothing(
     example_resolved: dict[str, object],
@@ -663,8 +672,8 @@ def test_the_example_layer_adds_destinations_and_loosens_nothing(
     tracked document declares resolve as they do without the layer. Every source the example
     defines is declared private, as a host doing an organization's work declares its sources
     before adopting the tracked document, which screens every write to a source not declared
-    private; and no route reaches the host's private stores, because a classification route
-    would be tried before every repository route and capture the organization's work too.
+    private; and a combined private route reaches the host's private plans store only for
+    the mixed-visibility owner's private work.
     """
     assert {key: example_resolved.get(key) for key in WRITE_POLICY_KEYS} == WRITE_POLICY
     assert "write_policy" not in onetaskgraph_user_layer.example()
@@ -694,13 +703,10 @@ def test_the_example_layer_adds_destinations_and_loosens_nothing(
         for entry in value
         if isinstance(entry, dict)
     }
-    assert targets == set(LINEAR_SOURCES), targets
-    classified = [
-        key
-        for key, value in example_resolved.items()
-        if ".routes" in key and "classification" in key
-    ]
-    assert classified == [], classified
+    assert targets == {*LINEAR_SOURCES, onetaskgraph_user_layer.PRIVATE_PLANS}, targets
+
+
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 
 def _linear_schema() -> dict[str, object]:
@@ -739,9 +745,12 @@ def _schema_refusals(config: dict[str, object]) -> list[str]:
     return sorted(error.message for error in validator.iter_errors(config))
 
 
+# llmlint: ignore-block[test_tiers_split_by_project_not_by_marker] `reads_checkouts` is the
+# uncached `orchestrator:test-checkouts` target, not a deselected tier: see the block below.
 # llmlint: ignore-block[shell_test_tiers_stay_split] Not a shell test: a Python check of the
 # installed plan-store CLI, in the `reads_checkouts` tier the sibling checks of this file's
-# board sources already use, which keeps it out of every memoized tier.
+# board sources already use, which routes it to the uncached `orchestrator:test-checkouts`
+# target because its subject is outside every key over this workspace.
 @pytest.mark.reads_checkouts
 def test_the_example_linear_sources_resolve_their_states_endpoint_and_routes(
     example_resolved: dict[str, object],
@@ -781,13 +790,17 @@ def test_the_example_linear_sources_resolve_their_states_endpoint_and_routes(
         monkeypatch.delenv(name)
     home = onetaskgraph_user_layer.installed(tmp_path_factory.mktemp("routed-layer"))
     monkeypatch.setenv(onetaskgraph_user_layer.XDG_CONFIG_HOME, str(home))
-    assert plan_store.routed_sources("plans") == (onetaskgraph_user_layer.ORGANIZATION_PLANS,)
+    assert plan_store.routed_sources("plans") == (
+        onetaskgraph_user_layer.PRIVATE_PLANS,
+        onetaskgraph_user_layer.ORGANIZATION_PLANS,
+    )
     assert plan_store.routed_sources("followups") == (
         onetaskgraph_user_layer.ORGANIZATION_FOLLOWUPS,
     )
 
 
 # llmlint: ignore-end[shell_test_tiers_stay_split]
+# llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]
 
 
 # llmlint: ignore-block[shell_test_tiers_stay_split] Not a shell test: a Python check of the

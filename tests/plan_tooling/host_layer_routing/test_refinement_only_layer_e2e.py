@@ -56,9 +56,21 @@ def test_the_example_layer_refines_each_tracked_board_with_its_routes_alone() ->
 
     for board in BOARDS:
         assert set(sources[board]) == {"routes"}, sources[board]
-        for route in sources[board]["routes"]:
-            assert route["to"].startswith("hiddenco-"), route
-            assert all(name.startswith("github.com/hiddenco/") for name in route["repositories"])
+        organization = {
+            "repositories": ["github.com/hiddenco/*"],
+            "to": f"hiddenco-{board}",
+        }
+        expected = [organization]
+        if board == "plans":
+            expected.insert(
+                0,
+                {
+                    "repositories": ["github.com/sample-owner/*"],
+                    "classification": "private",
+                    "to": "private-plans",
+                },
+            )
+        assert sources[board]["routes"] == expected
 
 
 def test_a_call_outside_this_checkout_succeeds_and_names_the_unconfigured_board(

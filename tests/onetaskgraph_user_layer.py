@@ -42,7 +42,7 @@ XDG_CONFIG_HOME = "XDG_CONFIG_HOME"
 ORGANIZATION_PLANS = "hiddenco-plans"
 ORGANIZATION_FOLLOWUPS = "hiddenco-followups"
 ORGANIZATION_REPOSITORIES = "github.com/hiddenco/*"
-#: The host's own private stores the example declares, which no route reaches.
+#: The host's private stores; plans routes the mixed owner's private work to PRIVATE_PLANS.
 PRIVATE_PLANS = "private-plans"
 PRIVATE_FOLLOWUPS = "private-followups"
 #: The credential the example's Linear sources name (`config/onetaskgraph.user-layer.example.yaml`);
@@ -170,15 +170,24 @@ def without_private_stores(document: Mapping[str, Any] | None = None) -> dict[st
     """``document`` (the example unless named) without the host's own private stores.
 
     The store reads every source declared private on each dependency read, and a journey
-    about an organization's routing holds no credential for the host's own boards, which no
-    route reaches anyway.
+    about an organization's routing holds no credential for the host's own boards.
+    Remove routes to those destinations with them.
     """
     layer = dict(example() if document is None else document)
     layer["sources"] = {
-        name: source
+        name: dict(source)
         for name, source in layer["sources"].items()
         if name not in (PRIVATE_PLANS, PRIVATE_FOLLOWUPS)
     }
+    # A removed destination cannot remain in a route: combined private routes require
+    # a destination declared private at load time.
+    for source in layer["sources"].values():
+        if "routes" in source:
+            source["routes"] = [
+                route
+                for route in source["routes"]
+                if route["to"] not in (PRIVATE_PLANS, PRIVATE_FOLLOWUPS)
+            ]
     return layer
 
 
