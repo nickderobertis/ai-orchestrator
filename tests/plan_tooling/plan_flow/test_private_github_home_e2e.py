@@ -181,9 +181,17 @@ def _task(what: str) -> str:
     )
 
 
-def _drafted(bench: Bench, name: str, tasks: Sequence[tuple[str, str, str]]) -> str:
-    """Author ``tasks`` — each its id, title and one repository — as one reviewed plan with a
-    design document in `authoring`, answering its qualified id."""
+class PlannedTask(NamedTuple):
+    """One task of a drafted plan: its node id, its title, and the one repository it names."""
+
+    id: str
+    title: str
+    repository: str
+
+
+def _drafted(bench: Bench, name: str, tasks: Sequence[PlannedTask]) -> str:
+    """Author ``tasks`` as one reviewed plan with a design document in `authoring`, answering
+    its qualified id."""
     write_plan_project(
         bench.authoring,
         {
@@ -192,31 +200,33 @@ def _drafted(bench: Bench, name: str, tasks: Sequence[tuple[str, str, str]]) -> 
             "name": name,
             "tasks": [
                 {
-                    "id": node,
-                    "title": title,
-                    "repo": repository,
+                    "id": task.id,
+                    "title": task.title,
+                    "repo": task.repository,
                     "persona": "engineer",
                     "task": _task("Reply with done."),
                     "unit": "Library",
                 }
-                for node, title, repository in tasks
+                for task in tasks
             ],
         },
         native_id=name,
     )
-    budgeted(AUTHORING, name, no_budgets(sorted({task[2] for task in tasks})), bench.environment)
+    budgeted(
+        AUTHORING, name, no_budgets(sorted({task.repository for task in tasks})), bench.environment
+    )
     designed(
         AUTHORING,
         name,
         [
             {
-                "task": title,
+                "task": task.title,
                 "unit": "Library",
-                "delivers": node,
+                "delivers": task.id,
                 "depends_on": "none",
                 "location": "the store's own location",
             }
-            for node, title, _ in tasks
+            for task in tasks
         ],
         bench.environment,
     )
@@ -320,6 +330,10 @@ def _store_copies(trace: Path) -> list[StoreCopy]:
     return [windows[index] for index in sorted(windows)]
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The task that added these
+# journeys requires them in the project holding the Linear routed-plans journey, so their graph
+# edges stay the plan-copy recipes and the stand-ins that project already depends on; they run
+# from this checkout rather than a copy of it, so they stay in its keyed `test` target.
 # llmlint: ignore-block[e2e_not_mocked] Two boundaries are doubled and no more: GitHub's wire,
 # as the loopback stand-in serving `plans` and the private board, because no check may reach a
 # live board; and the paid provider process for the review turn. The recipes, the store and its
@@ -336,8 +350,8 @@ def test_a_mixed_plan_lives_on_the_private_github_board_and_shows_its_public_tas
             bench,
             name,
             [
-                (PUBLIC_TASK, PUBLIC_TITLE, PUBLIC_REPOSITORY),
-                (PRIVATE_TASK, PRIVATE_TITLE, PRIVATE_REPOSITORY),
+                PlannedTask(PUBLIC_TASK, PUBLIC_TITLE, PUBLIC_REPOSITORY),
+                PlannedTask(PRIVATE_TASK, PRIVATE_TITLE, PRIVATE_REPOSITORY),
             ],
         )
         _clear_logs(bench)
@@ -467,7 +481,9 @@ def test_a_private_task_with_no_route_is_refused_before_either_board_is_written(
     the store's boundary refuses it there before either board takes a write."""
     with _bench(tmp_path, monkeypatch, routed=False) as bench:
         name = f"unrouted-{os.getpid()}"
-        project = _drafted(bench, name, [(PRIVATE_TASK, PRIVATE_TITLE, PRIVATE_REPOSITORY)])
+        project = _drafted(
+            bench, name, [PlannedTask(PRIVATE_TASK, PRIVATE_TITLE, PRIVATE_REPOSITORY)]
+        )
         _clear_logs(bench)
 
         copied = _run(bench, "just", "copy-plan", project)
@@ -480,3 +496,4 @@ def test_a_private_task_with_no_route_is_refused_before_either_board_is_written(
         assert _mutations(_PrivateBoardFixture.requests) == []
         assert BOARD.created == [] and PRIVATE_BOARD.created == []
     # llmlint: ignore-end[e2e_not_mocked]
+    # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

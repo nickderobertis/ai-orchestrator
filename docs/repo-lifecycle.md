@@ -96,8 +96,8 @@ reuses oneharness's shared model catalog and launches with analytics off — one
 dispatch's commands still see only its own environment.
 The adoption after that moves the engine to 0.96.0, the read API to 0.60.0, which links it,
 the store and its SDK to 0.12.11, the release of the store crates that engine links, and
-onevcs to the 0.57.4 it links, whose public boundary check never refuses a removal and whose
-store schema is version 7 as 0.57.0's was, so no registry migrates. On a GitHub Projects source
+onevcs to the 0.57.4 it links, whose public boundary check never refuses a removal. On a
+GitHub Projects source
 declared private that store creates a new issue whose item names one repository that does not
 read private in the repository of the project issue it is filed under, while the item still
 names that repository, so a private board can hold a mixed plan's public-repository tasks; it
@@ -1623,8 +1623,7 @@ checkouts to that order. The `Node` schema is
 `execution_checkout`, `steps`, `resume`, `adoption`, `consumes`, `delivers`, `pool`,
 `overflow`, `task_record`, `assets_from`, `human_item` — and
 anything else is refused while the plan loads. `human_item`, from onepipeline 0.96.0, is a
-node's optional human-item description — its kind, priority, title and body — and a node
-without one schedules exactly as before. `assets_from`, from onepipeline 0.86.0, is the
+node's optional human-item description, and a node without one schedules exactly as before. `assets_from`, from onepipeline 0.86.0, is the
 qualified task an `add` or a `retry` replacement takes its held images from, and a node a
 plan loads never states it, as it never states `task_record`. `pool` and `overflow` arrived with
 onepipeline 0.40.0 and are the worktree pool's half of the schema, copied onto the
