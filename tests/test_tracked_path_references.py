@@ -128,6 +128,16 @@ EXEMPTIONS = (
         "orchestrator/y.py",
         "the second half of that same illustrative pair",
     ),
+    Exemption(
+        ".onepipeline/templates/design-doc.md.j2",
+        "the template layer any repository may carry, which docs/orchestration.md and "
+        "orchestrator/design_chain.py name as a repository's own override; this repository's "
+        ".onepipeline/ holds only its human-items config, and its templates are templates/",
+    ),
+    Exemption(
+        ".onepipeline/templates/plan-task.md.j2",
+        "the same repository layer, for the plan-task template docs/orchestration.md names",
+    ),
 )
 EXEMPTED_PATHS = frozenset(exemption.path for exemption in EXEMPTIONS)
 

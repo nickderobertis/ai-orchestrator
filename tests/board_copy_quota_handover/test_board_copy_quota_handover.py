@@ -62,13 +62,14 @@ class Handed(NamedTuple):
 #: The store's budgets for what these recipes spend, at the bars this host was promised: a
 #: first copy, a re-copy after one task's body changed and an unchanged re-copy of the 10-item
 #: plan, in GraphQL points and in simulated seconds; a first copy's content creations; an
-#: approval's points; and the CPU seconds importing the store's Python SDK costs.
+#: approval's points, its design-review task's creation and resolution included; and the CPU
+#: seconds importing the store's Python SDK costs.
 HANDED_OVER = (
     Handed("github-plan-copy-points-first", 12, "points"),
     Handed("github-plan-copy-points-changed", 4, "points"),
     Handed("github-plan-copy-points-unchanged", 3, "points"),
     Handed("github-plan-copy-content-creations", 40, "writes"),
-    Handed("github-approval-calls-points", 5, "points"),
+    Handed("github-approval-calls-points", 13, "points"),
     Handed("github-plan-copy-seconds-first", 32, "seconds"),
     Handed("github-plan-copy-seconds-changed", 8, "seconds"),
     Handed("github-plan-copy-seconds-unchanged", 7, "seconds"),

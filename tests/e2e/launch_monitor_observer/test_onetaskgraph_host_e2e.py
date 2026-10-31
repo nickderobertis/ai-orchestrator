@@ -39,6 +39,8 @@ from github_board import (
     FOLLOWUPS_ENV_PREFIX,
     FOLLOWUPS_OPTIONS,
     FOLLOWUPS_PROJECT_NUMBER,
+    HUMAN_PRIORITY_LABELS,
+    HUMAN_TASKS_BOARD,
     LARGEST_PAGE,
     MEASURED_SEARCH_PAGE_PRICES,
     NEEDS_ATTENTION,
@@ -71,6 +73,7 @@ from github_board import (
     _GitHubFixture,
     _GraphQLRequest,
     _hosted,
+    _HumanTasksFixture,
     _Issue,
     _IssueNodeId,
     _Operation,
@@ -84,6 +87,7 @@ from github_board import (
     _serving_board,
     _serving_both_boards,
     _serving_followups,
+    _serving_human_tasks,
     _StatusOption,
     _wide_pages,
     _write_inputs,
@@ -3311,6 +3315,7 @@ class _RunPhase(StrEnum):
     SEARCHES = "searches"
     WRITES = "write path"
     BOARD_CHECK = "board check"
+    REVIEW = "review task"
 
 
 class _DocumentCost(NamedTuple):
@@ -3390,18 +3395,28 @@ def test_a_realistic_follow_up_run_reads_and_writes_only_the_items_it_is_about( 
     searched for by root cause and by text as the rendered task directs, then decided once,
     validated and copied to `Proposal`; 4 tickets an earlier dispatch bound to their
     items, edited and re-copied; 4 evidence comments on other runs' items, each followed by
-    its `re-estimate`; and the launch's one `check-dispositions --board`. Every request is
-    priced with the drift-checked prices, and each phase's points and requests, and each
-    document's, are recorded as budget `follow-up-run-points` and its breakdown.
+    its `re-estimate`; and the closeout's one `check-dispositions --board`, which then raises
+    the run's one review task over the twenty tickets it created or updated — projected by
+    the released engine into a human-task board beside `followups` — and that task completed,
+    its terminal state projected. Every request is priced with the drift-checked prices, and
+    each phase's points and requests, and each document's, are recorded as budget
+    `follow-up-run-points` and its breakdown.
     """
     environment, root = _followups_environment(tmp_path)
+    for variable in ("CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID", "CODEX_THREAD_ID"):
+        environment.pop(variable, None)
+    environment["ONEPIPELINE_LAUNCHER_SESSION"] = "follow-up-manager"
     trace = _audit_follow_up_calls(tmp_path, environment)
     board = follow_up_tickets.BOARD
     base = _follow_up_ticket(SIBLING_REPOSITORY)
     statuses = list(SEEDED_STATES)
     spent: dict[_RunPhase, list[_GraphQLRequest]] = {phase: [] for phase in _RunPhase}
     filed: list[_Filed] = []
-    with _serving_followups(environment, fields=True):
+    with (
+        _serving_followups(environment, fields=True),
+        _serving_human_tasks(tmp_path, environment) as human,
+    ):
+        environment.update(human)
         accepted: dict[str, int] = {}
         for at in range(REALISTIC_OTHER_ITEMS):
             area = REALISTIC_AREAS[(at // ACCEPTED_EVERY) % len(REALISTIC_AREAS)]
@@ -3427,6 +3442,10 @@ def test_a_realistic_follow_up_run_reads_and_writes_only_the_items_it_is_about( 
             )
             for at in range(REALISTIC_EVIDENCE_COMMENTS)
         ]
+        # Each carrier holds the priority its earlier run's copy wrote, the estimate its record
+        # stores, as every item a copy filed does.
+        for carrier in carriers:
+            carrier.priority = "Medium"
         # The earlier dispatch's copies are setup, so their requests are not this run's.
         bound = []
         for at in range(REALISTIC_BOUND_TICKETS):
@@ -3514,10 +3533,22 @@ def test_a_realistic_follow_up_run_reads_and_writes_only_the_items_it_is_about( 
         )
         trace.write_text("", encoding="utf-8")
         checked = _follow_up_step(
-            environment, "check-dispositions", "--root", str(root), "--board", board, PROPOSED_RUN
+            environment,
+            *("check-dispositions", "--root", str(root), "--board", board, "--review"),
+            PROPOSED_RUN,
         )
         assert checked.returncode == 0, checked.stdout + checked.stderr
         spent[_RunPhase.BOARD_CHECK].extend(_GitHubFixture.requests)
+        review = re.search(r"review task (hi-[0-9a-f]+)", checked.stdout)
+        assert review is not None, checked.stdout
+        completed = _followups_command(
+            environment, ["just", "human-items", "complete", review.group(1)]
+        )
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        assert "projection" not in completed.stderr, completed.stderr
+        spent[_RunPhase.REVIEW].extend(_HumanTasksFixture.requests)
+        done = json.loads(completed.stdout)["item"]["item"]
+        projected = [one for one in HUMAN_TASKS_BOARD.created if one.title == done["title"]]
         allowed = {carrier.content_id for carrier in carriers}
         allowed.update(
             one.content_id
@@ -3536,6 +3567,13 @@ def test_a_realistic_follow_up_run_reads_and_writes_only_the_items_it_is_about( 
             origin_lookups=len(carriers),
         )
 
+    # One task over every ticket the run created or updated, once each, at the priority the
+    # twenty Medium tickets derive, holding nothing, and its projection closed as completed.
+    assert done["priority"] == "medium" and done["block"] == {"scope": "nothing"}, done
+    links = [line for line in str(done["body"]).splitlines() if line.startswith("- ")]
+    assert len(links) == len(filed) and len(set(links)) == len(links), done["body"]
+    assert "No priority" not in str(done["body"]), done["body"]
+    assert len(projected) == 1 and projected[0].state == "CLOSED", projected
     for phase in _RunPhase:
         budget_telemetry.record(
             RUN_POINTS_BUDGET,
@@ -3553,6 +3591,197 @@ def test_a_realistic_follow_up_run_reads_and_writes_only_the_items_it_is_about( 
             counted=False,
             requests=cost.requests,
         )
+
+
+#: The board's word for each wire priority on the `followups` stand-in, and back.
+FOLLOWUPS_PRIORITY = {"urgent": "Urgent", "high": "High", "medium": "Medium", "low": "Low"}
+
+
+def _reviewed_after_evidence(
+    tmp_path: Path, priorities: list[str | None], *, then: str | None = None
+) -> tuple[dict[str, object], dict[str, object] | None, list[dict[str, object]]]:
+    """A run posts evidence on one carrier per entry of ``priorities``, and its closeout reviews.
+
+    Each carrier is another run's proposal holding that board priority — ``None`` for one a
+    person cleared — and this run posts its evidence and re-estimates it as the task directs,
+    then runs the closeout's `check-dispositions --board --review`. ``then``, when given, is a
+    board priority a person sets on the first carrier afterwards, before the closeout runs
+    again, as a re-dispatch's closeout does. Answers the review task after the first closeout,
+    after the second, and every open item afterwards.
+    """
+    run = PROPOSED_RUN
+    environment, root = _followups_environment(tmp_path)
+    for variable in ("CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID", "CODEX_THREAD_ID"):
+        environment.pop(variable, None)
+    environment["ONEPIPELINE_LAUNCHER_SESSION"] = "review-manager"
+    board = follow_up_tickets.BOARD
+    base = _follow_up_ticket(SIBLING_REPOSITORY)
+    filed: list[_Filed] = []
+    carriers: list[str] = []
+    with (
+        _serving_followups(environment, fields=True),
+        _serving_human_tasks(tmp_path, environment) as human,
+    ):
+        environment.update(human)
+        for at, priority in enumerate(priorities):
+            carrier = _seeded_item(
+                at,
+                run=f"earlier-run-{at}",
+                cause=f"shared-cause-{at}",
+                status=follow_up_tickets.Status.PROPOSED,
+                origin=f"drafts:earlier-run-{at}/tickets/shared-cause-{at}",
+                origin_in_body=True,
+            )
+            carrier.priority = None if priority is None else FOLLOWUPS_PRIORITY[priority]
+            cause = follow_up_tickets.RootCause(f"shared-cause-{at}")
+            ticket = replace(base, root_cause=cause, drafts=(_draft(f"evidence-{at}")[0],))
+            path = _written_ticket(root, ticket)
+            assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
+            qualified = f"{board}:{carrier.content_id}"
+            carriers.append(qualified)
+            evidence = tmp_path / f"evidence-{at}.md"
+            evidence.write_text(
+                follow_up_tickets.render_comment(run, cause, "Reproduced at the basis."),
+                encoding="utf-8",
+            )
+            posted = _followups_command(
+                environment,
+                [str(ONETASKGRAPH_BIN), "task", "comment", "add", qualified]
+                + ["--body-file", str(evidence), "--json"],
+            )
+            assert posted.returncode == 0, posted.stderr
+            estimated = _follow_up_step(environment, "re-estimate", "--board", board, qualified)
+            assert estimated.returncode == 0, estimated.stderr
+            filed.append(_Filed(ticket.drafts[0], cause, f"Posted evidence on {qualified}."))
+        account = follow_up_tickets.dispositions_path(root, run)
+        account.parent.mkdir(parents=True, exist_ok=True)
+        account.write_text(
+            json.dumps(
+                {
+                    "schema": follow_up_tickets.DISPOSITIONS_SCHEMA,
+                    "run": run,
+                    "drafts": [one.draft for one in filed],
+                    "dispositions": [one.entry() for one in filed],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        def closeout() -> dict[str, object]:
+            checked = _follow_up_step(
+                environment,
+                "check-dispositions",
+                "--root",
+                str(root),
+                "--board",
+                board,
+                "--review",
+                run,
+            )
+            assert checked.returncode == 0, checked.stdout + checked.stderr
+            found = re.search(r"review task (hi-[0-9a-f]+)", checked.stdout)
+            assert found is not None, checked.stdout
+            shown = _followups_command(
+                environment, ["just", "human-items", "show", found.group(1), "--json"]
+            )
+            assert shown.returncode == 0, shown.stdout + shown.stderr
+            detail: dict[str, object] = json.loads(shown.stdout)
+            return detail
+
+        first = closeout()
+        second = None
+        if then is not None:
+            # A person moves the first carrier's priority on the board, through the store.
+            moved = _followups_command(
+                environment,
+                [str(ONETASKGRAPH_BIN), "task", "update", carriers[0], "--priority", then],
+            )
+            assert moved.returncode == 0, moved.stdout + moved.stderr
+            second = closeout()
+        listed = _followups_command(environment, ["just", "human-items", "list", "--json"])
+        assert listed.returncode == 0, listed.stdout + listed.stderr
+    return first, second, [view["item"] for view in json.loads(listed.stdout)]
+
+
+def _groups(body: object) -> dict[str, int]:
+    """How many links the review task's body lists under each priority heading."""
+    groups: dict[str, int] = {}
+    heading = ""
+    for line in str(body).splitlines():
+        if line.startswith("- "):
+            groups[heading] = groups.get(heading, 0) + 1
+        elif line.strip():
+            heading = line.strip()
+    return groups
+
+
+@pytest.mark.parametrize(
+    ("priorities", "derived", "groups"),
+    [
+        (["high", "low"], "medium", {"High": 1, "Low": 1}),
+        (["high", "high"], "medium", {"High": 2}),
+        (["high", "high", "high"], "high", {"High": 3}),
+        (["urgent", "low"], "urgent", {"Critical": 1, "Low": 1}),
+        (["low", "low"], "low", {"Low": 2}),
+        (["medium", "low", "low"], "low", {"Medium": 1, "Low": 2}),
+        (["medium", "medium"], "medium", {"Medium": 2}),
+        ([None, "low"], "low", {"Low": 1, "No priority": 1}),
+        ([None, "medium"], "medium", {"Medium": 1, "No priority": 1}),
+    ],
+    ids=[
+        "one-high",
+        "two-high",
+        "three-high",
+        "urgent",
+        "all-low",
+        "one-medium-and-lows",
+        "two-medium",
+        "missing-and-low",
+        "missing-and-medium",
+    ],
+)
+def test_a_runs_review_task_derives_its_priority_from_every_ticket_it_touched(
+    tmp_path: Path, priorities: list[str | None], derived: str, groups: dict[str, int]
+) -> None:
+    """One non-blocking task per run, its priority by the exact rule, each ticket once.
+
+    Any urgent ticket is urgent; otherwise three or more high are high; otherwise only lows
+    plus at most one medium are low; otherwise medium — a ticket with no priority counting as
+    medium, listed under its own "No priority" group, and named in a finding to the owner.
+    """
+    first, _, items = _reviewed_after_evidence(tmp_path, priorities)
+    task = first["item"]
+    assert isinstance(task, dict)
+    assert task["priority"] == derived, task
+    assert task["block"] == {"scope": "nothing"}, task
+    assert first["blocked"] == {"total": 0, "plans": []}, first
+    assert _groups(task["body"]) == groups, task["body"]
+    findings = [one for one in items if one["id"] != task["id"]]
+    (projected,) = [one for one in HUMAN_TASKS_BOARD.created if one.title == task["title"]]
+    # The wire keeps `urgent`; the board shows the operator's word for it.
+    assert projected.priority == HUMAN_PRIORITY_LABELS[derived], projected
+    if None in priorities:
+        (finding,) = findings
+        assert finding["block"] == {"scope": "nothing"}, finding
+        assert "No priority" not in str(finding["body"]) and "- followups:" in str(
+            finding["body"]
+        ), finding
+    else:
+        assert findings == [], findings
+
+
+def test_a_re_dispatchs_closeout_updates_the_runs_one_review_task_at_the_final_priorities(
+    tmp_path: Path,
+) -> None:
+    """A person moves a ticket after the first closeout; the retry updates the same task."""
+    first, second, items = _reviewed_after_evidence(tmp_path, ["high", "high", "high"], then="low")
+    assert second is not None
+    before, after = first["item"], second["item"]
+    assert isinstance(before, dict) and isinstance(after, dict)
+    assert before["id"] == after["id"], (before, after)
+    assert (before["priority"], after["priority"]) == ("high", "medium"), (before, after)
+    assert _groups(after["body"]) == {"High": 2, "Low": 1}, after["body"]
+    assert [one["id"] for one in items] == [after["id"]], items
 
 
 # llmlint: ignore-block[budgets_scoped_to_minimal_tree] The budget sits in orchestrator/budgets.yaml beside follow-up-run-points and ticket-lifecycle-points, whose journeys are this module's: all three price the loopback board through tests/github_board.py, and orchestrator:budgets reads the telemetry this project's test target records, an edge orchestrator/project.json states; orchestrator/ holds the package alone, as that budgets file says.  # noqa: E501 - llmlint reads a directive and its reason off one line

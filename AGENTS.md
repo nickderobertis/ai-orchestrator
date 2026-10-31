@@ -980,6 +980,36 @@ limited attention, running several managers, who may not have read any earlier m
   answered, rather than pointing to where it was first asked.
 - **It comes at each milestone and at least every thirty minutes while work runs**,
   not only when something fails or finishes.
+- **It prints `just human-items report`** — the engine's one report of every open human
+  item, blocking first, each with its full body — never a list of your own of what waits
+  on a person.
+
+<!-- llmlint: ignore-block[agents_md_durable_and_terse] The node that adopted human items requires this document to state the manager's half — the report on every update, questions through items, worker-to-manager asks, acting for the user, dismissal, reconnect, the shared view, source and blocking — and to restate the engine's priority and authoring definitions, which `tests/test_human_items_guidance.py` holds word for word to the pinned engine's contract; the mechanics are `docs/orchestration.md`'s. -->
+**Human items are the one queue of what a person must do or decide**, shared by every
+manager session on the host; the browser's **Action items** page acts on the same store, so
+the CLI and the page show and do the same things.
+An item names its source — the plan and run it came from, the manager session for a
+question raised outside a run, or the host — and, when it blocks, says "blocks N steps in
+<plan>", "blocks all of <plan>" or "blocks all work on this host". Put a question that is
+genuinely the user's as a question item where it fits — `just human-items raise`, its
+`--input` file the engine's item shape — and keep unrelated nodes moving while it waits.
+**A worker's `ORCHESTRATOR_ASK_MANAGER` question is worker-to-manager**: answer it yourself;
+where only the user can, raise it as a question item, and relay the answer it records back
+on that run's channel. Complete an item for the user only after they decided in this chat —
+`just human-items complete <item>`, approved on its own, like `just approve-design`, because
+completing a design review records their approval; the receipt records this session acting
+for them. Dismiss what nothing needs with `just
+human-items dismiss <item> [--reason TEXT]`; a run's end dismisses its own as "the run
+ended", and a resolution made while you were away reaches your next `just human-items
+watch` once. A plan states each `kind: human` node's item in `onepipeline.human_item`, its
+priority always explicit and separate from a plan-store task's own priority, which a
+`plans` task carries none of. In the engine's words: Critical means drop everything for
+complete development disruption or critical production journeys down with only a human able
+to fix. High means substantial development outage, less significant journeys impaired or
+partial critical-journey outage needing a human. Medium means significant lifecycle or
+experience decisions; Low means everything else. Bodies are pithy and contain only needed
+input; question titles ask at high level, task titles say what to do.
+<!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 
 Require verified publication closeout, and the follow-up loop below, before
 issuing `complete`, which is a

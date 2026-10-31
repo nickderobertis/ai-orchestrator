@@ -1,0 +1,40 @@
+# This repository's shared `human_items` defaults: what every host that checks it out
+# reads, the engine's own two-layer configuration (onepipeline's `docs/contract.md`,
+# **Human items**), overridden key by key by the host-local file `ONEPIPELINE_CONFIG`
+# names, else `onepipeline/config.yaml` under the user's configuration directory.
+# `just human-items config` prints the effective settings and the files they came from.
+#
+# Two phase hooks and the one trusted approval authority, and no host code beyond the thin
+# commands that raise them:
+#
+#   * `design-review` — `just finish-plan` raises it once a plan's board copy exists: one
+#     task holding that plan, naming its design document and the version (approval key)
+#     a person is asked to approve. Completing it runs `design-approval`, which records
+#     exactly the record `just approve-design` records for that stored version, or
+#     refuses a changed document for re-reading (`orchestrator/design_review.py`).
+#   * `follow-up-review` — a follow-up run's closeout raises it over every ticket the run
+#     created or updated; the engine's `ticket_review` aggregation derives its priority,
+#     groups the links, and retires it when there are none. It holds nothing.
+#
+# Whether human items are on, and the tracker their tasks are projected into, are this
+# file's `enabled` and `task_source`, set where the boards they project into are
+# configured; the engine's default is off, and off every hook above raises nothing.
+human_items:
+  hooks:
+    - phase: design-review
+      kind: task
+      title: "Read and approve the design for {{ plan }}"
+      body: "Read {{ document }}. Complete this once the user approves it."
+      priority: medium
+      block: {scope: plan}
+      approval: {adapter: design-approval}
+    - phase: follow-up-review
+      kind: task
+      title: "Accept or defer the follow-up tickets from {{ run }}"
+      body: "Move each ticket to Todo to accept it or Deferred to defer it."
+      priority: low
+      block: {scope: nothing}
+      aggregate: ticket_review
+  approval_adapters:
+    design-approval:
+      command: ["uv", "run", "--no-sync", "orchestrator-design-review", "adapter"]

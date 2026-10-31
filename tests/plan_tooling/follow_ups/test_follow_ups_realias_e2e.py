@@ -30,6 +30,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import time
 from collections.abc import Iterator
 from functools import partial
 from pathlib import Path
@@ -466,6 +467,9 @@ def realiased(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Realiased]: 
 
         # A person asked on one of the run's issues, and a gathering of the run quoted it: the
         # run's reply and its response account are part of what the incident left.
+        # The run's boundary is its latest response at whole-second precision, and a comment
+        # at or before it is left out as answered, so the question waits for the next second.
+        time.sleep(1.05 - time.time() % 1)
         asked = _commented(bench, items[SECOND_CAUSE], "Does it forget the user on logout?", None)
         intent, plan = tmp / "gathering-intent.json", tmp / "gathering-plan.json"
         root = str(bench.drafts_root)

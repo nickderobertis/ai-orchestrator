@@ -32,6 +32,8 @@
 #   5. **copy** the plan and its documents into the destination a person reviews them in;
 #   6. **report** where that destination holds the project and the document, read back
 #      out of the store rather than composed from a name;
+#   6b. **raise** the design-review task for that board copy — the human item a person
+#      completes to approve the document, which `just approve-design` completes too;
 #   7. **report** what the plan checklist cost the flow: its two `planning` budgets of
 #      orchestrator/budgets.yaml over the flow's draft run and the reviews of its plan, an
 #      overrun warning rather than refusing a plan that has already landed.
@@ -990,6 +992,15 @@ fi
 uv run orchestrator-plan-locations "$plan_project" --in "$destination" ||
     fail "$plan_project landed in '$destination', but where it holds the plan and its design document could not be read" \
         "read the copy's own per-record report above, then ask the store directly with 'just plans project list --source $destination'"
+
+# 6b. The design-review task: one human task, holding the board copy's plan, asking for its
+# design document to be read and approved at the version it is at now — completing it records
+# the approval `just approve-design` records. An edited copy's task for an older version is
+# dismissed and replaced. Off on a host whose human items are off, and never a refusal: the
+# plan has landed, and `just approve-design` approves it either way.
+# llmlint: ignore[tool_output_is_signal] The raised task's id is what the manager relays to the user beside the two locations above.
+uv run orchestrator-design-review raise "$plan_project" --in "$destination" ||
+    echo "finish-plan: warning: no design-review task was raised for $plan_project; approve it with 'just approve-design' as before" >&2
 
 # 7. What the plan checklist cost this flow, measured once the flow has ended, the way a
 # landed change's cycle time is measured once it lands: the `planning` budgets of

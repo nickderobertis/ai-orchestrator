@@ -71,7 +71,7 @@ from published_tools import ONETASKGRAPH_BIN
 from orchestrator import follow_up_comments as comments
 from orchestrator import follow_up_drafts as drafts
 from orchestrator import follow_up_tickets as tickets
-from orchestrator import npm_installs, plan_store
+from orchestrator import human_items, npm_installs, plan_store
 from orchestrator.plan_budgets import Direction
 from orchestrator.plan_store import WRITABLE_PLUGIN
 from orchestrator.project_store import frontmatter
@@ -4523,6 +4523,45 @@ def test_a_filed_drafts_ticket_bound_to_the_board_satisfies_its_account(
 
     assert status == tickets.SOUND
     assert "accounts for every draft" in capsys.readouterr().out
+
+
+# llmlint: ignore-block[shell_test_tiers_stay_split] Not a shell suite and not a host tool:
+# the engine this spawns is the workspace's own locked install from `bun.lock`, in this tier's
+# key, its item store is the test's own temporary runs root, and it covers the `--review`
+# step of `check-dispositions` under the tier's 100% coverage floor.
+def test_a_sound_account_checked_with_review_raises_the_runs_one_review_task(
+    board: Path,
+    drafts_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`check-dispositions --board --review`, the closeout's last step, over the real engine.
+
+    Human items are on under a runs root of the test's own, so the released engine raises the
+    configured `follow-up-review` phase over the one item the check read as this run's.
+    """
+    host = tmp_path / "onepipeline-host.yaml"
+    host.write_text("human_items:\n  enabled: true\n", encoding="utf-8")
+    monkeypatch.setenv("ONEPIPELINE_CONFIG", str(host))
+    monkeypatch.setenv("ONEPIPELINE_RUNS_DIR", str(tmp_path / "runs"))
+    monkeypatch.setenv("ONEPIPELINE_LAUNCHER_SESSION", "review-session")
+    _drafted(drafts_root, RUN, "a-cursor-draft")
+    ticket = _write(drafts_root, _carrying())
+    account = tickets.open_dispositions(drafts_root, RUN)
+    account.write_text(json.dumps(_account(_disposed())), encoding="utf-8")
+    assert tickets.main(["copy", "--board", BOARD, str(ticket)]) == tickets.SOUND
+    capsys.readouterr()
+
+    status = tickets.main(
+        ["check-dispositions", "--root", str(drafts_root), "--board", BOARD, "--review", RUN]
+    )
+
+    assert status == tickets.SOUND
+    said = capsys.readouterr().out
+    assert "accounts for every draft" in said
+    assert f"links the 1 ticket(s) run {RUN} created or updated" in said, said
+    # llmlint: ignore-end[shell_test_tiers_stay_split]
 
 
 def test_a_filed_drafts_ticket_bound_to_an_item_that_is_not_its_copy_is_refused(
@@ -9335,6 +9374,58 @@ def test_budget_closeout_executes_quoted_hook_and_deletes_its_own_snapshot(
     assert tickets.main(write) == tickets.SOUND
     assert tickets.main(_closeout_arguments(drafts_root, snapshot, hook)) == tickets.SOUND
     assert not snapshot.exists() and not hook.exists()
+
+
+def _items_on(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Human items on under a runs root of ``tmp_path``'s own, acting as one session."""
+    host = tmp_path / "onepipeline-host.yaml"
+    host.write_text("human_items:\n  enabled: true\n", encoding="utf-8")
+    monkeypatch.setenv("ONEPIPELINE_CONFIG", str(host))
+    monkeypatch.setenv("ONEPIPELINE_RUNS_DIR", str(tmp_path / "runs"))
+    monkeypatch.setenv("ONEPIPELINE_LAUNCHER_SESSION", "closeout-session")
+
+
+@pytest.mark.parametrize("sound", [True, False], ids=["passed", "refused"])
+def test_the_closeout_raises_the_runs_review_task_only_once_every_check_passed(
+    drafts_root: Path,
+    board: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    sound: bool,
+) -> None:
+    """The executable closeout a launch hands the engine, with human items on.
+
+    Passed, it raises the run's one review task over the item its board check read as this
+    run's; refused — an input draft the account leaves undisposed — it raises none.
+    """
+    _items_on(tmp_path, monkeypatch)
+    _drafted(drafts_root, RUN, "a-cursor-draft")
+    if not sound:
+        _drafted(drafts_root, RUN, "an-undisposed-draft")
+    ticket = _write(drafts_root, _carrying())
+    account = tickets.open_dispositions(drafts_root, RUN)
+    account.write_text(json.dumps(_account(_disposed())), encoding="utf-8")
+    assert tickets.main(["copy", "--board", BOARD, str(ticket)]) == tickets.SOUND
+    entry = _cycle_entry("within")
+    snapshot = tmp_path / "measurement.json"
+    snapshot.write_bytes(_budget_account(drafts_root, entry).read_bytes())
+    hook = tmp_path / "closeout.sh"
+    hook.touch()
+    write = _closeout_arguments(drafts_root, snapshot, hook, "write-closeout")
+    assert tickets.main(write) == tickets.SOUND
+
+    done = subprocess.run([str(hook)], text=True, capture_output=True, check=False)
+
+    raised = f"links the 1 ticket(s) run {RUN} created or updated"
+    if sound:
+        assert done.returncode == tickets.SOUND, done.stdout + done.stderr
+        assert raised in done.stdout, done.stdout
+        (task,) = [item for item in human_items.open_items() if "Accept or defer" in item.title]
+        assert task.kind == "task" and f"\n- {BOARD}:" in task.body, task
+    else:
+        assert done.returncode != tickets.SOUND, done.stdout + done.stderr
+        assert raised not in done.stdout, done.stdout
+        assert human_items.open_items() == []
 
 
 def test_budget_closeout_preserves_a_refused_snapshot_and_recovers_after_repair(

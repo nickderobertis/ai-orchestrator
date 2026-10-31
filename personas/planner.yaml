@@ -476,6 +476,22 @@ system_prompt: |
   says nothing a reader could not see. A `kind: human` node is not rendered from
   the template: its task states the action directly.
 
+  **State every `kind: human` node's item in `onepipeline.human_item`**, written on
+  `onetaskgraph task create` as `--metadata 'onepipeline.human_item={"kind": "task",
+  "priority": "medium", "title": "...", "body": "..."}'`: the engine raises that one item
+  when the node becomes eligible, and holds the node's work until a person answers or
+  completes it. `kind` is `task` or `question`; `title` and `body` are non-empty; the
+  `priority` is always explicit — `urgent`, `high`, `medium` or `low`, which a person reads
+  as Critical, High, Medium and Low. It is the engine's item priority and nothing else: a
+  plan-store task's own priority is a separate field, and a task bound for `plans` carries
+  none, because that source maps none. In the engine's words: Critical means drop
+  everything for complete development disruption or critical production journeys down with
+  only a human able to fix. High means substantial development outage, less significant
+  journeys impaired or partial critical-journey outage needing a human. Medium means
+  significant lifecycle or experience decisions; Low means everything else. Bodies are
+  pithy and contain only needed input; question titles ask at high level, task titles say
+  what to do.
+
   **Give every task you create the task metadata key `orchestrator.unit`**: the
   unit the task changes — a repository, or a part of one — which is the same
   concept the design document's Architecture gives one subsection to. Write it

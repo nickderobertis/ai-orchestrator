@@ -669,6 +669,15 @@ integrate *args: _provisioned
 runs *args:
     @./scripts/onepipeline.sh runs "$@"
 
+# The host's one queue of what people must do or decide: `just human-items report` prints
+# every open item, blocking first, with its full body — the report a manager prints on every
+# update — and `list`, `show`, `answer`, `complete`, `dismiss [--reason TEXT]`, `watch` and
+# `config` are the engine's own verbs over the same live store the browser's **Action items**
+# page acts on. Run here, a write records this session as its actor on the user's behalf.
+# llmlint: ignore[tool_output_is_signal] the item report, list and receipts are this viewing and acting command's product.
+human-items *args:
+    @./scripts/onepipeline.sh human-items "$@"
+
 # Stop a run this session launched, tree and all: `just stop <run-id>`. Refuses a run
 # another planner launched, or one with no recorded launcher, unless given --force.
 # llmlint: ignore[tool_output_is_signal] the ownership refusal and what was stopped are this command's product.

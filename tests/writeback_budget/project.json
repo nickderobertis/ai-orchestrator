@@ -66,6 +66,7 @@
       "{workspaceRoot}/scripts/run-ended.sh",
       "{workspaceRoot}/scripts/session-setup.sh",
       "{workspaceRoot}/orchestrator/follow_up_tickets.py",
+      "{workspaceRoot}/orchestrator/human_items.py",
       "{workspaceRoot}/orchestrator/plan_store.py",
       "{workspaceRoot}/orchestrator/root.py",
       "{workspaceRoot}/orchestrator/plan_units.py",

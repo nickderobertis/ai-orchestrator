@@ -109,10 +109,23 @@ host's resources, provider health, dispatches and runs, the acting session's rep
 from the unwatched route, and the one **host-wide shutdown**
 ([below](#shutting-the-host-down-from-the-browser)). **Action items** is another page
 of its own: the acting session's queue of human tasks and questions from
-`/api/human-items`, where an item is raised, answered, completed or dismissed. The
-linked engine ships no live human-item adapter, so on this host, which never passes
-`--human-items-sample`, every one of those routes answers `503 human_items_unavailable`
-and the page shows no items.
+`/api/human-items`, where an item is raised, answered, completed or dismissed. It is the
+same live store `just human-items` reads and writes — one journal beneath the runs root,
+so the page and the CLI show and act on the same items; there is no sample mode. A host
+whose effective `human_items` configuration (`just human-items config`) does not enable
+it answers every one of those routes `503 human_items_unavailable` and the page shows no
+items. Each item shows its **source** — the plan and run it came from, the manager session
+for a question raised outside a run, or the host — and whether it blocks work, as
+"blocks N steps in <plan>", "blocks all of <plan>" or "blocks all work on this host";
+the scope behind that is the engine's internal record, never a filter or a column.
+Completing a design-review task here is an ordinary **Complete**: it approves the
+document version the task stored when it was raised, through the same authority `just
+approve-design` runs, and a document changed since is refused with `Re-read the current
+document`, the obsolete task dismissed and one raised for the current version. A write
+here is the acting session's own, so it records no `on_behalf_of`; a manager completing
+on a user's behalf does so from the CLI. When a run settles, ends or is stopped, the
+engine dismisses its still-open items that hold that run's work or plan with the reason
+"the run ended", so neither view keeps an item nothing can act on.
 
 **Those controls are the whole of what the view acts through.** A run is acted on by
 its per-run **Stop**, its channel's **Next**, reply, raised surface and `attest`, a human
@@ -263,7 +276,7 @@ serves another fails there instead of being noticed by a person.
 
 ### What the adopted view renders, and what it has nothing to render
 
-**`onepipeline-ui` 0.62.1**, the release `config/onepipeline-ui.version` pins, carries
+**`onepipeline-ui` 0.63.0**, the release `config/onepipeline-ui.version` pins, carries
 what makes this a supervising surface: the project sidebar grouped by each run's
 effective group with its kind filter, the run's **Channel** tab with its byte-for-byte
 reply composer and `attest`, the per-run **Stop** with the owner-naming refusal, and the

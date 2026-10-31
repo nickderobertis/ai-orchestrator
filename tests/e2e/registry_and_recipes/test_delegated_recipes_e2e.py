@@ -129,6 +129,7 @@ def _tail(destination: str = THE_BOARD, project: str = PLAN_PROJECT) -> tuple[st
         f"{ENGINE} start {DEFAULTS} {DESIGN_PROJECT} {_design_labels(project)} --dag-graph off",
         f"uv run orchestrator-copy-plan {project} --to {destination}",
         f"uv run orchestrator-plan-locations {project} --in {destination}",
+        f"uv run orchestrator-design-review raise {project} --in {destination}",
     )
 
 
@@ -492,6 +493,7 @@ DELEGATIONS = (
             f"{_design_labels('authoring:listing-cursor')} --dag-graph off",
             "uv run orchestrator-copy-plan authoring:listing-cursor --to elsewhere",
             "uv run orchestrator-plan-locations authoring:listing-cursor --in elsewhere",
+            "uv run orchestrator-design-review raise authoring:listing-cursor --in elsewhere",
         ),
     ),
     Delegation("channel-next", ("run-1",), f"{ENGINE} next run-1"),

@@ -41,6 +41,7 @@
       "{workspaceRoot}/orchestrator/design_approval.py",
       "{workspaceRoot}/orchestrator/follow_up_drafts.py",
       "{workspaceRoot}/orchestrator/follow_up_tickets.py",
+      "{workspaceRoot}/orchestrator/human_items.py",
       "{workspaceRoot}/orchestrator/plan_store.py",
       "{workspaceRoot}/orchestrator/plan_units.py",
       "{workspaceRoot}/orchestrator/project_store.py",

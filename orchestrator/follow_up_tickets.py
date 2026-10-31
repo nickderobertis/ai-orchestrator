@@ -94,7 +94,7 @@ from onetaskgraph_sdk._generated.task_detail import Comment as ShownComment
 from onetaskgraph_sdk._generated.task_detail import Task as ShownTask
 
 from orchestrator import follow_up_drafts as drafts
-from orchestrator import npm_installs, plan_store
+from orchestrator import human_items, npm_installs, plan_store
 from orchestrator.plan_budgets import BUDGETS_FILE, Direction
 from orchestrator.plan_store import RECORD_COMPONENT, QualifiedTaskId
 from orchestrator.project_store import TASKS_DIRECTORY, frontmatter, hosted_origin
@@ -4428,6 +4428,7 @@ def filed_board_problems(
     board: str,
     tickets: Mapping[str, Ticket | None],
     details: Mapping[str, Sequence[str]] | None = None,
+    touched: dict[str, ReviewTicket] | None = None,
 ) -> list[str]:
     """Filed causes whose item or evidence comment did not reach the board soundly.
 
@@ -4435,6 +4436,10 @@ def filed_board_problems(
     (:func:`locate`, once per ticket for the whole check). Local tickets, placements, board
     records and comments are shared within this check. A copied item's priority still agrees
     with its local ticket and every carrier's estimate is recounted.
+
+    ``touched`` collects every item this run created or updated — each filed cause's own item
+    or the item carrying its evidence comment — once per item, at the priority the board
+    holds it at, out of the reads this check already made, for the run's review task.
     """
     found = []
     reads = BoardReads()
@@ -4466,6 +4471,8 @@ def filed_board_problems(
                 f"comment of run {run} on {routed}, so its evidence did not reach the board"
             )
             continue
+        if touched is not None:
+            touched[carrier] = review_ticket(carrier, reads.item(carrier))
         found.extend(evidence_comment_problems(run, carrier, reads))
         found.extend(board_estimate_problems(carrier, reads))
         if copied and (held := held_priority(reads.item(carrier))) != ticket.priority:
@@ -4475,6 +4482,77 @@ def filed_board_problems(
             )
     found.extend(placed_status_problems(root, run, board, tickets, reads))
     return found
+
+
+class ReviewTicket(NamedTuple):
+    """One ticket a run's review task links: where a person opens it, and its board priority."""
+
+    url: str
+    priority: Priority
+
+
+def review_ticket(carrier: str, item: Mapping[str, object]) -> ReviewTicket:
+    """``carrier``'s link and the priority the board holds, as the review task lists it.
+
+    The board's priority rather than the ticket's estimate, because a person's override is
+    the ticket's final priority; a priority the store reports no value for stays `none`, which
+    the engine lists under "No priority" and counts as Medium, and a word that is no priority
+    at all is the store's refusal to answer, raised as :func:`held_priority` raises it.
+    """
+    location = item.get("location")
+    url = location.get("url") if isinstance(location, Mapping) else None
+    return ReviewTicket(url if isinstance(url, str) and url else carrier, held_priority(item))
+
+
+#: The phase `.onepipeline/config.yaml` configures a run's follow-up review task under.
+REVIEW_PHASE = "follow-up-review"
+
+
+def review_raised(run: str, touched: Mapping[str, ReviewTicket]) -> str:
+    """Raise, update or retire ``run``'s one review task over the tickets it ``touched``.
+
+    The engine's `ticket_review` hook does the rest: it deduplicates, derives the task's
+    priority, groups the links by priority with a separate "No priority" group, raises a
+    finding naming the tickets that have none, and retires the task when there are no
+    tickets. The dedup key is the run, so a re-dispatch's closeout updates the run's one task.
+    Answers one line saying what happened; never refuses a closeout whose checks passed.
+    """
+    try:
+        session = human_items.acting_session()
+    except OSError as exc:
+        return f"{PROG}: run {run}'s review task was not raised: {exc}"
+    if session is None:
+        return f"{PROG}: this process acts as no session, so run {run}'s review task was not raised"
+    tickets = [
+        {
+            "id": carrier,
+            "url": ticket.url,
+            "priority": None if ticket.priority is Priority.NONE else ticket.priority.value,
+        }
+        for carrier, ticket in sorted(touched.items())
+    ]
+    try:
+        raised = human_items.raise_phase(
+            REVIEW_PHASE,
+            {
+                "owner": {"session": session, "run": run, "plan": None},
+                "dedup_key": run,
+                "tickets": tickets,
+            },
+        )
+    except human_items.Unavailable:
+        return (
+            f"{PROG}: human items are off on this host, so run {run}'s review task was not raised"
+        )
+    except OSError as exc:
+        return f"{PROG}: run {run}'s review task was not raised: {exc}"
+    if raised is None:
+        return f"{PROG}: run {run} created or updated no ticket, so it has no review task"
+    return (
+        f"{PROG}: review task {raised.id} links the {len(tickets)} ticket(s) run {run} created "
+        f"or updated, at priority {raised.priority}; read it with `just human-items show "
+        f"{raised.id}`"
+    )
 
 
 def placed_status_problems(
@@ -7207,6 +7285,14 @@ def _parser() -> _Parser:
     accounted.add_argument(
         "--board", metavar="SOURCE", help="also verify filed evidence on this board"
     )
+    accounted.add_argument(
+        "--review",
+        action="store_true",
+        help=(
+            "with --board, then raise or update the run's review task over every item the "
+            "check read as created or updated — the closeout's own last step"
+        ),
+    )
     accounted.add_argument("run", metavar="RUN-ID")
     budgets_opened = commands.add_parser(
         "open-budgets",
@@ -7401,9 +7487,17 @@ def _realiased(arguments: argparse.Namespace) -> int:
     return SOUND
 
 
-def _accounted(arguments: argparse.Namespace) -> int:
-    """Validate a run's disposition artifact, for the `check-dispositions` command."""
+def _accounted(
+    arguments: argparse.Namespace, touched: dict[str, ReviewTicket] | None = None
+) -> int:
+    """Validate a run's disposition artifact, for the `check-dispositions` command.
+
+    ``touched`` collects the items the board check read as this run's, for the closeout's
+    review task.
+    """
     path = dispositions_path(arguments.root, arguments.run)
+    if touched is None and getattr(arguments, "review", False):
+        touched = {}
     try:
         if not path.is_file():
             return _refused(
@@ -7443,6 +7537,7 @@ def _accounted(arguments: argparse.Namespace) -> int:
                     ]
                     for cause in filed
                 },
+                touched,
             )
     except (OSError, Refused) as exc:
         print(f"{PROG}: refused: {exc}", file=sys.stderr)
@@ -7450,6 +7545,8 @@ def _accounted(arguments: argparse.Namespace) -> int:
     if problems:
         return _refused(str(path), problems)
     print(f"{PROG}: {path} accounts for every draft this dispatch was given")
+    if getattr(arguments, "review", False) and arguments.board:
+        print(review_raised(arguments.run, touched or {}))
     return SOUND
 
 
@@ -7568,9 +7665,10 @@ def _closed_out(arguments: argparse.Namespace) -> int:
     keeps of a hook's output, beside the re-dispatch that recovers it.
     """
     tickets = sorted((arguments.root / TASKS_DIRECTORY / arguments.run / TICKETS).glob("*.md"))
+    touched: dict[str, ReviewTicket] = {}
     checks: tuple[tuple[str, Callable[[], int]], ...] = (
         ("check-run", lambda: _validated(tickets)),
-        ("check-dispositions", lambda: _accounted(arguments)),
+        ("check-dispositions", lambda: _accounted(arguments, touched)),
         ("check-budgets", lambda: _budgets_checked(arguments)),
         ("budget-results", lambda: _budgets_reported(arguments)),
     )
@@ -7588,6 +7686,8 @@ def _closed_out(arguments: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return refused[0][1]
+    # The review task's id and priority are what the manager relays, beside the checks' lines.
+    print(review_raised(arguments.run, touched))
     try:
         arguments.hook.unlink()
         arguments.measured.unlink()

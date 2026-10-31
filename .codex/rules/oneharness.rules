@@ -64,6 +64,18 @@ prefix_rule(pattern=["just", "recoverable"], decision="allow")
 # allowed_tools: Bash(onemessagebus status:*)
 prefix_rule(pattern=["onemessagebus", "status"], decision="allow")
 
+# allowed_tools: Bash(just human-items report:*)
+prefix_rule(pattern=["just", "human-items", "report"], decision="allow")
+
+# allowed_tools: Bash(just human-items watch:*)
+prefix_rule(pattern=["just", "human-items", "watch"], decision="allow")
+
+# allowed_tools: Bash(just human-items raise:*)
+prefix_rule(pattern=["just", "human-items", "raise"], decision="allow")
+
+# allowed_tools: Bash(just human-items dismiss:*)
+prefix_rule(pattern=["just", "human-items", "dismiss"], decision="allow")
+
 # allowed_tools: Bash(just channel-next:*)
 prefix_rule(pattern=["just", "channel-next"], decision="allow")
 

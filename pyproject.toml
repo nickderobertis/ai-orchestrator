@@ -7,7 +7,7 @@ requires-python = ">=3.13"
 # classifier is the truthful statement of that, and the one PyPI refuses an upload over.
 classifiers = ["Private :: Do Not Upload"]
 dependencies = [
-    "onetaskgraph-sdk==0.12.12",
+    "onetaskgraph-sdk==0.12.13",
     "onebudgetspec-cli==0.1.5",
     "oneagentgraph-cli==0.9.1",
     "oneharness-cli==0.26.1",
@@ -46,7 +46,9 @@ orchestrator-copy-plan = "orchestrator.plan_copy:main"
 # which is the thing a person can actually judge and so the thing put in front of them.
 # It is a command of this repository because the record is keyed on the design-doc template
 # as this checkout's own template root resolves it — see `orchestrator/design_approval.py`.
-orchestrator-approve-design = "orchestrator.design_approval:main"
+# Once recorded it completes the plan's design-review task for that version, releasing the
+# plan's hold — `orchestrator/design_review.py`.
+orchestrator-approve-design = "orchestrator.design_review:approve_main"
 # The fifth is the other half of that gate and is not a verb anybody types: every launch
 # this repository makes goes through it, and it refuses a plan whose design document is
 # missing or unapproved before `onepipeline start` is reached.
@@ -62,6 +64,11 @@ orchestrator-plan-locations = "orchestrator.plan_locations:main"
 # so a host sizes its pool where its identities already live rather than in a tracked
 # file every host shares; `orchestrator/workspaces_overlay.py` states the overlay rule.
 orchestrator-workspaces-overlay = "orchestrator.workspaces_overlay:main"
+# The eighth is the design-review task's two ends: `raise`, `just finish-plan`'s step that
+# asks for the board copy's document to be read and approved, and `adapter`, the trusted
+# approval authority `.onepipeline/config.yaml` names, which the engine runs when that task
+# is completed — `orchestrator/design_review.py`.
+orchestrator-design-review = "orchestrator.design_review:main"
 
 [dependency-groups]
 dev = [

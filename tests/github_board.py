@@ -11,6 +11,7 @@ import json
 import os
 import random
 import re
+import socket
 import subprocess
 import threading
 import time
@@ -2971,6 +2972,110 @@ def _serving_private_board(number: int) -> Iterator[str]:
     with, yielding the endpoint that source is pointed at."""
     with _served(_PrivateBoardFixture, PRIVATE_BOARD, STATUS_OPTIONS, number) as endpoint:
         yield endpoint
+
+
+class _HumanTasksBoard(_Board):
+    """A board human tasks are projected onto, its items filed by the engine's projection."""
+
+    node_id: ClassVar[_BoardNodeId] = _BoardNodeId("PVT_human_tasks")
+    title: ClassVar[str] = "Human tasks"
+    created_prefix: ClassVar[str] = "human"
+
+
+class _HumanTasksFixture(_GitHubFixture):
+    """The human-task board, served with its own board and request logs, for the reason
+    :class:`_FollowUpsFixture` is: its traffic is read apart from the board beside it."""
+
+    requests: ClassVar[list[_GraphQLRequest]] = []
+    rest_requests: ClassVar[list[RestRequest]] = []
+
+
+#: The board a synthetic human-task source reaches when it is served.
+HUMAN_TASKS_BOARD = _HumanTasksBoard()
+
+#: The synthetic human-task source: declared in the store's environment layer alone, never
+#: in the tracked document, so a journey projects human tasks without this host's boards.
+HUMAN_TASKS_SOURCE = "humantasks"
+
+#: Its project number, apart from every tracked source's.
+HUMAN_TASKS_PROJECT_NUMBER = 70
+
+#: The operator-facing word each wire priority is labelled with on a human-task board:
+#: Critical for `urgent`, and the other three as they are spelled.
+HUMAN_PRIORITY_LABELS = {"urgent": "Critical", "high": "High", "medium": "Medium", "low": "Low"}
+
+#: The project a planless item is filed under: the board's own project issue.
+HUMAN_TASKS_PROJECT = "I_board_plan"
+
+
+@contextmanager
+def _serving_human_tasks(root: Path, environment: Mapping[str, str]) -> Iterator[dict[str, str]]:
+    """Serve a human-task board as :data:`HUMAN_TASKS_SOURCE` and turn human items on.
+
+    Yields what to lay over ``environment``: the source, declared through the store's
+    environment layer with the four word labels as its `priority_mapping` and the
+    `task_projection` this host is authoritative for; human items enabled the way a host
+    enables them, by the host-local file `ONEPIPELINE_CONFIG` names, projecting tasks into
+    that source; and a runs root of the journey's own under ``root``. The board's `Priority`
+    field is set up by `just plans sources fields --apply`, as an operator sets one up.
+    """
+    prefix = f"ONETASKGRAPH_SOURCES__{HUMAN_TASKS_SOURCE.upper()}__"
+    host = root / "onepipeline-host.yaml"
+    host.write_text(
+        f"human_items:\n  enabled: true\n  task_source: {HUMAN_TASKS_SOURCE}\n",
+        encoding="utf-8",
+    )
+    (root / "runs").mkdir(exist_ok=True)
+    with _served(
+        _HumanTasksFixture, HUMAN_TASKS_BOARD, STATUS_OPTIONS, HUMAN_TASKS_PROJECT_NUMBER
+    ) as endpoint:
+        declared = {
+            f"{prefix}PLUGIN": "github-projects",
+            f"{prefix}VISIBILITY": "public",
+            f"{prefix}CONFIG__OWNER": CONFIGURED_REPOSITORY.owner,
+            f"{prefix}CONFIG__PROJECT_NUMBER": str(HUMAN_TASKS_PROJECT_NUMBER),
+            f"{prefix}CONFIG__REPOSITORY": str(CONFIGURED_REPOSITORY),
+            f"{prefix}CONFIG__TOKEN_ENV": "GH_PROJECTS_TOKEN",
+            f"{prefix}CONFIG__ENDPOINT": endpoint,
+            f"{prefix}CONFIG__PACING__MIN_MUTATION_INTERVAL_MS": "0",
+            **{
+                f"{prefix}CONFIG__PRIORITY_MAPPING__{wire.upper()}": label
+                for wire, label in HUMAN_PRIORITY_LABELS.items()
+            },
+            f"{prefix}TASK_PROJECTION__HOST": socket.gethostname(),
+            f"{prefix}TASK_PROJECTION__DIRECTORY": str(root / "intents"),
+            f"{prefix}TASK_PROJECTION__PROJECT": HUMAN_TASKS_PROJECT,
+            "ONEPIPELINE_CONFIG": str(host),
+            "ONEPIPELINE_RUNS_DIR": str(root / "runs"),
+        }
+        set_up = subprocess.run(
+            ["just", "plans", "sources", "fields", HUMAN_TASKS_SOURCE, "--apply"],
+            cwd=REPO_ROOT,
+            env={**environment, "GH_PROJECTS_TOKEN": "fixture-token", **declared},
+            text=True,
+            capture_output=True,
+            timeout=e2e_timeout(120),
+            check=False,
+        )
+        assert set_up.returncode == 0, set_up.stdout + set_up.stderr
+        planned = subprocess.run(
+            [str(ONETASKGRAPH_BIN), "sources", "fields", HUMAN_TASKS_SOURCE, "--json"],
+            cwd=REPO_ROOT,
+            env={**environment, "GH_PROJECTS_TOKEN": "fixture-token", **declared},
+            text=True,
+            capture_output=True,
+            timeout=e2e_timeout(120),
+            check=False,
+        )
+        assert planned.returncode == 0, planned.stdout + planned.stderr
+        (priority,) = [
+            one for one in json.loads(planned.stdout)["fields"] if one["field"] == "Priority"
+        ]
+        assert [option["name"] for option in priority["existing"]] == list(
+            HUMAN_PRIORITY_LABELS.values()
+        ), "the field setup did not create the four word labels the source maps"
+        _HumanTasksFixture.requests.clear()
+        yield declared
 
 
 def _prepare_plan_sources(root: Path) -> dict[str, str]:

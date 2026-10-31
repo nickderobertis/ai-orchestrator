@@ -67,6 +67,13 @@ allowed_tools = [
     "Bash(onemessagebus status:*)",
     # llmlint: ignore-end[least_privilege_grants]
 
+    # llmlint: ignore-block[least_privilege_grants] `just human-items report`, `watch`, `raise` and `dismiss`, the human-item verbs AGENTS.md has a manager run: each suffix is only the report's filters, the session and timeout, the item file, or the item and its reason the one engine verb names, and the verb bounds it — `report` reads the queue, `watch` prints this session's undelivered item events, `raise` writes one item the engine validates whole, and `dismiss` resolves one open item, refusing one already resolved. `complete` is left off, because completing a design review records the user's own approval as `just approve-design` does.
+    "Bash(just human-items report:*)",
+    "Bash(just human-items watch:*)",
+    "Bash(just human-items raise:*)",
+    "Bash(just human-items dismiss:*)",
+    # llmlint: ignore-end[least_privilege_grants]
+
     # llmlint: ignore-block[least_privilege_grants] `just channel-next` and `just channel-reply`: each suffix is only the run, the envelope file and the correlation, and the bus bounds them — `channel-next` hands out one surface of the named run's own queue, and `channel-reply` appends only an envelope `config/onemessagebus.yaml`'s policy and validator accept whole, refusing a correlation nothing pending holds.
     "Bash(just channel-next:*)",
     "Bash(just channel-reply:*)",

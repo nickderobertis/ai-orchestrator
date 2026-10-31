@@ -81,7 +81,6 @@ is not quietly exempt. What has changed is that stating it is no longer sufficie
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import re
@@ -352,6 +351,12 @@ class Approved(NamedTuple):
     #: True when the document already carried an approval for this exact content, so
     #: nothing was written. Repeating the command is a no-op rather than a second record.
     held: bool
+    #: The version of the document this approval read — the key a record holds, and what
+    #: a design-review item names the version it was raised for by.
+    key: ApprovalKey
+    #: True when the caller named a version that is no longer the document's, so nothing
+    #: was recorded and ``key`` is the version the document is at now.
+    moved: bool = False
 
 
 def resolved_digest(root: Path = TEMPLATE_ROOT, repository: str | None = None) -> ChainDigest:
@@ -918,13 +923,12 @@ def lapsed(
     )
 
 
-def approve(project: str) -> Approved:
-    """Record a person's approval of ``project``'s design document, and say where it went.
+def current(project: str) -> tuple[StoreDocument, ApprovalKey]:
+    """``project``'s design document and the version it is at now: the key an approval records.
 
-    Repeating it on unchanged content writes nothing and reports the record it found, so a
-    retried command and a second person running it are both harmless. Everything else —
-    edited prose, a moved template — is content nobody has approved, and this is what
-    approves it.
+    Everything an approval is refused for is refused here — a visual report the document
+    does not show, a document that is no rendering of the chain in force, a graph the
+    template's shape does not hold — so a version this answers is one a person can approve.
     """
     documents = plan_store.read_documents(project)
     document = one_document(project, documents)
@@ -938,8 +942,27 @@ def approve(project: str) -> Approved:
     # After the key, which refuses a document that is not a rendering of the chain in force:
     # only such a rendering's table is the one the template's shape is read against.
     ungraphed(project, document)
+    return document, key
+
+
+def approve(project: str, expected: ApprovalKey | None = None) -> Approved:
+    """Record a person's approval of ``project``'s design document, and say where it went.
+
+    Repeating it on unchanged content writes nothing and reports the record it found, so a
+    retried command and a second person running it are both harmless. Everything else —
+    edited prose, a moved template — is content nobody has approved, and this is what
+    approves it.
+
+    ``expected`` names the version a person read — the key a design-review item stored
+    when it was raised. Where the document is no longer at it, nothing is recorded and the
+    answer is ``moved`` with the version it is at now, so an approval of what somebody read
+    is never recorded against content they did not.
+    """
+    document, key = current(project)
+    if expected is not None and key != expected:
+        return Approved(document.qualified_id, located(document), held=False, key=key, moved=True)
     if recorded(document) == key:
-        return Approved(document.qualified_id, located(document), held=True)
+        return Approved(document.qualified_id, located(document), held=True, key=key)
     value = {"key": key, "approved_at": datetime.now(UTC).isoformat()}
     try:
         # Guarded on the change token the listing above read the document at, so an edit
@@ -964,7 +987,7 @@ def approve(project: str) -> Approved:
         written.location.model_dump(mode="python") if written.location else None,
         written.id.model_dump(),
     )
-    return Approved(document.qualified_id, location, held=False)
+    return Approved(document.qualified_id, location, held=False, key=key)
 
 
 def unshown(
@@ -1172,31 +1195,18 @@ def qualified(project: str) -> str:
     )
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    """Record the user's approval of one plan's design document, from `just approve-design`."""
-    parser = argparse.ArgumentParser(
-        prog="approve-design",
-        description="Record the user's approval of one plan project's design document.",
-    )
-    parser.add_argument("project", metavar="SOURCE:PROJECT")
-    args = parser.parse_args(argv)
-    try:
-        answered = approve(qualified(args.project))
-    except (OSError, ValueError) as exc:
-        print(f"approve-design: {exc}", file=sys.stderr)
-        return 1
+def said(answered: Approved) -> str:
+    """The line `just approve-design` reports a recorded or already-held approval with."""
     if answered.held:
-        print(
+        return (
             f"approve-design: {answered.document} already carries an approval for what it "
             f"currently says ({answered.location}); nothing was recorded"
         )
-        return 0
-    print(
+    return (
         f"approve-design: recorded the approval of {answered.document} ({answered.location}); "
         f"editing it, or changing the {TEMPLATE_NAME} template it renders, leaves it "
         f"unapproved again"
     )
-    return 0
 
 
 def configured_sources() -> frozenset[str]:
@@ -1273,10 +1283,6 @@ def gate_main(argv: Sequence[str] | None = None) -> int:
         )
         return 1
     return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
 
 
 class ProsePart(TypedDict):

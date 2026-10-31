@@ -13,9 +13,12 @@ schema_version: 1
 budgets:
   - id: follow-up-run-points
     description: >-
-      Modelled GitHub GraphQL points one realistic follow-up run spends on the followups
-      board, priced on the loopback stand-in. It protects the board token's hourly
-      allowance, which every session on this host shares.
+      Modelled GitHub GraphQL points one complete realistic follow-up run spends, priced on
+      the loopback stand-ins: its tickets on the followups board and the one review task the
+      engine projects onto a human-task board, raised and completed. It protects the board
+      token's hourly allowance, which every session on this host shares; the figure is the
+      modelled points, not live quota, and its breakdown gives each phase's and each
+      document's points beside their requests.
     measure: reported
     command: ["uv", "run", "--directory", "..", "python", "-m", "tests.budget_telemetry"]
     unit: points
@@ -29,7 +32,12 @@ budgets:
     # policy, so it no longer steers by what its `board-status` decided: its one locate is the
     # full one, and the store's own counterpart verification on the copy reads the item again.
     # The planned store change returning the located item retires that read. Measured at 184.
-    threshold: 185
+    # Raised from 184 when the closeout began raising the run's human-items review task: the
+    # released engine's projection of it costs 8 — the project read, the creation context,
+    # the create, the board add, the batched fields and the plan link, then the terminal
+    # status and the close — so 8 of this threshold are the review lifecycle's and the rest
+    # the run's tickets'. Measured at 192, which is 184 + 8 with no allowance.
+    threshold: 192
   - id: comment-answer-pass-points
     description: >-
       Modelled GitHub GraphQL points one realistic comment-answer pass, the

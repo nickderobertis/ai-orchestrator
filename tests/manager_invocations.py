@@ -206,6 +206,19 @@ _STOP = (
 )
 _SHUTDOWN = "`just shutdown` is outside it for the same reason and more so"
 _APPROVE = "record their decision with `just approve-design <source>:<project>`"
+_HUMAN_ITEMS = (
+    "It prints `just human-items report`** — the engine's one report of every open human item"
+)
+_HUMAN_ITEMS_QUEUE = "Put a question that is genuinely the user's as a question item where it fits"
+_HUMAN_ITEMS_DISMISS = (
+    "Dismiss what nothing needs with `just human-items dismiss <item> [--reason TEXT]`"
+)
+_HUMAN_ITEMS_WATCH = (
+    "a resolution made while you were away reaches your next `just human-items watch` once"
+)
+_HUMAN_ITEMS_COMPLETE = (
+    "`just human-items complete <item>`, approved on its own, like `just approve-design`"
+)
 _ACK_BRANCH = (
     "acknowledge work deliberately kept with `just unpublished --acknowledge <branch> "
     '--reason "<why>"`'
@@ -333,6 +346,14 @@ INVOCATIONS: tuple[Invocation, ...] = (
     _allow("review-comments", "just review-comments {run}", _REVIEW_COMMENTS),
     _allow("readjust-stack", "just readjust-stack {run}", _READJUST_STACK),
     _allow("sync", "just sync", _SYNC),
+    _allow("human-items-report", "just human-items report", _HUMAN_ITEMS),
+    _allow("human-items-watch", "just human-items watch --session {session}", _HUMAN_ITEMS_WATCH),
+    _allow("human-items-raise", "just human-items raise --input {file}", _HUMAN_ITEMS_QUEUE),
+    _allow(
+        "human-items-dismiss",
+        "just human-items dismiss hi-0a1b2c3d --reason obsolete",
+        _HUMAN_ITEMS_DISMISS,
+    ),
     _allow("repos", "just repos", _REPOS),
     _allow("repos-apply", "just repos-apply", _REPOS_APPLY),
     _allow("sweep", "just sweep", _SWEEP),
@@ -436,6 +457,7 @@ INVOCATIONS: tuple[Invocation, ...] = (
     _refuse("stop", "just stop {run}", _STOP),
     _refuse("shutdown", "just shutdown --mine", _SHUTDOWN),
     _refuse("approve-design", "just approve-design {project}", _APPROVE),
+    _refuse("human-items-complete", "just human-items complete hi-0a1b2c3d", _HUMAN_ITEMS_COMPLETE),
     _refuse(
         "unpublished-acknowledge",
         "just unpublished --acknowledge {branch} --reason kept",

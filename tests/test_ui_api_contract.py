@@ -166,20 +166,6 @@ def test_the_page_and_contract_keep_browser_driving_removed() -> None:
         assert route not in _routes()
 
 
-def test_the_page_says_human_items_are_unavailable_without_a_sample() -> None:
-    """The page tells an operator the **Action items** page is empty here, and why.
-
-    The contract serves those routes only over `--human-items-sample`, which this host
-    never passes, so the page's claim is held to the contract still saying so.
-    """
-    document = " ".join(_source(UI_API, CONTRACT).split())
-    assert "--human-items-sample" in document
-    assert "`503 human_items_unavailable`" in document
-    page = _page()
-    assert "`--human-items-sample`" in page
-    assert "`503 human_items_unavailable`" in page
-
-
 def test_every_route_the_page_spells_in_full_is_one_the_reader_declares() -> None:
     """A path written out on the page is a path a reader will type, so it has to exist."""
     routes = _routes()
@@ -298,18 +284,20 @@ def test_the_shutdown_the_page_describes_is_the_one_the_contract_promises() -> N
 
 #: What the page says of the action items view's availability, against the contract's words.
 ACTION_ITEMS_AVAILABILITY = {
-    "ships no live human-item adapter": "ships no live human-item adapter",
+    "there is no sample mode": "There is no sample mode",
     "`503 human_items_unavailable`": "`503 human_items_unavailable`",
+    "`Re-read the current document`": "Re-read the current document",
+    "records no `on_behalf_of`": "`on_behalf_of` is always `null`",
 }
 
 
-def test_the_action_items_view_is_said_to_answer_only_in_sample_mode_as_the_release_says() -> None:
-    """The page's account of when the action items view answers is the pinned release's.
+def test_the_action_items_view_is_said_to_serve_the_live_store_as_the_release_says() -> None:
+    """The page's account of what the action items view serves is the pinned release's.
 
-    The release's contract states its engine ships no live action-item store, so every
-    human-item route answers `503 human_items_unavailable` without a sample bundle; the
-    page says the same, and a release that grows a live store fails here until the page is
-    corrected with it.
+    The release's contract serves the engine's live store over the same journal the CLI
+    acts on, with no sample mode, answering `503 human_items_unavailable` only where the
+    effective configuration leaves human items off; the page says the same, and a release
+    that changes any of it fails here until the page is corrected with it.
     """
     page = " ".join(_page().split())
     contract = " ".join(_source(UI_API, CONTRACT).split())

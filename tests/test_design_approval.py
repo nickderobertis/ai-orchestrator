@@ -36,7 +36,7 @@ import pytest
 from project_fixtures import ONEVCS_HOME, register_stand_in
 from registered_checkouts import discover_checkouts, sibling_git
 
-from orchestrator import design_approval, design_chain, npm_installs, plan_store
+from orchestrator import design_approval, design_chain, design_review, npm_installs, plan_store
 from orchestrator.plan_store import (
     NodeId,
     QualifiedDocumentId,
@@ -614,7 +614,7 @@ def test_an_engine_that_cannot_state_the_digest_refuses_the_approval_and_the_lau
     _project(monkeypatch, {})
     _holds(monkeypatch, _document())
 
-    assert design_approval.main(["authoring:demo"]) == 1
+    assert design_review.approve_main(["authoring:demo"]) == 1
     assert said in capsys.readouterr().err
     assert design_approval.gate_main(["authoring:demo"]) == 1
     refused = capsys.readouterr().err
@@ -948,7 +948,7 @@ def test_the_recipe_refuses_a_project_with_nothing_to_approve(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     _holds(monkeypatch)
-    assert design_approval.main(["authoring:demo"]) == 1
+    assert design_review.approve_main(["authoring:demo"]) == 1
     assert "holds no design document" in capsys.readouterr().err
 
 
@@ -968,7 +968,7 @@ def test_the_recipe_refuses_an_argument_that_names_a_project_in_no_store(
 
     monkeypatch.setattr(plan_store, "read_documents", never)
     for argument in ("demo", "authoring:", ":demo", "authoring:a demo", "authoring/demo"):
-        assert design_approval.main([argument]) == 1, argument
+        assert design_review.approve_main([argument]) == 1, argument
         refused = capsys.readouterr().err
         assert repr(argument) in refused, refused
         assert "is not a qualified project id" in refused, refused
@@ -990,7 +990,7 @@ def test_the_recipe_takes_no_flag_that_would_get_a_plan_past_the_gate() -> None:
     """
     for attempted in (["authoring:demo", "--force"], ["authoring:demo", "--skip"]):
         with pytest.raises(SystemExit) as refused:
-            design_approval.main(attempted)
+            design_review.approve_main(attempted)
         assert refused.value.code == 2
 
 
@@ -1607,6 +1607,32 @@ def test_an_approval_whose_listed_version_has_moved_is_refused_naming_the_re_run
     assert design_approval.RECORD_KEY not in after.metadata, after.metadata
 
 
+def test_an_approval_of_a_version_the_document_is_no_longer_at_records_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The version a design-review task stored is approved only while the document is at it.
+
+    Named another version, the authority records nothing and answers the one the document is
+    at; named that one, it records exactly the record `just approve-design` records, and a
+    repeat finds it held. The line each reports is the recipe's own.
+    """
+    project = _designed(tmp_path / "store", monkeypatch, CURRENT)
+    stale = design_approval.ApprovalKey("0" * 64)
+
+    moved = design_approval.approve(project, expected=stale)
+    (untouched,) = READ_DOCUMENTS(project)
+    approved = design_approval.approve(project, expected=moved.key)
+    (after,) = READ_DOCUMENTS(project)
+    repeated = design_approval.approve(project, expected=moved.key)
+
+    assert moved.moved and not moved.held and moved.key != stale, moved
+    assert design_approval.RECORD_KEY not in untouched.metadata, untouched.metadata
+    assert not approved.moved and not approved.held and approved.key == moved.key, approved
+    assert design_approval.recorded(after) == moved.key
+    assert "recorded the approval of" in design_approval.said(approved)
+    assert repeated.held and "nothing was recorded" in design_approval.said(repeated)
+
+
 def test_an_approval_write_the_store_refuses_otherwise_is_reported_as_the_store_said(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1748,7 +1774,7 @@ def test_a_visual_plans_document_showing_no_visual_change_is_not_approved(
     monkeypatch.setattr(plan_store, "project_record", lambda _: {"metadata": {}})
     _holds(monkeypatch, _visual_report(), _document())
 
-    assert design_approval.main(["authoring:demo"]) == 1
+    assert design_review.approve_main(["authoring:demo"]) == 1
     refused = capsys.readouterr().err
     assert "current visual evidence of authoring:spike-visual-report" in refused, refused
     assert "authoring:demo-design does not show" in refused, refused

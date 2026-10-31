@@ -42,6 +42,7 @@
       "{workspaceRoot}/orchestrator/design_chain.py",
       "{workspaceRoot}/orchestrator/follow_up_drafts.py",
       "{workspaceRoot}/orchestrator/follow_up_tickets.py",
+      "{workspaceRoot}/orchestrator/human_items.py",
       "{workspaceRoot}/orchestrator/gate_impact.py",
       "{workspaceRoot}/orchestrator/host_installs.py",
       "{workspaceRoot}/orchestrator/npm_installs.py",

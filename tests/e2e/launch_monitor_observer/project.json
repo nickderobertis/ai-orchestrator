@@ -66,6 +66,7 @@
   "namedInputs": {
     "launchMonitorObserverWorkspace": [
       "{workspaceRoot}/.claude/settings.json",
+      "{workspaceRoot}/.onepipeline/**/*",
       "{workspaceRoot}/.githooks/**/*",
       "{workspaceRoot}/.codex/rules/oneharness.rules",
       "{workspaceRoot}/.gitignore",

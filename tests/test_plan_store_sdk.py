@@ -20,7 +20,14 @@ from onetaskgraph_sdk import QueryResponseOfQualifiedTask
 from project_fixtures import helper
 from published_tools import ONETASKGRAPH_BIN
 
-from orchestrator import design_approval, design_chain, follow_up_comments, plan_copy, plan_store
+from orchestrator import (
+    design_approval,
+    design_chain,
+    design_review,
+    follow_up_comments,
+    plan_copy,
+    plan_store,
+)
 from orchestrator.project_store import PlanDocument, PlanNode, frontmatter, write_plan_project
 from orchestrator.root import REPO_ROOT
 
@@ -147,9 +154,9 @@ def test_sdk_helpers_read_and_copy_a_real_local_plan(
         "resolved_digest",
         lambda *_arguments: design_approval.ChainDigest("sha256:test-template"),
     )
-    assert design_approval.main(["sdksource:demo"]) == 0
+    assert design_review.approve_main(["sdksource:demo"]) == 0
     assert design_approval.approve("sdksource:demo").held
-    assert design_approval.main(["sdksource:demo"]) == 0
+    assert design_review.approve_main(["sdksource:demo"]) == 0
     assert "sdksource" in design_approval.configured_sources()
 
     assert plan_copy.copy("sdksource:demo", "sdkdestination", []) == plan_copy.OK

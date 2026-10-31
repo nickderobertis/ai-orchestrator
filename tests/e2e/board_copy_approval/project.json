@@ -20,6 +20,7 @@
     "support-plan-root-variable",
     "support-project-fixtures",
     "support-published-tools",
+    "support-served-recipe",
     "support-waits"
   ],
   "namedInputs": {
@@ -78,7 +79,32 @@
       "{workspaceRoot}/tests/e2e/board_copy_approval/test_board_copy_store_reads_e2e.py",
       "{workspaceRoot}/orchestrator/plan_locations.py",
       "{workspaceRoot}/tests/e2e/board_copy_approval/test_board_copy_at_scale_e2e.py",
-      "{workspaceRoot}/tests/e2e/board_copy_approval/test_board_copy_screening_e2e.py"
+      "{workspaceRoot}/tests/e2e/board_copy_approval/test_board_copy_screening_e2e.py",
+      "{workspaceRoot}/.onepipeline/config.yaml",
+      "{workspaceRoot}/orchestrator/design_review.py",
+      "{workspaceRoot}/orchestrator/human_items.py",
+      "{workspaceRoot}/scripts/onepipeline.sh",
+      "{workspaceRoot}/scripts/launcher-session.sh",
+      "{workspaceRoot}/scripts/template-env.sh",
+      "{workspaceRoot}/scripts/telemetry-server.sh",
+      "{workspaceRoot}/config/read-api.address",
+      "{workspaceRoot}/tests/e2e/board_copy_approval/test_design_review_items_e2e.py",
+      "{workspaceRoot}/tests/e2e/board_copy_approval/test_legacy_human_node_e2e.py",
+      "{workspaceRoot}/scripts/orchestrate.sh",
+      "{workspaceRoot}/scripts/run-ended.sh",
+      "{workspaceRoot}/scripts/dispatch-env.sh",
+      "{workspaceRoot}/scripts/dispatch-env-hook.sh",
+      "{workspaceRoot}/scripts/ask-manager-env.sh",
+      "{workspaceRoot}/scripts/ask-manager.sh",
+      "{workspaceRoot}/scripts/lock-timeout.sh",
+      "{workspaceRoot}/scripts/follow-up-draft.sh",
+      "{workspaceRoot}/graphs/pr-author.yaml",
+      "{workspaceRoot}/graphs/review-reply.yaml",
+      "{workspaceRoot}/config/onepipeline.maintenance.yaml",
+      "{workspaceRoot}/config/onepipeline.version",
+      "{workspaceRoot}/oneharness.pr-author.toml",
+      "{workspaceRoot}/oneharness.review-reply.toml",
+      "{workspaceRoot}/oneharness.dispatch.toml"
     ]
   },
   "targets": {
@@ -107,7 +133,32 @@
         "boardCopyApprovalWorkspace",
         {
           "input": "testSupport",
-          "dependencies": true
+          "projects": [
+            "support-boundary-home",
+            "support-budget-telemetry",
+            "support-conftest",
+            "support-fake-codex",
+            "support-follow-up-ticket-shape",
+            "support-follow-up-variables",
+            "support-github-board",
+            "support-no-paid-provider",
+            "support-nx-inputs",
+            "support-onejudge-bundle",
+            "support-onetaskgraph-user-layer",
+            "support-onevcs-state-snapshot",
+            "support-plan-fixture-source",
+            "support-plan-root-variable",
+            "support-plan-sources",
+            "support-plan-store-cache",
+            "support-plan-store-user-layer",
+            "support-pooled-server-state",
+            "support-project-fixtures",
+            "support-published-tools",
+            "support-pytest-temp-root",
+            "support-registered-checkouts",
+            "support-short-state",
+            "support-waits"
+          ]
         }
       ],
       "cache": false,

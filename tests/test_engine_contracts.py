@@ -3444,7 +3444,7 @@ MARKER_DECLARATIONS = {
     "maintenance": (
         re.compile(r'fn maintenance\(&self\) -> PathBuf \{\s*self\.dir\.join\("([^"]+)"\)'),
         re.compile(
-            r"fn join\(&mut self\) \{.*?"
+            r"fn join\(&mut self\)(?: -> bool)? \{.*?"
             r"std::fs::remove_file\(self\.paths\.maintenance\(\)\)",
             re.DOTALL,
         ),
