@@ -65,7 +65,7 @@ from github_board import (
     _Issue,
     _IssueNodeId,
     _Operation,
-    _serving_both_boards,
+    _serving_configured_boards,
 )
 from project_fixtures import helper, project_from_plan
 from scratch_identity import Identity, seeded
@@ -281,7 +281,7 @@ def _bench(root: Path, oneharness_bin: str, *, reviewed: bool = False) -> Iterat
     identity = seeded(
         root, execution=EXECUTION_ALIAS, origin=ORIGIN, visibility="public", reviewed=reviewed
     )
-    with _serving_both_boards() as remote, _serving_linear() as linear:
+    with _serving_configured_boards() as remote, _serving_linear() as linear:
         ticket = _planted(FOLLOWUPS_BOARD, TICKET, "Todo", "An accepted ticket a landing closes")
         untouched = _planted(FOLLOWUPS_BOARD, UNTOUCHED_TICKET, "Todo", "An accepted ticket")
         task = _planted(BOARD, TASK, "In Progress", "A plan task a landing closes")

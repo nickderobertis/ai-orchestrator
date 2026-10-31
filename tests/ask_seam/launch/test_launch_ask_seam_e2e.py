@@ -74,6 +74,10 @@ from orchestrator import plan_store
 from orchestrator.project_store import PROJECTS_DIRECTORY, TASKS_DIRECTORY, render_plan_project
 from orchestrator.root import REPO_ROOT
 
+#: The engine's human item store, which it keeps beside the runs under a runs root once
+#: `.onepipeline/config.yaml` turns human items on; it is no run.
+ITEM_STORE = "human-items"
+
 #: The stand-in for the paid model, and the provider binary beneath it — the second is
 #: what covers a single-sided member, which runs oneharness in process and so spawns no
 #: CLI for the first to be.
@@ -1373,7 +1377,9 @@ def test_every_orchestrate_launch_gives_its_dispatch_the_run_it_is_under(
     assert given.strip(), f"{RUN_ID.name} reached the dispatch blank, and it is {RUN_ID.why}"
 
     root = Path(dispatch.environment["ONEPIPELINE_RUNS_DIR"])
-    created = sorted(child.name for child in root.iterdir() if child.is_dir())
+    created = sorted(
+        child.name for child in root.iterdir() if child.is_dir() and child.name != ITEM_STORE
+    )
     assert created == [given], (
         f"a dispatch was told it is under run '{given}', but this launch's runs root "
         f"holds {created}; a question goes to the channel that id names"

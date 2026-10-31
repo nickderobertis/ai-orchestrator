@@ -99,6 +99,10 @@ from orchestrator.root import REPO_ROOT
 # (`tests/short_state.py`).
 pytestmark = [pytest.mark.usefixtures("module_tmpdir")]
 
+#: The engine's human item store, which it keeps beside the runs under a runs root once
+#: `.onepipeline/config.yaml` turns human items on; it is no run.
+ITEM_STORE = "human-items"
+
 #: The step a stand-in writer runs to copy the budget command's output into its answers.
 MERGES_THE_BUDGETS = Path(__file__).resolve().parent / "merge_answers.py"
 
@@ -1233,7 +1237,11 @@ def _minted(runs: Path, launch: subprocess.Popen[str]) -> str:
     """The one run a launch minted under its own runs root, waited for rather than guessed."""
     deadline = time.monotonic() + e2e_timeout(180)
     while time.monotonic() < deadline:
-        minted = sorted(held.name for held in runs.iterdir()) if runs.is_dir() else []
+        minted = (
+            sorted(held.name for held in runs.iterdir() if held.name != ITEM_STORE)
+            if runs.is_dir()
+            else []
+        )
         if minted:
             assert len(minted) == 1, f"this launch's own runs root holds several runs: {minted}"
             return minted[0]

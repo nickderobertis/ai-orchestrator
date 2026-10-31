@@ -140,3 +140,64 @@ sources:
           path: [host]
     cache:
       enabled: true
+  # The operator's two human-task boards, which the engine will project each human item's task
+  # into once `.onepipeline/config.yaml` names `human-public` as its `task_source` (it names
+  # none yet; that file says why): public own-account work on `human-public`, and work the
+  # public boundary classifies private on `human-private`. Like `plans` and `followups`, neither carries `routes` here, because a
+  # list this document sets replaces a user layer's whole list: the host's user layer
+  # declares `human-public`'s routes — the `purpose: human-task` entry sending a private task
+  # to `human-private`, and any organization's — and without one a private task is refused,
+  # never written publicly. Also host-local: each board's `task_projection`, the one host
+  # authoritative for its intents and their absolute directory, and `human-private`'s issue
+  # repository, which is private and so is never named in this public file
+  # (`config/onetaskgraph.user-layer.example.yaml`). `sources fields <source> --apply` is how
+  # each board's `Status` and `Priority` options are created from the mappings here.
+  human-public:
+    visibility: public
+    plugin: github-projects
+    config:
+      owner: nickderobertis
+      project_number: 7
+      repository: nickderobertis/ai-orchestrator
+      token_env: GH_PROJECTS_TOKEN
+      status_mapping:
+        # Every category is stated: a projected task is created at `todo` and settles at
+        # `done` (closed as completed) or `cancelled` (closed as not planned); a person may
+        # move one to `in-progress`; and the categories no human task reaches are disabled, so
+        # the board carries no option nothing writes.
+        backlog: null
+        draft: null
+        todo: Todo
+        queued: null
+        in-progress: In Progress
+        unknown: null
+        done: Done
+        cancelled: Cancelled
+      # The operator's word for each wire priority: `urgent` is shown as Critical.
+      priority_mapping:
+        urgent: Critical
+        high: High
+        medium: Medium
+        low: Low
+  human-private:
+    visibility: private
+    plugin: github-projects
+    config:
+      owner: nickderobertis
+      project_number: 8
+      token_env: GH_PROJECTS_TOKEN
+      # The same options as `human-public`, so a task reads alike on either board.
+      status_mapping:
+        backlog: null
+        draft: null
+        todo: Todo
+        queued: null
+        in-progress: In Progress
+        unknown: null
+        done: Done
+        cancelled: Cancelled
+      priority_mapping:
+        urgent: Critical
+        high: High
+        medium: Medium
+        low: Low

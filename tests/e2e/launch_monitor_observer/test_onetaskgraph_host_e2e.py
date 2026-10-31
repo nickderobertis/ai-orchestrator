@@ -85,7 +85,7 @@ from github_board import (
     _search_points,
     _sent,
     _serving_board,
-    _serving_both_boards,
+    _serving_configured_boards,
     _serving_followups,
     _serving_human_tasks,
     _StatusOption,
@@ -125,6 +125,10 @@ def _boundary_answers(monkeypatch: pytest.MonkeyPatch) -> None:
         ),
     )
 
+
+#: The engine's human item store, which it keeps beside the runs under a runs root once
+#: `.onepipeline/config.yaml` turns human items on; it is no run.
+ITEM_STORE = "human-items"
 
 ADOPTED = (REPO_ROOT / "config" / "onetaskgraph.version").read_text().strip()
 _NodeId = NewType("_NodeId", str)
@@ -5131,7 +5135,7 @@ def test_a_launch_claims_its_plan_items_and_the_ticket_a_node_delivers(
     reading is waited for while the turn is still held. No board write is held or altered
     to reach either reading; only the model's turn is.
     """
-    with _serving_both_boards() as remote:
+    with _serving_configured_boards() as remote:
         claiming = _prepare_claiming_launch(tmp_path, oneharness_bin, remote)
         launch = _launching(claiming)
         try:
@@ -5257,7 +5261,11 @@ def _run_id(runs: Path) -> str:
     """The one run this launch minted under its own ledger, waited for rather than guessed."""
     deadline = time.monotonic() + e2e_timeout(180)
     while time.monotonic() < deadline:
-        minted = [held.name for held in runs.iterdir()] if runs.is_dir() else []
+        minted = (
+            [held.name for held in runs.iterdir() if held.name != ITEM_STORE]
+            if runs.is_dir()
+            else []
+        )
         assert len(minted) <= 1, f"this launch's own ledger holds several runs: {minted}"
         if minted:
             return minted[0]
@@ -5302,7 +5310,7 @@ def test_a_cancelled_node_gives_back_the_ticket_it_had_claimed(
     paid-model boundary throughout, which is what keeps the delivering node from starting
     while the claim is read and while the cancel takes effect.
     """
-    with _serving_both_boards() as remote:
+    with _serving_configured_boards() as remote:
         claiming = _prepare_claiming_launch(tmp_path, oneharness_bin, remote)
         launch = _launching(claiming)
         try:
@@ -5802,7 +5810,11 @@ def test_a_regenerated_task_keeps_its_identity_and_its_board_item_and_launches_r
     )
 
     assert launched.returncode == 0, launched.stdout + launched.stderr
-    (run,) = [held for held in Path(launching["ONEPIPELINE_RUNS_DIR"]).iterdir() if held.is_dir()]
+    (run,) = [
+        held
+        for held in Path(launching["ONEPIPELINE_RUNS_DIR"]).iterdir()
+        if held.is_dir() and held.name != ITEM_STORE
+    ]
     record = json.loads((run / "launch.json").read_text("utf-8"))
     assert record["require_rendered"] is True, record
 
@@ -5957,7 +5969,9 @@ def test_a_hand_written_plan_is_refused_by_check_plan_and_at_launch_unless_the_c
         )
     ]
     runs = Path(launching["ONEPIPELINE_RUNS_DIR"])
-    refused_runs = [held.name for held in runs.iterdir()] if runs.is_dir() else []
+    refused_runs = (
+        [held.name for held in runs.iterdir() if held.name != ITEM_STORE] if runs.is_dir() else []
+    )
     kept = _recipe(
         launching,
         "orchestrate",
@@ -5983,7 +5997,7 @@ def test_a_hand_written_plan_is_refused_by_check_plan_and_at_launch_unless_the_c
         )
     assert not refused_runs, f"a refused launch minted {refused_runs}"
     assert kept.returncode == 0, kept.stdout + kept.stderr
-    (run,) = [held for held in runs.iterdir() if held.is_dir()]
+    (run,) = [held for held in runs.iterdir() if held.is_dir() and held.name != ITEM_STORE]
     record = json.loads((run / "launch.json").read_text("utf-8"))
     assert record.get("require_rendered", False) is False, record
 

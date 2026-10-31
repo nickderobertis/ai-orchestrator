@@ -16,10 +16,16 @@
 #     created or updated; the engine's `ticket_review` aggregation derives its priority,
 #     groups the links, and retires it when there are none. It holds nothing.
 #
-# Whether human items are on, and the tracker their tasks are projected into, are this
-# file's `enabled` and `task_source`, set where the boards they project into are
-# configured; the engine's default is off, and off every hook above raises nothing.
+# Human items are on for every host of this repository: the item store, holds, the CLI and
+# the browser's Action items page. No `task_source` is named yet, so no task is projected into
+# any tracker. `onetaskgraph.yaml` declares the boards they will go to, `human-public` and
+# `human-private`, but nothing writes to them until two upstream gaps are fixed, released and
+# pinned: the plan store's field setup sends a mutation live GitHub rejects, so the boards'
+# fields cannot be created, and the engine projects a plan-owned task under the plan's own
+# project and with no repositories, which the store refuses. The engine's own default stays
+# off, and a host turns human items off for itself in its host-local file.
 human_items:
+  enabled: true
   hooks:
     - phase: design-review
       kind: task

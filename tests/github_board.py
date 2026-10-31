@@ -146,6 +146,20 @@ def _followups_project_number() -> int:
 FOLLOWUPS_PROJECT_NUMBER = _followups_project_number()
 
 
+def _tracked_project_number(source: str) -> int:
+    """The board number the committed ``source`` names, read for the reason `plans`'s is."""
+    text = (REPO_ROOT / "onetaskgraph.yaml").read_text(encoding="utf-8")
+    opened = text.index(f"\n  {source}:\n")
+    named = re.compile(r"^\s+project_number:\s*(\d+)\s*$", re.MULTILINE).search(text, opened)
+    if named is None:
+        raise ValueError(f"onetaskgraph.yaml names no project_number for its `{source}` source")
+    return int(named.group(1))
+
+
+#: The committed human-task sources, which every read over each configured board reaches.
+TRACKED_HUMAN_SOURCES = ("human-public", "human-private")
+
+
 #: A second repository of the configured owner the fixture knows, so a task naming it is
 #: filed somewhere the configured fallback is not — the placement the adopted release
 #: buys, which a fixture answering one node id for every lookup could never observe.
@@ -2913,27 +2927,77 @@ class _FollowUpsFixture(_GitHubFixture):
 FOLLOWUPS_BOARD = _Board()
 
 
-@contextmanager
-def _serving_both_boards() -> Iterator[dict[str, str]]:
-    """Serve `plans` and `followups` as two boards, yielding the environment for both.
+class _EmptyBoard(_Board):
+    """A board holding nothing, which every item a journey asks about is absent from."""
 
-    Two servers rather than one, because the two sources are configured with different
-    project numbers and an issue's board membership is answered under the number of the
-    board holding it: one server would file every item under one number, and the source
-    configured with the other would find none of its own.
+    def reset(self) -> None:
+        super().reset()
+        self.issues = []
+
+
+class _HumanPublicFixture(_GitHubFixture):
+    """The committed `human-public` board, with its own board and request logs."""
+
+    requests: ClassVar[list[_GraphQLRequest]] = []
+    rest_requests: ClassVar[list[RestRequest]] = []
+
+
+class _HumanPrivateFixture(_GitHubFixture):
+    """The committed `human-private` board, with its own board and request logs."""
+
+    requests: ClassVar[list[_GraphQLRequest]] = []
+    rest_requests: ClassVar[list[RestRequest]] = []
+
+
+@contextmanager
+def _serving_configured_boards() -> Iterator[dict[str, str]]:
+    """Serve every GitHub board the tracked document configures, yielding their environment.
+
+    `plans` and `followups` are two servers rather than one, because the two are configured
+    with different project numbers and an issue's board membership is answered under the
+    number of the board holding it: one server would file every item under one number, and
+    the source configured with the other would find none of its own.
+
+    The committed human-task boards are served too, empty, because a landing asks every
+    configured board for the card of each issue it closes: left unpointed, `human-public`
+    and `human-private` would send that read to GitHub itself with the fixture's token.
     """
     with (
         _served(_GitHubFixture, BOARD, STATUS_OPTIONS, CONFIGURED_PROJECT_NUMBER) as plans,
         _served(
             _FollowUpsFixture, FOLLOWUPS_BOARD, FOLLOWUPS_OPTIONS, FOLLOWUPS_PROJECT_NUMBER
         ) as followups,
+        _served(
+            _HumanPublicFixture,
+            _EmptyBoard(),
+            STATUS_OPTIONS,
+            _tracked_project_number(TRACKED_HUMAN_SOURCES[0]),
+        ) as human_public,
+        _served(
+            _HumanPrivateFixture,
+            _EmptyBoard(),
+            STATUS_OPTIONS,
+            _tracked_project_number(TRACKED_HUMAN_SOURCES[1]),
+        ) as human_private,
     ):
+        served = {"PLANS": plans, "FOLLOWUPS": followups}
+        served |= dict(
+            zip(
+                (name.upper().replace("-", "_") for name in TRACKED_HUMAN_SOURCES),
+                (human_public, human_private),
+                strict=True,
+            )
+        )
         yield {
             "GH_PROJECTS_TOKEN": "fixture-token",
-            "ONETASKGRAPH_SOURCES__PLANS__CONFIG__ENDPOINT": plans,
-            "ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__ENDPOINT": followups,
-            "ONETASKGRAPH_SOURCES__PLANS__CONFIG__PACING__MIN_MUTATION_INTERVAL_MS": "0",
-            "ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__PACING__MIN_MUTATION_INTERVAL_MS": "0",
+            **{
+                f"ONETASKGRAPH_SOURCES__{name}__CONFIG__ENDPOINT": endpoint
+                for name, endpoint in served.items()
+            },
+            **{
+                f"ONETASKGRAPH_SOURCES__{name}__CONFIG__PACING__MIN_MUTATION_INTERVAL_MS": "0"
+                for name in served
+            },
         }
 
 

@@ -431,7 +431,8 @@ def test_the_browsers_complete_approves_the_stored_version_through_the_same_auth
 
 
 def test_the_tracked_configuration_names_this_repositorys_adapter_and_both_phases() -> None:
-    """The effective configuration the engine loads here: both hooks, the one adapter, off."""
+    """The effective configuration the engine loads here: both hooks, the one adapter, and the
+    shared default turning human items on, projecting tasks into no tracker yet."""
     shown = subprocess.run(
         [str(REPO_ROOT / "scripts" / "onepipeline.sh"), "human-items", "config", "--json"],
         cwd=REPO_ROOT,
@@ -450,3 +451,4 @@ def test_the_tracked_configuration_names_this_repositorys_adapter_and_both_phase
     assert hooks["follow-up-review"]["block"] == {"scope": "nothing"}, hooks
     adapter = effective["approval_adapters"]["design-approval"]["command"]
     assert adapter[-2:] == ["orchestrator-design-review", "adapter"], adapter
+    assert effective["enabled"] is True and effective["task_source"] is None, effective

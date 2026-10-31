@@ -12,6 +12,7 @@
     "support-conftest",
     "support-fake-codex",
     "support-github-board",
+    "support-linear-board",
     "support-no-paid-provider",
     "support-onetaskgraph-user-layer",
     "support-project-fixtures",

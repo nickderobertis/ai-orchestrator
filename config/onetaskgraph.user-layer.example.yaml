@@ -12,7 +12,12 @@
 #   - an all-private organization's repository-only routes on plans and followups;
 #   - a mixed-visibility owner's plans and follow-up tickets routed by organization and
 #     privacy together, so private work reaches private-plans and private-followups while
-#     public work stays on plans and followups.
+#     public work stays on plans and followups;
+#   - the human-task boards' host-local half: human-public's whole `routes` list — only entries
+#     carrying `purpose: human-task` route a human task, and the tracked document sets none,
+#     because a list it set would replace this one — human-private's private issue repository,
+#     and each destination's `task_projection`, the one host authoritative for its projection
+#     intents and their absolute directory.
 #
 # After the safety filter, combined repository-and-classification entries are tried first,
 # then classification-only entries, then repository-only entries, in written order within
@@ -48,6 +53,35 @@ sources:
         to: private-followups
       - repositories: ["github.com/hiddenco/*"]
         to: hiddenco-followups
+  # The human-task boards the tracked document declares. A task the public boundary classifies
+  # private goes to human-private; an organization's private task goes to its own tracker by a
+  # combined entry, tried before the classification-only one, filed under the plan's project
+  # there; public own-account work stays on human-public. With no private entry a private task
+  # is refused, never written publicly.
+  human-public:
+    routes:
+      - repositories: ["github.com/hiddenco/*"]
+        classification: private
+        purpose: human-task
+        to: hiddenco-plans
+      - classification: private
+        purpose: human-task
+        to: human-private
+    # The machine's name (`ONETASKGRAPH_HOST`, else its hostname) and an absolute directory
+    # there; `project` is the board's existing project issue a planless task is filed under.
+    task_projection:
+      host: workstation-1
+      directory: /home/operator/.local/state/onetaskgraph/human-intents
+      project: I_kwDOsampleHumanProject
+  human-private:
+    config:
+      # A private repository under the board's own owner, which every private task's issue is
+      # created in: a task naming several repositories is filed here rather than in one of them.
+      repository: nickderobertis/sample-private-store
+    task_projection:
+      host: workstation-1
+      directory: /home/operator/.local/state/onetaskgraph/human-intents
+      project: I_kwDOsamplePrivateProject
   # The organization's tracker for plans: a Linear team, verified private once per source by
   # the store, its credential named rather than held.
   hiddenco-plans:
@@ -70,6 +104,11 @@ sources:
         cancelled: Canceled
     cache:
       enabled: true
+    # Its human tasks are filed under the plan's own project here, which each request names,
+    # so it declares the authority and no `project`.
+    task_projection:
+      host: workstation-1
+      directory: /home/operator/.local/state/onetaskgraph/human-intents
   # The organization's tracker for follow-up tickets: one project of the same team, so every
   # read and create of this source is scoped to it. The same eight states as its plans source,
   # because both write the team's one workflow.

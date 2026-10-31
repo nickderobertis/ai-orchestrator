@@ -84,6 +84,10 @@ from orchestrator import plan_store
 from orchestrator.plan_store import QualifiedTaskId
 from orchestrator.root import REPO_ROOT
 
+#: The engine's human item store, which it keeps beside the runs under a runs root once
+#: `.onepipeline/config.yaml` turns human items on; it is no run.
+ITEM_STORE = "human-items"
+
 #: The group is this module's own, for fixture sharing: `life` is module-scoped and drives the real
 #: recipe end to end, so spread across workers the module would build it once per worker.
 pytestmark = [
@@ -625,10 +629,12 @@ def _snapshot(root: Path) -> dict[str, bytes]:
 
 
 def _follow_up_runs(bench: Bench) -> list[str]:
-    """Every run under the runs root, past the engine's own `.flows`, which holds no run."""
+    """Every run under the runs root, past the engine's own `.flows` and item store."""
     if not bench.runs.is_dir():
         return []
-    return sorted(path.name for path in bench.runs.iterdir() if path.name != ".flows")
+    return sorted(
+        path.name for path in bench.runs.iterdir() if path.name not in {".flows", ITEM_STORE}
+    )
 
 
 def _watermark(bench: Bench) -> bytes:

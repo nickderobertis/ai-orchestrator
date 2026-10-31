@@ -89,6 +89,79 @@ BOARDS = {
     },
 }
 
+#: The operator's two human-task boards, the account boards the user created, each declared with
+#: the values it is never repointed from. `human-private` names no repository here: its issues are
+#: created in a private repository, which this public file never names, so a host's user layer
+#: supplies it (`config/onetaskgraph.user-layer.example.yaml`).
+HUMAN_BOARDS = {
+    "human-public": {
+        "plugin": "github-projects",
+        "visibility": "public",
+        "owner": "nickderobertis",
+        "project_number": 7,
+        "repository": "nickderobertis/ai-orchestrator",
+        "token_env": "GH_PROJECTS_TOKEN",
+    },
+    "human-private": {
+        "plugin": "github-projects",
+        "visibility": "private",
+        "owner": "nickderobertis",
+        "project_number": 8,
+        "repository": None,
+        "token_env": "GH_PROJECTS_TOKEN",
+    },
+}
+#: The `Status` option each category is written to on both human-task boards: every category
+#: stated, a projected task's `todo`, `done` and `cancelled` and a person's `in-progress` mapped,
+#: and the four no human task reaches disabled.
+HUMAN_STATUSES: dict[str, str | None] = {
+    "backlog": None,
+    "draft": None,
+    "todo": "Todo",
+    "queued": None,
+    "in-progress": "In Progress",
+    "unknown": None,
+    "done": "Done",
+    "cancelled": "Cancelled",
+}
+#: The operator's word for each wire priority on both human-task boards.
+HUMAN_PRIORITIES = {"urgent": "Critical", "high": "High", "medium": "Medium", "low": "Low"}
+
+
+@pytest.mark.reads_checkouts
+@pytest.mark.parametrize("source", sorted(HUMAN_BOARDS))
+def test_each_human_task_board_resolves_its_whole_identity_and_mappings(source: str) -> None:
+    """Each human-task board resolves the identity, mappings and nothing host-local.
+
+    Read through the installed CLI's own resolution of this checkout's document alone, so
+    an identity left empty or a placeholder fails here, and so does a `routes`, a
+    `task_projection` or `human-private`'s repository, each of which is a host's.
+    """
+    resolved = _resolved_configuration()
+    identity = HUMAN_BOARDS[source]
+    for setting, expected in identity.items():
+        key = (
+            f"sources.{source}.{setting}"
+            if setting in ("plugin", "visibility")
+            else f"sources.{source}.config.{setting}"
+        )
+        assert resolved.get(key) == expected, (key, resolved.get(key), expected)
+
+    def mapped(name: str) -> dict[str, object]:
+        prefix = f"sources.{source}.config.{name}."
+        return {
+            key[len(prefix) :]: value for key, value in resolved.items() if key.startswith(prefix)
+        }
+
+    assert mapped("status_mapping") == HUMAN_STATUSES, mapped("status_mapping")
+    assert mapped("priority_mapping") == HUMAN_PRIORITIES, mapped("priority_mapping")
+    host_local = sorted(
+        key
+        for key in resolved
+        if key.startswith((f"sources.{source}.routes", f"sources.{source}.task_projection"))
+    )
+    assert host_local == [], host_local
+
 
 @pytest.mark.parametrize(
     ("source", "setting", "expected"),
@@ -317,6 +390,9 @@ def test_the_follow_ups_board_maps_every_priority_and_the_plans_board_maps_none(
         f"{mapped('followups')}, and this host states {FOLLOWUPS_PRIORITIES}"
     )
     assert mapped("plans") == {}, "the `plans` source maps priorities, which it never did"
+    # A human-task board's labels are the operator's, not a follow-up ticket's.
+    for source in HUMAN_BOARDS:
+        assert mapped(source) == HUMAN_PRIORITIES, (source, mapped(source))
     estimated = {level.value for level in follow_up_tickets.ESTIMATES}
     assert set(mapped("followups")) == estimated, (
         f"the `followups` source maps the priorities {sorted(mapped('followups'))}, and a "
@@ -493,6 +569,8 @@ WRITE_POLICY_KEYS = tuple(WRITE_POLICY)
 DECLARED_VISIBILITY = {
     "plans": "public",
     "followups": "public",
+    "human-public": "public",
+    "human-private": "private",
     "authoring": "private",
     "follow-up-runs": "private",
     "test-fixtures": "private",
@@ -515,19 +593,20 @@ def test_the_tracked_document_switches_the_public_boundary_on() -> None:
     }
     assert declared == DECLARED_VISIBILITY, declared
     for source, visibility in DECLARED_VISIBILITY.items():
-        if visibility == "private":
+        if visibility == "private" and source not in HUMAN_BOARDS:
             assert resolved[f"sources.{source}.plugin"] == WRITABLE_PLUGIN, source
 
 
 @pytest.mark.reads_checkouts
-def test_the_tracked_document_declares_no_private_tracker_and_no_route() -> None:
+def test_the_tracked_document_declares_no_route_and_no_private_tracker_but_its_own() -> None:
     """A private tracker and the route to it are a host's, so the tracked file holds neither;
-    the only sources it declares private are this machine's own local folders.
+    the only sources it declares private are this machine's own local folders and the
+    operator's own private human-task board, whose private issue repository it never names.
 
     Read off the installed CLI's resolution of this checkout's document alone — the suite
     keeps the host's user layer out of every process (`tests/plan_store_user_layer.py`) — so a
-    Linear source, a route, or a source declared private beyond this machine's own local folders
-    that crept back into the tracked file fails here.
+    Linear source, a route, or a source declared private beyond those that crept back into the
+    tracked file fails here.
     """
     resolved = _resolved_configuration()
     plugins = {key: value for key, value in resolved.items() if key.endswith(".plugin")}
@@ -544,6 +623,7 @@ def test_the_tracked_document_declares_no_private_tracker_and_no_route() -> None
     ), private
     assert plan_store.reachable("plans") == ("plans",)
     assert plan_store.reachable("followups") == ("followups",)
+    assert plan_store.reachable("human-public") == ("human-public",)
     configured = set(read_plan_sources(_configuration()))
     assert set(read_default_sources(_configuration())) <= configured
 
@@ -709,7 +789,7 @@ def test_the_example_layer_adds_destinations_and_loosens_nothing(
         for entry in value
         if isinstance(entry, dict)
     }
-    assert targets == {*LINEAR_SOURCES, *PRIVATE_STORES}, targets
+    assert targets == {*LINEAR_SOURCES, *PRIVATE_STORES, "human-private"}, targets
 
 
 # llmlint: ignore-end[test_tiers_split_by_project_not_by_marker]

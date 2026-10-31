@@ -4362,11 +4362,26 @@ that session acting on the user's behalf, a browser write records the server's a
 session alone.
 
 **Turning it on is configuration, not code.** The repository's `.onepipeline/config.yaml`
-holds this host's shared hooks and the one approval adapter; `enabled` and the
-`task_source` open tasks are projected into sit in the same file or in a host's own
-override, and `just human-items config` prints what is in force and where it came from.
-With it off every verb answers `unavailable`, every hook raises nothing, and no flow fails
-for it.
+holds this host's shared hooks, the one approval adapter, and the shared default every host of
+this repository reads, `enabled: true`. The engine's CLI, the read API embedding its SDK and
+every launch load it from that one file. A host's own override changes it for that host
+alone, and `just human-items config` prints what is in force and where it came from. With it
+off every verb answers `unavailable`, every hook raises nothing, and no flow fails for it.
+
+**The boards are declared and not yet written to.** `onetaskgraph.yaml` declares the
+operator's human-task boards, `human-public` and `human-private`, but the shared default names
+no `task_source`, so no task is projected into any tracker. Two upstream gaps stand in the way:
+the plan store's field setup sends a mutation live GitHub rejects, so the boards' `Priority`
+field and `Cancelled` option cannot be created, and the engine projects a plan-owned task under
+the plan's own project and with no repositories, which the store refuses. Once both fixes are
+released and pinned, `task_source: human-public` goes into the shared default. What the boards
+leave to a host is its user layer's: each board's `task_projection` (the one host
+authoritative for its intents, and their directory), `human-private`'s private issue
+repository, and `human-public`'s whole `routes` list — the `purpose: human-task` entry sending
+a private task to `human-private`, and any organization's entries and trackers — because a list
+the tracked document set would replace the layer's
+(`config/onetaskgraph.user-layer.example.yaml`). Without that layer a private task is refused
+rather than written publicly.
 
 **Where an item comes from is its source**: the plan and run a `kind: human` node or a
 phase raised it in, the manager session for a question raised outside any run, or the host

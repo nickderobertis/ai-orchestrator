@@ -83,6 +83,10 @@ from orchestrator.project_store import frontmatter, write_plan_project
 from orchestrator.root import REPO_ROOT
 from orchestrator.run_reading import RunId
 
+#: The engine's human item store, which it keeps beside the runs under a runs root once
+#: `.onepipeline/config.yaml` turns human items on; it is no run.
+ITEM_STORE = "human-items"
+
 #: The group is this module's own, for fixture sharing: `followed` and `endings` are module-scoped
 #: and drive the real recipe end to end, so spread across workers the module builds them once per
 #: worker — measured, about 360 s on each of four workers against 212 s for the whole module on one.
@@ -5684,8 +5688,12 @@ def test_failed_detached_follow_up_closes_its_budget_account_without_launching_a
         assert tickets.change_line(entry) in results.stdout
     assert snapshot.exists() and hook.exists()
     assert not (bench.runs / followed.run / "hooks/success.log").exists()
-    # Past the engine's own `.flows`, where the launch's flow is kept and which holds no run.
-    assert {path.name for path in bench.runs.iterdir()} - {".flows"} == {main, followed.run}
+    # Past the engine's own `.flows`, where the launch's flow is kept, and its item store,
+    # neither of which holds a run.
+    assert {path.name for path in bench.runs.iterdir()} - {".flows", ITEM_STORE} == {
+        main,
+        followed.run,
+    }
     # These files belong to the deliberately refused test launch; preservation was asserted.
     hook.unlink()
     snapshot.unlink()
