@@ -7,7 +7,7 @@ metadata:
   "onepipeline.id": "api"
   "orchestrator.unit": "Shortener API"
   "onepipeline.persona": "engineer"
-  "onetaskgraph.template": {"answers_digest":"sha256:fb23bc8ecf0b928b4b9db11ee2643bddec12bc81cbf40bf07ef5cda6f5d5d876","body_digest":"sha256:c7dbebcc06737ce2f65100dde1cf9d6fdc1e7457ead40d78153eac92147e39f0","digest":"sha256:3aa0b10cef465f7f3aec19d71a71bd1510f11ec0e4abb6c2c33db3e690095715","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:b79120100bb405fdcb45488df7ee0bf2fbc92876f8e15b41c05146cccf93f147","body_digest":"sha256:c7dbebcc06737ce2f65100dde1cf9d6fdc1e7457ead40d78153eac92147e39f0","digest":"sha256:00c53acf60517fac913d233714f2c0241c535a3502e3391bbf38d908a16cdf30","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What
@@ -404,6 +404,7 @@ acceptance_criteria:
 additional_info: ''
 boundary: {}
 budgets: []
+goals: []
 spikes: []
 what: 'Implement the URL-shortener HTTP API per `docs/design.md`: the create and resolve endpoints, validation, and persistence. Cover the endpoints with tests that drive real requests.'
 why: The service has no working create-or-resolve path yet, so nothing else in the product can be exercised end to end until this one exists.

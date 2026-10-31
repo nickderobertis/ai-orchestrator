@@ -7,7 +7,7 @@ metadata:
   "onepipeline.id": "review"
   "orchestrator.unit": "Review"
   "onepipeline.persona": "reviewer"
-  "onetaskgraph.template": {"answers_digest":"sha256:127e264008687ada1935875ac80e6a05910eb7d6e31194d4f69cb93835b02a59","body_digest":"sha256:e1307faa55c3974575ef323d6e0b59dae392d850a19493f45509d1b28500b8b1","digest":"sha256:3aa0b10cef465f7f3aec19d71a71bd1510f11ec0e4abb6c2c33db3e690095715","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:c68e123f5b08d45cc225eaf806000463af661cb65ff723d7c8484cb67b1c6768","body_digest":"sha256:e1307faa55c3974575ef323d6e0b59dae392d850a19493f45509d1b28500b8b1","digest":"sha256:00c53acf60517fac913d233714f2c0241c535a3502e3391bbf38d908a16cdf30","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What
@@ -404,6 +404,7 @@ acceptance_criteria:
 additional_info: ''
 boundary: {}
 budgets: []
+goals: []
 spikes: []
 what: Review the URL shortener end to end (api + ui + docs) for correctness, missing edge cases, and security, and report verified, severity-ranked findings.
 why: The api, ui, and docs subtasks each landed against their own slice, so nobody has yet read the three together for the gaps that only appear at their seams.

@@ -17,6 +17,21 @@ variables:
       recorded once, in the `**Requested**` part of the plan description's overview.
     type: text
     required: true
+  goals:
+    description: >-
+      The outcomes this task must reach, one string per goal, or `[]` when it states none.
+      A goal is a concrete, checkable outcome that must be true when the work is done. It is
+      distinct from the Why, which is the impact that motivates the work, and from the
+      acceptance criteria, which are the checks that prove the goals were reached. Goals
+      include non-functional ones (speed, latency, CPU, memory, disk, harness quota or
+      cost), and each non-functional goal names the `id` of the budget behind it: one a
+      task of the plan owns, or an existing root budget of the repository. A goal is proven
+      by acceptance criteria, by budgets, or by both, and goals and criteria relate many to
+      many, with no pairing assumed: one criterion may prove several goals, and one goal
+      may need several criteria and budgets together.
+    type: list
+    items: string
+    default: []
   additional_info:
     description: >-
       The task's own notes and grants, rendered under `## Additional info` above this host's
@@ -57,9 +72,37 @@ variables:
 
 {{ why }}
 
+{% if goals %}
+## Goals
+
+{% for goal in goals %}
+- {{ goal | replace("\n", "\n  ") }}
+{% endfor %}
+
+{% endif %}
 {% include "plan-task-budgets.md.j2" %}
 {% endblock %}
 {% block more_criteria %}
+{#-
+  DERIVED BUDGET CRITERIA. A dispatch's judge is bound only by the acceptance criteria, so a
+  budget stated in `## Budgets` alone binds nobody. Each budget this task adds or changes is
+  therefore rendered here as one criterion derived from its record, after the authored ones,
+  and no authored criterion restates it. A budget in a project's own budgets file is held to
+  onebudgetspec's own verdict, exactly the rule the gate applies. A budget in the
+  repository's root `budgets.yaml` is repo-wide and the merge path enforces its threshold, so
+  its criterion asks for its registration and its measurement, never a within-target result,
+  and for its registration alone where only the complete gate takes its figure, because a
+  dispatch never runs that gate. The record says only which file a budget is in, so whether a
+  budget is gate-measured or `host-variable` is a condition each criterion states for the
+  worker to read off the registered budget. A budget the task leaves as it is gets none.
+-#}
+{% for budget in budgets if budget.file_change in ["add", "change"] %}
+{% if budget.file != "budgets.yaml" %}
+- Budget `{{ budget.id }}` is registered in `{{ budget.file }}` as `## Budgets` states it, and its command, run over the finished tree inside this dispatch at the workload `## Budgets` states for it ({{ budget.workload | replace("\n", " ") }}), gets onebudgetspec's own verdict for that budget within its target, by the same rule the gate applies and no stricter or looser. Where onebudgetspec only warns on that budget (one labelled `host-variable`), an overrun does not fail this criterion; the dispatch's report instead states the measured figure, the threshold and the host load the reporter printed.
+{% else %}
+- Budget `{{ budget.id }}` is registered in `{{ budget.file }}` as `## Budgets` states it, with its command, and that command has run over the finished tree inside this dispatch at the workload `## Budgets` states for it ({{ budget.workload | replace("\n", " ") }}), the dispatch's report stating the figure it measured, the threshold and onebudgetspec's verdict. It is a repo-wide budget whose threshold the merge path enforces, so no within-target result is demanded here. Where its registered command is the repository's complete gate, or its figure is taken only by running that gate, only its registration with its command is required and no figure is demanded, because the merge path runs that gate and this dispatch does not.
+{% endif %}
+{% endfor %}
 {% if boundary.mixed is defined and boundary.mixed and boundary.clearance is defined and boundary.clearance == "public" %}
 - Nothing this task produces names anything private: no private repository, project, plan, task, path, identifier or content appears in its files, paths, names or identifiers, its commit messages or branch, or the text of its change request, follow-up drafts and reports.
 {% endif %}

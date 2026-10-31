@@ -2915,7 +2915,8 @@ def test_the_planner_is_told_how_to_state_its_budgets_in_general_terms() -> None
         "onebudgetspec fragment's rules**",
         "**The node that implements a budget owns** its command, the recording in the tests "
         "that command reads, and its registration in the right file",
-        "`plan_budget_owner_criteria_name_budget_and_workload`",
+        "`plan_criteria_do_not_restate_budgets`",
+        "the criterion the `plan-task` template derives from its record",
         "Which file each budget is registered in answers `budgets_scoped_to_minimal_tree`",
         "`plan_criteria_omit_repo_wide_budgets`",
         "**Say where a telemetry budget's figure comes from, and decide how it is taken.**",

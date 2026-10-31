@@ -7,7 +7,7 @@ metadata:
   "onepipeline.id": "ui"
   "orchestrator.unit": "Web UI"
   "onepipeline.persona": "engineer"
-  "onetaskgraph.template": {"answers_digest":"sha256:ab5535b1388b19101257ac1bb6864af2e07421ca139747ece3044ad085982225","body_digest":"sha256:e8f785f406779797c16c5a8050718c55e078be64311551932a0cc37a46ae6912","digest":"sha256:3aa0b10cef465f7f3aec19d71a71bd1510f11ec0e4abb6c2c33db3e690095715","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:40d229a813ba842a98c9c02e39aa963421a8f84870f2d096afa0f270a127d574","body_digest":"sha256:e8f785f406779797c16c5a8050718c55e078be64311551932a0cc37a46ae6912","digest":"sha256:00c53acf60517fac913d233714f2c0241c535a3502e3391bbf38d908a16cdf30","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What
@@ -404,6 +404,7 @@ acceptance_criteria:
 additional_info: ''
 boundary: {}
 budgets: []
+goals: []
 spikes: []
 what: 'Build the URL-shortener web UI per `docs/design.md`: a form to create a short link and a view of the result. Match the existing component patterns and keep it accessible.'
 why: Without a UI the service is reachable only by hand-written HTTP calls, which is not how the people it is for will use it.

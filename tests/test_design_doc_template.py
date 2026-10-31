@@ -79,6 +79,10 @@ BUDGET_SECTIONS = (("budgets", "Budgets"),)
 #: `spike-visual-report` showed a change, so a plan with none reads as it always did.
 VISUAL_SECTIONS = (("visual_changes", "Visual changes"),)
 
+#: The goals section, directly after Why, which renders only for a plan whose tasks state
+#: goals, so a plan stating none reads as it always did.
+GOAL_SECTIONS = (("goals", "Goals"),)
+
 #: The block holding what applies to the whole document, ahead of every section.
 DOCUMENT_GUIDANCE = "document_guidance"
 
@@ -86,7 +90,14 @@ DOCUMENT_GUIDANCE = "document_guidance"
 #: guidance block directly ahead of the block that renders it.
 BLOCKS = (DOCUMENT_GUIDANCE,) + tuple(
     name
-    for block, _ in (*SECTIONS[:2], *VISUAL_SECTIONS, SECTIONS[2], *BUDGET_SECTIONS, *SECTIONS[3:])
+    for block, _ in (
+        *SECTIONS[:2],
+        *GOAL_SECTIONS,
+        *VISUAL_SECTIONS,
+        SECTIONS[2],
+        *BUDGET_SECTIONS,
+        *SECTIONS[3:],
+    )
     for name in (f"{block}_guidance", block)
 )
 
@@ -148,8 +159,19 @@ GRAPH_VARIABLES: dict[str, tuple[str, str | None, Keys | None]] = {
     "dag_image": ("text", None, None),
 }
 
-#: Every optional answer: the budgets, the visual changes and the graph image.
-OPTIONAL_VARIABLES = {**BUDGET_VARIABLES, **VISUAL_VARIABLES, **GRAPH_VARIABLES}
+#: The goals answer, the plan's tasks' Goals merged, optional so a document of a plan whose
+#: tasks state none renders as it did.
+GOAL_VARIABLES: dict[str, tuple[str, str | None, Keys | None]] = {
+    "goals": ("list", "string", None),
+}
+
+#: Every optional answer: the goals, the budgets, the visual changes and the graph image.
+OPTIONAL_VARIABLES = {
+    **GOAL_VARIABLES,
+    **BUDGET_VARIABLES,
+    **VISUAL_VARIABLES,
+    **GRAPH_VARIABLES,
+}
 
 #: One phrase per format rule, which only that rule's statement carries. The guidance
 #: comments state each exactly once: none would leave a writer and its judge without it,
@@ -159,7 +181,11 @@ RULES = {
     "reader": "technical product manager with no depth in this domain",
     "prose": "no more technical than the plan's own goal statement",
     "length": "Exactness is spent on what is hard to undo",
-    "sections": "In this order: What, Why, Visual changes, Architecture, Budgets, Acceptance",
+    "sections": "In this order: What, Why, Goals, Visual changes, Architecture, Budgets,",
+    "goals are the tasks' goals merged": "The plan's tasks' Goals merged for the reader",
+    "goals invent none": "written from what the tasks' own `## Goals` sections state and",
+    "a non-functional goal names its budget": "A non-functional goal keeps the budget it names",
+    "no goals section without goals": "this document has no Goals section",
     "one subsection per visual change": "One `### <name>` subsection per change the plan",
     "illustrative images": "illustrative captures from a throwaway, mocked spike",
     "visual changes restate the report": "restates the plan's current visual report, resolved by",
@@ -1132,3 +1158,48 @@ def test_nonvisual_spike_omitted_and_empty_evidence_render_identically(tmp_path:
     absent = _render(resolved.stdout, answers, tmp_path)
     assert _render(resolved.stdout, {**answers, "visual_changes": []}, tmp_path) == absent
     assert "## Visual changes" not in absent
+
+
+#: Two goals, each distinct so the rendering can be read back against them; the second is a
+#: non-functional goal naming the budget behind it.
+GOALS = [
+    "An operator reaches any node of a 2,000-node plan from the listing.",
+    "The first page renders within the `listing-latency` budget.",
+]
+
+
+def test_a_plans_goals_render_after_why_and_before_visual_changes_and_architecture(
+    tmp_path: Path, loader: str
+) -> None:
+    """One bullet per goal, under `## Goals`, directly after Why."""
+    body = _render(loader, {**ANSWERS, "goals": GOALS, "visual_changes": VISUAL_CHANGES}, tmp_path)
+
+    sections = re.findall(r"^## (.+)$", body, re.MULTILINE)
+    assert sections == ["What", "Why", "Goals", "Visual changes", "Architecture"] + [
+        "Acceptance criteria",
+        "Planned tasks",
+    ], sections
+    section = body.split("## Goals\n", 1)[1].split("\n## ", 1)[0]
+    assert section == "\n" + "".join(f"- {goal}\n" for goal in GOALS), section
+
+
+@pytest.mark.parametrize("goals", ["absent", "empty"])
+def test_a_plan_stating_no_goals_renders_the_signed_off_sample_byte_for_byte(
+    loader: str, tmp_path: Path, goals: str
+) -> None:
+    """`goals: []`, and leaving it out, is the signed-off rendering exactly, with no section."""
+    answers = json.loads((SAMPLE / "sample-answers.json").read_text(encoding="utf-8"))
+    assert "goals" not in answers, "the signed-off sample answers goals, so this proves nothing"
+    if goals == "empty":
+        answers["goals"] = []
+    rendered = _render(loader, answers, tmp_path)
+    assert rendered == (SAMPLE / "sample-body.txt").read_text(encoding="utf-8")
+    assert "## Goals" not in rendered, rendered
+
+
+def test_the_goals_guidance_merges_the_tasks_goals_and_points_at_their_definition() -> None:
+    """The writer copies the tasks' goals; what a goal is lives once, on the plan-task template."""
+    guidance = _guidance("goals_guidance")
+    assert "inventing none" in guidance, guidance
+    assert "`goals` variable of this host's `plan-task` template" in guidance, guidance
+    assert "checkable outcome" not in guidance, "the guidance restates what a goal is"

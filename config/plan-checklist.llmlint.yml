@@ -50,10 +50,11 @@ agents:
       sizing, its answer about 10x usage, and its budget checklist) or one plan task's
       Markdown document. A task document carries YAML frontmatter, whose
       `orchestrator.budgets` record lists the budgets that task owns, and a body with
-      `## What`, `## Why`, `## Acceptance criteria`, an optional `## Budgets` section
-      and `## Additional info`. Text under `### Operational notes for this host` is a
-      standard appendix every task carries: read it as context, never as the plan's
-      own content, and never report a violation inside it.
+      `## What`, `## Why`, an optional `## Goals` section, an optional `## Budgets`
+      section, `## Acceptance criteria` and `## Additional info`. Text under
+      `### Operational notes for this host` is a standard appendix every task
+      carries: read it as context, never as the plan's own content, and never
+      report a violation inside it.
 
       The plan describes work in a target repository you cannot see. Judge each rule
       against what the plan says will exist once its tasks are done. A rule written
@@ -226,14 +227,17 @@ rules:
       or changes. false when a criterion holds the task to a repository-wide budget it
       does not own, such as the gate's own time or another root budget.
     require_line_attribution: true
-  - name: plan_budget_owner_criteria_name_budget_and_workload
+  - name: plan_criteria_do_not_restate_budgets
     agent: plan
     files:
       include: ["tasks/**/*.md"]
     relevance: the task's budget record registers or changes a budget
     description: |
-      true when the task's acceptance criteria name, by id, every budget its record
-      registers or changes, each with the workload it is measured at.
+      true when no criterion the plan's author wrote repeats what a budget this task owns
+      already proves. A criterion opening with a budget's id and the words `is registered
+      in` is the one the template derives from the budget record, not an authored one, and
+      it is true. false when an authored criterion restates an owned budget's figure, its
+      threshold or the workload it holds at.
     require_line_attribution: true
 
   # The facts a re-declared fragment rule judges, which a plan has to state before that

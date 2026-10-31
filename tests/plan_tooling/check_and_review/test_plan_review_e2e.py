@@ -2959,3 +2959,147 @@ def test_moving_the_plan_checklist_invalidates_the_plan_record_and_no_task_recor
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+#: Two goals, one functional and one non-functional naming the budget that backs it.
+STATED_GOALS = [
+    "A buyer completes a purchase through the checkout route.",
+    "The route answers within the `route-latency` budget at its workload.",
+]
+
+#: The budget the goals task owns, in the project's own budgets file.
+GOAL_BUDGET: dict[str, object] = {
+    **LONG_BUDGET,
+    "file": "services/checkout/budgets.yaml",
+    "workload": "500 purchases a minute at the evening peak",
+}
+
+
+def _goals_project(name: str, goals: list[str] | None) -> str:
+    """One agent node owning a budget, rendered with ``goals`` (or none), its plan answered."""
+    native = f"{name}-{os.getpid()}"
+    write_plan_project(
+        plan_fixture_source.root(),
+        {
+            "schema_version": 3,
+            "name": native,
+            "goal": {"text": "Deliver the checkout route"},
+            "tasks": [_node("route")],
+        },
+        native_id=native,
+    )
+    answers = no_budgets(["github.com/nickderobertis/some-service"])
+    answers["checklist"][0] = {
+        "concern": "latency",
+        "budget": "route-latency",
+        "not_applicable": "",
+        "summary": "",
+    }
+    task_answers: dict[str, object] = {
+        "what": "Add the checkout route and the test that drives it.",
+        "why": "A buyer cannot check out.",
+        "acceptance_criteria": [
+            "A request-level test drives the route end to end and covers a refused purchase.",
+            "Every claim the dispatch makes about the finished work is true of the tree as "
+            "it finally stands.",
+        ],
+    }
+    if goals is not None:
+        task_answers["goals"] = goals
+    task = owning(plan_fixture_source.SOURCE, native, "route", [GOAL_BUDGET], answers=task_answers)
+    subprocess.run(
+        [str(plan_store.locked_binary()), "task", "metadata", "set", task]
+        + ["orchestrator.unit", json.dumps("Checkout route")],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        check=True,
+    )
+    budgeted(plan_fixture_source.SOURCE, native, answers)
+    return f"{plan_fixture_source.SOURCE}:{native}"
+
+
+def _task_turn(log: Path) -> str:
+    """The one per-task prompt a review delivered, whitespace-normalized."""
+    opening = " ".join(plan_review.REVIEW_PROMPT.split()[:6])
+    (turn,) = [one for one in _prompts(log) if opening in one and _flat_plan_prompt() not in one]
+    return turn
+
+
+#: What the per-task question says of a task's Goals, each by the words that state it.
+TASK_QUESTION_ON_GOALS = (
+    "the goal its criteria are held to is each goal listed there",
+    "a budget counting as proof of the goal it backs",
+    "Assume no pairing between the two",
+    "Refuse the criteria that leave a stated goal unproven, naming that goal",
+)
+#: The fallback and the observation for a task stating no Goals.
+TASK_QUESTION_WITHOUT_GOALS = (
+    "A task that states no `## Goals` is held to the goal its `## What` and `## Why` state",
+    "is never refused for stating none",
+    "say that it states no Goals as an observation, never as a refusal",
+)
+#: The bar's clauses on Goals, each as the bar states it.
+BAR_ON_GOALS = (
+    "every stated goal is proven by the task's criteria and budgets taken together, a budget "
+    "counting as proof of the goal it backs",
+    "Assume no pairing: one criterion may prove several goals, and one goal may need several "
+    "criteria and budgets at once",
+    "An authored criterion that only duplicates what a budget the task owns proves is flagged, "
+    "by pointing at the plan checklist's `plan_criteria_do_not_restate_budgets`",
+    "Actively look for a simpler plan that still reaches every goal, and when one exists, name "
+    "the simplification concretely",
+    "Never propose a simplification that works only by relaxing or dropping a goal",
+    "every non-functional goal is backed by a budget a task owns or by an existing root budget "
+    "of the repository, and every budget the plan adds or changes traces to a goal a task states",
+)
+
+
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] These two journeys extend this module's review-plan journeys and drive the same `just review-plan` recipe, so they sit behind the edge this module already sits behind, `plan-tooling-check-and-review`, whose inputs are that project's split as `tests/plan_tooling/AGENTS.md` states it; a project of their own would be keyed on the same inputs and add only a target.  # noqa: E501
+def test_a_task_stating_goals_and_owning_a_budget_reaches_the_reviewer_with_its_goals_and_bar(
+    tmp_path: Path,
+) -> None:
+    """Through the real recipe, only the paid model scripted: what the per-task turn is handed."""
+    project = _goals_project("review-goals", STATED_GOALS)
+    log = tmp_path / "prompts.jsonl"
+    environment = _reviewing(tmp_path, PASSES)
+    environment["FAKE_CODEX_PROMPT_LOG"] = str(log)
+
+    review = _just("review-plan", project, environment=environment)
+
+    assert review.returncode == 0, review.stdout + review.stderr
+    turn = _task_turn(log)
+    assert "## Goals " + " ".join(f"- {goal}" for goal in STATED_GOALS) in turn, turn
+    assert "## Budgets" in turn, turn
+    for clause in (*TASK_QUESTION_ON_GOALS, *TASK_QUESTION_WITHOUT_GOALS, *BAR_ON_GOALS):
+        assert " ".join(clause.split()) in turn, clause
+
+
+def test_a_task_stating_no_goals_is_reviewed_with_the_fallback_and_refused_by_nothing_for_it(
+    tmp_path: Path,
+) -> None:
+    """No Goals is an observation for the reviewer and no refusal anywhere deterministic."""
+    project = _goals_project("review-no-goals", None)
+    log = tmp_path / "prompts.jsonl"
+    environment = _reviewing(tmp_path, PASSES)
+    environment["FAKE_CODEX_PROMPT_LOG"] = str(log)
+
+    review = _just("review-plan", project, environment=environment)
+
+    assert review.returncode == 0, review.stdout + review.stderr
+    turn = _task_turn(log)
+    assert "## Goals - " not in turn, "the task carries a Goals section it never answered"
+    for clause in TASK_QUESTION_WITHOUT_GOALS:
+        assert " ".join(clause.split()) in turn, clause
+    # The bar it is handed reads a plan of tasks stating no Goals by their What and Why, so a
+    # request those cover in full is no hole for want of a `## Goals` section.
+    assert (
+        "a plan whose tasks state no Goals but whose What and Why deliver every outcome of the "
+        "request is not refused for that"
+    ) in turn, turn
+    checked = _just("check-plan", project, environment=environment)
+    refusals = [line for line in checked.stderr.splitlines() if line.startswith("check-plan: ")]
+    assert not any("goal" in line.lower() for line in refusals), checked.stderr
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

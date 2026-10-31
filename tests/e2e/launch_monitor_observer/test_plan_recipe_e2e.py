@@ -641,6 +641,51 @@ def test_the_persona_path_resolves_to_this_repositorys_planner_file(planned: Pla
     )
 
 
+#: What the planner's agent side is told about Goals and budgets, each by its own words.
+PLANNER_ON_GOALS = (
+    "**Answer `goals` on every task you write**",
+    "Every non-functional goal names the `id` of the budget behind it",
+    "every budget the plan adds or changes traces to a goal some task states",
+    "author no criterion that restates a budget the task owns "
+    "(`plan_criteria_do_not_restate_budgets`)",
+)
+#: What the planner's judge side holds a plan to about Goals, beside the six points' lead.
+REVIEWER_ON_GOALS = (
+    "Hold it to six things, and accept nothing until all six hold.",
+    "The tasks' stated Goals must cover the request faithfully",
+    "Actively look for a simpler plan that still reaches every goal",
+    "every stated goal is proven by the task's criteria and budgets taken together",
+    "every non-functional goal is backed by a budget a task owns or by an existing root budget",
+)
+
+
+@pytest.mark.xdist_group("plan-recipe")
+def test_the_planner_is_told_to_state_goals_and_its_judge_holds_the_plan_to_them(
+    planned: Planned,
+) -> None:
+    """The composed configuration a planner dispatch runs under, read from the turns it took.
+
+    `personas/planner.yaml` merged over the base config, as the dispatch resolved it: the
+    agent side's composed system prompt carries the Goals instructions, and the judge side's
+    prompt carries the six-point bar holding the plan to the goals its tasks state.
+    """
+    worker = _worker_turns(planned)
+    judge_side = [
+        turn
+        for turn in worker
+        if _side(turn) == JUDGE_CONFIG_NAME or PANEL_JUDGE_CONFIG.fullmatch(_side(turn))
+    ]
+    agent_side = [turn for turn in worker if turn not in judge_side]
+    assert agent_side and judge_side, f"the dispatch was one-sided: {[_side(t) for t in worker]}"
+
+    system = _flattened(agent_side[0]["system"])
+    missing = [one for one in PLANNER_ON_GOALS if _flattened(one) not in system]
+    assert not missing, f"the planner's composed system prompt lacks {missing}"
+    bar = "\n".join(_flattened(turn["prompt"]) for turn in judge_side)
+    absent = [one for one in REVIEWER_ON_GOALS if _flattened(one) not in bar]
+    assert not absent, f"the planner's judge side was not handed {absent}"
+
+
 @pytest.mark.xdist_group("plan-recipe")
 def test_the_dispatched_planner_can_reach_its_manager(planned: Planned) -> None:
     """`ORCHESTRATOR_ASK_MANAGER` reaches the dispatch holding something it can run.

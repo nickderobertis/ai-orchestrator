@@ -26,8 +26,10 @@ CONFIG = "config/plan-checklist.llmlint.yml"
 PERSONA = "personas/planner.yaml"
 BUDGETS_DOC = "docs/budgets.md"
 
-#: The rules the checklist words itself: the nine checks moved out of the planner's judge,
-#: then the two that make a plan state the facts a re-declared fragment rule judges.
+#: The rules the checklist words itself: the nine checks moved out of the planner's judge —
+#: the last of them the rule that replaced the one demanding a budget owner's criteria name
+#: each budget, once a task's budgets derived their own criteria — then the two that make a
+#: plan state the facts a re-declared fragment rule judges.
 NEW_RULES = (
     "plan_criteria_satisfiable_inside_the_dispatch",
     "plan_criteria_require_realistic_tests",
@@ -37,7 +39,7 @@ NEW_RULES = (
     "plan_budget_basis_matches_evidence",
     "plan_budget_inner_measure_has_reason",
     "plan_criteria_omit_repo_wide_budgets",
-    "plan_budget_owner_criteria_name_budget_and_workload",
+    "plan_criteria_do_not_restate_budgets",
     "plan_budget_names_its_telemetry_source",
     "plan_budget_measurement_is_decided",
 )
@@ -63,7 +65,11 @@ MOVED_FROM_THE_BAR = {
     "plan_budget_basis_matches_evidence": ("basis",),
     "plan_budget_inner_measure_has_reason": ("inward",),
     "plan_criteria_omit_repo_wide_budgets": ("repo-wide", "repository-wide"),
-    "plan_budget_owner_criteria_name_budget_and_workload": ("its workload in its criteria",),
+    "plan_criteria_do_not_restate_budgets": (
+        "its workload in its criteria",
+        "figure, threshold or workload",
+        "figure, its threshold",
+    ),
     "budgets_track_product_owner_outcomes": ("second unit", "another budget's figure"),
     "budgets_reuse_gate_telemetry": ("scenario of its own", "standalone-measurement"),
     # Left without moving: `orchestrator/plan_budgets.py` refuses that shape itself.
@@ -119,11 +125,10 @@ RESTATEMENTS = {
         "never written into a task's criteria",
         "out of every task's criteria",
     ),
-    "plan_budget_owner_criteria_name_budget_and_workload": (
-        "criteria name the budget",
-        "names it in its criteria",
-        "numbers reach the acceptance criteria",
-        "realistic workload it holds at",
+    "plan_criteria_do_not_restate_budgets": (
+        "figure, threshold or workload",
+        "figure, its threshold",
+        "is registered in` is the one",
     ),
     "budgets_track_product_owner_outcomes": (
         "product-owner-level outcome",

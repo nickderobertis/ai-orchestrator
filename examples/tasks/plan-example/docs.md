@@ -7,7 +7,7 @@ metadata:
   "onepipeline.id": "docs"
   "orchestrator.unit": "Documentation"
   "onepipeline.persona": "docs-writer"
-  "onetaskgraph.template": {"answers_digest":"sha256:93bf1835f693573a6782e94802fe6abde2dfedf62bfa79c7656595aa058972ad","body_digest":"sha256:38585d5cd315f3525e0b4fb249f31a8b4d33ba42f9f235ee41bd162934601c24","digest":"sha256:3aa0b10cef465f7f3aec19d71a71bd1510f11ec0e4abb6c2c33db3e690095715","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:e31cd7b0dc66ed6e211aae26388df59e3d4b7c283163a2bf198043f6ac5a9237","body_digest":"sha256:38585d5cd315f3525e0b4fb249f31a8b4d33ba42f9f235ee41bd162934601c24","digest":"sha256:00c53acf60517fac913d233714f2c0241c535a3502e3391bbf38d908a16cdf30","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What
@@ -404,6 +404,7 @@ acceptance_criteria:
 additional_info: ''
 boundary: {}
 budgets: []
+goals: []
 spikes: []
 what: 'Write the README for the URL shortener: what it is, how to run it, and the API surface.'
 why: A reader arriving at the repository has no account of what the service does or how to start it, so every one of them has to reconstruct it from the code.

@@ -1160,15 +1160,18 @@ def check(task: str, node_id: str, bar: Bar) -> None:
 #: hands to :func:`check_amendment`.
 #:
 #: Each is left alone for its own reason, and the reasons are why this is a set of
-#: headings rather than a rule about depth. `## What` and `## Why` are the descriptive
-#: halves of the template every plan here is written in and no deterministic tier reads
-#: them, so asking the bar's questions of them would refuse, on a retry, prose that was
+#: headings rather than a rule about depth. `## What`, `## Why` and `## Goals` are the
+#: descriptive sections of the template every plan here is written in and no deterministic
+#: tier reads them — `## Goals` lists outcomes the plan review already judged the criteria
+#: against — so asking the bar's questions of them would refuse, on a retry, prose that was
 #: accepted as a plan. :data:`CRITERIA_HEADING` has a reader already and it is
 #: :func:`check`. And `## Additional info` is where every refusal in this module tells an
 #: author to put the commands it refuses — it is also where the tracked appendix is
 #: carried verbatim, and that text names `pkill`, `git status` and a `just` invocation, so
 #: a reader that examined it would refuse every task carrying the text this host requires.
-DESCRIBED_ELSEWHERE = frozenset({"## What", "## Why", CRITERIA_HEADING, "## Additional info"})
+DESCRIBED_ELSEWHERE = frozenset(
+    {"## What", "## Why", "## Goals", CRITERIA_HEADING, "## Additional info"}
+)
 
 #: Where a task's own sections begin: a level-2 heading on a line of its own. Level two
 #: exactly, so a `###` subsection stays inside the section that opened it — the appendix

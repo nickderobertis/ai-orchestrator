@@ -9,7 +9,7 @@ metadata:
   "orchestrator.unit": "Client library"
   "onepipeline.repo_type": "team"
   "onepipeline.persona": "engineer"
-  "onetaskgraph.template": {"answers_digest":"sha256:1e739d17982754e9d35650f46ea451bb07b3413693570480c0cde73bb4a9b193","body_digest":"sha256:3fc4d15e14a5cb1d4a2ffb60015ccc1cebccb299c4742e06629dcadf52633e79","digest":"sha256:3aa0b10cef465f7f3aec19d71a71bd1510f11ec0e4abb6c2c33db3e690095715","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:3bc167d6c142d59894143c0a50e90373c1e7ce6f40e55d2539cf5fb8e27c96d0","body_digest":"sha256:3fc4d15e14a5cb1d4a2ffb60015ccc1cebccb299c4742e06629dcadf52633e79","digest":"sha256:00c53acf60517fac913d233714f2c0241c535a3502e3391bbf38d908a16cdf30","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What
@@ -406,6 +406,7 @@ acceptance_criteria:
 additional_info: ''
 boundary: {}
 budgets: []
+goals: []
 spikes: []
 what: Add a typed `health()` method to the client that calls `GET /health`, with a test against a real local server.
 why: Every consumer of the new endpoint is otherwise left to hand-roll the request and its response type, which is where the contract drifts first.

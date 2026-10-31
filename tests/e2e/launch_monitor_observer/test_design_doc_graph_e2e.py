@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 from textwrap import dedent
@@ -407,3 +408,57 @@ def test_the_role_reaches_the_writer_and_its_bar_reaches_the_reviewer(
         f"{DESIGN_DOC_PERSONA.name}'s review bar never reached the supervisor, which is "
         f"then scoring this document against whatever it supplies itself:\n{delivered}"
     )
+
+    # llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] These assertions follow the resolve command each side of this module's existing graph run was handed, inside that journey and behind the edge it already sits behind; they spawn the one `onepipeline template resolve` that journey's sides would run, and a project of their own would rerun the whole graph run to reach the same turns.  # noqa: E501
+    # Each side reads the template's guidance by running the resolve command it was handed,
+    # so the guidance it reads is that command's chain: followed here as each side would.
+    for side, handed in (("writing", writing[0]["system"]), ("reviewing", delivered)):
+        assert RESOLVE_COMMAND in handed, f"the {side} side was handed no resolve command"
+        guidance = _chain_guidance(RESOLVE_COMMAND)
+        assert "goals_guidance" in guidance, f"the {side} side's chain carries no goals_guidance"
+        goals = " ".join(guidance["goals_guidance"].split())
+        for statement in GOALS_GUIDANCE:
+            assert statement in goals, f"the {side} side's goals_guidance lacks {statement!r}"
+    # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+
+#: The resolve command both halves of `personas/design-doc.yaml` hand their side when its
+#: task names none, which is the case for every plan node of this host.
+RESOLVE_COMMAND = "onepipeline template resolve design-doc --json"
+
+#: What the Goals guidance a side reads has to say: the plan's tasks' Goals merged, with
+#: none invented, and a non-functional goal keeping the budget it names.
+GOALS_GUIDANCE = (
+    "The plan's tasks' Goals merged for the reader",
+    "inventing none",
+    "A non-functional goal keeps the budget it names, by that budget's `id`",
+)
+
+
+def _chain_guidance(command: str) -> dict[str, str]:
+    """Each `*_guidance` block's comment across the chain ``command`` resolves, nearest first.
+
+    Run through `scripts/onepipeline.sh`, which exports this checkout's template root the
+    way a dispatch's environment does, and read the way both sides are told to: every
+    template source of the chain, a descendant's block replacing its parent's.
+    """
+    verb = command.split()
+    assert verb[0] == "onepipeline", command
+    resolved = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "onepipeline.sh"), *verb[1:]],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+        timeout=e2e_timeout(60),
+    )
+    loader = json.loads(resolved.stdout)
+    sources = [Path(loader["path"]).read_text(encoding="utf-8")]
+    sources += [entry["source"] for entry in loader.get("templates", [])]
+    found: dict[str, str] = {}
+    for source in sources:
+        for name, body in re.findall(
+            r"{%-?\s*block\s+(\w+_guidance)\s*-?%}(.*?){%-?\s*endblock", source, re.DOTALL
+        ):
+            found.setdefault(name, " ".join(re.findall(r"{#-?(.*?)-?#}", body, re.DOTALL)))
+    return found

@@ -3045,8 +3045,10 @@ layers resolve to as a loader document — a repository's
 `ONEPIPELINE_TEMPLATE_ROOT` names, else the engine's built-in — and the planner pipes it
 into `onetaskgraph task create <SOURCE> --template-loader - --no-interactive`, answering
 the template's variables with the record's fields on the same call. This host's template
-extends the engine's base and renders `## What`, `## Why`, the base's one
-`## Acceptance criteria`, the task's own `## Additional info` where it has any, and then
+extends the engine's base and renders `## What`, `## Why`, `## Goals` where the task states
+any, `## Budgets` where it owns any, the base's one `## Acceptance criteria` — ending in one
+criterion derived from each budget the task adds or changes — the task's own
+`## Additional info` where it has any, and then
 [`templates/dispatch-appendix.md`](../templates/dispatch-appendix.md) verbatim; each
 variable's `description` is where what that section is for is stated, and `onetaskgraph
 template variables --template-loader -` prints them. The answers are stored beside the

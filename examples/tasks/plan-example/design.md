@@ -6,7 +6,7 @@ metadata:
   "onepipeline.id": "design"
   "orchestrator.unit": "Design notes"
   "onepipeline.persona": "planner"
-  "onetaskgraph.template": {"answers_digest":"sha256:24ea404f271ee6ee32cd4c3ffcf01358cfeeccb87e2b2514f7a8b6ca5522422e","body_digest":"sha256:72ec17f66cd542ecda86cdbffb6ed2e2ad58a8216ced45be981f891451f63e28","digest":"sha256:3aa0b10cef465f7f3aec19d71a71bd1510f11ec0e4abb6c2c33db3e690095715","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:090f3a6e1f026f97a5c376ce9c5ef6850180ffd515b6f47f18200402397d061b","body_digest":"sha256:72ec17f66cd542ecda86cdbffb6ed2e2ad58a8216ced45be981f891451f63e28","digest":"sha256:00c53acf60517fac913d233714f2c0241c535a3502e3391bbf38d908a16cdf30","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What
@@ -405,6 +405,7 @@ acceptance_criteria:
 additional_info: ''
 boundary: {}
 budgets: []
+goals: []
 spikes: []
 what: 'Design a URL-shortener service and write the design to `docs/design.md`: the HTTP API (create + resolve), the storage schema, and the module boundaries the api and ui subtasks build against.'
 why: The api and ui subtasks are meant to run in parallel, and without one written contract between them each would invent its own and the two would have to be reconciled afterwards.

@@ -6,7 +6,7 @@ metadata:
   "onepipeline.id": "design"
   "orchestrator.unit": "Design"
   "onepipeline.persona": "planner"
-  "onetaskgraph.template": {"answers_digest":"sha256:7930c93b056450ffc6386f1b7e7fee53a5f48476813e6489a0e080d53cbc700e","body_digest":"sha256:36bb74a8d2321833d8eed8c677ec377b623f6f2fe9de16bb31f6164b425ce946","digest":"sha256:3aa0b10cef465f7f3aec19d71a71bd1510f11ec0e4abb6c2c33db3e690095715","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:37230a86c958877c21e62ab681e73085f2907ca6200fbda4f52d024458355725","body_digest":"sha256:36bb74a8d2321833d8eed8c677ec377b623f6f2fe9de16bb31f6164b425ce946","digest":"sha256:00c53acf60517fac913d233714f2c0241c535a3502e3391bbf38d908a16cdf30","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What
@@ -401,6 +401,7 @@ acceptance_criteria:
 additional_info: ''
 boundary: {}
 budgets: []
+goals: []
 spikes: []
 what: Design the release and record its API and rollout contract in docs/design.md.
 why: Give implementers and approvers one stable contract so the release can proceed without incompatible assumptions.

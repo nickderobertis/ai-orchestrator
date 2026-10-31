@@ -322,6 +322,7 @@ def test_each_task_records_the_engines_template_and_keeps_its_answers_beside_it(
         stored = _answers(authored.tasks[node])
         assert stored == {
             "additional_info": "",
+            "goals": [],
             "spikes": [],
             "budgets": [],
             "boundary": {},

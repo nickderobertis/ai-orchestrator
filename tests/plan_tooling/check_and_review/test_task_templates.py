@@ -247,7 +247,7 @@ def test_the_template_extends_the_engines_base_and_opens_no_criteria_heading_its
     assert '{% include "dispatch-appendix.md" %}' in source
 
 
-def test_the_variables_are_the_six_this_host_declares_and_the_inherited_criteria(
+def test_the_variables_are_the_seven_this_host_declares_and_the_inherited_criteria(
     launch_environment: dict[str, str],
 ) -> None:
     listed = _run(
@@ -261,6 +261,7 @@ def test_the_variables_are_the_six_this_host_declares_and_the_inherited_criteria
     assert set(variables) == {
         "what",
         "why",
+        "goals",
         "additional_info",
         "spikes",
         "budgets",
@@ -271,6 +272,8 @@ def test_the_variables_are_the_six_this_host_declares_and_the_inherited_criteria
         assert (variables[name]["type"], variables[name]["required"]) == ("text", True)
     assert variables["additional_info"]["required"] is False
     assert variables["additional_info"]["default"] == ""
+    assert (variables["goals"]["type"], variables["goals"]["required"]) == ("list", False)
+    assert (variables["goals"]["items"], variables["goals"]["default"]) == ("string", [])
     assert (variables["spikes"]["type"], variables["spikes"]["required"]) == ("list", False)
     assert variables["spikes"]["default"] == []
     assert (variables["budgets"]["type"], variables["budgets"]["required"]) == ("list", False)

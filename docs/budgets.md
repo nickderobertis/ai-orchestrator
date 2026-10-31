@@ -174,9 +174,15 @@ and `orchestrator/plan_budgets.py` states the shape of both once.
   only what a plan states.
 - **Which budgets file a budget is registered in** is `budgets_scoped_to_minimal_tree`'s.
 - **A check's own cost counts toward the gate-time budget.**
-- **What a task's criteria say about budgets** is the plan checklist's
-  `plan_budget_owner_criteria_name_budget_and_workload` and
-  `plan_criteria_omit_repo_wide_budgets`.
+- **A budget a task adds or changes binds that task's judge through a criterion the
+  `plan-task` template derives from its record**, after the authored criteria. Why, and what
+  each kind of budget's criterion asks, is stated once, in the Jinja comment beside that
+  template's `more_criteria` block. An authored criterion restating an owned budget is the
+  plan checklist's `plan_criteria_do_not_restate_budgets`, and one naming a repo-wide budget
+  the task does not own is its `plan_criteria_omit_repo_wide_budgets`.
+- **Goals and budgets trace to each other.** Every non-functional goal a task states names
+  the `id` of the budget behind it, and every budget a plan adds or changes traces to a goal
+  some task states; what a goal is, is the `goals` variable of `templates/plan-task.md.j2`.
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 ## Plans that predate budgets

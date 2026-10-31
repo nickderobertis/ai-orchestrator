@@ -214,6 +214,17 @@ satisfied while the goal the task states is missed, that each one is satisfiable
 worker inside its own dispatch, and that none of them names a procedure, a spelling, or
 a perishable fact in place of the property it stands in for.
 
+Where the task states a `## Goals` section, the goal its criteria are held to is each goal
+listed there. Every stated goal must be proven by the task's acceptance criteria and its
+budgets taken together, a budget counting as proof of the goal it backs, and no
+combination of every criterion and every budget passing may leave a stated goal unmet.
+Assume no pairing between the two: one criterion may prove several goals, and one goal may
+need several criteria and budgets at once. Refuse the criteria that leave a stated goal
+unproven, naming that goal. A task that states no `## Goals` is held to the goal its
+`## What` and `## Why` state, as before, and is never refused for stating none: say that
+it states no Goals as an observation, never as a refusal — inside a finding's reason when
+you refuse the task for something else, and not at all when nothing else is refused.
+
 A fact is perishable when it can move on its own between this task being written and
 its node being dispatched, so that finished, correct work fails against it: "the newest
 release at the time of writing", a floor a later publication overtakes, a line count.

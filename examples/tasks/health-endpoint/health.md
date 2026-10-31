@@ -8,7 +8,7 @@ metadata:
   "orchestrator.unit": "Health endpoint"
   "onepipeline.repo_type": "team"
   "onepipeline.persona": "engineer"
-  "onetaskgraph.template": {"answers_digest":"sha256:74480dfe65907ea1fc572f7471831543188d0a6022ff14dad75bad7bd5a08e0f","body_digest":"sha256:1efdf1d86d74aa76cc8f3cf093de233bf3b38731517f415940e5aced2d3e9dc6","digest":"sha256:3aa0b10cef465f7f3aec19d71a71bd1510f11ec0e4abb6c2c33db3e690095715","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:dc2a9217bfc72da6dc21cd511148eccd9577af71e90a1809422e4e1db86adeab","body_digest":"sha256:5dee8f0340984c9f31ebcf9fa69b825c43c698768512243881c8f7020a2debaf","digest":"sha256:00c53acf60517fac913d233714f2c0241c535a3502e3391bbf38d908a16cdf30","template":"onepipeline:plan-task"}
   "orchestrator.budgets": [{"basis":"estimate","check_runtime_seconds":3,"command":"python scripts/budgets/health_latency.py .budgets/health-requests.jsonl","direction":"max","evidence":"Estimate: the handler returns build metadata fixed at startup and reads no store, so its time is routing and serialization, a few milliseconds; 50 ms leaves headroom for a loaded test host.","file":"budgets.yaml","file_change":"add","id":"health-endpoint-p95-latency","inner_measure_reason":"","measure":"The 95th-percentile time a poller waits for `GET /health`, from the request sent to the response read through the service's real HTTP stack, over the requests the endpoint's request tests record; its analysis reports the median and the slowest request as its breakdown.","name":"Health endpoint p95 latency","repository":"github.com/nickderobertis/some-service","schema_version":2,"source":"telemetry","threshold":50,"unit":"ms","workload":"200 sequential `GET /health` requests against one service instance, the requests three monitoring probes polling every 10 s and a load balancer checking every 5 s make over about five minutes."}]
 ---
 ## What
@@ -41,6 +41,7 @@ Operators currently learn a deploy is unhealthy from user reports, because nothi
 - Real request tests prove the happy path and one failure path.
 - Each new test's subject is the behaviour this change adds, so removing that behaviour fails it.
 - The change opens no coverage gap.
+- Budget `health-endpoint-p95-latency` is registered in `budgets.yaml` as `## Budgets` states it, with its command, and that command has run over the finished tree inside this dispatch at the workload `## Budgets` states for it (200 sequential `GET /health` requests against one service instance, the requests three monitoring probes polling every 10 s and a load balancer checking every 5 s make over about five minutes.), the dispatch's report stating the figure it measured, the threshold and onebudgetspec's verdict. It is a repo-wide budget whose threshold the merge path enforces, so no within-target result is demanded here. Where its registered command is the repository's complete gate, or its figure is taken only by running that gate, only its registration with its command is required and no figure is demanded, because the merge path runs that gate and this dispatch does not.
 
 ## Additional info
 
@@ -440,6 +441,7 @@ budgets:
   threshold: 50
   unit: ms
   workload: 200 sequential `GET /health` requests against one service instance, the requests three monitoring probes polling every 10 s and a load balancer checking every 5 s make over about five minutes.
+goals: []
 spikes: []
 what: Add a `GET /health` endpoint that returns build metadata, with tests that drive real requests.
 why: Operators currently learn a deploy is unhealthy from user reports, because nothing exposes build metadata to poll.

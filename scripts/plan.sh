@@ -315,8 +315,9 @@ NODE_ID="plan"
 FINALIZE_NODE_ID="finalize"
 
 # Writes the plan. The brief is read here and embedded verbatim: it IS the task, in the
-# `## What` / `## Why` / `## Acceptance criteria` template every task this repository
-# dispatches is written in, so anything that reformatted it would be editing the
+# `## What` / `## Why` / `## Acceptance criteria` layout every task this repository
+# dispatches is written in (a rendered task adds `## Goals` after `## Why` where it states
+# any), so anything that reformatted it would be editing the
 # manager's words on the way to the dispatch. One thing is appended after it, never
 # woven in, so the manager's own words are always the whole of what precedes it:
 # `PLAN_DIRECT_PLACEMENT_NOTE`, which states where the dispatch works and which clause

@@ -9,7 +9,7 @@ metadata:
   "onepipeline.repo_type": "team"
   "onepipeline.merge_policy": "change-auto"
   "onepipeline.persona": "docs-writer"
-  "onetaskgraph.template": {"answers_digest":"sha256:2345769b818c32529181b132c44587c173602dd388d8703ffe0ee9796f1a8b9f","body_digest":"sha256:4704d6f97b2593353465a3c4f82b30f821d48fbff1276926433075f0fc875d8f","digest":"sha256:3aa0b10cef465f7f3aec19d71a71bd1510f11ec0e4abb6c2c33db3e690095715","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:db816bbc0491a17518c6b1079ab00f7fff4be3af21ddd2d5d4fd6ba152b0f10c","body_digest":"sha256:4704d6f97b2593353465a3c4f82b30f821d48fbff1276926433075f0fc875d8f","digest":"sha256:00c53acf60517fac913d233714f2c0241c535a3502e3391bbf38d908a16cdf30","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What
@@ -406,6 +406,7 @@ acceptance_criteria:
 additional_info: ''
 boundary: {}
 budgets: []
+goals: []
 spikes: []
 what: 'Document the new `/health` endpoint: its request, its response, and worked examples.'
 why: Operators are being asked to poll an endpoint that appears in no documentation, so each of them has to read the service source to learn its response shape.

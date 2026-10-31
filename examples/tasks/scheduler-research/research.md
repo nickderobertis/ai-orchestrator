@@ -6,7 +6,7 @@ metadata:
   "onepipeline.id": "research"
   "orchestrator.unit": "Scheduler research"
   "onepipeline.persona": "engineer"
-  "onetaskgraph.template": {"answers_digest":"sha256:bc44dacccf31d2aef0f608f0558c99a3f574bfbe1c331b60200835939ae09f44","body_digest":"sha256:231aed76d26ddce28f2dff4bab0d6ad567fb4aefc5f9a6b029fe8139cf026a79","digest":"sha256:3aa0b10cef465f7f3aec19d71a71bd1510f11ec0e4abb6c2c33db3e690095715","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:ac50099f38c82be01f76152140154b816fad241b962671a7dac84b82a397d021","body_digest":"sha256:231aed76d26ddce28f2dff4bab0d6ad567fb4aefc5f9a6b029fe8139cf026a79","digest":"sha256:00c53acf60517fac913d233714f2c0241c535a3502e3391bbf38d908a16cdf30","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What
@@ -401,6 +401,7 @@ acceptance_criteria:
 additional_info: ''
 boundary: {}
 budgets: []
+goals: []
 spikes: []
 what: Read the scheduler and report how it selects the next runnable node, in `docs/scheduler-notes.md`.
 why: The next change to the scheduler needs one written account of the current selection rule, so its author does not rediscover it from the code under time pressure.

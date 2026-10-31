@@ -9,7 +9,7 @@ metadata:
   "orchestrator.unit": "Documentation"
   "onepipeline.repo_type": "team"
   "onepipeline.persona": "docs-writer"
-  "onetaskgraph.template": {"answers_digest":"sha256:d18287fdb8ec4b52d996832e962f34708f4a5d550caa344ff08b466dcb8ba646","body_digest":"sha256:99a58da78647355585925aca0bfeef71f8ab6b33f322c82585f03a031a2c5cd8","digest":"sha256:3aa0b10cef465f7f3aec19d71a71bd1510f11ec0e4abb6c2c33db3e690095715","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:3edbd971292c119da012c1d5f13319e4a0723042efb33660b7663395cc166bfd","body_digest":"sha256:99a58da78647355585925aca0bfeef71f8ab6b33f322c82585f03a031a2c5cd8","digest":"sha256:00c53acf60517fac913d233714f2c0241c535a3502e3391bbf38d908a16cdf30","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What
@@ -404,6 +404,7 @@ acceptance_criteria:
 additional_info: ''
 boundary: {}
 budgets: []
+goals: []
 spikes: []
 what: Document the approved API and rollout.
 why: Enable users to adopt the release confidently with accurate operating instructions.

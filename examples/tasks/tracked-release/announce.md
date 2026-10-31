@@ -7,7 +7,7 @@ metadata:
   "onepipeline.id": "announce"
   "orchestrator.unit": "Announcement"
   "onepipeline.persona": "docs-writer"
-  "onetaskgraph.template": {"answers_digest":"sha256:e31cf1118280a5107673f781794a4a841bcef279142d8d7d0216c42c549eaa07","body_digest":"sha256:cb853d3ffd06023ab56319afdac3a3344221cfd776c8108a200bbddbc5d12472","digest":"sha256:3aa0b10cef465f7f3aec19d71a71bd1510f11ec0e4abb6c2c33db3e690095715","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:28c3fa3fa8098aefbec034dab5e036ca560b7a8709b0511926af6083078226ce","body_digest":"sha256:cb853d3ffd06023ab56319afdac3a3344221cfd776c8108a200bbddbc5d12472","digest":"sha256:00c53acf60517fac913d233714f2c0241c535a3502e3391bbf38d908a16cdf30","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What
@@ -402,6 +402,7 @@ acceptance_criteria:
 additional_info: ''
 boundary: {}
 budgets: []
+goals: []
 spikes: []
 what: Prepare the final release announcement from the verified implementation and documentation.
 why: Give users a concise, trustworthy explanation of the release and its impact.

@@ -7,7 +7,7 @@ metadata:
   "onepipeline.id": "unchanged-handoff"
   "orchestrator.unit": "Handoff"
   "onepipeline.expects_no_diff": true
-  "onetaskgraph.template": {"answers_digest":"sha256:0d67cf8b1306e9649b3406142190af170698adbdd17590b6ef980aada51343f0","body_digest":"sha256:fbff834aba8a8069d19b9fc5dff78e9c89e9eca823dc06da4df410a940a8b9d1","digest":"sha256:3aa0b10cef465f7f3aec19d71a71bd1510f11ec0e4abb6c2c33db3e690095715","template":"onepipeline:plan-task"}
+  "onetaskgraph.template": {"answers_digest":"sha256:ed657112d4f1e2138b808c24d144b677097857f606fc1fa4e33b186aefdbc09f","body_digest":"sha256:fbff834aba8a8069d19b9fc5dff78e9c89e9eca823dc06da4df410a940a8b9d1","digest":"sha256:00c53acf60517fac913d233714f2c0241c535a3502e3391bbf38d908a16cdf30","template":"onepipeline:plan-task"}
   "orchestrator.budgets": []
 ---
 ## What
@@ -400,6 +400,7 @@ acceptance_criteria:
 additional_info: ''
 boundary: {}
 budgets: []
+goals: []
 spikes: []
 what: Record that the readiness handoff expects no repository change or separate review evidence.
 why: Make the no-change boundary explicit so the release does not spend provider time on an unnecessary dispatch.

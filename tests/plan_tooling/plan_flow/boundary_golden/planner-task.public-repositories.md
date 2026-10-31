@@ -28,10 +28,11 @@ work exists. Each is either the plan's description (its goal, its workload and
 sizing, its answer about 10x usage, and its budget checklist) or one plan task's
 Markdown document. A task document carries YAML frontmatter, whose
 `orchestrator.budgets` record lists the budgets that task owns, and a body with
-`## What`, `## Why`, `## Acceptance criteria`, an optional `## Budgets` section
-and `## Additional info`. Text under `### Operational notes for this host` is a
-standard appendix every task carries: read it as context, never as the plan's
-own content, and never report a violation inside it.
+`## What`, `## Why`, an optional `## Goals` section, an optional `## Budgets`
+section, `## Acceptance criteria` and `## Additional info`. Text under
+`### Operational notes for this host` is a standard appendix every task
+carries: read it as context, never as the plan's own content, and never
+report a violation inside it.
 
 The plan describes work in a target repository you cannot see. Judge each rule
 against what the plan says will exist once its tasks are done. A rule written
@@ -244,10 +245,13 @@ does not own, such as the gate's own time or another root budget.
 
 Judged when the task document has an `## Acceptance criteria` section.
 
-#### `plan_budget_owner_criteria_name_budget_and_workload`
+#### `plan_criteria_do_not_restate_budgets`
 
-true when the task's acceptance criteria name, by id, every budget its record
-registers or changes, each with the workload it is measured at.
+true when no criterion the plan's author wrote repeats what a budget this task owns
+already proves. A criterion opening with a budget's id and the words `is registered
+in` is the one the template derives from the budget record, not an authored one, and
+it is true. false when an authored criterion restates an owned budget's figure, its
+threshold or the workload it holds at.
 
 Judged when the task's budget record registers or changes a budget.
 

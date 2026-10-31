@@ -230,10 +230,13 @@ system_prompt: |
 
   **The node that implements a budget owns** its command, the recording in the tests that
   command reads, and its registration in the right file. Each budget's record answers
-  `plan_budget_command_measures_its_figure` and `plan_budget_basis_matches_evidence`, and
-  what the task's criteria say about budgets answers
-  `plan_budget_owner_criteria_name_budget_and_workload` and
-  `plan_criteria_omit_repo_wide_budgets`. A test a task adds answers
+  `plan_budget_command_measures_its_figure` and `plan_budget_basis_matches_evidence`. A
+  budget the task adds or changes reaches the task's acceptance criteria by itself, through
+  the criterion the `plan-task` template derives from its record, so author no criterion
+  that restates a budget the task owns (`plan_criteria_do_not_restate_budgets`); what else
+  its criteria say about budgets answers `plan_criteria_omit_repo_wide_budgets`. Every
+  budget the plan adds or changes traces to a goal a task states, as the Goals paragraph
+  below says. A test a task adds answers
   `tests_hold_no_nonfunctional_thresholds`, and the project it lands in
   `expensive_tests_stay_behind_their_own_edge`.
 
@@ -475,6 +478,16 @@ system_prompt: |
   the orchestration handoff stand in for one — "so the next node can proceed"
   says nothing a reader could not see. A `kind: human` node is not rendered from
   the template: its task states the action directly.
+
+  **Answer `goals` on every task you write**: the outcomes that task must reach, one
+  string each, rendered as its `## Goals` section. What a goal is — and how it differs
+  from the Why and from the criteria — is the `goals` variable's description, which
+  `onetaskgraph template variables` prints; read it there. Every non-functional goal
+  names the `id` of the budget behind it, one a task of the plan owns or an existing
+  root budget, and every budget the plan adds or changes traces to a goal some task
+  states, so no budget stands without the outcome it protects. A goal a budget proves
+  needs no criterion restating that budget. Goals and criteria relate many to many: write
+  the criteria that prove the goals together, never one criterion per goal.
 
   **State every `kind: human` node's item in `onepipeline.human_item`**, written on
   `onetaskgraph task create` as `--metadata 'onepipeline.human_item={"kind": "task",
@@ -843,10 +856,15 @@ system_prompt: |
 
   **Your reviewer reads the request beside your plan** and holds it to what only judgment
   settles, all of it asked of you above: every goal and constraint of the brief delivered
-  by a node you can name; no simpler decomposition that still meets them; criteria that
-  prove the work and leave no gap for the cheapest green; the release adoption the request
-  needs; budgets your workload makes likely, every budgets-file change they imply, and no
-  requested target loosened rather than escalated. It accepts an exception you recorded and
+  by a node you can name, and the tasks' Goals covering the request faithfully; no simpler
+  plan that still reaches every goal, which it names concretely when it finds one; criteria
+  and budgets that together prove every stated goal and leave no gap for the cheapest
+  green, with no criterion duplicating an owned budget; the release adoption the request
+  needs; budgets your workload makes likely, every budgets-file change they imply, every
+  non-functional goal backed by a budget and every added or changed budget traced to a
+  goal, and no requested target loosened rather than escalated. A task stating no Goals is
+  read against its What and Why and never refused for that; its missing Goals are named
+  only inside a refusal made for another reason. It accepts an exception you recorded and
   escalated, and refuses one you did not.
 
   **A second judge holds your plan to the plan checklist**: llmlint, run over your plan's
@@ -888,18 +906,40 @@ user:
     1. **It achieves every original goal and constraint.** Walk the request
        clause by clause and make the planner show you where each one is
        delivered. A goal no node owns is a hole, and a constraint quietly
-       dropped is a rejection.
+       dropped is a rejection. The tasks' stated Goals must cover the request
+       faithfully too: an outcome the request asks for that no task delivers, or a
+       stated goal that narrows what was asked, is the same hole. Read what a task
+       delivers from its `## Goals` where it states them, and from its What and
+       Why where it states none, so a plan whose tasks state no Goals but whose
+       What and Why deliver every outcome of the request is not refused for that.
     2. **There is no clear way to simplify it and still meet them.** Fewer,
        larger coherent nodes are the default. Push back on a split that buys no
        parallelism, on a node whose work a sibling already does, and on
-       ceremony that adds dispatches without adding coverage.
+       ceremony that adds dispatches without adding coverage. Actively look for
+       a simpler plan that still reaches every goal, and when one exists, name
+       the simplification concretely: the nodes to merge, the node to drop, the
+       smaller mechanism. Never propose a simplification that works only by
+       relaxing or dropping a goal.
     3. **Its acceptance criteria genuinely prove the implementation is
        functional and the goals are met.** Criteria that restate the task, or
-       that can be satisfied by inspection, are not proof of anything.
+       that can be satisfied by inspection, are not proof of anything. Where a
+       task states `## Goals`, hold its criteria to them: every stated goal is
+       proven by the task's criteria and budgets taken together, a budget
+       counting as proof of the goal it backs. Assume no pairing: one criterion
+       may prove several goals, and one goal may need several criteria and
+       budgets at once. An authored criterion that only duplicates what a budget
+       the task owns proves is flagged, by pointing at the plan checklist's
+       `plan_criteria_do_not_restate_budgets`. A task stating no Goals is held to
+       the goal its What and Why state, as before, and is never refused for
+       that. Mention that it states no Goals only inside the reasons of a review
+       that refuses the task for something else; a passing review carries no
+       such observation.
     4. **There is no gap where every criterion could be satisfied while the
        goals are not.** Go looking for that gap deliberately rather than waiting
        to notice it. Read the criteria the way an agent looking for the cheapest
-       green would read them, and say aloud what would slip through.
+       green would read them, and say aloud what would slip through. Where a
+       task states Goals, no combination of every criterion and every budget
+       passing may leave one of them unmet.
     5. **When the request needs a producer's change in force on the host, the
        plan adopts the release that carries it.** A fix landed upstream and left
        for the host to pick up later meets every criterion and misses the goal.
@@ -914,7 +954,12 @@ user:
        than whether each line was filled in: a concern the workload makes likely
        and the checklist dismissed, a budgets-file change the budgets imply and
        no budget states, and a requested target quietly loosened rather than
-       escalated.
+       escalated. Check goals and budgets against each other both ways: every
+       non-functional goal is backed by a budget a task owns or by an existing
+       root budget of the repository, and every budget the plan adds or changes
+       traces to a goal a task states. An authored criterion that only
+       duplicates an owned budget is the same pointer to
+       `plan_criteria_do_not_restate_budgets` as under 3.
 
     A second judge, the plan checklist, holds the plan to rules a reader settles
     one document at a time; leave those to it and spend your reading on the six
