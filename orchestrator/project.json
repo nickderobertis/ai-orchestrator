@@ -39,6 +39,7 @@
     "support-plan-store-pin",
     "support-planner-fallback",
     "support-probe-run-root",
+    "support-process-tree",
     "support-project-fixtures",
     "support-published-surface",
     "support-published-tools",

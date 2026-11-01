@@ -24,16 +24,22 @@ import os
 import stat
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import process_tree as process_tree_module
 import pytest
+
+# The `process_tree` fixture, imported so this module's tests can name it as a parameter.
+from process_tree import LeftRunning, ProcessTree, process_tree_fixture  # noqa: F401
 from scratch_identity import registered, rules_for
 
 from orchestrator import publication_guard
 from orchestrator.publication_guard import (
     Destination,
     PublicationError,
+    RepoIdentity,
     Workflow,
     check_plan,
     commit_msg_hook,
@@ -410,7 +416,7 @@ def test_a_workflow_outside_the_published_vocabulary_decides_nothing(
     _onevcs(tmp_path, monkeypatch, answers={"service": (_checkout(tmp_path), "something-new")})
 
     assert destination("service") == Destination(
-        "local/service", tmp_path / "publication", workflow=None, origin=None
+        RepoIdentity("local/service"), tmp_path / "publication", workflow=None, origin=None
     )
     assert refusals(_plan(consumes={"library": "pypi"})) == []
     assert [one.field for one in refusals(_plan(title="chore: tidy"))] == ["title"]
@@ -595,7 +601,10 @@ def test_the_raising_face_reports_the_same_answer_one_refusal_at_a_time(
     corrected = _plan(title="fix: rename it")
 
     assert refusals(corrected) == [], "the corrected plan is still refused for something"
-    assert check_plan(corrected) is None, "the raising face refused a plan its own reader took"
+    try:
+        check_plan(corrected)
+    except PublicationError as error:
+        pytest.fail(f"the raising face refused a plan its own reader took: {error}")
 
 
 def test_a_node_wrong_in_two_ways_is_told_about_both(
@@ -714,18 +723,205 @@ def test_a_verb_that_does_not_return_is_bounded_rather_than_waited_on(
     assert destination("service") is None
 
 
+def test_an_onevcs_that_cannot_be_started_says_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stand-in whose interpreter is missing is found on PATH and refuses to start.
+
+    The same answer an unregistered repository gets: nothing about it is knowable here.
+    """
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    broken = binary / "onevcs"
+    broken.write_text(f"#!{tmp_path / 'no-such-interpreter'}\n", encoding="utf-8")
+    broken.chmod(broken.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("PATH", f"{binary}{os.pathsep}{os.environ['PATH']}")
+
+    assert destination("service") is None
+
+
 def test_a_hook_that_does_not_return_is_bounded_the_same_way(tmp_path: Path) -> None:
     """The destination's own hook is another program, and is given the same bound.
 
-    The hook execs its sleep, so the bound's kill reaches the sleeping process itself: a
-    `sleep` forked under bash would outlive the killed shell as an orphan carrying this
-    session's state home, and fail the session's teardown that runs within its 30 s.
+    The hook execs its sleep, so it is one process; a hook that forks before it waits is
+    the journey `test_a_hook_whose_children_do_not_return_leaves_none_of_them_running`
+    drives.
     """
     checkout = _checkout(tmp_path, hook="#!/usr/bin/env bash\nexec sleep 30\n")
 
     with pytest.MonkeyPatch.context() as bounded:
         bounded.setattr(publication_guard, "TIMEOUT_SECONDS", 1)
         assert hook_refusal(checkout / ".githooks" / "commit-msg", checkout, "feat: fine") is None
+
+
+#: What a test of a forking stand-in is handed: a factory for trees it ends at teardown.
+MakeTree = Callable[[Path], ProcessTree]
+
+
+def _on_path(monkeypatch: pytest.MonkeyPatch, tree: ProcessTree, root: Path, name: str) -> None:
+    """Put ``tree``'s forking stand-in on PATH, first, under ``name``."""
+    tree.install(root / "bin" / name)
+    monkeypatch.setenv("PATH", f"{root / 'bin'}{os.pathsep}{os.environ['PATH']}")
+
+
+def _assert_tree_ended(tree: ProcessTree) -> None:
+    """The stand-in recorded its whole tree, and none of it is running any more."""
+    assert set(tree.descendants()) == {"child", "grandchild"}, tree.recorded()
+    left = tree.running()
+    assert left == {}, f"left running after the guard returned: {left}"
+
+
+def test_a_hook_whose_children_do_not_return_leaves_none_of_them_running(
+    tmp_path: Path, process_tree: MakeTree
+) -> None:
+    """A timed-out hook is ended with everything it started, however deep.
+
+    `subprocess.run`'s own bound kills the hook alone, so a child it forked — and that
+    child's own — outlived the guard as orphans and failed this repository's gate under
+    its zero-process cleanup budget.
+    """
+    checkout = _checkout(tmp_path, hook=None)
+    tree = process_tree(tmp_path / "tree")
+    hook = tree.install(checkout / ".githooks" / "commit-msg")
+
+    with pytest.MonkeyPatch.context() as bounded:
+        bounded.setattr(publication_guard, "TIMEOUT_SECONDS", 1)
+        assert hook_refusal(hook, checkout, "feat: fine") is None
+
+    _assert_tree_ended(tree)
+
+
+def test_a_destination_lookup_whose_children_do_not_return_leaves_none_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, process_tree: MakeTree
+) -> None:
+    """The `onevcs` the destination is asked of gets the same bound and the same ending."""
+    tree = process_tree(tmp_path / "tree")
+    _on_path(monkeypatch, tree, tmp_path, "onevcs")
+    monkeypatch.setattr(publication_guard, "TIMEOUT_SECONDS", 1)
+
+    assert destination("service") is None
+
+    _assert_tree_ended(tree)
+
+
+def test_a_hook_directory_lookup_whose_children_do_not_return_leaves_none_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, process_tree: MakeTree
+) -> None:
+    """The git that resolves the hook directory is the third subprocess, ended the same way."""
+    checkout = _checkout(tmp_path)
+    tree = process_tree(tmp_path / "tree")
+    _on_path(monkeypatch, tree, tmp_path, "git")
+    monkeypatch.setattr(publication_guard, "TIMEOUT_SECONDS", 1)
+
+    assert commit_msg_hook(checkout) is None
+
+    _assert_tree_ended(tree)
+
+
+def test_a_descendant_that_detaches_is_outside_the_bound_but_does_not_hold_the_guard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, process_tree: MakeTree
+) -> None:
+    """A process that leaves the group for a session of its own is the guarantee's edge.
+
+    The module's docstring says so: ending a process group cannot reach it. What the guard
+    still owes is to return — the detached process holds the hook's output open, so the
+    drain after the kill is bounded rather than waited to the end of its sleep.
+    """
+    checkout = _checkout(tmp_path, hook=None)
+    tree = process_tree(tmp_path / "tree")
+    hook = checkout / ".githooks" / "commit-msg"
+    hook.parent.mkdir(parents=True)
+    hook.write_text(
+        "#!/usr/bin/env bash\n"
+        f'setsid "{tree.install(tmp_path / "detached")}" < /dev/null &\n'
+        f'until [ -s "{tree.root}/grandchild.pid" ]; do sleep 0.05; done\n'
+        "exec sleep 300\n",
+        encoding="utf-8",
+    )
+    hook.chmod(hook.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setattr(publication_guard, "TIMEOUT_SECONDS", 1)
+    monkeypatch.setattr(publication_guard, "DRAIN_SECONDS", 1)
+
+    assert hook_refusal(hook, checkout, "feat: fine") is None
+    assert set(tree.recorded()) == {"leader", "child", "grandchild"}
+
+
+#: A test module using the forking fixture, run as a session of its own: it starts a tree
+#: nothing ends and then fails its own assertion, so only the fixture's teardown stands
+#: between that failure and three processes left on the host.
+FAILING_SESSION = """
+from pathlib import Path
+
+# Imported only so pytest registers the `process_tree` fixture this test names.
+from process_tree import process_tree_fixture  # noqa: F401
+
+
+def test_fails_with_a_tree_running(process_tree):
+    tree = process_tree(Path({root!r}))
+    tree.start()
+    tree.wait_recorded()
+    assert False, "failing on purpose with the tree running"
+"""
+
+
+def test_the_fixture_ends_its_tree_when_the_test_using_it_fails(
+    tmp_path: Path, process_tree: MakeTree
+) -> None:
+    """A test that fails still leaves nothing it started behind.
+
+    Driven as a real nested pytest session rather than by calling the fixture's teardown,
+    because what is proven is the path pytest itself takes past a failed assertion. The
+    tree is registered with this test's own fixture before the inner session starts, so an
+    inner result nobody expected, or an inner session that times out, still ends with
+    every process it recorded ended here.
+    """
+    root = tmp_path / "tree"
+    outer = process_tree(root)
+    session = tmp_path / "session"
+    session.mkdir()
+    (session / "test_failing.py").write_text(FAILING_SESSION.format(root=str(root)))
+    tests = Path(__file__).resolve().parent
+
+    ran = subprocess.run(
+        [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-q", "test_failing.py"],
+        cwd=session,
+        env={
+            **os.environ,
+            "PYTHONPATH": os.pathsep.join([str(tests), os.environ.get("PYTHONPATH", "")]),
+        },
+        text=True,
+        capture_output=True,
+        timeout=120,
+        check=False,
+    )
+
+    assert ran.returncode == 1, ran.stdout + ran.stderr
+    assert "1 failed" in ran.stdout, ran.stdout
+    assert "failing on purpose with the tree running" in ran.stdout, ran.stdout
+    assert set(outer.recorded()) == {"leader", "child", "grandchild"}, outer.recorded()
+    left = outer.running()
+    assert left == {}, f"left running after the session ended: {left}"
+
+
+def test_a_recorded_process_the_cleanup_cannot_end_is_reported_rather_than_dropped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A survivor of the bounded cleanup fails it by name.
+
+    The recorded pid is a real process this test started that does not carry the tree's
+    name, so the cleanup will not signal it — the shape a process outside its reach takes.
+    """
+    tree = ProcessTree(tmp_path / "tree")
+    outsider = subprocess.Popen(["sleep", "300"])
+    try:
+        (tree.root / "leader.pid").write_text(f"{outsider.pid}\n")
+        monkeypatch.setattr(process_tree_module, "HANG_GUARD_SECONDS", 0.2)
+
+        with pytest.raises(LeftRunning, match=str(outsider.pid)):
+            tree.end()
+    finally:
+        outsider.kill()
+        outsider.wait()
 
 
 #: A publication policy no release of `onevcs` has ever named, so the registry has to

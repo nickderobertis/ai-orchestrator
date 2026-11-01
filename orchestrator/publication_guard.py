@@ -42,14 +42,26 @@ correctly today. Written to miss rather than to refuse a sound node, which is th
 
 Nothing here decides a plan's *structure*: the engine's own loader has already ruled on
 that, and every field is read leniently for the same reason.
+
+**A subprocess this module gives up on is ended with everything it started.** Each of the
+three it runs — the destination's hook and the two lookups, ``onevcs`` and git — is started
+as the leader of a process group of its own, and on timeout the whole group is killed, the
+leader waited for and its pipes drained, so no descendant remaining in that group is left
+running once the guard returns, however deep it was started. That is the boundary: a
+descendant that deliberately detaches into a session of its own — ``setsid``, a daemon —
+has left the group and is not reached, because holding it would take host-specific
+machinery, and no hook or stand-in this module runs detaches today. The drain is bounded
+too, so such a process holding the pipes open delays the answer rather than withholding it.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
 from collections.abc import Iterator, Mapping
@@ -125,6 +137,46 @@ _PUBLICATION = re.compile(r"^publication:\s*(?P<workflow>\S+)", re.MULTILINE)
 #: than a wait: this runs in front of a launch an operator is holding, and a repository
 #: whose hook does not return is one this module has nothing to say about.
 TIMEOUT_SECONDS = 30
+
+#: How long a timed-out subprocess's pipes are read for once its group is killed. Killing
+#: the group closes every writer the group held, so this bounds only the one writer the
+#: module docstring places outside the guarantee: a descendant that detached.
+DRAIN_SECONDS = 5
+
+
+class _Ran(NamedTuple):
+    """What a subprocess that returned within its bound reported."""
+
+    returncode: int
+    stdout: str
+    stderr: str
+
+
+def _bounded(arguments: list[str], *, cwd: Path | None = None) -> _Ran | None:
+    """Run ``arguments`` within :data:`TIMEOUT_SECONDS`, or ``None`` when it did not return.
+
+    The one way this module runs another program. It is started as the leader of a process
+    group of its own, so a timeout ends the whole group rather than the leader alone — the
+    leader's own children, and theirs, are what `subprocess.run`'s bound left running.
+    Raises what starting it raises, which every caller reads as "this host cannot say".
+    """
+    with subprocess.Popen(
+        arguments,
+        cwd=cwd,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    ) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                process.communicate(timeout=DRAIN_SECONDS)
+            return None
+    return _Ran(process.returncode, stdout, stderr)
 
 
 class Refusal(NamedTuple):
@@ -250,14 +302,10 @@ def _asked(arguments: list[str]) -> str | None:
     if found is None:
         return None
     try:
-        asked = subprocess.run(
-            [found, *arguments],
-            text=True,
-            capture_output=True,
-            timeout=TIMEOUT_SECONDS,
-            check=False,
-        )
+        asked = _bounded([found, *arguments])
     except (OSError, subprocess.SubprocessError):
+        return None
+    if asked is None:
         return None
     return asked.stdout if asked.returncode == 0 else None
 
@@ -333,16 +381,10 @@ def commit_msg_hook(checkout: Path) -> Path | None:
     thing to a plan's author: nothing about this title is knowable here.
     """
     try:
-        asked = subprocess.run(
-            ["git", "-C", str(checkout), "rev-parse", "--git-path", "hooks"],
-            text=True,
-            capture_output=True,
-            timeout=TIMEOUT_SECONDS,
-            check=False,
-        )
+        asked = _bounded(["git", "-C", str(checkout), "rev-parse", "--git-path", "hooks"])
     except (OSError, subprocess.SubprocessError):
         return None
-    if asked.returncode != 0 or not asked.stdout.strip():
+    if asked is None or asked.returncode != 0 or not asked.stdout.strip():
         return None
     hook = Path(os.path.join(checkout, asked.stdout.strip(), "commit-msg"))
     return hook if hook.is_file() and os.access(hook, os.X_OK) else None
@@ -366,19 +408,12 @@ def hook_refusal(hook: Path, checkout: Path, subject: str) -> str | None:
         with os.fdopen(handle, "w", encoding="utf-8") as message:
             message.write(f"{subject}\n")
         try:
-            ran = subprocess.run(
-                [str(hook), path],
-                cwd=str(checkout),
-                text=True,
-                capture_output=True,
-                timeout=TIMEOUT_SECONDS,
-                check=False,
-            )
+            ran = _bounded([str(hook), path], cwd=checkout)
         except (OSError, subprocess.SubprocessError):
             return None
     finally:
         os.unlink(path)
-    if ran.returncode == 0:
+    if ran is None or ran.returncode == 0:
         return None
     reported = (ran.stderr or ran.stdout).strip()
     return reported or f"it exited {ran.returncode} without saying why"
