@@ -738,7 +738,7 @@ follow-up *args:
     @./scripts/follow-up.sh "$@"
 
 # Verify a finished run's drafted follow-ups and put the verified tickets on the board:
-# `just follow-ups <run-id> [--feedback FILE] [--detach] [--to SOURCE]`.
+# `just follow-ups <run-id> [--feedback FILE] [--unanswered] [--detach] [--to SOURCE]`.
 #
 # Launches one direct node under `graphs/follow-up.yaml` — a single-sided follow-up agent
 # with no judge — on a task the store renders from this host's `follow-up-task` template,
@@ -746,7 +746,9 @@ follow-up *args:
 # owns the ticket shape and board ownership the template's prose states. It refuses a
 # run something is still driving, launches nothing for a run with no drafts or tickets,
 # and checks every ticket once an attached run settles; `--feedback` re-dispatches over the
-# same run, `--detach` returns at the launch record with the follow-up run id and its watch
+# same run, carrying the earlier pass's dispositions forward, `--unanswered` scopes it to the
+# drafts and tickets that pass left open, `--detach` returns at the launch record with the
+# follow-up run id and its watch
 # command, and `--to` names a configured source to copy onto instead of `followups`.
 # `scripts/follow-ups.sh` states each decision.
 [doc("Dispatch the follow-up agent over a run's drafted follow-ups; `--detach` returns at the launch record.")]

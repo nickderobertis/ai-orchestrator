@@ -2900,8 +2900,10 @@ def test_the_planner_is_told_how_to_state_its_budgets_in_general_terms() -> None
     for rule in (
         "**Workload first.**",
         "`plan_workload_states_numbers` judges how you state it",
-        "latency; quota and rate-limit headroom; how the work scales with data; spend; resource "
-        "use",
+        "latency; quota and rate-limit headroom; repeated attempts and retries re-spending "
+        "quota on settled work; how the work scales with data; spend; resource use",
+        "the plan registers or keeps a quota or scaling budget covering the settled work such "
+        "an attempt repeats",
         'Every concern gets a budget or a full "n/a because …"',
         "*at 10× realistic usage, what does the product owner notice getting worse first?*",
         "a set of general problem classes, never a closed list",

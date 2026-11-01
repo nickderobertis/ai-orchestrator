@@ -3096,6 +3096,10 @@ def test_two_later_runs_evidence_raises_the_following_priority_of_an_issue_they_
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
+# llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] This test launches nothing:
+# it reads the module-scoped `followed` journey, whose launches already sit behind the
+# `plan-tooling-follow-ups` edge the block around that fixture names, keyed on
+# `planToolingFollowUpsWorkspace`, which covers every file those launches read.
 def test_a_feedback_re_dispatch_edits_this_runs_issue_and_comment_instead_of_adding_any(
     followed: Followed,
 ) -> None:
@@ -3111,7 +3115,8 @@ def test_a_feedback_re_dispatch_edits_this_runs_issue_and_comment_instead_of_add
     assert f"an issue run `{followed.main}` created is **edited**" in task
     flat = " ".join(task.split())
     assert (
-        f"an existing ticket of run `{followed.main}` is copied again carrying the board's" in flat
+        f"an existing ticket of run `{followed.main}` you change is copied again carrying the "
+        "board's" in flat
     )
     assert "a ticket of an older schema is brought to the current shape" in flat
 
@@ -3121,6 +3126,9 @@ def test_a_feedback_re_dispatch_edits_this_runs_issue_and_comment_instead_of_add
     assert followed.new_after_second["content"] == _with_first_estimate(followed.edited_body)
     assert followed.new_after_second["content"] != followed.new_after_first["content"]
     assert followed.other_after_second["priority"] == HELD_PRIORITY, "a person's priority moved"
+
+
+# llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 
 def test_a_re_copy_keeps_the_status_a_person_moved_the_board_item_to(

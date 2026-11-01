@@ -634,10 +634,17 @@ def _checked(environment: dict[str, str], root: Path) -> tuple[int, str]:
 
 
 def _as_the_board_holds(root: Path, ticket: str, card: _Issue) -> None:
-    """The ticket's last copy receipt says what the board then holds for its card."""
-    last = [one for one in _receipts(root) if one["ticket"] == ticket][-1]
+    """The ticket's last copy receipt says what the board then holds for its card: a copy
+    skipped as unchanged by the landed copy whose receipt line it names."""
+    receipts = _receipts(root)
+    last = [one for one in receipts if one["ticket"] == ticket][-1]
     outcome = last["outcome"]
     assert isinstance(outcome, dict)
+    if outcome["action"] == follow_up_tickets.SKIPPED_UNCHANGED:
+        since = outcome["unchanged_since"]
+        assert isinstance(since, int), outcome
+        outcome = receipts[since - 1]["outcome"]
+        assert isinstance(outcome, dict)
     result = outcome["result"] if outcome.get("error") is None else outcome["held"]
     assert isinstance(result, dict), outcome
     assert result["status"]["category"] == CATEGORY_OF[card.status], (result, card.status)
@@ -648,10 +655,11 @@ def _as_the_board_holds(root: Path, ticket: str, card: _Issue) -> None:
 def test_the_closeout_check_accepts_every_write_its_receipts_show_and_reads_no_board(
     tmp_path: Path,
 ) -> None:
-    """A create, an update, an `unchanged` re-copy, a re-copy whose status the store preserved,
-    one whose priority the guard kept, a withdrawal, and a withdrawal refused as
+    """A create, an update, a re-copy skipped as unchanged, a re-copy whose status the store
+    preserved, one whose priority the guard kept, a withdrawal, and a withdrawal refused as
     `destination-status`: after each, `check-dispositions --board` accepts the account from the
-    receipts alone, and each receipt's `result` is what the board then holds for that card."""
+    receipts alone, and each landed receipt's `result` is what the board then holds for that
+    card — a skip's, the landed copy's it names."""
     environment, root = _followups_environment(tmp_path)
     kept = _written_ticket(root, _follow_up_ticket(SIBLING_REPOSITORY, cause="kept-cause"))
     withdrawn = _written_ticket(root, _follow_up_ticket(SIBLING_REPOSITORY, cause="gone-cause"))
@@ -683,7 +691,7 @@ def test_the_closeout_check_accepts_every_write_its_receipts_show_and_reads_no_b
         assert json.loads(out)["action"] == "updated"
         accepted(kept)
         status, out = written(kept)
-        assert json.loads(out)["action"] == "unchanged"
+        assert json.loads(out)["action"] == follow_up_tickets.SKIPPED_UNCHANGED
         accepted(kept)
         (card,) = _carrying(ids[kept])
         _person(environment, "status", "set", _card(card), "todo")
@@ -809,7 +817,12 @@ def test_the_closeout_check_refuses_an_account_its_receipts_contradict(tmp_path:
             ),
             "a receipt naming another card": (elsewhere, [], "names the card"),
             "a refusal where the account says filed": (
-                altered(copy_at, action="failed", error={"kind": "refused", "message": "no"}),
+                altered(
+                    copy_at,
+                    action="failed",
+                    error={"kind": "refused", "message": "no"},
+                    digest=None,
+                ),
                 [],
                 "records the store's refusal `refused`",
             ),
@@ -841,7 +854,7 @@ def test_the_closeout_check_refuses_an_account_its_receipts_contradict(tmp_path:
             "a schema that is no integer": (
                 real,
                 [json.dumps(dict(real[copy_at], schema=True))],
-                "is not a receipt of schema 1",
+                f"is not a receipt of schema {follow_up_tickets.RECEIPT_SCHEMA}",
             ),
             "an outcome its command's model does not read": (
                 altered(copy_at, result={**created["result"], "priority": 3}),
@@ -1289,7 +1302,11 @@ def test_a_ticket_rewritten_without_its_link_after_its_runs_copy_keeps_its_one_c
 ) -> None:
     """The agent rewrites a ticket its run already filed, dropping the keys the store and the
     copy wrote: what it kept, or its run's receipt of that copy, keeps the store's origin
-    lookup, which finds the card, so its next copy updates it rather than filing a second."""
+    lookup, which finds the card, so its next copy updates it rather than filing a second.
+
+    Rewritten with its text unchanged, the ticket is what its landed copy put on the card, so
+    that copy is skipped and the board is sent nothing; the lookup is the copy of the ticket
+    once its text changed too."""
     environment, root = _followups_environment(tmp_path)
     _record_existing(environment, root)
     path = _written_ticket(root, _follow_up_ticket(SIBLING_REPOSITORY))
@@ -1300,6 +1317,16 @@ def test_a_ticket_rewritten_without_its_link_after_its_runs_copy_keeps_its_one_c
         if dropped != "every key the store wrote":
             assert _ticket(environment, path).reserved, "the copy recorded no location"
         _ticket_rewritten(environment, path, **REWRITES[dropped])
+        _GitHubFixture.requests.clear()
+        status, out, said = _copy(environment, path)
+        assert status == follow_up_tickets.SOUND, said
+        assert json.loads(out) == {
+            "action": follow_up_tickets.SKIPPED_UNCHANGED,
+            "destination": _card(card),
+        }
+        assert _GitHubFixture.requests == [], "an unchanged ticket's copy was sent to the board"
+        held = _ticket(environment, path)
+        _ticket_rewritten(environment, path, body=f"{held.body}\n\nSeen again after the rewrite.")
         _GitHubFixture.requests.clear()
         status, out, said = _copy(environment, path)
         sent = list(_GitHubFixture.requests)

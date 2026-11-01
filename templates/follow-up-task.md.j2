@@ -109,6 +109,14 @@ variables:
       comments may already exist. `initial` mode only.
     type: boolean
     default: false
+  unanswered:
+    description: >-
+      A re-dispatch scoped by `--unanswered`: its `drafts`, the draft ids the account answers no
+      disposition for, and its `tickets`, the path of every ticket no receipted copy confirms
+      unchanged — the only work that dispatch does. Empty for every other dispatch. `initial`
+      mode only.
+    type: object
+    default: {}
   accepted_statuses:
     description: The accepted board statuses as prose, each as its board option and store word. `initial` mode only.
     type: string
@@ -332,7 +340,9 @@ Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Review
    A ticket whose record already names its card — its `{{ shape.copies_key }}` link, or the
    `{{ shape.binding_field }}` a ticket recorded before schema {{ shape.binding_retired_at }} still carries — is
    already placed: do not run metadata, text or origin searches for it, including on a
-   re-dispatch; copy onto the card its record names. For a ticket with no card yet, ask each
+   re-dispatch. Copy it onto the card its record names only once its content, dependencies or
+   status changed since its last confirmed copy; `{{ copy }}` itself skips the board for one
+   that has not, so a ticket nothing changed costs no board write either way. For a ticket with no card yet, ask each
    distinct question once, and never by origin: the store's own copy at step 9 is what looks
    a ticket up by origin, and nothing else does. The ticket's record, written at step
    6, is what says which board to ask: every question is a text search,
@@ -419,7 +429,7 @@ Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Review
    from those answers: an accepted ticket may have appeared, moved or been
    un-accepted since the last pass, so entries are added and removed and the ticket's claims
    re-derived to match. A ticket already placed skips these searches and edits its own item by
-   copying again.
+   copying again once it changed.
 8. **Decide each ticket's status from the board, before every copy.** For every ticket
    step 7 left, run `{{ board_status }} --board {{ board }} <path of the ticket>`, adding
    `--withdraw` for a ticket this run withdraws, which asks the store where it lands, checks its
@@ -447,6 +457,11 @@ Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Review
    `{{ re_estimate }} --board {{ board }} --run {{ run }} <that item's id>`, which recounts its
    occurrences, stores its estimate and rewrites its estimate line. Keep what each printed for
    your report.
+   `{{ copy }}` writes nothing to the board for a ticket whose content, dependencies and status
+   are unchanged since a copy of it that landed on the card it names: it prints
+   `{{ shape.skipped_unchanged }}` and receipts the skip, naming the receipt of that copy, which is
+   what the completion check reads the placement from. Never edit a ticket only to make a copy
+   write it.
    `{{ copy }}`, `{{ comment }}` and `{{ re_estimate }}` each append one line, built from the store's
    answer to the write, to this run's receipts at
    `{{ drafts_root }}/{{ shape.receipts_directory }}/{{ run }}{{ shape.receipt_suffix }}`. That file is the run's record of what
@@ -477,7 +492,9 @@ Linear's `Triage` or a review state — `Ready for Review`, `In Review`, `Review
 **Every draft this dispatch was given is accounted for, exactly once.** The account is a
 JSON document at `{{ dispositions }}`, which already exists: its `drafts` is the input set,
 written before you were dispatched, and it is not yours to change. Yours is
-`dispositions`, one entry per draft in `drafts`:
+`dispositions`, one entry per draft in `drafts`. Every entry it already holds was answered
+by an earlier pass and is carried forward as it stands: never change, remove or re-answer
+one, and add entries only for the drafts it does not answer yet.
 
 - **`{{ shape.filed }}`** — its claim holds, and its evidence reached the board: as a ticket this
   run wrote, or as this run's evidence comment on another run's open issue for the same
@@ -509,7 +526,8 @@ until it reports the local account sound. It exits {{ shape.exits.sound }} when 
 carries exactly one disposition with everything that disposition owes, and {{ shape.exits.unsound }} naming
 each draft that is absent, that carries more than one, or whose disposition links it to no
 root cause where it must, to one this run holds no ticket for, or to a ticket whose
-`drafts` does not name it. This dispatch is not finished while it refuses.
+`drafts` does not name it, and each disposition carried forward from an earlier pass that the
+account no longer holds unchanged. This dispatch is not finished while it refuses.
 The attached recipe runs the sole `check-dispositions --board` after settlement, against this
 run's receipts and nothing on the board: it also refuses a filed ticket whose record names a
 card with no copy receipt, or whose last copy the store refused, created off `Proposal`, left
@@ -1070,11 +1088,18 @@ comments of this run may already exist. "Ownership on the board" above binds eve
 
 - change only what belongs to run `{{ run }}`, as those rules say, and nothing belonging to any
   other run;
+- every disposition the account at `{{ dispositions }}` already holds is carried forward from
+  the earlier pass exactly as it stands: it is never re-answered, changed or removed, and
+  `{{ check_dispositions }}` refuses an account that no longer holds one unchanged. Where your
+  verification contradicts a carried disposition, report that rather than rewriting it;
+- a ticket of run `{{ run }}` whose content, dependencies and status have not changed since its
+  last confirmed copy is left uncopied, or copied with `{{ copy }}`, which skips the board for
+  it and receipts the skip: never edit one to force a write;
 - an issue run `{{ run }}` created is **edited** — change its ticket and copy the ticket again —
   and every comment of run `{{ run }}` is added, edited or left as those rules say;
-- an existing ticket of run `{{ run }}` is copied again carrying the board's status, which
-  `{{ board_status }} --board {{ board }} <path of the ticket>` prints, never the status the ticket
-  held before — the board may have been moved since the last copy;
+- an existing ticket of run `{{ run }}` you change is copied again carrying the board's status,
+  which `{{ board_status }} --board {{ board }} <path of the ticket>` prints, never the status the
+  ticket held before — the board may have been moved since the last copy;
 {{ older_schema.rule(shape, board, board_status, re_estimate, run) }}
 - a ticket's dependencies on accepted tickets, and the claims written against their fixes,
   are re-derived from step 7 for tickets with no item yet and from dependency items read by id
@@ -1083,6 +1108,32 @@ comments of this run may already exist. "Ownership on the board" above binds eve
   `## Rejected fixes` re-derived to match, and `{{ board_status }} --board {{ board }} <path of
   the ticket>` refusing an entry is the signal to re-derive that ticket before copying it;
   nothing else about an older ticket moves.
+{% endif %}
+{% if mode == "initial" and unanswered %}
+
+## The work this re-dispatch is scoped to
+
+This re-dispatch works only what the earlier pass of run `{{ run }}` left open. Every other
+draft is answered in the account and carried forward, and every other ticket is confirmed on
+the board by the receipt of its last copy: do not verify, edit, search for or copy any of
+them. "Account for every draft" means account for the drafts below; the full re-dispatch is
+the one that verifies every input draft.
+
+The drafts the account answers no disposition for — verify each, write and copy what stands,
+and add its one disposition:
+{% for draft in unanswered.drafts %}
+- draft `{{ draft }}`
+{% else %}
+- none
+{% endfor %}
+
+The tickets no receipted copy confirms unchanged — changed since their last confirmed copy, or
+never confirmed on the board — each decided, validated and copied as step 8 and step 9 state:
+{% for ticket in unanswered.tickets %}
+- ticket `{{ ticket }}`
+{% else %}
+- none
+{% endfor %}
 {% endif %}
 {% if mode == "initial" and feedback is not none %}
 

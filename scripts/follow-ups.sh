@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Dispatch the follow-up agent over one run's drafted follow-ups: `just follow-ups <run-id>
-# [--feedback FILE] [--comments] [--detach] [--to SOURCE]`.
+# [--feedback FILE] [--unanswered] [--comments] [--detach] [--to SOURCE]`.
 #
 # During a run every party drafts what it noticed outside its own scope as an unverified
 # follow-up in the run's draft project (`orchestrator/follow_up_drafts.py`). This recipe
@@ -69,6 +69,15 @@
 #     store in for the live board, and is refused unless it names a configured source;
 #   * `--feedback FILE` puts that file's text into the task verbatim, under a
 #     heading of its own, for a re-dispatch over the same run's drafts, tickets and board;
+#   * `--unanswered`, alone or beside `--feedback`, scopes that re-dispatch to what an earlier
+#     pass left open: the drafts its account answers no disposition for, and the tickets no
+#     receipted copy confirms unchanged (`orchestrator/follow_up_tickets.py`'s `retry_scope`).
+#     The task names those as its whole work. It is refused on a run whose account no earlier
+#     pass opened, naming the full form, and beside `--comments`, which answers comments
+#     rather than drafts. **Every re-dispatch carries the earlier pass forward**, scoped or
+#     full: `open-dispositions` snapshots the dispositions the account already records, which
+#     the account is then held to unchanged, and a ticket's `copy` skips the board for a ticket
+#     unchanged since its last copy that landed;
 #   * `--comments` says that file is a gathering of the board's own comments rather than a
 #     manager's prose, and renders the **feedback** mode instead — the narrow
 #     comment-answering task, with no inventory, no run-wide verification and no
@@ -177,7 +186,7 @@ for held in plan_store.read_tasks(f"{source}:{project}"):
 print(project)
 '
 
-usage="just follow-ups <run-id> [--feedback FILE] [--comments] [--detach] [--to SOURCE]"
+usage="just follow-ups <run-id> [--feedback FILE] [--unanswered] [--comments] [--detach] [--to SOURCE]"
 
 fail() {
     echo "follow-ups: $1; $2" >&2
@@ -223,6 +232,7 @@ shift
 
 feedback=""
 comments=0
+unanswered=0
 detached=0
 board=""
 while [ $# -gt 0 ]; do
@@ -248,6 +258,10 @@ while [ $# -gt 0 ]; do
             comments=1
             shift
             ;;
+        --unanswered)
+            unanswered=1
+            shift
+            ;;
         *)
             fail "'$1' is not an option of this recipe" "usage: $usage"
             ;;
@@ -259,6 +273,10 @@ fi
 if [ "$comments" -eq 1 ] && [ -z "$feedback" ]; then
     fail "--comments says which kind of feedback file this is, and none was named" \
         "gather the board's comments with 'just follow-ups-answer-comments', which names both"
+fi
+if [ "$comments" -eq 1 ] && [ "$unanswered" -eq 1 ]; then
+    fail "--unanswered scopes a re-dispatch to the drafts an earlier pass left open, and --comments answers board comments, which carry no drafts" \
+        "answer comments with 'just follow-ups-answer-comments', or retry the open drafts with 'just follow-ups $run --unanswered'"
 fi
 
 # The board credential from this checkout's `.env`, before the first board read in either
@@ -359,6 +377,15 @@ mkdir -p -- "${!PLAN_SOURCE_ROOT_ENV}" ||
     fail "the follow-up run root ${!PLAN_SOURCE_ROOT_ENV} could not be created" \
         "check that the drafts root $drafts_root is writable, then retry"
 
+if [ "$unanswered" -eq 1 ]; then
+    # A scoped retry carries an earlier pass forward, so a run no pass opened an account for
+    # has nothing to carry, and is the full re-dispatch's to verify.
+    prior=$("$python" -m orchestrator.follow_up_tickets dispositions-path --root "$drafts_root" "$key") ||
+        fail "the disposition account path for run '$run' could not be read" "repair the diagnostic above, then retry"
+    [ -f "$prior" ] ||
+        fail "--unanswered retries what an earlier pass of run '$run' left open, and no earlier pass opened its account at $prior" \
+            "verify every draft with 'just follow-ups $run'"
+fi
 if [ "$comments" -ne 1 ]; then
     counts=$("$python" -m orchestrator.follow_up_tickets inventory --root "$drafts_root" "$key") ||
         fail "the drafts and tickets of run '$run' could not be counted under $drafts_root" \
@@ -548,6 +575,7 @@ answering=(answers --mode "$mode" --root "$drafts_root" --run "$key"
     --comment "\"$python\" -m orchestrator.follow_up_tickets comment"
     --plan-store "$store_cli")
 [ -z "$feedback" ] || answering+=(--feedback "$feedback")
+[ "$unanswered" -eq 0 ] || answering+=(--unanswered)
 if [ "$comments" -eq 1 ]; then
     printf -v quoted_python '%q' "$python"
     printf -v quoted_board '%q' "$board"

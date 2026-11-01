@@ -1164,7 +1164,9 @@ success hook, launching the follow-up run.
 **Feedback is a tweak or a re-dispatch.** A small change to this run's own ticket or
 comment is a direct tweak; anything more goes back with `just follow-ups <run-id>
 --feedback FILE`. On the `followups` board a run owns only the issues it created and the
-comments its marker names (`orchestrator/follow_up_tickets.py`).
+comments its marker names (`orchestrator/follow_up_tickets.py`). Retry a pass a rate limit
+cut short with `just follow-ups <run-id> --unanswered`, never with hand-written feedback
+narrowing it (`docs/orchestration.md`, *A retry never repeats settled work*).
 
 <!-- llmlint: ignore-block[agents_md_durable_and_terse, instruction_layer_localized] The plan that added the command requires this section to name it, its dry run, what it reads and how a comment is routed and answered, because those decide whether a manager runs it and what its cost scales with, and the plan that made it read the board once requires the snapshot, `--from`, settle's one read and writes, pending writes, the residual race and the watermark stated here as one statement with the module's; the rules themselves are stated once, in the module this points to. It is the manager's own loop rather than an `orchestrator/` implementation constraint: the manager runs this recipe, launches a dry run with `--from` or not, and acts on its needs-attention ending, and no nested instruction file is one the manager reads. -->
 People's board comments are answered by `just follow-ups-answer-comments`, which reads the

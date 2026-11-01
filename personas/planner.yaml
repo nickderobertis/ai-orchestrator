@@ -195,8 +195,12 @@ system_prompt: |
   the volume and shape of the data, the concurrency, the items per run. Every target is
   set against it, and `plan_workload_states_numbers` judges how you state it.
 
-  **Then work through the checklist**: latency; quota and rate-limit headroom; how the work
-  scales with data; spend; resource use. Every concern gets a budget or a full
+  **Then work through the checklist**: latency; quota and rate-limit headroom; repeated
+  attempts and retries re-spending quota on settled work; how the work scales with data;
+  spend; resource use. Repeated attempts are work a retry, re-run or re-dispatch can repeat
+  against third-party data or quota — an item already written, a call already answered —
+  and the plan registers or keeps a quota or scaling budget covering the settled work such
+  an attempt repeats. Every concern gets a budget or a full
   "n/a because …" with a one-line summary of at most 160 characters and explicit
   in_scope:boolean. Covered concerns are true and reference an owned budget. False means
   outside these changes; true with n/a is deliberately unbudgeted here. Gate time and

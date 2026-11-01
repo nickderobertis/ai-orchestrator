@@ -1809,8 +1809,8 @@ def test_feedback_reaches_the_task_verbatim_under_its_own_heading() -> None:
     assert "an issue run `listing-run` created is **edited**" in task
     flat = _flat(task)
     assert (
-        f"an existing ticket of run `listing-run` is copied again carrying the board's status, "
-        f"which `{BOARD_STATUS} --board followups <path of the ticket>` prints"
+        f"an existing ticket of run `listing-run` you change is copied again carrying the "
+        f"board's status, which `{BOARD_STATUS} --board followups <path of the ticket>` prints"
     ) in flat
     assert (
         "a ticket of an older schema is brought to the current shape before it is copied, "
@@ -4276,7 +4276,7 @@ def test_the_task_writes_each_ticket_against_the_accepted_fixes_its_searches_ret
         "re-derive this from those answers: an accepted ticket may have appeared, moved or "
         "been un-accepted since the last pass, so entries are added and removed and the "
         "ticket's claims re-derived to match. A ticket already placed skips these searches and "
-        "edits its own item by copying again.",
+        "edits its own item by copying again once it changed.",
         "A ticket record you then do not file — one an accepted fix removes, below, or any "
         "other you drop — is deleted before you record that draft's disposition, so no record "
         "is left that no board holds.",
@@ -4881,7 +4881,7 @@ def test_a_runs_receipts_that_are_not_its_own_well_formed_lines_refuse_its_accou
         json.dumps([sound]),
         json.dumps({key: value for key, value in sound.items() if key != "outcome"}),
         line(run=OTHER_RUN),
-        line(schema=2),
+        line(schema=tickets.RECEIPT_SCHEMA + 1),
         line(command="delete"),
         line(ticket="no-source"),
         line(card="no-source"),

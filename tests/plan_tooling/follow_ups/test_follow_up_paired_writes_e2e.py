@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from dataclasses import replace
 from pathlib import Path
 from typing import NamedTuple
 
@@ -84,6 +85,13 @@ def _copy(path: Path, capsys: pytest.CaptureFixture[str]) -> tuple[int, str]:
     capsys.readouterr()
     status = tickets.main(["copy", "--board", BOARD, str(path)])
     return status, " ".join(capsys.readouterr().err.split())
+
+
+def _edited(path: Path, evidence: str) -> None:
+    """One more sentence of evidence in the ticket at ``path``, its record and link kept: a
+    ticket changed since its copy, which its next `copy` writes rather than skips."""
+    held = tickets.read_ticket(path)
+    path.write_text(tickets.render(replace(held, body=f"{held.body}\n\n{evidence}")), "utf-8")
 
 
 def _filed(loopback: Loopback, cause: str, capsys: pytest.CaptureFixture[str]) -> tuple[Path, str]:
@@ -253,13 +261,16 @@ def test_a_copy_reads_its_item_only_through_the_stores_own_copy(
 ) -> None:
     """A copy straight after its `board-status` and one long after it read alike: its `task
     locate` reads nothing at the board, and the store's copy reads the card the ticket's link
-    names once, so no status of the item is read for the copy to write."""
+    names once, so no status of the item is read for the copy to write. Each copy follows an
+    edit, since a ticket unchanged since its landed copy is skipped without asking the board."""
     path, issue = _filed(loopback, "re-copied-after-its-board-status", capsys)
+    _edited(path, "Seen again before its board-status.")
     _decided(path, capsys)
     paired = len(remote._GitHubFixture.requests)
     assert _copy(path, capsys)[0] == tickets.SOUND
     assert _operations(paired)["issue"] == 1, _operations(paired)
 
+    _edited(path, "Seen again long after it.")
     unpaired = len(remote._GitHubFixture.requests)
     assert _copy(path, capsys)[0] == tickets.SOUND
     assert _operations(unpaired)["issue"] == 1, _operations(unpaired)

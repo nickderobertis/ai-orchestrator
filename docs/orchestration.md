@@ -2447,6 +2447,18 @@ once an attached run settles. `--feedback FILE` re-dispatches over the same run 
 manager's words in the task, `--detach` returns at the launch record printing the follow-up
 run and its watch command, and `--to SOURCE` copies onto another configured source.
 
+**A retry never repeats settled work.** Every re-dispatch carries the earlier pass forward:
+the dispositions its account already records are snapshotted at launch beside the account
+(`dispositions/<run>.carried.json`) and `check-dispositions` refuses an account that no longer
+holds each one unchanged, and `copy` skips the board for a ticket whose copy digest — its
+record and `depends_on` set as copied — matches its last copy that landed, receipting the skip
+as `skipped-unchanged` naming that copy's receipt line, which the completion check reads the
+placement from. `--unanswered`, alone or beside `--feedback`, scopes the re-dispatch to the
+drafts the account answers no disposition for and the tickets no landed copy confirms
+unchanged, which its task names as its whole work; it is refused on a run whose account no
+earlier pass opened, naming `just follow-ups <run-id>`, and beside `--comments`.
+`orchestrator/follow_up_tickets.py` holds the digest's one definition.
+
 **A dispatch is rendered in one of two modes, and the caller states which.** The template
 takes the mode as its `mode` variable and refuses any other value; everything else it is
 answered with comes from `python -m orchestrator.follow_up_tickets answers`, which states

@@ -72,6 +72,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import hashlib
 import json
 import math
 import os
@@ -3406,7 +3407,7 @@ def _native(qualified: str, board: str) -> BoardItemId:
 
 #: What one ticket's copy did to its item: the store's copy actions but `orphaned`, which a
 #: copy reports for a destination item its source no longer holds, never for the one copied.
-type CopyAction = Literal["created", "updated", "unchanged"]
+type CopyAction = Literal["created", "updated", "unchanged", "skipped-unchanged"]
 
 
 class Copied(NamedTuple):
@@ -3423,8 +3424,13 @@ class Copied(NamedTuple):
 #: writes, built from the store's own answer to that write, so the closeout's checks hold the
 #: account to what each write returned instead of reading the board back. The file is the
 #: run's, written by those commands alone: the task tells the agent never to write or edit it.
+#: Schema 2 added a copy's optional `digest` and the `skipped-unchanged` receipt naming the copy
+#: it stands on (:func:`copy_digest`); a schema-1 line, which carries neither, is still read.
 RECEIPTS_DIRECTORY = "receipts"
-RECEIPT_SCHEMA = 1
+RECEIPT_SCHEMA = 2
+#: Every receipt schema a reader takes: the current one, and the one before it, whose lines a
+#: run written before the digest still holds.
+RECEIPT_SCHEMAS = (1, RECEIPT_SCHEMA)
 RECEIPT_KEYS = ("schema", "run", "command", "ticket", "card", "outcome")
 RECEIPT_SUFFIX = ".jsonl"
 
@@ -3475,20 +3481,36 @@ class ReceiptError(BaseModel):
     message: str
 
 
+#: The action of a copy that wrote nothing because its ticket is unchanged since a copy that
+#: landed: never the store's answer, which is why it is spelled apart from the store's words.
+SKIPPED_UNCHANGED: Literal["skipped-unchanged"] = "skipped-unchanged"
+#: A copy digest: sha256, as lowercase hex (:func:`copy_digest`), and nothing else: anchored,
+#: because a field's `pattern` is searched for rather than matched whole.
+DIGEST = re.compile(r"^[0-9a-f]{64}$")
+
+
 class CopyOutcomeReceipt(BaseModel):
     """A copy's receipt `outcome`: the store's own answer for the item copied.
 
     Its action, `result`, `status_condition` and `priority_condition`, and for a refusal its
-    error and the `held` the store's read found.
+    error and the `held` the store's read found. A copy that landed records the ticket's
+    :func:`copy_digest` as copied in `digest`; a copy skipped as unchanged
+    (:data:`SKIPPED_UNCHANGED`) wrote nothing, and names in `unchanged_since` the line of the
+    landed copy it stands on, whose digest it carries. Both keys are omitted when empty, so a
+    receipt of schema 1 reads as one with neither.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    action: Literal["created", "updated", "unchanged", "failed", "skipped", "orphaned"]
+    action: Literal[
+        "created", "updated", "unchanged", "failed", "skipped", "orphaned", "skipped-unchanged"
+    ]
     result: ReceiptResult | None = None
     status_condition: ReceiptCondition | None = None
     priority_condition: ReceiptCondition | None = None
     error: ReceiptError | None = None
     held: ReceiptResult | None = None
+    digest: str | None = Field(default=None, pattern=DIGEST.pattern)
+    unchanged_since: StrictInt | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
     def _answered(self) -> CopyOutcomeReceipt:
@@ -3497,7 +3519,27 @@ class CopyOutcomeReceipt(BaseModel):
             raise ValueError("an outcome carries an error exactly when its action is `failed`")
         if self.action in COPIED_ACTIONS and self.result is None:
             raise ValueError(f"a copy answered `{self.action}` carries the `result` it left")
+        skipped = self.action == SKIPPED_UNCHANGED
+        if skipped != (self.unchanged_since is not None):
+            raise ValueError(
+                f"an outcome names `unchanged_since` exactly when its action is "
+                f"`{SKIPPED_UNCHANGED}`"
+            )
+        if skipped and (self.digest is None or self.result is not None):
+            raise ValueError(
+                f"a copy `{SKIPPED_UNCHANGED}` carries the digest it matched and writes no `result`"
+            )
+        if self.digest is not None and not (skipped or self.action in COPIED_ACTIONS):
+            raise ValueError("only a copy that landed, or one skipped as unchanged, has a digest")
         return self
+
+    def dumped(self) -> dict[str, object]:
+        """The outcome as a receipt line holds it, its schema-2 keys omitted when empty."""
+        held = self.model_dump(mode="json")
+        for key in ("digest", "unchanged_since"):
+            if held[key] is None:
+                del held[key]
+        return held
 
 
 class CommentOutcomeReceipt(BaseModel):
@@ -3569,7 +3611,11 @@ def append_receipt(  # noqa: PLR0913 - each is one key of the receipt line
         "command": command.value,
         "ticket": ticket,
         "card": card,
-        "outcome": outcome.model_dump(mode="json"),
+        "outcome": (
+            outcome.dumped()
+            if isinstance(outcome, CopyOutcomeReceipt)
+            else outcome.model_dump(mode="json")
+        ),
     }
     with path.open("a", encoding="utf-8") as receipts:
         receipts.write(json.dumps(line, ensure_ascii=False, sort_keys=True) + "\n")
@@ -3598,14 +3644,19 @@ def _condition(condition: BaseModel | None) -> ReceiptCondition | None:
     return ReceiptCondition.model_validate({"held": dumped.get("held"), "met": dumped.get("met")})
 
 
-def copy_receipt(outcome: object) -> CopyOutcomeReceipt:
+def copy_receipt(outcome: object, digest: str | None = None) -> CopyOutcomeReceipt:
     """A copy outcome of the store's as its receipt's `outcome`; :class:`OSError` for an answer
-    no receipt can hold — a refusal without its error, or a write without what it left."""
+    no receipt can hold — a refusal without its error, or a write without what it left.
+
+    ``digest`` is the ticket's :func:`copy_digest` as copied, recorded only on a copy that
+    landed.
+    """
     error = getattr(outcome, "error", None)
+    action = str(getattr(outcome, "action", ""))
     try:
         return CopyOutcomeReceipt.model_validate(
             {
-                "action": str(getattr(outcome, "action", "")),
+                "action": action,
                 "result": _result(getattr(outcome, "result", None)),
                 "status_condition": _condition(getattr(outcome, "status_condition", None)),
                 "priority_condition": _condition(getattr(outcome, "priority_condition", None)),
@@ -3615,10 +3666,99 @@ def copy_receipt(outcome: object) -> CopyOutcomeReceipt:
                     else ReceiptError(kind=str(error.kind), message=str(error.message))
                 ),
                 "held": None if error is None else _result(getattr(outcome, "held", None)),
+                "digest": digest if action in COPIED_ACTIONS and error is None else None,
             }
         )
     except ValidationError as exc:
         raise OSError(f"the store answered the copy outside its own contract: {exc}") from exc
+
+
+#: **What a copy digest covers.** A ticket's own content as a copy carries it onto its card —
+#: its title, status, priority, `repositories`, body and record — beside the sorted ids of its
+#: store `depends_on`, and none of what the copy itself stamps on the record afterwards: the
+#: store's link and copy locations, its origin and create intent (:attr:`Ticket.links`,
+#: :attr:`Ticket.origin`, :attr:`Ticket.creating`, :attr:`Ticket.reserved`), the
+#: :data:`BOARD_ESTIMATE_FIELD` the copy stages, and the record's `schema`, which a copy
+#: bringing a record forward rewrites. A stored shape later runs read back, so this is its one
+#: definition, and the tests import it rather than recompute it.
+DIGEST_EXCLUDED_RECORD_KEYS = ("schema", BOARD_ESTIMATE_FIELD)
+
+
+def copy_digest(ticket: Ticket) -> str:
+    """The sha256, as hex, of ``ticket`` as a copy carries it onto its card.
+
+    The canonical JSON — keys sorted, no insignificant whitespace, UTF-8 — of the ticket's
+    record as copied, its title, status, priority, `repositories` and body beside the record's
+    metadata, together with the sorted list of its store `depends_on` ids; every field a copy
+    stamps afterwards is left out (:data:`DIGEST_EXCLUDED_RECORD_KEYS`). Two tickets with one
+    digest put the same card on the board, so a copy whose ticket's digest matches the last
+    copy of it that landed has nothing to write (:func:`copy_ticket`).
+    """
+    held = record(dataclasses.replace(ticket, board_estimate=None))
+    for key in DIGEST_EXCLUDED_RECORD_KEYS:
+        held.pop(key, None)
+    document = {
+        "record": {
+            "title": ticket.title,
+            "status": ticket.status.value,
+            PRIORITY_FIELD: str(ticket.priority),
+            "repositories": list(ticket.repositories),
+            "body": ticket.body,
+            "metadata": {KEY: held},
+        },
+        DEPENDENCY_FIELD: sorted(ticket.depends_on),
+    }
+    canonical = json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def landed_copy(receipts: Sequence[Receipt], at: int) -> Receipt | None:
+    """The receipt at line ``at`` when it is a copy that landed, else `None`."""
+    for receipt in receipts:
+        if receipt.at == at:
+            outcome = receipt.outcome
+            landed = (
+                receipt.command is ReceiptCommand.COPY
+                and isinstance(outcome, CopyOutcomeReceipt)
+                and outcome.error is None
+                and outcome.action in COPIED_ACTIONS
+                and receipt.card is not None
+            )
+            return receipt if landed else None
+    return None
+
+
+def last_landed_copy(receipts: Sequence[Receipt], ticket: str) -> Receipt | None:
+    """The last copy of ``ticket`` that landed: its last copy receipt that wrote its card, a
+    skip as unchanged standing for the landed copy it names; `None` for a ticket with none.
+
+    ``receipts`` are :func:`read_receipts`'s, which reads a skip only where it names a landed
+    copy of its own ticket on its own card.
+    """
+    for receipt in reversed(receipts):
+        outcome = receipt.outcome
+        if receipt.ticket != ticket or not isinstance(outcome, CopyOutcomeReceipt):
+            continue
+        if outcome.action == SKIPPED_UNCHANGED and outcome.unchanged_since is not None:
+            return landed_copy(receipts, outcome.unchanged_since)
+        if landed_copy(receipts, receipt.at) is receipt:
+            return receipt
+    return None
+
+
+def confirmed_copy(root: Path, run: str, ticket: str, digest: str) -> Receipt | None:
+    """The landed copy of ``ticket`` in ``run``'s receipts its current ``digest`` matches.
+
+    The last copy of it that landed (:func:`last_landed_copy`), when that receipt records
+    ``digest``; `None` otherwise — a ticket changed since, one never copied, and one whose last
+    landed copy was receipted before receipts carried a digest, which reads as not confirmed
+    unchanged and is copied as before.
+    """
+    receipts, _malformed = read_receipts(root, run)
+    landed = last_landed_copy(receipts, ticket)
+    if landed is None or cast(CopyOutcomeReceipt, landed.outcome).digest != digest:
+        return None
+    return landed
 
 
 #: The failure kinds of a copy's own target that no rule here re-finds a card for: its named
@@ -3723,6 +3863,23 @@ def copy_ticket(path: Path, board: str) -> Copied:
     # A card this run's own copy already reached — on a private destination, which keeps no link
     # — is one `board-status` read the status off, so the ticket creates nothing there.
     reached = card or receipt_card(path.absolute().parents[3], run, identifier)
+    # A ticket unchanged since a copy of it that landed on the card it names has nothing to
+    # write there: the skip is receipted naming that copy, and the board is sent nothing.
+    digest = copy_digest(ticket)
+    confirmed = confirmed_copy(path.absolute().parents[3], run, identifier, digest)
+    if confirmed is not None and confirmed.card is not None and confirmed.card == reached:
+        append_receipt(
+            path.absolute().parents[3],
+            run,
+            ReceiptCommand.COPY,
+            identifier,
+            confirmed.card,
+            CopyOutcomeReceipt(
+                action=SKIPPED_UNCHANGED, digest=digest, unchanged_since=confirmed.at
+            ),
+        )
+        held_at = confirmed.card.partition(":")[0]
+        return Copied(SKIPPED_UNCHANGED, _native(confirmed.card, held_at), held_at)
     if reached is None and ticket.status not in WITHDRAWABLE:
         raise Undecided(ticket.status)
     guard = Priority.NONE if ticket.board_estimate is None else ticket.board_estimate
@@ -3782,8 +3939,15 @@ def copy_ticket(path: Path, board: str) -> Copied:
         raise OSError(f"the copy onto {destination} answered {entries!r}, naming no item")
     reached = getattr(outcome, "destination", None)
     reached_id = None if reached is None else str(reached.root)
+    # The digest of the ticket as copied: a record this copy brings forward below is rewritten
+    # only in what a digest leaves out, so the ticket read before the copy is what landed.
     append_receipt(
-        root, run, ReceiptCommand.COPY, identifier, reached_id or card, copy_receipt(outcome)
+        root,
+        run,
+        ReceiptCommand.COPY,
+        identifier,
+        reached_id or card,
+        copy_receipt(outcome, None if ticket.board_item is not None else digest),
     )
     action = str(outcome.action)
     error = getattr(outcome, "error", None)
@@ -4949,10 +5113,12 @@ class Receipt:
 def read_receipts(root: Path, run: str) -> tuple[list[Receipt], list[str]]:
     """``run``'s receipts under ``root``, and every way a line of them is not one.
 
-    A line that is not a JSON object of exactly :data:`RECEIPT_KEYS` at :data:`RECEIPT_SCHEMA`,
-    naming a command of :class:`ReceiptCommand`, a qualified ticket or `null`, a qualified card
-    and the outcome that command's model (:data:`OUTCOME_MODELS`) reads, is malformed; one naming
-    another `run` is not this run's. An absent file holds no receipt.
+    A line that is not a JSON object of exactly :data:`RECEIPT_KEYS` at one of
+    :data:`RECEIPT_SCHEMAS`, naming a command of :class:`ReceiptCommand`, a qualified ticket or
+    `null`, a qualified card and the outcome that command's model (:data:`OUTCOME_MODELS`)
+    reads, is malformed; so is a schema-1 line carrying a key schema 2 added, and a copy skipped
+    as unchanged naming no card or not naming an earlier landed copy of its ticket on that card
+    with its digest. One naming another `run` is not this run's. An absent file holds no receipt.
     """
     path = receipts_path(root, run)
     if not path.is_file():
@@ -4982,7 +5148,7 @@ def read_receipts(root: Path, run: str) -> tuple[list[Receipt], list[str]]:
         ticket, card, outcome = entry["ticket"], entry["card"], entry["outcome"]
         if (
             type(entry["schema"]) is not int
-            or entry["schema"] != RECEIPT_SCHEMA
+            or entry["schema"] not in RECEIPT_SCHEMAS
             or entry["command"] not in tuple(ReceiptCommand)
             or not (ticket is None or (isinstance(ticket, str) and QUALIFIED_ID.fullmatch(ticket)))
             or not (card is None or (isinstance(card, str) and QUALIFIED_ID.fullmatch(card)))
@@ -5013,8 +5179,43 @@ def read_receipts(root: Path, run: str) -> tuple[list[Receipt], list[str]]:
                 "card, so it says nothing about which card the write reached"
             )
             continue
+        if isinstance(read, CopyOutcomeReceipt) and (
+            problem := _schema_two_problem(entry["schema"], read, ticket, card, held)
+        ):
+            found.append(f"receipt line {at} of {path} {problem}")
+            continue
         held.append(Receipt(at, command, ticket, card, cast(ReceiptOutcome, read)))
     return held, found
+
+
+def _schema_two_problem(
+    schema: int,
+    outcome: CopyOutcomeReceipt,
+    ticket: str | None,
+    card: str | None,
+    earlier: Sequence[Receipt],
+) -> str | None:
+    """How a copy receipt's schema-2 keys contradict its line, or `None` where they do not."""
+    if schema < RECEIPT_SCHEMA and (outcome.digest or outcome.unchanged_since):
+        return f"is of schema {schema}, which carries no `digest` or `unchanged_since`"
+    if outcome.action != SKIPPED_UNCHANGED:
+        return None
+    named = (
+        None if outcome.unchanged_since is None else landed_copy(earlier, outcome.unchanged_since)
+    )
+    if (
+        card is None
+        or named is None
+        or named.ticket != ticket
+        or named.card != card
+        or cast(CopyOutcomeReceipt, named.outcome).digest != outcome.digest
+    ):
+        return (
+            f"records a copy `{SKIPPED_UNCHANGED}` whose `unchanged_since` names no earlier "
+            "copy of its ticket that landed on its card with its digest, so nothing says the "
+            "card holds it"
+        )
+    return None
 
 
 def _category_of(result: ReceiptResult | None) -> str | None:
@@ -5225,9 +5426,15 @@ def receipt_problems(  # noqa: C901, PLR0912, PLR0913 - one pass over every file
                     "copy of it, so nothing this run wrote says the ticket reached the board"
                 )
                 continue
-            found.extend(copy_receipt_problems(ticket, copies[-1], named))
+            # A copy skipped as unchanged stands on the landed copy it names, which `read_receipts`
+            # held to being one of this ticket's, on this card, with the digest it matched.
+            standing = copies[-1]
+            skipped = cast(CopyOutcomeReceipt, standing.outcome)
+            if skipped.action == SKIPPED_UNCHANGED and skipped.unchanged_since is not None:
+                standing = landed_copy(receipts, skipped.unchanged_since) or standing
+            found.extend(copy_receipt_problems(ticket, standing, named))
             if touched is not None:
-                last = cast(CopyOutcomeReceipt, copies[-1].outcome)
+                last = cast(CopyOutcomeReceipt, standing.outcome)
                 # A refused copy left the card as the store's read found it, which is `held`.
                 result = last.held if last.error is not None else last.result
                 touched[card] = ReviewTicket(
@@ -5366,6 +5573,57 @@ def dispositions_path(root: Path, run: str) -> Path:
     return root / DISPOSITIONS_DIRECTORY / f"{run}.json"
 
 
+#: **The dispositions a re-dispatch carries forward.** Every entry the account already holds
+#: when a launch opens it was answered by an earlier pass, and a retry takes it from that
+#: account rather than answering it again: :func:`open_dispositions` writes those entries,
+#: exactly as they stand, to `<run>.carried.json` beside the account, and `check-dispositions`
+#: refuses an account that no longer holds each of them unchanged (:func:`carried_problems`).
+#: The document is :data:`DISPOSITIONS_SCHEMA`'s envelope with no `drafts`.
+CARRIED_SUFFIX = ".carried.json"
+CARRIED_KEYS = ("schema", "run", "dispositions")
+
+
+def carried_path(root: Path, run: str) -> Path:
+    """Where the dispositions ``run``'s re-dispatch carries forward are kept."""
+    return root / DISPOSITIONS_DIRECTORY / f"{run}{CARRIED_SUFFIX}"
+
+
+def read_carried(root: Path, run: str) -> list[Mapping[str, object]]:
+    """The dispositions ``run``'s re-dispatch carries forward; none where nothing is carried.
+
+    :class:`Refused` for a document that is not one: what it holds is what every later account
+    is held to, so it is read as an input rather than trusted.
+    """
+    path = carried_path(root, run)
+    if not path.is_file():
+        return []
+    document = _artifact(path)
+    found = _envelope_problems(document, run, CARRIED_KEYS, "dispositions", DISPOSITIONS_SCHEMA)
+    entries = document.get("dispositions")
+    found.extend(
+        problem
+        for at, entry in enumerate(entries if isinstance(entries, list) else [])
+        for problem in _entry_problems(entry, DISPOSITION_ENTRY_KEYS, at)
+    )
+    if found:
+        raise Refused([f"{path} is not this run's carried account: {problem}" for problem in found])
+    return cast(list[Mapping[str, object]], entries)
+
+
+def carried_problems(
+    entries: Sequence[object], carried: Sequence[Mapping[str, object]]
+) -> list[str]:
+    """Every carried disposition ``entries`` no longer holds exactly once and unchanged."""
+    return [
+        f"the disposition of {held.get('draft')!r} was carried forward from the earlier pass, "
+        "and the account no longer holds it exactly as it stood; restore it unchanged, as "
+        f"{json.dumps(held, ensure_ascii=False, sort_keys=True)}, and answer only drafts it "
+        "does not answer yet"
+        for held in carried
+        if sum(entry == held for entry in entries) != 1
+    ]
+
+
 def _drafts_recorded(held: object, run: str) -> tuple[list[QualifiedDraftId], list[str]]:
     """An artifact's recorded input set, and every way what it holds is not one.
 
@@ -5396,7 +5654,9 @@ def open_dispositions(root: Path, run: str) -> Path:
     The input set only ever **grows**: a re-dispatch over a run whose first pass consumed
     its drafts would otherwise record an empty input set and take the first pass's account
     with it. Every entry already recorded is left exactly as it stands, so this writes the
-    skeleton and never an answer.
+    skeleton and never an answer — and every entry is carried forward (:func:`carried_path`),
+    after holding the account to every disposition an earlier launch carried, so a later pass
+    that changed one is refused here rather than its change carried on.
 
     An artifact already there is read as an input, not resumed blindly: one of another
     schema or another run, or whose recorded set is not one, is :class:`Refused` here —
@@ -5433,16 +5693,21 @@ def open_dispositions(root: Path, run: str) -> Path:
             # its values; the cast states that narrowing across the helper boundary.
             _, problems = _disposed(cast(Mapping[str, object], entry), expected, at)
             found.extend(problems)
+    held = entries if isinstance(entries, list) else []
+    found.extend(carried_problems(held, read_carried(root, run)))
     if found:
         raise Refused([f"{path} is not this run's account: {problem}" for problem in found])
     written = {
         "schema": DISPOSITIONS_SCHEMA,
         "run": run,
         "drafts": expected,
-        "dispositions": entries if isinstance(entries, list) else [],
+        "dispositions": held,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(written, indent=2) + "\n", encoding="utf-8")
+    if held:
+        carried = {"schema": DISPOSITIONS_SCHEMA, "run": run, "dispositions": held}
+        carried_path(root, run).write_text(json.dumps(carried, indent=2) + "\n", "utf-8")
     return path
 
 
@@ -6368,12 +6633,13 @@ def _disposed(
     ), []
 
 
-def disposition_problems(
+def disposition_problems(  # noqa: PLR0913 - each is one input the account is held to
     document: Mapping[str, object],
     run: str,
     present: Sequence[QualifiedDraftId] = (),
     written: Mapping[str, Collection[str] | None] | None = None,
     refused: Mapping[str, Sequence[str]] | None = None,
+    carried: Sequence[Mapping[str, object]] = (),
 ) -> list[str]:
     """Every way a disposition artifact fails to account for the run's drafts.
 
@@ -6396,6 +6662,10 @@ def disposition_problems(
     ``refused`` is what each of this run's tickets `validate` refuses was refused for, by root
     cause: a draft filed under one is filed under a ticket that is not sound, which is named
     with its problems, once per ticket.
+
+    ``carried`` is every disposition an earlier pass recorded, which a re-dispatch carries
+    forward (:func:`read_carried`): each is held to being in the account exactly once and
+    unchanged, so the whole account is validated, carried entries included.
     """
     found = _envelope_problems(document, run, DISPOSITION_KEYS, "dispositions", DISPOSITIONS_SCHEMA)
     expected, problems = _drafts_recorded(document.get("drafts"), run)
@@ -6421,6 +6691,7 @@ def disposition_problems(
         return found
     entries = document["dispositions"]
     assert isinstance(entries, list)  # noqa: S101 - the envelope check above just proved it
+    found.extend(carried_problems(entries, carried))
     recorded: list[Disposed] = []
     for at, entry in enumerate(entries):
         if problems := _entry_problems(entry, DISPOSITION_ENTRY_KEYS, at):
@@ -6444,7 +6715,7 @@ def disposition_problems(
         "ticket's `drafts` does not name it, so the ticket carries none of its evidence"
         for one in recorded
         for cause in one.root_causes
-        if (carried := held.get(cause)) is not None and one.draft not in carried
+        if (named := held.get(cause)) is not None and one.draft not in named
     )
     filed = dict.fromkeys(cause for one in recorded for cause in one.root_causes)
     found.extend(
@@ -6920,6 +7191,7 @@ def shape(run: str) -> dict[str, object]:
         "board_estimate_field": BOARD_ESTIMATE_FIELD,
         "receipts_directory": RECEIPTS_DIRECTORY,
         "receipt_suffix": RECEIPT_SUFFIX,
+        "skipped_unchanged": SKIPPED_UNCHANGED,
         "headings": ", ".join(f"`## {heading}`" for heading in HEADINGS),
         "root_cause_bar": ROOT_CAUSE_BAR,
         "root_cause_parts": ", ".join(f"`**{part}.**`" for part in ROOT_CAUSE_PARTS),
@@ -7086,6 +7358,7 @@ def answers(
     check_responses: str | None = None,
     budgets: Path | None = None,
     check_budgets: str | None = None,
+    scope: RetryScope | None = None,
 ) -> dict[str, object]:
     """One dispatch's answers to this host's `follow-up-task` template, for ``mode``.
 
@@ -7104,7 +7377,8 @@ def answers(
 
     The feedback is an answer rather than text spliced into the template, so what it quotes
     — a brace, a placeholder-shaped word — reaches the task verbatim, less its trailing
-    whitespace.
+    whitespace. ``scope`` is a re-dispatch's `--unanswered` work (:func:`retry_scope`), rendered
+    as the only drafts and tickets that dispatch works; initial mode only.
     """
     found = _plan_store_problems(plan_store)
     found.extend(
@@ -7136,6 +7410,11 @@ def answers(
             },
         )
     )
+    if scope is not None and mode is not Mode.INITIAL:
+        found.append(
+            "a re-dispatch scoped to the unanswered drafts is of the initial mode, and a comment "
+            "gathering answers comments rather than drafts"
+        )
     if found:
         raise Refused(found)
     answered: dict[str, object] = {
@@ -7179,6 +7458,11 @@ def answers(
             "check_budgets": str(check_budgets),
             "budget_example": budget_example(run, board),
         }
+        if scope is not None:
+            answered["unanswered"] = {
+                "drafts": list(scope.drafts),
+                "tickets": [str(path) for path in scope.tickets],
+            }
     else:
         # `_mode_problems` refused feedback mode without `--feedback`, so the file is a `Path`.
         named = cast(Path, feedback_file).name
@@ -7211,6 +7495,64 @@ def _mode_problems(mode: Mode, given: Mapping[str, Path | str | None]) -> list[s
         for flag in OWED_ACCOUNTS[mode]
         if (value := given.get(flag)) is None or (isinstance(value, str) and not value.strip())
     ]
+
+
+class RetryScope(NamedTuple):
+    """What a re-dispatch scoped by `--unanswered` works, and nothing else.
+
+    ``drafts`` is every draft the account records in its input set and answers no disposition
+    for; ``tickets`` the path of every ticket of the run no landed copy confirms unchanged
+    (:func:`confirmed_copy`) — changed since its last copy that landed, never copied, copied
+    before receipts carried a digest, or one the store cannot read as a ticket.
+    """
+
+    drafts: tuple[QualifiedDraftId, ...]
+    tickets: tuple[Path, ...]
+
+
+def retry_scope(root: Path, run: str) -> RetryScope:
+    """The drafts and tickets a re-dispatch of ``run`` scoped by `--unanswered` works.
+
+    :class:`Refused` for a run whose account an earlier pass never opened, or one that is not
+    an account: there is nothing to carry forward, and only the full re-dispatch, which
+    verifies every draft, answers that run.
+    """
+    path = dispositions_path(root, run)
+    if not path.is_file():
+        raise Refused(
+            [
+                f"run {run} has no account at {path}, so no earlier pass left anything to carry "
+                f"forward; verify every draft with 'just follow-ups {run}'"
+            ]
+        )
+    # Held to what `open-dispositions` holds it to, every entry read as a disposition, so a
+    # draft counts as answered only by an entry that is one.
+    document = _artifact(path)
+    found = _envelope_problems(document, run, DISPOSITION_KEYS, "dispositions", DISPOSITIONS_SCHEMA)
+    recorded, problems = _drafts_recorded(document.get("drafts"), run)
+    found.extend(problems)
+    entries = document.get("dispositions")
+    answered: set[str] = set()
+    for at, entry in enumerate(entries if isinstance(entries, list) else []):
+        if problems := _entry_problems(entry, DISPOSITION_ENTRY_KEYS, at):
+            found.extend(problems)
+            continue
+        read, problems = _disposed(cast(Mapping[str, object], entry), recorded, at)
+        found.extend(problems)
+        if read is not None:
+            answered.add(read.draft)
+    if found:
+        raise Refused([f"{path} is not this run's account: {problem}" for problem in found])
+    changed = []
+    for ticket in sorted((root / TASKS_DIRECTORY / run / TICKETS).glob(f"*{TICKET_SUFFIX}")):
+        try:
+            digest = copy_digest(read_ticket(ticket, pending=True))
+        except (OSError, Refused):
+            changed.append(ticket)
+            continue
+        if confirmed_copy(root, run, qualified_id(*located_path(ticket)), digest) is None:
+            changed.append(ticket)
+    return RetryScope(tuple(one for one in recorded if one not in answered), tuple(changed))
 
 
 def inventory(root: Path, run: str) -> tuple[int, int]:
@@ -8107,6 +8449,14 @@ def _parser() -> _Parser:
     task.add_argument("--check-responses", metavar="COMMAND")
     task.add_argument("--budgets", type=Path, metavar="PATH")
     task.add_argument("--check-budgets", metavar="COMMAND")
+    task.add_argument(
+        "--unanswered",
+        action="store_true",
+        help=(
+            "scope the re-dispatch to the drafts the account does not answer and the tickets "
+            "changed since their last confirmed copy"
+        ),
+    )
     return parser
 
 
@@ -8186,6 +8536,7 @@ def _accounted(
             draft_ids(arguments.root, arguments.run),
             {cause: None if ticket is None else ticket.drafts for cause, ticket in local.items()},
             refusals,
+            read_carried(arguments.root, arguments.run),
         )
         if not problems and arguments.board:
             # `disposition_problems` proved every entry and every root-causes list above.
@@ -8507,6 +8858,7 @@ def _answered_template(arguments: argparse.Namespace) -> int:
     try:
         feedback = None if arguments.feedback is None else _text(arguments.feedback)
         mode = Mode(arguments.mode)
+        scope = retry_scope(root, arguments.run) if arguments.unanswered else None
         answered = answers(
             mode=mode,
             run=arguments.run,
@@ -8524,6 +8876,7 @@ def _answered_template(arguments: argparse.Namespace) -> int:
             feedback_file=arguments.feedback,
             redispatch=mode is Mode.FEEDBACK
             or feedback is not None
+            or arguments.unanswered
             or inventory(root, arguments.run)[1] > 0,
             dispositions=arguments.dispositions,
             check_dispositions=arguments.check_dispositions,
@@ -8531,6 +8884,7 @@ def _answered_template(arguments: argparse.Namespace) -> int:
             check_responses=arguments.check_responses,
             budgets=arguments.budgets,
             check_budgets=arguments.check_budgets,
+            scope=scope,
         )
     except (OSError, Refused) as exc:
         print(f"{PROG}: refused: {exc}", file=sys.stderr)

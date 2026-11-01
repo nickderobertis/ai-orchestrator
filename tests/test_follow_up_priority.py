@@ -860,10 +860,22 @@ def _owned_elsewhere(
         assert destination is not None
         issue = str(destination.model_dump())
     else:
+        # Each call stands for that run filing its item afresh, over whatever an earlier call
+        # left on the card: the run's earlier receipts are no receipts of this filing, and would
+        # confirm the rewritten ticket unchanged and skip its copy (`copy_ticket`).
+        tickets.receipts_path(drafts_root, OTHER_RUN).unlink(missing_ok=True)
         issue = _copied(_write(drafts_root, older), capsys)
     plan_store.sdk(plan_store.client().task_metadata_set(issue, "x.kept", '{"by": "a person"}'))
     plan_store.sdk(plan_store.client().task_status_set(issue, "todo"))
     return issue
+
+
+def _edited_since_copy(path: Path) -> None:
+    """One more sentence of evidence in the ticket at ``path``, its record and link kept: a
+    ticket changed since its copy, which its next `copy` writes rather than skips."""
+    held = tickets.read_ticket(path)
+    edited = dataclasses.replace(held, body=f"{held.body}\n\nSeen again since its copy.")
+    path.write_text(tickets.render(edited), encoding="utf-8")
 
 
 def _re_estimated(issue: str, capsys: pytest.CaptureFixture[str]) -> dict[str, object]:
@@ -1205,6 +1217,7 @@ def test_a_schema_7_item_storing_no_estimate_is_refused_rather_than_read_as_sche
         else "record is not sound: `priority_estimate` 'critical' is not one of" in refused
     ), refused
     assert _shown(issue) == before, "a refused read wrote something"
+    _edited_since_copy(path)
     _copied(path, capsys)
     assert _shown(issue)["priority"] == "low", "a person's priority was handed back"
 
@@ -1354,6 +1367,7 @@ def test_check_dispositions_holds_a_copied_tickets_item_to_its_receipted_priorit
     assert _dispositions(drafts_root, capsys)[0] == tickets.SOUND
 
     _person_sets(issue, Priority.LOW)
+    _edited_since_copy(path)
     _copied(path, capsys)
     assert _shown(issue)["priority"] == "low"
     receipt = _last_receipt(drafts_root, tickets.ReceiptCommand.COPY)
