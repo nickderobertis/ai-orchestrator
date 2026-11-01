@@ -1,8 +1,8 @@
 """The human-items guidance a manager and a planner read, held to the engine that defines it.
 
-`AGENTS.md` tells a manager how to run the one queue of what people must do — print the
-engine's report on every update, put the user's questions through items, keep a worker's
-question worker-to-manager, dismiss what nothing needs, reconnect through the watch — and
+`AGENTS.md` tells a manager how to run the one queue of what people must do — relay its own
+items from the engine's report on every update, put the user's questions through items, keep
+a worker's question worker-to-manager, dismiss what nothing needs, reconnect through the watch — and
 `personas/planner.yaml` tells a planner how to state a human node's item. Both restate the
 engine's own definitions of the four priorities and of a terse item, because a planner
 working in another repository reads only its persona; a restatement is a second source, so
@@ -95,13 +95,33 @@ def test_the_presentation_the_guidance_repeats_is_the_engines() -> None:
         assert source in manager and source in mechanics, source
 
 
-def test_the_manager_prints_the_engines_report_on_every_update() -> None:
+#: Each property of the manager's update rule for human items, as AGENTS.md words it.
+UPDATE_RULE = (
+    "It relays only this session's human items**: the items of this session and its runs",
+    "plus an item from another session only when it blocks this session's work",
+    "Each is one short line saying what is needed, its priority and what it blocks",
+    "any link a markdown link named by what it links to",
+    "when nothing waits on the user, one line says so",
+    "An item's full detail is given only when the user asks for it",
+    "`just human-items report`, the engine's one report of every open human item, is where "
+    "those lines are read from — never pasted into the update whole",
+)
+
+
+@pytest.mark.parametrize("said", UPDATE_RULE)
+def test_the_manager_relays_its_own_items_in_short_lines_read_from_the_report(said: str) -> None:
     manager = _manager()
     assert "Write every update for a user with limited attention" in manager
-    assert (
-        "It prints `just human-items report`** — the engine's one report of every open human "
-        "item, blocking first, each with its full body — never a list of your own"
-    ) in manager
+    assert manager.count(said) == 1, f"AGENTS.md must state {said!r} exactly once"
+    whole = _flat((REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8"))
+    assert whole.count(said) == 1, f"AGENTS.md states {said!r} outside the manager loop"
+
+
+def test_no_guidance_still_has_the_manager_paste_the_whole_report() -> None:
+    manager, mechanics = _manager(), _mechanics()
+    assert "It prints `just human-items report`" not in manager
+    assert "what a manager prints on every update" not in mechanics
+    assert "is where a manager reads the items its update relays" in mechanics
     assert "report is the one printable manager report" in _contract()
 
 

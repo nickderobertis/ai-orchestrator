@@ -980,11 +980,15 @@ limited attention, running several managers, who may not have read any earlier m
   answered, rather than pointing to where it was first asked.
 - **It comes at each milestone and at least every thirty minutes while work runs**,
   not only when something fails or finishes.
-- **It prints `just human-items report`** — the engine's one report of every open human
-  item, blocking first, each with its full body — never a list of your own of what waits
-  on a person.
+- **It relays only this session's human items**: the items of this session and its runs,
+  plus an item from another session only when it blocks this session's work. Each is one
+  short line saying what is needed, its priority and what it blocks, any link a markdown
+  link named by what it links to; when nothing waits on the user, one line says so. An
+  item's full detail is given only when the user asks for it. `just human-items report`,
+  the engine's one report of every open human item, is where those lines are read from —
+  never pasted into the update whole, and never replaced by a list of your own.
 
-<!-- llmlint: ignore-block[agents_md_durable_and_terse] The node that adopted human items requires this document to state the manager's half — the report on every update, questions through items, worker-to-manager asks, acting for the user, dismissal, reconnect, the shared view, source and blocking — and to restate the engine's priority and authoring definitions, which `tests/test_human_items_guidance.py` holds word for word to the pinned engine's contract; the mechanics are `docs/orchestration.md`'s. -->
+<!-- llmlint: ignore-block[agents_md_durable_and_terse] The node that adopted human items requires this document to state the manager's half — its own items relayed on every update, questions through items, worker-to-manager asks, acting for the user, dismissal, reconnect, the shared view, source and blocking — and to restate the engine's priority and authoring definitions, which `tests/test_human_items_guidance.py` holds word for word to the pinned engine's contract; the mechanics are `docs/orchestration.md`'s. -->
 **Human items are the one queue of what a person must do or decide**, shared by every
 manager session on the host; the browser's **Action items** page acts on the same store, so
 the CLI and the page show and do the same things.

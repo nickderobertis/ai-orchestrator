@@ -146,6 +146,11 @@ class Workspace:
         this journey's subject, so the gate this test started is stopped — by the process
         group it was started in — once that stage has passed and the next one has opened
         its log. Returns the judged stage's log.
+
+        Nx runs with plugin isolation off: an isolated plugin's worker is spawned
+        detached, in a process group of its own, so stopping the gate's group leaves it
+        alive past this test's teardown. Isolation changes no task hash, so the replay
+        this journey reads is the same.
         """
         logs = self.root / ".logs"
         said = self.root.parent / f"{self.root.name}-gate.log"
@@ -157,6 +162,7 @@ class Workspace:
                     **self.env,
                     "ONEVCS_COMPARISON_REMOTE": remote,
                     "ONEVCS_COMPARISON_BASE": base,
+                    "NX_ISOLATE_PLUGINS": "false",
                 },
                 stdin=subprocess.DEVNULL,
                 stdout=output,

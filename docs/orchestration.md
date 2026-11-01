@@ -4360,8 +4360,8 @@ settles the run.
 **What waits on a person is one queue**, the engine's live human-item store (onepipeline's
 `docs/contract.md`, **Human items**): one journal beneath the runs root, shared by every
 manager session on the host. `just human-items` runs the engine's own verbs over it —
-`report` prints every open item, blocking first, each with its full body, and is what a
-manager prints on every update; `list`, `show`, `answer`, `complete`, `dismiss [--reason
+`report` prints every open item, blocking first, each with its full body, and is where a
+manager reads the items its update relays; `list`, `show`, `answer`, `complete`, `dismiss [--reason
 TEXT]`, `raise --input FILE`, `watch` and `config` are the rest. The browser's **Action
 items** page ([`docs/dag-ui.md`](dag-ui.md)) is a separate view of the same store, with the
 same answer, complete and dismiss, so the CLI and the page show and do the same things;
