@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import threading
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -17,6 +18,8 @@ import pytest
 from github_board import (
     BOARD,
     CANCELLED,
+    CONFIGURED_REPOSITORY,
+    PRIVATE_STORE_REPOSITORY,
     PROPOSED_CAUSE,
     PROPOSED_RUN,
     SIBLING_REPOSITORY,
@@ -26,6 +29,7 @@ from github_board import (
     _followups_command,
     _followups_environment,
     _GitHubFixture,
+    _GraphQLRequest,
     _Issue,
     _Operation,
     _seeded_item,
@@ -1014,6 +1018,324 @@ def test_a_ticket_a_route_now_sends_elsewhere_still_names_its_card_and_moves_now
     assert not any(routed.rglob("*.md")), "the routed board received the ticket"
     last = _receipts(root)[-1]
     assert (last["card"], last["outcome"]["error"]["kind"]) == (_card(card), "misrouted")
+
+
+#: Every document a copy looks a ticket's counterpart up with, by its origin.
+ORIGIN_LOOKUPS = (
+    _Operation.ORIGIN_LOOKUP,
+    _Operation.ORIGIN_LOOKUPS,
+    _Operation.ORIGIN_LOOKUPS_WITH_MEMBERS,
+)
+
+
+def _lookups(requests: list[_GraphQLRequest]) -> list[_Operation]:
+    """Each origin lookup among ``requests``."""
+    return [one.operation for one in requests if one.operation in ORIGIN_LOOKUPS]
+
+
+def _record_existing(environment: dict[str, str], root: Path) -> dict[str, object]:
+    """Run `record-existing-tickets` as `docs/host-setup.md` gives it, naming no root: the
+    store's configured `drafts` root, which ``environment`` points at ``root``."""
+    recorded = _follow_up_step(environment, "record-existing-tickets")
+    assert recorded.returncode == follow_up_tickets.SOUND, recorded.stdout + recorded.stderr
+    answer: dict[str, object] = json.loads(recorded.stdout)
+    assert answer["list"] == str(follow_up_tickets.existing_tickets_path(root)), answer
+    return answer
+
+
+def test_recording_existing_tickets_keeps_an_unlinked_earlier_ticket_on_its_one_card(
+    tmp_path: Path,
+) -> None:
+    """An earlier run's ticket with no link, its card already filed: listed, then updated.
+
+    `record-existing-tickets` lists it once, reading and writing nothing on the board and
+    changing no ticket, and run again changes nothing; the ticket's next copy keeps the store's
+    origin lookup, which finds the card carrying its origin, so the board still holds one card
+    for it — while a ticket written after the list is created with no lookup at all.
+    """
+    environment, root = _followups_environment(tmp_path)
+    run = follow_up_tickets.RunId("earlier-run")
+    earlier = replace(
+        _follow_up_ticket(SIBLING_REPOSITORY),
+        created_by_run=run,
+        owning_runs=(run,),
+        drafts=(follow_up_tickets.QualifiedDraftId(f"drafts:{run}/drafts/noticed"),),
+    )
+    path = _written_ticket(root, earlier)
+    origin = follow_up_tickets.qualified_id("earlier-run", path.stem)
+    with _serving_followups(environment, fields=True):
+        held = _seeded_item(
+            0,
+            run="earlier-run",
+            cause=path.stem,
+            status=follow_up_tickets.Status.ACCEPTED,
+            origin=origin,
+            origin_in_body=True,
+        )
+        held.priority = "High"
+        card_before = (held.body, held.status, held.priority)
+        ticket_before = path.read_bytes()
+        _GitHubFixture.requests.clear()
+        first = _record_existing(environment, root)
+        listed = follow_up_tickets.existing_tickets_path(root).read_bytes()
+        again = _record_existing(environment, root)
+        recorded_requests = list(_GitHubFixture.requests)
+        assert (held.body, held.status, held.priority) == card_before
+        assert path.read_bytes() == ticket_before, "recording changed the ticket"
+
+        # Its record names no card, so it reads as the proposal it was when written.
+        assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
+        _GitHubFixture.requests.clear()
+        status, out, said = _copy(environment, path)
+        earlier_copy = list(_GitHubFixture.requests)
+
+        later = _written_ticket(root, _follow_up_ticket(SIBLING_REPOSITORY))
+        assert _decided_status(environment, later) == follow_up_tickets.Status.PROPOSED
+        _GitHubFixture.requests.clear()
+        later_status, later_out, later_said = _copy(environment, later)
+        later_copy = list(_GitHubFixture.requests)
+
+    assert recorded_requests == [], "recording the existing tickets asked the board"
+    assert first == {
+        "list": str(follow_up_tickets.existing_tickets_path(root)),
+        "tickets": 1,
+        "recorded": True,
+    }
+    assert again == dict(first, recorded=False)
+    assert follow_up_tickets.existing_tickets_path(root).read_bytes() == listed
+    assert follow_up_tickets.existing_tickets(root) == frozenset({origin})
+    assert status == follow_up_tickets.SOUND, said
+    assert json.loads(out) == {"action": "updated", "destination": _card(held)}
+    assert _lookups(earlier_copy) != [], "the listed ticket's copy skipped the origin lookup"
+    assert _carrying(origin) == [held], "the earlier ticket gained a second card"
+    assert held.status == card_before[1], "the copy moved a status a person set"
+    assert later_status == follow_up_tickets.SOUND, later_said
+    assert json.loads(later_out)["action"] == "created"
+    assert _lookups(later_copy) == [], "a ticket written after the list was looked up"
+    assert len(_carrying(PROPOSED_ID)) == 1
+
+
+def test_a_new_ticket_lands_one_card_with_no_lookup_and_its_re_copy_updates_it(
+    tmp_path: Path,
+) -> None:
+    """Once the list is recorded, a new proposal is created with no origin lookup, onto exactly
+    one card, and copying it again follows its link onto that card, creating none."""
+    environment, root = _followups_environment(tmp_path)
+    assert _record_existing(environment, root)["tickets"] == 0
+    path = _written_ticket(root, _follow_up_ticket(SIBLING_REPOSITORY))
+    with _serving_followups(environment, fields=True):
+        assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
+        _GitHubFixture.requests.clear()
+        status, out, said = _copy(environment, path)
+        created = list(_GitHubFixture.requests)
+        assert status == follow_up_tickets.SOUND, said
+        _edited(environment, path, "Seen again.")
+        _GitHubFixture.requests.clear()
+        again, again_out, again_said = _copy(environment, path)
+        recopied = list(_GitHubFixture.requests)
+
+    (card,) = _carrying(PROPOSED_ID)
+    assert BOARD.created == [card]
+    assert json.loads(out) == {"action": "created", "destination": _card(card)}
+    assert _lookups(created) == [], "a new ticket's create sent an origin lookup"
+    assert again == follow_up_tickets.SOUND, again_said
+    assert json.loads(again_out) == {"action": "updated", "destination": _card(card)}
+    assert _lookups(recopied) == []
+    assert "Seen again." in card.body
+
+
+def test_a_new_tickets_create_interrupted_after_filing_is_retried_onto_that_card(
+    tmp_path: Path,
+) -> None:
+    """A create sent with no lookup whose answer was lost: the retry finishes the same card.
+
+    The store keeps its intent on the ticket whether it looked a counterpart up or not, and a
+    record carrying an intent keeps the store's own rules, so the retry finds the card its first
+    attempt filed by its create key rather than creating a second.
+    """
+    environment, root = _followups_environment(tmp_path)
+    _record_existing(environment, root)
+    path = _written_ticket(root, _follow_up_ticket(SIBLING_REPOSITORY))
+    with _serving_followups(environment, fields=True):
+        assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
+        _GitHubFixture.dropped_operation = (_Operation.CREATE_ISSUE, "after")
+        _GitHubFixture.requests.clear()
+        status, _out, said = _copy(environment, path)
+        first = list(_GitHubFixture.requests)
+        assert status != follow_up_tickets.SOUND, said
+        assert len(BOARD.created) == 1, "the board ran the create"
+        assert _lookups(first) == [], "the first attempt looked its counterpart up"
+        assert _ticket(environment, path).creating is not None
+
+        status, out, said = _copy(environment, path)
+
+    assert status == follow_up_tickets.SOUND, said
+    (card,) = _carrying(PROPOSED_ID)
+    assert BOARD.created == [card], "the retry created a second card"
+    assert json.loads(out)["destination"] == _card(card)
+    finished = _ticket(environment, path)
+    assert finished.link(FOLLOWUPS) == card.content_id and finished.creating is None
+
+
+def test_a_ticket_on_a_private_destination_keeps_its_lookup_and_its_one_card(
+    tmp_path: Path,
+) -> None:
+    """On a destination declared private the store records no link to the card, so the record
+    never names it: each copy keeps the store's origin lookup, and copying the ticket again, as
+    a re-dispatch of the run does, updates the one card."""
+    environment, root = _followups_environment(tmp_path)
+    # The board and the repository its issues are created in are both private, as a host
+    # declaring a destination private keeps them.
+    environment["ONETASKGRAPH_SOURCES__FOLLOWUPS__VISIBILITY"] = "private"
+    environment["ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__REPOSITORY"] = str(
+        PRIVATE_STORE_REPOSITORY
+    )
+    environment["ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__CREATION_OWNERS"] = (
+        f"{PRIVATE_STORE_REPOSITORY.owner},{CONFIGURED_REPOSITORY.owner}"
+    )
+    _record_existing(environment, root)
+    path = _written_ticket(root, _follow_up_ticket(PRIVATE_STORE_REPOSITORY))
+    with _serving_followups(environment, fields=True):
+        BOARD.public = False
+        assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
+        _GitHubFixture.requests.clear()
+        status, out, said = _copy(environment, path)
+        created = list(_GitHubFixture.requests)
+        assert status == follow_up_tickets.SOUND, said
+        assert _ticket(environment, path).links == (), "the store linked a private card"
+        _edited(environment, path, "Seen again.")
+        _GitHubFixture.requests.clear()
+        again, again_out, again_said = _copy(environment, path)
+        recopied = list(_GitHubFixture.requests)
+
+    (card,) = _carrying(PROPOSED_ID)
+    assert BOARD.created == [card], "the private destination gained a second card"
+    assert json.loads(out) == {"action": "created", "destination": _card(card)}
+    assert _lookups(created) != [], "a copy onto a private destination skipped its lookup"
+    assert again == follow_up_tickets.SOUND, again_said
+    assert json.loads(again_out) == {"action": "updated", "destination": _card(card)}
+    assert _lookups(recopied) != []
+
+
+def _older_schema(_environment: dict[str, str], path: Path, _card_id: str) -> None:
+    text = path.read_text(encoding="utf-8")
+    older = text.replace(
+        f'"schema": {follow_up_tickets.SCHEMA}', f'"schema": {follow_up_tickets.PRIOR_SCHEMA}'
+    )
+    assert older != text
+    path.write_text(older, encoding="utf-8")
+
+
+def _ticket_rewritten(environment: dict[str, str], path: Path, **departures: object) -> None:
+    """The ticket at ``path`` rewritten in place with ``departures``, as the store reads it."""
+    held = _ticket(environment, path)
+    path.write_text(follow_up_tickets.render(replace(held, **departures)), encoding="utf-8")
+
+
+#: Each sign on a ticket written after the host's list that it may have been filed before, as a
+#: rewrite of its record, or of its run's receipts, given the card already carrying its origin.
+FILED_BEFORE: dict[str, Callable[[dict[str, str], Path, str], None]] = {
+    "an older schema": _older_schema,
+    "an estimate a copy wrote": lambda environment, path, _card_id: _ticket_rewritten(
+        environment, path, board_estimate=follow_up_tickets.Priority.MEDIUM
+    ),
+}
+
+
+@pytest.mark.parametrize("sign", list(FILED_BEFORE), ids=list(FILED_BEFORE))
+def test_a_ticket_showing_it_may_have_been_filed_keeps_the_lookup_and_its_one_card(
+    sign: str, tmp_path: Path
+) -> None:
+    """With the host's list recorded, a ticket it does not name whose record or receipts show it
+    may have been filed already is copied by the store's own rules, onto the one card carrying
+    its origin, rather than created without a lookup beside it."""
+    environment, root = _followups_environment(tmp_path)
+    _record_existing(environment, root)
+    path = _written_ticket(root, _follow_up_ticket(SIBLING_REPOSITORY))
+    with _serving_followups(environment, fields=True):
+        held = _seeded_item(
+            0,
+            run=PROPOSED_RUN,
+            cause=path.stem,
+            status=follow_up_tickets.Status.PROPOSED,
+            origin=PROPOSED_ID,
+            origin_in_body=True,
+        )
+        assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
+        FILED_BEFORE[sign](environment, path, _card(held))
+        status, out, said = _copy(environment, path)
+
+    assert status == follow_up_tickets.SOUND, said
+    assert json.loads(out)["destination"] == _card(held)
+    assert _carrying(PROPOSED_ID) == [held] and BOARD.created == [], "a second card was filed"
+
+
+#: What an agent's rewrite of a ticket its run already filed drops: every key the store and the
+#: copy wrote, or only the link and the estimate, keeping where the store says each copy opens.
+REWRITES: dict[str, dict[str, object]] = {
+    "every key the store wrote": {
+        "links": (),
+        "origin": None,
+        "board_estimate": None,
+        "reserved": (),
+    },
+    "its link but not the copy's locations": {"links": (), "board_estimate": None},
+}
+
+
+@pytest.mark.parametrize("dropped", list(REWRITES), ids=list(REWRITES))
+def test_a_ticket_rewritten_without_its_link_after_its_runs_copy_keeps_its_one_card(
+    dropped: str, tmp_path: Path
+) -> None:
+    """The agent rewrites a ticket its run already filed, dropping the keys the store and the
+    copy wrote: what it kept, or its run's receipt of that copy, keeps the store's origin
+    lookup, which finds the card, so its next copy updates it rather than filing a second."""
+    environment, root = _followups_environment(tmp_path)
+    _record_existing(environment, root)
+    path = _written_ticket(root, _follow_up_ticket(SIBLING_REPOSITORY))
+    with _serving_followups(environment, fields=True):
+        assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
+        assert _copy(environment, path)[0] == follow_up_tickets.SOUND
+        (card,) = _carrying(PROPOSED_ID)
+        if dropped != "every key the store wrote":
+            assert _ticket(environment, path).reserved, "the copy recorded no location"
+        _ticket_rewritten(environment, path, **REWRITES[dropped])
+        _GitHubFixture.requests.clear()
+        status, out, said = _copy(environment, path)
+        sent = list(_GitHubFixture.requests)
+
+    assert status == follow_up_tickets.SOUND, said
+    copied = json.loads(out)
+    assert copied["action"] != "created" and copied["destination"] == _card(card)
+    assert BOARD.created == [card], "the rewritten ticket gained a second card"
+    assert _lookups(sent) != [], "the rewritten ticket's copy skipped the lookup"
+
+
+def test_a_current_record_naming_its_card_as_its_own_origin_is_refused_and_files_nothing(
+    tmp_path: Path,
+) -> None:
+    """Only a record from before the binding was retired may name its card as its own origin;
+    a current one doing so is refused before the store is asked to copy, so with the host's
+    list recorded it still files no card beside the one already carrying its origin."""
+    environment, root = _followups_environment(tmp_path)
+    _record_existing(environment, root)
+    path = _written_ticket(root, _follow_up_ticket(SIBLING_REPOSITORY))
+    with _serving_followups(environment, fields=True):
+        held = _seeded_item(
+            0,
+            run=PROPOSED_RUN,
+            cause=path.stem,
+            status=follow_up_tickets.Status.PROPOSED,
+            origin=PROPOSED_ID,
+            origin_in_body=True,
+        )
+        assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
+        _ticket_rewritten(environment, path, origin=follow_up_tickets.QualifiedTaskId(_card(held)))
+        status, out, said = _copy(environment, path)
+
+    assert status != follow_up_tickets.SOUND and out == "", said
+    assert "remove it" in said
+    assert _carrying(PROPOSED_ID) == [held] and BOARD.created == [], "a second card was filed"
 
 
 # llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

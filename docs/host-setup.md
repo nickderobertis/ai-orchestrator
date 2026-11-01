@@ -623,6 +623,30 @@ more: it reads those sources as unavailable and every other plan-store command g
 `just plans sources list` reads each source's state, and `just plans config show` where each
 `visibility` came from.
 
+### List the follow-up tickets this host already holds, once
+
+A follow-up run's `copy` creates a new ticket's card without asking the board first whether
+one already carries its origin, which saves a point of the shared GraphQL allowance on every
+new ticket. It can only do that safely for a ticket that has never been filed. A ticket filed
+before the copies kept receipts, or whose record lost the link to its card, looks exactly like
+a new one, and creating it without the lookup would put a second card on the board. So a host
+lists the tickets it already holds once, from the canonical checkout, and every copy keeps the
+lookup for each ticket on that list:
+
+```sh
+cd ~/projects/ai-orchestrator
+uv run --no-sync python -m orchestrator.follow_up_tickets record-existing-tickets
+```
+
+Run it after adopting this checkout, before the next follow-up run; on a new host, before its
+first. It lists every ticket under the plan store's `drafts` root into `existing-tickets.json`
+there and prints how many it listed. It reads and writes nothing on any board and changes no
+ticket. Running it again changes nothing and reports `"recorded": false`, so a ticket written
+since is never listed. Until it has run, every copy keeps the lookup, as before. Never edit or
+delete the file: a copy refuses a list it cannot read, and a ticket missing from it can be
+filed twice. A ticket routed to a destination declared private keeps the lookup whatever the
+list says, because the store records no link to its card.
+
 ## 8. Verify the host
 
 Spend real agent-harness turns end to end — one on the agent chain, and the trust probe
@@ -677,4 +701,5 @@ just gate
 - [ ] registry rebuilt with checkout **paths**; `just repos --audit-gate-coverage` reviewed
 - [ ] `just repos-bootstrap` reports every present sibling `ran` or `unchanged`, none
       `failed` or `refused`
+- [ ] `record-existing-tickets` run once, listing the follow-up tickets this host holds
 - [ ] `just smoke`, the per-identity probes, and `just gate` all green

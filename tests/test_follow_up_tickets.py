@@ -11052,3 +11052,168 @@ def test_an_engine_run_that_is_not_one_path_component_is_refused_before_anything
     assert refused.value.code == tickets.UNRUNNABLE
     assert "RUN-ID must be one safe path component" in capsys.readouterr().err
     assert not tickets.budgets_path(tmp_path, "run-1").exists()
+
+
+def test_a_ticket_its_run_already_copied_is_looked_up_again_once_its_record_names_no_card(
+    board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An agent's rewrite that drops every key the store wrote leaves the run's receipt.
+
+    With the host's list of existing tickets recorded, a new ticket is created without a
+    lookup; rewritten from scratch, naming no card and no estimate a copy wrote, it still has
+    its run's receipt of that copy, so its next copy keeps the store's origin lookup and
+    updates the one item rather than creating a second.
+    """
+    assert tickets.main(["record-existing-tickets"]) == tickets.SOUND
+    assert json.loads(capsys.readouterr().out)["tickets"] == 0
+    path = _write(drafts_root, _carrying())
+    # Run again once a ticket is written, it lists nothing new.
+    assert tickets.main(["record-existing-tickets"]) == tickets.SOUND
+    again = json.loads(capsys.readouterr().out)
+    assert (again["tickets"], again["recorded"]) == (0, False), again
+    identifier = tickets.qualified_id(*tickets.located_path(path))
+
+    def creates(ticket: tickets.Ticket) -> bool:
+        return tickets.creates_without_lookup(
+            ticket, drafts_root, RUN, identifier, BOARD, current=True
+        )
+
+    assert creates(tickets.read_ticket(path)), "a new ticket kept its lookup"
+    status, out, said = _copied(path, capsys)
+    assert status == tickets.SOUND, said
+    first = json.loads(out)
+    assert first["action"] == "created"
+    copied = tickets.read_ticket(path)
+    assert copied.links and copied.board_estimate is not None
+    rewritten = dataclasses.replace(copied, links=(), origin=None, board_estimate=None, reserved=())
+    path.write_text(tickets.render(rewritten), encoding="utf-8")
+    assert not creates(tickets.read_ticket(path)), "a ticket its run copied skipped its lookup"
+
+    status, out, said = _copied(path, capsys)
+
+    assert status == tickets.SOUND, said
+    again = json.loads(out)
+    assert again["action"] != "created" and again["destination"] == first["destination"]
+    assert len(list(board.rglob("*.md"))) == 1, "the rewritten ticket gained a second item"
+
+
+@pytest.mark.parametrize(
+    "held",
+    [
+        "not json",
+        json.dumps({"schema": 2, "tickets": []}),
+        json.dumps({"schema": True, "tickets": []}),
+        json.dumps({"schema": 1}),
+        json.dumps({"schema": 1, "tickets": ["not-qualified"]}),
+    ],
+    ids=["not-json", "another-schema", "boolean-schema", "no-tickets", "unqualified-ticket"],
+)
+def test_a_list_of_existing_tickets_that_is_not_one_is_refused_rather_than_read(
+    held: str, board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A list that is not the one `record-existing-tickets` writes is named and left alone.
+
+    Read as no list or as an empty one, it would let a ticket that existed before it be created
+    a second time, so both the command and every copy refuse it rather than reading it.
+    """
+    listed = tickets.existing_tickets_path(drafts_root)
+    listed.write_text(held, encoding="utf-8")
+    path = _write(drafts_root, _carrying())
+
+    assert tickets.main(["record-existing-tickets"]) == tickets.UNRUNNABLE
+    assert str(listed) in capsys.readouterr().err
+    assert tickets.main(["copy", "--board", BOARD, str(path)]) == tickets.UNRUNNABLE
+    assert str(listed) in capsys.readouterr().err
+    assert listed.read_text(encoding="utf-8") == held
+    assert not list(board.rglob("*.md")), "a copy wrote past the unreadable list"
+
+
+#: Each way a ticket's record or its run's receipts can show it may already have a card, as a
+#: change to the sound new proposal and its receipts: none may create without the lookup.
+MAY_HAVE_A_CARD: dict[str, Callable[[tickets.Ticket, Path], tickets.Ticket]] = {
+    "a withdrawal": lambda ticket, _receipts: dataclasses.replace(
+        ticket, status=tickets.Status.WITHDRAWN
+    ),
+    "an older binding": lambda ticket, _receipts: dataclasses.replace(
+        ticket, retired=((tickets.BINDING_FIELD, "I_seen"),)
+    ),
+    "the store's link": lambda ticket, _receipts: dataclasses.replace(
+        ticket, links=(tickets.CopyLink(BOARD, f"{BOARD}:linked"),)
+    ),
+    "an own origin": lambda ticket, _receipts: dataclasses.replace(
+        ticket, origin=plan_store.QualifiedTaskId(f"{BOARD}:origin")
+    ),
+    "a create in flight": lambda ticket, _receipts: dataclasses.replace(
+        ticket, creating=json.dumps({BOARD: {"key": "k"}})
+    ),
+    "another reserved key": lambda ticket, _receipts: dataclasses.replace(
+        ticket, reserved=((tickets.COPY_LOCATIONS_KEY, json.dumps({BOARD: "u"})),)
+    ),
+    "an estimate a copy wrote": lambda ticket, _receipts: dataclasses.replace(
+        ticket, board_estimate=tickets.Priority.MEDIUM
+    ),
+    "unreadable receipts": lambda ticket, receipts: (
+        receipts.parent.mkdir(parents=True, exist_ok=True),
+        receipts.write_text("not json\n", encoding="utf-8"),
+        ticket,
+    )[-1],
+}
+
+
+@pytest.mark.parametrize("departure", list(MAY_HAVE_A_CARD), ids=list(MAY_HAVE_A_CARD))
+def test_a_ticket_that_may_already_have_a_card_keeps_the_lookup_with_the_list_recorded(
+    departure: str, board: Path, drafts_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """With the host's list recorded, only a sound new proposal creates without the lookup."""
+    assert tickets.main(["record-existing-tickets"]) == tickets.SOUND
+    capsys.readouterr()
+    path = _write(drafts_root, _carrying())
+    identifier = tickets.qualified_id(*tickets.located_path(path))
+    ticket = tickets.read_ticket(path)
+    assert tickets.creates_without_lookup(ticket, drafts_root, RUN, identifier, BOARD, current=True)
+    receipts = tickets.receipts_path(drafts_root, RUN)
+    departed = MAY_HAVE_A_CARD[departure](ticket, receipts)
+
+    assert not tickets.creates_without_lookup(
+        departed, drafts_root, RUN, identifier, BOARD, current=True
+    )
+
+
+def test_a_ticket_of_an_older_schema_or_bound_for_a_private_destination_keeps_the_lookup(
+    board: Path, drafts_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A record of an earlier schema may predate every link and receipt, and a destination
+    declared private keeps no link to its card, so neither is created without the lookup."""
+    assert tickets.main(["record-existing-tickets"]) == tickets.SOUND
+    path = _write(drafts_root, _carrying())
+    identifier = tickets.qualified_id(*tickets.located_path(path))
+    ticket = tickets.read_ticket(path)
+
+    assert not tickets.creates_without_lookup(
+        ticket, drafts_root, RUN, identifier, BOARD, current=False
+    )
+    monkeypatch.setenv(f"ONETASKGRAPH_SOURCES__{BOARD.upper()}__VISIBILITY", "private")
+    assert not tickets.creates_without_lookup(
+        ticket, drafts_root, RUN, identifier, BOARD, current=True
+    )
+
+
+def test_record_existing_tickets_lists_the_root_it_is_named_and_writes_nowhere_else(
+    drafts_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--root` names the drafts root listed and where its list is kept, not the configured one."""
+    other = tmp_path / "other-root"
+    written = _write(other, _carrying())
+    # A file whose name forms no ticket id is no ticket a copy reads, so it is not listed.
+    (written.parent / "not a ticket.md").write_text("stray", encoding="utf-8")
+
+    assert tickets.main(["record-existing-tickets", "--root", str(other)]) == tickets.SOUND
+
+    answer = json.loads(capsys.readouterr().out)
+    assert answer == {
+        "list": str(tickets.existing_tickets_path(other)),
+        "tickets": 1,
+        "recorded": True,
+    }
+    assert tickets.existing_tickets(other) == frozenset({tickets.qualified_id(RUN, CAUSE)})
+    assert tickets.existing_tickets(drafts_root) is None

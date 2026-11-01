@@ -2856,6 +2856,9 @@ def test_follow_up_commands_and_account_check_read_only_their_items_once(tmp_pat
         assert json.loads(estimated.stdout)["occurrences"] == 2, estimated.stdout
         calls = _store_calls(trace)
         assert len(_card_reads(calls, issue)) == 1 and _counterpart_lookups(calls) == [], calls
+        # Its writes expect the version that one read returned, so the store reads nothing more.
+        reads = [one.operation for one in _GitHubFixture.requests if not one.is_mutation]
+        assert len(reads) == 1, f"re-estimate read its card again before writing: {reads}"
         _per_step("re-estimate", _bounded_step("re-estimate", bound=True, trace=trace, writes=True))
 
         other = _seeded_item(
@@ -3270,13 +3273,14 @@ def test_a_realistic_follow_up_run_reads_and_writes_only_the_items_it_is_about( 
     evidence comments and spent roughly 500 of the 5,000 GraphQL points an hour every session
     on this host shares. Here the same run is driven through this checkout's real
     `orchestrator.follow_up_tickets` commands and the provisioned plan-store CLI against a
-    loopback `followups` board already holding hundreds of other items: 12 new tickets, each
+    loopback `followups` board already holding hundreds of other items, on a host that has
+    recorded its existing tickets once with `record-existing-tickets`: 12 new tickets, each
     searched for by root cause and by text as the rendered task directs, then decided once,
-    validated and copied to `Proposal`; 4 tickets an earlier dispatch bound to their
-    items, edited and re-copied; 4 evidence comments on other runs' items, each followed by
-    its `re-estimate`; and the closeout's one `check-dispositions --board`, which reads nothing
-    of the board, holding the account to the run's receipts, and then raises the run's one
-    review task over the twenty tickets it created or updated — projected by
+    validated and copied to `Proposal` with no origin lookup; 4 tickets an earlier dispatch
+    bound to their items, edited and re-copied; 4 evidence comments on other runs' items, each
+    followed by its `re-estimate`; and the closeout's one `check-dispositions --board`, which
+    reads nothing of the board, holding the account to the run's receipts, and then raises the
+    run's one review task over the twenty tickets it created or updated — projected by
     the released engine into a human-task board beside `followups` — and that task completed,
     its terminal state projected. Every request is priced with the drift-checked prices, and
     each phase's points and requests, and each document's, are recorded as budget
@@ -3286,6 +3290,9 @@ def test_a_realistic_follow_up_run_reads_and_writes_only_the_items_it_is_about( 
     for variable in ("CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID", "CODEX_THREAD_ID"):
         environment.pop(variable, None)
     environment["ONEPIPELINE_LAUNCHER_SESSION"] = "follow-up-manager"
+    # The host's one-time step, before any ticket of this run was written: it lists none.
+    recorded = _follow_up_step(environment, "record-existing-tickets")
+    assert recorded.returncode == 0 and json.loads(recorded.stdout)["tickets"] == 0, recorded
     trace = _audit_follow_up_calls(tmp_path, environment)
     board = follow_up_tickets.BOARD
     base = _follow_up_ticket(SIBLING_REPOSITORY)
@@ -3346,7 +3353,7 @@ def test_a_realistic_follow_up_run_reads_and_writes_only_the_items_it_is_about( 
             ticket = replace(base, root_cause=cause, drafts=_draft(f"new-{at}"))
             path = _written_ticket(root, ticket)
             # Searched for first, and asked `board-status` once, at the step deciding its
-            # status: that call's origin lookup is the only one the ticket sends.
+            # status; its copy then creates its card with no origin lookup.
             by_cause = _follow_up_step(
                 environment,
                 "board-items",
@@ -3363,6 +3370,12 @@ def test_a_realistic_follow_up_run_reads_and_writes_only_the_items_it_is_about( 
             _charged(spent, _RunPhase.SEARCHES, f"searching for {cause}")
             assert _decided_status(environment, path) == follow_up_tickets.Status.PROPOSED
             assert _validated_and_copied(environment, path)["action"] == "created"
+            looked_up = [
+                one
+                for one in _GitHubFixture.requests
+                if one.operation in (_Operation.ORIGIN_LOOKUP, _Operation.ORIGIN_LOOKUPS)
+            ]
+            assert looked_up == [], f"filing {cause} looked its counterpart up"
             _charged(spent, _RunPhase.WRITES, f"filing {cause}")
             filed.append(_Filed(ticket.drafts[0], cause, "Copied onto its item."))
 

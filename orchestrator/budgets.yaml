@@ -23,12 +23,13 @@ budgets:
     command: ["uv", "run", "--directory", "..", "python", "-m", "tests.budget_telemetry"]
     unit: points
     direction: max
-    # Measured at 128: searches 24, write path 96, board check 0 and the review task 8. A new
-    # ticket's one guarded copy costs 5 — the store's origin lookup, the repository read every
-    # create sends, the create, the created item's read and its field write — a bound re-copy 3,
-    # and each evidence comment with its re-estimate 6; both closeout checks read the run's
-    # receipts and nothing of the board.
-    threshold: 131
+    # Measured at 108: searches 24, write path 76, board check 0 and the review task 8. A new
+    # ticket's one guarded copy costs 4 — the creation context every create sends, the create,
+    # the created item's read and its field write, with no origin lookup on a host that has
+    # recorded its existing tickets — a bound re-copy 3, and each evidence comment with its
+    # re-estimate 4, whose writes expect the version its one read returned; both closeout
+    # checks read the run's receipts and nothing of the board.
+    threshold: 108
   - id: comment-answer-pass-points
     description: >-
       Modelled GitHub GraphQL points one realistic comment-answer pass, the

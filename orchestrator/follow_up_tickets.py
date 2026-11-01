@@ -3020,6 +3020,131 @@ def receipt_card(root: Path, run: str, ticket: str) -> QualifiedTaskId | None:
     return QualifiedTaskId(reached[-1]) if reached else None
 
 
+#: **The tickets a drafts root held before its copies could create without a lookup.** A
+#: ticket's record names its card once a copy of it lands — the store's link — and every copy
+#: this module makes is receipted (:func:`append_receipt`); but a record copied before either
+#: was kept, or whose link was lost since, names nothing that tells it from a ticket never
+#: filed, and creating it without the store's origin lookup would put a second card beside the
+#: one already carrying its origin. So `record-existing-tickets`, run once per host, lists every
+#: ticket the drafts root holds into this file at its root, and a copy creates without the
+#: lookup (:func:`creates_without_lookup`) only once the file exists and only for a ticket it
+#: does not list. While it is absent every copy keeps the lookup, as before.
+EXISTING_TICKETS = "existing-tickets.json"
+EXISTING_TICKETS_SCHEMA = 1
+
+
+def existing_tickets_path(root: Path) -> Path:
+    """Where a `drafts` root's list of its existing tickets is kept."""
+    return root / EXISTING_TICKETS
+
+
+def existing_tickets(root: Path) -> frozenset[str] | None:
+    """The tickets ``root``'s list names, `None` while no list is recorded.
+
+    :class:`OSError` for a file that is not the list :func:`record_existing_tickets` writes,
+    rather than reading it as no list or as an empty one.
+    """
+    path = existing_tickets_path(root)
+    if not path.is_file():
+        return None
+    try:
+        held = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise OSError(f"{path} is not JSON: {exc}") from exc
+    tickets = held.get("tickets") if isinstance(held, dict) else None
+    if (
+        not isinstance(held, dict)
+        or type(held.get("schema")) is not int
+        or held.get("schema") != EXISTING_TICKETS_SCHEMA
+        or not isinstance(tickets, list)
+        or not all(isinstance(one, str) and QUALIFIED_ID.fullmatch(one) for one in tickets)
+    ):
+        raise OSError(
+            f"{path} is not a schema-{EXISTING_TICKETS_SCHEMA} list of qualified ticket ids; "
+            "restore it rather than editing it, since a ticket missing from it can be filed twice"
+        )
+    return frozenset(tickets)
+
+
+class ExistingTickets(NamedTuple):
+    """What `record-existing-tickets` found: its list, how many it names, whether it wrote it."""
+
+    path: Path
+    tickets: int
+    recorded: bool
+
+
+def record_existing_tickets(root: Path) -> ExistingTickets:
+    """List every ticket ``root`` holds, once: a list already recorded is left as it stands.
+
+    Every ticket file of every run under ``root`` is listed by its qualified id, whatever its
+    record says, so each keeps the store's origin lookup on every later copy. Nothing is read
+    from or written to any board, and no ticket file is changed. Run again, it changes nothing
+    and answers the list it recorded first, so a ticket written since is never listed.
+    """
+    path = existing_tickets_path(root)
+    held = existing_tickets(root)
+    if held is not None:
+        return ExistingTickets(path, len(held), recorded=False)
+    # A file whose name forms no qualified id is no ticket a copy reads, so it is left out.
+    found = sorted(
+        identifier
+        for ticket in (root / TASKS_DIRECTORY).glob(f"*/{TICKETS}/*{TICKET_SUFFIX}")
+        if ticket.is_file()
+        and QUALIFIED_ID.fullmatch(
+            identifier := qualified_id(ticket.parent.parent.name, ticket.stem)
+        )
+    )
+    written = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    written.parent.mkdir(parents=True, exist_ok=True)
+    written.write_text(
+        json.dumps({"schema": EXISTING_TICKETS_SCHEMA, "tickets": found}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    written.replace(path)
+    return ExistingTickets(path, len(found), recorded=True)
+
+
+def creates_without_lookup(  # noqa: PLR0911 - each return is one way a card could exist
+    ticket: Ticket, root: Path, run: str, identifier: str, destination: str, *, current: bool
+) -> bool:
+    """Whether ``ticket``'s copy may create its card with `--create`, sending no origin lookup.
+
+    Only for a proposal provably never filed, because a create without the lookup cannot find a
+    card already carrying its origin: ``root``'s list of its existing tickets is recorded and
+    does not name it (:data:`EXISTING_TICKETS`); its record is of the current schema
+    (``current``), names no card and carries none of the store's own keys — no link, origin,
+    create in flight or other reserved key — and no :data:`BOARD_ESTIMATE_FIELD` a copy wrote;
+    ``run``'s receipts are sound and hold no copy of it, whatever that copy answered; and its
+    ``destination`` is not declared private, where the store records no link to its card. A
+    create in flight is the store's to finish by its own key, so it keeps the store's rules.
+    """
+    if (
+        ticket.status is not Status.PROPOSED
+        or not current
+        or ticket.board_item is not None
+        or ticket.links
+        or ticket.origin is not None
+        or ticket.creating is not None
+        or ticket.reserved
+        or ticket.board_estimate is not None
+    ):
+        return False
+    existing = existing_tickets(root)
+    if existing is None or identifier in existing:
+        return False
+    receipts, malformed = read_receipts(root, run)
+    # llmlint: ignore[changed_behavior_has_e2e] Unreadable receipts come from no command — only
+    # a torn write or a hand edit of a file the task tells the agent never to touch — so no
+    # journey reaches them through an interface; a unit test drives this guard directly, and the
+    # receipted case beside it is driven through `copy` on the loopback board.
+    if malformed or any(
+        one.command is ReceiptCommand.COPY and one.ticket == identifier for one in receipts
+    ):
+        return False
+    return not plan_store.declared_private(destination)
+
+
 def carries_origin(card: Mapping[str, object], ticket: str) -> bool:
     """Whether a card read back carries ``ticket`` as the store's own origin."""
     metadata = card.get("metadata")
@@ -3554,7 +3679,9 @@ def copy_ticket(path: Path, board: str) -> Copied:
     — its store link, or the :data:`BINDING_FIELD` a record from before
     :data:`BINDING_RETIRED_AT` still carries — is named as `--target-task`, which the store reads
     by id and verifies by origin, refusing a card that does not verify; for a record naming none,
-    the store's own intent and origin rules decide the card. Every copy but a
+    the store's own intent and origin rules decide the card — but for a proposal provably never
+    filed (:func:`creates_without_lookup`), which is created with `--create`, sending the board
+    no origin lookup, since no card can carry its origin yet. Every copy but a
     withdrawal is made under the `preserve-destination` status policy, so a card keeps the status
     a person or a run gave it; a withdrawal writes its closure under the store's status guard,
     only over a card at `Proposal` or `Cancelled`, and is otherwise refused as
@@ -3604,6 +3731,11 @@ def copy_ticket(path: Path, board: str) -> Copied:
     # an older record's body is not written to, and only a current record carries the key.
     written_at = _held_record(stored.item).get("schema")
     current = written_at == SCHEMA
+    root = path.absolute().parents[3]
+    # Decided off the record as it stands, before the estimate below is staged into it.
+    create = reached is None and creates_without_lookup(
+        ticket, root, run, identifier, destination, current=current
+    )
     staged = current and receiving is not None and receiving != ticket.board_estimate
     if staged:
         path.write_text(render(dataclasses.replace(ticket, board_estimate=receiving)), "utf-8")
@@ -3621,6 +3753,7 @@ def copy_ticket(path: Path, board: str) -> Copied:
                 [identifier],
                 to=destination,
                 target_task=card,
+                create=True if create else None,
                 status_policy=status_policy(ticket),
                 when_destination_status=(
                     [Status.PROPOSED.value, Status.WITHDRAWN.value] if withdrawing else None
@@ -3640,9 +3773,7 @@ def copy_ticket(path: Path, board: str) -> Copied:
         refused = CopyOutcomeReceipt(
             action="failed", error=ReceiptError(kind=kind, message=message)
         )
-        append_receipt(
-            path.absolute().parents[3], run, ReceiptCommand.COPY, identifier, card, refused
-        )
+        append_receipt(root, run, ReceiptCommand.COPY, identifier, card, refused)
         raise _refusal(kind, message, None, path, destination) from exc
     entries = report.items
     outcome = entries[0].root if len(entries) == 1 else None
@@ -3651,7 +3782,6 @@ def copy_ticket(path: Path, board: str) -> Copied:
         raise OSError(f"the copy onto {destination} answered {entries!r}, naming no item")
     reached = getattr(outcome, "destination", None)
     reached_id = None if reached is None else str(reached.root)
-    root = path.absolute().parents[3]
     append_receipt(
         root, run, ReceiptCommand.COPY, identifier, reached_id or card, copy_receipt(outcome)
     )
@@ -3818,9 +3948,11 @@ def re_estimate(board: str, issue: str, run: str, root: Path | None = None) -> R
     never rewritten; then the content just read, with its estimate line replaced — or added
     after the severity lines where a schema-6 content has none — with `task content set`; and
     last the record, brought to :data:`ESTIMATE_AT` where it is older, with `task metadata
-    set`. Nothing else about the item, its status and its schema's structure included, is
-    written. The receipt holds each write's `result` with the estimate, the occurrence count,
-    the severity and frequency it was computed from, and the estimate line written.
+    set`. Each write expects the version the read, or the write before it, answered, so the
+    store reads the item no further. Nothing else about the item, its status and its schema's
+    structure included, is written. The receipt holds each write's `result` with the estimate,
+    the occurrence count, the severity and frequency it was computed from, and the estimate
+    line written.
     :class:`Refused` for an item that is no follow-up ticket this reads.
     """
     matched = QUALIFIED_ID.fullmatch(issue)
@@ -3843,16 +3975,42 @@ def re_estimate(board: str, issue: str, run: str, root: Path | None = None) -> R
     # the old priority, which every later touch would read as a person's and never raise.
     # Written last, a refusal leaves either the old priority beside the old estimate, still
     # following, or the priority already at the new estimate, which a retry leaves as it is.
+    # Each write names, as `--expect`, the version the read above returned — then the version
+    # the write before it answered — so the store takes the card's ids and values from its cache
+    # rather than reading the card again first. It is no precondition: a person's edit to the
+    # field a write sets, made in the seconds between that read and the write, is overwritten,
+    # the residual race the comment pass's settle accepts too, and no wider than the store's own
+    # read-then-write without it. A board whose source keeps no cache, or a write that answers
+    # no version, names none, and the store reads first as it would.
+    from . import follow_up_comments as comments
+
+    settings = plan_store.configured_settings()
+    read_at = item.get("version")
+    version = comments.expectable_version(
+        issue, read_at if isinstance(read_at, str) else None, settings
+    )
     if decided.priority is not held_priority(item):
-        answered = plan_store.sdk(client.task_priority_set(issue, decided.priority.value))
+        answered = plan_store.sdk(
+            client.task_priority_set(issue, decided.priority.value, expect=version)
+        )
+        version = comments.expectable_version(
+            issue, answered.result.version if answered.result else None, settings
+        )
         writes.append(ReEstimateWrite(write="priority", result=_result(answered.result)))
     if decided.content != item_content(item):
         with tempfile.TemporaryDirectory(prefix="re-estimate-") as scratch:
             written = Path(scratch) / "content.md"
             written.write_text(decided.content, encoding="utf-8")
-            content = plan_store.sdk(client.task_content_set(issue, file=str(written)))
+            content = plan_store.sdk(
+                client.task_content_set(issue, file=str(written), expect=version)
+            )
+        version = comments.expectable_version(
+            issue, content.result.version if content.result else None, settings
+        )
         writes.append(ReEstimateWrite(write="content", result=_result(content.result)))
-    metadata = plan_store.sdk(client.task_metadata_set(issue, KEY, json.dumps(decided.record)))
+    metadata = plan_store.sdk(
+        client.task_metadata_set(issue, KEY, json.dumps(decided.record), expect=version)
+    )
     writes.append(ReEstimateWrite(write="metadata", result=_result(metadata.result)))
     held = _held_record(item)
     owner = issue_owner(item)
@@ -7663,6 +7821,22 @@ def _parser() -> _Parser:
         "--withdraw", action="store_true", help="decide for a ticket this run withdraws"
     )
     placed.add_argument("path", type=Path, metavar="PATH")
+    existing = commands.add_parser(
+        "record-existing-tickets",
+        description=(
+            "List every ticket the drafts root holds, once per host, so each keeps the store's "
+            "origin lookup on every later copy while a ticket written after it is created "
+            "without one. Reads and writes no board and changes no ticket; run again, it "
+            "changes nothing and answers the list it recorded first."
+        ),
+        help="record, once, the tickets that existed before copies could create without a lookup",
+    )
+    existing.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help="the `drafts` root whose tickets are listed; the store's configured one by default",
+    )
     copied = commands.add_parser(
         "copy",
         help=(
@@ -8480,6 +8654,22 @@ def _commented(arguments: argparse.Namespace) -> int:
     return SOUND
 
 
+def _recorded_existing(arguments: argparse.Namespace) -> int:
+    """Record the drafts root's existing tickets once, for `record-existing-tickets`."""
+    try:
+        root = drafts_root() if arguments.root is None else arguments.root
+        listed = record_existing_tickets(root)
+    except OSError as exc:
+        print(f"{PROG}: refused: {exc}", file=sys.stderr)
+        return UNRUNNABLE
+    json.dump(
+        {"list": str(listed.path), "tickets": listed.tickets, "recorded": listed.recorded},
+        sys.stdout,
+    )
+    sys.stdout.write("\n")
+    return SOUND
+
+
 def _copied(arguments: argparse.Namespace) -> int:
     """Copy a ticket with one guarded store copy, for the `copy` command."""
     try:
@@ -8521,6 +8711,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _placed(arguments)
         case "board-items":
             return _listed(arguments)
+        case "record-existing-tickets":
+            return _recorded_existing(arguments)
         case "copy":
             return _copied(arguments)
         case "re-estimate":
